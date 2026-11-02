@@ -42,8 +42,11 @@ async function pageThreads() {
     const p = new URLSearchParams({limit: '50', sort});
     if (cursor) p.set('cursor', cursor);
     if (withActor) p.set('with', withActor);
-    // Each switch starts a new list: a page asked for before it is dropped, whatever order it was for.
-    const mine = gen, r = await get('/v2/threads?' + p, {fresh: true});
+    // Each switch starts a new list: a page asked for before it is dropped, whatever order it was for, and so is its error.
+    const mine = gen;
+    let r;
+    try { r = await get('/v2/threads?' + p, {fresh: true}); }
+    catch (e) { if (S.route !== route || mine !== gen) return; throw e; }
     if (S.route !== route || mine !== gen) return;
     for (const key of ['attention', 'threads', 'dms']) {
       const have = new Set(st[key].map(t => t.id));
@@ -62,19 +65,26 @@ async function pageThreads() {
     $('#threads-all').innerHTML = html || `<p class="empty">${dms ? 'No DMs yet' : 'No threads yet'}</p>`;
     $('#threads-more').hidden = !st.next;
   };
+  // A new list from the top: after a switch, or when a thread's level moved while Important is shown.
+  const reload = (quiet = false) => {
+    gen++;
+    st = {attention: [], threads: [], dms: [], next: null};
+    if (!quiet) { $('#threads-all').innerHTML = '<div class="muted">Loading…</div>'; $('#threads-more').hidden = true; }
+    load('').catch(e => { if (S.route === route) $('#threads-all').innerHTML = `<p class="empty">${esc(e.message)}</p>`; });
+  };
   main.querySelector('.thp-sort')?.addEventListener('click', ev => {
     const k = ev.target.closest('[data-th-sort]')?.dataset.thSort;
     if (!k || k === sort) return;
     sort = k;
-    gen++;
     threadsSortSet(k);
     main.querySelectorAll('[data-th-sort]').forEach(b => { const on = b.dataset.thSort === k; b.classList.toggle('cur', on); b.setAttribute('aria-selected', String(on)); });
-    st = {attention: [], threads: [], dms: [], next: null};
-    $('#threads-all').innerHTML = '<div class="muted">Loading…</div>';
-    $('#threads-more').hidden = true;
     // The sidebar follows the same choice.
     void threadsLoad();
-    load('').catch(e => { if (S.route === route) $('#threads-all').innerHTML = `<p class="empty">${esc(e.message)}</p>`; });
+    reload();
+  });
+  const off = liveOn('threads', d => {
+    if (S.route !== route) return off();
+    if (d.kind === 'ranked' && sort === 'important' && !withActor) liveSoon('threads-page-ranked', () => { if (S.route === route) reload(true); }, 1500);
   });
   $('#threads-more').onclick = ev => { ev.currentTarget.disabled = true; load(st.next).finally(() => { ev.currentTarget.disabled = false; }); };
   try { await load(''); }

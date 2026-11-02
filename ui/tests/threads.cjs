@@ -498,6 +498,12 @@ let browser = null;
     await page.locator('.thp-sort [data-th-sort="recent"].cur').waitFor();
     await page.locator('.thp-sort [data-th-sort="important"]').click();
     await page.locator('.thp-sort [data-th-sort="important"].cur').waitFor();
+    // A thread's level moved: the Important list is read again.
+    await page.waitForFunction(() => document.querySelector('#threads-all .thp-list'));
+    seen.sorts.length = 0;
+    await page.evaluate(() => liveEmit('threads', {kind: 'ranked', thread_id: 't3', root_id: 't3'}));
+    for (let i = 0; i < 40 && !seen.sorts.length; i++) await page.waitForTimeout(100);
+    assert.ok(seen.sorts.includes('important'), 'a ranked change reads Important again: ' + seen.sorts);
 
     // Search in Threads: hits from the threads search, each opening its thread at the message.
     await page.goto('https://tico-ui.test/#/threads');
