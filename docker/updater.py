@@ -70,7 +70,12 @@ KEEP_SNAPSHOTS = int(os.environ.get("TICO_UPDATER_KEEP_SNAPSHOTS", "3"))
 # The pre-update copy is allowed FLOOR seconds, or PER_GB seconds per gigabyte of hub.sqlite when that is more. Setting
 # TICO_UPDATER_SNAPSHOT_SECONDS replaces the scaled allowance with a fixed one.
 _SNAPSHOT_OVERRIDE = os.environ.get("TICO_UPDATER_SNAPSHOT_SECONDS", "").strip()
-SNAPSHOT_SECONDS = int(_SNAPSHOT_OVERRIDE) if _SNAPSHOT_OVERRIDE else None
+try:
+    SNAPSHOT_SECONDS = int(_SNAPSHOT_OVERRIDE) if _SNAPSHOT_OVERRIDE else None
+except ValueError:
+    print("TICO_UPDATER_SNAPSHOT_SECONDS is not a whole number of seconds (%r): using the size-based allowance"
+          % _SNAPSHOT_OVERRIDE, file=sys.stderr, flush=True)
+    SNAPSHOT_SECONDS = None
 SNAPSHOT_FLOOR_SECONDS = 1200
 SNAPSHOT_SECONDS_PER_GB = 300
 # Off by default: the copy is also checked with PRAGMA quick_check, a full page walk that takes minutes on a large hub.

@@ -490,3 +490,10 @@ def test_compose_passes_the_snapshot_settings_from_env_to_the_updater():
     # Empty when .env does not set them, so the updater scales its allowance and keeps the full check off.
     assert environment["TICO_UPDATER_SNAPSHOT_SECONDS"] == "${TICO_UPDATER_SNAPSHOT_SECONDS:-}"
     assert environment["TICO_UPDATER_FULL_CHECK"] == "${TICO_UPDATER_FULL_CHECK:-}"
+
+
+def test_a_non_numeric_snapshot_override_falls_back_to_the_scaled_allowance(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("TICO_UPDATER_SNAPSHOT_SECONDS", "soon")
+    updater = load(monkeypatch, "", tmp_path)
+    assert updater.SNAPSHOT_SECONDS is None and updater.snapshot_seconds(10 * 1024 ** 3) == 3000
+    assert "TICO_UPDATER_SNAPSHOT_SECONDS" in capsys.readouterr().err

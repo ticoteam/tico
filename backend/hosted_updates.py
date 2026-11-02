@@ -44,6 +44,9 @@ HOSTED = ("own", "invited")
 CHECK_S = 15 * 60            # HQ is asked this often; at once after an outcome
 IDLE_WAIT_S = 2 * 3600       # a busy server updates anyway after this long, as Update now would
 SETTLE_S = 45 * 60           # an update with no final state from the updater after this long is reported timed_out
+# The pre-update copy's allowance scales with the database, so its time is not counted against SETTLE_S. A copy that
+# reports snapshotting for longer than this is no longer excused: the updater bounds it, and this guards a stuck status.
+SNAPSHOT_GUARD_S = 6 * 3600
 WAIT = 10                    # seconds for HQ's answer
 MAX_ANSWER = 4096
 OPENER = None                # tests replace it with a function (request, timeout) -> response: nothing leaves the test
@@ -214,6 +217,26 @@ def _status():
         return {"state": "unanswered"}
 
 
+def _track_snapshot(record, final, now):
+    """Keeps the time the pre-update copy has taken, so _settle_spent leaves it out."""
+    since = record.get("snapshot_since_s")
+    if final == "snapshotting" and since is None:
+        record["snapshot_since_s"] = now
+    elif final != "snapshotting" and since is not None:
+        record["snapshot_s"] = record.get("snapshot_s", 0) + now - since
+        record.pop("snapshot_since_s")
+    return record
+
+
+def _settle_spent(record, now):
+    """Seconds of the settle window used so far, not counting the pre-update copy."""
+    spent = record.get("snapshot_s", 0)
+    since = record.get("snapshot_since_s")
+    if since is not None and now - since < SNAPSHOT_GUARD_S:
+        spent += now - since
+    return now - record.get("started_s", now) - spent
+
+
 def advance(store, now):
     """Move a waiting or updating target one step. Returns the record's state."""
     with store.read() as c:
@@ -235,6 +258,8 @@ def advance(store, now):
             if busy(c) and now - record.get("queued_s", now) < IDLE_WAIT_S:
                 return state
             record.update(state="updating", started_s=now)
+            record.pop("snapshot_s", None)
+            record.pop("snapshot_since_s", None)
             save(c, record)
             c.execute("INSERT INTO registry_metadata VALUES('update-pending',?) "
                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -250,11 +275,16 @@ def advance(store, now):
         return "updating"
     result = _status()
     final, to = result.get("state"), str(result.get("to") or "").lstrip("v")
+    with store.transaction() as c:
+        fresh = load(c)
+        if fresh.get("request_id") == request_id and fresh.get("state") == "updating":
+            record = _track_snapshot(fresh, final, now)   # from the stored record, so the copy's start is kept
+            save(c, record)
     if final == "healthy" and reached(current, target):
         _finish(store, request_id, "updated", "")
     elif final in ("failed", "rolled_back") and to == target:
         _finish(store, request_id, final, result.get("message") or "")
-    elif now - record.get("started_s", now) >= SETTLE_S:
+    elif _settle_spent(record, now) >= SETTLE_S:
         _finish(store, request_id, "timed_out", "The updater gave no final answer in 45 minutes.")
     else:
         return state
