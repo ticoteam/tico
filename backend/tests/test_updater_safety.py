@@ -583,3 +583,85 @@ def test_a_front_door_start_that_runs_over_after_a_healthy_update_is_named_and_t
                                          " It may still start." % limit)
     assert updater.status["restored"] is False and docker.restored == []   # no rollback, so no snapshot restore
     assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.2.0"]
+
+
+class Script:
+    """Answers one call after another from a list; the last item repeats. An exception item is raised instead."""
+
+    def __init__(self, *items):
+        self.items, self.n = list(items), 0
+
+    def next(self):
+        item = self.items[min(self.n, len(self.items) - 1)]
+        self.n += 1
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+class Reply:
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def server_wait(monkeypatch, tmp_path, rows, answers):
+    """healthy() in server mode: `rows` answers each container inspect, `answers` each health request."""
+    import subprocess
+    updater = load(monkeypatch, "", tmp_path)
+    monkeypatch.setattr(updater, "POLL_SECONDS", 0.001)
+    monkeypatch.setattr(updater, "compose", lambda *args, **kw: "abc123\n")
+    inspected, asked = Script(*rows), Script(*answers)
+
+    def run(argv, **kw):
+        out = inspected.next()
+        return subprocess.CompletedProcess(argv, 0, out, "")
+
+    def urlopen(url, timeout=0):
+        if asked.next() == "up":
+            return Reply()
+        raise OSError("connection refused")
+    monkeypatch.setattr(updater, "docker_run", run)
+    monkeypatch.setattr(updater.urllib.request, "urlopen", urlopen)
+    return updater, inspected, asked
+
+
+def test_a_server_container_that_exited_during_start_ends_the_health_wait_early(monkeypatch, tmp_path):
+    import time
+    updater, inspected, asked = server_wait(monkeypatch, tmp_path, ["exited|0|False"], ["down"])
+    started = time.time()
+    assert updater.healthy(60) is False
+    assert time.time() - started < 5   # the window is 60 s; the wait ends at the first poll
+    assert inspected.n == 1 and asked.n == 1
+    assert "the server container exited during start" in updater.HEALTH_GAVE_UP
+
+
+def test_a_server_container_restarting_in_a_loop_ends_the_health_wait_early(monkeypatch, tmp_path):
+    import time
+    # The restart count is read when the wait begins (5); two restarts since then is a crash loop, not a slow start.
+    updater, inspected, asked = server_wait(monkeypatch, tmp_path, ["running|5|False", "running|6|False", "restarting|7|False"], ["down"])
+    started = time.time()
+    assert updater.healthy(60) is False
+    assert time.time() - started < 5
+    assert inspected.n == 3
+    assert "restarted 2 times during start" in updater.HEALTH_GAVE_UP
+
+
+def test_a_running_server_with_no_restarts_waits_the_whole_window(monkeypatch, tmp_path):
+    import time
+    updater, inspected, asked = server_wait(monkeypatch, tmp_path, ["running|0|False"], ["down"])
+    started = time.time()
+    assert updater.healthy(0.3) is False
+    assert time.time() - started >= 0.3   # it kept polling until the deadline
+    assert inspected.n > 1 and asked.n > 1
+    assert updater.HEALTH_GAVE_UP == ""
+
+
+def test_a_failed_container_inspect_keeps_polling_and_does_not_give_up(monkeypatch, tmp_path):
+    updater, inspected, asked = server_wait(monkeypatch, tmp_path, [OSError("docker is busy"), "running|0|False"], ["down", "down", "up"])
+    assert updater.healthy(60) is True   # the failed inspect ends nothing: the poll goes on and the server answers
+    assert inspected.n == 2 and asked.n == 3 and updater.HEALTH_GAVE_UP == ""
