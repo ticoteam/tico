@@ -196,6 +196,11 @@ class Settings:
     # visual page sits apart from the app's cookies. Empty: the fallback (backend/visuals.py mode), where the app's
     # own address serves pictures, video and audio as media only and pages and SVG open in the file viewer.
     visual_origin: str = ""
+    # The Company page's own address and the folder its public files are written to (backend/company_page).
+    reader_origin: str = ""
+    # The domain a page's own address sits under when the install has no reader origin of its own: <slug>.<page domain>.
+    page_domain: str = ""
+    company_page_dir: str = ""
     runner_url: str = ""
     screen_relay_url: str = ""
     screen_relay_key: str = field(default="", repr=False)
@@ -386,6 +391,9 @@ class Settings:
         self.public_url = self.public_url.rstrip("/")
         from .visuals import check_origin
         self.visual_origin = check_origin(self)
+        if self.reader_origin:          # most installs have none, and this import brings the whole sign-in stack
+            from .company_page.reader_app import check_origin as check_reader_origin
+            self.reader_origin = check_reader_origin(self)
         self.auth_proxy = self.auth_proxy.strip().lower()
         from . import cors
         self.cors_origins = cors.parse(self.cors_origins)
@@ -495,6 +503,9 @@ class Settings:
             public_url=(os.environ.get("TICO_PUBLIC_URL") or
                         "http://127.0.0.1:" + os.environ.get("TICO_PORT", "8765")).rstrip("/"),
             visual_origin=os.environ.get("TICO_VISUAL_ORIGIN", "").strip(),
+            reader_origin=os.environ.get("TICO_READER_ORIGIN", "").strip(),
+            page_domain=os.environ.get("TICO_PAGE_DOMAIN", "").strip().strip("."),
+            company_page_dir=os.environ.get("TICO_COMPANY_PAGE_DIR", "").strip(),
             owner_name=os.environ.get("TICO_OWNER_NAME", "").strip(),
             compose_project=os.environ.get("TICO_COMPOSE_PROJECT", "tico"),
             server_network=os.environ.get("TICO_SERVER_NETWORK", "tico_default"),

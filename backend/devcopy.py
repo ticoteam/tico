@@ -99,6 +99,11 @@ EMPTY = (
     # in prune; the books, budgets, views and rules are kept.
     "fin_connections", "fin_external_refs", "fin_outbox", "fin_inbox", "fin_cards", "fin_card_auths", "fin_holds",
     "fin_recipients", "fin_payments", "fin_transfers", "fin_provider_users", "fin_card_saves",
+    # The Company page: the readers (their addresses, sessions and invite hashes, the messages they wrote, what they read,
+    # what was mailed to them), and the company's published statements and rules. A copy is rehearsal data, so none of it.
+    "readers", "audience_readers", "reader_sessions", "reader_invites", "reader_messages", "reader_notices", "edition_views",
+    "company_page_settings", "audiences", "audience_sources", "disclosure_revisions", "disclosure_rules", "editions",
+    "edition_sources", "edition_checks", "page_stats", "stat_board_approvals", "page_releases",
 )
 # Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",

@@ -72,6 +72,7 @@ function route(hash = location.hash) {
   else if (S.route === '#/inbox' || S.route.startsWith('#/inbox?')) { location.hash = MAIL; return; }
   else if (S.route === OVERVIEW) pageDashboard('dashboard');
   else if (S.route === OVERVIEW_CAMPUS) pageOverview();
+  else if (S.route === OVERVIEW_COMPANY) pageOverviewCompany();
   else if (S.route.startsWith(TEAM_PAGE)) pageDashboard('team:' + decodeURIComponent(S.route.slice(TEAM_PAGE.length).split('?')[0]));
   else if (S.route === WELCOME) pageWelcome();
   else if (S.route === '#/roadmap') pageRoadmap();

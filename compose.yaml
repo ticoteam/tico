@@ -43,6 +43,10 @@ services:
       TICO_VISUAL_SECRET:
       # Local Caddy serving is a separate opt-in; a visual origin may belong to an external CDN.
       TICO_CADDY_VISUALS:
+      # The Company page's own origin (docs/company-page.md), served by the Caddy front door; unset = no page origin.
+      TICO_READER_ORIGIN:
+      # Where the page's public files are written; unset = the data directory's company-page-public folder.
+      TICO_COMPANY_PAGE_DIR:
       TICO_RUNNER_URL:
       TICO_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-tico}
       TICO_SERVER_NETWORK: ${TICO_SERVER_NETWORK:-${COMPOSE_PROJECT_NAME:-tico}_default}

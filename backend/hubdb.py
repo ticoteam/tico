@@ -89,6 +89,7 @@ from backend.repositories_schema import SCHEMA as REPOSITORIES_SCHEMA
 from backend.subscriptions_schema import SCHEMA as SUBSCRIPTIONS_SCHEMA
 from backend.triggers_schema import SCHEMA as TRIGGERS_SCHEMA, SIGNING_SCHEMA as TRIGGER_SIGNING_SCHEMA
 from backend.rules_schema import SCHEMA as RULE_EVENTS_SCHEMA
+from backend.company_page.schema import COMPANY_PAGE_SCHEMA
 from backend.triggers_incoming_schema import SCHEMA as TRIGGERS_INCOMING_SCHEMA, CONSUMER_SCHEMA as TRIGGERS_CONSUMER_SCHEMA
 from backend.hook_relay_schema import SCHEMA as HOOK_RELAY_SCHEMA
 from backend.webhooks_schema import SCHEMA as WEBHOOKS_SCHEMA
@@ -1006,7 +1007,7 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               RULE_TASK_TABLES_SCHEMA, TASK_RUN_MODELS_SCHEMA, LIVE_MEETINGS_CLIENT_SCHEMA,
               LIVE_MEETINGS_MODEL_SCHEMA, LIVE_MEETING_BOT_CONVERSATION_SCHEMA, LIVE_MEETING_TURN_RETRY_SCHEMA,
               POSTAL_MAIL_SCHEMA, POSTAL_MAIL_V2_SCHEMA, POSTAL_MAIL_V3_SCHEMA, TRIGGERS_CONSUMER_SCHEMA,
-              GROWTH_SCHEMA, BROWSER_EXITS_SCHEMA, SEGMENTS_SCHEMA]
+              GROWTH_SCHEMA, BROWSER_EXITS_SCHEMA, SEGMENTS_SCHEMA, COMPANY_PAGE_SCHEMA]
 
 
 class Refused(Exception):
@@ -1690,6 +1691,9 @@ RUN = contextvars.ContextVar("hub_run", default="")
 # The bulk change (backend/app.py task_bulk) a refusal came from: each task it skipped keeps its own refusal on record,
 # but one call counts once toward rule 8's quarantine, however many tasks it skipped (_escalate).
 BULK_CALL = contextvars.ContextVar("hub_bulk_call", default="")
+# A task filed from an outside reader's words (backend/company_page/readers.py) reaches a person and nothing else: no
+# webhook, automation or task rule hears the write, so no bot runs on it until a person passes it on.
+NO_TRIGGERS = contextvars.ContextVar("hub_no_triggers", default=False)
 
 
 def private_task_write(fn):
@@ -1758,6 +1762,8 @@ def hook(conn, type, subject, data, actor, revision=None):
     """Tell the outgoing webhooks (backend/webhooks.py) and the automations (backend/automations.py) that `type` happened
     to `subject`, in the caller's write. `data` is a function that makes the event's thin payload, called only when
     someone is listening. Never raises: a webhook problem must not undo or refuse the change that caused it."""
+    if NO_TRIGGERS.get():
+        return
     try:
         from . import webhooks
         if webhooks.listening(conn):
