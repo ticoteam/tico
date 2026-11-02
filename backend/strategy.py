@@ -809,7 +809,7 @@ def file_card(c, owner, proposal):
     if c.execute("SELECT 1 FROM goal_asks WHERE kind='proposal' AND ref=?", (proposal["id"],)).fetchone():
         return None
     requester = G.AUTO_ACTOR if GA.manager_ready(c) else H.KEEPER
-    title, body = GA._ask({"kind": "proposal", "proposal": proposal})
+    title, body = GA._ask(c, {"kind": "proposal", "proposal": proposal})
     # A realign card is urgent (goal_asks.urgent): past the daily cap, so publishing never rolls back on it.
     made = H.task_create(c, requester, title, body, owner, lint=False, lane="company")
     c.execute("INSERT INTO goal_asks (kind, ref, owner, task_id, created_at) VALUES ('proposal',?,?,?,?)",

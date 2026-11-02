@@ -347,7 +347,7 @@ def test_a_file_that_already_ran_the_segments_step_as_user_version_72_opens_and_
     assert [tuple(r) for r in conn.execute("SELECT id, status FROM growth_segments")] == [("kept", "dropped")]
     assert conn.execute("SELECT segment_id FROM growth_cohorts WHERE id='c'").fetchone()[0] == "s1"
     assert conn.execute("PRAGMA user_version").fetchone()[0] == 72
-    conn.execute("PRAGMA user_version=73")
+    conn.execute("PRAGMA user_version=74")
     conn.close()
     with pytest.raises(migrations.MigrationError, match="newer than this code"):
         migrations.preflight(path)

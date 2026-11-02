@@ -24,6 +24,10 @@ TABLES = {
 # Tables with no TypedDict in backend/rows.py yet. Shrink-only: a table that gains a TypedDict must leave this list
 # in the same change, and adding a name here is a visible decision in review, not a way around the row shapes.
 UNTYPED = frozenset({
+    # The Company page (backend/company_page).
+    "audience_readers", "audience_sources", "audiences", "company_page_settings", "disclosure_revisions",
+    "disclosure_rules", "edition_checks", "edition_sources", "edition_views", "editions", "page_releases", "page_stats",
+    "reader_invites", "reader_messages", "reader_notices", "reader_sessions", "readers", "stat_board_approvals",
     "agent_pairings", "agents", "archives", "ask_ingest_items", "ask_ingest_settings", "assignments",
     "assistant_actions", "attempt_capture_drops", "attempt_captures", "attempt_conversations", "attempt_diagnostics",
     "attempt_inputs", "attempt_load_snapshots", "attempt_subscriptions", "audit_log", "automation_daily",

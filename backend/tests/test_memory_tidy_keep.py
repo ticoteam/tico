@@ -77,7 +77,7 @@ def repos(tmp_path):
     git(remote, 'symbolic-ref', 'HEAD', 'refs/heads/main')
     subprocess.run(['git', 'clone', '-q', str(remote), str(writer)], check=True, capture_output=True)
     request = {'id': 'operation-one', 'card_id': 'card-one', 'memory_commit': git(local, 'rev-parse', 'HEAD'),
-               'date': TODAY.isoformat(), 'diary': 'Checked diary.', 'edits': raw(snap)}
+               'date': TODAY.isoformat(), 'diary': 'Checked diary.', 'edits_json': raw(snap)}
     return remote, local, writer, request
 
 

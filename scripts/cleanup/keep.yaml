@@ -47,6 +47,7 @@ names:
   # next: the login page's next= parameter; bot: its own chat state and kind literal; state: Execution.state; actor: Me.actor.
   examples/custom-frontend/app.js: [next, bot, state, actor]
 keys:
+  backend/tests/test_memory_tidy_keep.py: [edits_json]   # a Keep request as runners get it
   backend/memory_tidy_cards.py: [edits_json]   # the Keep reply's runner-wire field (runner/memory_tidy_keep.py) and the Result attribute
   backend/strategy_setup.py: [started, finished]
   clients/hubtools.py: [owner, requester, due, from_actor, at]   # a tool's input takes a name or an id
