@@ -604,6 +604,10 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
             return
     if posting_rules.post_feed(ctx, row, money, t, gl.id):
         return
+    # Nothing above decided it (a rule, a bill, a top-up...): it may be one side of a card payment (_card_payment). Here,
+    # after those, so the bank side gets the same decision whichever side comes first.
+    if card is None and t.kind not in F.CARD_KINDS and not t.request_id and _card_payment(ctx, row, money):
+        return
     if t.amount < 0:
         spend = by_code(ctx, OTHER)
         if spend is not None:
@@ -939,6 +943,49 @@ def _counterpart(ctx: Ctx, row: Any, money: Any) -> Any:
               "ambiguous")
         return None
     return found[0] if found else None
+
+
+def _card_payment(ctx: Ctx, row: Any, money: Any) -> bool:
+    """A payment from a bank account to a credit card program of the same connection (Mercury IO's autopay: a plain
+    row on each side, no transfer kind) posts as a transfer: Dr the card liability, Cr the bank. Whichever side comes
+    second pairs them; a bank side already posted to Other expenses (still waiting for a category) is taken back, one
+    a rule or match posted elsewhere is not. No pair, or several, and the row posts as any other."""
+    kind, amount = str(money["kind"]), int(row["amount"])
+    if kind == "card_program" and str(money["subtype"]) == "credit" and amount > 0:
+        want = "bank"
+    elif kind == "bank" and amount < 0:
+        want = "card_program"
+    else:
+        return False
+    conn = str(money["connection_id"] or "")
+    others = [str(m["id"]) for m in SK.money_accounts(ctx.c, ctx.book.id) if conn and str(m["kind"]) == want
+              and str(m["connection_id"] or "") == conn and (want == "bank" or str(m["subtype"]) == "credit")]
+    if not others:
+        return False
+    day = dates.day(str(row["txn_date"]))
+    start, end = (day - timedelta(days=MATCH_DAYS)).isoformat(), (day + timedelta(days=MATCH_DAYS)).isoformat()
+    other_line = by_code(ctx, OTHER)
+    found = [r for r in SK.transfer_candidates(ctx.c, others, -amount, start, end)
+             if str(r["kind"]) not in (*F.CARD_KINDS, *F.TRANSFER_KINDS) and not r["card_id"] and not r["request_id"]
+             and (not r["entry_id"] or other_line is not None and _only_other(ctx, r, other_line.id))]
+    if len(found) != 1:
+        return False
+    other = found[0]
+    if other["entry_id"]:
+        unpost_row(ctx, other, "it pays the card")
+        other = SK.get(ctx.c, "fin_feed_txns", str(other["id"]))
+    transfer(ctx, row, money, other)
+    return True
+
+
+def _only_other(ctx: Ctx, row: Any, other_id: str) -> bool:
+    """Whether a posted row's live entry is the Other expenses line alone (beside its own money line): no category yet."""
+    entry = SL.entry_row(ctx.c, str(row["entry_id"]))
+    if entry is None or str(entry["status"]) != "posted" or len(SK.rows_of_entry(ctx.c, str(row["entry_id"]))) > 1:
+        return False
+    money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
+    rest = {line.account_id for _, line in SL.entry_lines(ctx.c, str(row["entry_id"]))} - {str(money["account_id"])}
+    return rest == {other_id}
 
 
 def transfer(ctx: Ctx, row: Any, money: Any, other: Any) -> None:

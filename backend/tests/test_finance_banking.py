@@ -399,6 +399,67 @@ def test_transfers_pair_only_transfer_kinds_and_io_charges_on_unknown_cards_post
         assert codes[1] == "6900" and codes[0] != "1000"                                       # Other vs IO liability
 
 
+def _codes(c, entry_id):
+    return sorted((str(r[0]), int(r[1])) for r in c.execute(
+        "SELECT a.code, l.amount FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id WHERE l.entry_id=?",
+        (entry_id,)))
+
+
+def test_a_bank_payment_to_the_io_card_program_is_a_transfer_whichever_side_comes_first(books):
+    """Mercury IO's autopay is a plain row on the bank and on the card program: the pair posts one transfer (Dr the
+    card liability, Cr the bank). A bank side that came first and sat in Other expenses is taken back; a card side
+    two bank rows could pay is left for a person."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.read() as c:
+        cards = str(c.execute("SELECT a.code FROM fin_money_accounts m JOIN fin_accounts a ON a.id=m.account_id "
+                              "WHERE m.provider_account_id='credit-io'").fetchone()[0])
+    fake.txns["pay-out"] = _txn("pay-out", "acct-chk", -105.5, "other", day="2026-10-01")       # bank side first
+    sync_once(books, fake)
+    with books.read() as c:
+        assert ("6900", 10_550) in _codes(c, _row(c, "pay-out")[1])                              # Other, for now
+    fake.txns["pay-in"] = _txn("pay-in", "credit-io", 105.5, "other", day="2026-10-01")
+    fake.txns["two-out"] = _txn("two-out", "acct-chk", -40.0, "other", day="2026-10-03")
+    fake.txns["two-in"] = _txn("two-in", "credit-io", 40.0, "other", day="2026-10-03")         # card side first
+    fake.txns["amb-a"] = _txn("amb-a", "acct-chk", -7.0, "other", day="2026-10-05")
+    fake.txns["amb-b"] = _txn("amb-b", "acct-chk", -7.0, "other", day="2026-10-05")
+    fake.txns["amb-in"] = _txn("amb-in", "credit-io", 7.0, "other", day="2026-10-05")           # two could pay it
+    fake.txns = dict(sorted(fake.txns.items(), key=lambda kv: kv[0] != "two-in"))
+    with books.transaction() as c:
+        c.execute("UPDATE fin_connections SET settings='{}', cursor=NULL")             # backfill again
+    sync_once(books, fake, LATER)
+    with books.read() as c:
+        for out, inn, cents in (("pay-out", "pay-in", 10_550), ("two-out", "two-in", 4_000)):
+            entry = _row(c, inn)[1]
+            assert entry and tuple(_row(c, out)) == ("posted", entry)
+            assert _codes(c, entry) == sorted([("1000", -cents), (cards, cents)])
+        assert _row(c, "amb-in")[1] is None and _row(c, "amb-a")[1] != _row(c, "amb-b")[1]
+
+
+def test_a_bank_row_a_posting_rule_covers_never_pairs_with_the_io_card_program(books):
+    """A rule that posts a bank debit to an expense line decides it whichever side comes first: a same-amount credit
+    on the IO card program never takes it as the card's payment, and stays waiting."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        rule = {"kind": "posting", "name": "Rent", "when": {"counterparty": "Acme Rent"},
+                "outcome": {"outcome": "post", "account_id": account(c, "6100")},
+                "examples": [{"input": {"counterparty": "Acme Rent"}, "expect": "post"}]}
+        assert act(c, OWNER, "rule_create", rule).status == "committed"
+    fake.txns["rent-1"] = _txn("rent-1", "acct-chk", -60.0, "other", day="2026-10-01", counterpartyName="Acme Rent")
+    sync_once(books, fake)                                                                       # bank side first
+    fake.txns["io-1"] = _txn("io-1", "credit-io", 60.0, "other", day="2026-10-01")
+    fake.txns["io-2"] = _txn("io-2", "credit-io", 70.0, "other", day="2026-10-03")              # card side first
+    fake.txns["rent-2"] = _txn("rent-2", "acct-chk", -70.0, "other", day="2026-10-03", counterpartyName="Acme Rent")
+    with books.transaction() as c:
+        c.execute("UPDATE fin_connections SET settings='{}', cursor=NULL")             # backfill again
+    sync_once(books, fake, LATER)
+    with books.read() as c:
+        for rent, io, cents in (("rent-1", "io-1", 6_000), ("rent-2", "io-2", 7_000)):
+            assert ("6100", cents) in _codes(c, _row(c, rent)[1])
+            assert tuple(_row(c, io)) == ("new", None)
+
+
 def test_a_settled_card_charge_uses_its_allocation_at_its_actual_amount(books):
     """P: a card charge first seen settled (a backfill, no authorization) still uses the card's allocation, and a
     refund gives it back."""
