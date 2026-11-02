@@ -7,6 +7,8 @@ import pytest
 
 from backend.finance import reads as FR
 from backend.finance import actions as FA
+from backend.finance import mirror as M
+from backend.finance.context import load
 from clients import hubtools
 from backend.finance.core.errors import NOT_FOUND, FinanceError
 from backend.tests.test_finance_fixtures import (  # noqa: F401
@@ -148,3 +150,17 @@ def test_an_own_key_bot_holds_its_recent_average_and_a_subscription_run_never_co
         held = FA.run_hold(c, "coder", "job-own", at=AT)
         assert held.hold_id and not held.refused
         assert FA.budget_state(c, ai, AT).held == 40
+
+
+def test_an_edit_that_lands_in_a_closed_month_is_flagged_on_its_snapshot(books):
+    """§10: a mirrored edit made inside a closed month is flagged on that month's close snapshot, with the amounts left
+    out. The snapshot's totals are not touched."""
+    with books.transaction() as c:
+        spend(c, "5100", 1_000, day="2026-09-05")
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        sep = FR.pnl(c, OWNER, "2026-09-01", "2026-09-30", at=AT)
+        assert sep["snapshot"] == {"month": "2026-09", "restatements": 0}
+        M._restate(c, load(c, AT), "2026-09-05", "added", None, None, None, "ext-1", AT)     # what a mirror edit does
+        flagged = FR.pnl(c, OWNER, "2026-09-01", "2026-09-30", at=AT)
+        assert flagged["snapshot"] == {"month": "2026-09", "restatements": 1}
+        assert flagged["expense"] == sep["expense"]
