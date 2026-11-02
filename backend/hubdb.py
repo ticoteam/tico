@@ -335,7 +335,7 @@ CREATE TABLE IF NOT EXISTS kpi_definitions (
 
 CREATE TABLE IF NOT EXISTS goal_checkins (
   id TEXT PRIMARY KEY, goal_id TEXT NOT NULL, kpi_id TEXT, created_at TEXT NOT NULL, author TEXT NOT NULL,
-  source_actor TEXT NOT NULL, body TEXT NOT NULL, signal TEXT);
+  sender_id TEXT NOT NULL, body TEXT NOT NULL, signal TEXT);
 CREATE INDEX IF NOT EXISTS goal_checkins_goal ON goal_checkins(goal_id, created_at);
 
 CREATE TABLE IF NOT EXISTS goal_proposals (

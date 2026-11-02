@@ -36,7 +36,8 @@ SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_ca
 PROSE_SUFFIXES = {".md", ".markdown", ".rst", ".txt", ".yaml", ".yml"}   # only code spans and fenced blocks are read
 MAX_BYTES = 2_000_000
 MEMORY_DIR = "memory"
-AMBIGUOUS_KEYS = {"attempt"}     # `attempt` is a common key in a bot's own code (a retry count): report, never rewrite
+AMBIGUOUS_KEYS = {"attempt", "last_sync"}     # common keys in a bot's own code (a retry count; a sync time that stored
+                                              # documents keep): report, never rewrite
 
 FENCE = re.compile(r"^([ \t]*)(`{3,}|~{3,})[^\n]*\n(.*?)^\1\2[ \t]*$", re.M | re.S)
 SPAN = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")

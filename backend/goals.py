@@ -714,9 +714,9 @@ def hand_back(conn, actor, goal_id):
     return goal(conn, goal_id)
 
 
-def checkin_add(conn, actor, goal_id, body, signal=None, source_actor=None, kpi_id=None):
+def checkin_add(conn, actor, goal_id, body, signal=None, sender_id=None, kpi_id=None):
     """The owner's own answer about how a goal is going, in their words: interpretation, kept apart from
-    the readings (facts). `source_actor` is whose answer it is when someone records it for them."""
+    the readings (facts). `sender_id` is whose answer it is when someone records it for them."""
     H._writer(conn, actor)
     if not goal(conn, goal_id):
         H.refuse(conn, actor, "not-found", f"no goal {goal_id}")
@@ -728,9 +728,9 @@ def checkin_add(conn, actor, goal_id, body, signal=None, source_actor=None, kpi_
     if kpi_id and not kpi(conn, kpi_id):
         H.refuse(conn, actor, "not-found", f"no kpi {kpi_id}")
     row = {"id": H.new_id(), "goal_id": goal_id, "kpi_id": kpi_id or None, "created_at": H.now(), "author": actor,
-           "source_actor": source_actor or actor, "body": body[:4000], "signal": signal or None}
-    conn.execute("INSERT INTO goal_checkins (id, goal_id, kpi_id, created_at, author, source_actor, body, signal) VALUES "
-                 "(:id, :goal_id, :kpi_id, :created_at, :author, :source_actor, :body, :signal)", row)
+           "sender_id": sender_id or actor, "body": body[:4000], "signal": signal or None}
+    conn.execute("INSERT INTO goal_checkins (id, goal_id, kpi_id, created_at, author, sender_id, body, signal) VALUES "
+                 "(:id, :goal_id, :kpi_id, :created_at, :author, :sender_id, :body, :signal)", row)
     _event(conn, goal_id, actor, "checkin", None, signal, body[:300])
     H.event(conn, actor, "goal.checkin", goal_id, {"signal": signal})
     apply_auto(conn, goal_id)

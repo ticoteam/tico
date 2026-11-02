@@ -202,7 +202,7 @@ def install(app, auth, settings):
 
     # The seeded Granola account holds no token and nothing leaves this computer: a sync answers "recent".
     async def granola_recent(who, interval=0):
-        return {"state": "recent", "last_sync": app.state.granola.status(who)["last_sync"]}
+        return {"state": "recent", "last_synced_at": app.state.granola.status(who)["last_synced_at"]}
     app.state.granola.trigger = granola_recent
 
     def problem(status, code, detail):

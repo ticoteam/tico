@@ -12,8 +12,9 @@ Use this page with the spec (`docs/openapi/v2.json`), the [SQL guide](hub-sql.md
 - A database at schema version 70 or older is refused. The message is: "This database is at schema version N, below 71,
   the oldest this server upgrades. Start it once with Tico v0.5.x (the release that writes version 71), then upgrade to
   this release." Start the old database once with v0.5.x, then upgrade.
-- Migrations run on the first start. Migrations `0013_rails_renames_wave1`, `0014_rails_renames_wave2` and
-  `0031_rails_renames_wave3` rename the columns. A database that has both the old and the new name of a column is refused, so do not rename columns by hand.
+- Migrations run on the first start. Migrations `0013_rails_renames_wave1`, `0014_rails_renames_wave2`,
+  `0031_rails_renames_wave3`, `0032_one_spelling_canceled` (two note columns) and `0034_rails_renames_wave5` rename the
+  columns. A database that has both the old and the new name of a column is refused, so do not rename columns by hand.
 
 ## Field names
 
@@ -21,7 +22,7 @@ Use this page with the spec (`docs/openapi/v2.json`), the [SQL guide](hub-sql.md
 |---|---|---|
 | `<name>_json` | `<name>` | Every JSON field and column. The stored content is the same text. |
 | `created`, `updated` | `created_at`, `updated_at` | Objects and tables. |
-| `started`, `finished`, `last_seen`, `expires`, `last_checked`, `last_sync`, `next_attempt` | `started_at`, `finished_at`, `last_seen_at`, `expires_at`, `last_checked_at`, `last_synced_at`, `next_attempt_at` | Objects and tables. The names not yet changed are under [Still to rename](#todo-still-to-rename). |
+| `started`, `finished`, `last_seen`, `expires`, `last_checked`, `last_sync`, `next_attempt` | `started_at`, `finished_at`, `last_seen_at`, `expires_at`, `last_checked_at`, `last_synced_at`, `next_attempt_at` | Objects and tables. |
 
 Exceptions, where the new name is not the old name with the suffix dropped:
 
@@ -140,6 +141,7 @@ apply to the tables named, not to every column with the old name: `tasks.owner` 
 | `operator` | `owner_id` | `runners`, `bot_config`, `enrollments` |
 | `requester` | `requester_id` | `tasks` |
 | `from_actor`, `to_actor` | `sender_id`, `recipient_id` | `messages` |
+| `source_actor` | `sender_id` | `goal_checkins` |
 | `actor` | `actor_id` | `kpi_readings` |
 | `bot` | `bot_id` | `jobs`, `attempts`, `bot_files` |
 | `created_by`, `updated_by`, `closed_by`, `decided_by`, `requested_by` and other `*_by` | `*_by_id` | `tasks`, `goals`, `kpis`, `goal_kpis`, `approvals`, `cards`, `docs`, `messages` and others |
@@ -151,10 +153,21 @@ apply to the tables named, not to every column with the old name: `tasks.owner` 
 
 `clients/renames.json` holds the full list, with every table each name moved on and the tables that keep it.
 
-These request and response fields keep their old names in this release, and the spec lists them: `created` on
-`BotFileResult`, `PagePublished` and `InboundTaskResult`; `updated` on `UpdateArchiveResult`; `last_sync` on the Granola
-objects; `ts` on `KpiReadingView`; `at` on `KpiReading`; and `blocked_by` on `UsageLimitView`. Inputs that take a person
-or a date keep theirs too, such as `owner` and `due` on `TaskCreate` and `TaskUpdate`.
+These response fields keep their old names in this release, and the spec lists them: `created` on
+`BotFileResult`, `PagePublished` and `InboundTaskResult`; `updated` on `UpdateArchiveResult`; and `blocked_by` on
+`UsageLimitView`. Inputs keep their names too: `owner` and `due` on `TaskCreate` and `TaskUpdate`, `from_actor` on a goal
+check-in, and `at` on a KPI reading, which is the old name of `period_end`.
+
+Some response fields were renamed in this release and the spec now says so:
+
+- Granola's status, sign-in and sync answers: `last_sync` is `last_synced_at`, the time of the last sync. The Granola
+  document Tico stores keeps `last_sync`, so nothing stored changes.
+- A goal's `why_by` is `why_by_id`: the actor who wrote the goal's why.
+- A goal check-in's `source_actor` is `sender_id`, and `source_actor_name` is `sender_name`: whose words the check-in is.
+  `author` is who recorded it. Migration 0034 renames the column.
+- A KPI reading's `ts` is `measured_at`: the moment the reading is about, the end of its period. Its `actor` is
+  `actor_id`, the person who recorded it.
+- A message's display names are `sender_name` and `recipient_name`.
 
 ## Check a bot's repository
 

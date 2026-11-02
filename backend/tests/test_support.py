@@ -2,6 +2,7 @@
 mode, and a person sees their own tickets and HQ's replies, and no one else's."""
 
 import json
+import logging
 import re
 import secrets
 from pathlib import Path
@@ -363,6 +364,33 @@ def test_plaintext_ticket_secrets_from_before_are_sealed_once_on_start(environme
     assert support.seal_plaintext_secrets(api.app.state.store, vault) == 0 and stored_secret(api, ticket["id"]) == sealed
     hq.staff_replies(tid, "Fixed")
     assert api.post("/api/v2/support/tickets/refresh", headers=signed_in()).json()["tickets"][0]["status"] == "answered"
+
+
+def test_no_ticket_table_yet_is_nothing_to_seal_and_not_a_warning(environment, caplog):
+    api = environment()
+    with api.app.state.store.transaction() as c:      # a fresh database: the seal runs before Store.initialize makes the table
+        c.execute("DROP TABLE support_tickets")
+    caplog.clear()
+    assert support.seal_plaintext_secrets(api.app.state.store, api.app.state.vault) == 0
+    assert not [r for r in caplog.records if r.name == "tico.support" and r.levelno >= logging.WARNING]
+
+
+def test_a_vault_that_cannot_seal_still_fails_so_startup_names_it(environment, hq):
+    api = environment()
+    ticket = file(api).json()
+    (tid, held), = hq.tickets.items()
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE support_tickets SET hq_secret=? WHERE id=?", (held["secret"], ticket["id"]))
+
+    class KmsDown:
+        class cipher:
+            @staticmethod
+            def seal(c, context, value):
+                raise OSError("KMS unreachable")
+
+    with pytest.raises(OSError):
+        support.seal_plaintext_secrets(api.app.state.store, KmsDown)
+    assert stored_secret(api, ticket["id"]) == held["secret"]
 
 
 def test_a_vault_that_cannot_be_opened_refuses_a_ticket_before_anything_reaches_hq(environment, hq):

@@ -4,10 +4,13 @@
     "attempt": "run",
     "attempt_id": "run_id",
     "from_actor_name": "sender_name",
+    "last_sync": "last_synced_at",
     "operator_name": "owner_name",
     "since": "changed_at",
+    "source_actor_name": "sender_name",
     "to_actor_name": "recipient_name",
-    "ts": "created_at"
+    "ts": "created_at",
+    "why_by": "why_by_id"
   },
   "api_fields_removed": {
     "blocked_from_status": "holds",
@@ -36,7 +39,8 @@
     "2s",
     "2b",
     "3",
-    "4"
+    "4",
+    "5"
   ],
   "columns": {
     "acceptance_json": "acceptance",
@@ -1003,6 +1007,7 @@
           "assistant_actions",
           "brand_drafts",
           "brand_versions",
+          "editions",
           "gtm_drafts",
           "gtm_versions"
         ]
@@ -1369,6 +1374,7 @@
           "meeting_versions",
           "meetings",
           "memory_tidy_cards",
+          "memory_tidy_keeps",
           "messages",
           "model_logins",
           "model_subscriptions",
@@ -1457,6 +1463,7 @@
         "fin_credit_refunds",
         "fin_dimensions",
         "fin_entries",
+        "fin_estimate_lines",
         "fin_events",
         "fin_external_refs",
         "fin_feed_txns",
@@ -1470,6 +1477,7 @@
         "fin_outbox",
         "fin_payments",
         "fin_periods",
+        "fin_po_lines",
         "fin_private_lines",
         "fin_projections",
         "fin_raw_imports",
@@ -1616,6 +1624,7 @@
       "renames": {
         "detail": [
           "bot_file_activity",
+          "edition_checks",
           "events",
           "flight_db",
           "flight_events",
@@ -2436,6 +2445,7 @@
         "bot_transitions",
         "calendar_actions",
         "meeting_deliveries",
+        "memory_tidy_keeps",
         "model_logins",
         "rule_reads",
         "runner_harness_actions",
@@ -2700,6 +2710,14 @@
         ]
       }
     },
+    "source_actor": {
+      "kept_in": [],
+      "renames": {
+        "sender_id": [
+          "goal_checkins"
+        ]
+      }
+    },
     "source_json": {
       "kept_in": [],
       "renames": {
@@ -2831,8 +2849,10 @@
       "renames": {
         "tags": [
           "fin_bill_lines",
+          "fin_estimate_lines",
           "fin_invoice_lines",
-          "fin_payments"
+          "fin_payments",
+          "fin_po_lines"
         ]
       }
     },

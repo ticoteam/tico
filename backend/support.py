@@ -276,6 +276,9 @@ def seal_plaintext_secrets(store, vault):
     is left alone. Returns how many were sealed. Run on start; a vault that cannot be opened now (KMS unreachable)
     leaves them for the next start or the next use (`Support.secret`)."""
     with store.transaction() as c:
+        # The table is made by Store.initialize, which can run after this (a fresh database): no table, nothing stored yet.
+        if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='support_tickets'").fetchone():
+            return 0
         rows = c.execute("SELECT id,hq_secret FROM support_tickets WHERE substr(hq_secret,1,?)<>?",
                          (len(SEALED), SEALED)).fetchall()
         for row in rows:

@@ -16,9 +16,9 @@
           "goal_id": "<goal>",
           "id": "<id7>",
           "kpi_id": null,
-          "signal": "on_track",
-          "source_actor": "human:ana",
-          "source_actor_name": "Ana"
+          "sender_id": "human:ana",
+          "sender_name": "Ana",
+          "signal": "on_track"
         }
       ],
       "children": [],

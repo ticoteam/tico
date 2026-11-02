@@ -2,7 +2,7 @@
 # in cleanup-spec.md. Do not edit by hand: change the tables in gen_map.py and regenerate.
 # `# CHECK` marks a name the integration owner should confirm before the map is frozen.
 base: 29fcaaf6e
-applied_waves: [1, 2, 2s, 2b, 3, 4]
+applied_waves: [1, 2, 2s, 2b, 3, 4, 5]
 tables: {}
 columns:
   agent_pairings.created: created_at
@@ -237,6 +237,7 @@ columns:
   github_product_repo_operations.updated: updated_at
   github_review_operations.response_json: response
   goal_asks.created: created_at
+  goal_checkins.source_actor: sender_id  # the actor whose words the check-in is; the answer's sender
   goal_checkins.ts: created_at  # row time
   goal_events.ts: created_at  # row time
   goal_kpis.created: created_at
@@ -604,6 +605,9 @@ api_fields:
   from_actor_name: sender_name
   to_actor_name: recipient_name
   operator_name: owner_name
+  source_actor_name: sender_name
+  last_sync: last_synced_at
+  why_by: why_by_id
   ts: created_at
   at: created_at
   since: changed_at
@@ -930,4 +934,10 @@ waves:
     scoped:
       notes.cancelled_at: canceled_at  # one spelling: canceled
       notes.cancelled_by: canceled_by  # one spelling: canceled
+  "5":
+    rule: "a response's role name: goal_checkins.source_actor -> sender_id (migration 0034)"
+    count: 1
+    global: {}
+    scoped:
+      goal_checkins.source_actor: sender_id  # the actor whose words the check-in is; the answer's sender
 collisions: []

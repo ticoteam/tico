@@ -145,3 +145,16 @@ def test_every_finished_goal_of_one_owner_is_listed_without_the_rest_of_the_team
     listed = get(api, "goals?all=1&status=done,dropped&owner=human:ben")["goals"]
     assert [g["owner_id"] for g in listed] == ["human:ben"]
     assert len(get(api, "goals?all=1&status=done,dropped")["goals"]) == 2
+
+
+def test_a_check_in_says_whose_words_it_is_and_who_recorded_it(api):
+    """`from_actor` on the way in is whose words a check-in is (`sender_id` on the way out); `author` is who recorded
+    it. Without `from_actor` the words are the caller's."""
+    goal = post(api, "goals", {"title": "Grow activation", "owner": "me"})["goal"]
+    own = post(api, f"goals/{goal['id']}/checkins", {"body": "On track.", "signal": "on_track"})["checkin"]
+    assert own["sender_id"] == own["author"] == "human:ana" and own["sender_name"] == "Ana"
+    for_ben = post(api, f"goals/{goal['id']}/checkins",
+                   {"body": "Ben says the copy is late.", "from_actor": "human:ben"})["checkin"]
+    assert for_ben["sender_id"] == "human:ben" and for_ben["author"] == "human:ana"
+    listed = get(api, f"goals/{goal['id']}/checkins")["checkins"]
+    assert {c["sender_id"] for c in listed} == {"human:ana", "human:ben"}

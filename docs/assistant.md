@@ -317,7 +317,7 @@ own session, not a personal token.
 | `POST /api/v2/assistant/learned` `{"text", "layer"}` | Saves one line (`layer` is `personal`, the default, or `company`: the owner only, on their own or in their own Assistant chat; `403` for anyone else and any other Assistant). `{"entry"}`; the same line again returns the one already there; `409 too_many` past 100. What the bot's `hub assistant learn` calls. |
 | `PATCH /api/v2/assistant/learned/{id}` `{"text"}`, `DELETE /api/v2/assistant/learned/{id}` | Your own click only (`403` for a bot's turn); someone else's entry is `404`. |
 
-Names come with ids (`from_name`, `owner_name`, and an `actors` map), as elsewhere in v2. A custom frontend (see
+Names come with ids (`sender_name`, `owner_name`, and an `actors` map), as elsewhere in v2. A custom frontend (see
 [custom-frontend.md](custom-frontend.md)) can embed the Assistant with these routes alone.
 
 ## For the assistant bot

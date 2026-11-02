@@ -16,7 +16,7 @@ from . import fast_json
 import re
 
 ACTOR_KEYS = ("owner_id", "requester_id", "sender_id", "recipient_id", "actor_id", "status_by_id", "decided_by_id",
-              "owner", "requester", "actor", "author", "reports_to", "status_by", "proposed_by", "source_actor")
+              "owner", "requester", "actor", "author", "reports_to", "status_by", "proposed_by")
 ID = re.compile(r"\b(human|bot):([A-Za-z0-9._-]*[A-Za-z0-9_])")
 # Tico support in a session a person opened (backend/support_access.py): no roster row, always this name.
 SUPPORT_ACTOR, SUPPORT_NAME = "human:tico-support", "Tico support"

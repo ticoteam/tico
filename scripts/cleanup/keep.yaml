@@ -44,8 +44,6 @@ names:
   ui/tests/bot-pause-strip.cjs: [finished]  # a held request's own finished promise
   ui/app/settings-billing.js: [expires]   # Tico HQ's billing credits (backend/company_billing.py), another system's fields
   ui/tests/settings-billing.cjs: [expires]
-  ui/app/meetings-granola.js: [last_sync]   # Granola's sync status: a stored document's field, not a column
-  ui/tests/meetings-granola.cjs: [last_sync]
   # next: the login page's next= parameter; bot: its own chat state and kind literal; state: Execution.state; actor: Me.actor.
   examples/custom-frontend/app.js: [next, bot, state, actor]
 keys:
@@ -71,8 +69,7 @@ keys:
   backend/tests/test_company_billing.py: [created, expires]
   backend/tico_storage.py: [expires]   # HQ's storage answer (credentials.expires): the stored column is expires_at
   backend/tests/test_vendor_contracts.py: [expires]   # the recorded HQ answers: storage credentials and billing credits
-  backend/granola_mcp.py: [last_sync]   # Granola's stored sync status (a JSON document) and its answer
-  backend/demo.py: [last_sync]
+  backend/granola_mcp.py: [last_sync]   # Granola's stored sync status: a JSON document's key (the answer says last_synced_at)
   backend/tests/test_granola_*.py: [last_sync]
   backend/finance/core/feeds.py: [created]   # a Stripe balance transaction's own `created` (epoch seconds)
   backend/tests/test_finance_stripe.py: [created]   # the fake Stripe API's balance transactions

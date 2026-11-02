@@ -280,7 +280,7 @@ class GranolaMCP:
         meta = json.loads(row["metadata"]) if row else {}
         return {"mode": "account" if row else "api_key" if api_key and api_key[0] else "off",
                 "connected": meta.get("state") == "connected" or bool(meta.get("previous_meta")), "email": meta.get("email"),
-                "plan_hint": meta.get("plan_hint"), "last_sync": meta.get("last_sync"),
+                "plan_hint": meta.get("plan_hint"), "last_synced_at": meta.get("last_sync"),
                 "last_error": meta.get("last_error"), "imported_count": meta.get("imported_count", 0),
                 "needs_signin": meta.get("needs_signin", False), "syncing": who.actor in self.jobs,
                 "skipped": meta.get("skipped", 0), "skip_reasons": meta.get("skip_reasons", {}),
@@ -1049,19 +1049,19 @@ class GranolaMCP:
 
     async def trigger(self, who, interval=DEBOUNCE, now=False):
         if who.actor in self.changing_connections:
-            return {"state": "off", "last_sync": None}
+            return {"state": "off", "last_synced_at": None}
         if not await asyncio.to_thread(self.eligible, who):
             await self.disconnect(who)
-            return {"state": "off", "last_sync": None}
+            return {"state": "off", "last_synced_at": None}
         status = await asyncio.to_thread(self.status, who)
         if who.actor in self.jobs:
-            return {"state": "syncing", "last_sync": status["last_sync"]}
+            return {"state": "syncing", "last_synced_at": status["last_synced_at"]}
         meta = await asyncio.to_thread(self.metadata, who.actor)
         if meta.get("previous_meta") and self.clock() >= meta.get("expires", 0):
             await self.poll(who)
             meta = await asyncio.to_thread(self.metadata, who.actor)
         if not meta or meta["state"] != "connected":
-            return {"state": "needs_signin" if status["needs_signin"] else "off", "last_sync": status["last_sync"]}
+            return {"state": "needs_signin" if status["needs_signin"] else "off", "last_synced_at": status["last_synced_at"]}
         throttled = (meta.get("last_error") or "").startswith("rate_limited:")
         retry_at = self.next_retry(meta) if interval == SCHEDULE or throttled else 0
         # A person pressing Sync now (`now`, the button only) gets a real attempt once five minutes have passed since
@@ -1069,13 +1069,13 @@ class GranolaMCP:
         if retry_at and now and self.clock() - meta.get("last_attempt", 0) >= RATE_LIMIT_RETRY:
             retry_at = 0
         if retry_at and self.clock() < retry_at:
-            return {"state": "recent", "last_sync": status["last_sync"]}
+            return {"state": "recent", "last_synced_at": status["last_synced_at"]}
         if not retry_at and self.clock() - max(meta.get("last_attempt", 0), meta.get("last_finished", 0)) < interval:
-            return {"state": "recent", "last_sync": status["last_sync"]}
+            return {"state": "recent", "last_synced_at": status["last_synced_at"]}
         if who.actor in self.jobs:
-            return {"state": "syncing", "last_sync": status["last_sync"]}
+            return {"state": "syncing", "last_synced_at": status["last_synced_at"]}
         if who.actor in self.changing_connections:
-            return {"state": "off", "last_sync": status["last_sync"]}
+            return {"state": "off", "last_synced_at": status["last_synced_at"]}
         def record_failure():
             with self.store.transaction() as c:
                 row = c.execute("SELECT metadata FROM granola_connections WHERE actor=?", (who.actor,)).fetchone()
@@ -1097,7 +1097,7 @@ class GranolaMCP:
             if self.jobs.get(who.actor) is task:
                 self.jobs.pop(who.actor, None)
         task.add_done_callback(finished)
-        return {"state": "syncing", "last_sync": status["last_sync"]}
+        return {"state": "syncing", "last_synced_at": status["last_synced_at"]}
 
     async def tick(self):
         def connections():
