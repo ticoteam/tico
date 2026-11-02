@@ -468,6 +468,7 @@ class Viewer:
         self._backfill = None
         self._threads = {}
         self._legacy = {}
+        self._members = None      # {thread id: whether a member}, while a sidebar page reads (`_prefetch_members`)
 
     @property
     def is_bot(self):
@@ -603,6 +604,8 @@ def _task_readable(c, v, task_id):
 
 
 def _is_member(c, v, thread_id):
+    if v._members is not None and thread_id in v._members:
+        return v._members[thread_id]
     names = v.member_names(c)
     return c.execute("SELECT 1 FROM thread_members WHERE thread_id=? AND actor IN (%s) LIMIT 1"
                      % ",".join("?" * len(names)), (thread_id, *names)).fetchone() is not None
@@ -789,11 +792,13 @@ def readable(c, v, thread_or_message):
     return denial(c, v, value) is None
 
 
-def thread_readable(c, v, thread_id):
-    """Cached per viewer: a timeline or SSE batch asks about the same thread many times."""
-    if thread_id not in v._threads:
-        v._threads[thread_id] = denial(c, v, thread_id) is None
-    return v._threads[thread_id]
+def thread_readable(c, v, thread):
+    """Cached per viewer: a timeline or SSE batch asks about the same thread many times. `thread` is its id, or its row
+    when a list already holds the row (no second read of it)."""
+    key = thread if isinstance(thread, str) else thread["id"]
+    if key not in v._threads:
+        v._threads[key] = denial(c, v, thread) is None
+    return v._threads[key]
 
 
 def _legacy_homes(c):
@@ -3617,6 +3622,30 @@ def _sidebar_positions(cursor):
     return tuple(out)
 
 
+def _prefetch_members(c, v, ids):
+    """{thread id: whether the viewer is a member} for `ids`, in one query a chunk. A sidebar page reads it here, so each
+    of its rows does not ask again (`_is_member`)."""
+    ids = list(ids)
+    names = v.member_names(c)
+    found = set()
+    for part in H.chunks(ids):
+        found.update(r[0] for r in c.execute(
+            "SELECT DISTINCT thread_id FROM thread_members WHERE thread_id IN (%s) AND actor IN (%s)"
+            % (",".join("?" * len(part)), ",".join("?" * len(names))), (*part, *names)))
+    return {thread_id: thread_id in found for thread_id in ids}
+
+
+def _followers_of(c, v, ids):
+    """{thread id: the viewer's follower row} for `ids`, in one query a chunk; a thread the viewer does not follow has
+    none. `view` reads a page's rows from here."""
+    out = {}
+    for part in H.chunks(list(ids)):
+        for r in c.execute("SELECT thread_id, following, notify, last_read_seq FROM thread_followers WHERE actor=? "
+                           "AND thread_id IN (%s)" % ",".join("?" * len(part)), (v.actor, *part)):
+            out[r["thread_id"]] = dict(r)
+    return out
+
+
 def sidebar(c, v, *, cursor=None, limit=50):
     """The roots the viewer follows or belongs to, and the public ones, ranked before they are paged (spec §1): what
     needs their attention first, then what is unread for them, then the rest, each newest activity first. Following a
@@ -3625,8 +3654,16 @@ def sidebar(c, v, *, cursor=None, limit=50):
     someone with many threads still gets their DMs: one query each, whatever the page holds. A task's thread is listed
     only while it has unread for the viewer (its parties and posters are no reason), so task threads never crowd out
     the rest. `attention` is the page's rows with an open Needs attention item. `cursor` is the `next_cursor` of the
-    page before."""
+    page before. The page's per-row reads (membership, the viewer's follower row) are read once for all its rows."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
+    v._members = {}
+    try:
+        return _sidebar_page(c, v, cursor, limit)
+    finally:
+        v._members = None
+
+
+def _sidebar_page(c, v, cursor, limit):
     limit = max(1, min(int(limit or 50), MAX_PAGE))
     readable = readable_sql(c, v, "r")
     names = v.member_names(c)
@@ -3677,10 +3714,11 @@ def sidebar(c, v, *, cursor=None, limit=50):
                      "(activity=:at_seq AND id<:at_id))) ")
         sql = (f"SELECT * FROM (SELECT r.*, {activity} AS activity, {place} AS place FROM conversations r WHERE "
                + " AND ".join([*where, test]) + f") {after}ORDER BY place, activity DESC, id DESC LIMIT :fetch")
+        found = [dict(r) for r in c.execute(sql, {**args, **at})]
+        v._members.update(_prefetch_members(c, v, [r["id"] for r in found]))
         rows = []
-        for r in c.execute(sql, {**args, **at}):
-            r = dict(r)
-            if not thread_readable(c, v, r["id"]):
+        for r in found:
+            if not thread_readable(c, v, r):
                 continue
             if len(rows) >= limit:
                 return rows, True
@@ -3690,6 +3728,7 @@ def sidebar(c, v, *, cursor=None, limit=50):
     listed = [section(f"NOT {is_dm}", positions[0]), section(is_dm, positions[1])]
     every = [r for rows, _ in listed for r in rows]
     summaries = subtree_summaries(c, v, [r["id"] for r in every])
+    followers = _followers_of(c, v, [r["id"] for r in every])
     dms = dm_with(c, v, every)
 
     def items_of(rows, more):
@@ -3698,7 +3737,7 @@ def sidebar(c, v, *, cursor=None, limit=50):
         found, budget = [], MAX_PAGE_BYTES // 2
         for r in rows:
             summary = summaries.get(r["id"]) or {"unread": 0, "activity": False}
-            item = view(c, v, r, summary=summary, dm=dms.get(r["id"]))
+            item = view(c, v, r, summary=summary, dm=dms.get(r["id"]), follower=followers.get(r["id"], {}))
             item["activity_seq"] = r["activity"]
             if needing.get(r["id"], {}).get("new_at"):
                 item["new_at"] = needing[r["id"]]["new_at"]
