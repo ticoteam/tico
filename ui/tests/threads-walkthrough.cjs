@@ -428,6 +428,9 @@ async function messageMenu(page, text, item) {
     await journey(browser, hub, 'held message and edit', 'dana', async (page, phone, name) => {
       await step(page, 'set up the rule', phone, name, async () => {
         if (ruleMade) return;
+        // A message to edit per pass, made before the rule: a held edit leaves its message with a pending edit, and a
+        // message with one shows no Edit (thread-view.js thvMsgMenu: "one edit at a time").
+        for (const pass of ['desktop', 'phone']) await api(hub, 'dana', 'POST', `/v2/threads/${S.plan.id}/messages`, {text: `Price list draft ${pass}`, kind: 'say'});
         await api(hub, 'dana', 'POST', '/v2/rules', {kind: 'internal', text: 'Do not post the Q4 price list in company threads',
           who: {everyone: true}, if_broken: 'block'});
         ruleMade = true;
@@ -446,12 +449,8 @@ async function messageMenu(page, text, item) {
         assert.ok(!JSON.stringify(timeline).includes(HELD), 'the held message is not in the thread timeline');
       });
       await step(page, 'held edit', phone, name, async () => {
-        // A message of its own for this pass: a held edit leaves its message with a pending edit, and a message with one
-        // shows no Edit (thread-view.js thvMsgMenu: "one edit at a time"), so the other pass needs a fresh one.
+        // This pass's own draft (made in the set-up step, so the held message step's page load shows it).
         const draftText = `Price list draft ${phone ? 'phone' : 'desktop'}`;
-        await api(hub, 'dana', 'POST', `/v2/threads/${S.plan.id}/messages`, {text: draftText, kind: 'say'});
-        await shell(page, `#/thread/${S.plan.id}`, '.thv-composer')();
-        await sleep(1500);
         await dismissRunnerCard(page);
         await messageMenu(page, draftText, 'Edit');
         await page.locator('[data-message]', {hasText: draftText}).first().locator('textarea').first().fill(HELD);
