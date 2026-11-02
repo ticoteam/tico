@@ -6440,7 +6440,7 @@ FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_
 TAX_WORKPAPERS = {"sales_tax": "finance/tax/sales-tax", "1099": "finance/tax/1099"}   # spec 11: whole, full view only
 FINANCE_METRICS = ["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
                    "ar_overdue", "uncategorized_count", "unreconciled_days", "duplicate_charges", "price_increases"]
-FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card"]
+FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card", "account"]
 FINANCE_INBOX = ["uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
                  "budget_near_limit", "sync_failed", "period_ready", "unreconciled", "bill_email"]
 FIN_DAY = {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "YYYY-MM-DD"}
@@ -6626,8 +6626,9 @@ def _fin_paged(api, path, query, key, budget):
 
 
 @tool("hub_finance_search", "Search the books you may see: entries, bank and card rows, bills, invoices, contacts, "
-      "rules and cards (each card with the vendor accounts it is saved on). Name a kind to page with cursor; without "
-      "one you get the first few of each kind.",
+      "rules and cards (each card with the vendor accounts it is saved on). account finds the chart's lines by code or "
+      "name, with their ids, for categorize, bill_create and rule_create. Name a kind to page with cursor; without "
+      "one you get the first few of each kind (not accounts: name that kind).",
       {"kind": _s("What to search", enum=FINANCE_SEARCH), "q": _s("Words to match"),
        "status": _s("Row, document or card status"), "contact_id": _s("Bills/invoices: this vendor or customer"),
        "vendor": _s("Cards: saved on this vendor (a contact's id or name): which of your cards works there"),

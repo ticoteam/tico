@@ -1408,6 +1408,7 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
 # ------------------------------------------------------------------------------------------------ search
 SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project", "po",
               "estimate")
+NAMED_ONLY_KINDS = ("account",)     # searched when named (the chart a bot codes lines to), not in the first few of each
 RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects"}
 SEARCH_EACH = 10            # results per kind when no kind is named
 
@@ -1435,6 +1436,24 @@ def _search_rules(ctx: Ctx, viewer: str, q: str, filters: Mapping[str, object], 
              "words": str(r["words"]), "active": bool(r["active"]),
              "priority": int(r["priority"]) if str(r["kind"]) == "posting" else None} for r in page], \
         (str(page[-1]["id"]) if len(rows) > most else None)
+
+
+def _search_accounts(ctx: Ctx, viewer: str, q: str, most: int, cursor: str | None) -> tuple[list[Row], str | None]:
+    """The active accounts the viewer may post to, matched by code or name, in code order: the same lines the bill,
+    invoice and journal forms list (tab_ap.chart), so a bot can find the account id of a line. Paged by (code, id)."""
+    held = ctx.rights(viewer)
+    if not any(R.has(ctx.org, viewer, r, held) for r in (R.BOOK, R.AP, R.AR)):
+        raise denied("the chart is for teammates who write to the books")
+    view = ctx.view(viewer)
+    parts = tab.decode_cursor(cursor) or []
+    after = (parts[0], parts[1]) if len(parts) == 2 else ("", "")
+    found = [a for a in sorted(ctx.accounts.values(), key=lambda x: (x.code, x.id))
+             if a.active and (view.everything or view.sees_account(a)) and (a.code, a.id) > after
+             and (not q or q.lower() in f"{a.code} {a.name}".lower())]
+    page = found[:most]
+    nxt = tab.encode_cursor([page[-1].code, page[-1].id]) if len(found) > most and page else None
+    return [{"kind": "account", "id": a.id, "code": a.code, "name": a.name, "type": a.type, "subtype": a.subtype,
+             "label": f"{a.code} {a.name}"} for a in page], nxt
 
 
 def _record_row(kind: str, r: Any) -> Row:
@@ -1526,9 +1545,10 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
     start, end; bill/invoice: status, contact_id, start, end, aging; contact: kind, active; rule: kind (gate|posting);
     card: status, vendor (the cards saved on that vendor, so `vendor` answers "which of my cards works at X");
     po/estimate: status, contact_id, and a search over number, memo and contact name;
-    item/location/project: active (1 keeps only active records)."""
-    if kind is not None and kind not in SEARCH_KINDS:
-        raise invalid(f"kind is {'|'.join(SEARCH_KINDS)}")
+    item/location/project: active (1 keeps only active records); account (named only): a search over code and name,
+    the active accounts the forms list, in code order."""
+    if kind is not None and kind not in (*SEARCH_KINDS, *NAMED_ONLY_KINDS):
+        raise invalid(f"kind is {'|'.join((*SEARCH_KINDS, *NAMED_ONLY_KINDS))}")
     if cursor and kind is None:
         raise invalid("a cursor pages one kind; name it")
     f = filters or {}
@@ -1585,6 +1605,9 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
                 results += [{**r, "label": f"{r['nickname'] or r['holder']} ••{r['last4'] or ''}".strip()}
                             for r in cast(list[Row], found["cards"])]
                 nxt = cast(str | None, found["next"])
+            elif k == "account":
+                listed_accounts, nxt = _search_accounts(ctx, viewer, text, most, cursor)
+                results += listed_accounts
             elif k in RECORD_KINDS:
                 _in_view_or_refuse(view)
                 parts = tab.decode_cursor(cursor)

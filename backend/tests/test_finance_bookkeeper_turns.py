@@ -420,9 +420,16 @@ def test_gap_books_check_kinds_can_be_paged(api):
     assert not err and [i["id"] for i in second["items"]] == ["bin_2"] and second["next_cursor"] is None, second
 
 
-@pytest.mark.xfail(strict=True, reason="GAP: categorize, bill_create and rule_create need account ids, and no hub tool lists "
-                   "the chart: hub_finance_search has no account kind (clients/hubtools.py FINANCE_SEARCH).")
 def test_gap_the_bot_can_list_accounts(api):
+    """categorize, bill_create and rule_create take account ids: the bot finds the chart's lines by code or name with the
+    named search kind, paged. The first few of each kind without a kind leave accounts out."""
     token = hire(api)
     err, out = call(api, "hub_finance_search", {"kind": "account", "q": "Software"}, token=token)
-    assert not err and any(r.get("code") == "6100" for r in out["results"]), out
+    assert not err and any(r.get("code") == "6100" and r["id"] for r in out["results"]), out
+    err, page = call(api, "hub_finance_search", {"kind": "account", "limit": 2}, token=token)
+    assert not err and len(page["results"]) == 2 and page["next_cursor"], page
+    err, rest = call(api, "hub_finance_search", {"kind": "account", "limit": 2, "cursor": page["next_cursor"]},
+                     token=token)
+    assert not err and not {r["id"] for r in rest["results"]} & {r["id"] for r in page["results"]}, rest
+    err, every = call(api, "hub_finance_search", {"q": "Software"}, token=token)
+    assert not err and not any(r.get("kind") == "account" for r in every["results"]), every
