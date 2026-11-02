@@ -672,7 +672,7 @@ def test_a_reply_reaches_the_owner_as_untrusted_text_and_wakes_no_bot(site, monk
     assert task["body"].count("</outside-text>") == 1          # the writer can't close the fence
     assert requester["email"] == "pat@other.example" and requester["actor"] is None
     assert not [r for r in site.rows("SELECT detail FROM events") if "pat@other.example" in str(r["detail"])]
-    assert not site.rows("SELECT 1 FROM tasks WHERE id=? AND owner LIKE 'bot:%'", task["id"])
+    assert not site.rows("SELECT 1 FROM tasks WHERE id=? AND owner_id LIKE 'bot:%'", task["id"])
 
 
 def test_a_warned_message_says_so_to_the_owner(site, monkeypatch):

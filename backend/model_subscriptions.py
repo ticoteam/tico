@@ -261,6 +261,10 @@ def still_given(c, runner_id, runtime, subscription_id):
     return bool(sub) and sub["id"] == subscription_id
 
 
+RUNNER_READINESS_SQL = "SELECT readiness FROM runners WHERE id=?"
+RUNNER_CAPABILITIES_SQL = "SELECT capabilities FROM runners WHERE id=? AND revoked_at IS NULL"
+
+
 def in_effect(c, runner_id, runtime):
     """The subscription a turn on `runtime` on this computer signs in with, or None for the computer's own login (none
     given, the one given needs reconnecting or is held at a usage limit until its reset, or a runner too old to take
@@ -275,7 +279,7 @@ def in_effect(c, runner_id, runtime):
     if login_holds.holding(c, "", login_holds.subscription_login(sub["id"]), runtime) == "held":
         return None
     from .read_cache import one
-    runner = one(c, "SELECT capabilities FROM runners WHERE id=? AND revoked_at IS NULL", (runner_id,))
+    runner = one(c, RUNNER_CAPABILITIES_SQL, (runner_id,))
     return sub if runner_takes(runner) else None
 
 
@@ -730,7 +734,7 @@ def for_claim(c, runner, config):
     from .read_cache import one
     from .store import readiness_document
     own = turn_runtimes(config)
-    row = one(c, "SELECT readiness FROM runners WHERE id=?", (runner["id"],))
+    row = one(c, RUNNER_READINESS_SQL, (runner["id"],))
     ready = readiness_document(row["readiness"]) if row else {}
     out = []
     for runtime in turn_runtimes(config, providers.load(c)):

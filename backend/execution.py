@@ -1676,14 +1676,15 @@ def stranded(c, settings, bot, source_id, target_id):
 
     The destination gets it by cloning from GitHub. That fails when the destination holds no copy and the
     computer being left reports a checkout GitHub does not have (`published` false): its history exists
-    only there. A runner that does not report `published` is given the benefit of the doubt."""
-    _, there = _reported(c, target_id, bot)
+    only there. A runner that does not report `published` is given the benefit of the doubt. A `target_id` of
+    None is a machine not made yet, so nothing there holds a copy and only the source's `published` decides."""
+    there = {} if target_id is None else _reported(c, target_id, bot)[1]
     if there.get("repository_present") is True:
         return ""
     source, here = _reported(c, source_id, bot)
     if here.get("published") is not False:
         return ""
-    target, _ = _reported(c, target_id, bot)
+    target = "a new cloud machine" if target_id is None else _reported(c, target_id, bot)[0]
     repository = bot_repository(c, settings, bot) or "its repository"
     label = (H.bot(c, bot) or {}).get("slug", bot)
     return (f"{label}'s history exists only on {source}: {repository} is not on GitHub yet, so {target} could not fetch "
