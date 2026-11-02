@@ -3,6 +3,7 @@ them, and watch raises each renewal stage once per renewal date."""
 from datetime import date
 
 from backend.finance import actions as FA
+from backend.finance import context as FC
 from backend.finance import reads as FR
 from backend.finance.core import ap as AP
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
@@ -65,6 +66,30 @@ def test_a_vendor_renewal_raises_one_event_per_stage_for_each_date_and_none_once
         assert act(c, OWNER, "contact_update", {"contact_id": vid, "renewal_on": "2026-10-01"}).status == "committed"
         FA.watch_documents(c, AT)
         assert len(_events(c, "finance.vendor.renewal_due")) == 2
+
+
+def test_a_renewal_task_opens_once_per_date_and_falls_to_the_install_owner(books):  # noqa: F811
+    with books.transaction() as c:
+        laser = _vendor(c, "Laser Service Co")
+        assert act(c, OWNER, "contact_update", {"contact_id": laser, "renewal_on": "2026-12-14",
+                                                "renewal_notice_days": 60}).status == "committed"
+        FA.watch_documents(c, AT)
+        FA.watch_documents(c, "2026-10-15T13:00:00.000000Z")
+    with books.read() as c:
+        tasks = [tuple(r) for r in c.execute("SELECT owner, title FROM tasks WHERE title LIKE 'Vendor renewal:%'")]
+        assert tasks == [(FC.owner(c), "Vendor renewal: Laser Service Co")]
+
+
+def test_a_renewal_task_goes_to_the_vendors_owner_when_it_has_one(books):  # noqa: F811
+    with books.transaction() as c:
+        laser = _vendor(c, "Laser Service Co")
+        assert act(c, OWNER, "contact_update", {"contact_id": laser, "renewal_on": "2026-12-14",
+                                                "renewal_notice_days": 60,
+                                                "owner_id": "bot:coder"}).status == "committed"
+        FA.watch_documents(c, AT)
+    with books.read() as c:
+        tasks = [tuple(r) for r in c.execute("SELECT owner, title FROM tasks WHERE title LIKE 'Vendor renewal:%'")]
+        assert tasks == [("bot:coder", "Vendor renewal: Laser Service Co")]
 
 
 def test_a_viewer_without_the_vendors_cells_or_the_payables_view_gets_no_seats_or_renewal(books):  # noqa: F811

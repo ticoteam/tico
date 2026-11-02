@@ -2,13 +2,13 @@
 calendar and completion chains, one task per teammate for a day's work, closing a task completes nothing, archived
 records open nothing, the window a calendar date counts from, and who may read and work due dates. The clock is passed
 in as `at`: no test reads the wall clock."""
-import json
 from datetime import date, datetime, timedelta
 
 import pytest
 
 from backend import due_date_flow as DF
 from backend import hubdb as H
+from backend import sidebar as SB
 from backend.finance import due_dates as FD
 from backend.finance import reads as FR
 from backend.finance.core.errors import NOT_FOUND, FinanceError
@@ -28,14 +28,16 @@ def later(days: int, hours: int = 0) -> str:
     return (moment() + timedelta(days=days, hours=hours)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
-def _equipment(c, name: str, *, archived: bool = False) -> str:
-    """A piece of equipment. The equipment table is ops-equipment's; this makes the minimal one the pass reads when it is
-    not on the branch yet, and uses the same column names when it is."""
-    c.execute("CREATE TABLE IF NOT EXISTS equipment(id TEXT PRIMARY KEY, name TEXT NOT NULL, "
-              "kind TEXT NOT NULL DEFAULT 'owned', archived_at TEXT, created_at TEXT, created_by_id TEXT)")
-    equipment_id = RD.new_id()
-    c.execute("INSERT INTO equipment(id, name, kind, archived_at, created_at, created_by_id) VALUES(?,?,?,?,?,?)",
-              (equipment_id, name, "owned", AT if archived else None, AT, OWNER))
+def _equipment(c, name: str, *, archived: bool = False, warranty: str | None = None, who: str = OWNER) -> str:
+    """A piece of equipment, made the way Finance makes one (equipment_create), archived when asked. A bot creates it
+    straight away only with the records right, so the owner grants that first."""
+    if who != OWNER:
+        assert act(c, OWNER, "right_grant", {"teammate": who, "right": "finance.records"}).status == "committed"
+    made = act(c, who, "equipment_create", {"name": name, "kind": "owned", "warranty_ends_on": warranty})
+    assert made.status == "committed", made.reason
+    equipment_id = str(made.result["equipment_id"])
+    if archived:
+        assert act(c, OWNER, "equipment_update", {"equipment_id": equipment_id, "active": False}).status == "committed"
     return equipment_id
 
 
@@ -97,15 +99,65 @@ def _counted(c, due_date_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------------------------------- H8, H9, subjects
-def test_h8_a_warranty_ending_in_60_days_opens_one_task_for_the_bot_to_offer_the_agreement(books):
+def test_h8_a_warranty_ending_in_60_days_opens_one_task_for_whoever_added_the_piece(books):
     with books.transaction() as c:
-        unit = _equipment(c, "Walk-in unit")
-        _due(c, "equipment", unit, name="Offer maintenance agreement", assignee="bot:coder", starts_on="2026-12-14",
-             lead=60)
+        _equipment(c, "Walk-in unit", warranty="2026-12-14", who="bot:coder")
     assert _tick(books)["tasks"] == [{"actor": "bot:coder", "task": _tasks(books, "bot:coder")[0]["id"],
                                       "occurrences": 1}]
     [task] = _tasks(books, "bot:coder")
-    assert task["title"] == "Due dates: 1 due" and "Offer maintenance agreement" in task["body"]
+    assert task["title"] == "Due dates: 1 due"
+    assert "Warranty ends" in task["body"] and "Walk-in unit" in task["body"]
+    assert _tick(books, later(1))["tasks"] == []
+
+
+def test_h8_a_moved_warranty_end_moves_the_same_due_date_and_counts_from_today(books):
+    with books.transaction() as c:
+        unit = _equipment(c, "Kiln 2", warranty="2026-12-14", who="bot:coder")
+        assert act(c, OWNER, "equipment_update", {"equipment_id": unit, "warranty_ends_on": "2027-01-13"}).status == \
+            "committed"
+        row = RD.get(c, f"warranty-{unit}")
+        assert (row["starts_on"], row["counted_from_on"], row["assignee_id"]) == ("2027-01-13", DAY, "bot:coder")
+        assert c.execute("SELECT count(*) FROM due_dates WHERE subject_id=?", (unit,)).fetchone()[0] == 1
+    assert _tick(books)["tasks"] == []
+
+
+def test_h8_clearing_a_warranty_end_archives_its_due_date_and_a_new_date_does_not_bring_it_back(books):
+    with books.transaction() as c:
+        unit = _equipment(c, "Kiln 3", warranty="2026-12-14", who="bot:coder")
+        assert act(c, OWNER, "equipment_update", {"equipment_id": unit, "warranty_ends_on": None}).status == "committed"
+        assert RD.get(c, f"warranty-{unit}")["archived_at"] == AT
+        assert act(c, OWNER, "equipment_update", {"equipment_id": unit, "warranty_ends_on": "2027-01-13"}).status == \
+            "committed"
+        assert RD.get(c, f"warranty-{unit}")["starts_on"] == "2026-12-14"
+    assert _tick(books)["tasks"] == []
+
+
+def test_h8_a_renamed_or_archived_warranty_due_date_is_left_alone_when_the_warranty_moves(books):
+    with books.transaction() as c:
+        renamed = _equipment(c, "Oven 5", warranty="2026-12-14")
+        assert act(c, OWNER, "due_date_update", {"due_date_id": f"warranty-{renamed}",
+                                                 "name": "Service oven"}).status == "committed"
+        stopped = _equipment(c, "Oven 6", warranty="2026-12-14")
+        assert act(c, OWNER, "due_date_update", {"due_date_id": f"warranty-{stopped}",
+                                                 "active": False}).status == "committed"
+        for unit in (renamed, stopped):
+            assert act(c, OWNER, "equipment_update", {"equipment_id": unit, "warranty_ends_on": "2027-01-13"}
+                       ).status == "committed"
+        assert (RD.get(c, f"warranty-{renamed}")["name"], RD.get(c, f"warranty-{renamed}")["starts_on"]) == \
+            ("Service oven", "2026-12-14")
+        assert RD.get(c, f"warranty-{stopped}")["archived_at"] is not None
+        assert RD.get(c, f"warranty-{stopped}")["starts_on"] == "2026-12-14"
+
+
+def test_h8_a_warranty_end_added_later_makes_one_due_date_and_a_past_one_makes_none(books):
+    with books.transaction() as c:
+        unit = _equipment(c, "Pump 7")
+        assert RD.get(c, f"warranty-{unit}") is None
+        assert act(c, OWNER, "equipment_update", {"equipment_id": unit, "warranty_ends_on": "2026-12-14"}).status == \
+            "committed"
+        assert RD.get(c, f"warranty-{unit}")["starts_on"] == "2026-12-14"
+        past = _equipment(c, "Pump 8", warranty="2026-09-01")
+        assert RD.get(c, f"warranty-{past}") is None
 
 
 def test_h9_van_registration_opens_30_days_before_to_the_office_manager_and_not_earlier(books):
@@ -327,11 +379,11 @@ def test_h10c_an_archived_location_or_an_archived_due_date_opens_nothing(books):
 
 
 def test_x3_a_hidden_equipment_section_changes_nothing_about_equipment_due_dates(books):
-    """X3: the company's hidden sections are a sidebar setting; the pass reads none of them. (This branch has no
-    hidden_sections setting, so this only shows the probe key does not change the pass.)"""
+    """X3: the sidebar hides Operations > Equipment, and the pass still opens the piece's due dates: it reads no
+    sidebar setting."""
     with books.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO registry_metadata(key, value_json) VALUES('hidden_sections', ?)",
-                  (json.dumps(["operations", "operations.equipment"]),))
+        SB.set_settings(c, OWNER, SB.SidebarSettings(hidden_sections=["operations.equipment"]))
+        assert "operations.equipment" in SB.hidden_now(SB.stored(c)["hidden_sections"])
         unit = _equipment(c, "Hidden tab unit")
         _due(c, "equipment", unit, name="Hidden tab check", assignee="bot:coder")
     _tick(books)
