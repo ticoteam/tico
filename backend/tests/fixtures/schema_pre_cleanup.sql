@@ -1993,6 +1993,21 @@ CREATE TABLE memory_tidy_cards (
 CREATE UNIQUE INDEX memory_tidy_cards_one_open ON memory_tidy_cards(bot) WHERE status='open';
 CREATE INDEX memory_tidy_cards_reviewer ON memory_tidy_cards(reviewer,status,expires);
 CREATE INDEX memory_tidy_cards_started ON memory_tidy_cards(bot,started);
+CREATE TABLE fin_estimate_lines (
+  id TEXT PRIMARY KEY, estimate_id TEXT NOT NULL REFERENCES fin_estimates(id), line_no INTEGER NOT NULL,
+  account_id TEXT REFERENCES fin_accounts(id), item_id TEXT, amount BIGINT NOT NULL CHECK (amount > 0),
+  description TEXT NOT NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT '{}', taxable INTEGER,
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE (estimate_id, line_no));
+CREATE TABLE fin_po_lines (
+  id TEXT PRIMARY KEY, po_id TEXT NOT NULL REFERENCES fin_purchase_orders(id), line_no INTEGER NOT NULL,
+  account_id TEXT REFERENCES fin_accounts(id), item_id TEXT, amount BIGINT NOT NULL CHECK (amount > 0),
+  description TEXT NOT NULL DEFAULT '', tags_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE (po_id, line_no));
+CREATE TABLE memory_tidy_keeps (
+ id TEXT PRIMARY KEY, card_id TEXT NOT NULL REFERENCES memory_tidy_cards(id),
+ runner_id TEXT NOT NULL, requested_by TEXT NOT NULL, created TEXT NOT NULL,
+ status TEXT NOT NULL DEFAULT 'queued', commit_sha TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '');
+CREATE UNIQUE INDEX memory_tidy_keeps_pending_v2 ON memory_tidy_keeps(card_id) WHERE status IN ('queued','applying');
 CREATE INDEX messages_to_delivered ON messages(to_actor, delivered_at);
 CREATE INDEX messages_conversation ON messages(conversation_id, created);
 CREATE INDEX events_ts ON events(ts);
