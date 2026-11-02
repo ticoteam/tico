@@ -374,7 +374,7 @@ function thvPendingHTML(view, p) {
   const depth = thvDepth(view, p.depth);
   const text = `<div class="th-body">${esc(p.text)}${p.files?.length ? ` <span class="muted">· ${p.files.length} file${p.files.length === 1 ? '' : 's'}</span>` : ''}</div>`;
   if (p.state === 'held') {
-    const h = p.held || {}, rules = (h.rules || []).map(r => `<div class="th-held-rule">${esc(r.text)}</div>`).join('');
+    const h = p.held || {}, rules = (h.rules || []).map(r => `<div class="th-held-rule">${ruTextHTML(r.text)}</div>`).join('');
     return `<div class="th-msg th-mine th-held" data-pending="${p.key}" style="--d:${depth}"><div class="th-av">${actorAvatar(myActor(), 28)}</div>
       <div class="th-main"><div class="th-head"><span class="th-who">You</span><span class="th-state">${p.editOf ? 'Edit ' : ''}${h.outcome === 'escalated' ? (p.editOf ? 'waiting for review' : 'Waiting for review') : (p.editOf ? 'held' : 'Held')}</span></div>${text}${rules}
         <div class="th-held-acts"><button type="button" class="ghost small" data-held-edit>Edit</button>${

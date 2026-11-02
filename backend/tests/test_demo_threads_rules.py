@@ -1,7 +1,9 @@
 """Demo threads and org rules: the Home threads with their sub-thread, the company thread, Ana's DMs (the Assistant and
-pricing), the three rules and Ben's suggestion, and the one draft a rule held for Ben (written nowhere; its review task
+pricing), the rules (three for everyone, four between teammates with a With, each teammate named @handle) and Ben's
+suggestion, and the one draft a rule held for Ben (written nowhere; its review task
 waits for Ben, and Ana, the owner, can review it too)."""
 
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -35,15 +37,49 @@ def home_id(api, actor):
     return api.get(f"/api/v2/threads/home/{actor}").json()["id"]
 
 
-def test_the_three_rules_apply_to_everyone(built):
+def test_the_rules_say_who_follows_them_and_with_whom(built):
     _, settings = built
     with signed_in(settings) as api:
         rules = api.get("/api/v2/rules", params={"status": "active"}).json()["rules"]
     texts = {rule["text"]: rule for rule in rules}
     for item in CONTENT["rules"]:
         assert item["text"] in texts, item["text"]
-        assert texts[item["text"]]["who"]["everyone"] is True
-        assert texts[item["text"]]["if_broken"] == item.get("if_broken", "block")
+        rule = texts[item["text"]]
+        assert rule["if_broken"] == item.get("if_broken", "block")
+        assert (rule.get("reviewer") or {}).get("id") == (item["reviewer"].split(":", 1)[1] if "reviewer" in item else None)
+        if "who" not in item:
+            assert rule["who"]["everyone"] is True
+            continue
+        who, with_ = item["who"], item["with"]
+        assert rule["who"]["all_bots"] is bool(who.get("all_bots"))
+        for key in ("groups", "bots", "people"):
+            assert [x["id"] for x in rule["who"][key]] == who.get(key, []), (item["key"], key)
+            assert [x["id"] for x in rule["with"][key]] == with_.get(key, []), (item["key"], key)
+
+
+def test_peer_rules_fill_the_with_column(built):
+    _, settings = built
+    with signed_in(settings) as api:
+        rules = api.get("/api/v2/rules", params={"kind": "internal", "status": "active"}).json()["rules"]
+    peer = [r for r in rules if any(r["with"][k] for k in ("groups", "bots", "people"))]
+    assert len(peer) >= 3
+    by_text = {r["text"]: r for r in peer}
+    ben = by_text["Don't assign @ben a task without asking first."]
+    assert ben["who"]["all_bots"] and [p["id"] for p in ben["with"]["people"]] == ["ben"]
+
+
+def test_every_mention_in_a_rule_names_a_real_teammate(built):
+    """A rule names a teammate as @slug (a bot) or @handle (a person), the way the Rules page shows a mention chip."""
+    _, settings = built
+    with signed_in(settings) as api:
+        bots = {b["id"] for b in api.get("/api/v2/org").json()["bots"]}
+        rules = api.get("/api/v2/rules", params={"status": "active"}).json()["rules"]
+    people = {"ana", "ben", "cara", "eli"}
+    ours = {item["text"] for item in CONTENT["rules"]}
+    named = [m.rstrip(".-") for r in rules if r["text"] in ours for m in re.findall(r"(?<![\w@])@(\w[\w.-]*)", r["text"])]
+    assert {"ana", "ben", "bookkeeper", "accounts-payable", "firmware", "pricing"} <= set(named)
+    assert [m for m in named if m not in bots | people] == []
+    assert not any(re.search(r"\b(Ana|Ben)'s\b|go to Ben\b", text) for text in ours), "a teammate is named by @handle"
 
 
 def test_bens_rule_suggestion_waits_as_a_suggestion(built):
@@ -153,7 +189,7 @@ def _content(path):
             "conversations": db.execute("SELECT subject, audience, kind, owner_id, created_at, last_message_at "
                                         "FROM conversations WHERE created_at < ? ORDER BY created_at, subject",
                                         (DEMO_CLOCK_CUTOFF,)).fetchall(),
-            "rules": db.execute(f"SELECT id, text, status, who, if_broken, reviewer, suggested_by FROM org_rules "
+            "rules": db.execute(f"SELECT id, text, status, who, with_scope, if_broken, reviewer, suggested_by FROM org_rules "
                                 f"WHERE text IN ({','.join('?' * len(texts))}) ORDER BY id", texts).fetchall(),
             "holds": db.execute("SELECT id, author, reviewer, state, created_at FROM org_rule_holds").fetchall(),
         }

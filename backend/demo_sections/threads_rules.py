@@ -1,5 +1,6 @@
 """Threads and org rules: a Home per department (one with a sub-thread), a company thread, two DMs, the org rules Ana
-added, Ben's rule suggestion, and one draft that a rule held for Ben."""
+added (three for everyone, four working agreements between teammates, each with a With), Ben's rule suggestion, and one
+draft that a rule held for Ben. A teammate a rule names is written @slug, so the Rules page shows them as mentions."""
 
 from .. import org_rule_check as OC
 from .. import org_rules as R
@@ -9,13 +10,22 @@ from ..auth import Identity
 # Hours ago, oldest first within each list. Every name is fictional (acme.example and .example domains only).
 CONTENT = {
     "rules": [
-        {"key": "refund", "ago": 150, "text": "Never promise a refund over $100 in a customer message. Those go to Ben.",
+        {"key": "refund", "ago": 150, "text": "Never promise a refund over $100 in a customer message. Those go to @ben.",
          "if_broken": "escalate", "reviewer": "human:ben"},
-        {"key": "price", "ago": 150, "text": "A price change on any product line needs Ana's OK.",
+        {"key": "price", "ago": 150, "text": "A price change on any product line needs @ana's OK.",
          "if_broken": "escalate", "reviewer": "human:ana"},
         {"key": "drafts", "ago": 149,
          "text": "Customer messages are drafts until a person sends them, unless sending is turned on for that inbox.",
          "if_broken": "block"},
+        # Working agreements between teammates: each has a With, the teammate it is about.
+        {"key": "bills", "ago": 146, "who": {"groups": ["marketing"]}, "with": {"bots": ["bookkeeper"]},
+         "text": "Don't ask @bookkeeper to pay anything; send bills to @accounts-payable.", "if_broken": "block"},
+        {"key": "ben-tasks", "ago": 144, "who": {"all_bots": True}, "with": {"people": ["ben"]},
+         "text": "Don't assign @ben a task without asking first.", "if_broken": "warn"},
+        {"key": "firmware-bugs", "ago": 142, "who": {"groups": ["support"]}, "with": {"bots": ["firmware"]},
+         "text": "Send firmware bugs to @firmware with the unit's log, not to the support queue.", "if_broken": "warn"},
+        {"key": "quotes", "ago": 140, "who": {"groups": ["sales"]}, "with": {"bots": ["pricing"]},
+         "text": "Quotes below list price go to @pricing first.", "if_broken": "escalate", "reviewer": "human:cara"},
     ],
     "suggestion": {"ago": 50, "by": "human:ben", "bot": "marketplace",
                    "text": "Marketplace listings say ships in 3 to 5 days only while the unit is in stock at the warehouse."},
@@ -155,8 +165,8 @@ def seed(b):
     rules = {}
     for item in CONTENT["rules"]:
         _when(b, item["ago"])
-        body = {"kind": "internal", "text": item["text"], "who": {"everyone": True}}
-        body.update({k: item[k] for k in ("if_broken", "reviewer") if k in item})
+        body = {"kind": "internal", "text": item["text"], "who": item.get("who") or {"everyone": True}}
+        body.update({k: item[k] for k in ("with", "if_broken", "reviewer") if k in item})
         rules[item["key"]] = b.call("POST", "rules", body)["id"]
     suggestion = CONTENT["suggestion"]
     _when(b, suggestion["ago"])
