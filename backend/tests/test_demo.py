@@ -95,6 +95,9 @@ def test_a_public_demo_is_read_only(tmp_path):
     with signed_in(settings) as api:
         api.headers["Host"] = "demo.example.com"
         assert api.get("/api/v2/config").status_code == 200
+        # A link preview or monitor asks with HEAD and is sent to the same sign-in as a browser.
+        first = TestClient(create_app(settings), base_url="https://demo.example.com", follow_redirects=False)
+        assert first.head("/").status_code == 302 and first.head("/").headers["location"].startswith("/api/v2/local-signin")
         blocked = api.post("/api/v2/tasks", json={"title": "x", "owner": "bot:support"}, headers={"Idempotency-Key": "p1"})
         assert blocked.status_code == 403 and blocked.json()["error"]["code"] == "demo"
         assert api.post("/api/v2/updates/read", json={"ids": []}, headers={"Idempotency-Key": "p2"}).status_code == 200

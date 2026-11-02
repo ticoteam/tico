@@ -220,7 +220,7 @@ def install(app, auth, settings):
         photo = AVATAR.match(path)
         if photo and request.method == "GET":
             return avatar(photo.group(1))
-        if request.method == "GET" and path in ("/", "/index.html"):
+        if request.method in ("GET", "HEAD") and path in ("/", "/index.html"):
             # Nobody types a secret to try a demo: the first page visit is the sign-in.
             if not auth.local_session(request.cookies):
                 token = auth.local_token()
