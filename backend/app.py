@@ -2299,7 +2299,7 @@ def create_app(settings=None):
             with store.read() as c:
                 slug = (H.bot(c, H.actor_id(who.actor)) or {}).get("slug")
         return {"actor": who.actor, "role": who.role, "email": who.email,
-                "runner_id": who.runner_id, "attempt_id": who.attempt_id, "agent": who.agent,
+                "runner_id": who.runner_id, "run_id": who.attempt_id, "agent": who.agent,
                 "kind": caller_kind(auth, who), **({"slug": slug} if slug else {})}
 
     # A person's own API tokens (backend/personal_tokens.py). Managed only from a browser

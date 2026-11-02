@@ -55,7 +55,7 @@
   function actionCard(action, esc, open = false, assistantName = '') {
     // A bulk card that ran with some steps refused is done, and says which did not go through.
     const done = {done: 'Done.' + (action.result?.error ? ' ' + action.result.error : ''), failed: 'It did not go through' + (action.result?.error ? ': ' + action.result.error : '.'),
-      cancelled: 'Cancelled.', expired: 'Expired: ask again.', running: 'Running…'}[action.status];
+      canceled: 'Cancelled.', expired: 'Expired: ask again.', running: 'Running…'}[action.status];
     // Never cut a value: a long one is folded behind "Show more", whole.
     const shown = v => { const t = typeof v === 'string' ? v : JSON.stringify(v); return t.length > 160
       ? `<details class="asst-long"><summary>${esc(t.slice(0, 120))}… <span>Show more</span></summary>${esc(t)}</details>` : esc(t); };

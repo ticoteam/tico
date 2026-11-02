@@ -43,6 +43,15 @@ def test_a_task_received_runs_its_owners_automation_only(api):
     assert len(done) == 1 and done[0]["status"] == "ok" and done[0]["trigger_ref"].startswith("task:")
 
 
+def test_a_task_received_without_a_type_reaches_its_automation_as_the_general_type(api):
+    """A task made with no type keeps a NULL type_id on its row; the trigger reads it as the general type, as the
+    task flow does, so a filter on task.type_id matches it (docs/tasks.md)."""
+    aid = make(api, {"type": "task_received", "to": "bot:ops",
+                     "filters": [{"field": "task.type_id", "op": "is", "value": "general"}]})
+    post(api, "tasks", {"owner": "ops", "title": "Untyped check", "body": "Please."})
+    assert len(runs(api, aid)["runs"]) == 1
+
+
 def test_trigger_filters_drop_a_run_and_count_it_for_the_day(api):
     aid = make(api, {"type": "task_received", "to": "bot:ops",
                      "filters": [{"field": "task.title", "op": "contains", "value": "urgent"}]})

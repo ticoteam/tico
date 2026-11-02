@@ -872,7 +872,7 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
     from backend.tests.test_mcp import call, rpc
     with api.app.state.store.transaction() as c:
         assistant.ensure_schema(c)
-        for n, (status, proposer) in enumerate([("done", "assistant"), ("cancelled", "assistant"), ("done", "bot:botops")]):
+        for n, (status, proposer) in enumerate([("done", "assistant"), ("canceled", "assistant"), ("done", "bot:botops")]):
             c.execute("INSERT INTO assistant_actions(id,owner,summary,method,path,body,status,created_at,proposer) "
                       "VALUES(?,?,?,?,?,?,?,?,?)", (f"a{n}", "human:ana", "Pay Dana's invoice", "POST",
                                                     "/api/v2/tasks/xyz/close", '{"note":"secret"}', status, H.now(), proposer))
@@ -892,10 +892,10 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
     # Only the owner, signed in, grants it; the bot cannot grant itself.
     assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": True}, headers=headers(token)).status_code == 403
     assert api.put("/api/v2/outcome-stats/readers/ops", json={"read": True}, headers=headers("ana-test")).json() == {"readers": ["ops"]}
-    assert query(api, totals, token)["rows"] == [["cancelled", 1], ["done", 3]]
+    assert query(api, totals, token)["rows"] == [["canceled", 1], ["done", 3]]
     buckets = query(api, "SELECT proposer, status, actions, share_pct FROM assistant_action_weekly "
                     "ORDER BY proposer, status", token)["rows"]
-    assert buckets == [["assistant", "cancelled", 1, 33.3], ["assistant", "done", 2, 66.7],
+    assert buckets == [["assistant", "canceled", 1, 33.3], ["assistant", "done", 2, 66.7],
                        ["bot:botops", "done", 1, 100.0]]
     assert query(api, "SELECT tool, calls FROM mcp_call_weekly", token)["rows"] == [["hub_task_show", 1]]
     stats = api.get("/api/v2/live/stats", headers=headers(token))

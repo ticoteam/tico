@@ -12,7 +12,7 @@ import uuid
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, runner  # noqa: F401  (fixture)
+from backend.tests.test_api import api, assign, claim, get, headers, post, runner, setup_attempt  # noqa: F401  (fixture)
 from backend.tests.test_automation_cli import Client
 from clients import hubcli, hubtools, remotecli
 
@@ -333,3 +333,24 @@ def test_a_paused_bot_is_named_by_its_name_when_a_task_is_refused_or_a_message_h
     assert sales not in json.dumps(refused)
     held = post(api, "messages", {"to": "sales-helper", "text": "Ready when you are?"})
     assert "Sales Helper" in held["warning"] and sales not in held["warning"]
+
+
+# ----------------------------------------------------------------------------- contract names
+def test_me_names_an_attempt_run_id_and_never_attempt_id(api):
+    _, _, attempt = setup_attempt(api)
+    me = get(api, "me", attempt["token"])
+    assert me["run_id"] == attempt["id"] and "attempt_id" not in me
+
+
+def test_onboarding_names_a_managers_slug_for_a_bot_whose_id_is_not_its_slug_and_follows_a_rename(api, sales):
+    manager = create_bot(api, "sales-lead")
+    revision = column(api, "SELECT revision FROM bot_config WHERE bot=?", sales)[0]
+    r = api.post(f"/api/v2/bots/{sales}/definition", json={"reports_to": manager, "expected_revision": revision},
+                 headers=headers())
+    assert r.status_code == 200, r.text
+
+    def line():
+        return next(b for b in get(api, "onboarding")["bots"] if b["id"] == sales)
+    assert (line()["reports_to"], line()["reports_to_slug"]) == (manager, "sales-lead")
+    rename(api, manager, "sales-director")
+    assert line()["reports_to_slug"] == "sales-director"

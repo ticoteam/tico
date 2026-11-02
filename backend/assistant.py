@@ -56,6 +56,7 @@ def ensure_schema(c):
     for column in ("confirm_hash", "running_since", "description", "diff", "proposer"):
         if column not in have:
             c.execute("ALTER TABLE assistant_actions ADD COLUMN %s TEXT" % column)
+    c.execute("UPDATE assistant_actions SET status='canceled' WHERE status='cancelled'")   # stored before the rename
     if not any(r[1] == "via" for r in c.execute("PRAGMA table_info(task_events)")):
         c.execute("ALTER TABLE task_events ADD COLUMN via TEXT")
 
@@ -983,7 +984,7 @@ def move_strategy_room(c, actor, to):
     before = room.get("owner_actor")
     c.execute("UPDATE conversations SET owner_actor=?, participants=? WHERE id=?",
               (to, json.dumps([to, "bot:" + strategy_bot.SLUG]), room["id"]))
-    c.execute("UPDATE assistant_actions SET status='cancelled', decided_at=? WHERE conversation_id=? AND owner=? "
+    c.execute("UPDATE assistant_actions SET status='canceled', decided_at=? WHERE conversation_id=? AND owner=? "
               "AND status='pending'", (H.now(), room["id"], before))
     H.event(c, actor, "strategy_bot.chat_moved", room["id"], {"from": before, "to": to})
     return H.conversation(c, room["id"])
@@ -1789,7 +1790,7 @@ def install(app, store, auth, mutate, onboarding):
             row = load(c, who, aid)
             if row["status"] != "pending":
                 raise Problem("state", "This proposal is already " + row["status"], 409)
-            c.execute("UPDATE assistant_actions SET status='cancelled', decided_at=? WHERE id=?", (H.now(), aid))
+            c.execute("UPDATE assistant_actions SET status='canceled', decided_at=? WHERE id=?", (H.now(), aid))
             H.event(c, who.actor, "assistant.action.cancelled", aid, {})
             return {"action": action_view(load(c, who, aid), c)}
         return mutate(request, body, work)

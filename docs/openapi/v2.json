@@ -33510,7 +33510,7 @@
         "properties": {
           "action": {
             "type": "object",
-            "description": "id, summary, method, path, body, status (pending, running, done, failed, cancelled, expired), result"
+            "description": "id, summary, method, path, body, status (pending, running, done, failed, canceled, expired), result"
           },
           "message_id": {
             "type": "string"
@@ -34725,6 +34725,10 @@
           "description": {
             "type": "string"
           },
+          "folder": {
+            "type": "string",
+            "description": "Its checkout's folder on a computer; clients find its files by this, never by its slug."
+          },
           "reports_to": {
             "type": [
               "string",
@@ -35909,7 +35913,7 @@
           "task_id": {
             "type": "string"
           },
-          "cancelled": {
+          "canceled": {
             "type": "boolean"
           },
           "removal": {
@@ -43976,11 +43980,18 @@
               "type": "string"
             }
           },
+          "bot_slugs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "order": {
             "type": "integer"
           }
         },
         "required": [
+          "bot_slugs",
           "bots",
           "id",
           "name",

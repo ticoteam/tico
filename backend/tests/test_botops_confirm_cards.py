@@ -220,7 +220,7 @@ def test_gateway_address_change_with_saved_key_waits_for_the_owners_tap(api, bot
         assert KEY not in json.dumps(card)
 
         cancelled = post(api, f"assistant/actions/{card['action']['id']}/cancel", {}, token="ana-test")
-        assert cancelled["action"]["status"] == "cancelled"
+        assert cancelled["action"]["status"] == "canceled"
         assert get(api, "providers/gateway")["url"] == original.url
         assert proposed.calls == []
 

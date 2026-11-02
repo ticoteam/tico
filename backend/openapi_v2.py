@@ -816,6 +816,7 @@ SCHEMAS = {
                      required=["slug", "seat", "stage", "reports_to", "template"]),
     "TaskFlow": obj({"going": "i", "waiting": "i"}, required=["going", "waiting"]),
     "Bot": obj({"id": {"type": "string", "description": "The bot's stable id (its slug for a bot made before ids, else a UUIDv7); the slug is a renameable label"}, "slug": "s", "display_name": "s", "state": "s", "online": "b", "queued": "i", "description": "s",
+                "folder": {"type": "string", "description": "Its checkout's folder on a computer; clients find its files by this, never by its slug."},
                 "reports_to": "n", "team": "n", "operator": "n", "owners": "a", "status": {"type": ["object", "null"]},
                 "keep_tasks_going": {"type": ["integer", "null"]}, "turns_at_once": {"type": ["integer", "null"]},
                 "task_flow": ref("TaskFlow"),
@@ -854,7 +855,7 @@ SCHEMAS = {
                   required=["company_name", "app_name", "assistant_name", "assistant_bot", "public_url", "owner_email",
                             "version"]),
     "Group": obj({"id": "s", "name": "s", "parent": "s", "people": items({"type": "string"}),
-                  "bots": items({"type": "string"}), "order": "i"}),
+                  "bots": items({"type": "string"}), "bot_slugs": items({"type": "string"}), "order": "i"}),
     "GroupList": items(ref("Group")),
     "ReportOrderView": obj({"manager": "s", "kind": "s", "name": "s", "can_order": "b",
                             "reports": items(obj({"id": "s", "kind": "s", "name": "s", "saved": "b"},
@@ -893,7 +894,7 @@ SCHEMAS = {
     "BotToolRegistered": obj({"tool": ref("BotTool"), "task_id": "s", "yaml": "s", "credentials": "s"}),
     "BotToolUpdated": obj({"task_id": "s", "yaml": "s", "credentials": "s"}, required=["task_id"], update={"type": "boolean"},
                           tool={"type": "string"}),
-    "BotToolRemoval": obj({"task_id": "s"}, required=[], cancelled={"type": "boolean"}, removal={"type": "boolean"},
+    "BotToolRemoval": obj({"task_id": "s"}, required=[], canceled={"type": "boolean"}, removal={"type": "boolean"},
                           tool={"type": "string"}, detail={"type": "string"}),
     "BotTools": obj({"bot": "s", "tools": items(ref("BotTool")), "computer": "n", "online": "b", "reported_at": "n"},
                     required=["bot", "tools", "computer", "online", "reported_at"]),
@@ -1131,7 +1132,7 @@ SCHEMAS = {
     "AssistantSent": obj({"message": ref("Message"), "reply": {"type": ["object", "null"]}, "fast": "b", "intent": "n"},
                          required=["message", "fast"]),
     "AssistantActionResult": obj({"action": {"type": "object", "description": "id, summary, method, path, body, status "
-                                            "(pending, running, done, failed, cancelled, expired), result"}, "message_id": "s",
+                                            "(pending, running, done, failed, canceled, expired), result"}, "message_id": "s",
                                   "shown_once": {"type": "object", "description": "Confirm only, on a card that makes a "
                                                  "one-time value (a new computer's code): {code, expires, operator}, "
                                                  "in this answer alone and never stored on the card"}},

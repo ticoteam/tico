@@ -1205,8 +1205,9 @@ def on_event(c, type_, subject, data, actor):
         task = H.task(c, subject)
         if task and not H.task_private(c, task) and hub_checks(c, task):
             # task.assigned is told before the owner column is written: the new owner is the event's.
-            task = {**{k: task.get(k) for k in ("id", "title", "body", "status", "requester", "step_id", "type")},
-                    "owner": facts["owner"]}
+            # A task made without a type keeps a NULL type_id; hubdb reads that as the general type, so the trigger does too.
+            task = {**{k: task.get(k) for k in ("id", "title", "body", "status", "requester", "step_id")},
+                    "type_id": task.get("type_id") or H.GENERAL_TYPE, "owner": facts["owner"]}
             owner = F.owner_ref(facts["owner"])
             fire(c, "task_received", {"task": task, "event": {"name": name}}, f"task:{subject}:{name}",
                  lambda t: F.owner_ref(t["to"]) == owner)

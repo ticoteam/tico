@@ -327,6 +327,7 @@ export type Bot = {
   can_complete_onboarding?: boolean;
   description?: string;
   display_name: string;
+  folder?: string;
   id: string;
   keep_tasks_going?: number | null;
   onboarding_ready?: Record<string, unknown> | null;
@@ -583,7 +584,7 @@ export type BotToolRegistered = {
 };
 
 export type BotToolRemoval = {
-  cancelled?: boolean;
+  canceled?: boolean;
   detail?: string;
   removal?: boolean;
   task_id?: string;
@@ -2244,6 +2245,7 @@ export type Grant = {
 };
 
 export type Group = {
+  bot_slugs: Array<string>;
   bots: Array<string>;
   id: string;
   name: string;
