@@ -301,6 +301,15 @@ def test_the_daily_curate_pass_is_skipped_when_it_has_nothing_to_read(api):
         assert c.execute("SELECT count(*) FROM tasks WHERE owner_id='bot:librarian'").fetchone()[0] == 2
 
 
+def test_the_sweep_on_a_monday_reports_the_weekly_delta_refresh(api, tmp_path):
+    """The Monday sweep refreshes the weekly delta and says so: the response's delta carries `updated`."""
+    from datetime import date
+    _seed(api, tmp_path)
+    with api.app.state.store.transaction() as c:
+        out = M.sweep(c, M.SEED_ACTOR, [], today=date(2026, 11, 2))
+    assert out["delta"] == {"updated": True}
+
+
 def test_applying_an_insight_makes_an_entity_and_sets_its_verified_date(api, tmp_path):
     _seed(api, tmp_path)
     evidence = {"source_kind": "page-change", "source_url": "https://acme.example/pricing", "quote": "Pro is $12",
