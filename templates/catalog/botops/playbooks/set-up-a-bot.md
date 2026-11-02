@@ -8,6 +8,10 @@ instructions the owner recognises as what they asked for. When a human asked you
 take it live (`hub bot go-live <slug>`); for a task nobody chatted, the note tells the owner the one
 thing to read before they turn it on, and they do.
 
+Inputs: the task (`hub task show <id>`): the bot's name, its template, its slug if it is already registered, and any reviewed instructions or setup answers.
+
+Done when: `hub bot check <slug>` passes or its warnings are explained in the note, and the note from section 6 is on the task. The bot stays off unless the human asked you to take it live.
+
 ---
 
 ## 1. Read the task
@@ -23,7 +27,7 @@ instead of a template. Pick the closest template in the templates, and write `AG
 If any of those is missing, choose it and go on (AGENT.md, Defaults, not questions):
 
 - **Slug:** never ask anyone for one, and leave it out of `hub bot create`: Tico picks it from the name (else the
-  template's name), lowercase with hyphens ("Bleacher Report Manager" is `bleacher-report-manager`), adds -2, -3
+  template's name), lowercase with hyphens ("Projects Manager" is `projects-manager`), adds -2, -3
   when it is taken or reserved, and prints it. Use the printed slug from then on and name it in the report. Pass a
   slug only when the bot is already registered: the task names one, or you registered it with `--record-only`
   earlier in this run (build-me-a-bot step 1). Leaving it out then makes a second bot with -2.
@@ -44,7 +48,8 @@ human asked for the bot in chat, it also registers the bot with the server as th
 them an owner (`playbooks/build-me-a-bot.md`); for a task with no human behind it, the owner registered
 it already.
 Read what it produced before you change anything: the template is a starting point, not the
-answer. From here on a routine is changed with `hub routine set`, not by editing the file.
+answer. Use `hub bot branch <bot>` for shared instructions and lessons on your own computer; `hub bot copy <bot>` starts an independent bot from the original repository's contents.
+From here on a routine is changed in Tico with `hub automation update <id>` (its id is in `hub automation list --owner bot:<slug>`), not by editing the file.
 
 ## 3. Put the real instructions in
 
@@ -118,7 +123,7 @@ first placement is your computer, where its history is: the runner there sets `o
 publishes the history with the bot's own token, and never forces: if the repository already holds different
 history it stops and Health says so. Once GitHub has it, the bot can move to any computer. You do not push other bots'
 repositories. If `hub bot create` failed with `github_permission_missing`, a person must act: the app
-was not given permission to create repositories. Do not work around it or retry (AGENT.md rule 11). Finish
+was not given permission to create repositories. Do not work around it or retry (AGENT.md rule 6). Finish
 steps 3 to 5 in the local repository anyway, then say plainly in the task note that the bot waits for its
 GitHub repository and that the owner has a Needs-you task with the fix it names; tell the person who asked
 once, and do not file another ask. Tico finishes the repository on its own once the owner acts, and the bot
@@ -157,5 +162,3 @@ The requester closes the task. Unless a human asked you in chat to take it live,
 - **The check fails on something outside the repository**, such as a runtime that is not installed
   or a profile with no sign in. That is the owner's to fix. Record the exact failing line on the
   task and finish; do not work around it.
-
-Use `hub bot branch <bot>` for shared instructions and lessons on your own computer; `hub bot copy <bot>` starts an independent bot from the original repository's contents.

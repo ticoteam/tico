@@ -385,7 +385,8 @@ function decideActionsPlain(c, k) {
   // A pick between files has a button under each file: no Pick one row.
   if (c.type === 'pick' && qcardReview(c.it)?.pick) return skip;
   if (c.type === 'pick') return `${skip}<button type="button" disabled>Pick one</button>`;
-  if (c.type === 'memory_tidy') return `<button type="button" data-dc="no">Discard</button><button type="button" class="primary" data-dc="yes"${c.it.keep_available ? '' : ' disabled title="Keep is not available yet"'}>Keep</button>`;
+  if (c.type === 'memory_tidy') return c.it.keep_pending ? '<button type="button" disabled>Applying Keep…</button>'
+    : `<button type="button" data-dc="no">Discard</button><button type="button" class="primary" data-dc="yes"${c.it.keep_available ? '' : ' disabled title="Update this bot’s computer to enable Keep"'}>Keep</button>`;
   if (c.type === 'approve') return `<button type="button" data-dc="no">Decline${k('N')}</button><button type="button" class="primary" data-dc="yes">Approve${k('Y')}</button>`;
   if (c.yn) return `<button type="button" data-dc="no">No${k('N')}</button><button type="button" class="primary" data-dc="yes">Yes${k('Y')}</button>`;
   if (c.type === 'ask') return `${skip}<button type="button" class="primary" data-dc="answer" data-dc-text disabled title="Type an answer">Answer</button>`;
@@ -430,7 +431,7 @@ function decideMemoryTidyHTML(st, c) {
   return `<h2>Nightly memory tidy: ${esc(actorLabel('bot:' + it.bot) || it.bot)}</h2>
     <p>${esc(it.model)} · Estimated cost $${Number(it.cost_usd).toFixed(4)}</p>
     <p>Memory commit <code>${esc(it.memory_commit)}</code></p>
-    <pre>${esc(it.diary)}</pre><details open><summary>Proposed changes</summary><pre>${esc(it.diff ?? (st.data.get(c.it.id)?.error ? 'Could not load proposed changes. Reopen the card to try again.' : 'Loading proposed changes…'))}</pre></details>`;
+    <pre>${esc(it.diary)}</pre>${it.reason ? `<p>${esc(it.reason)}</p>` : ''}<details open><summary>Proposed changes</summary><pre>${esc(it.diff ?? (st.data.get(c.it.id)?.error ? 'Could not load proposed changes. Reopen the card to try again.' : 'Loading proposed changes…'))}</pre></details>`;
 }
 
 // The Stale tickets card: a row per task with Accept and Skip (needs-you.js staleCardRow), Accept all below.
@@ -532,7 +533,7 @@ function decideWriteBody(c, what, i, note) {
   if (c.type === 'memory_tidy') {
     const decision = what === 'yes' ? 'keep' : 'discard';
     return {writes: [{path: `/v2/memory-tidy/cards/${id}/decide`, body: {decision}}],
-      label: decision === 'keep' ? 'Kept Nightly memory tidy' : 'Discarded Nightly memory tidy'};
+      label: decision === 'keep' ? 'Keep requested for Nightly memory tidy' : 'Discarded Nightly memory tidy'};
   }
   if (['pick', 'all', 'ticked'].includes(what)) {
     // One pick, Yes to all, or the ticked picks (the rest go to the bot as "not this one"): question-card.js.

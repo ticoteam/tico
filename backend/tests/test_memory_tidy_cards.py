@@ -17,6 +17,7 @@ def db():
     c = sqlite3.connect(':memory:')
     c.row_factory = sqlite3.Row
     c.executescript(C.SCHEMA)
+    c.executescript("CREATE TABLE assignments(bot TEXT,runner_id TEXT); CREATE TABLE runners(id TEXT,capabilities_json TEXT,revoked_at TEXT);")
     yield c
     c.close()
 
@@ -44,7 +45,7 @@ def test_one_open_card_retry_and_new_night_replaces_without_applying(db, monkeyp
     with pytest.raises(Problem):
         offer(db, started_at='2026-11-02T17:00:00Z')
     # These are the only tables: filing has no repository/memory/job storage to mutate.
-    assert [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")] == ['memory_tidy_cards']
+    assert [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")] == ['memory_tidy_cards', 'memory_tidy_keeps', 'assignments', 'runners']
 
 
 def test_two_business_days_excludes_weekend_and_expires_at_boundary(db, monkeypatch):
@@ -151,3 +152,103 @@ def test_standalone_card_stays_out_of_batch_and_live_brief(api):
     assert get(api, 'memory-tidy/cards/' + card['id'])['card']['status'] == 'open'
     with api.app.state.store.read() as c:
         assert {t: c.execute('SELECT count(*) FROM ' + t).fetchone()[0] for t in before} == before
+
+
+def capable_computer(api):
+    from backend.tests.test_api import runner
+    joined = runner(api)
+    with api.app.state.store.transaction() as c:
+        rid = c.execute('SELECT id FROM runners ORDER BY created DESC LIMIT 1').fetchone()[0]
+        c.execute('UPDATE runners SET capabilities_json=? WHERE id=?', ('["memory_tidy_keep_v1"]', rid))
+        c.execute('INSERT OR REPLACE INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,?,?,?)',
+                  ('ops', rid, 1, H.now(), 'human:ana'))
+    return rid, joined['token']
+
+
+def test_keep_queue_named_reviewer_scoped_computer_refusal_and_retry(api):
+    rid, token = capable_computer(api)
+    with api.app.state.store.transaction() as c:
+        card = offer(c)
+    path = 'memory-tidy/cards/' + card['id'] + '/decide'
+    assert get(api, 'memory-tidy/cards')['cards'][0]['keep_available']
+    post(api, path, {'decision': 'keep'}, 'ben-test', expected=404)
+    queued = post(api, path, {'decision': 'keep'})['card']
+    assert queued['status'] == 'open' and queued['keep_pending'] and not queued['keep_available']
+    post(api, path, {'decision': 'discard'}, expected=409)
+    post(api, path, {'decision': 'keep'})  # idempotent beyond a transport key
+    payload = get(api, 'runners/me/memory-tidy-keeps', token)['keeps']
+    assert len(payload) == 1 and payload[0]['memory_commit'] == 'a' * 40
+    get(api, 'runners/me/memory-tidy-keeps', 'ana-test', expected=403)
+    other_id, other_token = capable_computer(api)
+    assert get(api, 'runners/me/memory-tidy-keeps', other_token)['keeps'] == []
+    endpoint = 'runners/me/memory-tidy-keeps/' + payload[0]['id'] + '/complete'
+    post(api, endpoint, {'status': 'kept', 'commit': 'b' * 40}, other_token, expected=404)
+    # Original computer can reconcile a push after placement changed, but nobody
+    # else can take over an already-authorized in-flight push.
+    post(api, endpoint, {'status': 'refused', 'reason': '9: instruction check failed'}, token)
+    reopened = get(api, 'memory-tidy/cards')['cards'][0]
+    assert reopened['status'] == 'open' and 'instruction check failed' in reopened['reason']
+    post(api, path, {'decision': 'keep'})
+    second = get(api, 'runners/me/memory-tidy-keeps', other_token)['keeps'][0]
+    done = 'runners/me/memory-tidy-keeps/' + second['id'] + '/complete'
+    post(api, done, {'status': 'kept', 'commit': 'bad'}, other_token, expected=422)
+    post(api, done, {'status': 'kept', 'commit': 'b' * 40}, other_token)
+    post(api, done, {'status': 'kept', 'commit': 'b' * 40}, other_token)
+    assert get(api, 'memory-tidy/cards')['cards'] == []
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM memory_tidy_cards WHERE status='kept'").fetchone()[0] == 1
+        assert c.execute("SELECT commit_sha FROM memory_tidy_keeps WHERE status='kept'").fetchone()[0] == 'b' * 40
+
+
+def test_inflight_keep_not_expired_or_replaced_and_discard_queues_nothing(api):
+    rid, token = capable_computer(api)
+    with api.app.state.store.transaction() as c:
+        card = offer(c)
+    path = 'memory-tidy/cards/' + card['id'] + '/decide'
+    post(api, path, {'decision': 'keep'})
+    with api.app.state.store.transaction() as c:
+        assert C.sweep(c, '2099-01-01T00:00:00Z') == 0
+        with pytest.raises(Problem, match='still being applied'):
+            offer(c, started_at='2098-01-01T00:00:00Z')
+    pending = get(api, 'runners/me/memory-tidy-keeps', token)['keeps'][0]
+    post(api, 'runners/me/memory-tidy-keeps/' + pending['id'] + '/complete',
+         {'status': 'refused', 'reason': 'Main changed'}, token)
+    post(api, path, {'decision': 'discard'})
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM memory_tidy_keeps WHERE status='queued'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM memory_tidy_cards WHERE status='discarded'").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize('change', ['move', 'revoke'])
+def test_undelivered_keep_lost_computer_is_refused_without_wedging_card(api, change):
+    rid, token = capable_computer(api)
+    with api.app.state.store.transaction() as c:
+        card = offer(c)
+    path = 'memory-tidy/cards/' + card['id'] + '/decide'
+    post(api, path, {'decision': 'keep'})
+    if change == 'move':
+        capable_computer(api)
+    else:
+        with api.app.state.store.transaction() as c:
+            c.execute('UPDATE runners SET revoked_at=? WHERE id=?', (H.now(), rid))
+    shown = get(api, 'memory-tidy/cards')['cards'][0]
+    assert not shown['keep_pending'] and 'placement changed' in shown['reason']
+    post(api, path, {'decision': 'discard'})
+    with api.app.state.store.transaction() as c:
+        assert c.execute("SELECT status FROM memory_tidy_keeps").fetchone()[0] == 'refused'
+        assert offer(c, started_at='2098-01-01T00:00:00Z')['status'] == 'open'
+
+
+def test_delivery_only_contains_checkout_configuration_and_pending_retry_survives_expiry(api):
+    rid, token = capable_computer(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
+                  (json.dumps({'repo': 'acme/bot-ops', 'shared_from': '', 'private_setting': 'synthetic-sensitive'}),))
+        card = offer(c)
+    path = 'memory-tidy/cards/' + card['id'] + '/decide'
+    post(api, path, {'decision': 'keep'})
+    payload = get(api, 'runners/me/memory-tidy-keeps', token)['keeps'][0]
+    assert payload['config'] == {'repo': 'acme/bot-ops', 'shared_from': ''}
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE memory_tidy_cards SET expires=? WHERE id=?', ('2000-01-01T00:00:00Z', card['id']))
+    assert post(api, path, {'decision': 'keep'})['card']['keep_pending']

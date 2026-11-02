@@ -1,5 +1,9 @@
 # Whose rights a command uses
 
+Inputs: the command about to run, and the requester and request id it came with.
+
+Done when: the command has run with the requester's rights, or it came back as `needs_confirm` and the asking bot was told so.
+
 ## Who the rights belong to
 Every tool uses the requester's rights by default. A human request uses that human's full rights for as long as its task is
 open (up to 30 days after they last spoke on it; a task you reopen lends nothing). Their own comment on that task is them asking.

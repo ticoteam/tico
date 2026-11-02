@@ -456,6 +456,11 @@ def enrolled(c, execution, runner_id, key):
     H.event(c, H.KEEPER, "cloud_machine.enrolled", key, {"runner": runner_id})
     for bot in hosted(c, key):
         bind(c, execution, bot)
+    from . import model_subscriptions as MS
+    for bot in hosted(c, key):                  # a new computer, even while its bot's last turn is still out elsewhere
+        chooser = (row(c, bot) or {}).get("changed_by") or ""
+        if MS.may_grant(c, execution.auth, chooser):
+            lend_plans(c, execution, bot, runner_id, chooser, new=True)
 
 
 def unplaced(c, bot):
@@ -503,6 +508,28 @@ def check_host(c, bot, runner_id):
     if found and found["bot"] not in (bot, SHARED):
         raise Problem("cloud_machine", "That computer is another bot's own cloud machine. Choose the shared cloud "
                       "machine or another computer", 409)
+
+
+def lend_plans(c, execution, bot, runner_id, chooser, new=False):
+    """An admin's choice put `bot` on its cloud machine's computer: `chooser` is that admin, already checked. Called at
+    only two moments, an admin's request (`change`) and a new computer's enrollment (`enrolled`), and never from a look,
+    so nothing a member does later brings back a plan an admin took off. That computer takes the company's plan for each
+    runtime the bot runs there when it has no plan or sign-in of its own (model_subscriptions.lend). On a computer that
+    isn't `new`, a runtime another bot there already runs is left: its first bot decided. No other computer is touched.
+    The shared machine's computer is first in the order a plan is picked from."""
+    from . import model_subscriptions as MS
+    if (home(c, bot) or {}).get("runner_id") != runner_id:
+        return
+    settings = execution.store.settings
+    shared = (row(c, SHARED) or {}).get("runner_id")
+    others = [r["runner_id"] for r in c.execute("SELECT runner_id FROM cloud_machines WHERE runner_id IS NOT NULL "
+                                                "AND bot<>? ORDER BY bot", (SHARED,))]
+    fellows = [] if new else [r["bot"] for r in c.execute("SELECT bot FROM assignments WHERE runner_id=? AND bot<>? "
+                                                          "ORDER BY bot", (runner_id, bot))]
+    taken = {runtime for fellow in fellows for runtime in MS.bot_runtimes(c, settings, fellow)}
+    for runtime in MS.bot_runtimes(c, settings, bot):
+        if runtime not in taken:
+            MS.lend(c, runner_id, runtime, chooser, shared, others)
 
 
 def placed(c, bot, runner_id, actor):
@@ -1134,8 +1161,14 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
         if row(c, SHARED)["enroll_fails"]:                  # and so does a member's, for the shared machine
             save(c, SHARED, enroll_fails=0, **({"problem": ""} if row(c, SHARED)["problem"] == "no_enroll" else {}))
     if after["mode"] == "cloud":
+        moving = unplaced(c, bot)
+        chose = mode is not None or placement is not None
         # onto a machine that is there already; else when it is made. A person's choice of a machine hears a lasting refusal.
-        bind(c, execution, bot, lasting=mode is not None or placement is not None)
+        bind(c, execution, bot, lasting=chose)
+        from . import model_subscriptions as MS
+        target = (home(c, bot) or {}).get("runner_id")
+        if moving and target and chose and MS.is_admin(auth, who):
+            lend_plans(c, execution, bot, target, who.actor)
     H.event(c, who.actor, "cloud_machine.changed", bot, {
         key: after[key] for key in ("mode", "placement", "size", "always_on") if after[key] != before[key]})
     return view(c, bot, execution.store.settings)
