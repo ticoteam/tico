@@ -185,14 +185,19 @@ def test_a_persons_message_with_no_rule_for_it_makes_no_call(ruled):
     assert judge.calls == [] and len(bodies(api, "favorite color is gold")) == 1
 
 
-def test_where_kind_dm_holds_direct_chats_and_not_a_group_conversation(ruled):
+def test_where_kind_dm_holds_direct_chats_and_group_dms_and_not_a_thread(ruled):
     api, judge = ruled
     block_everyone(api, where=["kind:dm"])
     assert write(api, "cara-test", "Our favorite color is gold.")["held"]["outcome"] == "blocked"
+    # A group conversation from the old route is a personal DM, as `threads.dm` makes one.
     group = post(api, "conversations", {"participants": ["ben", "ana"], "subject": "Palette"}, token="cara-test")
-    # A group conversation's audience is its participants, not a DM, though its legacy scope says direct: no call.
-    assert "held" not in write(api, "cara-test", "Our favorite shade is gold.", conversation_id=group["id"])
-    assert len(judge.calls) == 1
+    assert write(api, "cara-test", "Our favorite color is teal.", conversation_id=group["id"])["held"]
+    assert len(judge.calls) == 2
+    # A thread with members is no DM, whoever is in it: no call.
+    thread = post(api, "threads", {"title": "Palette", "audience": "members", "members": ["human:ben"]}, token="cara-test")
+    assert "held" not in post(api, f"threads/{thread['id']}/messages", {"text": "Our favorite color is red."},
+                              token="cara-test")
+    assert len(judge.calls) == 2
 
 
 def test_where_team_holds_the_writes_of_that_group_and_not_anyone_else(ruled):

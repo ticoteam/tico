@@ -5,7 +5,8 @@ that follows edits and deletes. Fictional people only: ana (owner), ben and cara
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the fixture and its helpers)
 from backend.tests.test_org_rule_check import COLOR, bodies, hold_row, ruled  # noqa: F401  (the Judge fixture)
 from backend.tests.test_org_rules import rule
-from backend import threads
+from backend import org_rule_check, threads
+from backend.store import Problem
 
 
 def new_thread(api, title="Budget", members=("human:ben",), body=None, parent_message_id=None):
@@ -201,6 +202,67 @@ def test_a_block_holds_a_persons_thread_post_through_rest_and_writes_nothing(rul
     assert hold["author"] == "human:cara" and hold["state"] == "held"
     assert bodies(api, "favorite color is gold") == []                 # the hold is the only trace
     assert not any("favorite color" in str(m.get("body")) for m in message_in(api, thread["id"]))
+
+
+def test_a_post_to_an_outside_destination_is_checked_like_any_other(ruled):
+    api, judge = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
+    thread = new_thread(api, members=("human:cara",))
+    calls = len(judge.calls)
+    got = api.post(f"/api/v2/threads/{thread['id']}/messages", json={"text": GOLD, "to": "slack:C123"},
+                   headers=headers("cara-test"))
+    assert got.status_code == 200, got.text
+    assert got.json()["held"]["outcome"] == "blocked"
+    assert len(judge.calls) == calls + 1
+    assert "slack:C123" in judge.calls[-1]["state"]["to"]
+    assert bodies(api, "favorite color is gold") == []
+    # One that breaks nothing goes on to it.
+    fine = api.post(f"/api/v2/threads/{thread['id']}/messages", json={"text": "The launch is on", "to": "slack:C123"},
+                    headers=headers("cara-test"))
+    assert fine.status_code == 200 and fine.json()["to_actor"] == "slack:C123", fine.text
+
+
+def company_thread(api):
+    made = api.post("/api/v2/threads", json={"title": "All hands", "audience": "company"}, headers=headers("ana-test"))
+    assert made.status_code == 200, made.text
+    return made.json()
+
+
+def test_a_refused_recipient_fails_the_write_with_its_error_and_never_goes_unchecked(ruled, monkeypatch):
+    api, judge = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
+    path = f"/api/v2/threads/{company_thread(api)['id']}/messages"
+    calls = len(judge.calls)
+    # No such teammate, whatever the text says: the write's own error, and nothing to judge.
+    missing = api.post(path, json={"text": GOLD, "to": "human:nobody"}, headers=headers("cara-test"))
+    assert missing.status_code == 404 and missing.json()["error"]["code"] == "not_found", missing.text
+
+    # A recipient only the check refuses (the gate moved between the check and the write) stops the write all the same.
+    def refuse(c, who, target, need="see"):
+        raise Problem("recruiting", "That teammate is still being set up", 409)
+
+    monkeypatch.setattr(api.app.state.auth, "target", refuse)
+    got = api.post(path, json={"text": GOLD, "to": "human:ben"}, headers=headers("cara-test"))
+    assert got.status_code == 409 and got.json()["error"]["code"] == "recruiting", got.text
+    assert len(judge.calls) == calls
+    assert bodies(api, "favorite color is gold") == []
+    assert org_rule_check.holds(org_rule_check.refused(Problem("recruiting", "Not yet", 409)))
+
+
+def test_the_retry_of_a_post_that_went_replays_its_answer_even_if_the_recipient_is_refused_now(ruled, monkeypatch):
+    api, _ = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
+    path = f"/api/v2/threads/{company_thread(api)['id']}/messages"
+    keyed = {**headers("cara-test"), "Idempotency-Key": "post-once"}
+    first = api.post(path, json={"text": "The launch is on", "to": "human:ben"}, headers=keyed)
+    assert first.status_code == 200, first.text
+
+    def refuse(c, who, target, need="see"):
+        raise Problem("not_found", "Unknown recipient", 404)
+
+    monkeypatch.setattr(api.app.state.auth, "target", refuse)
+    again = api.post(path, json={"text": "The launch is on", "to": "human:ben"}, headers=keyed)
+    assert again.status_code == 200 and again.json()["id"] == first.json()["id"], again.text
 
 
 def test_a_held_thread_post_is_sent_by_its_rule_author_as_its_person(ruled):

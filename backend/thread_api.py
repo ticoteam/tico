@@ -161,8 +161,11 @@ def install(app, store, auth, mutate, rule_check):
     def recipients(c, who, thread_id, to):
         """Who a thread write is for, as the org-rule check reads it (`org_rule_check.thread_people`). The recipient and
         the thread are authorized first (`auth`: 404 for a caller who may not read them), so no check reads members the
-        caller cannot see and no hold names them."""
+        caller cannot see and no hold names them. An outside destination is no teammate: its address is the recipient,
+        as `threads.post` writes it, and the check still reads it."""
         auth.conversation(c, who, thread_id)
+        if str(to or "").startswith(threads.OUTSIDE_PREFIXES):
+            return org_rule_check.thread_people(c, {"thread_id": thread_id, "to_actor": to})
         target = H.resolve_actor(c, to) if to else None
         # Two people already in a thread need no See or Write on each other; anyone else takes the teammate gate.
         if to and not (target and threads._in_it_together(c, thread_id, who.actor, target)):

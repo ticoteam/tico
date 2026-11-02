@@ -62,6 +62,9 @@ Catch up summarizes what is new for the person in a thread, or in the thread and
   message cut to 400 characters. Older messages are named as left out.
 - Before the reply is written, every message it read is checked again. If one has become unreadable, nothing is
   posted and the call answers 409 (catch up again), so no text from it reaches the Assistant DM.
+- It starts at the person's read point. Nothing from before they joined the thread is new, in any sub-thread, nor is
+  what the threads migration carried over or history written back (imports, replays).
+- A person they may not see is named only to someone in the same thread. The model reads "Someone" for anyone else.
 - It skips the person's own posts and system notices (update cards, follow-up nudges).
 - The summary is written by the company's model when one is available. Without one, the reply is the last few lines.
 - The reply is posted in the person's **Assistant** DM, and only that person reads it. It names its source messages in
