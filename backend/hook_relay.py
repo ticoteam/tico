@@ -169,16 +169,20 @@ class Link:
         self.key, self.base, self.fingerprint = key, base, fingerprint
 
     def call(self, method: str, path: str, body: object = None, idempotency: str | None = None, *,
-             area: str = "hooks", transport: object = None, cap: int = MAX_ANSWER) -> dict[str, Any]:
+             area: str = "hooks", transport: object = None, cap: int = MAX_ANSWER, content: bytes | None = None,
+             headers: dict[str, str] | None = None) -> dict[str, Any]:
         """One call to `<base>/<area>/<path>`. `area` and `cap` let the sleep client (backend/sleep_idle.py) share the
-        key, the pinned client settings and the answer cap; `transport` is a test's fake HQ."""
-        headers = {"Authorization": "Bearer " + self.key, "User-Agent": user_agent(), "Accept-Encoding": "identity"}
+        key, the pinned client settings and the answer cap; `transport` is a test's fake HQ. `content` sends raw bytes
+        (a signed federation envelope) in place of `body`, with `headers` added to the key's."""
+        sent = {"Authorization": "Bearer " + self.key, "User-Agent": user_agent(), "Accept-Encoding": "identity"}
+        sent.update(headers or {})
         if idempotency:
-            headers["Idempotency-Key"] = idempotency[:200]
+            sent["Idempotency-Key"] = idempotency[:200]
+        payload = {"content": content} if content is not None else {"json": body}
         try:
             with httpx.Client(transport=transport or TRANSPORT, timeout=TIMEOUT, trust_env=False, follow_redirects=False,
                               verify=outbound_tls.context(trust_env=False)) as client:
-                with client.stream(method, f"{self.base}/{area}/{path}", json=body, headers=headers) as response:
+                with client.stream(method, f"{self.base}/{area}/{path}", headers=sent, **payload) as response:
                     raw = bytearray()
                     for chunk in response.iter_bytes():
                         raw.extend(chunk)

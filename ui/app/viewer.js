@@ -308,7 +308,7 @@ async function viewerShow() {
 }
 // Everything viewable that sits with `el` (a message, an update, a task), in page order.
 function viewerOpenFrom(el) {
-  const home = el.closest('.bubble, .conv-run, .upd-card, .upd-msg, .tmodal-body, .doc-viewer-body, .trow, .card') || el.parentElement || document.body;
+  const home = el.closest('.th-msg, .bubble, .conv-run, .upd-card, .upd-msg, .tmodal-body, .doc-viewer-body, .trow, .card') || el.parentElement || document.body;
   const els = [...home.querySelectorAll('a[href], .chat-thumb.ready, .md img')].filter(x => !x.closest('.inline-thumb'));
   const items = [], at = {i: 0};
   for (const x of els) {

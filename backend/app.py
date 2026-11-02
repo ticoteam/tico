@@ -29,6 +29,7 @@ from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifecycle, mcp_oauth, recruiting, harness_actions, model_login, oidc, personal_tokens, views
 from . import outcome_stats
+from . import teammate_access
 from . import start_places
 from . import ask_ingest, delivery, strategy_bot, invites, owner_link
 from . import org_rule_check
@@ -36,6 +37,7 @@ from .roadmaps import exact_approval
 from . import login_holds
 from . import cloud_access
 from . import counsel
+from . import thread_api
 from . import step_age
 from . import bot_stops, turn_budgets, proposals, task_caps
 from . import (auto_tasks, check_models, profiles, run_triggers, task_models, task_run_models, team_rules, update_feeds,
@@ -340,6 +342,11 @@ def create_app(settings=None):
                 except Exception as exc:
                     telemetry.capture("live_meeting_sweep", exc)
                 try:
+                    # Calls keep to their threads: people and bots whose access ended, and a LiveKit that restarted.
+                    await asyncio.to_thread(app.state.calls.sweep)
+                except Exception as exc:
+                    telemetry.capture("calls_sweep", exc)
+                try:
                     await asyncio.wait_for(stop.wait(), timeout=10)
                 except TimeoutError:
                     pass
@@ -373,6 +380,8 @@ def create_app(settings=None):
             books_sync.start(store, app.state.vault, settings, rehearsal=settings.rehearsal)
         # Webhooks waiting at Tico Gateway; the loop does nothing without a relay or a key.
         hook_relay_task = asyncio.create_task(app.state.hook_relay.loop(stop)) if timers else None
+        # Shared threads between installs (backend/federation_relay.py): peerings and envelopes through Tico HQ.
+        federation_task = asyncio.create_task(app.state.federation_relay.loop(stop)) if timers else None
         # Physical mail (backend/postal_mail.py): reads and routes the letters the relay and the mail-intake inbox kept.
         postal_mail_task = asyncio.create_task(app.state.postal_mail.loop(stop)) if timers else None
         # Sleep when idle (backend/sleep_idle.py): looks every five minutes (a cell: every minute), and only on a hosted server that asked for it.
@@ -416,6 +425,8 @@ def create_app(settings=None):
                 await inbound_task
             if hook_relay_task:
                 await hook_relay_task
+            if federation_task:
+                await federation_task
             if postal_mail_task:
                 await postal_mail_task
             if sleep_idle_task:
@@ -716,7 +727,7 @@ def create_app(settings=None):
                 size = request.headers.get("content-length", "0")
                 if not size.isdigit():
                     raise Problem("content_length", "Invalid Content-Length", 400)
-                upload = request.url.path in ("/api/notes", "/api/send", "/api/v2/uploads/tasks", "/api/v2/uploads/assistant/messages", "/api/v2/meetings/import") or re.fullmatch(r"/api/(?:meetings/[^/]+/send|v2/uploads/chat/[^/]+)", request.url.path)
+                upload = request.url.path in ("/api/notes", "/api/send", "/api/v2/uploads/tasks", "/api/v2/uploads/assistant/messages", "/api/v2/meetings/import") or re.fullmatch(r"/api/(?:meetings/[^/]+/send|v2/uploads/chat/[^/]+|v2/uploads/threads/[^/]+/messages)", request.url.path)
                 docs_import = (request.url.path in ("/api/v2/docs/import", "/api/v2/market/import")
                                and request.state.identity.role in ("human", "owner", "bot"))
                 # A bot's computer publishes files up to 25 MB as raw bytes (backend/files.py).
@@ -1208,6 +1219,8 @@ def create_app(settings=None):
             value["parts"] = parts
             if since := step_age.since_map(c, [row]).get(row["id"]):
                 value["step_since"] = since      # how long a Dev ticket has been at its working step (backend/step_age.py)
+            if who is not None:
+                value = teammate_access.Known(c, who, auth).task(value)     # people the reader may not see
         return value
 
     def task_views(rows, c, who, visible_sql="1"):
@@ -1331,7 +1344,7 @@ def create_app(settings=None):
                 value["origin_actor"] = None
             value["from_person"] = views.person_origin(c, row, visible_sql, who.actor)
             result.append(value)
-        return result
+        return teammate_access.Known(c, who, auth).tasks(result)       # people the reader may not see
 
     def mover(c, who):
         """Whether this person may move any task: the owner, or a person on a mover team."""
@@ -1446,7 +1459,8 @@ def create_app(settings=None):
                                  kind="message")
         if body.conversation_id:
             conv = auth.conversation(c, who, body.conversation_id, write=True)
-            if to not in conv["participants"]:
+            from . import threads
+            if to not in threads.legacy_participants(c, conv):
                 raise Problem("forbidden", "Recipient is not a conversation participant", 403)
         if body.in_reply_to:
             msg = H.message(c, body.in_reply_to)
@@ -2448,8 +2462,9 @@ def create_app(settings=None):
                 shown.append((bot, level))
             rows = BotRows(c, who, [bot["slug"] for bot, _ in shown],
                            {bot["slug"] for bot, level in shown if level["read"]})
-            return [{**bot_view(c, bot, level, access, registry_roster, registry_entries, who, rows),
-                     "goal_active": readable_active(c, auth, who, bot["slug"], rows.goals.get(bot["slug"], []))}
+            redact = teammate_access.bot_redactor(c, who, auth)     # people and groups the caller may not see
+            return [redact({**bot_view(c, bot, level, access, registry_roster, registry_entries, who, rows),
+                            "goal_active": readable_active(c, auth, who, bot["slug"], rows.goals.get(bot["slug"], []))})
                     for bot, level in shown]
 
     @app.get("/api/v2/bots/{bot}")
@@ -2479,7 +2494,7 @@ def create_app(settings=None):
                 value["reports_to_name"] = (H.bot(c, reports) or {}).get("display_name") or reports
             if value.get("operator"):
                 value["operator_name"] = (H.human(c, value["operator"]) or {}).get("name") or value["operator"]
-            return value
+            return teammate_access.bot_redactor(c, who, auth)(value)
 
     @app.get("/api/v2/org")
     def org(request: Request, person: str | None = None, team: str | None = None, can: str | None = None):
@@ -2569,11 +2584,15 @@ def create_app(settings=None):
                               "org_parent": parent})
             for row in bots:
                 row["stage"] = lifecycle.stage(row["onboarding_state"])
-            return {**view, "bots": bots, "seats": seats}
+            # People and groups the caller may not see are left out, and what hung under them moves up.
+            people_hidden, groups_hidden = teammate_access.unseen(c, who, auth)
+            return teammate_access.redact_chart({**view, "bots": bots, "seats": seats}, roster, people_hidden,
+                                                groups_hidden)
 
     def may_edit_person(c, who, pid):
-        """Yourself, or someone who reports up to you (backend/people.py `manages`)."""
-        return auth.manages(c, who, "person", pid)
+        """Manage on this person: the same rule `my_access.manage` shows and the Access card's editor asks."""
+        from . import teammate_access
+        return teammate_access.can(c, who, "manage", "human:" + pid, auth=auth)
 
     @app.post("/api/v2/people/{pid}")
     def person_update(request: Request, pid: str, body: M.PersonUpdate):
@@ -2636,6 +2655,10 @@ def create_app(settings=None):
                     row = {**row, "notify_slack_bot_messages": body.notify_slack_bot_messages}
                 if body.update_draft is not None:
                     row = {**row, "update_draft": body.update_draft}
+                if body.notify_browser is not None:
+                    row = {**row, "notify_browser": body.notify_browser}
+                if body.email_digest is not None:
+                    row = {**row, "email_digest": body.email_digest}
                 if body.slack_muted_bots is not None:
                     row = {**row, "slack_muted_bots": list(dict.fromkeys(body.slack_muted_bots))}
                 if body.reports_to is not None:
@@ -2655,6 +2678,8 @@ def create_app(settings=None):
                                                               "github": body.github is not None,
                                                               "notify_slack_bot_messages": body.notify_slack_bot_messages,
                                                               "update_draft": body.update_draft,
+                                                              "notify_browser": body.notify_browser,
+                                                              "email_digest": body.email_digest,
                                                               "slack_muted_bots": body.slack_muted_bots,
                                                               "reports_to": body.reports_to, "left": bool(body.left)})
                 if caller is not who:
@@ -2814,7 +2839,9 @@ def create_app(settings=None):
                                 **views.page_options(limit, max_bytes))
             turn_work.annotate(c, auth, request.state.identity, page["messages"])
             visual_view(c, request.state.identity, page["messages"])
-            return {"conversation": H.conversation(c, cid), **page}
+            known = teammate_access.Known(c, request.state.identity, auth)     # people the reader may not see
+            return {"conversation": known.conversation(H.conversation(c, cid)),
+                    **page, "messages": known.messages(page["messages"])}
 
     @app.get("/api/v2/conversations/{cid}/outline")
     def outline(request: Request, cid: str):
@@ -2853,15 +2880,47 @@ def create_app(settings=None):
         people = H.mentioned_people(c, text, row, author) if text else []
         return [a for a in (row["owner"], row["requester"], *people, *extra) if a]
 
+    def rule_message_to(c, who, body):
+        """The actor a message goes to, as `send` writes it: `to: assistant` is the person's Assistant bot."""
+        if str(body.to).lower() == "assistant" and who.role in ("human", "owner") and not who.via:
+            return assistant_mod.availability(c, settings, who)["bot"]
+        return body.to
+
     def rule_message_audience(c, who, body):
-        out = {rule_target(c, who, body.to)}
-        if body.conversation_id and (conv := H.conversation(c, body.conversation_id)):
-            out |= set(conv.get("participants") or [])
+        """A message's audience as the check reads it: its target and its conversation's participants. Both are
+        authorized first, as the write authorizes them: a caller who cannot name the target or read the conversation
+        gets 404 here, so no check reads the participants and no hold names them."""
+        out = {auth.target(c, who, rule_message_to(c, who, body))}
+        if body.conversation_id:
+            out |= set(auth.conversation(c, who, body.conversation_id).get("participants") or [])
         return sorted(out)
 
-    def rule_check(who, operation, output, audience, obj="", context=None):
-        """The check for one bot write, or None (a person's write, nothing to judge, a write the caller cannot make:
-        the write itself refuses that)."""
+    def rule_message_place(who, body):
+        """A message's place, as `where:` reads it: its conversation (none for a direct chat, which is a DM). The
+        conversation is authorized first, as `rule_message_audience` does."""
+        def place(c, author, recipients):
+            if body.conversation_id:
+                auth.conversation(c, who, body.conversation_id)
+            return org_rule_check.place_for(c, author, recipients, body.conversation_id or "")
+        return place
+
+    def chat_place(who, bot):
+        """A person's chat with a bot is the direct chat it lands in: its conversation id is the thread `where:` names.
+        The chat route names no conversation, so the check finds the open chat (none yet: a DM with no thread)."""
+        return lambda c, author, recipients: org_rule_check.place_for(
+            c, author, recipients, (views.direct_chat(c, who.actor, bot) or {}).get("id") or "")
+
+    def task_place(who, tid):
+        """A task comment's place: its task's conversation, the thread its comments are in (`where: thread:<id>`)."""
+        def place(c, author, recipients):
+            row = H.task(c, auth.resolve_task(c, who, tid))
+            return org_rule_check.place_for(c, author, recipients, (row or {}).get("conversation_id") or "")
+        return place
+
+    def rule_check(who, operation, output, audience, obj="", context=None, place=None):
+        """The check for one write by a person or a bot, or None (nothing to judge). An audience the caller may not name
+        is `org_rule_check.refused`: never unchecked, the write fails with that error (`apply`). `place`: the write's
+        place, or a function of (c, author, recipients) that reads it."""
         if not output or not org_rule_check.author_of(who, settings.assistant_bot):
             return None
         with store.read() as c:
@@ -2869,9 +2928,10 @@ def create_app(settings=None):
                 return None             # no rule in force: the audience (a roster read, @mentions) is never resolved
             try:
                 recipients = audience(c)
-            except Problem:
-                return None
-        return org_rule_check.preflight(store, app.state.judge, who, operation, output, recipients, context, obj)
+            except Problem as exc:
+                return org_rule_check.refused(exc)
+        return org_rule_check.preflight(store, app.state.judge, who, operation, output, recipients, context, obj,
+                                        place=place)
 
     def rule_public(body):
         """Whether a task write makes the task public: the whole company reads it."""
@@ -2962,8 +3022,8 @@ def create_app(settings=None):
             with store.read() as c:
                 try:
                     row = auth.task(c, who, auth.resolve_task(c, who, tid))
-                except Problem:
-                    return None
+                except Problem as exc:
+                    return org_rule_check.refused(exc)
         text = rule_update_text(body, row)
         if not text:
             return None
@@ -2992,14 +3052,21 @@ def create_app(settings=None):
         return ask_ingest.preflight(store, app.state.judge, who, body.to, title, body.text,
                                     kind="question" if tref else "loose")
 
-    def message_write(c, who, body, rc=None, ingest=None):
+    def message_write(c, who, body, rc=None, ingest=None, files=None):
         """One message, as every route that sends one writes it (`/messages`, a conversation's `/messages`) and Send
-        anyway replays it: the org rule check's verdict, then ask ingest's, then the send."""
-        rule = org_rule_check.apply(c, rc, body.text, {"body": body.model_dump(mode="json", by_alias=True)})
+        anyway replays it: the org rule check's verdict, then ask ingest's, then the send. A hold names the audience the
+        check read, so the audience is read again here, inside the write: a caller who lost access gets 404, and an
+        audience that moved since the check is checked again (409)."""
+        audience = rule_message_audience(c, who, body) if rc is not None else None
+        replay = {"body": body.model_dump(mode="json", by_alias=True), **({"files": files} if files else {})}
+        rule = org_rule_check.apply(c, rc, body.text, replay, audience_now=audience)
+        if rule and rule.get("moved"):
+            raise Problem("moved", "The conversation changed while the message was checked; send it again", 409,
+                          retryable=True)
         if rule and rule.get("held"):
             if ingest:
                 ask_ingest.skipped(c, ingest, "held")
-            return org_rule_check.answer(rule)
+            return org_rule_check.held_answer(c, who, rule, auth=auth)
         sent = body.model_copy(update={"text": org_rule_check.warned_text(rule, body.text)}) if rule else body
         # Judged against the plate before the question is on it.
         gate = ask_ingest.apply(c, ingest) if ingest else None
@@ -3015,10 +3082,12 @@ def create_app(settings=None):
             ask_ingest.withdraw_loose(c, who.actor, message["id"], ingest["person"])
         return {**message, **ask_ingest.reply(gate), **org_rule_check.answer(rule)}
 
-    def message_checks(who, body, retry=False):
+    def message_checks(who, body, retry=False, place=None, operation="message"):
         """Both checks of one message, outside the write: the rule check, then ask ingest (a held one skips it, and so
-        does a saved retry, `retry`: `mutate` replays its answer without the write)."""
-        rc = rule_check(who, "message", body.text, lambda c: rule_message_audience(c, who, body))
+        does a saved retry, `retry`: `mutate` replays its answer without the write). `place`: the message's place when
+        the route does not name a conversation (`rule_message_place`)."""
+        rc = rule_check(who, operation, body.text, lambda c: rule_message_audience(c, who, body),
+                        place=place or rule_message_place(who, body))
         return rc, (None if org_rule_check.holds(rc) or retry else message_ingest(who, body))
 
     @app.post("/api/v2/messages")
@@ -3036,6 +3105,36 @@ def create_app(settings=None):
         # `send` checks the destination as the bot and its run (task_privacy.require_destination).
         return message_write(c, bot, M.MessageCreate.model_validate(replay["body"]), org_rule_check.decided(gate),
                              ingest)
+
+    def chat_upload_checks(request, who, bot, sent):
+        """The checks of a person's chat message with files, outside the write: `message_checks` under its own operation,
+        so Send anyway replays the files with the message (`chat_upload_write`)."""
+        return message_checks(who, sent, retry=saved_retry(request, who), place=chat_place(who, bot),
+                              operation="chat_upload")
+
+    def chat_upload_write(c, who, bot, sent, rc, ingest, uploads, titles):
+        """One chat message with files, as the route and Send anyway write it: the message (`message_write`: the verdict,
+        ask ingest, the send), then its files on it. Held, the message and its files wait in the hold; `uploads` are the
+        files' digests, sizes and names, whose bytes were kept before the check."""
+        message = message_write(c, who, sent, rc, ingest, {"uploads": uploads, "titles": list(titles or [])})
+        if "id" not in message:
+            return message
+        extra = {k: message.pop(k) for k in ("rule_warning", "ingest") if k in message}
+        return {"conversation": H.conversation(c, message["conversation_id"]),
+                "message": app.state.uploads.attach(c, who, bot, message, uploads, titles), **extra}
+
+    def rule_prepare_chat_upload(store_, who, replay):
+        return message_ingest(who, M.MessageCreate.model_validate(replay["body"]))
+
+    def rule_chat_upload_audience(c, who, replay):
+        return rule_message_audience(c, who, M.MessageCreate.model_validate(replay["body"]))
+
+    @org_rule_check.replayer("chat_upload", prepare=rule_prepare_chat_upload, audience=rule_chat_upload_audience)
+    def rule_replay_chat_upload(c, who, hold, replay, ingest, gate=None):
+        sent = M.MessageCreate.model_validate(replay["body"])
+        files = replay.get("files") or {}
+        return chat_upload_write(c, who, sent.to.removeprefix("bot:"), sent, org_rule_check.decided(gate), ingest,
+                                 files.get("uploads") or [], files.get("titles") or [])
 
     def checked_write(request, body, who, operation, output, audience, write, replay, obj="", context=None):
         """A bot's write through the org rule check (backend/org_rule_check.py), for routes with no checks of their
@@ -3059,7 +3158,11 @@ def create_app(settings=None):
                 raise Problem("not_found", "Message not found", 404)
             who = request.state.identity
             privacy.require_message(c, who, row)
-            if who.role == "bot" and (row.get("to_actor") == who.actor or row.get("from_actor") == who.actor):
+            # A native thread's readers decide first: a bot removed from it loses its addressed messages too. A legacy
+            # conversation keeps the sender/addressee shortcut as it was.
+            native = bool((H.conversation(c, row["conversation_id"]) or {}).get("audience"))
+            party = row.get("to_actor") == who.actor or row.get("from_actor") == who.actor
+            if who.role == "bot" and party and not native:
                 return visual_view(c, who, [row])[0]
             auth.conversation(c, who, row["conversation_id"])
             return visual_view(c, who, [row])[0]
@@ -3073,7 +3176,7 @@ def create_app(settings=None):
                                attachments=body.attachments, delivery=body.delivery, defer_for=body.defer_for)
         # A bot's message here is a message like any other: the same checks and write as `/messages`, held or warned
         # the same way, and replayed by Send anyway as one.
-        rc, ingest = message_checks(who, sent, retry=saved_retry(request, who))
+        rc, ingest = message_checks(who, sent, retry=saved_retry(request, who), place=chat_place(who, bot))
 
         def work(c):
             cleared = topic_change.apply(c, settings, who, bot, topic)
@@ -3498,8 +3601,10 @@ def create_app(settings=None):
 
     def conversation_target(c, who, cid):
         conv = auth.conversation(c, who, cid, write=True)
-        target = next((p for p in conv["participants"] if p != who.actor and p.startswith("bot:")), None)
-        target = target or next((p for p in conv["participants"] if p != who.actor), None)
+        from . import threads
+        people = threads.legacy_participants(c, conv)
+        target = next((p for p in people if p != who.actor and p.startswith("bot:")), None)
+        target = target or next((p for p in people if p != who.actor), None)
         if not target:
             raise Problem("recipient", "This conversation has no other recipient", 422)
         return target
@@ -3524,7 +3629,9 @@ def create_app(settings=None):
             if sent.to != target:
                 # The recipient changed after the check: delivered unchecked (no engine call in the write), recorded.
                 author = org_rule_check.author_of(who, settings.assistant_bot)
-                check = org_rule_check.changed(c, rc, author, "message", rule_message_audience(c, who, sent))
+                recipients = rule_message_audience(c, who, sent)
+                place = org_rule_check.place_for(c, author, recipients, sent.conversation_id or "") if author else None
+                check = org_rule_check.changed(c, rc, author, "message", recipients, place=place)
             if ingest and sent.to != target:
                 ask_ingest.skipped(c, ingest, "target")      # judged for the first recipient, delivered to another
             out = message_write(c, who, sent, check, ingest if sent.to == target else None)
@@ -3543,12 +3650,14 @@ def create_app(settings=None):
             raise Problem("not_found", "Message not found", 404)
         conversation = auth.conversation(c, who, msg["conversation_id"], write=True)
         lifecycle.refuse_send(c, who, msg["from_actor"], conversation, what="an answer")
-        if destination:
+        # A private run's answer is read by its question's readers, ordinary or replayed: the same check either way.
+        if destination or privacy.private_execution(c, who):
             privacy.require_destination(c, who, msg["from_actor"], msg["conversation_id"], {}, msg)
         if H.has_pick_options(msg):
             from .task_review import answer_text
             return answer_text(c, auth, who, msg, text, unknown=unknown, warn=warn)
-        return H.answer(c, who.actor, mid, warn + "\n\n" + text if warn else text, unknown=unknown, classify_text=text)
+        return H.answer(c, who.actor, mid, warn + "\n\n" + text if warn else text, unknown=unknown, classify_text=text,
+                        turn_id=who.attempt_id)
 
     def answer_audience(c, who, mid):
         msg = H.message(c, mid)
@@ -3747,14 +3856,21 @@ def create_app(settings=None):
                 "carried_by": row.get("carried_by"), "cancelled_at": row.get("cancelled_at")}
 
     def note_visible(c, who, row):
+        # A note copied from a message is read only while its recipient still reads that message (the same check a
+        # run's claim makes, threads.revalidate_notes), whoever asks, and only by who may read that message themselves.
+        from . import threads
+        if not threads.note_readable(c, row, row["to_actor"]):
+            return False
         # A bot sees the notes it left and the ones left for it; a person, the ones they left and
         # every note between bots whose activity they may read.
         if who.role == "bot":
-            return who.actor in (row["from_actor"], row["to_actor"])
-        if who.actor == row["from_actor"]:
-            return True
-        bots = [H.actor_id(a) for a in (row["from_actor"], row["to_actor"]) if str(a).startswith("bot:")]
-        return all(level["read"] for level in auth.bot_accesses(c, who, bots).values())
+            allowed = who.actor in (row["from_actor"], row["to_actor"])
+        elif who.actor == row["from_actor"]:
+            allowed = True
+        else:
+            bots = [H.actor_id(a) for a in (row["from_actor"], row["to_actor"]) if str(a).startswith("bot:")]
+            allowed = all(level["read"] for level in auth.bot_accesses(c, who, bots).values())
+        return allowed and threads.note_source_shown(c, auth, who, row)
 
     def note_write(c, who, body, rc=None):
         to = auth.target(c, who, body.to, need="write")
@@ -4878,7 +4994,7 @@ def create_app(settings=None):
         if rule and rule.get("held"):
             if ingest:
                 ask_ingest.skipped(c, ingest, "held")
-            return org_rule_check.answer(rule)
+            return org_rule_check.held_answer(c, who, rule, auth=auth)
         text = org_rule_check.warned_text(rule, body.text)
         attached, report = visuals.attach(c, who, app.state.files, app.state.blobs, body.attachments, task_id=task_id)
         moves = mover(c, who)
@@ -5007,7 +5123,7 @@ def create_app(settings=None):
                           422)
         rc = rule_check(who, "comment", body.text, lambda c: rule_task_audience(
             c, auth.task(c, who, auth.resolve_task(c, who, tid)), who.actor, body.text,
-            *([rule_target(c, who, body.ask.who)] if body.ask and body.ask.who else [])))
+            *([rule_target(c, who, body.ask.who)] if body.ask and body.ask.who else [])), place=task_place(who, tid))
         ingest = None if org_rule_check.holds(rc) or saved_retry(request, who) else comment_ingest(who, tid, body)
         result = ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: comment_write(
             c, who, tid, body, ingest, rc, request.state.identity)))
@@ -5118,7 +5234,8 @@ def create_app(settings=None):
         if body.ask is not None or body.attachments:
             raise Problem("validation", "An edit changes only a plain comment's text", 422)
         rc = rule_check(who, "comment_edit", body.text, lambda c: rule_task_audience(
-            c, auth.task(c, who, auth.resolve_task(c, who, tid)), who.actor, body.text), obj=mid)
+            c, auth.task(c, who, auth.resolve_task(c, who, tid)), who.actor, body.text), obj=mid,
+            place=task_place(who, tid))
         return mutate(request, body, lambda c: comment_edit_write(c, who, tid, mid, body, rc),
                       check=lambda c: own_comment(c, who, tid, mid, allow_deleted=True))
 
@@ -5130,7 +5247,7 @@ def create_app(settings=None):
         rule = org_rule_check.apply(c, rc, body.text, {"task": row["id"], "message": mid,
                                                        "body": body.model_dump(mode="json", by_alias=True)})
         if rule and rule.get("held"):
-            return org_rule_check.answer(rule)
+            return org_rule_check.held_answer(c, who, rule, auth=auth)
         msg = H.task_comment_edit(c, who.actor, row["id"], mid, org_rule_check.warned_text(rule, body.text),
                                   approval_id=body.approval_id)
         return {"comment": visual_view(c, who, [msg])[0],
@@ -6322,10 +6439,9 @@ def create_app(settings=None):
             rooms = {}
 
             def room_open(message):
-                """A bot reads a message only in a conversation it may read: checked once per room, before the message's
-                own privacy, so a backlog in rooms this turn was never handed costs a lookup each, not a provenance walk."""
-                if who.role != "bot":
-                    return True
+                """Anyone reads a message only in a thread they may read now (C1, the same check for people and bots):
+                checked once per thread, before the message's own privacy, so a backlog in threads this reader was
+                never given costs a lookup each, not a provenance walk."""
                 if message["conversation_id"] not in rooms:
                     try:
                         auth.conversation(c, who, message["conversation_id"])
@@ -6338,8 +6454,7 @@ def create_app(settings=None):
                 """The unread backlog newest first, a page at a time: each page's rooms read together, then its messages
                 in open rooms read together INBOX_LIMIT at a time, only as far as they are checked one by one."""
                 for page in H.inbox_pages(c, who.actor, size=INBOX_PAGE):
-                    if who.role == "bot":
-                        H.prime_conversations(c, {m["conversation_id"] for m in page} - set(rooms))
+                    H.prime_conversations(c, {m["conversation_id"] for m in page} - set(rooms))
                     candidates = [m for m in page if room_open(m)]
                     for at in range(0, len(candidates), INBOX_LIMIT):
                         part = candidates[at:at + INBOX_LIMIT]
@@ -6379,12 +6494,14 @@ def create_app(settings=None):
         who = request.state.identity
         def work(c):
             msg = H.message(c, mid)
-            if not msg or msg["to_actor"] != who.actor:
+            # Addressed to the caller, or reaching them another way (a mention, a DM): a delivery row (threads).
+            if not msg or (msg["to_actor"] != who.actor and not c.execute(
+                    "SELECT 1 FROM message_deliveries WHERE message_id=? AND recipient=?", (mid, who.actor)).fetchone()):
                 raise Problem("forbidden", "You may acknowledge only messages addressed to you", 403)
             auth.conversation(c, who, msg["conversation_id"])
             privacy.require_message(c, who, msg)
-            H.mark_read(c, who.actor, mid)
-            H.mark_delivered(c, who.actor, mid)
+            H.mark_read(c, who.actor, mid, recipient=who.actor)
+            H.mark_delivered(c, who.actor, mid, recipient=who.actor)
             # A waiting CLI has already consumed the answer in its current turn.
             if msg["kind"] == "answer":
                 c.execute("UPDATE jobs SET state='completed' WHERE message_id=? AND state='queued'", (mid,))
@@ -7270,6 +7387,46 @@ def create_app(settings=None):
             return settings_admin.set_access(c, who, bot, body)
         return mutate(request, body, work)
 
+    # A person's and a group's See, Read and Write, the bots' shape (backend/teammate_access.py, docs/permissions.md).
+    # Whoever manages them reads and changes it: the person themselves and whoever they report up to, a group's leads,
+    # the admins and the owner. BotOps does it as the person who asked.
+    def teammate_access_read(request, target, on_behalf_of=""):
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            if on_behalf_of:
+                who = delegated_identity(c, who, on_behalf_of)
+            return teammate_access.view(c, who, target, auth)
+
+    def teammate_access_write(request, target, body):
+        caller = request.state.identity
+        def work(c):
+            auth.domain(caller)
+            who = delegated_identity(c, caller, body.on_behalf_of) if body.on_behalf_of else caller
+            return teammate_access.save(c, who, target, body.model_dump(exclude={"on_behalf_of"}), auth,
+                                        via="botops" if who.via == "botops" else None)
+        return mutate(request, body, work)
+
+    @app.get("/api/v2/people/{pid}/access")
+    def person_access_read(request: Request, pid: str, on_behalf_of: str = ""):
+        """Who may see, read and write to this person (docs/permissions.md). For whoever manages them."""
+        return teammate_access_read(request, "human:" + pid, on_behalf_of)
+
+    @app.post("/api/v2/people/{pid}/access")     # the same write for the tools, whose client only posts
+    @app.put("/api/v2/people/{pid}/access")
+    def person_access_write(request: Request, pid: str, body: M.TeammateAccess):
+        return teammate_access_write(request, "human:" + pid, body)
+
+    @app.get("/api/v2/groups/{gid}/access")
+    def group_access_read(request: Request, gid: str, on_behalf_of: str = ""):
+        """Who may see, read and write to this group (docs/permissions.md). For its leads and the admins."""
+        return teammate_access_read(request, "group:" + gid, on_behalf_of)
+
+    @app.post("/api/v2/groups/{gid}/access")
+    @app.put("/api/v2/groups/{gid}/access")
+    def group_access_write(request: Request, gid: str, body: M.TeammateAccess):
+        return teammate_access_write(request, "group:" + gid, body)
+
     @app.post("/api/v2/bots/register")
     def bot_register(request: Request, body: M.BotRegister):
         """Register a bot with the server (planned), as the person asking: the record BotOps then builds the
@@ -7799,7 +7956,7 @@ def create_app(settings=None):
         as the completion would post it, to whom it would post it. None when there is nothing to check."""
         if body.outcome != "completed" or not body.text:
             return None
-        from .execution import reply_target, split_runner_notices, work_task_id
+        from .execution import reply_source, reply_target, split_runner_notices, work_task_id
         with store.read() as c:
             if not org_rule_check.R.any_active(c):
                 return None             # no rule in force: the completion reads nothing more for its check
@@ -7808,6 +7965,10 @@ def create_app(settings=None):
             row = c.execute("SELECT a.bot, j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
                             (aid,)).fetchone()
             msg = H.message(c, row["message_id"], include_deleted=True) if row else None
+            if not msg or msg["deleted_at"] is not None:
+                return None
+            # A carrier-started turn answers the message it carries, so its reply is checked as going to that sender.
+            msg = reply_source(c, msg)
             if not msg or msg["deleted_at"] is not None:
                 return None
             conv = H.conversation(c, msg["conversation_id"])
@@ -7897,10 +8058,12 @@ def create_app(settings=None):
     install_strategy_market(app, store, auth, mutate)
     from .strategy import install as install_strategy
     install_strategy(app, store, auth, mutate)
-    from .brand_gtm import install as install_brand_gtm
-    install_brand_gtm(app, store, auth, mutate)          # the brand and go-to-market pages
+    from .brand import install as install_brand
+    install_brand(app, store, auth, mutate)
     from .growth import install as install_growth
-    install_growth(app, store, auth, mutate, task_create)   # channels, sources, ideas, cohorts, unit economics
+    install_growth(app, store, auth, mutate)   # channels, sources, cohorts, unit economics, KPIs
+    from .growth_numbers import install as install_growth_numbers
+    install_growth_numbers(app, store, auth)   # the Growth page's numbers (read-only)
     from .strategy_setup import install as install_strategy_setup
     install_strategy_setup(app, store, auth, mutate)
     from .lenses import install as install_lenses
@@ -7910,7 +8073,8 @@ def create_app(settings=None):
     from .archive import install_archives
     install_archives(app, store)
     from .media import install_media
-    install_media(app, store, auth, mutate, send, task_create, review_preflight, rule_check)
+    install_media(app, store, auth, mutate, send, task_create, review_preflight, rule_check,
+                  chat_upload_checks, chat_upload_write)
     from .downloads import install_downloads
     install_downloads(app, store)
     from .team_icon import install_team_icon
@@ -7939,6 +8103,8 @@ def create_app(settings=None):
     from .judge import install_judge
     install_judge(app, store, auth)
     ask_ingest.install(app, store, auth)
+    from . import thread_catchup
+    thread_catchup.install(app, store, auth, mutate)
     from . import stale_review
     stale_review.install(app, store, auth, mutate)
     from . import system_routines
@@ -7959,7 +8125,12 @@ def create_app(settings=None):
     org_rule_check.REPLAY["automation"] = replay_step
     org_rule_check.AUDIENCE.update(rule_audiences())
     org_rule_check.AUDIENCE["automation"] = replay_audience
+    from .federation_routes import release_replayer
+    org_rule_check.REPLAY["federated_message"] = release_replayer(app)
     org_rule_check.install(app, store, auth, mutate)
+    thread_api.install(app, store, auth, mutate, rule_check)     # thread routes (§3.4); /threads/search before /threads/{id}
+    from . import thread_tasks
+    thread_tasks.install(app, store, auth, create_task, settings.public_url or "")    # Make task from a message
     counsel.install(app, store, auth, mutate)      # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
     profiles.install(app, store, auth, mutate, settings_admin)
@@ -7978,6 +8149,8 @@ def create_app(settings=None):
     outcome_stats.install(app, store, auth)
     from .live_meetings import install_live_meetings
     install_live_meetings(app, store, auth, mutate)
+    from .calls import install_calls
+    install_calls(app, store, auth, mutate)      # Tico Meet calls in threads (backend/calls.py)
     from .recorder_relay import install_recorder_relay
     install_recorder_relay(app, store, auth, settings)
     from .mail import install_mail
@@ -8000,6 +8173,8 @@ def create_app(settings=None):
     triggers.install(app, settings, store, auth, mutate)
     from . import webhooks
     webhooks.install(app, settings, store, auth, mutate)
+    from . import connections
+    connections.install(app, store, auth, settings)      # Library › Connections: every connection in one list
     # GitHub App per company: manifest setup, installation tokens for runners (docs/github-app.md).
     from .github_app import install_github_app
     install_github_app(app, settings, store)
@@ -8010,6 +8185,8 @@ def create_app(settings=None):
     install_slack_app(app, settings, store)
     from .slack_channels import install as install_slack_channels
     install_slack_channels(app, settings, store, auth)
+    from .slack_threads import install as install_slack_threads
+    install_slack_threads(app, settings, store, auth)
     from .directory import install_directory
     install_directory(app, settings, store, mutate)
     from .scim import install_scim
@@ -8070,6 +8247,8 @@ def create_app(settings=None):
     install_inbound(app, store, settings, auth)
     from .hook_relay import install as install_hook_relay
     install_hook_relay(app, settings, store, auth)
+    from .federation_routes import install as install_federation
+    install_federation(app, settings, store, auth)
     from .postal_mail import install as install_postal_mail
     install_postal_mail(app, settings, store, auth)
     from .sleep_idle import install as install_sleep_idle
@@ -8176,6 +8355,7 @@ def create_app(settings=None):
         demo.install(app, auth, settings)
     from . import cors
     cors.install(app, settings)          # last, so it is outermost: a preflight is answered before sign-in
+    org_rule_check.seal(app)             # every write registered above can be sent from a hold, whatever installed when
     from .company_page import reader_app
     reader_app.install(app, store, auth, settings)      # outside even that: the reader origin never reaches anything above
     return app

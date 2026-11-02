@@ -7,6 +7,7 @@ import uuid
 
 from backend import events as E
 from backend import hubdb as H
+from backend import threads as CORE
 from backend.store import encode
 from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
 
@@ -43,7 +44,7 @@ def test_payloads_stay_under_their_budgets(api):
         first = dict(c.execute("SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (cid,)).fetchone())
         # 1,000 long replies before it; a person's message would queue a run of its own.
         clone(c, "messages", {**first, "body": BODY, "from_actor": "bot:ops", "to_actor": "human:ana"}, 1000,
-              created=lambda i: H.shift(first["created"], seconds=-i - 1))
+              created=lambda i: H.shift(first["created"], seconds=-i - 1), origin_id=lambda i: uuid.uuid4().hex, seq=lambda i: None)
         # 60 bots at work, each with a status line as a busy team's are (focus, task, last result, counts).
         bot = dict(c.execute("SELECT * FROM bots WHERE slug='ops'").fetchone())
         c.executemany(f"INSERT INTO bots({','.join(bot)}) VALUES({','.join('?' * len(bot))})",
@@ -102,6 +103,57 @@ def test_payloads_stay_under_their_budgets(api):
     # Tool output is in no list (the whole Needs-you list above included).
     lists = [opened, board, status, api.get("/api/v2/conversations", headers=headers())]
     assert not [r.request.url for r in lists if MARKER in r.text] and MARKER not in encode([whole, changes])
+
+
+def test_a_thread_timeline_reads_its_branches_in_a_query_count_that_ignores_how_many_there_are(api):
+    """The whole tree comes in queries per level, so 40 branches read in as many as 5, and a page stays under its bytes."""
+    from backend import threads
+
+    def tree(branches):
+        with api.app.state.store.transaction() as c:
+            owner = threads.actor_viewer(c, "human:ana")
+            tid = threads.create(c, owner, title="Budget", audience="company")["id"]
+            for i in range(branches):
+                parent = threads.post(c, owner, tid, f"Own {i}")
+                for j in range(3):
+                    threads.post(c, owner, tid, f"Reply {j}", parent_message_id=parent["id"])
+        return tid
+
+    def statements(tid):
+        with api.app.state.store.read_transaction() as c:
+            threads.timeline(c, threads.actor_viewer(c, "human:ana"), tid, limit=100)     # warms the per-snapshot caches
+            seen = []
+            c.set_trace_callback(seen.append)
+            page = threads.timeline(c, threads.actor_viewer(c, "human:ana"), tid, limit=100)
+            c.set_trace_callback(None)
+        return len(seen), page
+
+    few, _ = statements(tree(5))
+    many, page = statements(tree(40))
+    assert len(page["messages"]) == 40 * 4
+    assert many <= few + 2, (few, many)
+
+
+def test_a_thread_timeline_stays_within_its_bytes_and_a_branch_too_big_for_a_page_is_one_more_row(api):
+    from backend import threads
+    with api.app.state.store.transaction() as c:
+        owner = threads.actor_viewer(c, "human:ana")
+        tid = threads.create(c, owner, title="Budget", audience="company")["id"]
+        older = threads.post(c, owner, tid, "Older")
+        threads.post(c, owner, tid, BODY, parent_message_id=older["id"])
+        parent = threads.post(c, owner, tid, BODY[:3000])
+        for _ in range(10):
+            threads.post(c, owner, tid, BODY, parent_message_id=parent["id"])
+    cap = 9 * KB
+    with api.app.state.store.read_transaction() as c:
+        v = threads.actor_viewer(c, "human:ana")
+        page = threads.timeline(c, v, tid, max_bytes=cap)
+        rest = threads.timeline(c, v, tid, cursor=page["next_cursor"], max_bytes=cap)
+    assert size(page["messages"]) <= cap and page["next_cursor"]
+    assert [r.get("body") for r in page["messages"]] == [BODY[:3000].strip(), None]
+    assert page["messages"][1]["collapsed"] is True and page["messages"][1]["count"] == 10
+    assert page["messages"][1]["thread_id"] == page["messages"][0]["sub_thread"]["id"]
+    assert [r.get("body") for r in rest["messages"]] == ["Older", BODY] and rest["next_cursor"] is None
 
 
 def test_a_settings_history_page_is_byte_capped(api):
@@ -166,7 +218,7 @@ def prepared_transitions(api, cid, count, text):
         first = dict(c.execute(
             "SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (cid,)).fetchone())
         clone(c, "messages", {**first, "from_actor": "bot:ops", "to_actor": "human:ana"}, count,
-              created=lambda i: H.shift(first["created"], seconds=-i - 1))
+              created=lambda i: H.shift(first["created"], seconds=-i - 1), origin_id=lambda i: uuid.uuid4().hex, seq=lambda i: None)
         messages = [row[0] for row in c.execute(
             "SELECT id FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT ?", (cid, count)).fetchall()]
         for i, message in enumerate(messages):
@@ -251,3 +303,32 @@ def test_snoozed_notes_stay_out_of_the_board_and_the_task_keeps_its_note(api):
     assert all("snoozed_note" not in r for r in rows), "a list row carries no snooze note"
     whole = get(api, "tasks/" + task["id"])["task"]
     assert whole["snoozed_note"] == note, "the task's own view keeps the note whole"
+
+
+def test_the_federation_status_pages_its_peerings_and_shared_threads(api):
+    """GET /api/v2/federation: one page of peerings and one of shared threads at a time, each with its cursor."""
+    other = "gi_" + "b" * 24
+    with api.app.state.store.transaction() as c:
+        for i in range(130):
+            thread = CORE.create(c, H.KEEPER, title=f"Shared {i}", audience="members", members=["human:ana"])["id"]
+            install = f"gi_{i:024x}"
+            c.execute("INSERT INTO federation_peerings(id,hq_peering_id,peer_install,direction,status,peer_company,created_at,"
+                      "updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                      (f"fp_{i:04d}", f"hq_{i:04d}", install, "outgoing", "active", f"Acme {i} " + "x" * 100, H.now(), H.now()))
+            c.execute("INSERT INTO federation_threads(id,thread_id,home_install,origin_id,applied_through,high_seq,"
+                      "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                      (uuid.uuid4().hex, thread, other, f"origin-{i:04d}", 1, 1, H.now(), H.now()))
+    first = get(api, "federation?limit=100")
+    assert len(first["peerings"]) == 100 and first["next_cursor"] and len(first["threads"]) == 100
+    assert first["threads_next_cursor"]
+    assert size(first) < 64 * KB
+    rest = get(api, f"federation?limit=100&cursor={first['next_cursor']}&threads_cursor={first['threads_next_cursor']}")
+    assert len(rest["peerings"]) == 30 and rest["next_cursor"] is None
+    assert len(rest["threads"]) == 30 and rest["threads_next_cursor"] is None
+    seen = [p["id"] for p in first["peerings"] + rest["peerings"]]
+    assert len(set(seen)) == 130
+    threads = [t["thread_id"] for t in first["threads"] + rest["threads"]]
+    assert len(set(threads)) == 130
+    assert first["peerings"][0]["company"].startswith("Acme 129 ")         # newest first
+    assert api.get("/api/v2/federation?limit=101", headers=headers()).status_code == 422
+    assert api.get("/api/v2/federation?cursor=nope", headers=headers()).status_code == 422

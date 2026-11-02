@@ -25,8 +25,8 @@ from pydantic import Field
 
 from . import listening as L
 from . import outcome_stats
-from . import rooms
 from . import task_privacy as privacy
+from . import teammate_access as TA
 from .privacy_index import ReadIndex
 from .bot_access import q, qlist
 from .models import Contract
@@ -56,6 +56,92 @@ MASKED = {"bot_control": {"claim_task": "CASE WHEN source.claim_task IS NULL THE
                                         "WHEN source.claim_task IN (SELECT id FROM tasks) THEN source.claim_task "
                                         "ELSE '' END"}}
 DENIED_FUNCTIONS = {"load_extension"}
+
+
+def teammate_masks(unseen, me, inner=None, names=None, bots=()):
+    """MASKED for one request: participant lists drop the people the caller may not see (in a conversation the caller
+    is not in), group lists the groups they may not see. A task's owner, requester and closer, the actor of an event
+    or a task event, and a message's author and recipient read '' when they are such a person, unless the caller is a party to
+    that task or in that conversation: whoever works with you there is known to you there. A thread's owner, its
+    followers and mentions read the same, and its members also leave out the groups and `bots` the caller may not see.
+    `names` are the thread_members values naming the caller (itself and its groups). A bot's operator, owners,
+    manager, author and group (its columns and its configuration) leave out whoever the caller may not see."""
+    people = sorted(t for t in unseen if t.startswith("human:"))
+    groups = sorted(t.split(":", 1)[1] for t in unseen if t.startswith("group:"))
+    bare = sorted(t[6:] for t in people)
+    out = {}
+    strangers = people + ["group:" + g for g in groups] + sorted(bots)
+    if strangers and inner is not None:
+        hidden = qlist(people)
+        names = names or f"({me})"
+
+        def member(conversation):
+            # In it, as teammate_access.Known says: its participant list or its root's, or a member of its root.
+            return (f"EXISTS (SELECT 1 FROM {inner('conversations')} v JOIN {inner('conversations')} vr "
+                    f"ON vr.id=COALESCE(v.root_id,v.id) WHERE v.id={conversation} AND ("
+                    f"EXISTS (SELECT 1 FROM json_each(v.participants_json) p WHERE p.value={me}) OR "
+                    f"EXISTS (SELECT 1 FROM json_each(vr.participants_json) p WHERE p.value={me}) OR "
+                    f"EXISTS (SELECT 1 FROM {inner('thread_members')} tm WHERE tm.thread_id=vr.id AND tm.actor IN {names})))")
+
+        def party(task):
+            return (f"EXISTS (SELECT 1 FROM {inner('tasks')} t WHERE t.id={task} AND (t.owner={me} OR t.requester={me} "
+                    f"OR {member('t.conversation_id')}))")
+
+        def masked(column, known, among=hidden):
+            return f"CASE WHEN source.{column} IN {among} AND NOT {known} THEN '' ELSE source.{column} END"
+        out["thread_members"] = {column: masked(column, member("source.thread_id"), qlist(strangers))
+                                 for column in ("actor", "added_by")}
+    if people and inner is not None:
+        out["tasks"] = {column: masked(column, party("source.id")) for column in ("owner", "requester", "closed_by")}
+        out["task_events"] = {"actor": masked("actor", party("source.task_id"))}
+        out["events"] = {"actor": masked("actor", f"({member('source.target')} OR {party('source.target')})")}
+        # As REST and the stream say it (teammate_access.Known): the message stays, its author is not named.
+        out["messages"] = {column: masked(column, member("source.conversation_id")) for column in ("from_actor", "to_actor")}
+        out["thread_followers"] = {"actor": masked("actor", member("source.thread_id"))}
+        said = (f"(SELECT mm.conversation_id FROM {inner('messages')} mm WHERE mm.id=source.message_id)")
+        out["message_mentions"] = {"actor": masked("actor", member(said))}
+    if people or groups:
+        out["bot_config"] = bot_config_masks(people, bare, groups)
+    if people:
+        out["conversations"] = {"participants_json": (
+            "CASE WHEN source.participants_json IS NULL OR NOT json_valid(source.participants_json) THEN NULL "
+            f"WHEN EXISTS (SELECT 1 FROM json_each(source.participants_json) WHERE value={me}) THEN source.participants_json "
+            f"ELSE (SELECT json_group_array(value) FROM json_each(source.participants_json) WHERE value NOT IN {qlist(people)}) "
+            "END")}
+        if inner is not None:
+            out["conversations"]["owner_actor"] = masked("owner_actor", member("source.id"))
+    if groups:
+        out["humans"] = {"teams_json": (
+            "CASE WHEN source.teams_json IS NULL OR NOT json_valid(source.teams_json) THEN source.teams_json "
+            f"ELSE (SELECT json_group_array(value) FROM json_each(source.teams_json) WHERE value NOT IN {qlist(groups)}) END")}
+    return out
+
+
+def bot_config_masks(people, bare, groups):
+    """bot_config columns less the people (`human:<id>` in `people`, bare ids in `bare`) and groups the caller may
+    not see: ids read '', owner lists drop them, and the configuration loses a `team`, `reports_to` or `operator`
+    naming one."""
+    nobody = "(SELECT NULL WHERE 0)"              # an IN list that matches nothing
+    actors, ids, teams = qlist(people) if people else nobody, qlist(bare) if bare else nobody, \
+        qlist(groups) if groups else nobody
+    out = {"team": f"CASE WHEN source.team IN {teams} THEN NULL ELSE source.team END"}
+    if not people:
+        return out
+    for column in ("operator", "reports_to"):
+        out[column] = (f"CASE WHEN source.{column} IN {ids} OR source.{column} IN {actors} THEN '' "
+                       f"ELSE source.{column} END")
+    for column in ("created_by", "definition_updated_by"):
+        out[column] = f"CASE WHEN source.{column} IN {actors} THEN '' ELSE source.{column} END"
+    for column in ("owner_ids_json", "bot_owners_json"):
+        out[column] = (f"CASE WHEN source.{column} IS NULL OR NOT json_valid(source.{column}) THEN source.{column} "
+                       f"ELSE (SELECT json_group_array(value) FROM json_each(source.{column}) "
+                       f"WHERE value NOT IN {ids} AND value NOT IN {actors}) END")
+    out["config_json"] = (
+        "CASE WHEN source.config_json IS NULL OR NOT json_valid(source.config_json) THEN source.config_json "
+        "ELSE json_patch(source.config_json, (SELECT json_group_object(key, NULL) FROM json_each(source.config_json) "
+        f"WHERE (key='team' AND value IN {teams}) OR (key IN ('reports_to','operator') "
+        f"AND (value IN {ids} OR value IN {actors})))) END")
+    return out
 
 
 def unsettled_watched(c, inner):
@@ -241,7 +327,7 @@ class Query(Contract):
     max_rows: int | None = Field(default=None, ge=1, le=5000)
 
 
-def guarded(c, auth, who, inner, function, columns=None):
+def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     """Every table a caller may read through a view: name -> (row predicate, hidden columns).
 
     The predicates say in SQL what `auth.bot_access`, `auth.conversation`, `auth.task` and
@@ -250,6 +336,10 @@ def guarded(c, auth, who, inner, function, columns=None):
     base table, and a plain table name inside a predicate is the filtered view of it.
     """
     me, owner, bot = q(who.actor), who.role == "owner", who.role == "bot"
+    # People and groups the caller may not see (backend/teammate_access.py): not in `humans`, and not named as authors
+    # or recipients of messages outside the conversations they are in, nor in a participant or group list
+    # (teammate_masks).
+    unseen = TA.hidden(c, who, "see", ("human", "group"), auth) if unseen is None else unseen
     listener = L.sees_everything(who)
     mine_inboxes = [] if listener else L.destinations_of(who.actor, L.destinations(auth.settings, c))
     hidden = sorted(auth.unreadable_bots(c, who))
@@ -257,23 +347,15 @@ def guarded(c, auth, who, inner, function, columns=None):
     def bots_visible(column):
         return f"{column} NOT IN {qlist(hidden)}" if hidden else "1"
 
-    if bot:
-        conversations = (f"id IN (SELECT conversation_id FROM {inner('attempt_conversations')} "
-                         f"WHERE attempt_id={q(who.attempt_id)}) "
-                         "OR (kind='task' AND task_id IS NOT NULL AND task_id IN (SELECT id FROM tasks))")
-    else:
-        visible = [row["slug"] for row in H.bots(c) if row["slug"] not in hidden]
-        member = rooms.shared_member_bots(c, auth, who.actor, visible)
-        shared = [slug for slug in visible if slug in member]
-        room_bot = ("COALESCE(NULLIF(substr(room_key,1,instr(room_key||':',':')-1),''),"
-                    "(SELECT substr(value,5) FROM json_each(participants_json) WHERE value LIKE 'bot:%' LIMIT 1))")
-        first_human = "(SELECT value FROM json_each(participants_json) WHERE value LIKE 'human:%' LIMIT 1)"
-        participant = "1" if owner else f"EXISTS (SELECT 1 FROM json_each(participants_json) WHERE value={me})"
-        conversations = (f"CASE COALESCE(scope,'direct') WHEN 'personal' THEN COALESCE(owner_actor,{first_human})={me} "
-                         f"WHEN 'shared' THEN {room_bot} IN {qlist(shared)} ELSE {participant} END "
-                         # A task's own room is read by whoever may read the task (auth.conversation).
-                         "OR (kind='task' AND task_id IS NOT NULL)")
-        conversations = f"({conversations}) OR " + function("meeting_room") + "(id)"
+    # Who reads a thread is C1 (backend/threads.py), the same rule Auth.conversation asks in Python.
+    from . import threads
+    viewer = threads.Viewer(auth, who)
+    conversations = threads.readable_sql(
+        c, viewer, "", inner=inner, tasks="SELECT id FROM tasks",
+        meeting=lambda cid: function("meeting_room") + f"({cid})",
+        conversation=lambda cid: function("conversation") + f"({cid})")
+    # A message migrated from a shared bot room keeps that room's readers (threads.message_sql).
+    legacy_messages = threads.message_sql(c, viewer, "", inner=inner)
     tasks = auth.task_sql(c, who, delegations=inner("task_delegations"), unreadable=hidden)
     # Evaluate provenance only for candidate rows, never scan unrelated content first.
     msg_gate = function("message") + "(id,conversation_id,refs_json,in_reply_to)"
@@ -291,9 +373,6 @@ def guarded(c, auth, who, inner, function, columns=None):
                  function("blob") + "(v.blob_id) OR (v.attempt_id IS NOT NULL AND NOT " +
                  function("attempt") + "(v.attempt_id))))")
 
-    # Even an attempt's retained conversation grant must pass the current task gate.
-    conversations = (f"({conversations}) AND (task_id IS NULL OR kind<>'task' OR task_id IN (SELECT id FROM tasks)) AND "
-                     + function("conversation") + "(id)")
     by_task = "task_id IN (SELECT id FROM tasks)"
     # Correlate large history tables by primary key. An IN subquery materializes
     # every readable message/job/attempt before even a LIMIT 1 can return.
@@ -340,7 +419,12 @@ def guarded(c, auth, who, inner, function, columns=None):
         "conversations": conversations,
         # Rooms are the small authorization set, unlike message/run history.
         # Build their id set once rather than re-evaluate the room view per message.
-        "messages": "conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND " + msg_gate,
+        "messages": ("conversation_id IN (SELECT id FROM conversations) AND deleted_at IS NULL AND "
+                     + legacy_messages + " AND " + msg_gate),
+        # Thread membership and follows are read with their thread; mentions with their message.
+        "thread_members": "thread_id IN (SELECT id FROM conversations)",
+        "thread_followers": "thread_id IN (SELECT id FROM conversations)",
+        "message_mentions": "EXISTS (SELECT 1 FROM messages readable WHERE readable.id=source.message_id)",
         "tasks": tasks,
         "tags": tag_gate, "task_tags": by_task,
         "task_events": by_task + " AND " + content_gate(("old", "new", "note")), "task_delegations": by_task,
@@ -365,7 +449,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         "attempt_inputs": by_attempt, "attempt_conversations": by_attempt,
         "bot_transition_checkpoints": "conversation_id IN (SELECT id FROM conversations)",
         "task_types": "1", "task_steps": "1",
-        "humans": "1",
+        "humans": TA.sql_visible(c, who, "id", bare="human", unseen=unseen),
         # Recruiting seats are roles on the company chart that everyone sees (backend/lifecycle.py): their titles,
         # job descriptions and reporting lines. Never a bare "1" (the same reason as intake_items below).
         "seats": "id IS NOT NULL",
@@ -377,7 +461,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         # A strategy proposal carries the unpublished draft or every affected goal's title (goal_routes.strategy_visible):
         # the owner's, and the bot's that proposed it.
         "goal_proposals": "(goal_id IS NULL OR goal_id IN (SELECT id FROM goals)) AND " + (
-            "1" if owner else f"(kind NOT IN ('strategy_draft','strategy_realign','brand_draft','gtm_draft') "
+            "1" if owner else f"(kind NOT IN ('strategy_draft','strategy_realign','brand_draft') "
                               f"OR proposed_by={me})"),
         "goal_asks": "task_id IN (SELECT id FROM tasks)",
         # The company's Vision and Description and their history: everyone's to read, like the company's goals.
@@ -637,7 +721,8 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         # Predicates, provenance and result rows use one read snapshot.
         conn.execute("BEGIN")
         columns = schema_columns(conn, path)
-        tables = guarded(conn, auth, who, inner, function, columns)
+        unseen = TA.hidden(conn, who, "see", ("human", "group"), auth)
+        tables = guarded(conn, auth, who, inner, function, columns, unseen=unseen)
         source_tables = set(tables) | {"blob_media", "live_meetings", "live_meeting_access", "live_meeting_bots",
                                        "live_meeting_turns"}
         class Source:
@@ -707,6 +792,11 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         tables = materialize(conn, index, tables, inner, function, private)
         conn.set_progress_handler(None, 0)
         masks = {**MASKED, **live_masks(unsettled_watched(conn, inner))}
+        from . import threads
+        names = qlist(threads.Viewer(auth, who).member_names(conn))
+        bots = TA.hidden(conn, who, "see", ("bot",), auth)
+        for table, columns_masked in teammate_masks(unseen, q(who.actor), inner, names, bots).items():
+            masks[table] = {**masks.get(table, {}), **columns_masked}
         for table, (predicate, _) in tables.items():
             masked = masks.get(table, {})
             projection = ",".join(f'({masked[name]}) AS "{name}"' if name in masked else f'source."{name}"'

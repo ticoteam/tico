@@ -8,6 +8,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000' + '1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
 const ORIGIN = 'https://tico-ui.test';
@@ -34,6 +35,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     const errors = [], visualReqs = [];
     let config = {company_name: 'Acme', visuals: 'media', visual_origin: ''};
     page.on('pageerror', e => errors.push(e.message));
+    const threads = threadsFake({bot: 'designer', messages: () => MESSAGES});
     await context.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
       const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -52,8 +54,8 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       if (p === '/api/issues') return json([]);
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/events') return;                                // live events, held open
-      if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c-designer', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:designer']}] : []});
-      if (p === '/api/v2/conversations/c-designer/snapshot') return json({messages: MESSAGES, execution: null});
+      const answer = threads(p, url, req.method());
+      if (answer !== undefined) return json(answer);
       if (p === '/api/v2/tasks' && req.method() === 'GET') return json({tasks: [task], next_offset: null});
       if (p === '/api/v2/tasks/t1/files') return json({files: taskFiles});
       if (p === '/api/v2/tasks/t1') return json({task, comments: taskComments, events: [], children: [], parent: null, mover: true, messages: [], can_comment: true});
@@ -77,7 +79,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
         refs: {task: 't1', comment: true, attachments: [A('f-tpage', 'page'), A('f-tlogo', 'svg')]}}];
 
     // ---- chat: media inline from the app's own address; page and SVG are Open cards
-    await page.goto(ORIGIN + '/#/bot/designer/chat');
+    await page.goto(ORIGIN + '/#/bot/designer/dm');
     const m1 = page.locator('[data-message="m1"]'), m2 = page.locator('[data-message="m2"]');
     await m1.locator('figure.vcard').nth(2).waitFor();
     // Each card is drawn with its address on the app's own route (the fixture bytes are a picture, so the players may

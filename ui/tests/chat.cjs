@@ -1,9 +1,10 @@
-// The chat, offline. Fixtures only, no network.
-//  - offline retry: a message the network dropped sends itself when the connection is back, once, with the
-//    same request id.
+// The Assistant's chat, offline: the one old chat left (ui/app/chat.js), at #/assistant. A bot's page is Home and DM now
+// (ui/tests/threads.cjs). Fixtures only, no network.
+//  - touch copy and the bot switcher: on touch a tap on a message shows its copy button, off the words; the round menu
+//    button beside the switcher opens the side menu.
 //  - live reply: a bot's separate messages stay apart (the server joins them with a blank line,
 //    execution.text and execution.parts) and show as separate paragraphs, not one run-on line
-//    ("keep the bot planned.I've filed the build").
+//    ("keep the bot planned.I've filed the build"); a message held for the next turn can replace the turn.
 //  - outline: a prompt on a page not loaded yet is paged in and brought into view; the draft stays put.
 //  - activity fold: task and note cards in a row fold into one "N updates" row; older history loads only at the top.
 //  - side threads: the chat is the person and the bot; bot-to-bot talk, relays, notices and notes fold into one line
@@ -18,13 +19,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {assistantView} = require('./support/assistant-chat.cjs');
 
-async function offlineRetry(browser) {
+async function touchCopy(browser) {
   const page = await browser.newPage({viewport:{width:390,height:844},hasTouch:true,serviceWorkers:'block'});
-  await page.clock.install();
-  const errors=[],uploads=[],sends=[];let offline=true;
+  const errors=[];
   page.on('pageerror',e=>errors.push(e.message));
-  const bots=[{name:'legal',display_name:'Legal',host:'keeper',status:'active',can_chat:true,schedules:[]}];
+  const bots=[{name:'coo',display_name:'Assistant',host:'keeper',status:'active',can_chat:true,schedules:[]}];
+  const snapshot={messages:[{id:'m1',from_actor:'human:ana',body:'Hello there',created:new Date().toISOString()}],execution:null};
   await page.route('**/*',route=>{
     const p=new URL(route.request().url()).pathname;
     const json=body=>route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
@@ -37,38 +39,13 @@ async function offlineRetry(browser) {
     if(p==='/api/me')return json({id:'ana',name:'Ana',role:'owner',cloud:true});
     if(p==='/api/employees')return json(bots);
     if(p==='/api/issues')return json([]);
-    if(p==='/api/v2/conversations')return json({conversations:[]});
+    if(p==='/api/v2/assistant')return json(assistantView('c-coo',snapshot));
+    if(p==='/api/v2/conversations/c-coo/snapshot')return json(snapshot);
     if(p.endsWith('/watch'))return route.fulfill({contentType:'text/event-stream',body:': fixture\n\n'});
-    if(p==='/api/v2/chat/legal'){
-      sends.push(route.request().headers()['idempotency-key']);
-      if(offline)return route.abort('internetdisconnected');
-      return json({conversation:{id:'legal-chat'},message:{id:'m1',from_actor:'human:ana',body:'Hello offline',created:new Date().toISOString()}});
-    }
-    if(p==='/api/v2/uploads/chat/legal'){
-      uploads.push({path:p,body:route.request().postDataBuffer().toString()});
-      if(false)return route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:{detail:'Fixture upload unavailable'}})});
-      return json({conversation:{id:'legal-upload'},message:{id:'m1',from_actor:'human:ana',body:'Review this fixture',created:new Date().toISOString()}});
-    }
     return json(unrouted(p));
   });
-  await page.goto('https://tico-ui.test/#/bot/legal/chat');
-  await page.waitForFunction(()=>BOT?.slug==='legal' && V2C?.rendered);
-  const box=page.locator('#chat-composer textarea');
-  await box.fill('Hello offline');
-  await page.locator('#chat-composer').getByRole('button',{name:'Send',exact:true}).click();
-  await page.getByText('Offline or connection lost. Your message will send by itself',{exact:false}).waitFor();
-  assert.equal(sends.length,3,'three quick tries, then it waits');
-  assert.equal(await box.inputValue(),'Hello offline','the message stays in the box');
-  offline=false;
-  await page.evaluate(()=>window.dispatchEvent(new Event('online')));
-  await page.waitForFunction(()=>!document.querySelector('#chat-composer textarea').value);
-  assert.equal(sends.length,4,'sent once when back online');
-  assert.equal(new Set(sends).size,1,'every try carries the same request id');
-  // Waiting out the backoff sends nothing more.
-  await page.clock.fastForward(60000);
-  await page.waitForFunction(()=>!BOT_PILL.sending);
-  assert.equal(sends.length,4);
-  assert.deepEqual(errors,[]);
+  await page.goto('https://tico-ui.test/#/assistant');
+  await page.waitForFunction(()=>V2C?.rendered && V2C.loaded);
   await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', {configurable:true,
     value:{writeText:async text => {window.copiedMessage=text;}}}));
   // On touch no copy button floats in the thread; a tap on the message shows it, on its own line under the words.
@@ -77,7 +54,7 @@ async function offlineRetry(browser) {
   assert.equal(await copy.isVisible(),false,'hidden until the message is tapped');
   await you.tap();
   await copy.tap();
-  assert.equal(await page.evaluate(()=>window.copiedMessage),'Hello offline');
+  assert.equal(await page.evaluate(()=>window.copiedMessage),'Hello there');
   assert.ok((await copy.boundingBox()).width>=40,'touch target remains usable');
   const clear=await page.evaluate(()=>{
     const you=document.querySelector('.bubble.you');
@@ -112,7 +89,7 @@ async function offlineRetry(browser) {
   await page.locator('.side-close').click();
   await page.waitForFunction(()=>!document.body.classList.contains('drawer'));
   assert.deepEqual(errors,[]);
-  console.log('chat offline retry and touch copy: ok');
+  console.log('chat touch copy and bot switcher: ok');
 }
 
 async function liveReply(browser) {
@@ -122,9 +99,9 @@ async function liveReply(browser) {
   const now=new Date().toISOString();
   const snapshot={messages:[{id:'m1',from_actor:'human:ana',body:'Plan the build',created:now,
                              run:{job_id:'j1',attempt_id:'a1',state:'started_run'}},
-                            {id:'m2',from_actor:'human:ana',to_actor:'bot:ops',body:'Do April instead',created:now,
+                            {id:'m2',from_actor:'human:ana',to_actor:'bot:coo',body:'Do April instead',created:now,
                              delivery:{attempt_id:'a1',mode:'next_turn'}}],
-    execution:{job_id:'j1',message_id:'m1',bot:'ops',attempt_id:'a1',state:'running',label:'Working',
+    execution:{job_id:'j1',message_id:'m1',bot:'coo',attempt_id:'a1',state:'running',label:'Working',
       text:'Keep the bot planned.\n\nI filed the build.',
       parts:[{kind:'progress',text:'Keep the bot planned.',at:now},{kind:'tool',text:'Ran hub task create',at:now},
              {kind:'reply',text:'I filed the build.',at:now}]}};
@@ -137,35 +114,24 @@ async function liveReply(browser) {
       if(fs.existsSync(file))return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(file,'utf8')});}
     if(/\/marked\.min\.js$/.test(p))return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(__dirname,'../vendor/marked.min.js'),'utf8')});
     if(p==='/api/me')return json({id:'ana',name:'Ana',role:'owner',cloud:true});
-    if(p==='/api/employees')return json([{name:'ops',display_name:'Ops',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
+    if(p==='/api/employees')return json([{name:'coo',display_name:'Assistant',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
     if(p==='/api/issues')return json([]);
     if(p.endsWith('/watch'))return route.fulfill({contentType:'text/event-stream',body:'event: snapshot\ndata: '+JSON.stringify(snapshot)+'\n\n'});
-    if(p==='/api/v2/conversations'){const b=url.searchParams.get('chat_with');
-      return json({conversations:b?[{id:'c-ops',kind:'chat',scope:'personal',participants:['human:ana','bot:ops']}]:[]});}
+    if(p==='/api/v2/assistant')return json(assistantView('c-coo',snapshot));
     if(p.startsWith('/api/v2/conversations/c-')&&p.endsWith('/snapshot'))return json(snapshot);
-    if(p==='/api/v2/bots/ops/stop'){stops.push(route.request().postDataJSON());return json({attempt_id:'a1',stopping:true});}
+    if(p==='/api/v2/bots/coo/stop'){stops.push(route.request().postDataJSON());return json({attempt_id:'a1',stopping:true});}
     // Support off: its load 3 s in would otherwise add Report this to the copy-error toasts matched below.
     if(p==='/api/v2/support/tickets')return json({enabled:false});
     return json(unrouted(p));
   });
-  await page.goto('https://tico-ui.test/#/bot/ops/chat');
+  await page.goto('https://tico-ui.test/#/assistant');
   await page.locator('#v2-live').waitFor();
-  // While the bot runs, Stop sits where Send is; typing brings Send back so a follow-up can still queue.
-  const composer=page.locator('#chat-composer'),stop=composer.getByRole('button',{name:'Stop',exact:true});
-  await stop.waitFor();
-  assert.equal(await composer.getByRole('button',{name:'Send',exact:true}).isVisible(),false);
-  await composer.locator('textarea').fill('One more thing');
-  assert.equal(await stop.isVisible(),false,'typing brings Send back');
-  await composer.locator('textarea').fill('');
-  await stop.click();
-  await page.waitForFunction(()=>BOT_PILL.stopping);
-  assert.deepEqual(stops,[{attempt_id:'a1'}],'stops the run this chat shows');
   // A message this host holds for the next turn says so, and its sender can have it replace the turn.
   const held=page.locator('[data-message="m2"] .chat-delivery');
   assert.match(await held.innerText(),/Queued for the next turn/);
   await held.getByRole('button',{name:'Stop and redirect'}).click();
   await page.waitForFunction(()=>document.querySelector('[data-message="m2"] .chat-delivery')?.textContent.startsWith('Stopping'));
-  assert.deepEqual(stops[1],{attempt_id:'a1',redirect:'m2'},'stops that run and names the message to start with');
+  assert.deepEqual(stops,[{attempt_id:'a1',redirect:'m2'}],'stops that run and names the message to start with');
   const paragraphs=await page.locator('#v2-live p').allInnerTexts();
   assert.deepEqual(paragraphs,['Keep the bot planned.','I filed the build.'],'each message is its own paragraph');
   // Avatars: a bot is an SVG blob that breathes while it answers; a person stays a circle; motion stops under reduced motion.
@@ -187,7 +153,7 @@ async function liveReply(browser) {
   assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector('#bot-top .av-shape')).animationName==='none'),true,'reduced motion: no breath');
   assert.deepEqual(errors,[]);
   const pending = await page.evaluate(() => {
-    const state = {slug:'ops', messages:[{id:'queued',created:new Date(Date.now()-30*60000).toISOString()}],
+    const state = {slug:'coo', messages:[{id:'queued',created:new Date(Date.now()-30*60000).toISOString()}],
       execution:{message_id:'queued',state:'queued',label:'Saved — no AI provider is chosen',readiness_reason:'missing_provider'}};
     const el = document.createElement('div');
     el.innerHTML = v2PendingHTML(state);
@@ -205,7 +171,7 @@ async function liveReply(browser) {
   assert.match(pending.legacy,/No reply after 20 minutes/);
   // A provider is chosen but the bot's computer is not signed in to its model: the same place says so, with Sign in and Health.
   const signIn = await page.evaluate(() => {
-    const state = {slug:'ops', messages:[{id:'queued',created:new Date(Date.now()-30*60000).toISOString()}],
+    const state = {slug:'coo', messages:[{id:'queued',created:new Date(Date.now()-30*60000).toISOString()}],
       execution:{message_id:'queued',state:'queued',label:'Saved — Claude login required',readiness_reason:'model_sign_in'}};
     const el = document.createElement('div');
     el.innerHTML = v2PendingHTML(state);
@@ -258,7 +224,7 @@ async function outlineJump(browser) {
   const errors=[];
   page.on('pageerror',e=>errors.push(e.message));
   const at=n=>new Date(Date.UTC(2026,9,5,9,n)).toISOString();
-  const pair=(n,text)=>[{id:'h'+n,from_actor:'human:ana',body:text,created:at(n*2)},{id:'b'+n,from_actor:'bot:ops',body:'Done: '+text,created:at(n*2+1)}];
+  const pair=(n,text)=>[{id:'h'+n,from_actor:'human:ana',body:text,created:at(n*2)},{id:'b'+n,from_actor:'bot:coo',body:'Done: '+text,created:at(n*2+1)}];
   const older=[...pair(0,'Check the release notes'),...pair(1,'Draft the launch email')];
   const latest=[2,3,4,5,6,7,8].flatMap(n=>pair(n,'Prompt number '+n));
   const snapshot={messages:latest,next_before:'h2',execution:null};
@@ -273,21 +239,16 @@ async function outlineJump(browser) {
       if(fs.existsSync(file))return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(file,'utf8')});}
     if(/\/marked\.min\.js$/.test(p))return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(__dirname,'../vendor/marked.min.js'),'utf8')});
     if(p==='/api/me')return json({id:'ana',name:'Ana',role:'owner',cloud:true});
-    if(p==='/api/employees')return json([{name:'ops',display_name:'Ops',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
+    if(p==='/api/employees')return json([{name:'coo',display_name:'Assistant',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
     if(p==='/api/issues')return json([]);
     if(p.endsWith('/watch'))return route.fulfill({contentType:'text/event-stream',body:'event: snapshot\ndata: '+JSON.stringify(snapshot)+'\n\n'});
-    if(p==='/api/v2/conversations'){const b=url.searchParams.get('chat_with');
-      return json({conversations:b?[{id:'c-ops',kind:'chat',scope:'personal',participants:['human:ana','bot:ops']},
-        {id:'c-slack',kind:'chat',scope:'direct',participants:['human:ana','bot:ops']}]:[]});}
+    if(p==='/api/v2/assistant')return json(assistantView('c-ops',snapshot));
     if(p==='/api/v2/conversations/c-ops/snapshot')return json(snapshot);
-    // A Slack thread's own room beside the usual chat (backend/slack_gateway.py opens one per thread).
-    if(p==='/api/v2/conversations/c-slack/snapshot')return json({messages:[{id:'s1',kind:'say',from_actor:'bot:ops',to_actor:'human:ana',
-      body:'The chart from Slack.',created:'2026-10-06T09:59:00Z',refs:{}}],next_before:null,execution:null});
     if(p==='/api/v2/conversations/c-ops/outline')return json({prompts});
     if(p==='/api/v2/conversations/c-ops/messages'){pages.push(url.searchParams.get('before'));return json({messages:older,next_before:null});}
     return json(unrouted(p));
   });
-  await page.goto('https://tico-ui.test/#/bot/ops/chat');
+  await page.goto('https://tico-ui.test/#/assistant');
   await page.waitForFunction(()=>V2C?.rendered&&V2C.loaded);
   await page.locator('#chat-composer textarea').fill('half-written thought');
   await page.getByRole('button',{name:'Outline',exact:true}).click();
@@ -317,21 +278,12 @@ async function outlineJump(browser) {
   if(process.env.TICO_SHOTS)await page.screenshot({path:process.env.TICO_SHOTS+'/outline-phone.png'});
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#chat-outline').evaluate(d=>d.open),false,'Escape closes');
-  // The Slack "1 visual - view in Tico" line from a plain chat names the room the reply is in: a Slack thread's own
-  // room opens in place of the usual chat, at the message; the query goes.
-  await page.goto('https://tico-ui.test/?bot=ops&conversation=c-slack&message=s1');
-  await page.locator('#conv-thread .jump-mark[data-message="s1"]').waitFor();
-  assert.equal(new URL(page.url()).hash,'#/bot/ops');
-  assert.equal(new URL(page.url()).search,'');
-  // The next ordinary visit is the usual chat again, not the linked room.
-  await page.evaluate(()=>{location.hash='#/tasks';});
-  await page.evaluate(()=>{location.hash='#/bot/ops/chat';});
-  await page.waitForFunction(()=>V2C?.loaded&&V2C.conv?.id==='c-ops');
-  // In the usual room the link pages back to an older message like the outline does.
-  await page.goto('https://tico-ui.test/?bot=ops&conversation=c-ops&message=h0');
+  // A source link to a message (jumpToMessage, from another page) opens the chat and pages back to it.
+  const link = id => page.evaluate(id => { location.hash = '#/updates'; return new Promise(done => setTimeout(done, 100)).then(() => { CHAT_JUMP = {slug: 'coo', id}; location.hash = '#/assistant'; }); }, id);
+  await link('h0');
   await page.locator('#conv-thread .jump-mark[data-message="h0"]').waitFor();
-  // A room the reader is not in is not among their chats: the usual chat opens and says the message is not there.
-  await page.goto('https://tico-ui.test/?bot=ops&conversation=c-theirs&message=x9');
+  // A message that is not in the chat says so.
+  await link('x9');
   await page.locator('.toast',{hasText:'That message is not in this chat'}).waitFor();
   assert.equal(await page.evaluate(()=>V2C.conv.id),'c-ops');
   assert.deepEqual(errors,[]);
@@ -345,21 +297,21 @@ async function activityFold(browser) {
   const at = n => new Date(Date.UTC(2026, 9, 6, 9, n)).toISOString();
   const activity = [
     {id:'task-created',kind:'notice',from_actor:'keeper',body:'New task from Head of Engineering: Review the next release',created:at(1),refs:{task:'task-1'}},
-    {id:'note-one',kind:'say',from_actor:'bot:ops',body:'Cloud transcript shows performance goal. https://example.test/audit',created:at(2),refs:{task:'task-1',note:true}},
+    {id:'note-one',kind:'say',from_actor:'bot:coo',body:'Cloud transcript shows performance goal. https://example.test/audit',created:at(2),refs:{task:'task-1',note:true}},
     {id:'task-status',kind:'notice',from_actor:'keeper',body:'Open: Review the next release',created:at(3),refs:{task:'task-1'}},
-    {id:'note-two',kind:'say',from_actor:'bot:ops',body:'Reviewed the status note.',created:at(4),refs:{task:'task-1',note:true}},
+    {id:'note-two',kind:'say',from_actor:'bot:coo',body:'Reviewed the status note.',created:at(4),refs:{task:'task-1',note:true}},
   ];
   // Similar words and even a note ref do not turn human-authored prose into generated activity.
   const latest = [
     ...activity,
     {id:'human-quote',kind:'say',from_actor:'human:ana',body:'New task from Head of Engineering is only a quote here.',created:at(5),refs:{}},
     {id:'human-note',kind:'say',from_actor:'human:ana',body:'Note Cloud transcript shows performance goal.',created:at(6),refs:{task:'task-1',note:true}},
-    {id:'bot-prose',kind:'say',from_actor:'bot:ops',body:'Note: I checked the release page.',created:at(7),refs:{task:'task-1'}},
-    ...Array.from({length:12}, (_, i) => ({id:`chat-${i}`,kind:'say',from_actor:i % 2 ? 'bot:ops' : 'human:ana',body:`Regular conversation ${i}`,created:at(8+i),refs:{}})),
+    {id:'bot-prose',kind:'say',from_actor:'bot:coo',body:'Note: I checked the release page.',created:at(7),refs:{task:'task-1'}},
+    ...Array.from({length:12}, (_, i) => ({id:`chat-${i}`,kind:'say',from_actor:i % 2 ? 'bot:coo' : 'human:ana',body:`Regular conversation ${i}`,created:at(8+i),refs:{}})),
     {id:'task-done',kind:'notice',from_actor:'keeper',body:'Done: Review the next release',created:at(20),refs:{task:'task-1'}},
     {id:'chat-last',kind:'say',from_actor:'human:ana',body:'Thanks',created:at(21),refs:{}},
   ];
-  const endedGoal = {id:'goal-ended',conversation_id:'c-ops',bot:'ops',objective:'Ship the finished update',status:'met',note:'Reviewed',ended_at:at(4.5),updated_at:at(4.5)};
+  const endedGoal = {id:'goal-ended',conversation_id:'c-ops',bot:'coo',objective:'Ship the finished update',status:'met',note:'Reviewed',ended_at:at(4.5),updated_at:at(4.5)};
   const snapshot = {messages: latest, next_before: 'cursor-1', execution: null, goal: endedGoal};
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
@@ -369,21 +321,21 @@ async function activityFold(browser) {
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType:ui[1].endsWith('.css')?'text/css':'application/javascript',body:fs.readFileSync(uiFile(ui[1]),'utf8')});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(uiFile('vendor/marked.min.js'),'utf8')});
     if (p === '/api/me') return json({id:'ana',name:'Ana',role:'owner',cloud:true});
-    if (p === '/api/employees') return json([{name:'ops',display_name:'Ops',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
+    if (p === '/api/employees') return json([{name:'coo',display_name:'Assistant',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
     if (p === '/api/issues') return json([]);
     if (p.endsWith('/watch')) return route.fulfill({contentType:'text/event-stream',body:`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`});
-    if (p === '/api/v2/conversations') return json({conversations:[{id:'c-ops',kind:'chat',scope:'personal',participants:['human:ana','bot:ops']}]});
+    if (p === '/api/v2/assistant') return json(assistantView('c-ops', snapshot));
     if (p === '/api/v2/conversations/c-ops/snapshot') return json(snapshot);
     if (p === '/api/v2/conversations/c-ops/messages') {
       const cursor = url.searchParams.get('before'); pages.push(cursor);
       return json(cursor === 'cursor-1'
         ? {messages:[{id:'older-a',kind:'say',from_actor:'human:ana',body:'Earlier question',created:at(0),refs:{}}],next_before:'cursor-2'}
-        : {messages:[{id:'older-b',kind:'say',from_actor:'bot:ops',body:'Earlier answer',created:at(-1),refs:{}}],next_before:null});
+        : {messages:[{id:'older-b',kind:'say',from_actor:'bot:coo',body:'Earlier answer',created:at(-1),refs:{}}],next_before:null});
     }
     if (p === '/api/v2/conversations/c-ops/goal') return json({goal:endedGoal,supported:true,commands:[]});
     return json(unrouted(p));
   });
-  await page.goto('https://tico-ui.test/#/bot/ops/chat');
+  await page.goto('https://tico-ui.test/#/assistant');
   await page.waitForFunction(() => V2C?.rendered && V2C.loaded);
 
   const thread = page.locator('#conv-thread'), disclosure = page.locator('#conv-thread details.chat-side').first(), summary = disclosure.locator('> summary');
@@ -461,25 +413,25 @@ async function sideThreads(browser) {
   const say = (id, from, to, body, n, extra = {}) => ({id, conversation_id: 'c-cmo', kind: 'say', from_actor: from, to_actor: to, body, created: at(n), refs: {}, ...extra});
   const long = 'From dot (Dots): the national continuation is delivered. ' + 'It adds reviewed records with samples in every provisional destination. '.repeat(6);
   const side = Array.from({length: 20}, (_, i) => i === 7
-    ? say('relay', 'bot:cmo', 'human:ana', long, 10 + i, {prompted_by: 'bot'})
-    : i === 11 ? say('note', 'bot:cmo', 'human:ana', 'Checked the census sources.', 10 + i, {refs: {task: 't1', note: true}})
-    : i % 3 === 0 ? say('side-' + i, 'keeper', 'bot:cmo', `Open: census batch ${i}`, 10 + i, {kind: 'notice', refs: {task: 't1'}})
-    : say('side-' + i, i % 2 ? 'bot:dots' : 'bot:cmo', i % 2 ? 'bot:cmo' : 'bot:botops', `Batch ${i} is in.`, 10 + i));
+    ? say('relay', 'bot:coo', 'human:ana', long, 10 + i, {prompted_by: 'bot'})
+    : i === 11 ? say('note', 'bot:coo', 'human:ana', 'Checked the census sources.', 10 + i, {refs: {task: 't1', note: true}})
+    : i % 3 === 0 ? say('side-' + i, 'keeper', 'bot:coo', `Open: census batch ${i}`, 10 + i, {kind: 'notice', refs: {task: 't1'}})
+    : say('side-' + i, i % 2 ? 'bot:dots' : 'bot:coo', i % 2 ? 'bot:coo' : 'bot:botops', `Batch ${i} is in.`, 10 + i));
   const messages = [
-    say('ask-1', 'human:ana', 'bot:cmo', 'Get me a new customer a day.', 1),
-    say('reply-1', 'bot:cmo', 'human:ana', 'On it.', 2, {in_reply_to: 'ask-1', refs: {turn_id: 'turn-1'}}),
+    say('ask-1', 'human:ana', 'bot:coo', 'Get me a new customer a day.', 1),
+    say('reply-1', 'bot:coo', 'human:ana', 'On it.', 2, {in_reply_to: 'ask-1', refs: {turn_id: 'turn-1'}}),
     ...side,
-    say('approval', 'bot:cmo', 'human:ana', 'Approve this send: the first outreach batch', 40, {kind: 'notice', refs: {approval: 'ap-1', task: 't1'}}),
-    say('ask-2', 'human:ana', 'bot:cmo', 'What did Dots find?', 41),
-    say('quote', 'bot:cmo', 'human:ana', 'From dot (Dots): 198 records. My read: go with managed homes.', 42, {in_reply_to: 'ask-2', refs: {turn_id: 'turn-2'}}),
-    say('late-1', 'bot:dots', 'bot:cmo', 'Switching the census to managed homes.', 43),
-    say('late-2', 'keeper', 'bot:cmo', 'Done: census', 44, {kind: 'notice', refs: {task: 't1'}}),
+    say('approval', 'bot:coo', 'human:ana', 'Approve this send: the first outreach batch', 40, {kind: 'notice', refs: {approval: 'ap-1', task: 't1'}}),
+    say('ask-2', 'human:ana', 'bot:coo', 'What did Dots find?', 41),
+    say('quote', 'bot:coo', 'human:ana', 'From dot (Dots): 198 records. My read: go with managed homes.', 42, {in_reply_to: 'ask-2', refs: {turn_id: 'turn-2'}}),
+    say('late-1', 'bot:dots', 'bot:coo', 'Switching the census to managed homes.', 43),
+    say('late-2', 'keeper', 'bot:coo', 'Done: census', 44, {kind: 'notice', refs: {task: 't1'}}),
   ];
   const snapshot = {messages, next_before: null, execution: null, goal: null};
-  const talk = [{id: 'b0', conversation_id: 'c-ask', kind: 'ask', from_actor: 'bot:cmo', to_actor: 'bot:seo', body: 'Who has Respona?', created: at(29), refs: {}},
-                {id: 'b1', conversation_id: 'c-ask', kind: 'ask', from_actor: 'bot:cmo', to_actor: 'bot:seo', body: 'Can SEO read Respona?', created: at(30), refs: {}},
-                {id: 'b2', conversation_id: 'c-ask', kind: 'answer', from_actor: 'bot:seo', to_actor: 'bot:cmo', body: 'Yes, read-only.', created: at(31), refs: {}}];
-  const bots = ['cmo', 'dots', 'botops', 'seo'].map(name => ({name, display_name: name === 'cmo' ? 'CMO' : name[0].toUpperCase() + name.slice(1), host: 'keeper', status: 'active', can_chat: true, schedules: []}));
+  const talk = [{id: 'b0', conversation_id: 'c-ask', kind: 'ask', from_actor: 'bot:coo', to_actor: 'bot:seo', body: 'Who has Respona?', created: at(29), refs: {}},
+                {id: 'b1', conversation_id: 'c-ask', kind: 'ask', from_actor: 'bot:coo', to_actor: 'bot:seo', body: 'Can SEO read Respona?', created: at(30), refs: {}},
+                {id: 'b2', conversation_id: 'c-ask', kind: 'answer', from_actor: 'bot:seo', to_actor: 'bot:coo', body: 'Yes, read-only.', created: at(31), refs: {}}];
+  const bots = ['coo', 'dots', 'botops', 'seo'].map(name => ({name, display_name: name === 'coo' ? 'Assistant' : name[0].toUpperCase() + name.slice(1), host: 'keeper', status: 'active', can_chat: true, schedules: []}));
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -491,9 +443,9 @@ async function sideThreads(browser) {
     if (p === '/api/employees') return json(bots);
     if (p === '/api/issues') return json([]);
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
+    if (p === '/api/v2/assistant') return json(assistantView('c-cmo', snapshot));
     if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('bot')
-      ? [{id: 'c-ask', kind: 'ask', participants: ['bot:cmo', 'bot:seo'], subject: 'Respona access'}]
-      : [{id: 'c-cmo', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:cmo']}]});
+      ? [{id: 'c-ask', kind: 'ask', participants: ['bot:coo', 'bot:seo'], subject: 'Respona access'}] : []});
     if (p === '/api/v2/conversations/c-cmo/snapshot' || p === '/api/v2/conversations/c-cmo/messages') return json(snapshot);
     if (p === '/api/v2/conversations/c-ask/messages') {
       asked.push(url.searchParams.get('limit') + (url.searchParams.get('before') ? ' before ' + url.searchParams.get('before') : ''));
@@ -503,14 +455,14 @@ async function sideThreads(browser) {
     return json(unrouted(p));
   });
   const asked = [];
-  await page.goto('https://tico-ui.test/#/bot/cmo/chat');
+  await page.goto('https://tico-ui.test/#/assistant');
   await page.waitForFunction(() => V2C?.rendered && V2C.loaded && V2C.botTalk?.length);
 
   // Classified on fields, not words: the reply that quotes Dots is the conversation, the relay from Dots' run is not.
-  const kinds = await page.evaluate(() => Object.fromEntries(V2C.messages.map(m => [m.id, chatSideKind(m, 'cmo')])));
+  const kinds = await page.evaluate(() => Object.fromEntries(V2C.messages.map(m => [m.id, chatSideKind(m, 'coo')])));
   assert.deepEqual([kinds['ask-1'], kinds['reply-1'], kinds.quote, kinds.approval], ['', '', '', ''], 'the person, the bot\'s replies and an approval are the conversation');
   assert.deepEqual([kinds.relay, kinds.note, kinds['side-1'], kinds['side-2'], kinds['side-3'], kinds['late-2']], ['relay', 'note', 'bots', 'bots', 'notice', 'notice']);
-  assert.equal(await page.evaluate(() => chatSideKind({id: 'q', kind: 'ask', from_actor: 'bot:dots', to_actor: 'human:ana', body: 'Which ranking?'}, 'cmo')), '', 'a question to the person waits on them');
+  assert.equal(await page.evaluate(() => chatSideKind({id: 'q', kind: 'ask', from_actor: 'bot:dots', to_actor: 'human:ana', body: 'Which ranking?'}, 'coo')), '', 'a question to the person waits on them');
 
   const thread = page.locator('#conv-thread'), runs = thread.locator('details.chat-side');
   assert.equal(await page.locator('#conv-bots').count(), 0, 'no second strip for bot-to-bot talk');
@@ -520,7 +472,7 @@ async function sideThreads(browser) {
   assert.equal(await big.evaluate(el => el.open), false, 'it starts folded');
   const box = await summary.boundingBox();
   assert.ok(box.height < 34, `one compact line (${box.height}px)`);
-  assert.equal(await thread.locator('.bubble').count(), 4, 'four messages between Ana and the CMO');
+  assert.equal(await thread.locator('.bubble').count(), 4, 'four messages between Ana and the Assistant');
   assert.equal(await thread.locator('> .chat-system', {hasText: 'Approve this send'}).count(), 1, 'the approval stays in the conversation');
   const order = await thread.evaluate(el => [...el.children].map(x => x.dataset.message || (x.matches('.chat-side') ? 'side' : x.className)));
   assert.deepEqual(order, ['ask-1', 'reply-1', 'side', 'approval', 'ask-2', 'side', 'quote'],
@@ -564,11 +516,11 @@ async function sideThreads(browser) {
   // New side traffic while reading (the open line makes the thread scroll) joins a line; a new reply brings the pill.
   await thread.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
   await page.waitForFunction(() => !V2C.stick.atBottom);
-  await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('late-3', 'bot:botops', 'bot:cmo', 'Granted.', 45));
+  await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('late-3', 'bot:botops', 'bot:coo', 'Granted.', 45));
   assert.equal(await runs.count(), 2, 'no new line for it');
   assert.equal(await runs.nth(1).getAttribute('data-side-count'), '3');
   assert.equal(await page.locator('#conv-jump').isHidden(), true, 'side traffic is not a new reply');
-  await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('reply-3', 'bot:cmo', 'human:ana', 'First prospects are out.', 46, {in_reply_to: 'ask-2'}));
+  await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('reply-3', 'bot:coo', 'human:ana', 'First prospects are out.', 46, {in_reply_to: 'ask-2'}));
   await page.locator('#conv-jump', {hasText: 'New reply'}).waitFor();
   await page.locator('#conv-jump').tap();
   await page.waitForFunction(() => { const t = document.querySelector('#conv-thread'); return t.scrollTop + t.clientHeight >= t.scrollHeight - 2; });
@@ -589,8 +541,8 @@ async function stickToBottom(browser) {
   const at = n => new Date(Date.UTC(2026, 9, 6, 9, n)).toISOString();
   const say = (id, from, to, body, n, extra = {}) => ({id, conversation_id: 'c-ops', kind: 'say', from_actor: from, to_actor: to, body, created: at(n), refs: {}, ...extra});
   const messages = Array.from({length: 30}, (_, i) => i % 2
-    ? say('r' + i, 'bot:ops', 'human:ana', `Reply ${i}. ` + 'Here is what I found. '.repeat(12), i, {in_reply_to: 'q' + (i - 1)})
-    : say('q' + i, 'human:ana', 'bot:ops', `Question ${i}`, i));
+    ? say('r' + i, 'bot:coo', 'human:ana', `Reply ${i}. ` + 'Here is what I found. '.repeat(12), i, {in_reply_to: 'q' + (i - 1)})
+    : say('q' + i, 'human:ana', 'bot:coo', `Question ${i}`, i));
   const snapshot = {messages, next_before: null, execution: null, goal: null};
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
@@ -600,15 +552,14 @@ async function stickToBottom(browser) {
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-    if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+    if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/issues') return json([]);
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('bot') ? []
-      : [{id: 'c-ops', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:ops']}]});
+    if (p === '/api/v2/assistant') return json(assistantView('c-ops', snapshot));
     if (p === '/api/v2/conversations/c-ops/snapshot' || p === '/api/v2/conversations/c-ops/messages') return json(snapshot);
     return json(unrouted(p));
   });
-  await page.goto('https://tico-ui.test/#/bot/ops/chat');
+  await page.goto('https://tico-ui.test/#/assistant');
   await page.waitForFunction(() => V2C?.rendered && V2C.loaded && document.querySelectorAll('#conv-thread .bubble').length === 30);
   const thread = page.locator('#conv-thread'), pill = page.locator('#conv-jump');
   const frames = () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
@@ -618,7 +569,7 @@ async function stickToBottom(browser) {
   assert.ok(await gap() <= 1, 'it opens at the newest line');
 
   // At the bottom: a new message, a reply streaming in and an image loading all keep the newest line in view.
-  await add(say('q30', 'human:ana', 'bot:ops', 'And the next step?', 30));
+  await add(say('q30', 'human:ana', 'bot:coo', 'And the next step?', 30));
   assert.ok(await gap() <= 1, 'a new message stays pinned');
   await page.evaluate(() => { V2C.live = {text: 'Working on it.'}; v2ChatRender(V2C); });
   assert.ok(await gap() <= 1, 'the start of a reply stays pinned');
@@ -643,7 +594,7 @@ async function stickToBottom(browser) {
   await frames();
   assert.equal(await thread.evaluate(el => el.scrollTop), top, 'a streamed chunk does not move a reader who scrolled up');
   await page.evaluate(() => { V2C.live = null; });
-  await add(say('r31', 'bot:ops', 'human:ana', 'Here is the next step.', 31, {in_reply_to: 'q30'}));
+  await add(say('r31', 'bot:coo', 'human:ana', 'Here is the next step.', 31, {in_reply_to: 'q30'}));
   await frames();
   assert.equal(await thread.evaluate(el => el.scrollTop), top, 'a new message does not move a reader who scrolled up');
   await pill.waitFor();
@@ -656,7 +607,7 @@ async function stickToBottom(browser) {
   assert.ok(await gap() <= 1, 'the pill goes to the bottom');
   assert.equal(await pill.isHidden(), true, 'and hides');
   assert.equal(await page.evaluate(() => V2C.stick.atBottom), true, 'and follows again');
-  await add(say('q32', 'human:ana', 'bot:ops', 'Thanks.', 32));
+  await add(say('q32', 'human:ana', 'bot:coo', 'Thanks.', 32));
   assert.ok(await gap() <= 1, 'following again after the pill');
   assert.deepEqual(errors, []);
   console.log('chat stays at the bottom, or where you scrolled: ok');
@@ -670,8 +621,8 @@ async function settingsLinks(browser) {
   page.on('pageerror',e=>errors.push(e.message));
   const now=new Date().toISOString();
   let reason='missing_provider';
-  const snapshot=()=>({messages:[{id:'q1',from_actor:'human:ana',to_actor:'bot:ops',body:'Plan the build',created:now}],
-    execution:{message_id:'q1',bot:'ops',state:'queued',label:'Saved',readiness_reason:reason}});
+  const snapshot=()=>({messages:[{id:'q1',from_actor:'human:ana',to_actor:'bot:coo',body:'Plan the build',created:now}],
+    execution:{message_id:'q1',bot:'coo',state:'queued',label:'Saved',readiness_reason:reason}});
   await page.context().route('**/*',route=>{
     const url=new URL(route.request().url()),p=url.pathname;
     const json=body=>route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
@@ -681,11 +632,10 @@ async function settingsLinks(browser) {
       if(fs.existsSync(file))return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(file,'utf8')});}
     if(/\/marked\.min\.js$/.test(p))return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(__dirname,'../vendor/marked.min.js'),'utf8')});
     if(p==='/api/me')return json({id:'ana',name:'Ana',role:'owner',cloud:true});
-    if(p==='/api/employees')return json([{name:'ops',display_name:'Ops',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
+    if(p==='/api/employees')return json([{name:'coo',display_name:'Assistant',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
     if(p==='/api/issues')return json([]);
     if(p.endsWith('/watch'))return route.fulfill({contentType:'text/event-stream',body:'event: snapshot\ndata: '+JSON.stringify(snapshot())+'\n\n'});
-    if(p==='/api/v2/conversations'){const b=url.searchParams.get('chat_with');
-      return json({conversations:b?[{id:'c-ops',kind:'chat',scope:'personal',participants:['human:ana','bot:ops']}]:[]});}
+    if(p==='/api/v2/assistant')return json(assistantView('c-ops',snapshot()));
     if(p.startsWith('/api/v2/conversations/c-')&&p.endsWith('/snapshot'))return json(snapshot());
     if(p==='/api/v2/support/tickets')return json({enabled:false});
     return json(unrouted(p));
@@ -697,7 +647,7 @@ async function settingsLinks(browser) {
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('#settings-tabs [data-settings-tab=repos]').click();
     await page.locator('#settings-tabs [data-settings-tab=repos][aria-selected=true]').waitFor();
-    await page.goto('https://tico-ui.test/#/bot/ops/chat');
+    await page.goto('https://tico-ui.test/#/assistant');
     await page.locator('.conv-run.chat .thinking').getByRole('link',{name,exact:true}).click();
     await page.locator(`#settings-tabs [data-settings-tab=${tab}][aria-selected=true]`).waitFor();
     assert.equal(new URL(page.url()).hash,'#/settings/'+tab);
@@ -711,7 +661,7 @@ async function settingsLinks(browser) {
 (async () => {
   const browser = process.env.TICO_BROWSER === 'webkit' ? await webkit.launch({headless:true}) : await chromium.launch({channel:process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined,headless:true});
   try {
-    await offlineRetry(browser);
+    await touchCopy(browser);
     await liveReply(browser);
     await settingsLinks(browser);
     await outlineJump(browser);

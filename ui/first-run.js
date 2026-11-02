@@ -207,7 +207,8 @@ async function frSendSetup(slug) {
   const bots = await v2Get('/v2/bots?include_archived=1');
   const bot = (bots || []).find(row => row.slug === slug);
   if (bot && bot.state === 'planned') await post(`/v2/bots/${encodeURIComponent(slug)}/definition`, {status: 'active', expected_revision: bot.revision});
-  v2ChatAdopt(slug, await post(`/v2/chat/${encodeURIComponent(slug)}`, {text: "Let's set you up."}));   // the Chat tab shows it
+  await post(`/v2/chat/${encodeURIComponent(slug)}`, {text: "Let's set you up."});   // it lands in the DM with the bot
+  threadsReloadDM('bot:' + slug);
   await refresh(true);
 }
 function frWireNext(state) {
@@ -264,7 +265,7 @@ function frBotWire(slug) {
   const button = $('#bot-start-setup');
   if (button) button.onclick = async () => {
     button.disabled = true; button.textContent = 'Starting…';
-    try { await frSendSetup(slug); button.textContent = 'Onboarding started'; showBotTab('chat'); }
+    try { await frSendSetup(slug); button.textContent = 'Onboarding started'; showBotTab('dm'); }
     catch (error) { toast(error.message, true); button.disabled = false; button.textContent = 'Start onboarding'; }
   };
   const finish = $('#bot-finish-setup');

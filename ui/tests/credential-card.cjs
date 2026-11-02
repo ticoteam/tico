@@ -1,4 +1,4 @@
-// The credential card (ui/credential-card.js): a bot asks for a secret inside the chat, the person types it
+// The credential card (ui/credential-card.js): a bot asks for a secret inside the Assistant's chat (BotOps has no DM of its own), the person types it
 // there, and it goes to one route only (the credential request's save), never anywhere else, never back into
 // the page, a toast or the console. Fixtures only, no network.
 const {chromium, webkit} = require('playwright');
@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {assistantView} = require('./support/assistant-chat.cjs');
 
 const SECRET = 'ana@acme.example:ATATT-super-secret-7788';
 const now = new Date().toISOString();
@@ -37,6 +38,7 @@ async function open(browser, viewport, view) {
     if (p === '/api/employees') return json([{name: 'botops', display_name: 'BotOps', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/issues') return json([]);
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: 'event: snapshot\ndata: ' + JSON.stringify(snapshot) + '\n\n'});
+    if (p === '/api/v2/assistant' && req.method() === 'GET') return json(assistantView('c-botops', snapshot));
     if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c-botops', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']}] : []});
     if (p.startsWith('/api/v2/conversations/c-') && p.endsWith('/snapshot')) return json(snapshot);
     if (p === '/api/v2/credential-requests/cr1' && req.method() === 'GET') return json(seen.view);
@@ -49,7 +51,7 @@ async function open(browser, viewport, view) {
     if (p === '/api/v2/credential-requests/cr1/cancel') { seen.cancels++; seen.view = {...seen.view, status: 'cancelled'}; return json(seen.view); }
     return json(unrouted(p));
   });
-  await page.goto('https://tico-ui.test/#/bot/botops/chat');
+  await page.goto('https://tico-ui.test/#/assistant');
   return {page, seen};
 }
 

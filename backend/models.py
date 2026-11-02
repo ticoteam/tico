@@ -708,7 +708,7 @@ class KpiReading(Contract):
 
 class GoalProposalCreate(Contract):
     kind: Literal["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why", "recovery",
-                  "strategy_draft", "brand_draft", "gtm_draft"]
+                  "strategy_draft", "brand_draft"]
     goal_id: str | None = Field(default=None, max_length=200)
     kpi_id: str | None = Field(default=None, max_length=200)
     payload: dict = Field(default_factory=dict)
@@ -782,7 +782,7 @@ class StrategyDraft(Contract):
     guide: str | None = Field(default=None, max_length=40)
     summary: str | None = Field(default=None, max_length=2000)
     vision: str | None = Field(default=None, max_length=2000)
-    sections: dict | None = None          # {serve, sell, know, not, extra: {key: {title, body}}}, any of them
+    sections: dict | None = None          # {serve, sell, know, how, not, extra: {key: {title, body}}}, any of them
 
 
 class StrategyPublish(Contract):
@@ -1427,7 +1427,7 @@ class Heartbeat(Contract):
         "task_goals_v1", "screen_v1", "model_sign_out_v1", "model_keys_v1", "model_switch_type_v1", "model_remove_v1",
         "model_switch_to_key_v1", "computer_logins_v1", "capacity_continue_v1", "source_continue_v1",
         "turns_at_once_v1", "private_lanes_v1", "model_subscriptions_v1", "browser_exit_v1",
-        "model_subscription_activation_v1", "model_connect_v1", "memory_tidy_packets_v1"]] = Field(
+        "model_subscription_activation_v1", "model_connect_v1", "threads_v1", "memory_tidy_packets_v1"]] = Field(
         default_factory=list, max_length=20)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
@@ -1540,6 +1540,16 @@ class BotAccess(Contract):
     write: AccessAudience
     revision: int = Field(ge=1)
     # BotOps making the change the requester asked for in chat ("turn", or their message's id).
+    on_behalf_of: ID | None = None
+
+
+class TeammateAccess(Contract):
+    """A person's or a group's See, Read and Write (backend/teammate_access.py), in a bot's shape. `revision` is the
+    one the editor read: 0 while they still have the defaults."""
+    see: AccessAudience
+    read: AccessAudience
+    write: AccessAudience
+    revision: int = Field(ge=0)
     on_behalf_of: ID | None = None
 
 
@@ -1840,6 +1850,10 @@ class PersonUpdate(Contract):
     notify_slack_bot_messages: bool | None = None
     # Whether the Assistant drafts their daily update (on unless turned off).
     update_draft: bool | None = None
+    # Browser notifications for Needs you while the page is in the background (off unless turned on).
+    notify_browser: bool | None = None
+    # Email digests of the threads they follow on digest (off unless turned on by the person; on by default).
+    email_digest: bool | None = None
     # Bots whose messages to this person stay in Tico even while bot messages in Slack are on.
     slack_muted_bots: list[Slug] | None = Field(default=None, max_length=200)
     # Where this person sits on the org chart: another person's id, or "" for the top.
@@ -1853,7 +1867,7 @@ class PersonUpdate(Contract):
     @model_validator(mode="after")
     def has_change(self):
         if not (self.model_fields_set - {"on_behalf_of"}):
-            raise ValueError("Provide title, about, goals, notes, notify_slack_task_done, notify_slack_bot_messages, update_draft, slack_muted_bots, github, reports_to or left")
+            raise ValueError("Provide title, about, goals, notes, notify_slack_task_done, notify_slack_bot_messages, update_draft, notify_browser, email_digest, slack_muted_bots, github, reports_to or left")
         return self
 
 
@@ -2414,6 +2428,9 @@ class Completion(Contract):
     profile_used: str | None = Field(default=None, max_length=80)
     outcome: Literal["completed", "failed", "interrupted"]
     text: str = Field(default="", max_length=200_000)
+    # The message this reply goes under when it answers one in a sub-thread (docs/threads.md). Declared so a runner that
+    # sends it is not refused: Completion forbids fields it does not know.
+    parent_message_id: ID | None = None
     last_seq: int = Field(ge=0)
     tokens_in: int | None = Field(default=None, ge=0)
     tokens_out: int | None = Field(default=None, ge=0)
@@ -2881,8 +2898,8 @@ class TaskRuleUpdate(Contract):
     at: str | None = Field(default=None, max_length=5)
 
 
-# ----------------------------------------------------------------------------- brand, go-to-market, growth
-# The brand and GTM pages (backend/brand_gtm.py): one body per version, each section optional. The draft is written a
+# ----------------------------------------------------------------------------- brand, growth
+# The brand page (backend/brand.py): one body per version, each section optional. The draft is written a
 # section at a time (null removes one) and checked whole against these shapes.
 S80 = Annotated[str, Field(max_length=80)]
 S300 = Annotated[str, Field(max_length=300)]
@@ -2966,28 +2983,6 @@ class BrandBody(Contract):
     examples: list[BrandExample] | None = Field(default=None, max_length=30)
 
 
-Motion = Literal["self_serve", "sales_led", "partner", "marketplace", "local", "community", "ecommerce"]
-
-
-class GtmMotion(Contract):
-    primary: Motion
-    secondary: Motion | None = None
-
-
-class GtmBuyer(Contract):
-    who_buys: S300 = ""
-    who_uses: S300 = ""
-    deal_size: S80 = ""
-    cycle: S80 = ""
-    objections: list[S300] = Field(default_factory=list, max_length=30)
-
-
-class GtmBody(Contract):
-    motion: GtmMotion | None = None
-    buyer: GtmBuyer | None = None
-    playbooks: list[S80] | None = Field(default=None, max_length=30)
-
-
 class PageDraft(Contract):
     """`sections`: {name: value or null}; null removes the section. `revision` is the draft's as read; leave it out to
     write without the check."""
@@ -3016,7 +3011,6 @@ class GrowthChannelCreate(Contract):
     guardrail_kpi_id: str | None = Field(default=None, max_length=200)
     guardrail_max: float | None = None
     sort: int = 0
-    segments: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=20)
 
 
 class GrowthChannelUpdate(Contract):
@@ -3030,7 +3024,6 @@ class GrowthChannelUpdate(Contract):
     guardrail_kpi_id: str | None = Field(default=None, max_length=200)
     guardrail_max: float | None = None
     sort: int | None = None
-    segments: list[Annotated[str, Field(max_length=200)]] | None = Field(default=None, max_length=20)
 
 
 class GrowthSourceCreate(Contract):
@@ -3051,75 +3044,8 @@ class GrowthSourceUpdate(Contract):
     owner_ref: str | None = Field(default=None, max_length=200)
 
 
-IceScore = Annotated[int, Field(ge=1, le=10)]
-IdeaSource = Literal["strategy", "competitor", "listening", "peec", "lost_test", "person", "other"]
-
-
-class GrowthIdeaCreate(Contract):
-    title: Annotated[str, Field(min_length=1, max_length=300)]
-    hypothesis: str = Field(default="", max_length=2000)
-    prediction: str = Field(default="", max_length=1000)
-    bet_id: str | None = Field(default=None, max_length=200)
-    kpi_id: str | None = Field(default=None, max_length=200)
-    channels: list[Annotated[str, Field(max_length=40)]] = Field(default_factory=list, max_length=10)
-    segments: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=20)
-    ice_i: IceScore | None = None
-    ice_c: IceScore | None = None
-    ice_e: IceScore | None = None
-    source_kind: IdeaSource | None = None
-    source_ref: str | None = Field(default=None, max_length=500)
-    follow_up_of: str | None = Field(default=None, max_length=200)
-    assignee: str | None = Field(default=None, max_length=200)
-    body: str = Field(default="", max_length=20_000)
-
-
-class GrowthIdeaUpdate(Contract):
-    title: str | None = Field(default=None, min_length=1, max_length=300)
-    hypothesis: str | None = Field(default=None, max_length=2000)
-    prediction: str | None = Field(default=None, max_length=1000)
-    bet_id: str | None = Field(default=None, max_length=200)
-    kpi_id: str | None = Field(default=None, max_length=200)
-    judged_kpi_id: str | None = Field(default=None, max_length=200)
-    channels: list[Annotated[str, Field(max_length=40)]] | None = Field(default=None, max_length=10)
-    segments: list[Annotated[str, Field(max_length=200)]] | None = Field(default=None, max_length=20)
-    source_kind: IdeaSource | None = None
-    source_ref: str | None = Field(default=None, max_length=500)
-    test_from: str | None = Field(default=None, max_length=40)
-    test_to: str | None = Field(default=None, max_length=40)
-    change: str | None = Field(default=None, max_length=2000)
-    stop_if: str | None = Field(default=None, max_length=1000)
-    min_events: int | None = Field(default=None, ge=0)
-    audience: str | None = Field(default=None, max_length=500)
-    external_ref: str | None = Field(default=None, max_length=500)
-
-
-class GrowthIdeaScore(Contract):
-    i: IceScore
-    c: IceScore
-    e: IceScore
-
-
-class GrowthIdeaStart(Contract):
-    test_from: str | None = Field(default=None, max_length=40)
-    test_to: Annotated[str, Field(min_length=1, max_length=40)]
-    change: Annotated[str, Field(min_length=1, max_length=2000)]
-    stop_if: Annotated[str, Field(min_length=1, max_length=1000)]
-    min_events: int | None = Field(default=None, ge=0)
-    judged_kpi_id: str | None = Field(default=None, max_length=200)
-    audience: str | None = Field(default=None, max_length=500)
-
-
-class GrowthIdeaVerdict(Contract):
-    status: Literal["won", "lost", "inconclusive", "dropped", "paused"]
-    result: str | None = Field(default=None, max_length=2000)
-    learning: str | None = Field(default=None, max_length=2000)
-    bet_effect: Literal["supports", "weakens", "none"] | None = None
-    confidence: Literal["low", "medium", "high"] | None = None
-
-
 class GrowthCohortSet(Contract):
     channel: str | None = Field(default=None, max_length=40)       # a channel slug; "unknown" or null is Unknown
-    segment_id: str | None = Field(default=None, max_length=200)   # a growth segment or its market segment; null: not split
     month: Annotated[str, Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")]
     spend: float | None = Field(default=None, ge=0)
     bot_cost: float | None = Field(default=None, ge=0)
@@ -3133,35 +3059,7 @@ class GrowthCohortSet(Contract):
     sources: dict[Annotated[str, Field(max_length=40)], Annotated[str, Field(max_length=300)]] | None = None
 
 
-SegmentStatus = Literal["serving", "testing", "next", "dropped"]
-
-
-class GrowthSegmentCreate(Contract):
-    name: str | None = Field(default=None, min_length=1, max_length=120)
-    segment_id: str | None = Field(default=None, min_length=1, max_length=200)
-    status: SegmentStatus = "testing"
-    motion: Motion | None = None
-    who_buys: str = Field(default="", max_length=300)
-    deal_size: str = Field(default="", max_length=80)
-    why: str = Field(default="", max_length=1000)
-    owner_ref: str | None = Field(default=None, max_length=200)
-    sort: int = 0
-
-
-class GrowthSegmentUpdate(Contract):
-    name: str | None = Field(default=None, min_length=1, max_length=120)
-    status: SegmentStatus | None = None
-    motion: Motion | None = None
-    who_buys: str | None = Field(default=None, max_length=300)
-    deal_size: str | None = Field(default=None, max_length=80)
-    why: str | None = Field(default=None, max_length=1000)
-    owner_ref: str | None = Field(default=None, max_length=200)
-    sort: int | None = None
-
-
 class GrowthSettingsUpdate(Contract):
     unit: str | None = Field(default=None, min_length=1, max_length=40)
     revenue_month: float | None = Field(default=None, ge=0)
     margin_pct: float | None = Field(default=None, ge=0, le=100)
-    verdict_win_pct: float | None = Field(default=None, ge=0, le=100)
-    framework: str | None = Field(default=None, max_length=80)

@@ -202,6 +202,23 @@ def test_a_client_further_behind_than_the_log_keeps_is_told_to_reset(api, live):
 
 
 @pytest.mark.slow
+def test_a_consumer_that_leaves_a_frame_unread_is_reset_rather_than_replayed(api, live, monkeypatch):
+    """A slow consumer is sent `reset` and the newest change number, not the rest of the backlog it fell behind on."""
+    with api.app.state.store.read() as c:
+        cursor = E.latest(c)
+    made = [post(api, "tasks", {"owner": "ben", "title": f"Stall item {n}", "body": "Please."})["id"] for n in range(3)]
+    with api.app.state.store.read() as c:
+        newest = E.latest(c)
+    monkeypatch.setattr(E, "STALL_SECONDS", -1.0)     # every read's frames count as ones the client was slow to take
+    monkeypatch.setattr(E, "ROUND_ROWS", 1)           # and each read holds one change
+    stream = live("ben-test", f"?topics=tasks&after={cursor}")
+    reset = stream.until(topic("reset"))
+    assert reset["data"]["seq"] >= newest
+    sent = [e["data"]["id"] for e in stream.seen if e["event"] == "tasks"]
+    assert len(sent) == 1 and sent[0] in made
+
+
+@pytest.mark.slow
 def test_a_stream_ends_with_expired_when_sign_in_lapses_and_ends_on_its_own(api, live, monkeypatch):
     monkeypatch.setattr(E, "SIGN_IN_RECHECK_SECONDS", 0)     # every poll checks, so the lapse ends it before its data
     stream = live("ben-test")
@@ -424,3 +441,42 @@ def test_a_read_with_tasks_and_bots_asks_for_the_viewers_bot_access_once(api, mo
     assert [topic for _, topic, _ in events] == ["bots"]
     assert len(asked) == 1
 
+
+
+def _task_views(rows, c, who, visible_sql="1"):
+    return [{"id": row["id"]} for row in rows]
+
+
+def test_one_read_sends_its_byte_budget_and_the_rest_comes_on_the_next_read(api, monkeypatch):
+    """A busy team's backlog is sent in bounded reads, each one's events in order, none lost or repeated."""
+    auth, store = api.app.state.auth, api.app.state.store
+    with store.read() as c:
+        cursor = E.latest(c)
+    made = [post(api, "tasks", {"owner": "ben", "title": f"Count item {n}", "body": "Please."})["id"] for n in range(3)]
+    monkeypatch.setattr(E, "READ_BYTES", 1)          # every event is over budget, so each read sends exactly one
+    who = Identity("human:ben", "human", "ben@acme.example")
+    sent, more = [], True
+    while more:
+        with store.read() as c:
+            events, cursor, reset, more = E.read(c, auth, who, cursor, topics=("tasks",), task_views=_task_views)
+        assert not reset and len(events) <= 1
+        sent += [data["id"] for _, _, data in events]
+    assert [task_id for task_id in sent if task_id in made] == made
+    assert len(sent) == len(set(sent))
+
+
+def test_a_consumer_more_changes_behind_than_the_backlog_limit_is_reset(api, monkeypatch):
+    auth, store = api.app.state.auth, api.app.state.store
+    with store.read() as c:
+        cursor = E.latest(c)
+    for n in range(3):
+        post(api, "tasks", {"owner": "ben", "title": f"Backlog item {n}", "body": "Please."})
+    monkeypatch.setattr(E, "BACKLOG_MAX", 2)
+    who = Identity("human:ben", "human", "ben@acme.example")
+    with store.read() as c:
+        events, newest, reset, more = E.read(c, auth, who, cursor, topics=("tasks",), task_views=_task_views)
+    assert reset and events == [] and more is False and newest > cursor
+    monkeypatch.setattr(E, "BACKLOG_MAX", 5000)
+    with store.read() as c:
+        _, _, reset, _ = E.read(c, auth, who, cursor, topics=("tasks",), task_views=_task_views)
+    assert not reset

@@ -1,4 +1,4 @@
-/* ui/app/growth-sources.js — Growth › Sources (#/growth/sources, brand-and-gtm spec §5): one source of truth per kind
+/* ui/app/growth-sources.js — Sources (#/growth/sources, behind a link on the Growth page, which its head links back to): one source of truth per kind
    of number (GET /api/v2/growth/sources), one row each: what it is the truth for, the system, how bots reach it, what
    they may do and who owns it. Two sources for one truth are flagged, and "Use X" keeps X and retires the others. The
    owner or an admin adds, edits and retires one; they change without a publish.
@@ -24,7 +24,6 @@ function gsrcDraw(state) {
   if (!body || !d) return;
   const may = d.may, list = d.src.filter(s => !s.retired_at).sort((a, b) => String(a.truth_for).localeCompare(String(b.truth_for)));
   patchHTML($('#strat-actions'), may ? '<button class="primary" type="button" data-src-add>+ Source</button>' : '');
-  const clash = new Set(d.conflicts.map(t => String(t).toLowerCase()));
   const banners = d.conflicts.map(t => {
     const rows = list.filter(s => String(s.truth_for).toLowerCase() === String(t).toLowerCase());
     return `<div class="gr-banner gr-amber" data-clash="${esc(t)}"><span><b>${esc(t)}</b> · ${esc(rows.map(s => s.system).join(', '))}</span><span class="spacer"></span>
@@ -34,7 +33,7 @@ function gsrcDraw(state) {
   const row = s => {
     const inner = `<span class="gsrc-t">${esc(s.truth_for)}</span><span class="gsrc-s">${esc(s.system)}</span><span class="muted gsrc-r">${reach(s)}</span>
       <span class="muted gsrc-m">${esc(gtMayText(s.may))}</span><span class="muted gsrc-o">${esc(grWho(s.owner_ref))}</span>`;
-    return `<li class="${clash.has(String(s.truth_for).toLowerCase()) ? 'gsrc-clash' : ''}">${may
+    return `<li>${may
       ? `<button type="button" class="gsrc-row" data-src-edit="${esc(s.id)}">${inner}</button>` : `<div class="gsrc-row">${inner}</div>`}</li>`;
   };
   body.innerHTML = banners + (list.length ? `<section class="card gsrc-list" aria-label="Sources"><ul class="gsrc-ul">${list.map(row).join('')}</ul></section>` : '');

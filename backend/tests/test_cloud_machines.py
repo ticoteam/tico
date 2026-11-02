@@ -925,6 +925,43 @@ def test_a_lasting_refusal_to_move_is_said_to_the_person_and_nothing_moves(cloud
     assert placed(cloud)["ops"] == own["runner_id"] and shared != own["runner_id"]
 
 
+def report_repo(api, m, bot, **fields):
+    """The computer's report on the bot's checkout (`published`: whether GitHub has its history, as the runner says)."""
+    return post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {
+        "schema_version": 1, "runtimes": {}, "bots": {bot: {"ready": True, **fields}}}}, token=m["token"])
+
+
+def test_a_move_to_a_cloud_machine_not_made_yet_is_refused_before_one_is_billed(cloud):
+    m = runner(cloud.api)                                       # ops on an ordinary computer, its history only there
+    assign(cloud.api, m, "ops")
+    report_repo(cloud.api, m, "ops", published=False)
+    refused = cloud.api.post("/api/v2/bots/ops/cloud-machine", headers=headers(),
+                             json={"mode": "cloud", "placement": "own"})
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "repository_unpublished", refused.text
+    assert "a new cloud machine could not fetch it" in refused.json()["error"]["detail"]
+    assert not any(call[0] in ("create", "start") for call in cloud.hq.calls)     # no machine made, nothing billed
+    assert (cloud.row() or {}).get("mode", "computer") == "computer"          # the choice was rolled back
+    assert placed(cloud)["ops"] == m["runner_id"]
+
+
+@pytest.mark.parametrize("fields", [{"published": True}, {}])
+def test_a_move_to_a_cloud_machine_not_made_yet_is_allowed_when_the_history_is_on_github_or_unreported(cloud, fields):
+    m = runner(cloud.api)
+    assign(cloud.api, m, "ops")
+    report_repo(cloud.api, m, "ops", **fields)
+    change_as(cloud, "ops", mode="cloud", placement="own")
+    assert cloud.row()["mode"] == "cloud" and cloud.row()["placement"] == "own"
+    assert placed(cloud)["ops"] == m["runner_id"]               # it moves when its machine is made
+
+
+def test_a_look_never_refuses_a_move_to_an_unmade_machine(cloud):
+    m = runner(cloud.api)
+    assign(cloud.api, m, "ops")
+    report_repo(cloud.api, m, "ops", published=False)
+    with cloud.store.transaction() as c:
+        assert CM.bind(c, cloud.api.app.state.execution, "ops") is False      # no lasting choice: no raise
+
+
 def test_a_turn_still_out_on_the_old_computer_is_asked_again_at_a_look(cloud):
     own = enrolled(cloud)                                       # ops on its own machine, with its work claimed there
     ready(cloud.api, own, ["ops"])
