@@ -235,6 +235,11 @@ rule_enable = _toggle(True)
 rule_disable = _toggle(False)
 
 
+# the rule outcomes that leave an action with the status it already has (a limit that still fits leaves a committed
+# action committed, so a rule test does not list it as a change)
+ALREADY = {"committed": ("allow", "limit"), "needs_approval": ("needs_approval",), "denied": ("deny",)}
+
+
 def rule_test(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Run a draft (or saved) rule over the last 90 days of actions and feed rows the tester can see and say what it
     would have changed (a posting rule: the feed rows it would post, and where). Writes nothing but the action's own
@@ -266,7 +271,7 @@ def rule_test(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                                     **{k: v for k, v in body.items() if isinstance(v, (int, str, bool))}}
         checked += 1
         got = G.evaluate([replace(rule, active=True)], found, day).outcome
-        if got != "allow":
+        if got not in ("allow", *ALREADY.get(str(row["status"]), ())):
             changed.append({"action_id": str(row["id"]), "kind": str(row["kind"]), "was": str(row["status"]),
                             "would": got, "at": str(row["created_at"])})
     from .tab import sees_money_account

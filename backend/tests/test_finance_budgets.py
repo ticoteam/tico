@@ -579,6 +579,29 @@ def test_a_rule_test_never_reads_the_fingerprint_of_a_hidden_raise(books):
         assert probe.impact["test"]["changed_count"] == 0
 
 
+def test_a_rule_test_lists_only_the_actions_a_draft_would_change(books):
+    """An action a rule already denied is not a change when the draft denies it too; a committed one is. A limit that
+    still fits leaves a committed action committed, so it is not a change either."""
+    with books.transaction() as c:
+        journal = {"date": "2026-10-15", "memo": "rule test", "lines": [
+            {"account_id": account(c, "6900"), "amount": 500}, {"account_id": account(c, "1000"), "amount": -500}]}
+        kept = act(c, OWNER, "journal", journal)
+        assert kept.status == "committed", kept
+        frozen = act(c, OWNER, "rule_create", {"kind": "gate", "name": "Frozen journals", "when": {"kind": "journal"},
+                                               "outcome": {"outcome": "deny", "reason": "frozen"},
+                                               "examples": [{"input": {"kind": "journal"}, "expect": "deny"}]})
+        assert frozen.status == "committed", frozen
+        refused = act(c, OWNER, "journal", journal)
+        assert refused.status == "denied", refused
+        deny = {"when": {"kind": "journal"}, "outcome": {"outcome": "deny", "reason": "test"}}
+        tested = act(c, OWNER, "rule_test", deny, dry_run=True).impact["test"]
+        changed = {x.get("action_id") for x in tested["changed"]}
+        assert kept.action_id in changed and refused.action_id not in changed, tested
+        fits = {"when": {"kind": "journal"}, "outcome": {"outcome": "limit", "limit": 10_000_000, "per": "action"}}
+        fit = act(c, OWNER, "rule_test", fits, dry_run=True).impact["test"]
+        assert kept.action_id not in {x.get("action_id") for x in fit["changed"]}, fit
+
+
 def test_a_set_aside_adds_only_the_part_its_target_does_not_already_hold(books):
     """A live 4,000 hold for a Gateway key already counts against a 10,000 budget, so setting that key aside at 7,000 adds
     3,000 to the reserve (4,000 held and 3,000 unspent), not the whole 7,000. Totals up to 10,000 fit; 10,001 does not."""
