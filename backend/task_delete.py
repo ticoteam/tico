@@ -338,8 +338,11 @@ def _insert(c, table, row, skip=()):
 
 
 def _try_insert(c, table, row, skipped):
-    """Bookkeeping that something newer has taken (a service key's mapping, a Slack thread, a deleted
-    label) is left out rather than failing the restore; the report counts it."""
+    """Bookkeeping that something newer has taken (a service key's mapping, a Slack thread, a deleted label) is left
+    out rather than failing the restore, and so is a row of a table a migration has dropped; the report counts both."""
+    if not _columns(c, table):
+        skipped[table] = skipped.get(table, 0) + 1
+        return
     c.execute("SAVEPOINT trash_row")
     try:
         _insert(c, table, row)
