@@ -2000,3 +2000,113 @@ def test_a_reply_deleted_before_its_first_export_is_never_sent(make_side, hq):
     with a.app.state.store.read() as c:
         assert c.execute("SELECT COUNT(*) FROM federation_items WHERE kind='message' AND origin_id="
                          "(SELECT origin_id FROM messages WHERE id=?)", (reply,)).fetchone()[0] == 0
+
+
+def staged_item_payloads(side):
+    """What the outbox would send for every waiting item now: each decoded payload (None for a skip)."""
+    import base64 as _b64
+    import json as _json
+    relay = side.app.state.federation_relay
+    out = []
+    with side.app.state.store.read() as c:
+        due = [dict(r) for r in c.execute("SELECT * FROM federation_outbox_items WHERE kind='item'").fetchall()]
+    for row in due:
+        with side.app.state.store.transaction() as c:
+            outbound = S.envelope(c, relay.vault(), row, R.now())
+        if outbound is None:
+            continue
+        item = _json.loads(outbound["body"].decode())
+        out.append(None if item.get("skip") else _json.loads(_b64.b64decode(item["payload_b64"]).decode()))
+    return out
+
+
+def home_reply(side, tid, question, text, turn, task=None):
+    refs = {"turn_id": turn}
+    if task:
+        refs["task"] = task
+    with side.app.state.store.transaction() as c:
+        return CORE.post(c, "bot:ops", tid, text, kind="say", refs=refs, in_reply_to=question)["id"]
+
+
+def test_a_staged_reply_whose_task_turned_private_then_was_deleted_sends_no_body(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    with a.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Public launch notes", "", "human:ana", lint=False, private=False)["id"]
+    question = say(a, tid, "What is the status?")
+    reply = home_reply(a, tid, question, "Confidential figures.", "turn_20", task=task)
+    relay = a.app.state.federation_relay
+    with a.app.state.store.transaction() as c:
+        S.stage(c, relay.vault(), R.now())
+        H.task_update(c, "human:ana", task, private=True)
+        CORE.delete_message(c, "bot:ops", reply)
+    bodies = [p.get("body") for p in staged_item_payloads(a) if p]
+    assert "Confidential figures." not in bodies
+    assert not any("Confidential figures." in str(p) for p in staged_item_payloads(a))
+
+
+def test_a_reply_deleted_before_its_first_send_sends_no_body(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    question = say(a, tid, "When is the launch?")
+    reply = home_reply(a, tid, question, "Draft answer.", "turn_21")
+    relay = a.app.state.federation_relay
+    with a.app.state.store.transaction() as c:
+        S.stage(c, relay.vault(), R.now())
+        CORE.delete_message(c, "bot:ops", reply)
+    assert not any("Draft answer." in str(p) for p in staged_item_payloads(a))
+    drive(a, b)
+    assert texts(b, local_thread(b, tid, a)) == ["When is the launch?"]
+
+
+def test_a_delete_after_export_sends_a_body_free_tombstone(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    question = say(a, tid, "When is the launch?")
+    reply = home_reply(a, tid, question, "The launch is on Friday.", "turn_22")
+    drive(a, b)
+    assert texts(b, local_thread(b, tid, a)) == ["When is the launch?", "The launch is on Friday."]
+    with a.app.state.store.transaction() as c:
+        CORE.delete_message(c, "bot:ops", reply)
+    with a.app.state.store.transaction() as c:
+        S.stage(c, a.app.state.federation_relay.vault(), R.now())
+    tombstones = staged_item_payloads(a)
+    assert tombstones and all(p.get("deleted") for p in tombstones)
+    assert all(not p.get("body") for p in tombstones)
+    drive(a, b)
+    assert texts(b, local_thread(b, tid, a)) == ["When is the launch?"]
+
+
+def test_a_replica_post_deleted_before_its_first_send_sends_no_body(make_side, hq):
+    """The replica's own post, staged and then deleted before it goes to the home: nothing with its text is sent."""
+    import base64 as _b64
+    import json as _json
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    post_id = say(b, there, "Replica secret draft", who="human:ben")
+    relay = b.app.state.federation_relay
+    with b.app.state.store.transaction() as c:
+        S.stage(c, relay.vault(), R.now())
+        CORE.delete_message(c, "human:ben", post_id)
+    with b.app.state.store.read() as c:
+        due = [dict(r) for r in c.execute("SELECT * FROM federation_outbox_items WHERE kind='delivery'").fetchall()]
+    for row in due:
+        with b.app.state.store.transaction() as c:
+            outbound = S.envelope(c, relay.vault(), row, R.now())
+        if outbound is not None:
+            assert b"Replica secret draft" not in outbound["body"]
+    drive(a, b)
+    assert "Replica secret draft" not in texts(a, tid)

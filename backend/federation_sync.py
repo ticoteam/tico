@@ -248,11 +248,15 @@ def withheld(c, message_id):
     return CORE._narrower_than_thread(c, message)
 
 
-def home_withheld(c, origin_id):
-    """Whether a message the home numbered must be skipped now: its privacy changed after it was staged (a task went
-    private). Checked when the item is sent, so a home reply is held to the same rule a replica's is."""
+def home_content_held(c, origin_id):
+    """Whether a content item the home numbered must be skipped at send time: its message was deleted since it was
+    staged, or its privacy changed (a task went private). Only a tombstone may still carry news of a message, and it
+    carries no text (see home_message)."""
     known = message_row(c, origin_id)
-    return known is None or withheld(c, known["message_id"])
+    if known is None:
+        return True
+    row = c.execute("SELECT deleted_at FROM messages WHERE id=?", (known["message_id"],)).fetchone()
+    return row is None or row["deleted_at"] is not None or withheld(c, known["message_id"])
 
 
 def _local(actor, me):
@@ -1107,8 +1111,9 @@ def envelope(c, vault, row, now):
                                                                or item["home_seq"] > member["removed_at_seq"])):
             return None
         thread = thread_local(c, item["thread_id"])
+        tombstone = item["kind"] == "message" and bool(json.loads(bytes(item["payload"])).get("deleted"))
         if item["kind"] == "message" and (not eligible(c, member, item["origin_id"])
-                                          or home_withheld(c, item["origin_id"])):
+                                          or (not tombstone and home_content_held(c, item["origin_id"]))):
             skip = True
             body = E.payload_bytes({"type": "item", "thread": thread["origin_id"], "home_seq": item["home_seq"], "skip": True})
         else:
