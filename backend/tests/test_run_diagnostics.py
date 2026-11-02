@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+from backend import run_diagnostics
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
 
@@ -163,8 +164,11 @@ def silent_since(api, aid, started):
 
 
 def tick(api, at):
+    """One scheduler pass at `at`, by a server that has been listening since long before the silences these tests set up."""
     from backend.scheduler import Scheduler
-    Scheduler(api.app.state.store, api.app.state.execution).tick(H.parse_ts(at))
+    scheduler = Scheduler(api.app.state.store, api.app.state.execution)
+    scheduler.listening_since = H.shift(H.now(), days=-1)
+    scheduler.tick(H.parse_ts(at))
 
 
 def test_silent_run_is_marked_stalled_then_ended_by_the_server_at_its_limit_plus_grace(api):
@@ -186,6 +190,26 @@ def test_silent_run_is_marked_stalled_then_ended_by_the_server_at_its_limit_plus
     row = listed(api, a['id'])
     assert row['end_reason'].startswith('Ended by the server: no heartbeat for 5 minutes')
     assert 'max_run_minutes (60 minutes)' in row['end_reason']
+
+
+def test_server_outage_is_not_the_computers_silence_for_the_cap(api):
+    """A run past its limit with no heartbeat since before a server outage is not capped until the server has been
+    listening for longer than STALL_MINUTES: the outage is not the computer's silence."""
+    machine, _, a = start(api)
+    t0 = H.now()
+    silent_since(api, a['id'], H.shift(t0, minutes=-70))
+
+    def capped():
+        with api.app.state.store.read() as c:
+            return c.execute('SELECT 1 FROM events WHERE target=? AND action=?',
+                             (a['id'], run_diagnostics.CAP_EVENT)).fetchone()
+
+    with api.app.state.store.transaction() as c:
+        run_diagnostics.cap(c, t0, H.shift(t0, minutes=-(run_diagnostics.STALL_MINUTES - 2)))
+    assert not capped()
+    with api.app.state.store.transaction() as c:
+        run_diagnostics.cap(c, t0, H.shift(t0, minutes=-(run_diagnostics.STALL_MINUTES + 1)))
+    assert capped()
 
 
 def test_capped_run_is_not_extended_by_stall_grace_or_a_call_in_flight(api, monkeypatch):
