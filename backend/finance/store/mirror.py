@@ -43,6 +43,28 @@ def ref_set(c: sqlite3.Connection, ref_id: str, *, local_id: str, revision: str,
               (local_id, revision, status, at, ref_id))
 
 
+def reread_seen(c: sqlite3.Connection, cid: str, keys: Sequence[str], gen: int) -> None:
+    """The refs a full re-read of generation `gen` found in the books (by external id, whatever their local table)."""
+    c.executemany("UPDATE fin_external_refs SET seen_gen=? WHERE connection_id=? AND external_id=?",
+                  [(gen, cid, key) for key in keys])
+
+
+def reread_unseen(c: sqlite3.Connection, cid: str, gen: int, kinds: Sequence[str], most: int) -> list[Any]:
+    """Refs a connection holds, not deleted, of the kinds a full read covers, that generation `gen`'s re-read has not
+    found in the books (and has not swept yet): at most `most`, as (id, external id)."""
+    marks = ",".join("?" * len(kinds))
+    return c.execute(
+        "SELECT id, external_id FROM fin_external_refs WHERE connection_id=? AND status<>'deleted' AND "
+        f"substr(external_id, 1, instr(external_id, ':') - 1) IN ({marks}) AND "
+        "(seen_gen IS NULL OR seen_gen NOT IN (?, ?)) ORDER BY id LIMIT ?",
+        (cid, *kinds, gen, -gen, most)).fetchall()
+
+
+def reread_swept(c: sqlite3.Connection, ref_ids: Sequence[str], gen: int) -> None:
+    """Marks refs swept in generation `gen` (negative), so the sweep does not come back to them."""
+    c.executemany("UPDATE fin_external_refs SET seen_gen=? WHERE id=?", [(-gen, ref_id) for ref_id in ref_ids])
+
+
 def restatement_insert(c: sqlite3.Connection, *, book_id: str, period_id: str, day: str, change: str,
                        entry_id: str | None, reversal_id: str | None, cid: str | None, external_id: str, at: str,
                        by: str) -> None:

@@ -15,6 +15,7 @@ MATCH_DAYS = 3          # a bank row finds an entry this many days either side o
 CDC_DAYS = 30           # how far back a change feed reaches (QuickBooks keeps 30 days of changes)
 CDC_OVERLAP = 300       # seconds read again before the last pass, so a change made during it is not missed
 CDC_EVERY = 900         # seconds between change feed reads (the safety net under the webhooks)
+CDC_FLOOR_MARGIN = timedelta(days=1)    # the change feed never starts on the window's edge (a read is sent after `now`)
 # A write's reference: the id a provider keeps on the record it makes, so a record that comes in can be bound to the
 # write that made it (the write's idempotency key, in this namespace). Providers store the same string in their notes.
 REFERENCE_NAMESPACE = uuid.UUID("6f0c5a1e-2b7d-4c8e-9a13-5d2f7e4b9c01")
@@ -271,11 +272,22 @@ def stamp(value: str, n: int) -> str:
 
 
 def cdc_since(cursor: str | None, now: str) -> str:
-    """The time a change feed is read from: the last read less an overlap, never more than CDC_DAYS back (ISO, UTC)."""
+    """The time a change feed is read from: the last read less an overlap, never more than CDC_DAYS back less a margin
+    (ISO, UTC). QuickBooks keeps CDC_DAYS of changes; a read sent after `now` must still be inside them."""
     at = parse(now)
-    floor = at - timedelta(days=CDC_DAYS)
+    floor = at - timedelta(days=CDC_DAYS) + CDC_FLOOR_MARGIN
     base = parse(cursor) - timedelta(seconds=CDC_OVERLAP) if cursor else floor
     return max(base, floor).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def cdc_clamped(cursor: str | None, now: str) -> bool:
+    """Whether a feed's cursor is older than the provider keeps changes for (the window, with its one-day margin): a read
+    from it would start at the floor, so the changes between the cursor and the floor are gone and the books are read in
+    full instead. A feed never read has no cursor and is not clamped."""
+    if not cursor:
+        return False
+    floor = parse(now) - timedelta(days=CDC_DAYS) + CDC_FLOOR_MARGIN
+    return parse(cursor) - timedelta(seconds=CDC_OVERLAP) < floor
 
 
 def cdc_due(cursor: str | None, now: str, every: int = CDC_EVERY) -> bool:

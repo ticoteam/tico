@@ -1841,6 +1841,7 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.delivery(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(82,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=83").fetchone():
                     # A finance admin's cancel of an unknown payment waits for the worker's lookup by its key
                     # (fin_payments.cancel_asked_at; backend/finance/payments.py). Idempotent like 82.
                     from .finance.store import schema as _finance_schema
@@ -1852,6 +1853,12 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.card_merchant(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(84,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=85").fetchone():
+                    # The mirror's full re-read marks the external refs the books return (fin_external_refs.seen_gen).
+                    # Idempotent like 84.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.reread(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(85,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the

@@ -534,6 +534,8 @@ ADDED = (
     # phase 4: the mirror's external refs (kind, revision, status) on installs made before them (migration 68)
     ("fin_external_refs", "kind", "TEXT NOT NULL DEFAULT ''"), ("fin_external_refs", "revision", "TEXT NOT NULL DEFAULT ''"),
     ("fin_external_refs", "status", "TEXT NOT NULL DEFAULT 'active'"), ("fin_external_refs", "updated_at", "TEXT"),
+    # the generation of a full re-read that the books returned the ref in (migration 85); negative once swept in it
+    ("fin_external_refs", "seen_gen", "INTEGER"),
     # the provider's id for a journal or credit memo line, so its tags follow the line across a revision
     ("fin_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
     # vendors: seats or licenses, and the next renewal date (spec §12; the renewal stage events come from watch)
@@ -854,6 +856,12 @@ def card_merchant(c: sqlite3.Connection) -> None:
     """Cloud migration 84: the merchant a card was asked for (fin_cards.merchant), kept as the request's intent.
     Idempotent: `_add_columns` adds only what is missing."""
     _add_columns(c)
+
+
+def reread(c: sqlite3.Connection) -> None:
+    """Cloud migration 85: fin_external_refs.seen_gen, which a full re-read of a provider's books marks the refs the books
+    return in it. Idempotent: `create` makes whatever is missing."""
+    create(c)
 
 
 def catalog(c: sqlite3.Connection, at: str) -> None:

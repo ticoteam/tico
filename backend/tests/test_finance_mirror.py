@@ -50,6 +50,9 @@ class FakeBooks:
     through: tuple[tuple[str, str], ...] = ()          # where each feed a read cut short is complete to
     feeds: tuple[str, ...] = ("Account", "Vendor", "Customer", "Bill", "Invoice", "CreditMemo", "BillPayment",
                               "Payment", "JournalEntry")
+    full_reread: bool = False       # QuickBooks: a feed the window or the cap cut short is read again in full
+    read_kinds: tuple[str, ...] = ("Account", "Vendor", "Customer", "Bill", "Invoice", "CreditMemo", "BillPayment",
+                                   "Payment", "JournalEntry")     # the kinds a full read covers (swept when not returned)
 
     def find(self, op: str, body: Any, key: str) -> mirror.Sent | None:
         self.lookups.append(key)
@@ -1133,6 +1136,67 @@ def test_a_change_read_the_provider_cut_short_resumes_from_where_it_is_complete(
         assert cursors["Invoice"] == "2026-10-15T13:30:00.000000Z"
         assert cursors["Bill"] == LATER
         assert SX.mirror_state(c, cid)["changed_at"] == LATER          # the earliest stamp: complete to there
+
+
+def _status(c: sqlite3.Connection, external: str) -> str:
+    return str(c.execute("SELECT status FROM fin_external_refs WHERE external_id=? AND local_table='fin_accounts'",
+                         (external,)).fetchone()[0])
+
+
+def _old_cursors(books: Any, cid: str, when: str = "2026-09-01T12:00:00.000000Z") -> None:
+    """The change feed last read on `when`: more than QuickBooks' 30 days before the passes that follow."""
+    with books.transaction() as c:
+        SX.set_mirror_state(c, cid, {"cursors": {feed: when for feed in FakeBooks.__dataclass_fields__["feeds"].default},
+                                     "changed_at": when})
+
+
+def test_a_change_feed_read_from_past_quickbooks_thirty_days_reads_the_books_in_full_so_a_gap_change_is_not_lost(books):
+    fake = FakeBooks(full_reread=True)
+    _chart(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    _old_cursors(books, cid)                                   # offline for weeks: the feed no longer reaches back
+    fake.records["accounts"] = [acct(1, "1000", "Bank", "asset"), acct(3, "6200", "Travel")]   # 2 deleted, 3 new: no feed
+    assert _drain(books, fake, cid, now=LATER, passes=30) == []
+    with books.read() as c:
+        assert _status(c, "Account:2") == "deleted"
+        assert _status(c, "Account:3") == "active"
+
+
+def test_an_answer_at_the_change_feed_cap_reads_the_books_in_full_so_a_change_past_the_cap_is_not_lost(books):
+    fake = FakeBooks(full_reread=True)
+    _chart(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    fake.records["accounts"] = [acct(1, "1000", "Bank", "asset"), acct(2, "6100", "Software"),
+                                acct(3, "6200", "Travel")]     # 3 is past the cap: the answer does not hold it
+    fake.changes = [acct(2, "6100", "Software")]
+    fake.through = (("Account", "2026-10-15T13:30:00.000000Z"),)
+    assert mirror.sync_once(books, fake, cid, LATER) == []      # the capped answer
+    fake.through = ()
+    assert _drain(books, fake, cid, now=LATER, passes=30) == []
+    with books.read() as c:
+        assert _status(c, "Account:3") == "active"
+
+
+def test_a_full_re_read_that_fails_part_way_deletes_nothing_until_it_is_complete(books):
+    fake = FakeBooks(full_reread=True)
+    _chart(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    _old_cursors(books, cid)
+    fake.records["accounts"] = [acct(1, "1000", "Bank", "asset")]          # 2 deleted at the provider
+    assert mirror.sync_once(books, fake, cid, LATER) == []                 # the window: read in full from the start
+    fake.fail.add(("accounts", 1))
+    assert mirror.sync_once(books, fake, cid, LATER) == ["backfill accounts from 1: the provider is down"]
+    with books.read() as c:
+        assert _status(c, "Account:2") == "active"                         # an incomplete read decides nothing
+    assert _drain(books, fake, cid, now=LATER, passes=30) == []
+    with books.read() as c:
+        assert _status(c, "Account:2") == "deleted"
 
 
 def test_a_bank_row_matched_while_its_entry_was_out_withdraws_the_entry_at_the_provider(books):

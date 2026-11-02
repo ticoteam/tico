@@ -430,6 +430,9 @@ class Rehearsal:
         print(f"[{self.provider}] fake {self.provider} pid {self.fake_proc.pid} on {self.fake}", flush=True)
         if not wait_until(lambda: self.fake_up(), 15):
             raise RuntimeError(f"the fake {self.provider} did not start")
+        if self.provider == "quickbooks":
+            # The child runs on the scenario day (pin_clock), so the fake judges its 30-day change window by that day too.
+            self.fake_call("/_fake/clock", {"now": f"{DAY}T12:00:00+00:00"})
 
     def fake_up(self) -> bool:
         try:
