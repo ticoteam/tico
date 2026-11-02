@@ -151,7 +151,7 @@ async function ruLoad(tab) {
       const [rules, reach, groups] = await Promise.all([ruAll('/v2/rules?kind=internal'),
         get('/v2/reach', {fresh: true}).then(d => ({d}), e => ({e})), get('/v2/groups').catch(() => null)]);
       state.rules.internal = rules;
-      Object.assign(state.reach, rrNormal(reach.d), {error: reach.e ? reach.e.message : '',
+      Object.assign(state.reach, rrNormal(reach.d), {error: reach.e ? rrError(reach.e) : '',
         groups: Array.isArray(groups) ? groups : groups?.groups || null});
     } else if (tab === 'external') {
       [state.rules.external, state.sources] = await Promise.all([ruAll('/v2/rules?kind=external'), ruAll('/v2/rule-sources')]);
@@ -306,6 +306,8 @@ function rrEff(p) {
   return out;
 }
 const rrMay = p => RU.reach.mayEdit.has(p);
+// A hub from before Reach has no /v2/reach: its rules still list.
+const rrError = e => e?.status === 404 ? 'Reach needs a newer hub.' : e?.message || 'Something went wrong.';
 // A party's lines as its panel lists them: those it sends first ("To"), then those it receives ("From").
 const rrLinesOf = p => RU.reach.lines.filter(l => (l.sender === p) !== (l.receiver === p))
   .map(l => ({l, dir: l.sender === p ? 'to' : 'from', other: l.sender === p ? l.receiver : l.sender}))
@@ -539,7 +541,7 @@ async function rrReload(note = '') {
     if (RU !== state) return;
     Object.assign(state.reach, rrNormal(d), {error: ''});
     state.rules.internal = rules;
-  } catch (e) { if (RU === state) state.reach.error = e.message; }
+  } catch (e) { if (RU === state) state.reach.error = rrError(e); }
   if (RU !== state || state.tab !== 'internal') return;
   rrMapPaint(); rrPanelDraw(note);
 }
