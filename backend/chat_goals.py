@@ -32,14 +32,14 @@ def capabilities(c, auth, conv):
     bots = [H.actor_id(p) for p in conv["participants"] if p.startswith("bot:")]
     if conv.get("kind") == "task" and conv.get("task_id"):
         # A task's own room is its owning bot's, whoever else is in it (a requesting bot).
-        owner = (H.task(c, conv["task_id"]) or {}).get("owner") or ""
+        owner = (H.task(c, conv["task_id"]) or {}).get("owner_id") or ""
         bots = [H.actor_id(owner)] if H.is_bot(owner) else []
     if len(bots) != 1 or bots[0] == auth.settings.assistant_bot:
         return None, False, []
     bot = bots[0]
-    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     runtime, _ = providers.bot_choice(c, auth.settings, json.loads(config[0] or "{}") if config else {})
-    row = c.execute("SELECT r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
                     "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
     report = readiness_document(row[0]) if row else {}
     detail = bot_readiness(row[0], bot) if row else {}
@@ -76,7 +76,7 @@ def report(c, attempt, payload):
     """Only the leased thread and the current goal revision may change the pinned state."""
     msg = H.message(c, c.execute("SELECT message_id FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0])
     goal = current(c, msg["conversation_id"])
-    if not goal or goal["bot"] != attempt["bot"] or goal["status"] != "active":
+    if not goal or goal["bot"] != attempt["bot_id"] or goal["status"] != "active":
         return
     origin = msg.get("refs") or {}
     context = origin.get("goal_context") or {"id": origin.get("goal_id"), "updated_at": origin.get("goal_revision")}
@@ -168,8 +168,8 @@ def clear_task_goal(c, conv):
     now = H.now()
     c.execute("UPDATE chat_goals SET status='cleared',note=?,updated_at=?,ended_at=? WHERE id=?",
               ("The task's goal was turned off", now, now, goal["id"]))
-    c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND message_id IN "
-              "(SELECT id FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.goal_action') IS NOT NULL)",
+    c.execute("UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
+              "(SELECT id FROM messages WHERE conversation_id=? AND json_extract(refs,'$.goal_action') IS NOT NULL)",
               (conv["id"],))
     H._write_message(c, H.KEEPER, "bot:" + goal["bot"], "/goal clear", conv, "say",
                      {"task": conv["task_id"], "command": True, "goal_action": "clear", "goal_id": goal["id"],
@@ -183,7 +183,7 @@ def task_goal_ended(c, goal, task_id, status, note):
     marked it already (the objective told it to). Paused or stopped: the task stays open and the main chat hears
     it is blocked (waiting on someone) or stuck."""
     row = H.task(c, task_id)
-    if not row or row["owner"] != "bot:" + goal["bot"] or row["status"] not in H.ACTIVE_STATUSES:
+    if not row or row["owner_id"] != "bot:" + goal["bot"] or row["status"] not in H.ACTIVE_STATUSES:
         return
     if status == "met":
         # Only the goal Tico set for the task, for its objective as it stands: a goal a person set in the room
@@ -194,7 +194,7 @@ def task_goal_ended(c, goal, task_id, status, note):
         steps = H.steps_only(c, row)
         if (row["status"] in ("open", "doing") and goal["set_by"] == H.KEEPER and wanted and not steps
                 and goal["objective"] == task_goal_objective(row, wanted["objective"], steps)):
-            H.task_update(c, row["owner"], task_id, status="done", note=(note or "Goal met.")[:4000])
+            H.task_update(c, row["owner_id"], task_id, status="done", note=(note or "Goal met.")[:4000])
         return
     if status in ("paused", "stopped"):
         # A harness pauses a goal that needs a person (Codex "blocked"); the runner's tries guard pauses a stuck one.
@@ -215,7 +215,12 @@ def install(app, store, auth, mutate, send):
     @app.post("/api/v2/conversations/{cid}/goal")
     def write(request: Request, cid: str, body: GoalAction):
         def work(c):
-            goal = set_goal(c, auth, request.state.identity, cid, body.action, body.objective, send)
+            who = request.state.identity
+            # A goal is words the conversation's readers see: a private run sets one only where its own work may
+            # post (the same check as a message; task_privacy.private_thread_destination for a native thread).
+            from . import task_privacy
+            task_privacy.require_destination(c, who, who.actor, cid, {})
+            goal = set_goal(c, auth, who, cid, body.action, body.objective, send)
             return {"goal": goal}
         return mutate(request, body, work)
 
@@ -292,13 +297,13 @@ def set_goal(c, auth, who, cid, action, objective, send):
                    now if status == "cleared" else None, who.actor, cid))
     goal = current(c, cid)
     # Superseded controls must never reset a newer objective when the computer catches up.
-    c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND message_id IN "
-              "(SELECT id FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.goal_action') IS NOT NULL)", (cid,))
+    c.execute("UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
+              "(SELECT id FROM messages WHERE conversation_id=? AND json_extract(refs,'$.goal_action') IS NOT NULL)", (cid,))
     text = "/goal clear" if action in ("pause", "clear") else "/goal " + goal["objective"]
     message = send(c, who, M.MessageCreate(to="bot:" + bot, text=text, conversation_id=cid, command=True))
     refs = {**(message.get("refs") or {}), "goal_action": action, "goal_id": goal["id"],
             "goal_revision": now, "goal_objective": goal["objective"]}
-    c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
+    c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), message["id"]))
     # The objective is stored after send()'s own recheck: charge the final references.
     H.held_queue_recheck(c, message["id"])
     H.event(c, who.actor, "chat.goal", cid, {"status": status})

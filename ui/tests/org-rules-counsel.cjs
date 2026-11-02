@@ -66,8 +66,9 @@ const suggest = (hub, read, text, who, cite = {section: '4. Messaging', quote: O
     await page.locator('[data-org^="b:"]').first().waitFor({timeout: t(15000)});
     assert.equal(await page.locator('[data-org="b:tico-counsel"], #side a[href="#/bot/tico-counsel"]').count(), 0, 'Counsel is not on the Team list');
     await go(page, '#/bot/tico-counsel');
-    await page.locator('#chat-composer [data-ask-open]').waitFor({timeout: t(15000)});
-    assert.equal(await page.locator('#chat-composer textarea').count(), 0, 'no composer on its page');
+    await page.locator('#bot-thread .thv-scroll').waitFor({timeout: t(15000)});
+    assert.equal(await page.locator('#bot-thread textarea').count(), 0, 'no composer on its page');
+    assert.equal(await page.locator('#btabs [data-bt="dm"]').count(), 0, 'and no DM tab');
 
     // Add document: the terms from Files, from a new vendor, with a description.
     await go(page, '#/rules/external');
@@ -83,7 +84,7 @@ const suggest = (hub, read, text, who, cite = {section: '4. Messaging', quote: O
     await done.waitFor({timeout: t(15000)});
     const taskId = await done.getAttribute('data-ru-read');
     const task = await call(hub, 'dana', 'GET', '/v2/tasks/' + taskId);
-    assert.equal((task.task || task).owner, 'bot:tico-counsel', 'a Counsel task');
+    assert.equal((task.task || task).owner_id, 'bot:tico-counsel', 'a Counsel task');
     assert.match(await modal.locator('[data-ru-task]').getAttribute('href'), new RegExp(taskId));
     await modal.locator('[data-ru-close]').first().click();
 

@@ -4,16 +4,23 @@
 
 setDrawer(false);
 if (/TicoHub/.test(navigator.userAgent)) document.body.classList.add('native');
-// installable app: the server maps /manifest.webmanifest and /sw.js at the root like /assets/
-if ('serviceWorker' in navigator) window.addEventListener('load', () => {
-  const had = !!navigator.serviceWorker.controller;
+// installable app: the server maps /manifest.webmanifest and /sw.js at the root like /assets/. Reading
+// navigator.serviceWorker throws in a sandboxed document (no allow-same-origin), where no worker can register, so the
+// read is guarded: it gives null there, as it does where the API is missing.
+function serviceWorkerContainer() {
+  try { return navigator.serviceWorker || null; } catch { return null; }
+}
+window.addEventListener('load', () => {
+  const sw = serviceWorkerContainer();
+  if (!sw) return;
+  const had = !!sw.controller;
   let reloading = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
+  sw.addEventListener('controllerchange', () => {
     if (!had || reloading) return;
     reloading = true;
     location.reload();
   });
-  navigator.serviceWorker.register('/sw.js?v=41', {updateViaCache: 'none'}).then(reg => reg.update()).catch(() => {});
+  sw.register('/sw.js?v=41', {updateViaCache: 'none'}).then(reg => reg.update()).catch(() => {});
 });
 (async () => {
   let configVersion = nativeVisualVersion();

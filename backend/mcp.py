@@ -280,12 +280,12 @@ def task_dry_run(c, auth, who, body):
             if state in H.INACTIVE_STATES:
                 problems.append(H.target_inactive(c, H.actor_id(target), state))
             elif state != "active":
-                problems.append(f"{H.actor_id(target)} is {state}, not active")
+                problems.append(f"{H.actor_name(c, target)} is {state}, not active")
             if not auth.bot_access(c, who, H.actor_id(target))["write"]:
-                problems.append(f"you can see {H.actor_id(target)} but may not give it work; "
+                problems.append(f"you can see {H.actor_name(c, target)} but may not give it work; "
                                 "ask the person who runs it for Write access")
             if not auth.bot_contact(c, who, H.actor_id(target)):
-                problems.append(f"{H.actor_id(target)} does not take tasks from other bots; ask its "
+                problems.append(f"{H.actor_name(c, target)} does not take tasks from other bots; ask its "
                                 "manager or a person to pass this on")
         if not title:
             problems.append("give it a title that says what you are asking for")
@@ -298,12 +298,12 @@ def task_dry_run(c, auth, who, body):
         if H.is_bot(who.actor) and H.TITLE_LINT != "off" and general:
             # plain-English titles: recorded on the task this week, refused once TICO_TITLE_LINT=refuse
             problems += [f"{p} (title lint, {H.TITLE_LINT})" for p in H.lint_title(title)]
-        dup = H._one(c, "SELECT id FROM tasks WHERE requester=? AND owner=? AND title=? "
+        dup = H._one(c, "SELECT id FROM tasks WHERE requester_id=? AND owner_id=? AND title=? "
                         f"AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))})",
                      (who.actor, target, title, *H.ACTIVE_STATUSES))
         if dup and H.task_private_readable(c, who.actor, H.task(c, dup["id"])) and (
                 not who.task_actor or H.task_private_readable(c, who.task_actor, H.task(c, dup["id"]))):
-            problems.append(f"{dup['id']} already asks {H.actor_id(target)} for this")
+            problems.append(f"{dup['id']} already asks {H.actor_name(c, target)} for this")
         # The create's own privacy refusals, word for word (task_privacy.require_create): private work handed to
         # someone who cannot read it, or a private task's guest refused.
         from . import task_privacy as privacy

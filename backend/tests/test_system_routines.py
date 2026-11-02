@@ -26,7 +26,7 @@ def test_every_built_in_job_is_listed_with_its_group_word_and_control_availabili
     assert {k for k, j in jobs.items() if j["controllable"]} == {
         "stale_review", "still_wanted", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
         "stall_triage", "engineering_exceptions", "bookkeeper_check", "memory_tidy"}
-    assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "learnings", "stall_triage"}
+    assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "learnings", "stall_triage", "thread_routing"}
     assert all(j["needed"] == (j["group"] == "housekeeping") for j in jobs.values())
     assert jobs["stale_review"]["schedule"] == "Hourly" and jobs["learnings"]["schedule"] == "Nightly at 03:00"
     for key in ("due_reminders", "ask_deadlines", "approval_expiry"):
@@ -178,8 +178,8 @@ def test_a_quiet_repeat_moves_its_row_after_a_minute_and_a_busy_run_starts_a_new
         rid = SR.save(c, first, finished=first.started)
         moved = SR.Run("snooze_ends").did("Nothing due", quiet=True)
         assert SR.save(c, moved) == rid
-        row = c.execute("SELECT runs,started FROM system_runs WHERE id=?", (rid,)).fetchone()
-        assert row["runs"] == 2 and row["started"] == moved.started, "folded and moved forward"
+        row = c.execute("SELECT runs,started_at FROM system_runs WHERE id=?", (rid,)).fetchone()
+        assert row["runs"] == 2 and row["started_at"] == moved.started, "folded and moved forward"
         busy = SR.Run("snooze_ends").did("1 snooze ended")
         assert SR.save(c, busy) != rid
         assert c.execute("SELECT count(*) FROM system_runs WHERE job='snooze_ends'").fetchone()[0] == 2

@@ -84,7 +84,7 @@ def test_a_no_cited_from_more_than_thirty_minutes_ago_is_refused(api):
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
     r, attempt = turn(api, "coo", "ana-test", "No, leave it.")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created=? WHERE id=?",
+        c.execute("UPDATE messages SET created_at=? WHERE id=?",
                   (H.shift(H.now(), seconds=-31 * 60), turn_message(api, attempt)))
     refused = turn_down(api, attempt, suggestion(g["id"]), expected=403)["error"]
     assert refused["code"] == "on_behalf_of"

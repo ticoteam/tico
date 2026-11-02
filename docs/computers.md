@@ -219,7 +219,11 @@ who added it. Owners and admins add, rename, reconnect and remove them in **Sett
 page sees the list (name, kind, status, computers, usage), never a value.
 
 Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many
-computers. Every bot on that computer then runs that tool on it.
+computers. Every bot on that computer then runs that tool on it. Automatic fallback can use it too when
+that tool is installed and the company allows automatic fallback. On an updated runner, an unused automatic
+candidate's login is fetched only when the bot is about to use it. Changing or removing that login leaves a turn
+still running on another tool alone. Once the fallback fetches the login, changing it stops that turn too. Older
+runners fetch fallback logins up front and restart those turns when a login changes.
 
 - Giving, switching or taking off a computer's subscription, reconnecting it, or removing one in use, restarts that tool there: its
   running turns stop and go back in the queue (a turn that may already have acted outside Tico is held for review
@@ -462,9 +466,9 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
 - **Switch account** is a sign-in on the side. The Computer signs the new account in to a private folder inside the
   login's home (`.tico-switch-<id>`, 0700, with copies of the files the CLI keeps beside the login). Once the new
   account is signed in there, the dialog reads **Putting the new account in place**: the Computer asks Tico to go
-  ahead, and from Tico's yes the switch can no longer be cancelled (it gets two more minutes of its own to finish).
+  ahead, and from Tico's yes the switch can no longer be canceled (it gets two more minutes of its own to finish).
   Only then does it move the new login files in, keeping the old ones until it has checked the login again; if moving
-  a file or that check fails, the old files go back. Cancelling before that point, failing or running out of time leaves
+  a file or that check fails, the old files go back. Canceling before that point, failing or running out of time leaves
   the old account working, and the side folder is removed (kept, and named in the message, only if the old files could
   not be put back). Runs that start afterwards use the new account. The account and usage readings of the old account
   are cleared.
@@ -478,7 +482,7 @@ and on a current runner; an older one answers `Update <computer> to sign out fro
 - **Switch to subscription** sits on a Computer's own login that runs on an API key (the shared key, the Computer's
   own key or one set in its terminal): in place of **Switch account**, or next to **Replace key** and **Clear key**. It
   is the same sign-in on the side: until the subscription is signed in and in place the key stays in use, and
-  cancelling, failing or running out of time leaves it so. Once the subscription is in place the key is removed as
+  canceling, failing or running out of time leaves it so. Once the subscription is in place the key is removed as
   **Clear key** removes it (the Computer's copies, and its own key in the vault), and no key reaches that login again:
   not readiness, not the ten-minute key login and not a turn's environment, so the next turn runs on the subscription.
   The server stops handing it the **Every computer** key too. Unlike a sign-out, a later sign-in or Switch account does
@@ -532,7 +536,7 @@ login with none. The Computer must be online and on a current runner; an older o
   own connection (the sign-in queue never carries a key) and checks it (Codex signs in with it; the others read it on
   each turn). Until the check passes and Tico agrees the key goes in, the old key stays in use for runs and in the
   Computer's key files, and the Computer's regular key fetch leaves them alone. From Tico's yes the change can no longer
-  be cancelled: the key it replaces is deleted from the vault, and a key set on the computer is taken out of
+  be canceled: the key it replaces is deleted from the vault, and a key set on the computer is taken out of
   `secrets/_shared.env`. A key that does not work, a cancel, or a check that runs out of time deletes the new key and
   leaves the old one in use (for Codex, signed in again with it). Runs that start afterwards use the new key; for Claude
   Code, a key added here is used even when the computer also has a browser login.

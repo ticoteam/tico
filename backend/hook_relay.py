@@ -118,7 +118,7 @@ def save(c, **fields):
 
 def live(c):
     """The relay addresses people made, not the one HQ keeps for Tico Team's notices."""
-    return [dict(r) for r in c.execute("SELECT * FROM trigger_relays WHERE deleted_at IS NULL AND trigger_id<>? ORDER BY created",
+    return [dict(r) for r in c.execute("SELECT * FROM trigger_relays WHERE deleted_at IS NULL AND trigger_id<>? ORDER BY created_at",
                                        (tico_notices.ID,)).fetchall()]
 
 
@@ -129,7 +129,7 @@ def _row(c, trigger_id):
 def public(row):
     """The relay as a trigger shows it. `wake` is whether a delivery starts a sleeping server (HQ's switch, as last
     listed), null until HQ has said."""
-    return {"address_prefix": row["address_prefix"], "created": row["created"],
+    return {"address_prefix": row["address_prefix"], "created_at": row["created_at"],
             "wake": None if row["wake"] is None else bool(row["wake"])} if row else None
 
 
@@ -169,16 +169,20 @@ class Link:
         self.key, self.base, self.fingerprint = key, base, fingerprint
 
     def call(self, method: str, path: str, body: object = None, idempotency: str | None = None, *,
-             area: str = "hooks", transport: object = None, cap: int = MAX_ANSWER) -> dict[str, Any]:
+             area: str = "hooks", transport: object = None, cap: int = MAX_ANSWER, content: bytes | None = None,
+             headers: dict[str, str] | None = None) -> dict[str, Any]:
         """One call to `<base>/<area>/<path>`. `area` and `cap` let the sleep client (backend/sleep_idle.py) share the
-        key, the pinned client settings and the answer cap; `transport` is a test's fake HQ."""
-        headers = {"Authorization": "Bearer " + self.key, "User-Agent": user_agent(), "Accept-Encoding": "identity"}
+        key, the pinned client settings and the answer cap; `transport` is a test's fake HQ. `content` sends raw bytes
+        (a signed federation envelope) in place of `body`, with `headers` added to the key's."""
+        sent = {"Authorization": "Bearer " + self.key, "User-Agent": user_agent(), "Accept-Encoding": "identity"}
+        sent.update(headers or {})
         if idempotency:
-            headers["Idempotency-Key"] = idempotency[:200]
+            sent["Idempotency-Key"] = idempotency[:200]
+        payload = {"content": content} if content is not None else {"json": body}
         try:
             with httpx.Client(transport=transport or TRANSPORT, timeout=TIMEOUT, trust_env=False, follow_redirects=False,
                               verify=outbound_tls.context(trust_env=False)) as client:
-                with client.stream(method, f"{self.base}/{area}/{path}", json=body, headers=headers) as response:
+                with client.stream(method, f"{self.base}/{area}/{path}", headers=sent, **payload) as response:
                     raw = bytearray()
                     for chunk in response.iter_bytes():
                         raw.extend(chunk)
@@ -526,7 +530,7 @@ class HookRelay:
             elif existing:
                 pass                                # the same HQ relay (a concurrent retry with the same key): keep it
             else:
-                c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created) VALUES(?,?,?,?,?) "
+                c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at) VALUES(?,?,?,?,?) "
                           "ON CONFLICT(relay_id) DO UPDATE SET trigger_id=excluded.trigger_id,address_prefix=excluded.address_prefix,"
                           "deleted_at=NULL,hq_gone=0", (relay_id, trigger_id, prefix, who.actor, H.now()))
                 H.event(c, who.actor, "trigger.relay_created", trigger_id, {"relay": relay_id})

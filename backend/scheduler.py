@@ -30,16 +30,16 @@ REMINDER_BATCH = 50
 
 def remind(c, row, at):
     """Whether a task from H.tasks_due_for_bots gets its due-date reminder now."""
-    due = H.parse_ts(row.get("due"))
+    due = H.parse_ts(row.get("due_at"))
     if due and due.tzinfo is None:
         # Legacy rows allowed dates/local timestamps. New API writes require an
         # offset; preserve the old machine's Pacific interpretation on migration.
         due = due.replace(tzinfo=ZoneInfo("America/Los_Angeles"))
-    if not due or due > at or not row["owner"].startswith("bot:"):
+    if not due or due > at or not row["owner_id"].startswith("bot:"):
         return False
-    if c.execute("SELECT 1 FROM task_reminders WHERE task_id=? AND due=?", (row["id"], row["due"])).fetchone():
+    if c.execute("SELECT 1 FROM task_reminders WHERE task_id=? AND due_at=?", (row["id"], row["due_at"])).fetchone():
         return False
-    return H.bot(c, H.actor_id(row["owner"]))["state"] == "active"
+    return H.bot(c, H.actor_id(row["owner_id"]))["state"] == "active"
 
 
 # The controlled system routines' blocks (backend/system_routines.py CONTROLS), shared by the scheduler and Run now: a
@@ -151,6 +151,44 @@ def run_bookkeeper_rules_digest(store, auth, at, failures=None):
         run.did(made["words"], quiet=not made["items"])
 
 
+def run_thread_followups(store, auth, at, failures=None):
+    # Asks a bot left unanswered for a day get one nudge in their thread, and a bot's managers one notice about its Home's
+    # closed history (backend/thread_followups.py). Nothing due is a quiet run: no post, no model.
+    with SR.recording(store, "thread_followups", failures, "helper") as run:
+        from . import thread_followups
+        with store.transaction() as c:
+            nudged = thread_followups.sweep(c, stamp(at))
+            thread_followups.earlier_sweep(c, auth, stamp(at))
+        run.did(SR.words_of(nudged, "follow-up", "Nothing to follow up"), quiet=not nudged)
+
+
+def run_thread_digest(store, auth, at, failures=None):
+    # One email an hour to each person with threads to list on digest (backend/thread_digest.py). Nothing unread is a
+    # quiet run: no mail and no write.
+    from . import thread_digest
+    with SR.recording(store, "thread_digest", failures, "helper") as run:
+        sent = thread_digest.sweep(store, thread_digest.sender_for(auth))
+        run.did(SR.words_of(sent, "digest", "No digests to send"), quiet=not sent)
+
+
+def run_thread_bot_digest(store, auth, at, failures=None):
+    # A bot on digest gets one run an hour for what its threads gathered (backend/thread_bot_digest.py). Plain code: a
+    # model runs only when a batch has something in it.
+    from . import thread_bot_digest
+    with SR.recording(store, "thread_bot_digest", failures, "helper") as run:
+        woken = thread_bot_digest.sweep(store)
+        run.did(SR.words_of(woken, "bot", "No bot digests"), quiet=not woken)
+
+
+def run_thread_retention(store, auth, at, failures=None):
+    # Threads that keep their messages for a set time lose what is past it (backend/thread_retention.py), in short
+    # batches. Plain code; nothing past its time is a quiet run.
+    from . import thread_retention
+    with SR.recording(store, "thread_retention", failures, "helper") as run:
+        purged = thread_retention.sweep(store)
+        run.did(SR.words_of(purged, "message", "Nothing past its time"), quiet=not purged)
+
+
 QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
          "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report,
          "engineering_exceptions": run_engineering_exceptions, "bookkeeper_check": run_bookkeeper_check}
@@ -158,7 +196,11 @@ QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_sca
 # The Bookkeeper's Watch (daily) and rules digest (weekly): their own cadence, not controlled jobs (CONTROLS has the
 # six a person switches). The Bookkeeper's pause is their off switch.
 FIXED = {"bookkeeper_watch": (run_bookkeeper_watch, timedelta(days=1)),
-         "bookkeeper_rules_digest": (run_bookkeeper_rules_digest, timedelta(days=7))}
+         "bookkeeper_rules_digest": (run_bookkeeper_rules_digest, timedelta(days=7)),
+         "thread_followups": (run_thread_followups, timedelta(minutes=15)),
+         "thread_digest": (run_thread_digest, timedelta(hours=1)),
+         "thread_bot_digest": (run_thread_bot_digest, timedelta(hours=1)),
+         "thread_retention": (run_thread_retention, timedelta(minutes=15))}
 
 
 def run_now(store, auth, key, actor):
@@ -375,12 +417,12 @@ class Scheduler:
             try:
                 # One snapshot for the cursor read and the selection, so the runs' provenance primes together.
                 with self.store.read_transaction() as c:
-                    saved = c.execute('SELECT value_json FROM registry_metadata WHERE key=?',
+                    saved = c.execute('SELECT value FROM registry_metadata WHERE key=?',
                                       (assigned_start.CURSOR_KEY,)).fetchone()
                     cursor = [H._json(saved[0], "") if saved else ""]
                     unstarted = assigned_start.due(c, stamp(at), cursor=cursor, failures=failures)
                 with locked("assigned_start_cursor") as c:
-                    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
+                    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                               (assigned_start.CURSOR_KEY, H._dump(cursor[0])))
             except Exception as exc:
                 failures.append({'assigned_start': 'selection', 'error': type(exc).__name__})
@@ -425,27 +467,27 @@ class Scheduler:
             with locked("reminders") as c:
                 for listed in ready[batch:batch + REMINDER_BATCH]:
                     with isolated(c, "reminder", listed["id"], failures):
-                        row = c.execute("SELECT id,title,owner,due,conversation_id FROM tasks WHERE id=? AND due=? "
-                                        "AND owner=? AND snoozed_until IS NULL AND status IN (" +
+                        row = c.execute("SELECT id,title,owner_id,due_at,conversation_id FROM tasks WHERE id=? AND due_at=? "
+                                        "AND owner_id=? AND snoozed_until IS NULL AND status IN (" +
                                         ",".join("?" * len(H.ACTIVE_STATUSES)) + ")",
-                                        (listed["id"], listed["due"], listed["owner"], *H.ACTIVE_STATUSES)).fetchone()
+                                        (listed["id"], listed["due_at"], listed["owner_id"], *H.ACTIVE_STATUSES)).fetchone()
                         if row is None or not remind(c, dict(row), at):
                             continue
                         try:
-                            H.say(c, H.KEEPER, row["owner"], "Due: " + row["title"], kind="notice",
+                            H.say(c, H.KEEPER, row["owner_id"], "Due: " + row["title"], kind="notice",
                                   conversation_id=row["conversation_id"],
                                   refs=run_triggers.stamp({"task": row["id"], "wake": "due"}, "schedule",
                                                            purpose="work task due soon"))
                         except H.Refused as exc:
                             H.event(c, H.KEEPER, "task.reminder-refused", row["id"], {"reason": str(exc)[:300]})
-                        c.execute("INSERT INTO task_reminders VALUES(?,?,?)", (row["id"], row["due"], stamp(at)))
+                        c.execute("INSERT INTO task_reminders VALUES(?,?,?)", (row["id"], row["due_at"], stamp(at)))
                         reminders += 1
         SR.write(self.store, SR.Run("due_reminders").did(SR.words_of(reminders, "reminder sent", "Nothing due"),
                                                          quiet=not reminders))
         longest = max(holds, default=(0, 0, None))
         with self.store.transaction() as c:
             c.execute("INSERT INTO service_health VALUES('scheduler',?,?,?) ON CONFLICT(service) DO UPDATE SET "
-                      "last_success=excluded.last_success,last_error=excluded.last_error,detail_json=excluded.detail_json",
+                      "last_succeeded_at=excluded.last_succeeded_at,last_error=excluded.last_error,detail=excluded.detail",
                       (stamp(at), "schedule errors" if failures else None,
                        # How long the 10-second pass took, the longest any one of its transactions held the write
                        # lock and which step that was, and the longest it waited for the lock behind other writers.
@@ -478,6 +520,18 @@ class Scheduler:
                 threading.Thread(target=updates.write_draft, args=(self.store, sent, writer, settings.assistant_bot),
                                  name="update-draft", daemon=True).start()
             run.did("1 asked" if sent else "Nobody due", quiet=not sent)
+        # The Company page's editions that came due (backend/company_page/schedule.py); the model call is off this loop.
+        try:
+            from .company_page import schedule as company_page_schedule
+            company_page_schedule.start(self.store, at)
+        except Exception as exc:
+            failures.append({"company_page": type(exc).__name__})
+        # Reader notices a restart or the issuer's limit left waiting; the mail goes on a thread of its own.
+        try:
+            from .company_page import readers as company_page_readers
+            company_page_readers.tick(self.store)
+        except Exception as exc:
+            failures.append({"company_page_readers": type(exc).__name__})
         # The nightly learning run (backend/learnings.py): one row per night claims it; the work runs
         # in a background thread, so the decision model's calls never hold the write lock.
         try:
@@ -523,7 +577,7 @@ class Scheduler:
             self.swept = at
             with SR.recording(self.store, "cleanup") as run:
                 with self.store.transaction() as c:
-                    c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND julianday(json_extract(detail_json,'$.failed_at')) < julianday(?) - 30", (stamp(at),))
+                    c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND julianday(json_extract(detail,'$.failed_at')) < julianday(?) - 30", (stamp(at),))
                     # A duplicate is not a failure (batch_work.isolated); rows an older server wrote for one go.
                     c.execute("DELETE FROM service_health WHERE service LIKE 'background:%' AND last_error LIKE '%: duplicate: %'")
                     SR.prune(c)                                # each system job keeps its last runs
@@ -586,6 +640,18 @@ class Scheduler:
                 if mark is None or at - mark >= every:
                     self.marks[key] = at
                     run(self.store, self.execution.auth, at, failures)
+        # Thread messages waiting to be routed: on their own thread, since a tick never waits on the decision model.
+        try:
+            from . import thread_routing
+            thread_routing.kick(self.store)
+        except Exception as exc:
+            failures.append({"thread_routing": type(exc).__name__})
+        # Bot wakes the loop guard held: they go by themselves as their root's rolling hour reopens. Plain SQL, no model.
+        try:
+            from . import threads
+            threads.reopen_due(self.store)
+        except Exception as exc:
+            failures.append({"thread_loop_guard": type(exc).__name__})
         # Production invariants every 15 minutes (backend/invariants.py): plain SQL, no model.
         if self.invariants_checked is None or at - self.invariants_checked >= timedelta(minutes=15):
             self.invariants_checked = at
@@ -765,8 +831,8 @@ class Scheduler:
                         # The expensive privacy/provenance scan does not need the writer lock.
                         from . import task_privacy
                         job_ids = [row["job_id"] for row in c.execute(
-                            "SELECT j.id AS job_id,j.bot,m.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'")
-                            if not task_privacy.message_readable(c, "bot:" + row["bot"], row, current=True)]
+                            "SELECT j.id AS job_id,j.bot_id,m.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'")
+                            if not task_privacy.message_readable(c, "bot:" + row["bot_id"], row, current=True)]
                     for job_id in job_ids:
                         with locked("drop_unreadable:" + job_id) as c:
                             self.execution.drop_unreadable(c, job_ids=[job_id])

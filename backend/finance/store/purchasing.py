@@ -111,14 +111,14 @@ def set_bill_retained(c: sqlite3.Connection, bill_id: str, amounts: Mapping[str,
 
 # A bill write held against an order line's room until it is refused outright or confirmed. Confirmed writes are in
 # billed(); a write refused outright (failed, not unknown) bills nothing.
-_HELD_WRITES = ("SELECT payload_json FROM fin_outbox WHERE op='bill.create' AND "
-                "NOT (status='sent' OR (status='failed' AND unknown=0)) AND instr(payload_json, ?) > 0")
+_HELD_WRITES = ("SELECT payload FROM fin_outbox WHERE op='bill.create' AND "
+                "NOT (status='sent' OR (status='failed' AND unknown=0)) AND instr(payload, ?) > 0")
 # The writes that may already have reached the books before a write is sent: an unknown answer, or a retry that is
 # sent again without a check. A write still waiting for its first try has taken no room, so of two that wait the one
 # sent first keeps it and the second is refused when its turn comes.
-_LANDED_WRITES = ("SELECT payload_json FROM fin_outbox WHERE op='bill.create' AND "
+_LANDED_WRITES = ("SELECT payload FROM fin_outbox WHERE op='bill.create' AND "
                   "((status='failed' AND unknown=1) OR (status IN ('pending','withheld') AND attempts>0)) "
-                  "AND instr(payload_json, ?) > 0")
+                  "AND instr(payload, ?) > 0")
 
 
 def _billed_on(c: sqlite3.Connection, query: str, po_line_id: str) -> int:

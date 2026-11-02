@@ -18,7 +18,7 @@ function accountIssueFix(issue) {
   if (issue.kind === 'uncertain_work' && issue.bot) return `<button class="ghost" type="button" data-account-review="${esc(issue.bot)}">Review</button>`;
   if (issue.restart && issue.machine) return '<button class="ghost" type="button" data-account-needs-you title="Open Needs you to restart this computer">Open</button>';
   if (issue.kind === 'machine' && issue.machine) return '<a class="ghost" href="#/settings" data-gs-tab="devices">Fix</a>';
-  if (issue.bot) return `<a class="ghost" href="#/bot/${esc(issue.bot)}/more" title="Open the bot">Fix</a>`;
+  if (issue.bot) return `<a class="ghost" href="#/bot/${encodeURIComponent(issue.bot)}/more" title="Open the bot">Fix</a>`;
   return '<button class="ghost" type="button" data-account-needs-you title="Open Needs you">Open</button>';
 }
 function accountStatusLines() {
@@ -206,7 +206,7 @@ async function decideRun(run, decision) {
 const needsTitle = (text, tag, tip = '') => `<${tag} class="needs-title"${tip ? ` title="${esc(tip)}"` : ''}><span>${esc(text)}</span><span class="nav-icon" aria-hidden="true">chevron_right</span></${tag.split(' ')[0]}>`;
 const needsTitleTag = issue => issue.kind === 'uncertain_work' && issue.bot ? `button type="button" data-execution-review="${esc(issue.bot)}"`
   : issue.machine && !issue.bot ? 'a href="#/settings" data-gs-tab="devices"'
-  : issue.bot ? `a href="#/bot/${esc(issue.bot)}/more"` : 'a href="#/settings" data-gs-tab="health"';
+  : issue.bot ? `a href="#/bot/${encodeURIComponent(issue.bot)}/more"` : 'a href="#/settings" data-gs-tab="health"';
 function needsYou() {
   document.querySelector('.needs-you')?.remove();
   const issues = (S.status?.health_issues || []).filter(needsPerson);

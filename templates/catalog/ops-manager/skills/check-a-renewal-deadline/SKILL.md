@@ -33,7 +33,7 @@ appears in a task or an email, and when a renewal comes into its lead time on th
 - The notice deadline is a date, with its clause and the date read beside it.
 - The automatic-renewal outcome is stated, not assumed.
 - Each gap is marked "not found" and named on the page.
-- Nothing was signed, renewed or cancelled. Only the owner decides.
+- Nothing was signed, renewed or canceled. Only the owner decides.
 
 ## Example
 

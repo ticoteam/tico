@@ -58,7 +58,7 @@ function pillRestore(P) {
 const activeEmps = () => shownEmps().filter(e => e.status === 'active');
 function toastSent(r) {
   const t = document.createElement('div'); t.className = 'toast';
-  t.textContent = r.pending ? `Saved. Sending to ${S.emps.find(e => e.name === r.slug)?.display_name || r.slug} in the background—you can close this page.` : `Sent to ${S.emps.find(e => e.name === r.slug)?.display_name || r.slug}`;
+  t.textContent = r.pending ? `Saved. Sending to ${botDisplayName(r.bot || r.slug)} in the background—you can close this page.` : `Sent to ${botDisplayName(r.bot || r.slug)}`;
 
   document.body.appendChild(t); setTimeout(() => t.remove(), 9000);
 }
@@ -322,7 +322,7 @@ document.addEventListener('pointerdown', ev => {
 async function pillStop(P) {
   if (!P.running || P.stopping) return;
   P.stopping = true; pillButtons(P);
-  try { await post(`/v2/bots/${encodeURIComponent(P.slug)}/stop`, P.running.attempt_id ? {attempt_id: P.running.attempt_id} : {}); }
+  try { await post(`/v2/bots/${encodeURIComponent(P.slug)}/stop`, P.running.run_id ? {run_id: P.running.run_id} : {}); }
   catch (e) { P.stopping = false; pillButtons(P); toast(`Not stopped: ${e.message}`, true); }
 }
 // "when i paste an image into a box, can we show a clickable preview of it?"

@@ -65,9 +65,9 @@ def _cases():
 
 
 def _librarian(c):
-    c.execute("INSERT OR IGNORE INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-              "VALUES('librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-    c.execute("INSERT OR IGNORE INTO bot_config(bot,config_json,operator) VALUES('librarian','{}','ana')")
+    c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
+              "VALUES('librarian','librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
+    c.execute("INSERT OR IGNORE INTO bot_config(bot,config,owner_id) VALUES('librarian','{}','ana')")
 
 
 @pytest.fixture
@@ -133,7 +133,7 @@ def test_librarian_docs_and_messages_change_only_ticos_terms_through_writes_upgr
     for path, _, want in cases:
         message = shown[made[path.name]["message"]]
         assert message["body"] == want, path.name
-        assert message["from_actor_name"] == "Librarian" and message["to_actor_name"] == "Ana Example", path.name
+        assert message["sender_name"] == "Librarian" and message["recipient_name"] == "Ana Example", path.name
 
 
 def _repair_markers(api):
@@ -154,17 +154,17 @@ def test_upgrade_repairs_fix_legacy_librarian_text_once_and_leave_a_persons_text
         for path, original, want in cases:
             # An older Librarian cache, written before its words were repaired (librarian_fix33).
             doc_id = legacy(path.stem, original, "_librarian/old-" + path.name)
-            c.execute("UPDATE docs SET created_by='bot:librarian',updated_by='bot:librarian' WHERE id=?", (doc_id,))
+            c.execute("UPDATE docs SET created_by_id='bot:librarian',updated_by_id='bot:librarian' WHERE id=?", (doc_id,))
             rows[doc_id] = (path.name, "unrepaired", want, 1 if want == original else 2)
             # The same, last touched by Tico's keeper (a title fix): only librarian_wording35 picks it up.
             doc_id = legacy(path.stem, original, "_librarian/kept-by-keeper-" + path.name)
-            c.execute("UPDATE docs SET created_by='bot:librarian',updated_by='keeper' WHERE id=?", (doc_id,))
+            c.execute("UPDATE docs SET created_by_id='bot:librarian',updated_by_id='keeper' WHERE id=?", (doc_id,))
             rows[doc_id] = (path.name, "unrepaired, keeper", want, 1 if want == original else 2)
             # A doc the 0.2.35 repair broke (company -> team, machine -> Computer): redone from version 1
             # (librarian_wording36).
             doc_id = legacy(path.stem, original, "_librarian/broken-" + path.name)
             broken = original.replace("company", "team").replace("machine", "Computer") + "\nteam Computer"
-            c.execute("UPDATE docs SET body=?,version=2,created_by='bot:librarian',updated_by='keeper' WHERE id=?",
+            c.execute("UPDATE docs SET body=?,version=2,created_by_id='bot:librarian',updated_by_id='keeper' WHERE id=?",
                       (broken, doc_id))
             store.snapshot(c, store.get_row(c, doc_id), H.KEEPER, "Updated generated Tico wording")
             rows[doc_id] = (path.name, "broken", want, 3)
@@ -201,7 +201,7 @@ def test_upgrade_repairs_fix_legacy_librarian_text_once_and_leave_a_persons_text
         store = docs.Docs(None, None, None, None)
         for path, original, want in cases:
             doc_id = store.insert(c, "human:ana", path.stem, original, "_librarian/fix33-" + path.name)["id"]
-            c.execute("UPDATE docs SET created_by='bot:librarian',updated_by='bot:librarian' WHERE id=?", (doc_id,))
+            c.execute("UPDATE docs SET created_by_id='bot:librarian',updated_by_id='bot:librarian' WHERE id=?", (doc_id,))
             rows[doc_id] = (path.name, "fix33 only", want, 1 if want == original else 2)
         c.execute("DELETE FROM registry_metadata WHERE key='librarian_fix33'")
     api.app.state.store.initialize(seed_market=False)
@@ -260,8 +260,8 @@ def test_display_names_add_names_beside_ids_and_keep_every_body_as_written(named
             assert message["body"] == sent[message["id"]], url
             assert "body_raw" not in message, url
             if named_door:
-                assert message["from_actor_name"] == "Operations", url
-                assert message["to_actor_name"] == "Ana Example", url
+                assert message["sender_name"] == "Operations", url
+                assert message["recipient_name"] == "Ana Example", url
         shown = next(m for m in inbox["notices"] if m["id"] == notice["id"])
         if named_door:
             assert inbox["actors"] == {"bot:ops": "Operations", "human:ana": "Ana Example"}, url

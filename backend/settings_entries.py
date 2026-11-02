@@ -338,6 +338,8 @@ ENTRIES = TEAM_RULES + [
       card=_card("inbound", "set-inbound")),
     S("inbound.inbox", "Inbox", INBOUND, "anyone", "direct", "PATCH", "inbound/inboxes/{id}", value="json",
       card=_card("inbound", "set-inbound")),
+    S("inbound.inbox.audience", "Inbox readers", INBOUND, "admin", "confirm", "PUT", "inbound/inboxes/{id}/audience",
+      value="json", card=_card("inbound", "set-inbound"), words="audience readers group who reads"),
     S("inbound.inbox.release", "Release an inbox", INBOUND, "admin", "confirm", "POST", "inbound/inboxes/{id}/release",
       value="json", card=_card("inbound", "set-inbound")),
     S("inbound.phone_request", "Ask for a phone number", INBOUND, "admin", "confirm", "POST",

@@ -29,7 +29,7 @@ def test_reopened_quiet_task_reuses_its_queued_job_once(api, sweep):
     machine = task_bot(api, lanes=True)
     task = reopened(api, sweep)
     with api.app.state.store.read() as c:
-        [job] = c.execute("SELECT id FROM jobs WHERE bot='ops' AND state='queued'").fetchall()
+        [job] = c.execute("SELECT id FROM jobs WHERE bot_id='ops' AND state='queued'").fetchall()
         assert H.task(c, task['id'])['next_run'] == 1  # also covers queues stranded before this fix
     assert reason(api, machine) is None
     attempt = post(api, 'jobs/claim', {'next_run': True}, machine['token'])['attempt']
@@ -38,7 +38,7 @@ def test_reopened_quiet_task_reuses_its_queued_job_once(api, sweep):
     assert attempt['next_run'] == []
     assert post(api, 'jobs/claim', {}, machine['token'])['attempt'] is None
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops'").fetchone()[0] == 1
         assert H.task(c, task['id'])['carried_by'] is None
 
 
@@ -72,7 +72,7 @@ def test_reopened_job_keeps_real_gates_and_health_reports_them(api, gate):
     assert reason(api, machine) == expected
     assert post(api, 'jobs/claim', {}, machine['token'])['attempt'] is None
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued'",
+        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'",
                   (H.shift(H.now(), hours=-40),))
         rows = [r for r in health._waiting(c, {machine['runner_id']}, api.app.state.store.settings)[2]
                 if r['bot'] == 'ops']

@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
+from .. import hubdb as H
 from ..records import reads as RR
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
 from .tab_purchasing import estimate as estimate, estimates as estimates, order as order, orders as orders
@@ -264,7 +265,10 @@ class _Filter:
 
 def _org_filter(s: _Seen, teams: Iterable[str], teammates: Iterable[str], who: str, unattributed: bool) -> _Filter:
     picked_teams = tuple(dict.fromkeys(t for t in teams if t))
-    picked_mates = tuple(dict.fromkeys(m for m in teammates if m))
+    mates: list[str] = []
+    for m in teammates:
+        mates.append(str(H.resolve_actor(s.ctx.c, m) or m) if m and m.startswith("bot:") else m)
+    picked_mates = tuple(dict.fromkeys(m for m in mates if m))
     if who not in WHO:
         raise invalid(f"who is {'|'.join(WHO)}")
     for t in picked_teams:
@@ -618,6 +622,7 @@ def _grouped(s: _Seen, a: date, z: date, by: str, account_id: str | None, team: 
     if below is not None:
         cells = [x for x in cells if x.team in below]
     if teammate:
+        teammate = str(H.resolve_actor(s.ctx.c, teammate) or teammate) if teammate.startswith("bot:") else teammate
         cells = [x for x in cells if x.teammate == teammate]
     department_wide = not teammate and (not team or s.ctx.org.department(team) == team)
     narrow = by not in ("department", "account") or not department_wide
@@ -2005,11 +2010,11 @@ def action_for(c: sqlite3.Connection, viewer: str, action_id: str, at: str | Non
         return None
     ctx = load(c, at)
     try:
-        payload = cast(Mapping[str, object], json.loads(str(row["payload_json"] or "{}")))
+        payload = cast(Mapping[str, object], json.loads(str(row["payload"] or "{}")))
     except ValueError:
         payload = dict[str, object]()
     try:
-        result = cast(Mapping[str, Any], json.loads(str(row["result_json"] or "{}")))
+        result = cast(Mapping[str, Any], json.loads(str(row["result"] or "{}")))
     except ValueError:
         result = dict[str, Any]()
     covers = True if ctx.view(viewer).everything else _covers(ctx, viewer, payload)
@@ -2022,3 +2027,49 @@ def action_for(c: sqlite3.Connection, viewer: str, action_id: str, at: str | Non
             "code": str(row["code"] or ""), "reason": named_reason(ctx, viewer, str(row["reason"] or ""), result, decider=approver) if shown else "",
             "approval_id": str(row["approval_id"] or "") or None, "approver": str(row["approval_to"] or "") or None,
             "rule": str(row["rule_id"] or "")}
+
+
+# ------------------------------------------------------------------------------------------- the Company page's reads
+# What the Company page's stats read from the books. The page's own check decides what a reader may see; these only say
+# what the books hold, so none of them applies a viewer's view.
+
+@dataclass(frozen=True)
+class BookView:
+    viewer: str                        # the owner who reads the books for the page ("" when there is none)
+    accounts: Mapping[str, Account]
+    private: frozenset[str]            # private lines: never on a page, whatever the grid says
+    currency: str
+    exponent: int                      # minor units of the currency
+
+
+def book_view(c: sqlite3.Connection, at: str) -> BookView:
+    """The books as a Company page reads them at `at`. Raises FinanceError when Finance isn't set up."""
+    ctx = load(c, at)
+    return BookView(viewer=_context.owner(c), accounts=ctx.accounts, private=frozenset(SA.private_lines(c)),
+                    currency=ctx.book.base_currency, exponent=money.EXPONENTS.get(ctx.book.base_currency, 2))
+
+
+def private_line_ids(c: sqlite3.Connection) -> frozenset[str]:
+    return frozenset(SA.private_lines(c))
+
+
+def account_name_and_type(c: sqlite3.Connection, account_id: str) -> dict[str, str] | None:
+    row = c.execute("SELECT name, type FROM fin_accounts WHERE id=?", (account_id,)).fetchone()
+    return {"name": str(row["name"]), "type": str(row["type"])} if row else None
+
+
+def income_and_expense_accounts(c: sqlite3.Connection, limit: int) -> list[dict[str, str]]:
+    """Active income and expense accounts in chart order: the lines a Company page can show."""
+    return [{"id": str(r["id"]), "name": str(r["name"])} for r in c.execute(
+        "SELECT id, name FROM fin_accounts WHERE type IN ('income','expense') AND active=1 ORDER BY code, id LIMIT ?",
+        (limit,))]
+
+
+def descendant_ids(accounts: Mapping[str, Account], account_id: str) -> set[str]:
+    """`account_id` and every account below it in the chart."""
+    return descendants(accounts, account_id)
+
+
+def pnl_section_of(accounts: Mapping[str, Account], account_id: str) -> str:
+    """Where a P&L account sits: revenue, cost of revenue, operating expenses, or other income and expense."""
+    return pnl_section(accounts, accounts[account_id])

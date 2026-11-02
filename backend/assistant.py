@@ -23,7 +23,7 @@ import secrets
 import unicodedata
 import uuid
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import httpx
 from fastapi import Request
@@ -44,8 +44,8 @@ DOCS_DIR = Path(__file__).resolve().parents[1] / "docs"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS assistant_actions (
   id TEXT PRIMARY KEY, owner TEXT NOT NULL, conversation_id TEXT, summary TEXT NOT NULL,
-  method TEXT NOT NULL, path TEXT NOT NULL, body_json TEXT NOT NULL DEFAULT '{}',
-  status TEXT NOT NULL, proposed_via TEXT, created TEXT NOT NULL, decided_at TEXT, result_json TEXT);
+  method TEXT NOT NULL, path TEXT NOT NULL, body TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL, proposed_via TEXT, created_at TEXT NOT NULL, decided_at TEXT, result TEXT);
 CREATE INDEX IF NOT EXISTS assistant_actions_owner ON assistant_actions(owner, status);
 """
 
@@ -53,7 +53,7 @@ CREATE INDEX IF NOT EXISTS assistant_actions_owner ON assistant_actions(owner, s
 def ensure_schema(c):
     c.executescript(SCHEMA)
     have = {r[1] for r in c.execute("PRAGMA table_info(assistant_actions)")}
-    for column in ("confirm_hash", "running_since", "description", "diff_json", "proposer"):
+    for column in ("confirm_hash", "running_since", "description", "diff", "proposer"):
         if column not in have:
             c.execute("ALTER TABLE assistant_actions ADD COLUMN %s TEXT" % column)
     if not any(r[1] == "via" for r in c.execute("PRAGMA table_info(task_events)")):
@@ -108,7 +108,8 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     if direct and to_bot:
         chatting = re.fullmatch(r"/api/v2/chat/([^/]+)", path)
         if (chatting and (settings is None
-                          or chatting.group(1) not in (settings.assistant_bot, strategy_bot.SLUG))) or (
+                          or unquote(chatting.group(1)).removeprefix("bot:")
+                          not in (settings.assistant_bot, strategy_bot.SLUG))) or (
                 path == "/api/v2/messages" and to_bot(fields.get("to"))):
             return True
     commenting = re.fullmatch(r"/api/v2/tasks/([^/]+)/comments", path)
@@ -150,7 +151,7 @@ def decides(c, actor):
     """Whether this person's own Assistant may decide approvals addressed to them: their own switch in Settings, which
     only they turn on, and the team's rule (backend/team_rules.py), on unless the owner turned it off."""
     from . import team_rules
-    row = c.execute("SELECT value_json FROM preferences WHERE actor=? AND key=?", (actor, DECIDES_KEY)).fetchone()
+    row = c.execute("SELECT value FROM preferences WHERE actor=? AND key=?", (actor, DECIDES_KEY)).fetchone()
     on = bool(row) and json.loads(row[0]) is True
     allowed = team_rules.load(c)["assistant_approvals"]
     return {"decides_approvals": on, "team_allows": allowed, "active": on and allowed}
@@ -269,13 +270,24 @@ def require_addressed(c, who, path, body):
     for s in steps or []:
         target = str(s.get("path") or "") if isinstance(s, dict) else ""
         if (m := _DECIDING.fullmatch(target)):
-            message_id = (H.approval(c, m.group(1)) or {}).get("message_id")
+            row = H.approval(c, m.group(1)) or {}
+            refuse_own_click(row)
+            message_id = row.get("message_id")
         elif (m := re.fullmatch(r"/api/v2/messages/([^/]+)/answer", target)):
             message_id = m.group(1)
         else:
             continue
-        if (H.message(c, message_id) or {}).get("to_actor") != who.actor:
+        if (H.message(c, message_id) or {}).get("recipient_id") != who.actor:
             raise Problem("forbidden", "That approval or question is not addressed to you", 403)
+
+
+def refuse_own_click(row):
+    """A Company page edition or stats board is decided only by the person's own click in Tico, either way, whatever
+    "My assistant can decide approvals for me" says: not on a card, not on their words (backend/company_page/editions.py)."""
+    from .company_page.editions import own_click_approval
+    if own_click_approval(row.get("payload")):
+        raise Problem("approve_own_click", "What the Company page sends outside is decided only by the person's own "
+                      "click in Tico, so leave it out and tell them it is waiting", 403)
 
 
 def require_named_approval(c, who, ref):
@@ -380,25 +392,25 @@ def approval_words(c, who, cited, assistant_bot, approval):
     after it: "wait, no" takes it back. Their own sentence, words in a file, a page, a bot's message or the read-back
     alone never approve, and the Assistant never approves what it asked for itself."""
     bot = "bot:" + assistant_bot
-    if (H.approval(c, approval) or {}).get("requested_by") == bot:
+    if (H.approval(c, approval) or {}).get("requested_by_id") == bot:
         raise Problem("own_request", "You asked for this approval yourself, so it stays the person's click: propose it "
                       "on a card (`hub assistant propose`)", 403)
     msg = H.message(c, cited) or {}
     words = str(msg.get("body") or "").strip()
-    room, at = msg.get("conversation_id"), str(msg.get("created") or "")
+    room, at = msg.get("conversation_id"), str(msg.get("created_at") or "")
     back = None
-    later = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created>? AND id<>? "
+    later = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>? AND id<>? "
                       "AND deleted_at IS NULL LIMIT 1", (room, who.actor, at, cited)).fetchone()
     if len(words) <= 60 and AFFIRM.fullmatch(words) and not later:
-        before = c.execute("SELECT created FROM messages WHERE conversation_id=? AND from_actor=? AND created<? "
-                           "AND id<>? AND deleted_at IS NULL ORDER BY created DESC LIMIT 1",
+        before = c.execute("SELECT created_at FROM messages WHERE conversation_id=? AND sender_id=? AND created_at<? "
+                           "AND id<>? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
                            (room, who.actor, at, cited)).fetchone()
-        last = c.execute("SELECT m.id, m.from_actor, m.body, e.detail_json FROM messages m LEFT JOIN events e "
-                         "ON e.target=m.id AND e.action=? WHERE m.conversation_id=? AND m.from_actor<>? AND m.created>=? AND m.created<=? "
-                         "AND m.id<>? AND m.deleted_at IS NULL ORDER BY m.created DESC, m.rowid DESC LIMIT 1",
-                         (READ_BACK, room, who.actor, before["created"] if before else "", at, cited)).fetchone()
-        if last and last["from_actor"] == bot and last["detail_json"]:
-            back = {"body": last["body"], "approves": (json.loads(last["detail_json"]) or {}).get("approves") or []}
+        last = c.execute("SELECT m.id, m.sender_id, m.body, e.detail FROM messages m LEFT JOIN events e "
+                         "ON e.target=m.id AND e.action=? WHERE m.conversation_id=? AND m.sender_id<>? AND m.created_at>=? AND m.created_at<=? "
+                         "AND m.id<>? AND m.deleted_at IS NULL ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1",
+                         (READ_BACK, room, who.actor, before["created_at"] if before else "", at, cited)).fetchone()
+        if last and last["sender_id"] == bot and last["detail"]:
+            back = {"body": last["body"], "approves": (json.loads(last["detail"]) or {}).get("approves") or []}
     if not back or approval not in back["approves"]:
         raise Problem("approve_not_asked", "Approving needs the person's yes to your read-back: post the list with "
                       "`hub approval read-back <id>...` as your reply and end the turn; their plain yes to it approves "
@@ -422,12 +434,12 @@ def instruction(c, who, ref):
     room = H.conversation(c, msg["conversation_id"]) if msg else None
     refs = (msg or {}).get("refs") or {}
     # Only the person's own Assistant room: the owner's earlier Strategy Bot chat (`rooms.STRATEGY_ROOM`) is history.
-    if (not msg or msg["from_actor"] != who.actor or msg["kind"] != "say" or not refs.get("assistant")
+    if (not msg or msg["sender_id"] != who.actor or msg["kind"] != "say" or not refs.get("assistant")
             or refs.get("via") or not room or room.get("scope") != rooms.PERSONAL
-            or room.get("owner_actor") != who.actor or room.get("room_key") != rooms.ASSISTANT_ROOM
+            or room.get("owner_id") != who.actor or room.get("room_key") != rooms.ASSISTANT_ROOM
             or room.get("closed_at")):
         refuse("Cite a message the person sent you in their own Assistant chat")
-    if str(msg["created"]) < H.shift(H.now(), seconds=-INSTRUCTION_TTL_S):
+    if str(msg["created_at"]) < H.shift(H.now(), seconds=-INSTRUCTION_TTL_S):
         refuse(f"That message is more than {INSTRUCTION_TTL_S // 60} minutes old; ask the person again")
     return {"for": who.actor, "cited": msg["id"], "run": "asked"}
 
@@ -445,7 +457,7 @@ def require_on_task(c, auth, who, path):
         return          # the route answers for a task that is not there
     auth.task_row(c, who, row)
     from . import task_roles
-    people = {row["owner"], row["requester"]} | {a for actors in task_roles.roles_of(c, row["id"]).values()
+    people = {row["owner_id"], row["requester_id"]} | {a for actors in task_roles.roles_of(c, row["id"]).values()
                                                  for a in actors}
     if who.actor not in people:
         raise Problem("on_behalf_of", "That task is another person's: an Assistant acts only on the person's own "
@@ -481,9 +493,11 @@ _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     ("POST", r"/api/v2/access/owner"), ("POST", r"/api/v2/enrollments"), ("POST", r"/api/v2/seats/[^/]+/hire"),
     # A webhook moved to another destination while it holds secret headers (app.py `destination_card`).
     ("POST", r"/api/v2/webhooks/[^/]+/update"),
+    # Who reads an inbox (backend/inbound.py `set_audience`): owner and admins, on their own click.
+    ("PUT", r"/api/v2/inbound/inboxes/[^/]+/audience"),
 )]
 # An inbox is an email address in its path (`inboxes/ana@acme.example`): the one `@` a route may carry.
-_SHAPE = re.compile(r"/api/v2/(?:inboxes/[A-Za-z0-9_.+\-]+@[A-Za-z0-9.\-]+|[A-Za-z0-9_.:\-/]+)")
+_SHAPE = re.compile(r"/api/v2/(?:inboxes/[A-Za-z0-9_.+\-]+@[A-Za-z0-9.\-]+|[A-Za-z0-9_.:+\-/]+)")
 
 
 def normalize_path(path):
@@ -573,15 +587,15 @@ def groups(c, steps):
         if (m := _DECIDING.fullmatch(path)):
             row = H.approval(c, m.group(1)) or {}
             verb = "Approve" if body.get("decision") == "approved" else "Decline"
-            noun, created = f"{row.get('kind') or ''} approval".strip(), row.get("created")
+            noun, created = f"{row.get('kind') or ''} approval".strip(), row.get("created_at")
         elif (m := re.fullmatch(r"/api/v2/messages/([^/]+)/answer", path)):
-            verb, noun, created = "Answer", "bot question", (H.message(c, m.group(1)) or {}).get("created")
+            verb, noun, created = "Answer", "bot question", (H.message(c, m.group(1)) or {}).get("created_at")
         else:
             m = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(comments|links))?", path)
             sub = m.group(2) if m else None
             verb = ({"comments": "Comment on", "links": "Link"}.get(sub) or ("Close" if body.get("close") else None)
                     or {"done": "Mark done", "declined": "Decline"}.get(body.get("status"), "Change"))
-            noun, created = "task", (H.task(c, m.group(1)) or {}).get("created") if m else None
+            noun, created = "task", (H.task(c, m.group(1)) or {}).get("created_at") if m else None
         days = days_old(created)
         band = next(label for limit, label in AGE_BANDS if limit is None or days < limit)
         out.setdefault((verb, noun, band), []).append(str(body.get("note") or "").strip())
@@ -597,7 +611,8 @@ def describe(c, method, path, body):
     """A one-line, server-derived description of what confirming would do (never the bot's words), and
     for a task update the exact field changes."""
     def bot(slug):
-        return (H.bot(c, slug) or {}).get("display_name") or slug
+        row = H.bot(c, slug) or {}
+        return row.get("display_name") or row.get("slug") or slug
 
     def who(actor):
         a = str(actor or "")
@@ -647,14 +662,14 @@ def describe(c, method, path, body):
         # so a long or crafted field (padding, "card; amount: 9") can't push a later one out or pose as it.
         payload = row.get("payload") or {}
         detail = "; ".join(f"{field_value(k, 40)}: “{field_value(payload[k])}”" for k in approval_fields(payload))
-        return (f"{verb} the {row['kind']} approval requested by {who(row['requested_by'])}"
-                + (f" ({detail})" if detail else "") + f", {age(row['created'])}"
+        return (f"{verb} the {row['kind']} approval requested by {who(row['requested_by_id'])}"
+                + (f" ({detail})" if detail else "") + f", {age(row['created_at'])}"
                 + (f"; reason: {preview(body['note'], 120)}" if body.get("note") else ""))
 
     def answer_line(mid):
         asked = H.message(c, mid) or {}
-        return (f"Answer {who(asked.get('from_actor'))}'s question “{preview(asked.get('body'), 80)}”"
-                + (f", {age(asked['created'])}" if asked.get("created") else "") + f": {preview(body.get('text'), 120)}")
+        return (f"Answer {who(asked.get('sender_id'))}'s question “{preview(asked.get('body'), 80)}”"
+                + (f", {age(asked['created_at'])}" if asked.get("created_at") else "") + f": {preview(body.get('text'), 120)}")
     diff = []
     m = re.fullmatch(r"/api/v2/tasks/([^/]+)", path)
     if m and (t := H.task(c, m.group(1))):
@@ -785,7 +800,7 @@ def batch_steps(body):
 def covers(row, method, path):
     """Whether a confirmed proposal covers this request: its own operation, or one step of a bulk card."""
     if row["path"] == BATCH_PATH:
-        steps = json.loads(row["body_json"] or "{}").get("actions") or []
+        steps = json.loads(row["body"] or "{}").get("actions") or []
         return any(s.get("method") == method and s.get("path") == path for s in steps)
     return row["method"] == method and row["path"] == path
 
@@ -871,7 +886,7 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
     if who.via == "assistant" and not who.confirmed and approvals_in(path, body):
         require_named_approval(c, who, asked)
     same = c.execute("SELECT * FROM assistant_actions WHERE owner=? AND status='pending' AND method=? AND path=? "
-                     "AND body_json=? AND proposer=?", (who.actor, method, path, json.dumps(body), proposer)).fetchone()
+                     "AND body=? AND proposer=?", (who.actor, method, path, json.dumps(body), proposer)).fetchone()
     if same:
         # The same card again is the same card: a retried command never leaves two to click.
         return {"action": action_view(dict(same), c), "message_id": None, "repeated": True}
@@ -896,12 +911,12 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
     if shown is not None:
         diff = shown
     row = {"id": H.new_id(), "owner": who.actor, "conversation_id": room["id"], "summary": summary,
-           "method": method, "path": path, "body_json": json.dumps(body),
-           "status": "pending", "proposed_via": proposer, "created": H.now(),
-           "description": what, "diff_json": json.dumps(diff, default=str), "proposer": proposer}
-    c.execute("INSERT INTO assistant_actions(id,owner,conversation_id,summary,method,path,body_json,status,"
-              "proposed_via,created,description,diff_json,proposer) VALUES(:id,:owner,:conversation_id,:summary,"
-              ":method,:path,:body_json,:status,:proposed_via,:created,:description,:diff_json,:proposer)", row)
+           "method": method, "path": path, "body": json.dumps(body),
+           "status": "pending", "proposed_via": proposer, "created_at": H.now(),
+           "description": what, "diff": json.dumps(diff, default=str), "proposer": proposer}
+    c.execute("INSERT INTO assistant_actions(id,owner,conversation_id,summary,method,path,body,status,"
+              "proposed_via,created_at,description,diff,proposer) VALUES(:id,:owner,:conversation_id,:summary,"
+              ":method,:path,:body,:status,:proposed_via,:created_at,:description,:diff,:proposer)", row)
     bot = room_bot(settings, room) if proposer == "assistant" else proposer
     card = H._write_message(c, "bot:" + bot, who.actor, "Needs your OK: " + summary, room, "say",
                             {"assistant": True, "action": row["id"]}, None, None, delivered_at=H.now())
@@ -918,8 +933,8 @@ def room_bot(settings, room):
 
 
 def find_room(c, actor):
-    row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND owner_actor=? AND room_key=? "
-                    "AND closed_at IS NULL ORDER BY created LIMIT 1", (actor, rooms.ASSISTANT_ROOM)).fetchone()
+    row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND owner_id=? AND room_key=? "
+                    "AND closed_at IS NULL ORDER BY created_at LIMIT 1", (actor, rooms.ASSISTANT_ROOM)).fetchone()
     return H.conversation(c, row["id"]) if row else None
 
 
@@ -928,7 +943,7 @@ def own_room(c, who, conversation_id):
     if not conversation_id or who.role not in ("owner", "human") or who.via:
         return False
     room = H.conversation(c, conversation_id)
-    return bool(room and room.get("scope") == rooms.PERSONAL and room.get("owner_actor") == who.actor
+    return bool(room and room.get("scope") == rooms.PERSONAL and room.get("owner_id") == who.actor
                 and room.get("room_key") == rooms.ASSISTANT_ROOM and not room.get("closed_at"))
 
 
@@ -967,21 +982,21 @@ def chat_name(c, settings, bot):
 def find_strategy_room(c, actor=None):
     """The owner's earlier Strategy Bot chat: the owner seat's one room. With `actor`, only while it is theirs."""
     row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND room_key=? AND closed_at IS NULL "
-                    "ORDER BY created LIMIT 1", (rooms.STRATEGY_ROOM,)).fetchone()
+                    "ORDER BY created_at LIMIT 1", (rooms.STRATEGY_ROOM,)).fetchone()
     room = H.conversation(c, row["id"]) if row else None
-    return room if room and (actor is None or room.get("owner_actor") == actor) else None
+    return room if room and (actor is None or room.get("owner_id") == actor) else None
 
 
 def move_strategy_room(c, actor, to):
     """The earlier Strategy Bot chat goes with the owner seat to `to`, the new owner, as history. A card still in it
     is withdrawn: it ran as the old owner, who is no longer the owner."""
     room = find_strategy_room(c)
-    if not room or room.get("owner_actor") == to:
+    if not room or room.get("owner_id") == to:
         return room
-    before = room.get("owner_actor")
-    c.execute("UPDATE conversations SET owner_actor=?, participants_json=? WHERE id=?",
+    before = room.get("owner_id")
+    c.execute("UPDATE conversations SET owner_id=?, participants=? WHERE id=?",
               (to, json.dumps([to, "bot:" + strategy_bot.SLUG]), room["id"]))
-    c.execute("UPDATE assistant_actions SET status='cancelled', decided_at=? WHERE conversation_id=? AND owner=? "
+    c.execute("UPDATE assistant_actions SET status='canceled', decided_at=? WHERE conversation_id=? AND owner=? "
               "AND status='pending'", (H.now(), room["id"], before))
     H.event(c, actor, "strategy_bot.chat_moved", room["id"], {"from": before, "to": to})
     return H.conversation(c, room["id"])
@@ -996,7 +1011,7 @@ def migrate(c, settings):
     moved = 0
     for row in c.execute("SELECT a.id, a.owner, a.summary FROM assistant_actions a JOIN conversations v "
                          "ON v.id=a.conversation_id WHERE a.status='pending' AND v.scope='personal' AND v.room_key=? "
-                         "AND a.owner=v.owner_actor ORDER BY a.created", (rooms.STRATEGY_ROOM,)).fetchall():
+                         "AND a.owner=v.owner_id ORDER BY a.created_at", (rooms.STRATEGY_ROOM,)).fetchall():
         room = ensure_room(c, row["owner"], settings.assistant_bot)
         c.execute("UPDATE assistant_actions SET conversation_id=? WHERE id=?", (room["id"], row["id"]))
         H._write_message(c, "bot:" + settings.assistant_bot, row["owner"], "Needs your OK: " + row["summary"], room,
@@ -1038,13 +1053,13 @@ OLD_REPO_SUMMARY = re.compile(r"Set .+'s repository access to (own|all|chosen)\b
 
 
 def action_view(row, c=None):
-    result = json.loads(row["result_json"]) if row.get("result_json") else None
+    result = json.loads(row["result"]) if row.get("result") else None
     view = {"id": row["id"], "owner": row["owner"], "conversation_id": row["conversation_id"],
             "summary": row["summary"], "method": row["method"], "path": row["path"],
-            "body": json.loads(row["body_json"] or "{}"), "status": row["status"],
+            "body": json.loads(row["body"] or "{}"), "status": row["status"],
             "proposed_via": row["proposed_via"], "proposer": row.get("proposer") or row["proposed_via"],
-            "created": row["created"], "decided_at": row.get("decided_at"),
-            "description": row.get("description") or "", "diff": json.loads(row.get("diff_json") or "[]"),
+            "created_at": row["created_at"], "decided_at": row.get("decided_at"),
+            "description": row.get("description") or "", "diff": json.loads(row.get("diff") or "[]"),
             "result": result}
     if c is not None and view["proposer"] == "assistant" and view["conversation_id"]:
         # A card the Strategy Bot put in the owner's earlier chat with it says it is the Strategy Bot's, by its name.
@@ -1056,7 +1071,7 @@ def action_view(row, c=None):
         # which reads the mode word as English, only under the card's Details.
         if not view["description"] or re.match(r"(GET|POST|PUT|PATCH|DELETE) /", view["description"]):
             from .repositories import plain_request
-            view["description"] = plain_request((H.bot(c, m.group(1)) or {}).get("display_name") or m.group(1), view["body"])
+            view["description"] = plain_request((H.resolve_bot(c, m.group(1)) or {}).get("display_name") or m.group(1), view["body"])
         if OLD_REPO_SUMMARY.match(view["summary"] or ""):
             view["original_summary"], view["summary"] = view["summary"], ""
     return view
@@ -1150,7 +1165,7 @@ def _terms(arg):
 
 
 # Cards whose answer carries a one-time value for the person who taps: the route and the fields shown to them.
-SHOWN_ONCE = {"/api/v2/enrollments": ("code", "expires", "operator")}
+SHOWN_ONCE = {"/api/v2/enrollments": ("code", "expires_at", "operator")}
 
 
 def shown_once(response, fields):
@@ -1239,7 +1254,7 @@ async def search_all(api, arg, bots, limit=4):
     async def tasks():
         data = await api.get("tasks", limit=500) or {}
         rows = [t for t in data.get("tasks") or [] if matches(t.get("title"), t.get("id"))]
-        rows.sort(key=lambda t: (t.get("status") in ("done", "closed", "declined"), t.get("updated") or ""), reverse=False)
+        rows.sort(key=lambda t: (t.get("status") in ("done", "closed", "declined"), t.get("updated_at") or ""), reverse=False)
         return [{"title": t["title"], "href": _task_href(t), "note": t.get("status")} for t in rows[:limit]]
 
     async def docs():
@@ -1249,7 +1264,7 @@ async def search_all(api, arg, bots, limit=4):
 
     async def meetings():
         data = await api.get("meetings/search", q=q, limit=limit) or {}
-        return [{"title": m.get("title"), "href": m.get("url") or "#/meetings", "note": (m.get("started") or m.get("created") or "")[:10]}
+        return [{"title": m.get("title"), "href": m.get("url") or "#/meetings", "note": (m.get("started_at") or m.get("created_at") or "")[:10]}
                 for m in (data.get("results") or [])[:limit]]
 
     async def org():
@@ -1269,12 +1284,12 @@ async def search_all(api, arg, bots, limit=4):
         found = []
 
         async def one(bot):
-            data = await api.get(f"bots/{bot['slug']}/files", limit=50) or {}
+            data = await api.get(f"bots/{bot['id']}/files", limit=50) or {}
             for f in data.get("files") or []:
                 if matches(f.get("title"), f.get("name")):
                     op = f.get("open") or {}
                     href = op.get("url") if op.get("type") == "external" and str(op.get("url", "")).startswith("https://") \
-                        else "#/bot/" + quote(bot["slug"], safe="")
+                        else "#/bot/" + quote(bot["id"], safe="")
                     found.append({"title": f.get("title") or f.get("name"), "href": href, "note": bot["name"]})
         await asyncio.gather(*(one(b) for b in bots[:25]))
         return found[:limit]
@@ -1347,17 +1362,17 @@ async def fast_bot_today(api, who, bots, slug):
     if not bot:
         return None, []
     since = H.shift(H.now(), hours=-24)
-    updates = await api.get("updates", bot=slug, limit=10) or {}
-    recent = [u for u in updates.get("updates") or [] if str(u.get("created") or "") >= since]
-    tasks = await api.get("tasks", owner=slug, limit=100) or {}
-    touched = [t for t in tasks.get("tasks") or [] if str(t.get("updated") or "") >= since]
+    updates = await api.get("updates", bot=bot["id"], limit=10) or {}
+    recent = [u for u in updates.get("updates") or [] if str(u.get("created_at") or "") >= since]
+    tasks = await api.get("tasks", owner=bot["id"], limit=100) or {}
+    touched = [t for t in tasks.get("tasks") or [] if str(t.get("updated_at") or "") >= since]
     lines, links = [], []
     for u in recent[:3]:
         lines.append(f"- {u.get('kind', 'update').title()} update: {link(u.get('headline') or 'Update', '#/updates')}")
     for t in touched[:6]:
         lines.append(f"- {link(t['title'], _task_href(t))} ({t.get('status')})")
         links.append({"title": t["title"], "href": _task_href(t), "kind": "task"})
-    href = "#/bot/" + quote(slug, safe="")
+    href = "#/bot/" + quote(bot["id"], safe="")
     links.append({"title": bot["name"], "href": href, "kind": "bots"})
     if not lines:
         return f"{link(bot['name'], href)} has posted no update and touched no task in the last 24 hours.", links
@@ -1492,6 +1507,7 @@ async def fast_answer(api, who, bots, text):
 
 # ------------------------------------------------------------------ the routes
 def install(app, store, auth, mutate, onboarding):
+    from . import org_rule_check
     settings = store.settings
 
     def person(request):
@@ -1508,8 +1524,8 @@ def install(app, store, auth, mutate, onboarding):
 
     def bots_for(c, who):
         access = auth.bot_accesses(c, who)
-        return [{"slug": r["slug"], "name": r["display_name"] or r["slug"]} for r in H.bots(c)
-                if r["state"] not in ("archived",) and access.get(r["slug"], auth.FULL)["see"]]
+        return [{"id": r["id"], "slug": r["slug"], "name": r["display_name"] or r["slug"]} for r in H.bots(c)
+                if r["state"] not in ("archived",) and access.get(r["id"], auth.FULL)["see"]]
 
     def view(c, who, room):
         from .views import conversation_snapshot
@@ -1518,7 +1534,7 @@ def install(app, store, auth, mutate, onboarding):
         visuals.for_reader(app, settings, c, who, snap["messages"])
         ids = [m["refs"]["action"] for m in snap["messages"] if isinstance(m.get("refs"), dict) and m["refs"].get("action")]
         pending = [action_view(dict(r), c) for r in c.execute(
-            "SELECT * FROM assistant_actions WHERE owner=? AND status='pending' ORDER BY created", (who.actor,))]
+            "SELECT * FROM assistant_actions WHERE owner=? AND status='pending' ORDER BY created_at", (who.actor,))]
         info = availability(c, settings, who)
         earlier = earlier_chat(c, settings, who)
         return {**info, "room_id": room["id"] if room else None,
@@ -1552,14 +1568,53 @@ def install(app, store, auth, mutate, onboarding):
         auth.require_write(c, who, info["bot"])
         return info["bot"]
 
-    def post_message_sync(request, body, who, intent, reply, links, uploads=None):
+    def assistant_checks(who, bot, text):
+        """The org rule check of a person's message to their Assistant, outside the write, as `chat` checks one to a
+        bot: the chat is its place (`where:` rules), the bot its destination. Held, nothing is written (`assistant_say`).
+        None when no rule is in force, so nothing is read or called."""
+        if not text:
+            return None
+        with store.read() as c:
+            if not org_rule_check.in_force(c):
+                return None
+            room = find_room(c, who.actor)
+        room_id = (room or {}).get("id") or ""
+        return org_rule_check.preflight(store, app.state.judge, who, "assistant_message", text, ["bot:" + bot],
+                                        place=lambda c, author, recipients: org_rule_check.place_for(
+                                            c, author, recipients, room_id))
+
+    def assistant_say(c, who, bot, room, text, refs, rc, uploads=None, titles=(), fast=None):
+        """One person's message to their Assistant, as the route and Send anyway write it: the org rule check's verdict
+        first (held: nothing is written and the hold is the answer), then the message with its files, then the quick
+        answer when `fast` (said, intent, links) is given. `uploads` are the files' digests, sizes and names, kept
+        already; a replay carries them, so Send anyway attaches the same files."""
+        titles = list(titles or [])
+        gate = org_rule_check.apply(c, rc, text, {"text": text, "to": "bot:" + bot, "refs": refs,
+                                                  "uploads": uploads, "titles": titles})
+        if gate and gate.get("held"):
+            return org_rule_check.held_answer(c, who, gate, auth=auth)
+        message = H.say(c, who.actor, "bot:" + bot, org_rule_check.warned_text(gate, text) if gate else text,
+                        conversation_id=room["id"], kind="say", refs=refs)
+        if uploads is not None:
+            message = app.state.uploads.attach(c, who, bot, message, uploads, titles)
+        said, kind, links = fast or (None, None, [])
+        out = {"message": message, "reply": None, "fast": said is not None, "intent": kind,
+               **org_rule_check.answer(gate)}
+        if said is not None:
+            out["reply"] = H._write_message(c, "bot:" + bot, who.actor, said, room, "say",
+                                            {"assistant": True, "fast": True, "intent": kind, "links": links},
+                                            message["id"], None, delivered_at=H.now())
+            H.event(c, who.actor, "assistant.fast", message["id"], {"intent": kind})
+        return out
+
+    def post_message_sync(request, body, who, intent, reply, links, uploads=None, rc=None):
         def work(c):
             bot = chat_bot_for(c, who)
             room = chat_room(c, settings, who)
             said, kind, fast_links = reply, intent, links
             # The canned hello only opens a chat: a "hi" after anything the person said goes to the model, which knows
             # what came before, rather than repeating the same line.
-            if kind == "greeting" and c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? LIMIT 1",
+            if kind == "greeting" and c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? LIMIT 1",
                                                 (room["id"], who.actor)).fetchone():
                 said, kind, fast_links = None, None, []
             refs = {"assistant": True}
@@ -1570,20 +1625,22 @@ def install(app, store, auth, mutate, onboarding):
                 refs["page"] = {"path": page.path, "title": page.title}   # where they asked from (runner-rs prompt.rs)
             if said is not None:
                 refs["quiet"] = True
-            message = H.say(c, who.actor, "bot:" + bot, body.text, conversation_id=room["id"],
-                            kind="say", refs=refs)
-            if uploads is not None:
-                message = app.state.uploads.attach(c, who, bot, message, uploads, body.titles)
-            out = {"message": message, "reply": None, "fast": said is not None, "intent": kind}
-            if said is not None:
-                out["reply"] = H._write_message(c, "bot:" + bot, who.actor, said, room, "say",
-                                                {"assistant": True, "fast": True, "intent": kind, "links": fast_links},
-                                                message["id"], None, delivered_at=H.now())
-                H.event(c, who.actor, "assistant.fast", message["id"], {"intent": kind})
-            return out
+            return assistant_say(c, who, bot, room, body.text, refs, rc, uploads,
+                                 getattr(body, "titles", None) or [], fast=(said, kind, fast_links))
         if uploads is not None:
             return app.state.uploads.write(request, body, uploads, work)
         return mutate(request, body, work)
+
+    @org_rule_check.replayer("assistant_message")
+    def assistant_replay(c, who, hold, replay, ingest, gate=None):
+        """Send anyway's write: the person's message to their Assistant, as the person, with its files (kept already).
+        It is posted without a quick answer; its turn answers it."""
+        bot = chat_bot_for(c, who)
+        if "bot:" + bot != replay.get("to"):
+            raise Problem("changed", "Your " + settings.assistant_name + " changed since the message was held; send it "
+                          "again", 409)
+        return assistant_say(c, who, bot, chat_room(c, settings, who), replay["text"], replay.get("refs") or {},
+                             org_rule_check.decided(gate), replay.get("uploads"), replay.get("titles") or [])
 
     @app.post("/api/v2/assistant/messages")
     async def assistant_message(request: Request, body: M.AssistantMessage):
@@ -1595,10 +1652,12 @@ def install(app, store, auth, mutate, onboarding):
         info, bots = await asyncio.to_thread(read)
         if not info["available"]:
             raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
-        # A question from the Updates chat is about the updates its turn is handed, which the quick answers never read.
-        intent, reply, links = (None, None, []) if body.place == "updates" else \
-            await fast_answer(Internal(request), who, bots, body.text)
-        return await asyncio.to_thread(post_message_sync, request, body, who, intent, reply, links)
+        rc = await asyncio.to_thread(assistant_checks, who, info["bot"], body.text)
+        # A question from the Updates chat is about the updates its turn is handed, which the quick answers never
+        # read. A held message gets no quick answer: nothing of it is written, so nothing is answered.
+        intent, reply, links = (None, None, []) if body.place == "updates" or org_rule_check.holds(rc) \
+            else await fast_answer(Internal(request), who, bots, body.text)
+        return await asyncio.to_thread(post_message_sync, request, body, who, intent, reply, links, None, rc)
 
     # Files and pictures in a person's own Assistant chat (the Ask panel, the Assistant page), stored on the message like
     # any bot chat's, in their room's conversation. They skip the quick answers, which read words only.
@@ -1611,7 +1670,12 @@ def install(app, store, auth, mutate, onboarding):
             with store.read() as c:
                 chat_bot_for(c, who)
         body, uploads = await app.state.uploads.form(request, M.AssistantUpload, admit)
-        return await asyncio.to_thread(post_message_sync, request, body, who, None, None, [], uploads)
+        def bot_of():
+            with store.read() as c:
+                return chat_bot_for(c, who)
+        bot = await asyncio.to_thread(bot_of)
+        rc = await asyncio.to_thread(assistant_checks, who, bot, body.text)
+        return await asyncio.to_thread(post_message_sync, request, body, who, None, None, [], uploads, rc)
 
     @app.post("/api/v2/assistant/turn-on")
     def turn_on(request: Request, body: M.Empty):
@@ -1636,8 +1700,8 @@ def install(app, store, auth, mutate, onboarding):
 
         def work(c):
             before = decides(c, who.actor)["decides_approvals"]
-            c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES(?,?,?,?) ON CONFLICT(actor,key) "
-                      "DO UPDATE SET value_json=excluded.value_json, updated=excluded.updated",
+            c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) ON CONFLICT(actor,key) "
+                      "DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
                       (who.actor, DECIDES_KEY, json.dumps(body.decides_approvals), H.now()))
             if before != body.decides_approvals:
                 H.event(c, who.actor, "assistant.decides_approvals", who.actor, {"on": body.decides_approvals})
@@ -1651,8 +1715,8 @@ def install(app, store, auth, mutate, onboarding):
         who = own(request)
         since = H.shift(H.now(), days=-max(1, min(days, 90)))
         with store.read() as c:
-            rows = c.execute("SELECT a.id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.decided_by=? "
-                             "AND a.decided_via='assistant' AND m.to_actor=? AND a.decided_at>=? "
+            rows = c.execute("SELECT a.id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.decided_by_id=? "
+                             "AND a.decided_via='assistant' AND m.recipient_id=? AND a.decided_at>=? "
                              "ORDER BY a.decided_at DESC LIMIT 200", (who.actor, who.actor, since)).fetchall()
             out = []
             for r in rows:
@@ -1686,13 +1750,14 @@ def install(app, store, auth, mutate, onboarding):
             lines = []
             for aid in ids:
                 row = H.approval(c, aid)
-                if not row or (H.message(c, row.get("message_id")) or {}).get("to_actor") != who.actor:
+                if not row or (H.message(c, row.get("message_id")) or {}).get("recipient_id") != who.actor:
                     raise Problem("forbidden", "That approval is not addressed to you", 403)
                 if row["decision"]:
                     raise Problem("conflict", f"Approval {aid} is already decided", 409)
-                if row["requested_by"] == "bot:" + bot:
+                if row["requested_by_id"] == "bot:" + bot:
                     raise Problem("own_request", "You asked for this approval yourself, so it stays the person's "
                                   "click: propose it on a card (`hub assistant propose`)", 403)
+                refuse_own_click(row)
                 if row["kind"] == "support":
                     raise Problem("approve_support", "A report to the Tico team is sent only on the person's own "
                                   "click, so leave it out of the read-back", 403)
@@ -1749,7 +1814,7 @@ def install(app, store, auth, mutate, onboarding):
 
     def expire(c):
         """A confirm that never settled (a restart, a dropped connection) fails after two minutes."""
-        c.execute("UPDATE assistant_actions SET status='failed', decided_at=?, confirm_hash=NULL, result_json=? "
+        c.execute("UPDATE assistant_actions SET status='failed', decided_at=?, confirm_hash=NULL, result=? "
                   "WHERE status='running' AND running_since<?",
                   (H.now(), json.dumps({"status_code": 0, "error": "It did not finish; ask again"}),
                    H.shift(H.now(), seconds=-RUNNING_TTL_S)))
@@ -1768,7 +1833,7 @@ def install(app, store, auth, mutate, onboarding):
 
     def settle(aid, who, status, result, note):
         with store.transaction() as c:
-            c.execute("UPDATE assistant_actions SET status=?, decided_at=?, result_json=?, confirm_hash=NULL WHERE id=?",
+            c.execute("UPDATE assistant_actions SET status=?, decided_at=?, result=?, confirm_hash=NULL WHERE id=?",
                       (status, H.now(), json.dumps(result), aid))
             row = load(c, who, aid)
             room = H.conversation(c, row["conversation_id"]) if row["conversation_id"] else None
@@ -1787,8 +1852,8 @@ def install(app, store, auth, mutate, onboarding):
             row = load(c, who, aid)
             if row["status"] != "pending":
                 raise Problem("state", "This proposal is already " + row["status"], 409)
-            c.execute("UPDATE assistant_actions SET status='cancelled', decided_at=? WHERE id=?", (H.now(), aid))
-            H.event(c, who.actor, "assistant.action.cancelled", aid, {})
+            c.execute("UPDATE assistant_actions SET status='canceled', decided_at=? WHERE id=?", (H.now(), aid))
+            H.event(c, who.actor, "assistant.action.canceled", aid, {})
             return {"action": action_view(load(c, who, aid), c)}
         return mutate(request, body, work)
 
@@ -1805,7 +1870,7 @@ def install(app, store, auth, mutate, onboarding):
                 row = load(c, who, aid)
                 if row["status"] != "pending":
                     raise Problem("state", "This proposal is already " + row["status"], 409)
-                if row["created"] < H.shift(H.now(), hours=-CONFIRM_TTL_H):
+                if row["created_at"] < H.shift(H.now(), hours=-CONFIRM_TTL_H):
                     # Recorded here, raised after the transaction commits (raising inside it rolls it back).
                     c.execute("UPDATE assistant_actions SET status='expired', decided_at=? WHERE id=?", (H.now(), aid))
                     return None
@@ -1815,13 +1880,13 @@ def install(app, store, auth, mutate, onboarding):
                 H.event(c, who.actor, "assistant.action.confirmed", aid,
                         {"summary": row["summary"][:200], "method": row["method"], "path": row["path"]})
                 # A card stored before its task change was made runnable (`runnable`) still runs, read as it is now.
-                sent = json.loads(row["body_json"] or "{}")
+                sent = json.loads(row["body"] or "{}")
                 if row["path"] == BATCH_PATH and isinstance(sent, dict) and isinstance(sent.get("actions"), list):
                     sent = {"actions": [{**s, "body": runnable(c, s.get("method") or "POST", s.get("path"), s.get("body") or {})}
                                         if isinstance(s, dict) else s for s in sent["actions"]]}
                 else:
                     sent = runnable(c, row["method"], row["path"], sent)
-                return {**row, "body_json": json.dumps(sent)}
+                return {**row, "body": json.dumps(sent)}
         row = await asyncio.to_thread(claim)
         if row is None:
             raise Problem("expired", "This proposal is more than a day old; ask again", 409)
@@ -1833,7 +1898,7 @@ def install(app, store, auth, mutate, onboarding):
                 raise Problem("operation", "This proposal is not on the list of routes a person confirms", 422)
             api = Internal(request)
             api.headers["x-tico-assistant-action"] = aid + "." + secret
-            sent = json.loads(row["body_json"] or "{}") if row["method"] != "DELETE" else None
+            sent = json.loads(row["body"] or "{}") if row["method"] != "DELETE" else None
             if isinstance(sent, dict):
                 sent = {k: v for k, v in sent.items() if k not in PERSON_ONLY_FIELDS}   # a card stored before the check
             if path == BATCH_PATH:

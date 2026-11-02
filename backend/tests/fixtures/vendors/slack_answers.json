@@ -1,0 +1,23 @@
+{
+  "_source": "Slack Web API answers for conversations.history (the fields connectors/slack.py reads: messages with ts, user, text; response_metadata.next_cursor) and the missing_scope error (error, needed, provided). Shaped from Slack's public API reference, not a live capture.",
+  "history": {
+    "ok": true,
+    "messages": [
+      {
+        "type": "message",
+        "user": "U012ABCDEF",
+        "text": "Kickoff notes are in the doc, please review",
+        "ts": "1730419200.000100",
+        "team": "T012AB3C4"
+      }
+    ],
+    "has_more": false,
+    "response_metadata": {"next_cursor": ""}
+  },
+  "missing_scope": {
+    "ok": false,
+    "error": "missing_scope",
+    "needed": "channels:history",
+    "provided": "channels:read,chat:write"
+  }
+}

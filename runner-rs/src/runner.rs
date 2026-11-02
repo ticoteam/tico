@@ -851,7 +851,7 @@ impl Runner {
             || crate::follow::shared().is_some_and(|f| f.draining()) {
             if crate::follow::feature("runner_drain") { self.drain.begin(Instant::now()); }
         } else {
-            self.drain.end(); // a failed or cancelled update takes work again
+            self.drain.end(); // a failed or canceled update takes work again
         }
         let finished: Vec<String> = workers.iter().filter(|(_, w)| w.is_finished()).map(|(a, _)| a.clone()).collect();
         for aid in finished {

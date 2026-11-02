@@ -59,7 +59,7 @@ def _notes(path, mtime_ns, size):
 
 
 def stored_products(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='product_updates'").fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='product_updates'").fetchone()
     return json.loads(row[0]) if row else []
 
 
@@ -105,7 +105,7 @@ def products(c, settings):
 
 
 def read_ids(c, actor):
-    row = c.execute("SELECT value_json FROM preferences WHERE actor=? AND key=?", (actor, READ_KEY)).fetchone()
+    row = c.execute("SELECT value FROM preferences WHERE actor=? AND key=?", (actor, READ_KEY)).fetchone()
     value = json.loads(row[0]) if row else None
     return {item for item in value if isinstance(item, str)} if isinstance(value, list) else set()
 
@@ -119,7 +119,7 @@ def mark_read(c, settings, actor, ids):
     known = {row["id"] for row in products(c, settings)}
     # Merge acknowledgements from concurrent tabs; a later announcement is never acknowledged implicitly.
     read = read_ids(c, actor) | (set(ids) & known)
-    c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES(?,?,?,?) "
-              "ON CONFLICT(actor,key) DO UPDATE SET value_json=excluded.value_json, updated=excluded.updated",
+    c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) "
+              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
               (actor, READ_KEY, encode(sorted(read)), H.now()))
     return summary(c, settings, actor)

@@ -95,9 +95,9 @@ function budgetTree(limits) {
     ? (a[0].order || 0) - (b[0].order || 0) : 0) || a[1] - b[1]).forEach(([k]) => { const kid = make(k, root); if (kid) root.kids.push(kid); });
   // Helpers and the bots the chart leaves out, each in a branch of its own at the end.
   const live = e => !['archived', 'planned'].includes(e.status);
-  const helpers = (S.emps || []).filter(e => live(e) && isHelperBot(e) && !nodes.has('bot:' + e.name));
-  const other = Object.keys(limits?.bots || {}).filter(slug => !nodes.has('bot:' + slug) && !helpers.some(e => e.name === slug));
-  for (const [key, name, slugs] of [['helpers', 'Helpers', helpers.map(e => e.name)], ['other', 'Other', other]]) {
+  const helpers = (S.emps || []).filter(e => live(e) && isHelperBot(e) && !nodes.has('bot:' + e.id));
+  const other = Object.keys(limits?.bots || {}).filter(slug => !nodes.has('bot:' + slug) && !helpers.some(e => e.id === slug));
+  for (const [key, name, slugs] of [['helpers', 'Helpers', helpers.map(e => e.id)], ['other', 'Other', other]]) {
     if (!slugs.length) continue;
     const node = {key, kind: 'branch', id: key, ref: '', name, parent: root, depth: 1, kids: []};
     nodes.set(key, node);
@@ -276,7 +276,7 @@ const budgetAdmin = () => !!BUDGET?.limits?.may_edit_default || S.me?.role === '
 // A teammate's home group, and whether this person leads it or a group above it (the hub's rule for caps).
 function budgetHome(ref) {
   const id = ref.slice(ref.indexOf(':') + 1);
-  return (ref.startsWith('person:') ? (S.people || []).find(p => p.id === id)?.team : (S.emps || []).find(e => e.name === id)?.team) || '';
+  return (ref.startsWith('person:') ? (S.people || []).find(p => p.id === id)?.team : botRow(id)?.team) || '';
 }
 const budgetMayCap = sender => budgetAdmin() || (BUDGET?.limits?.leads || []).includes(budgetHome(sender));
 function budgetMaySpend(node) {
@@ -296,7 +296,7 @@ function budgetManagers(sender) {
 // Who may send `receiver` capped tasks: every teammate it is a manager above.
 function budgetBelow(receiver) {
   const key = receiver.startsWith('person:') ? 'p:' + receiver.slice(7) : 'b:' + receiver.slice(4);
-  const refs = [...(S.emps || []).filter(e => !['archived', 'planned'].includes(e.status) && !isHelperBot(e)).map(e => 'bot:' + e.name),
+  const refs = [...(S.emps || []).filter(e => !['archived', 'planned'].includes(e.status) && !isHelperBot(e)).map(e => 'bot:' + e.id),
     ...(S.people || []).filter(p => !p.hidden).map(p => 'person:' + p.id)];
   return refs.filter(ref => ref !== receiver && goalOrgPlace(ref.replace(/^person:/, 'human:')).above.has(key))
     .sort((a, b) => budgetName(a).localeCompare(budgetName(b)));

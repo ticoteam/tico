@@ -6,7 +6,7 @@ from backend import rule_due as D
 
 
 def row(first, repeats="once", zone="America/Los_Angeles"):
-    return {"first_due": first, "repeats": repeats, "timezone": zone}
+    return {"first_due_on": first, "repeats": repeats, "timezone": zone}
 
 
 def test_monthly_from_the_31st_falls_on_each_month_end_and_never_drifts_back():

@@ -15,7 +15,7 @@ const SYSTEM_ROUTINE_ON_EVENT = new Set(['topic_fresh', 'stall_triage']);
 function systemRoutineLastHTML(j) {
   if (!j.records) return SYSTEM_ROUTINE_ON_EVENT.has(j.key) ? '<span class="muted">Runs when it happens</span>' : '<span class="muted">Each connection shows its own</span>';
   if (!j.last) return '<span class="muted">Not run yet</span>';
-  const when = `<span class="tnum muted" title="${esc(fmt(j.last.finished || j.last.started))}">${esc(ago(j.last.finished || j.last.started))}</span>`;
+  const when = `<span class="tnum muted" title="${esc(fmt(j.last.finished_at || j.last.started_at))}">${esc(ago(j.last.finished_at || j.last.started_at))}</span>`;
   return `<span class="${j.last.ok ? '' : 'sysr-failed'}" data-sysr-result>${esc(j.last.result)}</span> ${when}`;
 }
 function systemRoutineAIHTML(j) {
@@ -103,11 +103,11 @@ async function systemRoutineWrite(key, send, status) {
 }
 // A Run now that asks Decide works on its own thread: read its row again until its result lands (about two minutes).
 function systemRoutineFollow(key, n) {
-  const before = (SYSTEM_ROUTINES?.jobs || []).find(j => j.key === key)?.last?.started || '';
+  const before = (SYSTEM_ROUTINES?.jobs || []).find(j => j.key === key)?.last?.started_at || '';
   setTimeout(async () => {
     try { SYSTEM_ROUTINES = await get('/v2/system-routines'); SYSTEM_ROUTINES_AT = Date.now(); } catch (e) { return; }
     systemRoutinesPaint();
-    const now = (SYSTEM_ROUTINES.jobs || []).find(j => j.key === key)?.last?.started || '';
+    const now = (SYSTEM_ROUTINES.jobs || []).find(j => j.key === key)?.last?.started_at || '';
     if (now === before && n < 24) systemRoutineFollow(key, n + 1);
   }, 5000);
 }
@@ -210,7 +210,7 @@ function memoryTidyEditor(job) {
   const rows = dialog.querySelector('[data-pilot-rows]'), add = dialog.querySelector('[data-add]');
   const addRow = (entry = {}) => {
     const row = document.createElement('div'); row.dataset.pilotRow = '';
-    row.innerHTML = `<label>Bot slug<input data-bot required maxlength="100" value="${esc(entry.bot || '')}"></label>
+    row.innerHTML = `<label>Bot slug<input data-bot required maxlength="100" value="${esc(entry.slug || entry.bot || '')}"></label>
       <label>Pass model<select data-model required><option value="">Choose a model</option>${choices.map(c => `<option value="${esc(c.model)}"${c.model === entry.model ? ' selected' : ''}>${esc(c.label)}</option>`).join('')}
       ${entry.model && !choices.some(c => c.model === entry.model) ? `<option value="${esc(entry.model)}" selected disabled>${esc(entry.model)} (unavailable)</option>` : ''}</select></label>
       <label>Reasoning effort<select data-effort><option value="low">low</option></select></label><button type="button" class="ghost" data-remove>Remove bot</button>`;

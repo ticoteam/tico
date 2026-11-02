@@ -62,10 +62,10 @@ function cloudMachineRowHTML(e) {
   const names = CLOUD_SIZES?.length ? CLOUD_SIZES : CLOUD_SIZE_NAMES.map(name => ({name}));
   const what = scope === 'shared' ? 'the shared cloud machine' : `${esc(e.display_name)}'s cloud machine`;
   return `<div class="sb-row" data-bot-cloud-row><span>Size</span><div class="rel-line">
-      <select class="settings-inline-select" data-bot-cloud-size="${esc(e.name)}" data-cloud-scope="${scope}" data-current="${esc(m.size)}" aria-label="Size of ${what}" ${may}>
+      <select class="settings-inline-select" data-bot-cloud-size="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${esc(m.size)}" aria-label="Size of ${what}" ${may}>
         ${names.map(size => `<option value="${esc(size.name)}" ${size.name === m.size ? 'selected' : ''}>${esc(cloudSizeLabel(size))}</option>`).join('')}
       </select>
-      <label class="bot-editor-check"><input type="checkbox" data-bot-cloud-always="${esc(e.name)}" data-cloud-scope="${scope}" data-current="${m.always_on}" ${m.always_on ? 'checked' : ''} ${may}> Always on</label>
+      <label class="bot-editor-check"><input type="checkbox" data-bot-cloud-always="${esc(e.id)}" data-cloud-scope="${scope}" data-current="${m.always_on}" ${m.always_on ? 'checked' : ''} ${may}> Always on</label>
     </div><span></span></div>
     <div class="sb-sub" data-bot-cloud-status>${esc(cloudMachineStatus(m))}</div>`;
 }

@@ -146,7 +146,7 @@ def _payee(store, fake, *, at=AT):
         assert made.status == "committed", made
     sync_once(store, fake, at)
     with store.read() as c:
-        payload = c.execute("SELECT payload_json FROM fin_outbox WHERE op='recipient_create'").fetchone()[0]
+        payload = c.execute("SELECT payload FROM fin_outbox WHERE op='recipient_create'").fetchone()[0]
         assert "000099998888" not in payload                                     # erased once Mercury has it
     return str(made.result["recipient_id"])
 
@@ -204,7 +204,7 @@ def test_an_unknown_payment_is_never_sent_again_and_is_found_by_memo_recipient_a
     fake.requests["req-9"] = {**fake.requests["req-9"], "status": "rejected"}
     sync_once(books, fake, HOURS[6])
     with books.transaction() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "canceled"
         assert _holds(c) == [(50_000, "released")]
         again = act(c, OWNER, "payment_create", body)                             # the bill may be paid again
         assert again.status == "committed"
@@ -302,7 +302,7 @@ def test_rules_strictest_wins_examples_must_pass_and_a_bots_rule_needs_a_finance
         refused = act(c, OWNER, "card_create", {"holder": "human:gus", "budget_id": b.result["budget_id"],
                                                 "amount": 1_000, "provider_user_id": "u"})
         assert refused.status == "denied" and refused.reason == "gus has no cards"   # deny beats needs_approval
-        runs = c.execute("SELECT json_extract(outcome_json,'$.outcome') FROM fin_rule_runs WHERE rule_id=?",
+        runs = c.execute("SELECT json_extract(outcome,'$.outcome') FROM fin_rule_runs WHERE rule_id=?",
                          (deny.result["rule_id"],)).fetchall()
         assert [r[0] for r in runs] == ["deny"]
         tested = act(c, OWNER, "rule_test", {"rule_id": deny.result["rule_id"]})
@@ -403,7 +403,7 @@ def test_money_reads_cut_to_the_viewer_and_a_revoked_grant_is_gone(books):
 
 def test_every_send_is_judged_again_with_its_counters_once_and_a_new_deny_cancels_it(books):
     """C: right before the send, the action's rights, view, rules (counters less its own) and budget run again: a
-    payment that used its own limit still goes; one a rule now denies, or whose payer lost the right, is cancelled."""
+    payment that used its own limit still goes; one a rule now denies, or whose payer lost the right, is canceled."""
     fake = FakeMercury()
     connect(books, fake)
     rid = _payee(books, fake)
@@ -433,8 +433,8 @@ def test_every_send_is_judged_again_with_its_counters_once_and_a_new_deny_cancel
     assert len(fake.sent("request_send_money")) == 1
     with books.read() as c:
         rows = dict(c.execute("SELECT amount, status || ':' || last_error FROM fin_payments WHERE amount<50000"))
-        assert rows[5_000].startswith("cancelled:No more Acme")                 # a rule added after it was queued
-        assert rows[4_000] == "cancelled:whoever asked for it no longer has the right to pay"
+        assert rows[5_000].startswith("canceled:No more Acme")                 # a rule added after it was queued
+        assert rows[4_000] == "canceled:whoever asked for it no longer has the right to pay"
         assert sorted(_holds(c)) == [(4_000, "released"), (5_000, "released"), (50_000, "held")]   # the sent one keeps its
 
 
@@ -572,7 +572,7 @@ def test_a_denied_or_declined_payee_leaves_no_bank_numbers_and_no_vault_row(api)
 
 def test_a_limit_added_after_payments_were_queued_is_reserved_at_send_once(books):
     """N6: queued payments a new monthly limit now covers reserve its counter with their send claim, owned by each
-    payment: the first fits and counts once (a retried send doesn't count it again); the next is over and cancelled."""
+    payment: the first fits and counts once (a retried send doesn't count it again); the next is over and canceled."""
     fake = FakeMercury()
     connect(books, fake)
     rid = _payee(books, fake)
@@ -597,10 +597,10 @@ def test_a_limit_added_after_payments_were_queued_is_reserved_at_send_once(books
                                (rule_id,)).fetchone()) == (10_000, 1)
         status = dict(c.execute("SELECT id, status || ':' || coalesce(last_error, '') FROM fin_payments"))
         assert sorted(status.values())[0].startswith("awaiting_bank_approval")
-        assert sorted(status.values())[1].startswith("cancelled:Monthly cap"), status
+        assert sorted(status.values())[1].startswith("canceled:Monthly cap"), status
 
 
-def test_a_limit_reserved_at_send_is_given_back_once_when_the_payment_fails_or_is_cancelled(books):
+def test_a_limit_reserved_at_send_is_given_back_once_when_the_payment_fails_or_is_canceled(books):
     """Round 3 #4: what a payment reserved at its send claim comes off the counter when Mercury refuses it or a person
     cancels it after a retry, once (its record empties)."""
     fake = FakeMercury()
@@ -622,14 +622,14 @@ def test_a_limit_reserved_at_send_is_given_back_once_when_the_payment_fails_or_i
     fake.queue["request_send_money"] = [Answer(429, {}), Answer(400, {"errors": {"message": "account closed"}})]
     sync_once(books, fake, HOURS[1])
     with books.transaction() as c:
-        state = {m: (st, cj) for m, st, cj in c.execute("SELECT memo, status, counted_json FROM fin_payments")}
+        state = {m: (st, cj) for m, st, cj in c.execute("SELECT memo, status, counted FROM fin_payments")}
         assert state["refused"] == ("failed", "[]")                         # refused: its reservation came back
         assert state["retried"][0] == "queued" and state["retried"][1] != "[]"
         assert counted(c) == (10_000, 1)                                    # only the retried one's
         pid = str(c.execute("SELECT id FROM fin_payments WHERE memo='retried'").fetchone()[0])
         assert act(c, OWNER, "payment_cancel", {"payment_id": pid}).status == "committed"
         assert counted(c) == (0, 0)
-        assert c.execute("SELECT counted_json FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "[]"
+        assert c.execute("SELECT counted FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "[]"
 
 
 def _lines(c, source="bank"):
@@ -837,7 +837,7 @@ def test_a_reconciled_debit_found_as_a_lost_payment_moves_its_spend_to_the_payme
                            "ON a.id=l.account_id WHERE a.code='6100' AND t.kind='team'").fetchall()
         assert [r[0] for r in tagged] == ["eng"]
         assert c.execute("SELECT count(*) FROM fin_events WHERE name='finance.feed.needs_category' AND "
-                         "payload_json LIKE '%found after it was reconciled%'").fetchone()[0] == 1
+                         "payload LIKE '%found after it was reconciled%'").fetchone()[0] == 1
     with books.transaction() as c:                    # unreconciled and re-categorized: the move goes with the entry
         rec = str(c.execute("SELECT reconciliation_id FROM fin_feed_txns WHERE id=?", (fid,)).fetchone()[0])
         assert act(c, OWNER, "reconcile_undo", {"reconciliation_id": rec}).status == "committed"
@@ -965,7 +965,7 @@ def test_turning_direct_send_off_before_a_queued_direct_payment_goes_sends_it_by
     assert len(fake.sent("request_send_money")) == 2
     with books.read() as c:
         mode, status = c.execute("SELECT mode, status FROM fin_payments WHERE id=?", (dpid,)).fetchone()
-    assert mode == "approval_queue" and status not in ("failed", "cancelled"), (mode, status)
+    assert mode == "approval_queue" and status not in ("failed", "canceled"), (mode, status)
 
 
 def test_a_rule_on_direct_payments_added_after_queueing_cancels_the_send(books):
@@ -983,7 +983,7 @@ def test_a_rule_on_direct_payments_added_after_queueing_cancels_the_send(books):
     sync_once(books, fake, HOURS[8])
     assert fake.sent("create_transaction") == []
     with books.read() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (dpid,)).fetchone()[0] == "cancelled"
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (dpid,)).fetchone()[0] == "canceled"
 
 
 def test_a_direct_payment_the_bank_cancels_with_no_request_id_fails_and_its_hold_is_released(books):
@@ -1007,7 +1007,7 @@ def test_a_direct_payment_the_bank_cancels_with_no_request_id_fails_and_its_hold
 
 def test_a_send_time_rule_on_who_asks_cancels_a_payment_someone_else_queued(books):
     """Ben queues a payment; the owner then adds a deny for payments by anyone but the owner. The send-time facts carry
-    actor.owner as the request did, so the payment is cancelled before Mercury sees it."""
+    actor.owner as the request did, so the payment is canceled before Mercury sees it."""
     fake = FakeMercury()
     connect(books, fake)
     rid = _payee(books, fake)
@@ -1024,4 +1024,4 @@ def test_a_send_time_rule_on_who_asks_cancels_a_payment_someone_else_queued(book
     assert fake.sent("request_send_money") == []
     with books.read() as c:
         status = c.execute("SELECT status || ':' || coalesce(last_error, '') FROM fin_payments").fetchone()[0]
-        assert status.startswith("cancelled:Only the owner pays"), status
+        assert status.startswith("canceled:Only the owner pays"), status

@@ -64,7 +64,7 @@ Only when the task asks for it and a granted Tool allows it:
 - **Changing a duty's owner, cadence or date** in the register, and sharing the page beyond its recipient.
 
 Never:
-- **Renewing, cancelling, ordering, signing or paying.** Record the deadline and the cost of
+- **Renewing, canceling, ordering, signing or paying.** Record the deadline and the cost of
   missing it on the task for the owner.
 
 Always:

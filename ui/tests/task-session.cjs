@@ -20,18 +20,18 @@ async function reread(page) {
 }
 
 const now = Date.now(), at = m => new Date(now - m * 60000).toISOString();
-const task = {id: 't-docs', title: 'Ship the docs refresh', owner: 'bot:botops', requester: 'human:ana', status: 'doing',
-  lane: 'company', version: 2, created: at(60), updated: at(1), conversation_id: 'r-docs'};
+const task = {id: 't-docs', title: 'Ship the docs refresh', owner_id: 'bot:botops', requester_id: 'human:ana', status: 'doing',
+  lane: 'company', version: 2, created_at: at(60), updated_at: at(1), conversation_id: 'r-docs'};
 const comments = [
-  {id: 'k1', conversation_id: 'r-docs', from_actor: 'human:ana', kind: 'say', body: 'Refresh the docs please', created: at(50)},
-  {id: 'k2', conversation_id: 'r-docs', from_actor: 'human:ben', kind: 'say', body: 'Include the API page too.', created: at(40)},
-  {id: 'k3', conversation_id: 'r-docs', from_actor: 'bot:botops', kind: 'say', body: 'Rebuilt the guide.', created: at(30),
+  {id: 'k1', conversation_id: 'r-docs', sender_id: 'human:ana', kind: 'say', body: 'Refresh the docs please', created_at: at(50)},
+  {id: 'k2', conversation_id: 'r-docs', sender_id: 'human:ben', kind: 'say', body: 'Include the API page too.', created_at: at(40)},
+  {id: 'k3', conversation_id: 'r-docs', sender_id: 'bot:botops', kind: 'say', body: 'Rebuilt the guide.', created_at: at(30),
     refs: {turn_id: 'a1'}, run: {steps: 3, tool_calls: 2, took_s: 95}},
-  {id: 'k4', conversation_id: 'r-docs', from_actor: 'bot:botops', kind: 'say', body: 'Shared the preview.', created: at(20),
+  {id: 'k4', conversation_id: 'r-docs', sender_id: 'bot:botops', kind: 'say', body: 'Shared the preview.', created_at: at(20),
     refs: {turn_id: 'a3'}, run: {steps: 1}},
 ];
-const events = [{id: 1, task_id: 't-docs', ts: at(35), actor: 'bot:botops', field: 'status', old: 'open', new: 'doing', note: ''}];
-const execution = {job_id: 'j2', message_id: 'k2', bot: 'botops', attempt_id: 'a2', state: 'running', label: 'Working', text: '',
+const events = [{id: 1, task_id: 't-docs', created_at: at(35), actor: 'bot:botops', field: 'status', old: 'open', new: 'doing', note: ''}];
+const execution = {job_id: 'j2', message_id: 'k2', bot: 'botops', run_id: 'a2', state: 'running', label: 'Working', text: '',
   parts: [{kind: 'progress', text: 'Checking the API page.', at: at(1)}, {kind: 'tool', text: 'Ran hub task create', at: at(1)}]};
 
 async function run(viewport, shot) {
@@ -56,7 +56,7 @@ async function run(viewport, shot) {
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/tasks') return json({tasks: [task]});
       if (p === '/api/v2/tasks/t-docs')
-        return json({task, comments, events, can_comment: true, children: [], execution: !running ? {...execution, state: 'cancelled', label: 'Stopped'}
+        return json({task, comments, events, can_comment: true, children: [], execution: !running ? {...execution, state: 'canceled', label: 'Stopped'}
           : live2 ? {...execution, parts: [...execution.parts, {kind: 'tool', text: 'Ran grep', at: at(0)}]} : execution});
       const steps = p.match(/^\/api\/v2\/turns\/([^/]+)\/steps$/);
       if (steps) {
@@ -116,7 +116,7 @@ async function run(viewport, shot) {
     assert.match(await live.innerText(), /Ran grep/, 'the redraw drew the new step');
     assert.equal(await live.locator('[data-task-stop]').innerText(), 'Stopping…');
     assert.ok(await live.locator('[data-task-stop]').isDisabled());
-    assert.deepEqual(stops, [{attempt_id: 'a2'}]);
+    assert.deepEqual(stops, [{run_id: 'a2'}]);
     running = false;
     await reread(page);
     await page.waitForFunction(() => !document.querySelector('#task-modal .task-live'));
@@ -146,15 +146,15 @@ async function answered(viewport, shot) {
   try {
     const page = await browser.newPage({viewport, serviceWorkers: 'block'});
     const errors = [];
-    const ask = {id: 't-ask', title: 'Which app is still open?', owner: 'human:ana', requester: 'bot:lead', status: 'open',
-      lane: 'company', version: 1, created: at(30), updated: at(5), conversation_id: 'r-ask'};
-    const said = [{id: 'q1', conversation_id: 'r-ask', from_actor: 'bot:lead', kind: 'say', body: 'Which app is still open?', created: at(20)}];
-    const mine = {id: 'c2', conversation_id: 'r-ask', from_actor: 'human:ana', to_actor: 'bot:lead', kind: 'say', body: 'The billing one.', created: at(0)};
-    const reply = {id: 'r3', conversation_id: 'r-ask', from_actor: 'bot:lead', kind: 'say', body: 'Thanks, closing it.', created: at(0)};
-    const run = {job_id: 'c2', message_id: 'c2', bot: 'lead', attempt_id: 'a9', from_person: true, text: '', parts: []};
+    const ask = {id: 't-ask', title: 'Which app is still open?', owner_id: 'human:ana', requester_id: 'bot:lead', status: 'open',
+      lane: 'company', version: 1, created_at: at(30), updated_at: at(5), conversation_id: 'r-ask'};
+    const said = [{id: 'q1', conversation_id: 'r-ask', sender_id: 'bot:lead', kind: 'say', body: 'Which app is still open?', created_at: at(20)}];
+    const mine = {id: 'c2', conversation_id: 'r-ask', sender_id: 'human:ana', recipient_id: 'bot:lead', kind: 'say', body: 'The billing one.', created_at: at(0)};
+    const reply = {id: 'r3', conversation_id: 'r-ask', sender_id: 'bot:lead', kind: 'say', body: 'Thanks, closing it.', created_at: at(0)};
+    const run = {job_id: 'c2', message_id: 'c2', bot: 'lead', run_id: 'a9', from_person: true, text: '', parts: []};
     const states = {
       idle: {comments: said, execution: null},
-      queued: {comments: [...said, mine], execution: {...run, attempt_id: null, state: 'queued', label: 'Saved — queued'}},
+      queued: {comments: [...said, mine], execution: {...run, run_id: null, state: 'queued', label: 'Saved — queued'}},
       running: {comments: [...said, mine], execution: {...run, state: 'running', label: 'Working', parts: [{kind: 'tool', text: 'Ran hub task show', at: at(0)}]}},
       replied: {comments: [...said, mine, reply], execution: {...run, state: 'completed', label: 'Complete'}},
       failed: {comments: [...said, mine], execution: {...run, state: 'uncertain', label: 'Reply failed — your message is saved'}},
@@ -256,9 +256,9 @@ async function deliveryChoice(viewport, shot) {
     // A pick saved with the old meaning ("queue" = do not wake) is ignored.
     await page.addInitScript(() => { try { localStorage.setItem('hub.task.delivery', '[["t-plan","queue"]]'); } catch {} });
     const errors = [];
-    const plan = {id: 't-plan', title: 'Plan the launch', owner: 'human:ana', requester: 'bot:lead', status: 'open',
-      lane: 'company', version: 1, created: at(30), updated: at(5), conversation_id: 'r-plan'};
-    const said = [{id: 'p1', conversation_id: 'r-plan', from_actor: 'bot:lead', kind: 'say', body: 'What should launch first?', created: at(20)}];
+    const plan = {id: 't-plan', title: 'Plan the launch', owner_id: 'human:ana', requester_id: 'bot:lead', status: 'open',
+      lane: 'company', version: 1, created_at: at(30), updated_at: at(5), conversation_id: 'r-plan'};
+    const said = [{id: 'p1', conversation_id: 'r-plan', sender_id: 'bot:lead', kind: 'say', body: 'What should launch first?', created_at: at(20)}];
     const sent = [], posted = [];
     let to = {bot: 'lead', wakes: true, mention: []};
     let choices = {default: 'queue', default_for: null, steer: true, queue: true, steers: true, goal: true};
@@ -280,7 +280,7 @@ async function deliveryChoice(viewport, shot) {
       if (p === '/api/v2/tasks/t-plan/comments' && req.method() === 'POST') {
         const body = JSON.parse(req.postData() || '{}');
         posted.push(body);
-        sent.push({id: 'p' + (sent.length + 2), conversation_id: 'r-plan', from_actor: 'human:ana', to_actor: 'bot:lead', kind: 'say', body: body.text, created: at(0)});
+        sent.push({id: 'p' + (sent.length + 2), conversation_id: 'r-plan', sender_id: 'human:ana', recipient_id: 'bot:lead', kind: 'say', body: body.text, created_at: at(0)});
         const way = body.delivery && body.delivery !== 'goal' ? body.delivery : 'queue';
         return json({comment: sent.at(-1), comments: [...said, ...sent], woke: false, sent_as: {delivery: way, until: null}});
       }
