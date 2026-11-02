@@ -3,7 +3,7 @@
 import pytest
 
 from backend import hubdb as H, rules, verdict_moves as V
-from backend.tests.test_github import PR, _suite, api, hook, post, pr_event  # noqa: F401
+from backend.tests.test_github import PR, _status, _suite, api, hook, post, pr_event  # noqa: F401
 
 HEAD, NEW, BASE = "a" * 40, "d" * 40, "c" * 40
 STEPS = [("On Deck", "open"), ("In Progress", "doing"), ("Review 1", "review"), ("Review 1 Fixes", "doing"),
@@ -546,7 +546,10 @@ def _github(api, monkeypatch, suites, runs, statuses=()):
         read.append(path)
         for end, (field, rows) in lists.items():
             if path.endswith(f"/commits/{HEAD}{end}"):
-                return SimpleNamespace(status_code=200, json=lambda field=field, rows=rows: {field: rows})
+                params = kw.get("params") or {}
+                page, per = params.get("page", 1), params.get("per_page", 100)
+                got = rows[(page - 1) * per:page * per]
+                return SimpleNamespace(status_code=200, json=lambda field=field, got=got: {field: got})
         if path.endswith("/pulls/412"):
             return SimpleNamespace(status_code=200, json=lambda: {"state": "open", "head": {"sha": HEAD}})
         return SimpleNamespace(status_code=404, json=lambda: {})
@@ -861,3 +864,52 @@ def test_the_stored_checks_keep_the_newest_when_every_check_passes(api):
     checks = _many_checks("passing")
     kept = G._kept(checks)
     assert len(kept) == 100 and "lint" not in kept and list(kept) == list(checks)[1:]
+
+
+def _all_non_passing(state):
+    """101 checks on the head, all `state`: `shard 0` is the oldest, so the stored copy keeps shards 1-100 and drops it."""
+    return {f"shard {n}": state for n in range(101)}
+
+
+def _github_status_read(state):
+    """GitHub's own list for the head: `shard 0` still `state`, the kept shards all green."""
+    return [{"context": "shard 0", "state": state}] + [{"context": f"shard {n}", "state": "success"} for n in range(1, 101)]
+
+
+@pytest.mark.parametrize("state", ["failing", "pending"])
+def test_a_dropped_check_among_more_than_100_non_passing_keeps_the_head_unpassed_on_later_webhooks(api, monkeypatch, state):
+    """Dev 646 follow-up: the stored copy keeps 100 of 101 non-passing checks. The kept ones then pass one at a time by
+    webhook while the dropped one is still `state`: the head must never read passing, and no merge may be woken."""
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    with api.app.state.store.transaction() as c:
+        assert G.apply_checks(c, _link(api, task)["id"], HEAD, _all_non_passing(state)) == state
+    for n in range(1, 101):
+        _status(api, f"shard {n}", "success")
+        assert _link(api, task)["checks"] == state, f"after shard {n} passed"
+    assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+    service, _ = _github(api, monkeypatch, [], [], statuses=_github_status_read(state))
+    _quiet(api, task)
+    G.refresh_pending_checks(service)
+    assert _link(api, task)["checks"] == state, "a fresh read still sees the dropped check"
+    _status(api, "later", "success")
+    assert _link(api, task)["checks"] == state, "a later webhook keeps the fresh read's state"
+    assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+
+
+def test_a_dropped_failing_check_that_later_passes_reads_green_only_after_a_fresh_read(api, monkeypatch):
+    """The dropped check's own pass cannot say the others are green: one fresh read after it settles the head."""
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    with api.app.state.store.transaction() as c:
+        G.apply_checks(c, _link(api, task)["id"], HEAD, _all_non_passing("failing"))
+    for n in range(1, 101):
+        _status(api, f"shard {n}", "success")
+    _status(api, "shard 0", "success")
+    assert _link(api, task)["checks"] == "failing"
+    green = [{"context": f"shard {n}", "state": "success"} for n in range(101)]
+    service, _ = _github(api, monkeypatch, [], [], statuses=green)
+    _quiet(api, task)
+    G.refresh_pending_checks(service)
+    assert _link(api, task)["checks"] == "passing"
+    assert [m["refs"]["pr_head"] for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"] == [HEAD]
