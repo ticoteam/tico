@@ -289,6 +289,8 @@ def resolve_lines(ctx: Ctx, who: str, kind: str, contact: Any,
         account = ctx.accounts.get(x.account_id)
         if account is None or not account.active or account.id == ctl or not _line_type_ok(kind, account):
             raise FinanceError(NOT_FOUND, f"no such {'/'.join(LINE_TYPES[kind])} account for a {kind} line")
+        if x.prepaid and account.type != "expense":
+            raise invalid("a prepaid line posts to an expense account")
         tags = shared.check_tags(ctx, posting.with_team(ctx, x.tags))
         if not may_write(ctx, who, account.id, tags):
             raise denied("a line's account or tags are outside your view")
@@ -304,12 +306,15 @@ def _line_rows(lines: Sequence[AP.DocLine], who: str, at: str) -> list[dict[str,
     return [{"account_id": x.account_id, "amount": x.amount, "description": x.description,
              "tags_json": SK.dump(dict(x.tags)), "created_at": at, "created_by": who, "item_id": x.item_id or None,
              **({"po_line_id": x.po_line_id} if x.po_line_id else {}),
+             **({"prepaid_start": x.prepaid[0], "prepaid_months": x.prepaid[1]} if x.prepaid else {}),
              **({"taxable": int(x.taxable)} if x.taxable is not None else {})} for x in lines]
 
 
 def doc_lines_of(ctx: Ctx, kind: str, doc_id: str) -> list[AP.DocLine]:
     return [AP.DocLine(str(r["account_id"]), int(r["amount"]), str(r["description"]),
-                       cast(dict[str, str], SK.loads(r["tags_json"])), None, str(r["item_id"] or ""))
+                       cast(dict[str, str], SK.loads(r["tags_json"])), None, str(r["item_id"] or ""),
+                       prepaid=(str(r["prepaid_start"]), int(r["prepaid_months"]))
+                       if kind == "bill" and r["prepaid_start"] else None)
             for r in SAP.lines(ctx.c, kind, [doc_id]).get(doc_id, [])]
 
 
@@ -321,7 +326,7 @@ def _hold(ctx: Ctx, bill_id: str, vendor_id: str, lines: Sequence[AP.DocLine], w
     refused: list[str] = []
     for n, x in enumerate(lines):
         account = ctx.accounts[x.account_id]
-        if account.type != "expense":
+        if account.type != "expense" or x.prepaid:     # a prepaid line is expensed as its months come due (prepaids.py)
             continue
         moved = None
         if x.po_line_id:
@@ -480,12 +485,17 @@ def bill_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def _post_doc(ctx: Ctx, kind: str, doc: Any, lines: Sequence[AP.DocLine], day: str, who: str,
               holds: Sequence[str] = ()) -> str:
-    """A document's own entry: Dr expense / Cr AP for a bill, Dr AR / Cr income for an invoice."""
+    """A document's own entry: Dr expense / Cr AP for a bill, Dr AR / Cr income for an invoice. A prepaid bill line
+    debits the prepaid expenses asset instead, untagged; its expense comes out month by month (prepaids.py)."""
     from .banking import open_day
+    from . import prepaids
     s = SIGN[kind]
     contact = str(doc[f"{CONTACT_OF[kind]}_id"])
-    rows: list[dict[str, object]] = [{"account_id": x.account_id, "amount": s * x.amount, "tags": dict(x.tags),
-                                      "contact_id": contact, "description": x.description[:200]} for x in lines]
+    prepaid = prepaids.account(ctx, who).id if kind == "bill" and any(x.prepaid for x in lines) else ""
+    rows: list[dict[str, object]] = [
+        {"account_id": prepaid if x.prepaid else x.account_id, "amount": s * x.amount,
+         "tags": {} if x.prepaid else dict(x.tags), "contact_id": contact, "description": x.description[:200]}
+        for x in lines]
     rows.append({"account_id": control(ctx, kind).id, "amount": -s * sum(x.amount for x in lines),
                  "contact_id": contact})
     label = f"{'Bill' if kind == 'bill' else 'Invoice'} {doc['number'] or doc['id']} · {doc['contact_name'] or ''}"
@@ -577,8 +587,10 @@ def bill_void(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         from .banking import open_day
+        from . import prepaids
         from . import purchasing as PU
         bill_id = str(bill["id"])
+        prepaids.unpost(ctx, bill_id, who, aid, f"Void bill {bill['number'] or bill['id']}: {reason}"[:200])
         posted = False
         if bill["entry_id"]:
             entry = SL.entry_row(ctx.c, str(bill["entry_id"]))
@@ -947,7 +959,7 @@ def _bill_pasts(ctx: Ctx, bill: Any) -> list[str]:
     out: list[str] = []
     for x in doc_lines_of(ctx, "bill", str(bill["id"])):
         account = ctx.accounts.get(x.account_id)
-        if account is None or account.type != "expense":
+        if account is None or account.type != "expense" or x.prepaid:
             continue
         tags = scope_tags(x.tags)
         b = budgeting.leaf(ctx, account.id, tags.get("team", ""), tags.get("teammate", ""), str(bill["vendor_id"]))

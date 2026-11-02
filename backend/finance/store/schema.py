@@ -543,6 +543,8 @@ ADDED = (
     # the shared item a bill or invoice line names (migration 76, backend/records)
     ("fin_bill_lines", "item_id", "TEXT"), ("fin_invoice_lines", "item_id", "TEXT"),
     ("fin_bill_lines", "po_line_id", "TEXT"),
+    # a prepaid bill line: the month its expense starts and the months it is spread over (migration 78)
+    ("fin_bill_lines", "prepaid_start", "TEXT"), ("fin_bill_lines", "prepaid_months", "INTEGER"),
 )
 
 
@@ -599,9 +601,18 @@ CREATE TABLE IF NOT EXISTS fin_bill_retained (
   amount BIGINT NOT NULL CHECK (amount > 0), PRIMARY KEY (bill_id, po_line_id));
 """
 
+# Prepaid expenses (backend/finance/prepaids.py): one row per month of a prepaid bill line that was expensed. The
+# month is the key, so a month posts once; the entry is that month's expense, reversed when the bill is voided.
+PREPAIDS = """
+CREATE TABLE IF NOT EXISTS fin_prepaid_postings (
+  bill_line_id TEXT NOT NULL REFERENCES fin_bill_lines(id), month TEXT NOT NULL,
+  amount BIGINT NOT NULL CHECK (amount > 0), entry_id TEXT NOT NULL REFERENCES fin_entries(id),
+  action_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL, PRIMARY KEY (bill_line_id, month));
+"""
+
 def table_names() -> list[str]:
     """Every fin_* table the migration makes."""
-    return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES + TAX + PURCHASING)
+    return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES + TAX + PURCHASING + PREPAIDS)
 
 
 def statements(script: str) -> list[str]:
@@ -631,7 +642,7 @@ def _add_columns(c: sqlite3.Connection) -> None:
 def create(c: sqlite3.Connection) -> None:
     """Every table, index and trigger, statement by statement inside the caller's transaction (executescript would
     commit it). Idempotent: on an install made before a later phase it adds the new tables and columns too."""
-    for script in (TABLES, TAX, PURCHASING):
+    for script in (TABLES, TAX, PURCHASING, PREPAIDS):
         for statement in statements(script):
             c.execute(statement)
     _add_columns(c)
@@ -767,6 +778,12 @@ def tax(c: sqlite3.Connection) -> None:
 def purchasing(c: sqlite3.Connection) -> None:
     """Cloud migration 77: purchase orders and estimates, and the bill line an order line is billed on. Idempotent:
     `create` makes whatever is missing."""
+    create(c)
+
+
+def prepaids(c: sqlite3.Connection) -> None:
+    """Cloud migration 78: prepaid bill lines (their schedule) and the months they were expensed. Idempotent: `create`
+    makes whatever is missing."""
     create(c)
 
 

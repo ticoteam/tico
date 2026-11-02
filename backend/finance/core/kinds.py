@@ -27,7 +27,9 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "item_create", "item_update", "location_create", "location_update", "project_create", "project_update",
        # purchase orders and estimates (backend/finance/purchasing.py)
        "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
-       "estimate_accept", "estimate_decline", "estimate_convert")
+       "estimate_accept", "estimate_decline", "estimate_convert",
+       # prepaid expenses: one month of a prepaid bill line comes out as expense (backend/finance/prepaids.py)
+       "prepaid_amortize")
 LIVE = ("journal", "categorize", "account_create", "account_update", "budget_create", "budget_update",
         "allocation_set", "projection_set", "view_grant", "view_revoke", "private_lines_set", "close_period",
         "reopen_period", "right_grant", "right_revoke",
@@ -53,7 +55,8 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         "item_create", "item_update", "location_create", "location_update", "project_create", "project_update",
         # purchase orders and estimates
         "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
-        "estimate_accept", "estimate_decline", "estimate_convert")
+        "estimate_accept", "estimate_decline", "estimate_convert",
+        "prepaid_amortize")
 NEEDS: dict[str, str | tuple[str, ...]] = {
          "journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
@@ -70,6 +73,7 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "bill_void": R.AP, "invoice_create": R.AR, "invoice_send": R.AR, "invoice_record_payment": R.AR,
          "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": (R.BOOK, R.AP, R.AR),
          "feed_match": (R.AP, R.AR), "mirror_start": R.BOOK, "mirror_stop": R.BOOK, "mirror_tags": R.BOOK, "mirror_xero_location": R.BOOK,
+         "prepaid_amortize": R.BOOK,
          "tax_jurisdiction_add": R.BOOK, "tax_remit": R.AP, "import_raw_totals": R.BOOK,
          "item_create": R.BOOK, "item_update": R.BOOK, "location_create": R.BOOK, "location_update": R.BOOK,
          "project_create": R.BOOK, "project_update": R.BOOK,
@@ -159,7 +163,8 @@ def default_gate(org: Org, actor: str, kind: str) -> Gate:
 Field = tuple[str, str, str]
 _LINE = "list[{account_id?, item_id?, amount: minor, description?, tags?: obj}]"
 _INVOICE_LINE = "list[{account_id?, item_id?, amount: minor, description?, tags?: obj, taxable?: bool}]"
-_BILL_LINE = "list[{account_id?, item_id?, po_line_id?, amount: minor, description?, tags?: obj}]"
+_BILL_LINE = ("list[{account_id?, item_id?, po_line_id?, prepaid?: {start: month, months: int}, amount: minor, "
+              "description?, tags?: obj}]")
 _RULE: tuple[Field, ...] = (
     ("kind?", "gate|posting", "gate (before an action) or posting (on a new feed row or bill draft); default gate"),
     ("name", "str", "short name"), ("words?", "str", "the rule in plain words"),
@@ -279,7 +284,8 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "bill_create": (("vendor_id", "str", "a vendor contact"), ("number?", "str", "the vendor's bill number"),
                     ("bill_date", "day", ""), ("due_date?", "day", "or terms_days"),
                     ("terms_days?", "int", "due this many days after bill_date"), ("memo?", "str", ""),
-                    ("lines", _BILL_LINE, "expense lines; amounts positive; po_line_id bills an open purchase order's line"),
+                    ("lines", _BILL_LINE, "expense lines; amounts positive; po_line_id bills an open purchase "
+                     "order's line; prepaid spreads a line over months from its start"),
                     ("attachments?", "list[str]", "Library file ids"), ("origin?", "manual|email|upload", "")),
     "bill_update": (("bill_id", "str", ""), ("vendor_id?", "str", "draft only"), ("number?", "str", ""),
                     ("bill_date?", "day", "draft only"), ("due_date?", "day", ""), ("terms_days?", "int", ""),
@@ -295,6 +301,7 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                        ("money_account_id?", "str", "or the money account it was paid from (its bank row links later)"),
                        ("account_id?", "str", "or another money line; none: a clearing account")),
     "bill_void": (("bill_id", "str", ""), ("reason?", "str", "")),
+    "prepaid_amortize": (("bill_line_id", "str", ""), ("month", "str", "YYYY-MM, due and not yet expensed")),
     "invoice_create": (("customer_id", "str", "a customer contact"), ("number?", "str", ""),
                        ("invoice_date", "day", ""), ("due_date?", "day", "or terms_days"), ("terms_days?", "int", ""),
                        ("memo?", "str", ""),
@@ -402,6 +409,7 @@ WORDS: dict[str, str] = {
     "bill_schedule": "Pay a bill on a day: a payment is requested then.",
     "bill_mark_paid": "Record that a bill was paid, from a bank or card row, a money account or line.",
     "bill_void": "Void a bill (an entered one is reversed).",
+    "prepaid_amortize": "Expense one due month of a prepaid bill line, out of its prepaid asset.",
     "invoice_create": "Draft an invoice.", "invoice_send": "Send an invoice: it posts to receivables.",
     "invoice_record_payment": "Record money received on an invoice (part or all).",
     "invoice_write_off": "Write off what a customer will not pay.", "invoice_void": "Void an invoice.",

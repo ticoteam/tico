@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 from . import banking, budgeting, cards, catalog, documents, gateway_sync, gating, handlers, jobs, mirror, payments
-from . import purchasing
+from . import prepaids, purchasing
 from . import posting
 from . import raw_totals, runs
 from . import setup as setup_mod
@@ -49,7 +49,7 @@ PLANNERS: dict[str, handlers.Planner] = {
     "connection_sync": banking.connection_sync, "connection_disconnect": banking.connection_disconnect,
     "connection_map": banking.connection_map, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
     **documents.PLANNERS, **mirror.PLANNERS, **tax.PLANNERS, **raw_totals.PLANNERS, **catalog.PLANNERS,
-    **purchasing.PLANNERS}
+    **purchasing.PLANNERS, **prepaids.PLANNERS}
 assert set(PLANNERS) == set(K.LIVE)
 
 STATUSES = ("committed", "needs_approval", "denied", "failed", "expired", "withdrawn")
@@ -212,6 +212,9 @@ def _plan(ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object],
     kind's own checks and default gate, then the gate rules (§6.3), which run again whenever this does: at consume."""
     if ctx.book.mode == "mirror" and kind in mirror.REFUSED:
         raise FinanceError(NOT_AVAILABLE, f"{kind} is not available while the books are a provider's (mirror mode)")
+    if ctx.book.mode == "mirror" and prepaids.in_lines(payload):
+        # The mirror's planners send bill lines to the provider as they are, which has no prepaid schedule.
+        raise FinanceError(NOT_AVAILABLE, "prepaid bill lines are not available while the books are a provider's")
     by_right = K.authority(ctx.org, p.who, kind, ctx.rights(p.who))
     if by_right is not None and by_right.outcome == "deny":
         raise FinanceError(DENIED, f"{kind} needs {by_right.rule.removeprefix('right:')}")
@@ -542,6 +545,7 @@ def help(kind: str | None = None) -> dict[str, object]:
 ensure_setup = jobs.ensure_setup
 drain_events = jobs.drain
 open_next_period = jobs.open_next_period
+amortize_prepaids = jobs.amortize
 watch_documents = jobs.watch
 grant_defaults = rights.grant_defaults
 

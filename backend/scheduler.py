@@ -244,6 +244,8 @@ class Scheduler:
                 steps.append(("finance_holds", lambda c: finance.expire_holds(c, stamp(at))))
             if self.finance_due("usage", at, timedelta(hours=1)):
                 steps.append(("finance_usage", lambda c: finance.post_usage(c, stamp(at))))
+            if self.finance_due("prepaids", at, timedelta(hours=1)):
+                steps.append(("finance_prepaids", lambda c: finance.amortize_prepaids(c, stamp(at))))
             if self.finance_due("documents", at, timedelta(hours=1)):
                 steps.append(("finance_documents", lambda c: finance.watch_documents(c, stamp(at))))
             if self.finance_due("period", at, timedelta(days=1)):

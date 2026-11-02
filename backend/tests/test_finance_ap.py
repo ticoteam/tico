@@ -1063,3 +1063,60 @@ def test_an_explicit_zero_pays_nothing_of_a_bill(books):
             got = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "account_id": account(c, "1000"), "amount": amount})
             assert (got.status, got.code) == ("failed", "invalid"), got
         assert _settled(c, "fin_bills", bid) == before
+
+
+DEC_15 = "2026-12-15T12:00:00.000000Z"      # November and December have come
+YEAR_END = "2027-10-15T12:00:00.000000Z"    # a twelve-month prepaid starting in November 2026 has all come
+
+
+def test_a_prepaid_line_expenses_a_month_at_a_time_and_each_month_posts_once(books):
+    """A $1,800 prepaid over twelve months from November counts $150 of expense a month. It sits in prepaid expenses
+    until its months come due; each month posts once in its own month; cash waits for the bill's payment."""
+    with books.transaction() as c:
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 180_000,
+                                     "prepaid": {"start": "2026-11", "months": 12}}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        assert (_balance(c, "1150"), _balance(c, "6100"), _balance(c, "2000")) == (180_000, 0, -180_000)
+        assert FA.amortize_prepaids(c, DEC_15) == 2
+        assert FA.amortize_prepaids(c, DEC_15) == 0
+        assert _pnl(c, "accrual", "2026-11-01", "2026-11-30") == {"6100": 15_000}
+        assert _pnl(c, "cash", "2026-11-01", "2026-11-30") == {}
+        assert (_balance(c, "1150"), _balance(c, "6100")) == (150_000, 30_000)
+        assert FA.amortize_prepaids(c, YEAR_END) == 10
+        assert (_balance(c, "1150"), _balance(c, "6100")) == (0, 180_000)
+        assert act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "account_id": account(c, "1000")}).status == "committed"
+        assert _pnl(c, "cash", "2026-10-01", "2026-10-31") == {"6100": 180_000}     # the whole bill, as paid
+
+
+def test_a_month_not_run_is_expensed_later_in_its_own_month(books):
+    with books.transaction() as c:
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 30_000,
+                                     "prepaid": {"start": "2026-10", "months": 3}}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        assert FA.amortize_prepaids(c, AT) == 1
+        assert FA.amortize_prepaids(c, DEC_15) == 2
+        assert _pnl(c, "accrual", "2026-11-01", "2026-11-30") == {"6100": 10_000}
+        assert _pnl(c, "accrual", "2026-12-01", "2026-12-31") == {"6100": 10_000}
+        assert _balance(c, "1150") == 0
+
+
+def test_voiding_a_prepaid_bill_reverses_the_months_it_expensed(books):
+    with books.transaction() as c:
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 180_000,
+                                     "prepaid": {"start": "2026-10", "months": 12}}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        assert FA.amortize_prepaids(c, DEC_15) == 3
+        assert act(c, OWNER, "bill_void", {"bill_id": bid, "reason": "entered twice"}).status == "committed"
+        assert (_balance(c, "6100"), _balance(c, "1150"), _balance(c, "2000")) == (0, 0, 0)
+        assert FA.amortize_prepaids(c, YEAR_END) == 0
+
+
+def test_a_prepaid_line_is_an_expense_with_a_cent_a_month(books):
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 1_200,
+                           "prepaid": {"start": "2026-10", "months": 12}}])
+        for line in ({"account_id": account(c, "1000"), "amount": 1_200, "prepaid": {"start": "2026-10", "months": 12}},
+                     {"account_id": account(c, "6100"), "amount": 5, "prepaid": {"start": "2026-10", "months": 12}}):
+            got = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-10", "lines": [line]})
+            assert (got.status, got.code) == ("failed", "invalid"), got
