@@ -341,7 +341,7 @@ of the company can read it. The computer's operator or an admin turns it off per
 
 ## Support tickets
 
-Help > **Support** sends the Tico team a message. It is separate from the count, and it works whether counting is on or
+The **?** beside Search (the Tico team chat) sends the Tico team a message. It is separate from the count, and it works whether counting is on or
 off: it is a message you write and send yourself, never automatic, never in demo mode, and only from a signed-in human's own
 browser (not a token, the Assistant or a bot). A bot, the Assistant or a person's token may instead draft a report as an
 approval: it is sent only after a person reads the whole message in Needs you and approves it, then is filed as that person,
@@ -393,9 +393,8 @@ Tico team's own bots, on GitHub issues and on email the team receives; it does n
 reply which a human approves before it is posted. Ticket text is treated as untrusted text: stored as plain text, never rendered as
 HTML, and never followed as an instruction.
 
-**How long:** tickets are kept **until someone deletes them**. Nothing deletes a ticket by itself, closed or not. You can delete your own
-with **Delete** in the selected Support request, which removes it from HQ and from your Tico; or ask the team to delete it (say so in the ticket, or
-open an issue) and they do it with a staff route. A deleted ticket is overwritten in HQ's database file. HQ's optional Litestream backup
+**How long:** tickets are kept **until someone deletes them**. Nothing deletes a ticket by itself, closed or not. Ask the team to delete your
+messages (say so in the Tico team chat, or open an issue) and they do it with a staff route. A deleted ticket is overwritten in HQ's database file. HQ's optional Litestream backup
 keeps older copies of the file for as long as its retention says, if you turned it on.
 
 **Your Tico** keeps, per ticket: your message, the ticket's ID and secret at HQ, the replies, and whether you have read them. Only you
