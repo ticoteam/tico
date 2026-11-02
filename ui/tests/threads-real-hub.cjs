@@ -151,13 +151,19 @@ async function restrictPerson(hub) {
     await peer.locator('h1', {hasText: 'Priya'}).waitFor({timeout: t(15000)});
     await peer.waitForFunction(() => document.getElementById('person-home')?.hidden === true, null, {timeout: t(15000)});
     assert.equal(await peer.getByText(HOME_NOTE).count(), 0, 'a See-only peer does not read the Home of someone he does not manage');
+    // Nor may he write to her: no DM button, and the server refuses one too.
+    assert.equal(await peer.locator('#person-dm').count(), 0, 'no DM without Write on them');
     await peer.context().close();
+    const refused = await fetch(hub.url + '/api/v2/threads/dm', {method: 'POST', headers: {Authorization: 'Bearer ' + hub.tokens.omar,
+      'content-type': 'application/json', 'Idempotency-Key': crypto.randomUUID()}, body: JSON.stringify({members: ['human:priya'], body: 'Hi'})});
+    assert.equal(refused.status, 403, 'the server refuses a DM without Write');
 
     await api(hub, 'dana', 'POST', '/v2/humans/priya', {reports_to: 'omar'});
     const manager = await pageAs(browser, hub, 'omar');
     await manager.goto(hub.url + '/#/person/priya');
     await manager.locator('#person-home-thread').getByText(HOME_NOTE).waitFor({timeout: t(15000)});
     assert.equal(await manager.locator('#person-home').isVisible(), true, 'the manager sees the report\'s Home card');
+    assert.equal(await manager.locator('#person-dm').count(), 1, 'her manager may write to her');
     await manager.context().close();
 
     // Priya, phone: the company thread is on the Threads tab (the sidebar is in the closed drawer); tapping it opens the
@@ -236,16 +242,6 @@ async function restrictPerson(hub) {
     assert.equal(await dmCount(), dmsBefore + 1, 'the first message made the DM');
     await talk.waitForFunction(n => document.querySelectorAll('#dm-list [data-thread]').length === n, rowsBefore + 1, {timeout: t(15000)});
     await talk.context().close();
-
-    // Omar may see Priya but not write to her: no DM button, and the server refuses it too. Dana keeps hers.
-    const seer = await pageAs(browser, hub, 'omar');
-    await seer.goto(hub.url + '/#/person/priya');
-    await seer.locator('#ptabs').waitFor({timeout: t(15000)});
-    assert.equal(await seer.locator('#person-dm').count(), 0, 'no DM without Write on them');
-    await seer.context().close();
-    const refused = await fetch(hub.url + '/api/v2/threads/dm', {method: 'POST', headers: {Authorization: 'Bearer ' + hub.tokens.omar,
-      'content-type': 'application/json', 'Idempotency-Key': crypto.randomUUID()}, body: JSON.stringify({members: ['human:priya'], body: 'Hi'})});
-    assert.equal(refused.status, 403, 'the server refuses a DM without Write');
 
     const groups = await api(hub, 'dana', 'GET', '/v2/groups');
     const eng = (groups.groups || groups).find(g => g.name === 'Engineering');
