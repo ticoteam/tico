@@ -5,7 +5,7 @@ choose one of their own computers whose runner drives the Grok Mac app: `config.
 {"computer": <runner id>, "app": "grok"}`, set through the bot's definition (settings_admin.update_bot). While
 that computer is registered:
 
-- a message to the bot in its chat queues a job for that computer like any bot's (store.EXTERNAL_BOT_SQL), and
+- a message to the bot in its chat queues a job for that computer like any bot's (backend/enqueue.py), and
   the claim carries `app_delivery` and the bot's identity in the app (`app_bot`) in its config; the sync's inbox
   never hands the same message over as well (external_sync.take_inbox);
 - the computer reports what the app's conversation shows (`POST /api/v2/runners/me/app-delivery/{slug}`): the
@@ -64,7 +64,7 @@ def _config(c, bot):
 
 
 def active(c, config):
-    """The registered computer the bot is delivered through, or None: the same rule the queue trigger applies."""
+    """The registered computer the bot is delivered through, or None: the same rule backend/enqueue.py applies."""
     found = setting(config)
     if not found:
         return None

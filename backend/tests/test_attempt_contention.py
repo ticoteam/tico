@@ -12,6 +12,7 @@ from backend import flight, worktrees
 from backend.scheduler import Scheduler
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, headers, ready, runner  # noqa: F401
+from backend.enqueue import enqueue_stored
 
 
 def fleet(api, attempts=100, trees=50):
@@ -34,6 +35,7 @@ def fleet(api, attempts=100, trees=50):
                 c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
                           "VALUES(?,?,'human:ana','bot:ops','say','Synthetic work',?,?)",
                           (mid, cid, now, encode({"task": tid})))
+                enqueue_stored(c, mid)
                 c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,lane) "
                           "VALUES(?,?,'ops',?,?,?,'running',?,?,?)",
                           (f"attempt-{i}", mid, computer["runner_id"], generation, f"synthetic-{i}", until, now, "task:" + tid))

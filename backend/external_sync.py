@@ -44,6 +44,7 @@ from . import models as M
 from . import people as P
 from . import rooms
 from .blobs import register
+from .enqueue import enqueue
 from .store import H, Problem, encode
 
 # A routine runs on a schedule of days, not minutes: a bot synced within the last day and a bit
@@ -360,6 +361,7 @@ def import_messages(c, provider, person, slug, ext_id, messages, images=None, wh
             (mid, room["id"], sender, target, "say", text, encode(refs), created, now, now))
         added += cur.rowcount
         if cur.rowcount:
+            enqueue(c, {"id": mid, "sender_id": sender, "recipient_id": target, "refs": refs, "created_at": created})
             for item in attached:
                 c.execute("INSERT INTO message_assets VALUES(?,?)", (mid, item["id"]))
     if added:

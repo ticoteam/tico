@@ -1812,10 +1812,13 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None):
     author = message.get("sender_id") or ""
     body = body or f"{author} in this thread: {message.get('body') or ''}"
     legacy = c.execute("SELECT legacy_audience FROM messages WHERE id=?", (message["id"],)).fetchone()
+    created, stored = _now(), H._dump(refs)
     c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,created_at,"
               "origin_id,revision,restricted,legacy_audience) VALUES(?,?,?,?,'notice',?,?,NULL,?,?,0,1,?)",
-              (cid, thread["id"], H.KEEPER, bot, body, H._dump(refs), _now(), mint_origin(c),
+              (cid, thread["id"], H.KEEPER, bot, body, stored, created, mint_origin(c),
                legacy[0] if legacy else None))
+    from .enqueue import enqueue
+    enqueue(c, {"id": cid, "sender_id": H.KEEPER, "recipient_id": bot, "refs": stored, "created_at": created})
     return cid
 
 
@@ -2095,7 +2098,7 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
     if via:
         refs["via"] = via
     if quiet_notice({"refs": refs}):
-        refs["quiet"] = True            # nor does it start the addressed bot's run (the queue trigger reads quiet)
+        refs["quiet"] = True            # nor does it start the addressed bot's run (enqueue reads quiet)
     if origin:
         refs["origin"] = {k: origin.get(k) for k in ("origin_id", "revision", "install", "actor") if origin.get(k)}
     if attachments:

@@ -194,3 +194,80 @@ def test_a_bot_hand_off_held_as_a_note_queues_nothing(api):
         refs = json.loads(c.execute("SELECT refs FROM messages WHERE sender_id=? ORDER BY rowid DESC LIMIT 1",
                                     (ops,)).fetchone()[0])
     assert sent == [(ops, coo, "say", False)] and refs.get("quiet")
+
+
+# The trigger as the last release that had it defined it (backend/store.py before migration 0051), kept here as the
+# oracle `enqueue` is checked against row for row on the odd inputs the product's writers never produce.
+_HARNESSES = "'hermes','openclaw','grokbot','dots','muse'"
+_LEGACY_TRIGGER = (
+    "CREATE TRIGGER queue_bot_message AFTER INSERT ON messages "
+    "WHEN NEW.recipient_id LIKE 'bot:%' AND COALESCE(NEW.sender_id, '') != NEW.recipient_id "
+    "AND COALESCE(json_extract(NEW.refs,'$.live.kind'), '') NOT IN ('transcript','decision','tool') "
+    "AND COALESCE(json_extract(NEW.refs,'$.quiet'), 0) = 0 "
+    "AND NOT EXISTS (SELECT 1 FROM bot_config WHERE bot=substr(NEW.recipient_id,5) AND "
+    "json_extract(config,'$.harness') IN (" + _HARNESSES + ") AND NOT EXISTS ("
+    "SELECT 1 FROM runners r WHERE r.id=json_extract(config,'$.app_delivery.computer') "
+    "AND r.revoked_at IS NULL)) BEGIN "
+    "INSERT INTO jobs(id,message_id,bot_id,created_at) "
+    "VALUES(NEW.id,NEW.id,substr(NEW.recipient_id,5),NEW.created_at); END")
+
+
+def _bare(trigger):
+    import sqlite3
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        "CREATE TABLE messages(id TEXT PRIMARY KEY, sender_id TEXT, recipient_id TEXT, refs TEXT, created_at TEXT);"
+        "CREATE TABLE jobs(id TEXT PRIMARY KEY, message_id TEXT, bot_id TEXT, created_at TEXT);"
+        "CREATE TABLE bot_config(bot TEXT PRIMARY KEY, config TEXT);"
+        "CREATE TABLE runners(id TEXT PRIMARY KEY, revoked_at TEXT);"
+        "INSERT INTO runners VALUES('mac', NULL), ('old-mac', '2026-01-01');"
+        "INSERT INTO bot_config VALUES"
+        "('inbox', '{\"harness\":\"hermes\"}'),"
+        "('desk', '{\"harness\":\"openclaw\",\"app_delivery\":{\"computer\":\"mac\"}}'),"
+        "('gone', '{\"harness\":\"dots\",\"app_delivery\":{\"computer\":\"old-mac\"}}'),"
+        "('ops', '{\"harness\":\"claude\"}');")
+    if trigger:
+        conn.execute(_LEGACY_TRIGGER)
+    return conn
+
+
+def test_enqueue_matches_the_dropped_trigger_on_every_odd_input():
+    from backend.enqueue import enqueue
+    from backend.harnesses import EXTERNAL_HARNESSES
+    assert set(EXTERNAL_HARNESSES) == {h.strip("'") for h in _HARNESSES.split(",")}   # the oracle's list is current
+    senders = (None, "", "human:ana", "bot:ops", "BOT:ops")
+    recipients = ("bot:ops", "BOT:ops", "Bot:inbox", "bot:inbox", "bot:desk", "bot:gone", "bot:", "human:ana", "ops",
+                  "", None, "xbot:ops")
+    refs = (None, "{}", "[]", '"words"', "1", "null", '{"quiet":true}', '{"quiet":false}', '{"quiet":0}',
+            '{"quiet":0.0}', '{"quiet":1}', '{"quiet":""}', '{"quiet":"no"}', '{"quiet":[]}', '{"quiet":{}}',
+            '{"quiet":null}', '{"live":{"kind":"transcript"}}', '{"live":{"kind":"decision"}}',
+            '{"live":{"kind":"tool"}}', '{"live":{"kind":"ask"}}', '{"live":{"kind":""}}', '{"live":{"kind":1}}',
+            '{"live":"transcript"}', '{"live":["transcript"]}', '{"live":{"kind":"Transcript"}}',
+            '{"live":{"kind":"transcript"},"quiet":false}', '{"command":true}', '{"task":["t1"]}')
+    legacy, current = _bare(True), _bare(False)
+    n = 0
+    for sender in senders:
+        for recipient in recipients:
+            for ref in refs:
+                n += 1
+                row = {"id": f"m{n}", "sender_id": sender, "recipient_id": recipient, "refs": ref,
+                       "created_at": "2026-11-02T00:00:00Z"}
+                values = tuple(row[k] for k in ("id", "sender_id", "recipient_id", "refs", "created_at"))
+                legacy.execute("INSERT INTO messages VALUES(?,?,?,?,?)", values)
+                current.execute("INSERT INTO messages VALUES(?,?,?,?,?)", values)
+                enqueue(current, row)
+    jobs = "SELECT id, message_id, bot_id, created_at FROM jobs ORDER BY id"
+    want = legacy.execute(jobs).fetchall()
+    assert want and current.execute(jobs).fetchall() == want
+    assert len(want) < n                       # the matrix exercises both outcomes
+
+
+def test_a_bare_hub_database_queues_nothing():
+    """A hub database without Store's job queue (no `jobs` table) writes messages and queues nothing."""
+    import sqlite3
+
+    from backend.enqueue import enqueue
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE messages(id TEXT PRIMARY KEY)")
+    assert enqueue(conn, {"id": "m1", "sender_id": "human:ana", "recipient_id": "bot:ops", "refs": "{}",
+                          "created_at": "2026-11-02T00:00:00Z"}) is None

@@ -69,6 +69,8 @@ def restore(path):
 
 
 # Dropped by backend/migrations/0035_growth_rethink.py after the renames ran on them.
+# Objects a later migration drops on purpose: 0051 replaced the queue trigger with backend/enqueue.py.
+DROPPED = {"queue_bot_message"}
 RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",
            "gtm_versions", "gtm_drafts"}
 
@@ -126,7 +128,8 @@ def test_indexes_triggers_and_views_survive_and_name_no_old_column(upgraded):
         now = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type=?", (kind,))}
         # The tables 0035_growth_rethink retires take their indexes with them.
         kept = {name for name in before[kind + "es" if kind == "index" else kind + "s"]
-                if not any(table in name for table in RETIRED) and not name.startswith("growth_idea")}
+                if not any(table in name for table in RETIRED) and not name.startswith("growth_idea")
+                and name not in DROPPED}
         assert kept <= now, kind
     # An old name may live on as a column elsewhere (or as another rename's new name), so look only for names
     # that no table has any more, outside string literals.
@@ -143,16 +146,20 @@ def test_indexes_triggers_and_views_survive_and_name_no_old_column(upgraded):
 
 
 def test_a_message_to_a_bot_still_queues_a_job(upgraded):
+    from backend.enqueue import enqueue_stored
     _store, conn, _before = upgraded
     refs = new("messages", "refs_json")
     created = new("messages", "created")
+    assert not conn.execute("SELECT 1 FROM sqlite_master WHERE name='queue_bot_message'").fetchone()
     conn.execute(f"INSERT INTO messages(id, conversation_id, sender_id, recipient_id, kind, body, {refs}, {created}) "
                  "VALUES('msg-2', 'conv-1', 'human:ana', 'bot:ops', 'chat', 'please ship', '{}', ?)", (NOW,))
+    enqueue_stored(conn, "msg-2")
     job = conn.execute("SELECT * FROM jobs WHERE message_id='msg-2'").fetchone()
     assert job and job["bot_id"] == "ops" and job["state"] == "queued" and job[new("jobs", "created")] == NOW
     # A quiet message (read through the renamed refs column) queues nothing.
     conn.execute(f"INSERT INTO messages(id, conversation_id, sender_id, recipient_id, kind, body, {refs}, {created}) "
                  "VALUES('msg-3', 'conv-1', 'human:ana', 'bot:ops', 'chat', 'fyi', '{\"quiet\":1}', ?)", (NOW,))
+    enqueue_stored(conn, "msg-3")
     assert not conn.execute("SELECT 1 FROM jobs WHERE message_id='msg-3'").fetchone()
     conn.rollback()
 
