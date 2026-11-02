@@ -91,6 +91,7 @@ async function open(browser, who, w, hash, viewport = DESKTOP) {
     if (p === '/api/v2/finance/actions' && req.method() === 'POST') {
       const body = req.postDataJSON(); w.actions.push(body);
       const load = body.payload || {};
+      if (w.actionHold) await w.actionHold;
       if (w.approve) return json({status: 'needs_approval'});
       if (body.kind === 'location_update' && !('active' in load)) { const {location_id, ...fields} = load; Object.assign(w.locations.find(l => l.id === location_id), fields); }
       if (body.kind === 'location_update' && 'active' in load) w.locations.find(l => l.id === load.location_id).archived_at = load.active ? null : '2026-11-01T00:00:00Z';
@@ -126,7 +127,12 @@ async function open(browser, who, w, hash, viewport = DESKTOP) {
       return json({task: {id: 't-9'}});
     }
     // The list has no history; the detail does.
-    if (p === '/api/v2/due-dates') return json({due_dates: w.due_dates.filter(d => d.subject_id === url.searchParams.get('subject_id')).map(({history, ...d}) => d), next_cursor: null});
+    if (p === '/api/v2/due-dates') {
+      const sp = url.searchParams, from = Number(sp.get('cursor') || 0), limit = Number(sp.get('limit') || 50);
+      if (w.dueHold?.[sp.get('subject_id')]) await w.dueHold[sp.get('subject_id')];
+      const found = w.due_dates.filter(d => d.subject_id === sp.get('subject_id')).map(({history, ...d}) => d);
+      return json({due_dates: found.slice(from, from + limit), next_cursor: from + limit < found.length ? String(from + limit) : null});
+    }
     const date = p.match(/^\/api\/v2\/due-dates\/([^/]+)$/);
     if (date) return json({due_date: w.due_dates.find(d => d.id === date[1])});
     const m = p.match(/^\/api\/v2\/(locations|items|projects|equipment)(?:\/([^/]+))?$/);
@@ -331,6 +337,97 @@ const close = async (o, label) => { assert.deepEqual(o.errors, [], label + ' pag
     assert.equal(w.actions.at(-1).payload.subject_id, 'eq-1');
     assert.doesNotMatch(await page.locator('#ops-panel').textContent(), /\brule/i, 'never the word');
     await close(o, 'due dates');
+  }
+
+  // A late answer stays with the panel that asked. A's list answers after B's panel is up; B keeps B's dates, and its buttons
+  // change B's. A write finishing after the panel moved on leaves the new panel alone too.
+  {
+    const w = world();
+    w.due_dates.push({id: 'dd-2', name: 'Coil cleaning', subject_type: 'equipment', subject_id: 'eq-2', repeats: 'yearly', starts_on: '2026-01-01', next_due_on: iso(10), status: 'upcoming', lead_days: 14, archived_at: null, history: []});
+    let release;
+    w.dueHold = {'eq-1': new Promise(r => { release = r; })};
+    const o = await open(browser, 'ana', w, '#/operations/equipment?id=eq-1'), {page} = o;
+    await page.locator('#ops-panel h2', {hasText: 'Rooftop unit 3'}).waitFor();
+    await page.waitForTimeout(200);
+    await page.evaluate(() => { location.hash = '#/operations/equipment?id=eq-2'; });
+    await page.locator('[data-due="dd-2"]').waitFor();
+    release();
+    w.dueHold = null;
+    await page.waitForTimeout(300);
+    assert.equal(await page.locator('[data-due="dd-1"]').count(), 0, "A's late answer doesn't draw on B's panel");
+    await page.locator('[data-due="dd-2"] [data-due-done]').click();
+    await page.waitForFunction(() => document.querySelector('.toast')?.textContent.includes('Done'));
+    assert.equal(w.actions.at(-1).payload.due_date_id, 'dd-2');
+
+    let let_go;
+    await page.evaluate(() => { location.hash = '#/operations/equipment?id=eq-1'; });
+    await page.locator('[data-due="dd-1"] [data-due-done]').waitFor();
+    w.actionHold = new Promise(r => { let_go = r; });
+    await page.locator('[data-due="dd-1"] [data-due-done]').click();
+    await page.evaluate(() => { location.hash = '#/operations/equipment?id=eq-2'; });
+    await page.locator('[data-due="dd-2"]').waitFor();
+    let_go();
+    w.actionHold = null;
+    await page.waitForFunction(n => document.querySelectorAll('.toast').length >= n, 1);
+    await page.waitForTimeout(300);
+    assert.equal(await page.locator('[data-due="dd-1"]').count(), 0, "A's finished write doesn't redraw B's panel");
+    await page.locator('[data-due="dd-2"]').waitFor();
+    await close(o, 'late answers');
+  }
+
+  // Past the first page: the most pressing is on top however its name sorts, and More reaches the rest.
+  {
+    const w = world();
+    w.due_dates = Array.from({length: 230}, (_, n) => ({id: 'many-' + n, name: `Check ${String(n).padStart(3, '0')}`, subject_type: 'equipment', subject_id: 'eq-1', repeats: 'yearly', starts_on: '2026-01-01', next_due_on: iso(100 + n), status: 'upcoming', lead_days: 0, archived_at: null, history: []}));
+    w.due_dates.push({id: 'dd-z', name: 'Z inspection', subject_type: 'equipment', subject_id: 'eq-1', repeats: 'once', starts_on: '2026-01-01', next_due_on: iso(-5), status: 'overdue', lead_days: 0, archived_at: null, history: []});
+    const o = await open(browser, 'ana', w, '#/operations/equipment?id=eq-1'), {page} = o;
+    const shown = page.locator('#ops-m-due .ops-due');
+    await shown.first().waitFor();
+    assert.equal(await shown.first().locator('b').textContent(), 'Z inspection', 'overdue first, from past the first read');
+    assert.equal(await shown.count(), 50);
+    await page.locator('[data-due-more]').click();
+    await page.waitForFunction(() => document.querySelectorAll('#ops-m-due .ops-due').length === 100);
+    await page.locator('[data-due="many-98"]').waitFor();
+    assert.equal(await shown.first().locator('b').textContent(), 'Z inspection');
+    // A write keeps what's open.
+    await page.locator('[data-due="many-90"] [data-due-done]').click();
+    await page.waitForFunction(() => document.querySelector('.toast')?.textContent.includes('Done'));
+    await page.waitForTimeout(200);
+    assert.equal(await shown.count(), 100);
+    await close(o, 'many due dates');
+  }
+
+  // The assignee works their own without the records right; the schedule stays an editor's, and someone else's has no buttons.
+  {
+    const w = world();
+    w.due_dates[0].assignee_id = 'human:cara';
+    w.due_dates.push({id: 'dd-3', name: 'Coil cleaning', subject_type: 'equipment', subject_id: 'eq-1', repeats: 'yearly', starts_on: '2026-01-01', next_due_on: iso(10), status: 'upcoming', lead_days: 14, assignee_id: 'human:ana', archived_at: null, history: [{due_on: '2026-01-01', completed_at: '2026-01-02T10:00:00Z', completed_by_id: 'human:ana', task_id: null}]});
+    const o = await open(browser, 'cara', w, '#/operations/equipment?id=eq-1'), {page} = o;
+    const mine = page.locator('[data-due="dd-1"]'), theirs = page.locator('[data-due="dd-3"]');
+    await mine.locator('[data-due-done]').waitFor();
+    await mine.locator('summary').click();
+    assert.equal(await mine.locator('[data-due-reopen]').count(), 1);
+    assert.equal(await theirs.locator('[data-due-done],[data-due-reopen]').count(), 0);
+    assert.equal(await page.locator('[data-due-add],[data-due-stop]').count(), 0, 'no schedule changes');
+    await mine.locator('[data-due-done]').click();
+    await page.waitForFunction(() => document.querySelector('.toast')?.textContent.includes('Done'));
+    assert.equal(w.actions.at(-1).kind, 'due_date_occurrence_complete');
+    await close(o, 'assignee');
+  }
+
+  // A repeat counted from its last completion reopens only the latest; a calendar repeat reopens any.
+  {
+    const w = world(), history = [{due_on: '2026-09-30', completed_at: '2026-10-01T10:00:00Z', completed_by_id: 'human:ana', task_id: null}, {due_on: '2026-10-30', completed_at: '2026-10-30T10:00:00Z', completed_by_id: 'human:ana', task_id: null}];
+    Object.assign(w.due_dates[0], {repeats: 'every_days', every_count: 30, history});
+    w.due_dates.push({id: 'dd-4', name: 'Fire inspection', subject_type: 'equipment', subject_id: 'eq-1', repeats: 'quarterly', starts_on: '2026-01-01', next_due_on: iso(30), status: 'upcoming', lead_days: 0, archived_at: null, history});
+    const o = await open(browser, 'ana', w, '#/operations/equipment?id=eq-1'), {page} = o;
+    const anchored = page.locator('[data-due="dd-1"] [data-due-reopen]');
+    await page.locator('[data-due="dd-1"] summary').click();
+    assert.deepEqual(await anchored.evaluateAll(els => els.map(e => e.dataset.on)), ['2026-10-30']);
+    await page.locator('[data-due="dd-4"] summary').click();
+    assert.equal(await page.locator('[data-due="dd-4"] [data-due-reopen]').count(), 2);
+    assert.equal(await page.locator('[data-due="dd-1"] .ops-hist li').count(), 2, 'the older day still shows');
+    await close(o, 'reopen latest');
   }
 
   // CSV: per-row errors and duplicates; a kept duplicate and the bulk location go to commit.
