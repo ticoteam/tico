@@ -50,9 +50,10 @@ def test_no_change_is_free_and_logs_without_creating_any_task(api, monkeypatch):
         assert runs.admit(c, store.settings, AT) == []
 
 
-def test_private_container_cannot_start_an_ordinary_turn_while_its_check_runs(api, monkeypatch):
+@pytest.mark.parametrize('unavailable', [False, True])
+def test_private_container_cannot_start_an_ordinary_turn_while_its_check_runs(api, monkeypatch, unavailable):
     from backend.tests.test_api import assign, claim, runner
-    from backend.tests.test_check_models import all_ready
+    from backend.tests.test_check_models import all_ready, out_of_quota
 
     monkeypatch.setattr(H, 'now', lambda: runs.stamp(AT))
     store = setup(api)
@@ -70,6 +71,13 @@ def test_private_container_cannot_start_an_ordinary_turn_while_its_check_runs(ap
     # Claim backfill considers same-owner subtasks separately, even without a
     # queued notice. The container must stay asleep when another slot is free.
     assert claim(api, machine) is None
+    if unavailable:
+        out_of_quota(api, machine, check)
+        assert claim(api, machine) is None, 'a model-unavailable skip cannot wake the container'
+        with store.read() as c:
+            assert H.task(c, row['parent_task_id'])['status'] == 'closed'
+            assert H.task(c, row['check_task_id'])['status'] == 'closed'
+            assert c.execute('SELECT reason FROM memory_tidy_passes').fetchone()[0] == 'skipped: model unavailable'
 
 
 @pytest.mark.parametrize('reason', ['skipped: model floor', 'skipped: spend limit'])
