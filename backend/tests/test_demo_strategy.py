@@ -53,7 +53,7 @@ def test_an_earlier_version_and_a_diff_show_the_change(built):
         diff = api.get("/api/v2/strategy/diff?from=1&to=2").json()
     assert [v["n"] for v in versions] == [2, 1]
     assert [field["key"] for field in diff["fields"]] == [
-        "summary", "sections.serve", "sections.sell", "sections.how", "sections.not"]
+        "summary", "sections.serve", "sections.sell", "sections.proof", "sections.how", "sections.not"]
     assert [bet["statement"] for bet in diff["bets"]["added"]] == [
         "Business installs are the margin; homes are the volume and the brand."]
 

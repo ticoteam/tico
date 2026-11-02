@@ -31,6 +31,13 @@ CONTENT = {
                 "The Scene Library is sold on top: $4.99 a month, or $29 for a season.\n\n"
                 "The price that breaks: a kit that needs a second visit to calibrate costs us a return and a trip. A "
                 "lower price does not fix that, so we fix the calibration first.",
+        "proof": "Owners come back. Most of last season's owners bought a second scene before New Year, and they bought "
+                 "it in our store.\n\n"
+                 "The kits that came back were nearly all a scene that landed crooked on the first night. 16 in 100 first "
+                 "calibrations still fail, and that is the number we watch.",
+        "now": "A phone camera can now map a facade in one pass, which took a technician two years ago. LED projectors got "
+               "bright enough to light a two-storey house at $449. And people now expect a holiday show that changes each "
+               "season, not one string of lights.",
         "know": "A projector is only as good as its first night. A scene that lands crooked gets the kit returned, and "
                 "the owner never buys a second scene. Calibration decides both, and it is where other kits ask for a "
                 "second visit or a manual setup. We map the facade in one pass, so the first night is the one people keep.",
@@ -42,7 +49,7 @@ CONTENT = {
                "- We won't cut the kit price below a retail partner's shelf price.\n"
                "- We won't ship a scene that has not run on a real facade.",
     },
-    # Version 2 changes these four sections for the business branch; "know" stays as it was.
+    # Version 2 changes these five sections for the business branch; "know" and "now" stay as they were.
     "sections_v2": {
         "serve": "Homeowners who want the house to be the light show on the street, set up themselves over one weekend.\n\n"
                  "Shops and hotels that want a storefront or a lobby lit for the season. Towns and HOAs that want a street "
@@ -56,6 +63,11 @@ CONTENT = {
                 "season's scene set.\n\n"
                 "The price that breaks: a facade quote below the crew's cost loses money on every site. We quote from the "
                 "survey, not from the size of the wall.",
+        "proof": "Owners come back. Most of last season's owners bought a second scene before New Year, and they bought "
+                 "it in our store.\n\n"
+                 "Business asked before we sold it: shop owners wrote in after seeing a house on their street, and the "
+                 "three downtown storefronts we lit as a test asked for next season's license before this one ended.\n\n"
+                 "16 in 100 first calibrations still fail, and that is the number we watch.",
         "how": "Home kits go through the store, the marketplace and retail, as before.\n\n"
                "Business goes through direct sales for shops, hotels and towns, and through installer and event partners "
                "who run the survey and the crew. Towns and HOAs put their holiday contracts out to public bid, and we bid "
