@@ -1,9 +1,13 @@
 # Finance tools
 
-Seven hub tools reach Finance. Each is an MCP tool (`hub_finance_*`) and a `hub finance` command with the same
-inputs. Every call runs as its caller, a person or a bot, with that caller's own Finance rights and view: a bot
-without finance.pay cannot pay, and a bot sees only what its view covers. Payroll's private lines stay private for
-everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else reads or writes the books.
+Thirteen hub tools in all: seven reach Finance, and six read the Operations records (see [Records](#records)). Each
+is an MCP tool (`hub_finance_*`, `hub_locations`, `hub_items`, `hub_projects`, `hub_equipment`, `hub_due_dates`,
+`hub_customers`) and a `hub` command with the same inputs (`hub finance …`, `hub locations|items|projects|equipment|
+due-dates|customers list|get`). Every call runs as its caller, a person or a bot, with that caller's own Finance rights
+and view: a bot without finance.pay cannot pay, and a bot sees only what its view covers. Payroll's private lines stay
+private for everyone. The Finance tools call the Finance API under `/api/v2/finance/`, and the record tools the record
+routes under `/api/v2/` (locations, items, projects, equipment, due-dates, customers); nothing else reads or writes the
+books or the records.
 
 ## The tools
 
@@ -16,6 +20,26 @@ everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else 
 | `hub_finance_action` | `hub finance action <id>` | `action_id` | the action's current status |
 | `hub_finance_inbox` | `hub finance inbox` | `kind`, `cursor`, `limit` | `{items, counts, next_cursor}`: the caller's Finance work queue; with `kind`, that kind alone, paged past its first 200 |
 | `hub_finance_card_fill` | `hub finance card-fill` | `card_id`, `merchant`, `amount` | not available yet |
+
+## Records
+
+The Operations records (locations, items, products and services, projects, equipment, due dates and customers) are
+read with one tool per type. Each takes an optional `id`: with it, that one record, archived or not; without it, a page
+of the list, by name. Writes stay on `hub_finance_act` (`location_create`, `item_create`, `project_create`,
+`equipment_create`, `due_date_create`, `contact_create`); the record tools never write.
+
+| Tool | Command | Input | Output |
+|---|---|---|---|
+| `hub_locations` | `hub locations list` / `get <id>` | `id`, `q`, `archived` (hide, only, all), `kind` (store, office, warehouse, plant, customer_site, vehicle, other), `customer_id`, `cursor`, `limit` (up to 200) | `{locations, next_cursor}`; with `id`, `{location}` with its `next_due_on` |
+| `hub_items` | `hub items list` / `get <id>` | `id`, `q`, `archived`, `kind` (service, inventory, non_inventory, bundle, category, raw_material, assembly), `cursor`, `limit` | `{items, next_cursor}`; with `id`, `{item}`, its accounts only where you see them |
+| `hub_projects` | `hub projects list` / `get <id>` | `id`, `q`, `archived`, `status` (open, closed), `customer_id`, `cursor`, `limit` | `{projects, next_cursor}`; with `id`, `{project}` |
+| `hub_equipment` | `hub equipment list` / `get <id>` | `id`, `q`, `archived`, `kind` (owned, customer), `customer_id`, `location_id`, `warranty_ends_by`, `warranty` (ending), `due` (soon, overdue), `cursor`, `limit` | `{equipment, next_cursor}`; with `id`, `{equipment}` |
+| `hub_due_dates` | `hub due-dates list` / `get <id>` | `id`, `q`, `archived`, `subject_type` (location, equipment, contact), `subject_id`, `cursor`, `limit` | `{due_dates, next_cursor}`; with `id`, `{due_date}` with its days |
+| `hub_customers` | `hub customers list` / `get <id>` | `id` (a customer's contact id: its panel instead of the list), `q`, `cursor`, `limit` | `{customers, next_cursor}`; with `id`, the panel: `contact`, `locations`, `equipment`, `due_dates`, and `estimates` and `invoices` where you see receivables (null without it) |
+
+A bot reads what its routes give it: any teammate may read these records, and a bot without the receivables view sees
+the customer panel without its estimates and invoices. A record's list page is cut to the same budget as a Finance
+result (see [Sizes](#sizes)), and `next_cursor` carries on from the last row shown.
 
 ## Acting
 
@@ -41,7 +65,7 @@ hub finance action fa_123
 
 ## Sizes
 
-A result is kept to about 4,000 tokens. `limit` (search, inbox) or `top_n` (reports) raises that to about 16,000. A
+A result is kept to about 4,000 tokens. `limit` (search, inbox, the record lists) or `top_n` (reports) raises that to about 16,000. A
 longer list keeps its first rows and ends with one row labelled "Other · n" that counts, and for reports adds up, the
 rest; a paged list's `next_cursor` carries on from the last row shown. Period columns are never folded. A row too
 big on its own keeps its ids and amounts and has its long text and nested lists cut; a result that still does not fit
