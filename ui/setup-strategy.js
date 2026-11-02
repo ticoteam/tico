@@ -150,7 +150,7 @@ function ssSideHTML(state) {
   return `<p class="ss-side-head"><b>Draft</b> <span class="muted">· not published</span></p>
     ${block(STRAT_SECTIONS[0].title, text('serve'))}${block(STRAT_SECTIONS[1].title, text('sell'))}
     ${block(label, kept.length ? `<ol class="ss-side-bets">${kept.map(b => `<li>${esc(b.statement)}</li>`).join('')}</ol>` : '<p class="muted strat-empty">None kept yet</p>')}
-    ${block(STRAT_SECTIONS[3].title, not ? `<p class="strat-text">${esc(not)}</p>` : none)}`;
+    ${block(STRAT_SECTIONS.find(sec => sec.key === 'not').title, not ? `<p class="strat-text">${esc(not)}</p>` : none)}`;
 }
 
 // Entering the step reads the draft and the newest run, then polls a run still going.

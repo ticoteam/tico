@@ -328,7 +328,8 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   // Old addresses land on what replaced them.
   for (const [from, to] of [['#/growth/channels', '#/growth'], ['#/growth/learning', '#/growth'], ['#/growth/week', '#/growth'], ['#/growth/ideas', '#/growth'],
     ['#/growth/buyers', '#/strategy'], ['#/growth/segments', '#/strategy'], ['#/growth/gtm', '#/strategy'], ['#/growth/gtm/model', '#/strategy'], ['#/strategy/gtm', '#/strategy'],
-    ['#/strategy/gtm/channels', '#/strategy'], ['#/growth/gtm/sources', '#/growth/sources'], ['#/strategy/growth', '#/growth'], ['#/strategy/growth/channels?x=1', '#/growth']]) {
+    ['#/strategy/gtm/channels', '#/strategy'], ['#/growth/gtm/sources', '#/growth/sources'], ['#/strategy/gtm/sources', '#/growth/sources'],
+    ['#/strategy/growth', '#/growth'], ['#/strategy/growth/channels?x=1', '#/growth']]) {
     await go(page, from);
     await arrive(to, from);
   }

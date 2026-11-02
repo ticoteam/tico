@@ -828,6 +828,18 @@ def test_a_bot_that_does_not_own_a_marketing_idea_cannot_finish_it(api):
         assert H.task(c, tid)["status"] == "open"
 
 
+def test_an_owner_bot_cannot_close_a_marketing_idea_onto_another_board_that_has_the_same_step_name(api):
+    with api.app.state.store.transaction() as c:
+        tid = marketing_idea(c)
+        sales = H.type_create(c, H.KEEPER, "Sales", [{"name": "Draft", "status": "open"},
+                                                       {"name": "Lost", "status": "closed"}])
+        with pytest.raises(H.Refused, match="only they or their managers close it"):
+            H.task_update(c, "bot:cmo", tid, type=sales["id"], step="Lost", note="Lost on cost.")
+        with pytest.raises(H.Refused, match="only they or their managers close it"):
+            H.task_close(c, "bot:cmo", tid, note="Lost on cost.", type=sales["id"], step="Lost")
+        assert H.task(c, tid)["status"] == "open"
+
+
 def test_the_verdict_alias_on_a_live_server_pauses_an_idea_with_its_result_as_the_note(api, live, monkeypatch):
     with api.app.state.store.transaction() as c:
         tid = marketing_idea(c)
