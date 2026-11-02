@@ -136,10 +136,14 @@ async function restrictPerson(hub) {
     await omar.getByText('Not found').waitFor({timeout: t(15000)});
     assert.ok(!(await omar.content()).includes(SECRET), 'the members-only text is not on Omar\'s page');
     await omar.goto(hub.url + '/#/bot/' + BOT + '/dm');
-    await omar.locator('#btabs').waitFor({state: 'attached', timeout: t(15000)});
+    // A peer who may only see the bot gets Info and Rules (bot-page.js botTabs): the DM route falls back to Info, with
+    // no Home, DM or Tasks tab and no work pane.
+    await omar.locator('#pane-more').waitFor({timeout: t(15000)});
     await omar.waitForLoadState('networkidle');
-    assert.equal(await omar.locator('.bot-talk-switch [data-talk="home"]').count(), 0,
-      'a peer with See only on the bot gets no Home tab');
+    assert.equal(await omar.locator('#btabs [data-bt="home"]').count(), 0, 'a peer with See only on the bot gets no Home tab');
+    assert.equal(await omar.locator('#btabs [data-bt="dm"]').count(), 0, 'a peer who may not write to the bot gets no DM tab');
+    assert.equal(await omar.locator('.bot-talk-switch').count(), 0, 'a peer with See only on the bot has no Home/DM switch');
+    assert.equal(await omar.locator('#bot-work').isVisible(), false, 'a peer with See only on the bot has no work pane');
     await omar.context().close();
 
     // Priya's Home. Omar sees Priya but is not her manager (Priya reports to Dana), so her Home is hidden from him. Dana then
@@ -164,10 +168,14 @@ async function restrictPerson(hub) {
     // thread with its composer, and the page does not scroll sideways.
     const priya = await pageAs(browser, hub, 'priya', {phone: true});
     await priya.goto(hub.url + '/#/tasks');
-    await priya.locator('#mobile-threads').tap();
+    // On a phone the list is one tap away, the Threads tab in the bottom bar (ui/tests/threads.cjs does the same): the
+    // sidebar on this page sits off screen.
+    await priya.locator('#mobile-threads:not([hidden])').waitFor({timeout: t(15000)});
+    await priya.locator('#mobile-threads').click();
+    await priya.waitForFunction(() => location.hash === '#/threads', null, {timeout: t(15000)});
     await priya.locator('.threads-page .th-row-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
     assert.equal(await priya.locator('.threads-page .th-row-title', {hasText: 'Pricing war room'}).count(), 0);
-    await priya.locator('.threads-page a.th-row[data-thread="' + plan.id + '"]').first().tap();
+    await priya.locator('.threads-page a.th-row[data-thread="' + plan.id + '"]').tap();
     await priya.waitForURL(new RegExp('#/thread/' + plan.id), {timeout: t(15000)});
     await priya.getByText(PLAN).waitFor({timeout: t(15000)});
     await priya.locator('.thv-composer .p-text').waitFor({timeout: t(15000)});
