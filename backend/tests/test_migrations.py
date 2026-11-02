@@ -303,42 +303,62 @@ def test_an_existing_bots_runtime_model_and_host_move_into_its_config_then_the_c
         "name": "x", "reasoning_effort": "low", "model": "kept-in-config", "runtime": "codex", "host": "keeper"}
 
 
-def test_an_existing_kpi_goal_and_target_become_a_goal_link_then_the_columns_go(tmp_path):
-    """Migration 0042: a KPI with a goal but no link to it gets one, holding its target as an improvement; then the
-    kpis columns goal_id and target are dropped."""
+def _old_kpis(c):
+    """kpis as a database before 0042 has it: goal_id (NOT NULL, '' for none), target and the kpis_goal index."""
+    c.execute("ALTER TABLE kpis ADD COLUMN goal_id TEXT NOT NULL DEFAULT ''")
+    c.execute("CREATE INDEX kpis_goal ON kpis(goal_id)")
+
+
+def _old_kpi(c, kid, goal, target):
+    c.execute("INSERT INTO kpis(id,slug,name,unit,target,goal_id,owner_id,direction,cadence,created_at,created_by_id,"
+              "definition_version,updated_at) VALUES(?,?,?,'',?,?,'company','up','weekly','2026-01-01T00:00:00Z',"
+              "'human:ana',1,'2026-01-01T00:00:00Z')", (kid, kid, kid.title(), target, goal))
+
+
+def test_an_existing_kpi_goal_becomes_a_goal_link_holding_its_target_then_goal_id_goes(tmp_path):
+    """Migration 0042: a KPI with a goal but no link to it gets one, holding its target as an improvement; a link
+    already made keeps its own target; then kpis.goal_id and its index are dropped. kpis.target stays."""
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
-        goal = "g-old"
-        c.execute("INSERT INTO goals(id,title,owner,created_at,created_by,updated_at) "
-                  "VALUES(?,'Grow revenue','company','2026-01-01T00:00:00Z','human:ana','2026-01-01T00:00:00Z')", (goal,))
-        c.execute("ALTER TABLE kpis ADD COLUMN goal_id TEXT NOT NULL DEFAULT ''")
-        c.execute("ALTER TABLE kpis ADD COLUMN target REAL")
-        c.execute("CREATE INDEX kpis_goal ON kpis(goal_id)")
-        c.execute("INSERT INTO kpis(id,slug,name,unit,target,goal_id,owner,direction,cadence,created_at,created_by,"
-                  "definition_version,updated_at) VALUES('k-old','old-measure','Old measure','',7.5,?,'company','up',"
-                  "'weekly','2026-01-01T00:00:00Z','human:ana',1,'2026-01-01T00:00:00Z')", (goal,))
+        for goal in ("g-old", "g-linked"):
+            c.execute("INSERT INTO goals(id,title,owner_id,created_at,created_by_id,updated_at) VALUES(?,'Grow revenue',"
+                      "'company','2026-01-01T00:00:00Z','human:ana','2026-01-01T00:00:00Z')", (goal,))
+        _old_kpis(c)
+        _old_kpi(c, "k-old", "g-old", 7.5)
+        _old_kpi(c, "k-plain", "g-old", None)
+        _old_kpi(c, "k-linked", "g-linked", 4)
+        c.execute("INSERT INTO goal_kpis(id,goal_id,kpi_id,kind,target,deadline,created_at,created_by_id,updated_at,"
+                  "updated_by_id) VALUES('k-linked','g-linked','k-linked','improve',9,'2026-12-31','2026-01-01T00:00:00Z',"
+                  "'human:ana','2026-01-01T00:00:00Z','human:ana')")
     _back_to_before(path, "0042")
     boot(path)
     with sqlite3.connect(path) as c:
         columns = {row[1] for row in c.execute("PRAGMA table_info(kpis)")}
-        link = c.execute("SELECT goal_id, kind, target FROM goal_kpis WHERE kpi_id='k-old'").fetchall()
-    assert not {"goal_id", "target"} & columns
-    assert link == [(goal, "improve", 7.5)]
+        links = {r[0]: r[1:] for r in c.execute("SELECT kpi_id, goal_id, kind, target FROM goal_kpis")}
+        indexes = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        targets = dict(c.execute("SELECT id, target FROM kpis"))
+    assert "goal_id" not in columns and "kpis_goal" not in indexes
+    assert links == {"k-old": ("g-old", "improve", 7.5), "k-plain": ("g-old", "none", None),
+                     "k-linked": ("g-linked", "improve", 9)}
+    assert targets == {"k-old": 7.5, "k-plain": None, "k-linked": 4}
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
 
 
-def test_a_standalone_kpi_with_a_target_stops_the_migration_and_nothing_is_dropped(tmp_path):
-    """Migration 0042 refuses a KPI that has a target and no goal: that target would have nowhere to go."""
+def test_a_standalone_kpi_keeps_its_target_and_the_migration_runs(tmp_path):
+    """Migration 0042 does not stop on a KPI that has a target and no goal, nor on one whose goal is gone: each stays
+    a standalone KPI with its target on the KPI, and links to nothing."""
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
-        c.execute("ALTER TABLE kpis ADD COLUMN goal_id TEXT NOT NULL DEFAULT ''")
-        c.execute("ALTER TABLE kpis ADD COLUMN target REAL")
-        c.execute("INSERT INTO kpis(id,slug,name,unit,target,goal_id,owner,direction,cadence,created_at,created_by,"
-                  "definition_version,updated_at) VALUES('k-loose','loose-measure','Loose','',3,'','company','up',"
-                  "'weekly','2026-01-01T00:00:00Z','human:ana',1,'2026-01-01T00:00:00Z')")
+        _old_kpis(c)
+        _old_kpi(c, "k-loose", "", 3)
+        _old_kpi(c, "k-orphan", "g-deleted", 5)
     _back_to_before(path, "0042")
-    with pytest.raises(RuntimeError, match="have a target and no goal"):
-        boot(path)
+    boot(path)
     with sqlite3.connect(path) as c:
         columns = {row[1] for row in c.execute("PRAGMA table_info(kpis)")}
-    assert {"goal_id", "target"} <= columns
-
+        targets = dict(c.execute("SELECT id, target FROM kpis"))
+        links = c.execute("SELECT count(*) FROM goal_kpis WHERE kpi_id IN ('k-loose','k-orphan')").fetchone()[0]
+    assert "goal_id" not in columns and "target" in columns
+    assert targets == {"k-loose": 3, "k-orphan": 5} and links == 0

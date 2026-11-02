@@ -292,8 +292,9 @@ ALTER TABLE tasks ADD COLUMN goal_id TEXT;
 # no longer belongs to one goal: `goal_kpis` links a goal to a KPI and holds the target (an improvement
 # from a baseline to a value by a deadline, or a range to stay inside). Readings keep the business time
 # (`period_start`/`period_end`) apart from `collected_at`, and a correction is a new reading that
-# `supersedes` the old one. The old `kpis.goal_id` and `kpis.target` are copied into `goal_kpis` here and dropped by
-# migration 0042. Rows that existed before this migration are recognised by `owner IS NULL`.
+# `supersedes` the old one. The old `kpis.goal_id` and `kpis.target` are copied into `goal_kpis` here; migration 0042
+# drops `goal_id` (`target` stays, read by nothing). Rows that existed before this migration are recognised by
+# `owner_id IS NULL`.
 KPIS_SCHEMA = """
 ALTER TABLE kpis ADD COLUMN slug TEXT;
 ALTER TABLE kpis ADD COLUMN definition TEXT NOT NULL DEFAULT '';
