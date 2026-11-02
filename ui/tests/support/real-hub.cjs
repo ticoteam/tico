@@ -52,13 +52,12 @@ function startHub({seeds = ['org'], env = {}} = {}) {
 
 // A page signed in as `teammate` (a key of hub.tokens), opened at the app's root. The teammate's token goes on every
 // request the page makes, as the API takes it. The caller closes it with page.context().close().
-async function pageAs(browser, hub, teammate, {phone = false, timezone = '', reducedMotion = false} = {}) {
+async function pageAs(browser, hub, teammate, {phone = false, timezone = ''} = {}) {
   const token = hub.tokens[teammate];
   if (!token) throw new Error(`no teammate "${teammate}" on this hub; it has ${Object.keys(hub.tokens).join(', ')}`);
   const context = await browser.newContext({
     ...(phone ? PHONE : DESKTOP),
     ...(timezone ? {timezoneId: timezone} : {}),   // the viewer's zone, as the browser reports it
-    ...(reducedMotion ? {reducedMotion: 'reduce'} : {}),   // no sidebar transitions, as threads.cjs sets them
     serviceWorkers: 'block',
     extraHTTPHeaders: {Authorization: 'Bearer ' + token},
   });

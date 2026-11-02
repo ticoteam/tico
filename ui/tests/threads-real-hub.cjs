@@ -140,11 +140,16 @@ async function restrictPerson(hub) {
 
     // Priya, phone: the company thread is in the sidebar; tapping it opens the thread with its composer, and the page
     // does not scroll sideways.
-    const priya = await pageAs(browser, hub, 'priya', {phone: true, reducedMotion: true});
+    const priya = await pageAs(browser, hub, 'priya', {phone: true});
     await priya.goto(hub.url + '/#/tasks');
-    await priya.locator('#th-list .th-row-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
-    assert.equal(await priya.locator('#th-list .th-row-title', {hasText: 'Pricing war room'}).count(), 0);
-    await priya.locator('#th-list a.th-row[data-thread="' + plan.id + '"]').tap();
+    // On a phone the list is one tap away, the Threads tab in the bottom bar (ui/tests/threads.cjs does the same): the
+    // sidebar on this page sits off screen.
+    await priya.locator('#mobile-threads:not([hidden])').waitFor({timeout: t(15000)});
+    await priya.locator('#mobile-threads').click();
+    await priya.waitForFunction(() => location.hash === '#/threads', null, {timeout: t(15000)});
+    await priya.locator('.threads-page .th-row-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
+    assert.equal(await priya.locator('.threads-page .th-row-title', {hasText: 'Pricing war room'}).count(), 0);
+    await priya.locator('.threads-page a.th-row[data-thread="' + plan.id + '"]').tap();
     await priya.waitForURL(new RegExp('#/thread/' + plan.id), {timeout: t(15000)});
     await priya.getByText(PLAN).waitFor({timeout: t(15000)});
     await priya.locator('.thv-composer .p-text').waitFor({timeout: t(15000)});
