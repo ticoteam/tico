@@ -104,7 +104,7 @@
 <div id="version-message" role="note" aria-label="Notices from Tico" hidden></div>
 <div id="usage-notice" role="note" hidden><span>Tico counts active installs anonymously (a random ID, version, and three yes/no activity flags). Turn off: Settings &gt; Privacy or TICO_TELEMETRY=off. <a href="https://github.com/ticoteam/tico/blob/main/PRIVACY.md" target="_blank" rel="noopener noreferrer">Details</a></span><button class="ghost" type="button" id="usage-notice-x">Dismiss</button></div>
 <div id="signed-out" role="alert" hidden><span>You've been signed out.</span><button class="primary" type="button">Sign in again</button></div>
-<div id="support-access-banner" role="status" hidden><button class="linkish" type="button" data-access-left title="Open in Support"></button><button class="ghost" type="button" data-access-stop hidden>Stop</button></div>
+<div id="support-access-banner" role="status" hidden><button class="linkish" type="button" data-access-left title="Open the Tico team chat"></button><button class="ghost" type="button" data-access-stop hidden>Stop</button></div>
 <div id="cloud-banner" role="status"><strong>Out of credit</strong><a data-cloud-pay target="_blank" rel="noopener noreferrer">Add credit</a></div>
 <div id="cloud-lock" role="alertdialog" aria-modal="true" aria-labelledby="cloud-lock-h"><div class="cloud-lock-card"><h1 id="cloud-lock-h">Pay to continue</h1><p data-cloud-why></p><div class="row"><a class="primary btn" data-cloud-pay target="_blank" rel="noopener noreferrer">Open billing</a><a class="link" data-cloud-download download hidden>Download your files</a></div></div></div>
 <div id="demo-banner" role="note" hidden><strong>Demo — sample data</strong><span>A fictional team. Bots do not run here and nothing leaves this computer.</span></div>
@@ -165,11 +165,12 @@
       <div id="new-version-pop" role="dialog" aria-label="New version" hidden></div>
     </div>
     <a id="changelog-notice" href="#/changelog" hidden><span class="changelog-notice-dot" aria-hidden="true"></span><span class="changelog-notice-label">What's new</span></a>
-    <!-- Ask on a computer: the dot and "Ask Tico" (ui/app/ask-panel.js), Search's icon at the row's end. Where Ask is away
+    <!-- Ask on a computer: the dot and "Ask Tico" (ui/app/ask-panel.js), then Search's icon and the Tico team's ? (ui/support.js). Where Ask is away
          (the Assistant page, setup, signed out) the icon is the whole Search row again (search.css). -->
     <div class="side-ask">
       <button class="ask-row" id="ask-row" type="button" aria-controls="ask-panel" aria-expanded="false" hidden><span class="ask-glyph"><span class="ldot" data-ask-dot data-state="idle" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><span class="nav-icon ask-x" aria-hidden="true">close</span></span><span class="ask-label">Ask Tico</span><span class="ask-word" data-ask-word></span></button>
       <button id="search-open" type="button" aria-label="Search (⌘K)" aria-haspopup="dialog" title="Search bots, humans and pages (⌘K)"><span class="nav-icon" aria-hidden="true">search</span><span class="search-label">Search</span><kbd>⌘K</kbd></button>
+      <button id="support-open" type="button" aria-label="Tico team" aria-haspopup="dialog" title="Tico team"><span class="nav-icon" aria-hidden="true">help</span></button>
     </div>
     <div class="side-utility">
       <div class="account-wrap">
@@ -202,11 +203,7 @@
 <section class="ask-panel" id="ask-panel" role="dialog" aria-labelledby="ask-title" inert>
   <header class="ask-head"><span class="ldot ask-mark" data-ask-dot data-state="still" data-size="20" style="width:20px" aria-hidden="true"><i class="shadow"></i><i class="body"></i></span><h2 id="ask-title">Tico Assistant</h2>
     <span class="ask-sees" data-ask-sees><span data-ask-sees-name></span></span>
-    <span class="ask-people" data-ask-people></span>
-    <button type="button" class="ask-requests" data-ask-requests>Your requests</button>
-    <button type="button" class="ask-loop" data-ask-loop title="Shares this chat's last 20 turns with Tico support">Loop in Support</button>
     <button type="button" class="ask-ib" data-ask-close aria-label="Close">✕</button></header>
-  <p class="ask-loop-note" data-ask-loop-note>Shares this chat's last 20 turns with Tico support</p>
   <div class="ask-thread" data-ask-thread role="log" tabindex="0"></div>
   <div class="ask-form"></div>
   <p class="err" data-ask-error role="alert" hidden></p>

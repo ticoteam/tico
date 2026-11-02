@@ -1,9 +1,10 @@
 # One explicitly requested release check, split across isolated native VMs that run side by side.
 # The VMs are RunsOn instances in Tico's own AWS account (manual runs only, never fork code).
 # No PR/push tests, schedule or publication: the release command dispatches it for the frozen candidate.
-# It builds the release once: the runner and relay binaries for every platform (clean, no cache) and the three images
-# for both architectures, pushed by digest only. The gate tests those binaries and images, and release.yml publishes
-# exactly them for the tag, so what shipped is what was tested.
+# It builds the release once: the Linux runner and relay binaries and the three images for both architectures, pushed by
+# digest only. The gate tests those binaries and images, and release.yml publishes exactly them for the tag, so what
+# shipped is what was tested. The Mac binaries are built by release.yml after the tag (no gate part runs on a Mac, and a
+# GitHub macOS runner can take 5-15 minutes to start), or carried forward when the runner sources did not change.
 name: Release validation
 run-name: Validate ${{ inputs.candidate_sha }} as ${{ inputs.version }} from ${{ inputs.previous_release }}
 
@@ -51,8 +52,8 @@ jobs:
           [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::version must be vX.Y.Z"; exit 1; }
           { echo "sha=$SHA"; echo "previous=$PREVIOUS"; echo "version=$VERSION"; } >> "$GITHUB_OUTPUT"
 
-  # The runner and screen relay for every platform, built once from the candidate. Linux builds are clean (no build cache);
-  # macOS builds reuse compiled dependencies from a cache only main writes (Chris, Nov 2). Linux builds are static (musl): the images, Linux checkouts and
+  # The runner and screen relay for Linux, built once from the candidate, reusing compiled dependencies from a cache only
+  # main writes. Linux builds are static (musl): the images, Linux checkouts and
   # the gate all run these same files. On-demand VMs, so an interruption never leaves a half-built release.
   native-linux:
     needs: candidate
@@ -107,57 +108,6 @@ jobs:
           else
             echo "::notice::runner-rs/build.rs predates the release stamp; tico-runner --release not checked"
           fi
-          mkdir -p dist
-          gzip -9 -c "runner-rs/target/$TARGET/release/tico-runner" > "dist/tico-runner-$NAME.gz"
-          gzip -9 -c "relay-rs/target/$TARGET/release/tico-screen-relay" > "dist/tico-screen-relay-$NAME.gz"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: runner-${{ matrix.name }}
-          path: dist/*.gz
-          retention-days: 30
-          if-no-files-found: error
-
-  # The Mac builds only ship: no gate part runs on a Mac, so nothing waits for them but the verdict.
-  native-macos:
-    needs: candidate
-    strategy:
-      matrix:
-        include:
-          - {name: macos-arm64, target: aarch64-apple-darwin}
-          - {name: macos-x86_64, target: x86_64-apple-darwin}
-    runs-on: macos-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ needs.candidate.outputs.sha }}
-          persist-credentials: false
-      - name: Install Rust
-        env:
-          TARGET: ${{ matrix.target }}
-        run: rustup toolchain install 1.92 --profile minimal --target "$TARGET" && rustup default 1.92
-      # Chris, Nov 2: cache the macOS builds' compiled dependencies (not our own crates: rust-cache drops workspace
-      # artifacts). Keyed on Cargo.lock, toolchain and target; only Release validation runs on main write it.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: |
-            runner-rs -> target
-            relay-rs -> target
-          key: ${{ matrix.target }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build tico-runner and tico-screen-relay
-        env:
-          TARGET: ${{ matrix.target }}
-          NAME: ${{ matrix.name }}
-          TICO_VERSION: ${{ needs.candidate.outputs.version }}
-        run: |
-          # Two crates with their own target directories, built side by side (dependencies from the rust cache above); both must succeed.
-          (cd runner-rs && cargo build --release --locked --target "$TARGET") & runner=$!
-          (cd relay-rs && cargo build --release --locked --target "$TARGET") & relay=$!
-          status=0
-          wait "$runner" || { echo "::error::tico-runner did not build"; status=1; }
-          wait "$relay" || { echo "::error::tico-screen-relay did not build"; status=1; }
-          [ "$status" = 0 ] || exit 1
           mkdir -p dist
           gzip -9 -c "runner-rs/target/$TARGET/release/tico-runner" > "dist/tico-runner-$NAME.gz"
           gzip -9 -c "relay-rs/target/$TARGET/release/tico-screen-relay" > "dist/tico-screen-relay-$NAME.gz"
@@ -253,34 +203,34 @@ jobs:
       matrix:
         include:
           - {name: product, part: product, shard: '', workers: '2', runner: 4cpu-linux-x64}
-          - {name: browser-1, part: browser, shard: '1/4', workers: '2', runner: 4cpu-linux-x64}
-          - {name: browser-2, part: browser, shard: '2/4', workers: '2', runner: 4cpu-linux-x64}
-          - {name: browser-3, part: browser, shard: '3/4', workers: '2', runner: 4cpu-linux-x64}
-          - {name: browser-4, part: browser, shard: '4/4', workers: '2', runner: 4cpu-linux-x64}
+          - {name: browser-1, part: browser, shard: '1/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: browser-2, part: browser, shard: '2/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: browser-3, part: browser, shard: '3/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: browser-4, part: browser, shard: '4/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
           - {name: python-1, part: python, shard: '1/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-2, part: python, shard: '2/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-3, part: python, shard: '3/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-4, part: python, shard: '4/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-5, part: python, shard: '5/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-6, part: python, shard: '6/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-7, part: python, shard: '7/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-8, part: python, shard: '8/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-9, part: python, shard: '9/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-10, part: python, shard: '10/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-11, part: python, shard: '11/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-12, part: python, shard: '12/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-13, part: python, shard: '13/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-14, part: python, shard: '14/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-15, part: python, shard: '15/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-16, part: python, shard: '16/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-17, part: python, shard: '17/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-18, part: python, shard: '18/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-19, part: python, shard: '19/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-20, part: python, shard: '20/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-21, part: python, shard: '21/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-22, part: python, shard: '22/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-23, part: python, shard: '23/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-24, part: python, shard: '24/24', workers: '4', runner: 4cpu-linux-x64}
+          - {name: python-2, part: python, shard: '2/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-3, part: python, shard: '3/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-4, part: python, shard: '4/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-5, part: python, shard: '5/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-6, part: python, shard: '6/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-7, part: python, shard: '7/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-8, part: python, shard: '8/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-9, part: python, shard: '9/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-10, part: python, shard: '10/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-11, part: python, shard: '11/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-12, part: python, shard: '12/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-13, part: python, shard: '13/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-14, part: python, shard: '14/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-15, part: python, shard: '15/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-16, part: python, shard: '16/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-17, part: python, shard: '17/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-18, part: python, shard: '18/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-19, part: python, shard: '19/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-20, part: python, shard: '20/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-21, part: python, shard: '21/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-22, part: python, shard: '22/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-23, part: python, shard: '23/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-24, part: python, shard: '24/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
           # The Linux desktop app updating from a company feed; on its own VM, beside the longer product part.
           - {name: desktop, part: desktop, shard: '', workers: '2', runner: 4cpu-linux-x64}
     runs-on: runs-on=${{ github.run_id }}/runner=${{ matrix.runner }}/volume=80gb/spot=false/extras=s3-cache
@@ -380,8 +330,22 @@ jobs:
           npx playwright install --with-deps chromium webkit
       # The release's own Linux binaries, where a checkout's build would be; hosted_release_check.py run checks on
       # every VM that their build ids match the candidate's sources. Setup above overlaps their build: wait for the
-      # native-linux x86_64 job to finish, and fail this part if that build did not succeed.
+      # native-linux x86_64 job to finish, and fail this part if that build did not succeed. Only product, desktop
+      # and python-1 (every native test file, release_checks.py) need them; the other VMs start at once.
+      # A candidate frozen before native-first python shards may put native tests on any python VM: all of them wait.
+      - name: Does this VM need the release binaries
+        id: binaries
+        env:
+          TICO_MATRIX_BINARIES: ${{ matrix.binaries }}
+        run: |
+          needed=true
+          if [ "$TICO_MATRIX_BINARIES" = no ]; then needed=false
+            if [ "$TICO_RELEASE_PART" = python ] && ! grep -q native_first candidate/scripts/release_checks.py
+            then needed=true; fi
+          fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
       - name: Wait for the release Linux binaries
+        if: steps.binaries.outputs.needed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -396,11 +360,13 @@ jobs:
             sleep 10
           done
           echo "::error::The release Linux binaries were not built within 25 minutes."; exit 1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - if: steps.binaries.outputs.needed == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: runner-linux-x86_64
           path: ${{ runner.temp }}/native
       - name: Place the release binaries
+        if: steps.binaries.outputs.needed == 'true'
         working-directory: candidate
         run: |
           mkdir -p runner-rs/target/release relay-rs/target/release
@@ -409,6 +375,7 @@ jobs:
           chmod 0755 runner-rs/target/release/tico-runner relay-rs/target/release/tico-screen-relay
       # Tests that build other Rust code still find a toolchain.
       - name: Install Rust
+        if: matrix.part != 'browser'
         run: |
           rustup toolchain install 1.92 --profile minimal
           rustup default 1.92
@@ -423,8 +390,8 @@ jobs:
         with:
           workspaces: candidate/app -> target
           shared-key: release-desktop
-      # The product part tests the release's own images (amd64, this VM's architecture), pulled by digest, once all
-      # six image builds (the images job's 3 images x 2 platforms) have finished.
+      # The product part tests the release's own images (amd64, this VM's architecture), pulled by digest, once the
+      # three amd64 builds have finished. The arm64 builds finish on their own; release-check needs every image.
       - if: matrix.part == 'product'
         name: Wait for the release images
         env:
@@ -432,10 +399,10 @@ jobs:
         run: |
           for _ in $(seq 120); do
             images="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
-              -q '[.jobs[] | select(.name | startswith("images (")) | {status, conclusion}]')"
+              -q '[.jobs[] | select((.name | startswith("images (")) and (.name | contains("amd64"))) | {status, conclusion}]')"
             failed="$(jq '[.[] | select(.status == "completed" and .conclusion != "success")] | length' <<<"$images")"
             [ "$failed" = 0 ] || { echo "::error::An image build did not succeed."; exit 1; }
-            [ "$(jq '[.[] | select(.status == "completed")] | length' <<<"$images")" = 6 ] && exit 0
+            [ "$(jq '[.[] | select(.status == "completed")] | length' <<<"$images")" = 3 ] && exit 0
             sleep 10
           done
           echo "::error::The images were not built within 20 minutes."
@@ -539,18 +506,19 @@ jobs:
             awk '/^== /{h=$0; next} /^ +(FAIL|NOTE) /{if(h){print h; h=""} print} /scenario runs in/' "$RUNNER_TEMP/sim.log"
             echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
-  # The one verdict: the release passes only when every part passed and every platform's binaries built.
+  # The one verdict: the release passes only when every part passed and the Linux binaries and images built.
   release-check:
-    needs: [gate, native-macos, factory-sim]
+    needs: [gate, factory-sim, images]
     if: always()
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
+    # Only compares results: GitHub-hosted starts in seconds, where a RunsOn VM boots for ~20 s at the run's very end.
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Every part of the release gate passed
         env:
           GATE: ${{ needs.gate.result }}
-          MACOS: ${{ needs.native-macos.result }}
           SIM: ${{ needs.factory-sim.result }}
+          IMAGES: ${{ needs.images.result }}
         run: |
-          echo "Release gate parts: $GATE; Mac binaries: $MACOS; factory sim: $SIM"
-          test "$GATE" = success && test "$MACOS" = success && test "$SIM" = success
+          echo "Release gate parts: $GATE; factory sim: $SIM; images: $IMAGES"
+          test "$GATE" = success && test "$SIM" = success && test "$IMAGES" = success

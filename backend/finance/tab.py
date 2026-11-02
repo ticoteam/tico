@@ -644,7 +644,10 @@ def _sync(conn: Any | None) -> Row | None:
     settings = SK.loads(conn["settings"])
     return {"connection_id": str(conn["id"]), "provider": str(conn["provider"]), "status": str(conn["status"]),
             "last_ok_at": conn["last_ok_at"], "last_sync_at": conn["last_sync_at"], "last_error": conn["last_error"],
-            "egress_ip": settings.get("egress_ip")}
+            "egress_ip": settings.get("egress_ip"),
+            # A bank or Stripe connection's first history import: "importing" until it ends (no opening balance yet).
+            "history": ("done" if settings.get("backfilled") else "importing")
+            if str(conn["provider"]) in ("mercury", "stripe") else None}
 
 
 def _books_mirror(c: sqlite3.Connection, book: Book, cid: str, status: str) -> str:

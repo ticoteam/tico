@@ -159,6 +159,34 @@ def stuck_company(api, monkeypatch, count):
                 {"since": "2026-10-23T00:00:00.000000Z", "observed_at": H.now(), "job": "j", "reason": "r"})))
 
 
+def refuse_queues(api, monkeypatch, slugs):
+    """Each of these bots' queues refused for over 12 hours, as stuck_company leaves them."""
+    from backend.store import H, encode
+    from backend.tests.test_run_backoff import at
+    at(monkeypatch, api, "2026-10-24T12:40:00.000000Z")
+    with api.app.state.store.transaction() as c:
+        for slug in slugs:
+            c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (f"queue-refusal:{slug}", encode(
+                {"since": "2026-10-23T00:00:00.000000Z", "observed_at": H.now(), "job": "j", "reason": "r"})))
+
+
+def test_refused_queue_checks_read_the_company_limit_once_for_all_bots(api, monkeypatch):
+    # Each refused queue's claim check read the company's limit default fresh: its budget cutoffs (the Finance book
+    # first, one read a bot) and every period's spend. One pass over the refused queues shares that default now.
+    from backend.tests.test_run_backoff import at
+    machine = setup(api, monkeypatch, tasks=2)
+    at(monkeypatch, api, "2026-10-24T12:00:00.000000Z")
+    busy(api, machine, 0, 6)
+    refuse_queues(api, monkeypatch, [f"busy-{k}" for k in range(6)])
+    counted(api, monkeypatch, "/api/v2/health")
+    few = counted(api, monkeypatch, "/api/v2/health")[1]
+    at(monkeypatch, api, "2026-10-24T12:00:00.000000Z")
+    busy(api, machine, 6, 12)
+    refuse_queues(api, monkeypatch, [f"busy-{k}" for k in range(6, 18)])
+    many = counted(api, monkeypatch, "/api/v2/health")[1]
+    assert many == few, (few, many)
+
+
 def test_health_claim_checks_read_every_queued_job_together_and_say_the_same(api, monkeypatch):
     # Tico Team (Oct 30): GET /api/v2/health ran about 1,600 statements a poll, 1.1 s of SQL. Every queued job of
     # every bot with old work was checked by the claim's rules one at a time, twice (bot_claimable, then

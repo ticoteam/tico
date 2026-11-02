@@ -139,13 +139,16 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub page list [--bot X] [--task ID] [--archived]   pages you may read, newest first
     hub page show <id>                     one page's status: updated, by, version, cadence, stale or replaced
     hub page archive <id> [--restore]      hide a page from lists and search, or bring it back
-    hub card list [--place P]              what is pinned at dashboard, team:<group>, bot:<slug>, task:<id> or
-                                           person:me (My dashboard)
+    hub card list [--place P]              what is pinned at dashboard, growth, team:<group>, bot:<slug>, task:<id>
+                                           or person:me (My dashboard)
     hub card add <template> [--place P] [--team G] [--weeks N] [--count N] [--kpi ID] [--title T] [--size S]
+                                           [--metric M] [--channel C] [--months N]
                                            tasks_by_status, done_per_week, needs_you, spend, kpi, automation_runs,
                                            latest_pages, needs_attention, unread_threads, my_tasks, updates; a bot
-                                           pins to its own sidebar or task
-    hub card update <id> [--title T] [--team G] [--weeks N] [--count N] [--kpi ID]
+                                           pins to its own sidebar or task. The Growth page's cards (growth_number,
+                                           growth_funnel, growth_channels, growth_retention, growth_board) go on
+                                           --place growth only; --metric and --channel are for growth_number
+    hub card update <id> [--title T] [--team G] [--weeks N] [--count N] [--kpi ID] [--metric M] [--channel C] [--months N]
     hub card remove <id>
     hub connections list [--cursor C] [--limit N]
                                            every connection you may see: status, scope, who reads it, its bots
@@ -1228,6 +1231,9 @@ def parser():
         s.add_argument("--weeks", type=int)
         s.add_argument("--count", type=int)
         s.add_argument("--kpi")
+        s.add_argument("--metric")
+        s.add_argument("--channel")
+        s.add_argument("--months", type=int)
         if name == "add":
             s.add_argument("--place")
             s.add_argument("--size", choices=["small", "medium", "large"])
