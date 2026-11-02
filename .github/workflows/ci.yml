@@ -441,6 +441,11 @@ jobs:
           images="$images,runner=ghcr.io/ticoteam/tico-runner@$(cat "$d/tico-runner-amd64")"
           images="$images,updater=ghcr.io/ticoteam/tico-updater@$(cat "$d/tico-updater-amd64")"
           { echo "TICO_RELEASE_IMAGES=$images"; echo "TICO_RELEASE_VERSION=$CANDIDATE_VERSION"; } >> "$GITHUB_ENV"
+      - name: Write the python part's junit report (xunit1), for the shard timings
+        if: matrix.part == 'python'
+        run: |
+          mkdir -p "$RUNNER_TEMP/junit"
+          echo "PYTEST_ADDOPTS=$PYTEST_ADDOPTS -o junit_family=xunit1 --junitxml=$RUNNER_TEMP/junit/python-${TICO_RELEASE_SHARD//\//-of-}.xml" >> "$GITHUB_ENV"
       - name: Run the candidate's unchanged release gate, this part
         # The helper takes its slice only from --part/--shard (argparse), never from the environment.
         run: |
@@ -459,6 +464,13 @@ jobs:
           name: release-validation-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
           path: ${{ runner.temp }}/release-validation-report
           retention-days: 3
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && matrix.part == 'python'
+        with:
+          name: release-junit-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.name }}
+          path: ${{ runner.temp }}/junit
+          retention-days: 30
           if-no-files-found: warn
 
   # The factory simulation (evals/factory): scripted bots work the candidate's Dev board on a fake clock, seeds 1-3,

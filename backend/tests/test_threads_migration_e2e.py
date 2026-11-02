@@ -19,9 +19,9 @@ The file is written one entry per line, so a change shows as the lines it touche
 Regenerate after a deliberate change to who reads what, and review the diff:
     TICO_WRITE_READER_GOLDENS=1 python3 -m pytest -q backend/tests/test_threads_migration_e2e.py
 
-The comparisons run `threads.migrate(c)` and assert `threads.readable` gives the same sets. Until
-backend/threads.py exists they skip; nothing is faked. The freshness test runs now: it fails when the golden no longer
-matches what today's predicates read, so a golden is never compared against a stale baseline.
+The comparisons run `threads.migrate(c)` and assert `threads.readable` gives the same sets. The freshness test
+fails when the golden no longer matches what today's predicates read, so a golden is never compared against a stale
+baseline.
 """
 
 import dataclasses
@@ -45,7 +45,6 @@ NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)      # the instant test
 GOLDENS = Path(__file__).resolve().parent / "fixtures" / "threads"
 WRITE = os.environ.get("TICO_WRITE_READER_GOLDENS") == "1"
 WORLDS = ("demo", "devcopy")
-SKIP = "not built yet: threads core (docs/dev/threads-contract.md section 2.4)"
 AGENT = "standing"          # the harness label of a bot's standing credential; Auth.conversation only checks it is set
 
 
@@ -63,16 +62,6 @@ def build(world, directory):
     return dataclasses.replace(settings, db_path=dest, registry_dir=dest.parent / "registry",
                                blob_dir=dest.parent / "blobs", demo=False, demo_public=False,
                                local_owner_token_file=None, rehearsal=True)
-
-
-def threads_module():
-    """`backend.threads` once the threads core has landed, else None."""
-    try:
-        return importlib.import_module("backend.threads")
-    except ModuleNotFoundError as missing:
-        if missing.name != "backend.threads":
-            raise
-        return None
 
 
 def open_store(settings):
@@ -216,7 +205,7 @@ def test_goldens_are_todays_reader_sets(world, tmp_path):
     assert golden_path(world).read_text() == dump(now), "the golden is not in writer form; regenerate it"
 
 
-# ----------------------------------------------------------------------------- the migration (skips until threads)
+# ----------------------------------------------------------------------------- the migration
 def migrate(settings, threads):
     store, _ = open_store(settings)
     try:
@@ -249,9 +238,7 @@ def threads_sets(threads, settings, expected):
 
 @pytest.mark.parametrize("world", WORLDS)
 def test_migration_keeps_every_reader_set(world, tmp_path):
-    threads = threads_module()
-    if threads is None:
-        pytest.skip(SKIP)
+    threads = importlib.import_module("backend.threads")
     settings = build(world, tmp_path)
     expected = full_from_golden(json.loads(golden_path(world).read_text()), message_owners(settings))
     migrate(settings, threads)
@@ -264,9 +251,7 @@ def test_removing_a_person_does_not_widen_any_reader_set(tmp_path):
     """Taking someone off the org chart after the migration may narrow reader sets but never widens them: the roster is
     read live, as it is today. Ben has no reports (the bots report to the Assistant), so his removal moves nobody else's
     access. He is primary for the support and inbox bots, the people whose shared rooms would change."""
-    threads = threads_module()
-    if threads is None:
-        pytest.skip(SKIP)
+    threads = importlib.import_module("backend.threads")
     settings = demo.build(tmp_path / "demo", now=NOW)
     expected = full_from_golden(json.loads(golden_path("demo").read_text()), message_owners(settings))
     migrate(settings, threads)
