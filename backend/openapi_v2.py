@@ -2426,6 +2426,18 @@ def spec(app):
         if method == "get" and path.startswith("/api/v2/finance/tax/") and path.endswith(".csv"):
             responses["200"] = {"description": "The workpaper as CSV (text/csv, sent as an attachment)",
                                 "content": {"text/csv": {"schema": {"type": "string"}}}}
+        # The logo travels as its raw bytes, not JSON, and the preview is a page of HTML (company_page/api.py).
+        if path == "/api/v2/company-page/logo" and method == "post":
+            op["requestBody"] = {"required": True, "description": "The image itself, up to 2 MB. SVG is refused.",
+                                 "content": {mime: {"schema": {"type": "string", "format": "binary"}}
+                                             for mime in COMPANY_LOGO_TYPES}}
+        if path == "/api/v2/company-page/logo" and method == "get":
+            responses["200"] = {"description": "The logo's bytes, sent as their image type",
+                                "content": {mime: {"schema": {"type": "string", "format": "binary"}}
+                                            for mime in COMPANY_LOGO_TYPES}}
+        if path == "/api/v2/company-page/preview" and method == "get":
+            responses["200"] = {"description": "The page as HTML for one audience, never kept",
+                                "content": {"text/html": {"schema": {"type": "string"}}}}
         if path == "/auth/login":
             responses = {"302": {"description": "Redirect to the identity provider"},
                          "400": {"description": "next is not an allowed origin, or code_challenge is missing"}}
@@ -2551,6 +2563,7 @@ SCHEMAS["Seat"]["required"] = sorted(set(SCHEMAS["Seat"]["required"]) | {"agent"
 
 # The Company page (backend/company_page): what an owner or an admin writes, and the page's own settings. Readers never
 # reach these routes; the reader origin serves the page and its data without a key.
+COMPANY_LOGO_TYPES = ("image/png", "image/jpeg", "image/webp")   # company_page/release.py LOGO_TYPES
 TAGS["Company page"] = ("The public page for the company's updates: its audiences, the editions each one reads, the stats "
                         "the page shows, the readers who sign in to it, and the logo (docs/company-page.md).")
 STABLE.extend([

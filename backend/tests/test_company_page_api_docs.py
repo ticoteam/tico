@@ -16,6 +16,15 @@ def test_every_company_page_route_the_server_serves_is_in_the_v2_document(api): 
     assert served and served == documented, (sorted(served - documented), sorted(documented - served))
 
 
+def test_the_logo_and_the_preview_say_they_send_image_bytes_and_html_not_json(api):  # noqa: F811
+    """A client generating code from the document would otherwise send the logo as JSON and read the preview as JSON."""
+    ops = spec(api.app)["paths"]
+    images = {"image/png", "image/jpeg", "image/webp"}
+    assert set(ops["/api/v2/company-page/logo"]["post"]["requestBody"]["content"]) == images
+    assert set(ops["/api/v2/company-page/logo"]["get"]["responses"]["200"]["content"]) == images
+    assert set(ops["/api/v2/company-page/preview"]["get"]["responses"]["200"]["content"]) == {"text/html"}
+
+
 def test_the_cli_sends_an_outside_editions_who_for_a_rule_an_owner_adds_or_edits(monkeypatch):
     """`hub rules add --outside-editions` is the Who the Company page's editions read; it must reach the API as that key."""
     from clients import hubcli, remotecli

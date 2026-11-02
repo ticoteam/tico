@@ -6113,7 +6113,7 @@ export type GetCompanyHistoryResponse = CompanyHistory;
 /** GET /api/v2/company-page/logo */
 export type GetCompanyLogoParams = Record<string, never>;
 export type GetCompanyLogoBody = never;
-export type GetCompanyLogoResponse = unknown;
+export type GetCompanyLogoResponse = string;
 
 /** GET /api/v2/company-page */
 export type GetCompanyPageParams = Record<string, never>;
@@ -6125,7 +6125,7 @@ export type GetCompanyPreviewParams = {
   audience?: string;
 };
 export type GetCompanyPreviewBody = never;
-export type GetCompanyPreviewResponse = unknown;
+export type GetCompanyPreviewResponse = string;
 
 /** GET /api/v2/computers/{rid}/browser-exit */
 export type GetComputerBrowserExitParams = {
@@ -8672,7 +8672,7 @@ export type SetChatGoalResponse = ChatGoalResult;
 export type SetCompanyLogoParams = {
   "Idempotency-Key": string;
 };
-export type SetCompanyLogoBody = never;
+export type SetCompanyLogoBody = FormData | Blob;
 export type SetCompanyLogoResponse = unknown;
 
 /** POST /api/v2/computers/{rid}/browser-exit */

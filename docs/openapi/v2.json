@@ -6263,10 +6263,25 @@
         "operationId": "getCompanyLogo",
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The logo's bytes, sent as their image type",
             "content": {
-              "application/json": {
-                "schema": {}
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -6331,6 +6346,30 @@
         "tags": [
           "Company page"
         ],
+        "requestBody": {
+          "required": true,
+          "description": "The image itself, up to 2 MB. SVG is refused.",
+          "content": {
+            "image/png": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/jpeg": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            },
+            "image/webp": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
         "parameters": [
           {
             "name": "Idempotency-Key",
@@ -6410,10 +6449,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "The page as HTML for one audience, never kept",
             "content": {
-              "application/json": {
-                "schema": {}
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
               }
             }
           },
