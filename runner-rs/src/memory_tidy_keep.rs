@@ -3,7 +3,7 @@
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::io::AsyncWriteExt;
 use crate::{runner::Runner, util::text_of};
 
@@ -50,17 +50,61 @@ async fn apply(runner: &Runner, request: &Value) -> Result<Value, String> {
     serde_json::from_slice(&output.stdout).map_err(|_| "Keep checker returned an invalid result".into())
 }
 
+fn settle(dir: &std::path::Path, id: &str, outcome: Result<Value, String>) -> Option<Value> {
+    // Save a terminal result before reporting: a lost completion response cannot
+    // restart a refused operation. Only uncertain outcomes consume this budget.
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Some(json!({"status":"refused", "commit":"", "reason":"Invalid Keep operation"}));
+    }
+    let done = dir.join(format!("memory-keep-{id}.result"));
+    if let Ok(bytes) = std::fs::read(&done) {
+        if let Ok(result) = serde_json::from_slice(&bytes) { return Some(result); }
+    }
+    let result = match outcome {
+        Ok(v) if v["status"] == "kept" || v["status"] == "refused" => v,
+        other => {
+            let attempts = dir.join(format!("memory-keep-{id}.attempts"));
+            let pushed = std::fs::read_to_string(attempts).ok().and_then(|n| n.parse::<u32>().ok()).unwrap_or(0) > 0;
+            if !pushed && other.is_err() {
+                json!({"status":"refused", "commit":"", "reason":"Keep checker unavailable; check computer repository access and try again"})
+            } else {
+                let counter = dir.join(format!("memory-keep-{id}.checks"));
+                let n = std::fs::read_to_string(&counter).ok().and_then(|n| n.parse::<u32>().ok()).unwrap_or(0) + 1;
+                let temp = counter.with_extension("tmp");
+                if std::fs::write(&temp, n.to_string()).and_then(|_| std::fs::rename(temp, counter)).is_err() {
+                    return Some(json!({"status":"refused", "commit":"", "reason":"Cannot save Keep recovery state; check computer storage"}));
+                }
+                if n < 3 { return None; }
+                json!({"status":"refused", "commit":"", "reason":"Keep outcome could not be verified after three checks; inspect main before trying again"})
+            }
+        }
+    };
+    let tmp = done.with_extension("tmp");
+    if std::fs::write(&tmp, result.to_string()).and_then(|_| std::fs::rename(tmp, done)).is_err() {
+        return Some(json!({"status":"refused", "commit":"", "reason":"Cannot save Keep recovery state; check computer storage"}));
+    }
+    Some(result)
+}
+
+async fn deliver(runner: &Runner, request: &Value) {
+    let id = text_of(&request["id"]);
+    let saved = runner.state.directory.join(format!("memory-keep-{id}.result"));
+    let outcome = match std::fs::read(saved).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()) {
+        Some(v) => Ok(v),
+        None => apply(&runner, request).await,
+    };
+    let result = settle(&runner.state.directory, &id, outcome);
+    if let Some(result) = result {
+        let _ = runner.client.post(&format!("runners/me/memory-tidy-keeps/{id}/complete"), &result, None).await;
+    }
+}
+
 pub async fn run_loop(runner: Arc<Runner>) {
     while !runner.stopping() {
         if let Ok(payload) = runner.client.get("runners/me/memory-tidy-keeps").await {
             for request in payload["keeps"].as_array().into_iter().flatten() {
                 if runner.stopping() { break; }
-                let id = text_of(&request["id"]);
-                // An interrupted/uncertain push must be reconciled by the checker,
-                // never reported as refusal: it may already be in main.
-                if let Ok(result) = apply(&runner, request).await {
-                    let _ = runner.client.post(&format!("runners/me/memory-tidy-keeps/{id}/complete"), &result, None).await;
-                }
+                deliver(&runner, request).await;
             }
         }
         tokio::time::sleep(Duration::from_secs(15)).await;
@@ -70,7 +114,6 @@ pub async fn run_loop(runner: Arc<Runner>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[tokio::test]
@@ -87,7 +130,7 @@ mod tests {
                                         crate::state::State::open(&dir.join("state")).unwrap()));
         let ordinary_push = runner.push_lock.lock().await;
         let other = runner.clone();
-        let keep = tokio::spawn(async move { apply(&other, &json!({"id": "test-operation", "bot": "ops", "config": {}})).await });
+        let keep = tokio::spawn(async move { deliver(&other, &json!({"id": "test-operation", "bot": "ops", "config": {}})).await });
         assert!(tokio::time::timeout(Duration::from_millis(50), server.accept()).await.is_err());
         drop(ordinary_push);
         let (mut stream, _) = tokio::time::timeout(Duration::from_secs(2), server.accept()).await.unwrap().unwrap();
@@ -96,7 +139,37 @@ mod tests {
         assert!(String::from_utf8_lossy(&request[..n]).contains("github/token"));
         let body = r#"{"configured":false}"#;
         stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
-        assert!(keep.await.unwrap().unwrap_err().contains("credentials unavailable"));
+        let (mut completion, _) = tokio::time::timeout(Duration::from_secs(2), server.accept()).await.unwrap().unwrap();
+        let mut bytes = vec![];
+        loop {
+            let mut chunk = [0u8; 8192];
+            let n = tokio::time::timeout(Duration::from_secs(2), completion.read(&mut chunk)).await.unwrap().unwrap();
+            assert!(n > 0);
+            bytes.extend_from_slice(&chunk[..n]);
+            let text = String::from_utf8_lossy(&bytes);
+            if let Some((headers, body)) = text.split_once("\r\n\r\n") {
+                let len = headers.lines().find_map(|line| line.to_lowercase().strip_prefix("content-length:").and_then(|n| n.trim().parse::<usize>().ok())).unwrap();
+                if body.len() >= len { break; }
+            }
+        }
+        let request = String::from_utf8_lossy(&bytes);
+        assert!(request.contains("memory-tidy-keeps/test-operation/complete"));
+        assert!(request.contains("refused"));
+        completion.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+        keep.await.unwrap();
         let _ = std::fs::remove_dir_all(dir);
     }
+    #[test]
+    fn uncertain_errors_have_durable_bound_and_terminal_reporting_replays() {
+        let dir = std::env::temp_dir().join(format!("tico-keep-errors-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("memory-keep-test.attempts"), "1").unwrap();
+        assert!(settle(&dir, "test", Err("timeout".into())).is_none());
+        assert!(settle(&dir, "test", Ok(json!({"status":"retry"}))).is_none());
+        let terminal = settle(&dir, "test", Err("timeout".into())).unwrap();
+        assert_eq!(terminal["status"], "refused");
+        assert_eq!(settle(&dir, "test", Ok(json!({"status":"kept"}))).unwrap(), terminal);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
 }

@@ -74,7 +74,7 @@ class Git:
                            env=self.env, timeout=60, check=False)
         if check and p.returncode:
             # Never return git's stderr: credential helpers/remote URLs can contain secrets.
-            raise RepositoryError('Repository operation failed')
+            raise RepositoryError('Repository fetch unavailable') if args[0] == 'fetch' else Refused('Repository operation failed; check computer repository access')
         return p
 
     def text(self, *args):
@@ -164,10 +164,13 @@ def apply(repo, request, *, before_push=None, journal=None):
 def main():
     try:
         result = apply(sys.argv[1], json.load(sys.stdin), journal=Path(sys.argv[2]))
+    except RepositoryError:
+        result = {'status': 'retry', 'commit': '', 'reason': 'Repository fetch unavailable; retrying bounded reconciliation'}
     except (Refused, ValueError, KeyError, OSError, subprocess.SubprocessError):
         # Detailed refusal contains only fixed contract reasons, never proposal/git output.
         exc = sys.exc_info()[1]
-        result = {'status': 'refused', 'commit': '', 'reason': str(exc) if isinstance(exc, Refused)
+        uncertain = not isinstance(exc, Refused) and Path(sys.argv[2]).exists()
+        result = {'status': 'retry' if uncertain else 'refused', 'commit': '', 'reason': str(exc) if isinstance(exc, Refused)
                   else 'Keep could not be checked safely; card remains open'}
     print(json.dumps(result))
 

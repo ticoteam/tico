@@ -147,3 +147,19 @@ def test_moved_instructions_refuse_and_dirty_checkout_is_preserved(repos):
     with pytest.raises(Refused, match='uncommitted'):
         apply(local, request)
     assert (local / C.LEARNINGS).read_text() == 'Uncommitted day write'
+
+
+def test_cli_repository_error_is_fixed_json_and_fetch_error_requests_reconciliation(repos, tmp_path):
+    import sys
+    from runner import safe_git
+    remote, local, writer, request = repos
+    git(local, 'remote', 'remove', 'origin')
+    def call():
+        result = subprocess.run([sys.executable, '-m', 'runner.memory_tidy_keep', str(local), str(tmp_path / 'journal')],
+                                input=json.dumps(request), text=True, capture_output=True,
+                                env=safe_git.process_environment(), check=True)
+        assert result.stderr == ''
+        return json.loads(result.stdout)
+    assert call()['status'] == 'refused'
+    git(local, 'remote', 'add', 'origin', str(tmp_path / 'missing.git'))
+    assert call()['status'] == 'retry'
