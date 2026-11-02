@@ -1327,9 +1327,22 @@ class Gateway:
                 "AND m.deleted_at IS NULL AND json_extract(m.refs_json,'$.task_completion') IS NULL "
                 "AND NOT EXISTS (SELECT 1 FROM slack_posts p WHERE p.message_id=m.id) ORDER BY m.created LIMIT 50").fetchall()
             people = roster(c) if rows else None
+            seen = set()
             for r in rows:
+                if r["id"] in seen:
+                    continue
+                seen.add(r["id"])
                 if not privacy.public_message(c, H.message(c, r["id"])):
                     continue
+                # The copy goes to the mapping that fits its recipient: a shared channel fits anyone, a DM only its
+                # own person. No fitting mapping: the copy is cancelled here, so it is never queued for another person's DM.
+                mapped = self.destination(c, r)
+                if mapped is None:
+                    c.execute("INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,"
+                              "updated,error) VALUES(?,?,'',?,'','cancelled',?,?,'No Slack destination fits this recipient')",
+                              (r["id"], r["channel"], r["bot"], self.clock(), self.clock()))
+                    continue
+                r = {**dict(r), "channel": mapped["channel"], "thread_ts": mapped["thread_ts"]}
                 if self.stays_in_tico(c, r, r["bot"], people):
                     self.keep_in_tico(c, r, r["bot"], r["channel"], r["thread_ts"])
                     continue
@@ -1347,6 +1360,29 @@ class Gateway:
                 c.execute("INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated) "
                           "VALUES(?,?,?,?,?,'ready',?,?)", (r["id"], r["channel"], reply_ts, r["bot"], r["body"], now, now))
         return len(rows)
+
+    def destination(self, c, row):
+        """The Slack mapping a bot's reply in this conversation goes through (its first that existed before the message
+        and fits the person it is addressed to), or None."""
+        for mapped in c.execute("SELECT channel,thread_ts FROM slack_threads WHERE conversation_id=? AND bot=? "
+                                "AND created<? ORDER BY created", (row["conversation_id"], row["bot"], row["created"])):
+            if self.dm_fits(c, mapped["channel"], str(row["to_actor"] or ""), row["conversation_id"]):
+                return dict(mapped)
+        return None
+
+    def dm_fits(self, c, channel, person, conversation_id):
+        """Whether a Slack channel may carry a copy to `person` (an actor id) from this conversation. A shared channel
+        carries anyone's. A DM is its person's: the humans whose verified messages arrived in it are exactly that
+        person; a DM with none yet is its thread's member, as threads.legacy_participants reads who a thread names
+        (a native DM's other people are thread members, not participants_json rows)."""
+        if not str(channel or "").startswith("D"):
+            return True
+        actors = {r[0] for r in c.execute("SELECT DISTINCT actor FROM slack_events WHERE channel=? AND actor LIKE 'human:%' "
+                                          "AND state IN ('routed','recorded')", (channel,))}
+        if actors:
+            return actors == {person}
+        from . import threads
+        return person in threads.legacy_participants(c, H.conversation(c, conversation_id))
 
     def task_completions(self):
         """Completion notices use the same durable post queue, sent by the Tico app."""
