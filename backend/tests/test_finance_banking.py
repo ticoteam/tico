@@ -643,7 +643,7 @@ def test_a_bank_row_that_took_a_marked_payment_counts_once_in_the_reconciliation
     (expected_match), so the GL line holds the payment once. The cleared row must count once in the book gap too:
     the reconciliation is done, not open by the payment's amount."""
     fake = FakeMercury()
-    fake.balances["acct-chk"] = -15.0
+    fake.balances["acct-chk"] = -265.0                  # Mercury already holds the payment the feed has not shown yet
     connect(books, fake)
     fake.txns["txn-fee"] = dict(MERCURY["txn_bank_fee"])                           # -15.00 on Oct 12
     sync_once(books, fake)
@@ -1212,3 +1212,24 @@ def test_an_account_with_no_balance_when_the_backfill_ended_gets_its_opening_onc
     sync_once(books, fake, NEXT_DAY)
     with books.read() as c:
         assert _opening(c) == [("2026-09-02", "1000", 12_625_050), ("2026-09-02", "3900", -12_625_050)]
+
+
+def test_late_history_keeps_moving_an_opening_it_brought_to_zero(books):
+    """A $100 opening, then history Mercury already held: +$100 (the opening goes to 0, no entry) and -$50. The opening
+    is $50, so with both rows the bank line is Mercury's $100."""
+    fake = FakeMercury()
+    fake.balances["acct-chk"] = 100.0
+    connect(books, fake)
+    fake.queue["events"] = [{"events": []}]
+    sync_once(books, fake)
+    rows = [_txn("old-in", "acct-chk", 100.0, "externalTransfer", day="2026-09-02"),
+            _txn("old-out", "acct-chk", -50.0, "wireFee", day="2026-09-01")]
+    for i, raw in enumerate(rows):
+        fake.txns[str(raw["id"])] = raw
+        fake.events_list.append({"id": f"evt-{i}", "resourceType": "transaction", "resourceId": raw["id"],
+                                 "operationType": "create", "resourceVersion": 1})
+    sync_once(books, fake, LATER)
+    with books.read() as c:
+        rows = c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_feed_txns WHERE provider_id LIKE 'old-%'").fetchone()[0]
+        assert rows == 5_000                              # both taken in (one may wait for review before it posts)
+        assert _opening(c) == [("2026-08-31", "1000", 5_000), ("2026-08-31", "3900", -5_000)]

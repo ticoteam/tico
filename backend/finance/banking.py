@@ -400,16 +400,19 @@ def _before_opening(ctx: Ctx, money: Any, t: F.FeedTxn) -> None:
     then; with no time kept, one dated on or before the opening's day): the opening gives it back and
     moves before it if need be. History arriving late and out of order (through the Events API) counts whatever its
     date. A later row needs nothing: the balance moved with it, and so does the opening's figure. Only a first sighting
-    counts (a pending row that settles moved the balance after the opening)."""
+    counts (a pending row that settles moved the balance after the opening). An opening at 0 (no entry) still moves."""
     entry = SK.opening_entry(ctx.c, ctx.book.id, str(money["id"]))
-    if entry is None:
-        return
-    dated = str(entry["entry_date"])
     ended = str(dict(_conn_settings(ctx, money).get("opened_at") or {}).get(str(money["id"])) or "")
+    if entry is None and not ended:
+        return
     seen = str(t.raw.get("postedAt") or t.raw.get("createdAt") or "")
-    if not (seen <= ended if ended and seen else t.txn_date <= dated):
+    if not (seen <= ended if ended and seen else entry is not None and t.txn_date <= str(entry["entry_date"])):
         return
     earlier = (dates.day(t.txn_date) - timedelta(days=1)).isoformat()
+    if entry is None:
+        set_opening(ctx, money, -t.amount, earlier)
+        return
+    dated = str(entry["entry_date"])
     set_opening(ctx, money, opening_amount(ctx, money, dated) - t.amount, min(dated, earlier))
 
 
