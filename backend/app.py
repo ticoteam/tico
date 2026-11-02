@@ -200,6 +200,13 @@ def create_app(settings=None):
                 bookkeeper.ensure(c, onboarding, auth)
         except Exception as exc:
             telemetry.capture("bookkeeper", exc)
+        # Finance rights a template's bot was hired with before Finance was set up (backend/template_finance.py).
+        try:
+            from . import template_finance
+            with store.transaction() as c:
+                template_finance.ensure(c)
+        except Exception as exc:
+            telemetry.capture("template_finance", exc)
         # Physical mail filed before bills and tax letters were private: those tasks go private, once.
         try:
             app.state.postal_mail.backfill_private()

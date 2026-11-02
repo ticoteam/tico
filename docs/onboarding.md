@@ -523,7 +523,8 @@ Tico ships 98 role templates, by group, each with a card. `templates/catalog/` a
 
 - `card.yaml` describes the template to whoever is choosing. It is never copied into a bot's
   repository. Fields: `template`, `slug` (the default bot slug), `name`, `required`, `bootstrap`,
-  `summary`, `owns`, `never`, `runtime`, `model`, `reasoning_effort`, `recommend_when`, `pack` (its group: `basics`, `sales`,
+  `summary`, `owns`, `never`, `runtime`, `model`, `reasoning_effort`, `recommend_when`, `finance` (`rights` and one
+  company `view`, given once at hire: `backend/template_finance.py`), `pack` (its group: `basics`, `sales`,
   `marketing`, `support`, `operations` or `engineering`), `lead` (on each group head), `group`, `icon`, `tags`, `suggest`,
   `team_templates`, `kind` (`helper` on a card that serves one human and sits outside the team chart), `pains`, `prerequisites` and, for a starter, `onboarding`, `first_routine`, `approval_required` and `example_output`. The
   server serves all of them except `onboarding` and `example_output`; the team builder reads `group`, `pack`, `lead`, `kind`, `icon`, `tags`,
