@@ -217,6 +217,15 @@ def test_company_members_share_non_consuming_reads_and_waits(api):
     assert len(api.get('/api/v2/inbound/messages',headers=headers()).content)<96*1024
 
 
+def test_inbox_page_says_not_configured_on_a_real_install_with_inbound_off(api):
+    svc=seed(api)
+    assert svc.off and not svc.settings.demo         # no key and not the demo: the page's connection is off
+    listed=api.get('/api/v2/inbound/inboxes',headers=headers()).json()
+    assert len(listed['inboxes'])==3 and listed['configured'] is False
+    svc.off=False                                    # with a key and a reachable HQ the same inboxes are configured
+    assert api.get('/api/v2/inbound/inboxes',headers=headers()).json()['configured'] is True
+
+
 def test_authorization_rejects_bare_runners_support_and_non_admin_phone_writes(api):
     svc=seed(api)
     for who in (Identity('runner:x','runner'),Identity('service:x','service',scope='tasks'),

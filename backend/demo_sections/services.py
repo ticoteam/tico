@@ -149,6 +149,11 @@ def _inboxes(b):
                            "subject": subject, "text": text})
     b.app.state.inbound.ingest({"cursor": len(deliveries), "deliveries": deliveries, "gaps": []})
 
+    # `ingest` stamps the sync with the wall clock. A sync that ran in the demo's week stamps the demo's time instead.
+    def synced(c):
+        c.execute("UPDATE inbound_sync SET last_synced_at=? WHERE singleton=1", (b.ago(hours=0.2).timestamp(),))
+    b.write(synced)
+
 
 def _letters(b):
     """Each letter arrives from HQ's relay, is read, and is filed to a task. A task whose work belongs to a bot is then

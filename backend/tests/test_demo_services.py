@@ -38,6 +38,17 @@ def test_company_inboxes_and_phone_line_hold_their_messages(built):
         assert len(email) == 7
 
 
+def test_email_and_phone_page_reads_configured_in_the_demo_and_still_refuses_writes(built):
+    with as_ana(built) as api:
+        listed = api.get("/api/v2/inbound/inboxes").json()
+        assert listed["configured"] is True and len(listed["inboxes"]) == 4
+        assert listed["last_synced_at"] is not None
+        assert api.get("/api/v2/inbound/messages").json()["messages"]
+        refused = api.post("/api/v2/inbound/inboxes", headers={"Idempotency-Key": "demo-services-create"},
+                           json={"kind": "email", "name": "Sales two"})
+        assert refused.status_code == 409 and refused.json()["error"]["code"] == "inbound_unconfigured"
+
+
 def test_letters_carry_the_mailing_address_and_reach_their_owners(built):
     with as_ana(built) as api:
         items = {row["external_id"]: row for row in api.get("/api/v2/postal/items").json()["items"]}
