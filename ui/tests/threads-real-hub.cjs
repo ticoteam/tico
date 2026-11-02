@@ -315,6 +315,7 @@ async function restrictPerson(hub) {
       assert.deepEqual(save, {inside: true, top: true}, `${tag}: Save can be reached`);
 
       // On the bot's own page the same editor opens in place: there the page scrolls, and Save still comes clear of the bottom nav.
+      await page.keyboard.press('Escape');
       await page.goto(hub.url + `/#/bot/${BOT}/settings`);
       await page.locator('#bot-editor [data-edit-access]').first().click();
       await page.locator('#access-editor.bot-settings-panel [name="preset"][value="custom"]').check();
