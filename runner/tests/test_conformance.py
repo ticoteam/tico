@@ -245,9 +245,9 @@ def test_native_packet_runs_in_private_workspace_and_delivers_without_parent_tur
                "GIT_COMMITTER_NAME": "Acme", "GIT_COMMITTER_EMAIL": "ops@acme.invalid"}
     for args in (["add", "-A"], ["commit", "-qm", "Synthetic memory"], ["push", "-q"]):
         subprocess.run(["git", "-C", str(repo), *args], env=git_env, check=True, capture_output=True)
-    computer.start()
     at = datetime(2026, 11, 2, 11, 30, tzinfo=timezone.utc)
     monkeypatch.setattr(H, "now", lambda: at.isoformat().replace("+00:00", "Z"))
+    computer.start()
     enable(api)
     model = "claude:claude-sonnet-5-5" if computer.harness == "claude" else "codex:gpt-6.1-sol"
     put(api, "system-routines/memory_tidy", {"on": True, "pilots": [entry(model=model)]})
