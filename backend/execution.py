@@ -380,7 +380,7 @@ def lift_after_connection_change(c, settings, actor, bot):
         if why == "login" and until:
             # The bot stays held on its own login until that login's hold ends (a replaced plan's later deadline is no
             # longer the one): the claim releases these at this time (wake_presets.release_quota_resets).
-            c.execute("UPDATE jobs SET hold_until=? WHERE bot=? AND state='queued' AND held=1 "
+            c.execute("UPDATE jobs SET hold_until=? WHERE bot_id=? AND state='queued' AND held=1 "
                       "AND wake_class='quota-reset' AND hold_reason IS NULL", (until, bot))
         H.status_set(c, actor, bot, state="limited",
                      focus=("Connection changed; the new login is at its usage limit"

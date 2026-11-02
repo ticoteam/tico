@@ -526,7 +526,7 @@ def test_hold_words_name_the_memory_percent_and_the_stale_sample(api):
     with api.app.state.store.read() as c:
         assert computer_hold(c, computer['runner_id']) == ('computer busy: memory', 'computer busy: memory 86%')
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runner_load_samples SET ts=ts-300,sampled_at=sampled_at-300 WHERE runner_id=?',
+        c.execute('UPDATE runner_load_samples SET created_at=created_at-300,sampled_at=sampled_at-300 WHERE runner_id=?',
                   (computer['runner_id'],))
     with api.app.state.store.read() as c:
         assert computer_hold(c, computer['runner_id']) == ('computer not reporting', 'computer not reporting')
@@ -541,7 +541,7 @@ def test_a_computer_whose_sample_is_stale_refuses_bot_starts_and_admits_a_person
     machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == computer['runner_id'])
     assert any(w['reason'] == 'computer not reporting' for w in machine['turn_counts']['waits'])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET from_actor='human:chris' WHERE from_actor='bot:ops'")
+        c.execute("UPDATE messages SET sender_id='human:chris' WHERE sender_id='bot:ops'")
     assert claim(api, computer, 'finance') is not None
 
 

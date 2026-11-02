@@ -611,7 +611,7 @@ def status(api, bot="ops"):
 
 def queued_holds(api, bot="ops"):
     with api.app.state.store.read() as c:
-        return [tuple(r) for r in c.execute("SELECT held,wake_class FROM jobs WHERE bot=? AND state='queued' "
+        return [tuple(r) for r in c.execute("SELECT held,wake_class FROM jobs WHERE bot_id=? AND state='queued' "
                                             "ORDER BY id", (bot,))]
 
 
@@ -639,14 +639,14 @@ def hold_own_login(api, m, until="2999-01-01T00:00:00.000000Z", runtime="claude"
 def hold_queued(api, bot="ops", until="2999-01-01T00:00:00.000000Z"):
     """The bot is limited and its queued work waits until `until`, as a limit with a named reset leaves it."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET held=1,hold_until=?,wake_class='quota-reset' WHERE bot=? AND state='queued'",
+        c.execute("UPDATE jobs SET held=1,hold_until=?,wake_class='quota-reset' WHERE bot_id=? AND state='queued'",
                   (until, bot))
         H.status_set(c, H.KEEPER, bot, state="limited", focus="Usage limit", reason="test")
 
 
 def queued_until(api, bot="ops"):
     with api.app.state.store.read() as c:
-        return [tuple(r) for r in c.execute("SELECT held,hold_until FROM jobs WHERE bot=? AND state='queued'", (bot,))]
+        return [tuple(r) for r in c.execute("SELECT held,hold_until FROM jobs WHERE bot_id=? AND state='queued'", (bot,))]
 
 
 def test_switching_a_computer_to_another_plan_frees_a_bot_limited_on_the_old_one(api):

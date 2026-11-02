@@ -910,7 +910,7 @@ def _connect_computers(c, runtime, who=None):
                 and (report.get(runtime) or {}).get("installed")):
             found.append(runner)
     found.sort(key=lambda r: r["last_seen_at"] or "", reverse=True)
-    found.sort(key=lambda r: (r["operator"] != me, r["id"] in busy))
+    found.sort(key=lambda r: (r["owner_id"] != me, r["id"] in busy))
     return found
 
 
@@ -943,7 +943,7 @@ def connect(c, settings, who, body):
         raise Problem("limit", f"The company has {MAX_SUBSCRIPTIONS} subscriptions; remove one first", 422)
     def answer(login, runner):
         return {**model_login.view(login), "computer": runner["label"],
-                "not_yours": runner["operator"] != H.actor_id(who.actor)}
+                "not_yours": runner["owner_id"] != H.actor_id(who.actor)}
 
     # Asked again (a reloaded page): the sign-in already going picks back up, wherever it runs.
     model_login.sweep(c)

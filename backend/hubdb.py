@@ -8423,7 +8423,7 @@ def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
                     continue
             # A wake a rule held leaves no stall wake, so its own event spaces the next one, or every pass would write
             # another notice. Decide's go-ahead is not such a notice: it keeps to the gap of the wakes that went out.
-            quiet = None if triaged else conn.execute("SELECT max(ts) FROM events WHERE action='task.stall_quiet' "
+            quiet = None if triaged else conn.execute("SELECT max(created_at) FROM events WHERE action='task.stall_quiet' "
                                                       "AND target=?", (row["id"],)).fetchone()[0]
             if max(last or "", quiet or "") > shift(at, seconds=-_stall_gap(conn, row, stand, not triaged) * 60):
                 continue
@@ -8437,7 +8437,7 @@ def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
                     queued_here.append(msg["id"])
                 if msg and msg["refs"].get(wake_rules.MARK) in wake_rules.SILENT:
                     # No attempted wake for the retry/escalation machinery to count.
-                    event(conn, KEEPER, "task.stall_quiet", row["id"], {"bot": actor_id(row["owner"]), "stand": stand,
+                    event(conn, KEEPER, "task.stall_quiet", row["id"], {"bot": actor_id(row["owner_id"]), "stand": stand,
                                                                         "kind": "status_check"})
                     continue
                 if triaged:
@@ -8462,7 +8462,7 @@ def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
             if queued_here is not None and msg:
                 queued_here.append(msg["id"])
             if msg and msg["refs"].get(wake_rules.MARK) in wake_rules.SILENT:
-                event(conn, KEEPER, "task.stall_quiet", row["id"], {"bot": actor_id(row["owner"]), "stand": stand})
+                event(conn, KEEPER, "task.stall_quiet", row["id"], {"bot": actor_id(row["owner_id"]), "stand": stand})
                 continue
             if triaged:
                 stall_triage.sent(conn, row, at)

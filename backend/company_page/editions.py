@@ -490,7 +490,7 @@ def _approval_state(row, expected):
 
 def _decision_note(c, approval_id):
     """What the person wrote when they decided: the approval's row doesn't hold it, its event does."""
-    row = c.execute("SELECT detail FROM events WHERE target=? AND action='approval.decide' ORDER BY ts DESC LIMIT 1",
+    row = c.execute("SELECT detail FROM events WHERE target=? AND action='approval.decide' ORDER BY created_at DESC LIMIT 1",
                     (approval_id,)).fetchone()
     return (json.loads(row["detail"] or "{}").get("note") or "") if row else ""
 
@@ -503,7 +503,7 @@ def approval_view(c, row):
         return {"id": row["approval_id"], "state": "lapsed"}
     return {"id": found["id"], "state": _approval_state(found, approval_payload(c, row)),
             "to": found.get("decision_owner"), "to_name": found.get("decision_owner_name"),
-            "requested_by": found["requested_by"], "created_at": found["created_at"], "decided_by": found["decided_by"],
+            "requested_by": found["requested_by_id"], "created_at": found["created_at"], "decided_by": found["decided_by_id"],
             "decided_at": found["decided_at"], "note": _decision_note(c, found["id"])}
 
 
@@ -943,8 +943,8 @@ def request_approval(c, who, edition_id):
 
 def _decided_by_addressee(found):
     """A yes from the person it was addressed to, by their own hand, asked for by a person."""
-    return (found["decision"] == "approved" and H.is_human(found["requested_by"]) and not found.get("decided_via")
-            and found["decided_by"] == found.get("decision_owner"))
+    return (found["decision"] == "approved" and H.is_human(found["requested_by_id"]) and not found.get("decided_via")
+            and found["decided_by_id"] == found.get("decision_owner"))
 
 
 def publish(c, who, edition_id, approval_id=None):
@@ -965,7 +965,7 @@ def publish(c, who, edition_id, approval_id=None):
     H.approval_consume(c, who.actor, found["id"])
     at = H.now()
     c.execute("UPDATE editions SET status='published', published_at=?, approved_by=?, payload_hash=?, updated_at=? "
-              "WHERE id=? AND status='awaiting_approval'", (at, found["decided_by"], found["payload_hash"], at, edition_id))
+              "WHERE id=? AND status='awaiting_approval'", (at, found["decided_by_id"], found["payload_hash"], at, edition_id))
     if row["supersedes_id"]:
         # Only what is up gets superseded: a correction of a retracted edition leaves it retracted.
         c.execute("UPDATE editions SET status='superseded', updated_at=? WHERE id=? AND status='published'",
@@ -1074,7 +1074,7 @@ def board_approval(c, audience_id):
              else "declined" if found["decision"] == "declined" else "stale" if found["payload"].get("url") != current
              else "approved" if found["decision"] == "approved" else "pending")
     return {"id": found["id"], "state": state, "to": found.get("decision_owner"),
-            "to_name": found.get("decision_owner_name"), "created_at": found["created_at"], "decided_by": found["decided_by"],
+            "to_name": found.get("decision_owner_name"), "created_at": found["created_at"], "decided_by": found["decided_by_id"],
             "decided_at": found["decided_at"], "note": _decision_note(c, found["id"])}
 
 
@@ -1114,9 +1114,9 @@ def approval_decided(c, found):
     revision = found["payload"].get("disclosure_revision")
     if config != stats.board_config_hash(c, audience_id) or revision != _revision(c, audience_id):
         return None
-    H.approval_consume(c, found["decided_by"], found["id"])
+    H.approval_consume(c, found["decided_by_id"], found["id"])
     row = H.new_id()
     c.execute("INSERT INTO stat_board_approvals(id, audience_id, config_hash, disclosure_revision_id, approval_id, "
               "approved_by, created_at) VALUES(?,?,?,?,?,?,?)",
-              (row, audience_id, config, revision, found["id"], found["decided_by"], H.now()))
+              (row, audience_id, config, revision, found["id"], found["decided_by_id"], H.now()))
     return row

@@ -93,7 +93,7 @@ def test_a_manager_declared_only_in_the_bots_definition_counts_too(api):
 def test_quarantined_writer_names_its_cooldown_deadline(api, reason):
     with api.app.state.store.transaction() as c:
         H.quarantine(c, "cpo", reason)
-        c.execute("UPDATE events SET ts=? WHERE action='quarantine' AND target='bot:cpo'",
+        c.execute("UPDATE events SET created_at=? WHERE action='quarantine' AND target='bot:cpo'",
                   ("2026-11-01T23:32:00Z",))
         with pytest.raises(H.Refused) as got:
             H._writer(c, "bot:cpo")

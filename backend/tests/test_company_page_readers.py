@@ -666,7 +666,7 @@ def test_a_reply_reaches_the_owner_as_untrusted_text_and_wakes_no_bot(site, monk
     with site.store.read() as c:
         task = H.task(c, message["task_id"])
         requester = dict(c.execute("SELECT * FROM task_requesters WHERE task_id=?", (task["id"],)).fetchone())
-    assert task["owner"].startswith("human:") and task["private"] == 1
+    assert task["owner_id"].startswith("human:") and task["private"] == 1
     assert "pat@other.example" not in task["title"] + task["body"]
     assert "untrusted" in task["body"] and "<outside-text>" in task["body"]
     assert task["body"].count("</outside-text>") == 1          # the writer can't close the fence

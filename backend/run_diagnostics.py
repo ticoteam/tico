@@ -161,19 +161,19 @@ def cap(c, at, listening_since=None):
     cap. A run whose computer still heartbeats is left to the runner's own limit."""
     cutoff = H.shift(at, seconds=-STALL_MINUTES * 60)
     now = H.now()
-    for row in c.execute("SELECT a.id,a.bot,a.started_at,max(a.started_at,coalesce(d.heartbeat_at,''),"
+    for row in c.execute("SELECT a.id,a.bot_id,a.started_at,max(a.started_at,coalesce(d.heartbeat_at,''),"
                          "coalesce(d.last_event_at,'')) AS seen FROM attempts a "
                          "LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id "
                          "WHERE a.state IN ('leased','running') AND a.started_at IS NOT NULL "
                          "AND NOT EXISTS(SELECT 1 FROM events e WHERE e.target=a.id AND e.action=?)",
                          (CAP_EVENT,)).fetchall():
-        minutes = max_run_minutes(c, row['bot'])
+        minutes = max_run_minutes(c, row['bot_id'])
         seen = max(row['seen'], listening_since or '')
         if H.shift(row['started_at'], seconds=(minutes + MAX_RUN_GRACE_MINUTES) * 60) > at or seen > cutoff:
             continue
         reason = (f'Ended by the server: no heartbeat for {STALL_MINUTES} minutes, more than '
                   f'{MAX_RUN_GRACE_MINUTES} minutes past max_run_minutes ({minutes:g} minutes)')
-        H.event(c, H.KEEPER, CAP_EVENT, row['id'], {'bot': row['bot'], 'max_run_minutes': minutes,
+        H.event(c, H.KEEPER, CAP_EVENT, row['id'], {'bot': row['bot_id'], 'max_run_minutes': minutes,
                                                    'silent_since': seen, 'reason': reason})
         c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (now, row['id']))
 

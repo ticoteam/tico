@@ -935,7 +935,7 @@ def test_a_turn_still_out_on_the_old_computer_is_asked_again_at_a_look(cloud):
     assert out.status_code == 200, out.text
     assert cloud.row()["placement"] == "shared" and placed(cloud)["ops"] == own["runner_id"]
     with cloud.store.transaction() as c:                        # its turn ends; the next look moves it
-        c.execute("UPDATE attempts SET lease_until=0 WHERE bot='ops'")
+        c.execute("UPDATE attempts SET lease_until=0 WHERE bot_id='ops'")
     cloud.tick()
     assert placed(cloud)["ops"] == shared
 
@@ -1157,7 +1157,7 @@ def test_a_member_moving_a_bot_gets_no_plan_on_a_computer_it_moves_to(cloud):
     shared = shared_for(cloud, "cpo")["runner_id"]           # the owner's shared machine, with no plan yet
     add(cloud.api)
     with cloud.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
     change_as(cloud, "ops", "cara-test", mode="cloud", placement="shared")
     assert placed(cloud)["ops"] == shared and given(cloud, shared) == {}
     change_as(cloud, "ops", "cara-test", mode="cloud", placement="own")  # a new machine, made and enrolled for her move
@@ -1212,7 +1212,7 @@ def test_a_same_computer_reassignment_by_a_member_or_support_after_a_plan_is_rem
     assert given(cloud, computer["runner_id"]) == {"claude": sid}
     give(cloud.api, computer, "claude", None)
     with cloud.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
     idle(cloud)
     assign(cloud.api, computer, "ops", generation(cloud, "ops"), operator="cara-test")
     assert given(cloud, computer["runner_id"]) == {}
@@ -1232,7 +1232,7 @@ def test_a_member_moving_its_bot_off_and_back_through_the_assignment_route_gives
     give(cloud.api, own, "claude", None)
     other = runner(cloud.api, label="Office Mac")
     with cloud.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
         c.execute("UPDATE runners SET accepts_member_bots=1 WHERE id=?", (other["runner_id"],))
     idle(cloud)
     assign(cloud.api, other, "ops", generation(cloud, "ops"), operator="cara-test")

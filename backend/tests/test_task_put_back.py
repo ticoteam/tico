@@ -131,7 +131,7 @@ def test_done_task_question_refusal_gives_owner_command_and_nonowner_route(api):
         for outsider in ('bot:ops', 'human:zed'):
             with pytest.raises(H.Refused) as refused:
                 H.task_update(c, outsider, closed['id'], status='doing', note='Reopen.')
-            assert 'ask ana to reopen it' in refused.value.detail
+            assert 'ask Ana to reopen it' in refused.value.detail
             assert '--status doing' not in refused.value.detail
 
 

@@ -211,7 +211,7 @@ def test_only_an_owner_or_admin_uploads_the_logo_and_a_bot_is_refused(api):
     """A bot never changes what leaves the install, and a member who is not an owner or admin doesn't either."""
     api.app.state.auth.settings.test_identities["ops-test"] = Identity("bot:ops", "bot", agent="test")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,runtime,created_at) VALUES('ops','ops','fake',?)", (H.now(),))
+        c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,runtime,created_at) VALUES('ops','ops','ops','fake',?)", (H.now(),))
         c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('ops','test','x-ops',?,'human:ana')",
                   (H.now(),))
     upload(api, PNG, token="ops-test", expected=403)

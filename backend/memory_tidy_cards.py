@@ -225,7 +225,8 @@ def install(app, store, auth, mutate):
                              "WHERE k.runner_id=? AND r.revoked_at IS NULL AND k.status IN ('queued','applying') ORDER BY k.created_at LIMIT 1", (rid,)).fetchall()
             for row in rows:
                 c.execute("UPDATE memory_tidy_keeps SET status='applying' WHERE id=?", (row['id'],))
-            return {'keeps': [{**{k: r[k] for k in r.keys() if k != 'config'}, 'config': {key: value for key, value in json.loads(r['config']).items() if key in {'repo', 'repo_url', 'shared_from'}}, 'date': r['created_at'][:10]} for r in rows]}
+            # edits_json is the runner wire's name (runner/memory_tidy_keep.py); older runners read it too.
+            return {'keeps': [{**{k: r[k] for k in r.keys() if k not in ('config', 'edits')}, 'edits_json': r['edits'], 'config': {key: value for key, value in json.loads(r['config']).items() if key in {'repo', 'repo_url', 'shared_from'}}, 'date': r['created_at'][:10]} for r in rows]}
 
     @app.post('/api/v2/runners/me/memory-tidy-keeps/{ident}/complete')
     def complete_keep(request: Request, ident: str, body: MemoryTidyCompletion):
