@@ -764,7 +764,7 @@ def test_a_task_room_reply_held_before_done_keeps_its_text_nowhere(ruled):
     post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": secret, "last_seq": 2}, token=r["token"])
     for query in ("SELECT final_text AS t FROM attempts WHERE id=?", "SELECT result AS t FROM attempts WHERE id=?",
                   "SELECT payload AS t FROM attempt_events WHERE attempt_id=?",
-                  "SELECT summary AS t FROM turns WHERE id=?"):
+                  "SELECT summary AS t FROM attempts WHERE id=?"):
         assert all("blue" not in str(row["t"] or "") for row in sql(api, query, (aid,))), query
     assert "blue" not in str(sql(api, "SELECT checkpoint FROM tasks WHERE id=?", (review["id"],))[0]["checkpoint"] or "")
     # Not recorded from a held reply: the review's verdict stays unset.
@@ -798,7 +798,7 @@ def test_sql_shows_a_watched_live_run_tool_steps_but_not_its_said_text(ruled):
         return json.dumps(res.json())
     events_sql = f"SELECT kind, payload FROM attempt_events WHERE attempt_id='{aid}'"
     assert "blue" not in read(events_sql) and '"tool"' in read(events_sql)
-    assert "blue" not in read(f"SELECT text FROM deltas WHERE turn_id='{aid}'")
+    assert "blue" not in read(f"SELECT text FROM deltas WHERE attempt_id='{aid}'")
     # Once the run hands in a reply that passes, its stream reads again.
     post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Done.", "last_seq": 3}, token=r["token"])
     assert "thinking about blue" in read(events_sql)
@@ -818,7 +818,7 @@ def test_a_late_result_a_block_rule_holds_is_filed_as_its_note_and_sql_masks_a_l
                                                   "last_seq": 0}, token=r["token"])
     assert done["filed"] is True
     for query in ("SELECT final_text AS t FROM attempts WHERE id=?", "SELECT result AS t FROM attempts WHERE id=?",
-                  "SELECT summary AS t FROM turns WHERE id=?"):
+                  "SELECT summary AS t FROM attempts WHERE id=?"):
         assert all("blue" not in str(row["t"] or "") for row in sql(api, query, (aid,))), query
     assert sql(api, "SELECT thread_id FROM attempts WHERE id=?", (aid,))[0]["thread_id"] is None
 
@@ -826,9 +826,9 @@ def test_a_late_result_a_block_rule_holds_is_filed_as_its_note_and_sql_masks_a_l
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET final_text=?, result=? WHERE id=?",
                   ("favorite color is blue", json.dumps({"text": "favorite color is blue", "outcome": "completed"}), aid))
-        c.execute("UPDATE turns SET summary='favorite color is blue' WHERE id=?", (aid,))
-    res = api.post("/api/v2/sql", json={"sql": f"SELECT a.state, a.final_text, a.result, t.summary FROM attempts a "
-                                               f"JOIN turns t ON t.id=a.id WHERE a.id='{aid}'"}, headers=headers())
+        c.execute("UPDATE attempts SET summary='favorite color is blue' WHERE id=?", (aid,))
+    res = api.post("/api/v2/sql", json={"sql": f"SELECT a.state, a.final_text, a.result, a.summary FROM attempts a "
+                                               f"WHERE a.id='{aid}'"}, headers=headers())
     assert res.status_code == 200, res.text
     assert "blue" not in res.text and "expired" in res.text and "completed" in res.text
 

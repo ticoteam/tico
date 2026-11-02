@@ -372,7 +372,7 @@ def test_run_windows_include_failed_attempts_without_turns_and_hide_private_room
     machine, message, attempt = setup_attempt(api)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), attempt["id"]))
-        c.execute("DELETE FROM turns WHERE id=?", (attempt["id"],))
+        c.execute("DELETE FROM attempts WHERE id=?", (attempt["id"],))
         H.status_set(c, "bot:ops", "ops", "running")
         H.status_set(c, "bot:ops", "ops", "idle")
     rows = get(api, "bots/ops/turns?since=24h")

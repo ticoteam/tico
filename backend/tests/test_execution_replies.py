@@ -221,8 +221,8 @@ def test_a_runs_confirmed_thread_replaces_the_one_it_started_on_and_only_while_i
         with api.app.state.store.read() as c:
             links = {link["url"]: json.loads(link["detail"])["primary"]
                      for link in H.task_links(c, task["id"]) if link["kind"] == "session"}
-            ran = c.execute("SELECT a.thread_id, t.thread_id FROM attempts a JOIN turns t ON t.id=a.id WHERE a.id=?",
-                            (attempt["id"],)).fetchone()
+            ran = (c.execute("SELECT thread_id FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0],
+                   H.turn(c, attempt["id"])["thread_id"])
             session = c.execute("SELECT thread_id FROM bot_sessions WHERE bot='ops'").fetchone()
             return links, tuple(ran), session[0]
 

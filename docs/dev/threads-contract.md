@@ -5,7 +5,7 @@ track builds against this page. Owner: `threads/core`. A change here is announce
 ("contract:"), and additive changes are preferred over renames.
 
 Terms in UI and docs: **Thread, Home, DM, Sub-thread, Call**. Internally the table stays `conversations` and a
-thread id **is** a conversation id. `bots.thread_id` and `turns.thread_id` are provider sessions: never read or
+thread id **is** a conversation id. `bots.thread_id` and `attempts.thread_id` are provider sessions: never read or
 reuse them as thread ids.
 
 ## 0. Files core owns

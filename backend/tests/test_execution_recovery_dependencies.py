@@ -21,7 +21,7 @@ def test_overlap_wait_is_visible_and_reviewed_within_five_minutes_of_freeing(api
             c.execute("UPDATE attempts SET lane=? WHERE id IN (?,?)", (lane, attempt['id'], other['id']))
         else:
             task = H.task_create(c, 'human:ana', 'Shared work', 'Finish this.', 'bot:ops')
-            c.execute('UPDATE turns SET task_id=? WHERE id IN (?,?)', (task['id'], attempt['id'], other['id']))
+            c.execute('UPDATE attempts SET task_id=? WHERE id IN (?,?)', (task['id'], attempt['id'], other['id']))
             c.execute('UPDATE messages SET refs=? WHERE id=?', (json.dumps({'task': task['id']}), message['id']))
     assert sweep(api) == []
     with api.app.state.store.read() as c:
@@ -123,7 +123,7 @@ def test_shell_run_ignores_another_runs_task_merge(api):
     machine, message, attempt = restarted_mid_turn(api, [('Bash', None)])
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, 'human:ana', 'Shared task', 'Finish.', 'bot:ops')
-        c.execute('UPDATE turns SET task_id=? WHERE id=?', (task['id'], attempt['id']))
+        c.execute('UPDATE attempts SET task_id=? WHERE id=?', (task['id'], attempt['id']))
         c.execute('INSERT INTO task_links(id,task_id,kind,url,created_at,pr_merged_at) VALUES(?,?,?,?,?,?)',
                   (H.new_id(), task['id'], 'pr', 'https://example.com/acme/app/pull/9', H.now(), H.now()))
     assert [d['state'] for d in sweep(api)] == ['queued']

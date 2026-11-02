@@ -71,7 +71,9 @@ COLUMNS = (
     Column("tasks", "status", TASK_STATUSES, nullable=True),
     Column("tasks", "blocked_from_status", TASK_STATUSES, nullable=True),
     Column("jobs", "state", JOB_STATES, retired=(("cancelled", "canceled"),)),
-    Column("attempts", "state", ATTEMPT_STATES),
+    # NULL for a run recorded with no lease (backend/migrations/0060_turns_into_attempts.py); attempts' CHECK keeps a
+    # leased run's state set.
+    Column("attempts", "state", ATTEMPT_STATES, nullable=True),
     Column("automation_runs", "status", RUN_STATUSES),
     Column("webhook_sends", "state", WEBHOOK_SEND_STATES, retired=(("cancelled", "canceled"),)),
     Column("bots", "state", BOT_STATES, nullable=True, enforce="check"),

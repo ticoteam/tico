@@ -68,9 +68,11 @@ def restore(path):
     return before
 
 
-# Dropped by backend/migrations/0035_growth_rethink.py after the renames ran on them.
+# Dropped by later migrations (0035_growth_rethink, 0060_turns_into_attempts) after the renames ran on them.
 RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",
-           "gtm_versions", "gtm_drafts"}
+           "gtm_versions", "gtm_drafts",
+           # Moved onto attempts and attempt_usage_segments by backend/migrations/0060_turns_into_attempts.py.
+           "turns", "turn_usage_segments"}
 
 
 @pytest.fixture(scope="module")
@@ -124,7 +126,7 @@ def test_indexes_triggers_and_views_survive_and_name_no_old_column(upgraded):
     _store, conn, before = upgraded
     for kind in ("index", "trigger", "view"):
         now = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type=?", (kind,))}
-        # The tables 0035_growth_rethink retires take their indexes with them.
+        # The tables later migrations retire take their indexes with them.
         kept = {name for name in before[kind + "es" if kind == "index" else kind + "s"]
                 if not any(table in name for table in RETIRED) and not name.startswith("growth_idea")}
         assert kept <= now, kind

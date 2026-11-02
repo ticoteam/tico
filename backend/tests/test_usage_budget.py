@@ -60,7 +60,7 @@ def big_org(api, first, last, groups_=8):
                       "VALUES(?,?,?,?,?,?,'','keeper','active',?)", (slug, slug, slug, "fake", "m", "", H.now()))
             c.execute("INSERT INTO bot_config(bot,config,owner_id,team) VALUES(?,?,?,?)",
                       (slug, encode({"name": slug}), "ana", teams[n % len(teams)]))
-            c.execute("INSERT INTO turns(id,bot,started_at,finished_at,est_cost_usd,billing) VALUES(?,?,?,?,?,?)",
+            c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,est_cost_usd,billing) VALUES(?,?,?,?,?,?)",
                       (H.new_id(), slug, H.now(), H.now(), 0.25, "api"))
             c.execute("INSERT INTO usage_limits(bot,daily_usd,updated_at,updated_by) VALUES(?,?,?,?)",
                       (slug, 10, H.now(), "human:ana"))

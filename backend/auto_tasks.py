@@ -67,7 +67,7 @@ def back_off(c, row):
     if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND rowid>? AND field IN ('step','owner') "
                  "AND actor<>? LIMIT 1", (row['id'], move['rowid'], H.KEEPER)).fetchone():
         return False
-    if c.execute('SELECT 1 FROM turns WHERE task_id=? AND finished_at IS NOT NULL LIMIT 1', (row['id'],)).fetchone():
+    if c.execute('SELECT 1 FROM attempts WHERE task_id=? AND settled_at IS NOT NULL LIMIT 1', (row['id'],)).fetchone():
         return False
     H._set_status(c, H.KEEPER, row, status='open', note='Automatic start returned to the queue: a blocker was linked',
                   skip_step_wake=(row['owner_id'],))
@@ -288,8 +288,8 @@ def notice_releases(c, row, message):
     if carrier_held(c, row):
         return False
     # A task may have moved lanes or have a run of its own without a carried_by marker.
-    if c.execute("SELECT 1 FROM attempts a JOIN turns t ON t.id=a.id LEFT JOIN jobs j ON j.id=a.job_id "
-                 "WHERE a.bot_id=? AND t.task_id=? AND (a.state IN ('leased','running') OR j.state='uncertain') "
+    if c.execute("SELECT 1 FROM attempts a LEFT JOIN jobs j ON j.id=a.job_id "
+                 "WHERE a.bot_id=? AND a.task_id=? AND (a.state IN ('leased','running') OR j.state='uncertain') "
                  "LIMIT 1", (H.actor_id(row['owner_id']), row['id'])).fetchone():
         return False
     return True

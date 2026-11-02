@@ -77,7 +77,7 @@ def test_a_prompt_too_large_to_send_compacts_first_then_starts_a_fresh_session_a
                 # The run that compacted first failed the same way: now the next run starts a new provider session,
                 # as a Clear does, and the failed run says why.
                 assert epoch["epoch"] == 1 and c.execute("SELECT count(*) FROM compact_first").fetchone()[0] == 0
-                assert tuple(c.execute("SELECT session_kind,session_why FROM turns WHERE id=?",
+                assert tuple(c.execute("SELECT session_kind,session_why FROM attempts WHERE id=?",
                                        (attempt["id"],)).fetchone()) == ("new", "prompt_too_long_after_compact")
             state = run_backoff.get(c, "ops")
         assert state["fails"] == fails and state["error_class"] == run_backoff.PROMPT_TOO_LONG

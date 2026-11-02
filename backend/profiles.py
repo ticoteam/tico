@@ -530,8 +530,8 @@ def mismatches(c):
             if n:
                 out.append(("responder_has_tasks", bot, n))
         elif name == DOER:
-            seen = c.execute("SELECT count(*) AS n, sum(coalesce(did_nothing,0)=1) AS idle FROM turns WHERE bot=? "
-                             "AND started_at>? AND finished_at IS NOT NULL", (bot, since)).fetchone()
+            seen = c.execute("SELECT count(*) AS n, sum(coalesce(did_nothing,0)=1) AS idle FROM attempts WHERE bot_id=? "
+                             "AND created_at>? AND settled_at IS NOT NULL", (bot, since)).fetchone()
             created = c.execute("SELECT created_at FROM bots WHERE id=?", (bot,)).fetchone()
             if (seen["n"] >= IDLE_MIN_RUNS and seen["idle"] == seen["n"]
                     and not (created and created[0] and created[0] > since)):

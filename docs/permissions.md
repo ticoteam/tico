@@ -827,7 +827,7 @@ access you meant there; saving any bot's access, or dismissing the note, clears 
 ## In SQL
 
 `POST /api/v2/sql` is the one place a bot the caller may only see or write to does not appear: the
-`bots`, `bot_status`, `schedules`, `bot_config`, `turns`, `jobs` and related tables hold the bots the caller can read,
+`bots`, `bot_status`, `schedules`, `bot_config`, `attempts`, `jobs` and related tables hold the bots the caller can read,
 and tasks follow the rule above ([Tico SQL](hub-sql.md)).
 
 ## Tags

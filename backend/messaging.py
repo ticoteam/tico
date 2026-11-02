@@ -85,7 +85,8 @@ def _catalog(c, who, auth, settings):
         jobs = schedules.get(bot, [])
         fired = [r["last_fired_at"] for r in jobs if r["last_fired_at"]]
         due = [r["next_due_at"] for r in jobs if r["enabled"] and r["next_due_at"]]
-        turn = c.execute("SELECT max(coalesce(finished_at,started_at)) FROM turns WHERE bot=?", (bot,)).fetchone()[0]
+        turn = c.execute("SELECT max(coalesce(settled_at,created_at)) FROM attempts WHERE bot_id=? AND (job_id IS NULL OR trigger IS NOT NULL)",
+                         (bot,)).fetchone()[0]
         last = max(fired + ([latest_digest[bot]] if bot in latest_digest else []) + ([turn] if turn else []), default=None)
         status = H.status(c, bot) or {}
         bots.append({"bot": bot, "name": row["display_name"] or row["slug"],

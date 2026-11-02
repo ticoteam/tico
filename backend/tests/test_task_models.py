@@ -215,7 +215,7 @@ def test_spend_caps_meter_what_the_task_model_ran(api):
     _, turn = task_turn(api, machine)
     finish(api, machine, turn, HAIKU_RAN)
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT model,effort,est_cost_usd FROM turn_usage_segments WHERE turn_id=?",
+        rows = c.execute("SELECT model,effort,est_cost_usd FROM attempt_usage_segments WHERE attempt_id=?",
                          (turn["id"],)).fetchall()
         assert [tuple(r)[:2] for r in rows] == [("claude-haiku-5-5", "low")]
         cost = rows[0]["est_cost_usd"]

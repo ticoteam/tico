@@ -226,7 +226,7 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
     assert all(world[k]["conversation_id"] in rooms for k in ("private", "coo_task", "finance_task"))
     assert "Started task: Summarize the week" in bodies
     assert column(api, "SELECT id FROM attempts") == [world["attempt"]["id"]]
-    assert column(api, "SELECT id FROM turns") == [world["attempt"]["id"]]
+    assert column(api, "SELECT id FROM attempts") == [world["attempt"]["id"]]
     with api.app.state.store.read() as c:
         jobs = c.execute("SELECT count(*) FROM jobs").fetchone()[0]
     # Every queued job but the one Ben's private room raised.

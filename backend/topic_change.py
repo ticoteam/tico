@@ -102,8 +102,9 @@ def last_turn(c, settings, bot):
                         (bot, runtime, model)).fetchone()
     if not session or not session[0]:
         return None
-    row = c.execute("SELECT finished_at,input_tokens,cached_tokens,prompt_tokens FROM turns WHERE bot=? AND thread_id=? "
-                    "AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1", (bot, session[0])).fetchone()
+    row = c.execute("SELECT settled_at AS finished_at,input_tokens,cached_tokens,prompt_tokens FROM attempts "
+                    "WHERE bot_id=? AND thread_id=? AND settled_at IS NOT NULL ORDER BY settled_at DESC LIMIT 1",
+                    (bot, session[0])).fetchone()
     return {**dict(row), "runtime": runtime} if row else None
 
 
@@ -130,8 +131,8 @@ def epoch_since(c, conversation_id):
 
 def turns_since(c, bot, conversation_id, since):
     """The bot's finished turns on this chat since its last clear."""
-    return c.execute("SELECT count(*) FROM turns t JOIN messages m ON m.id=t.message_id WHERE t.bot=? "
-                     "AND m.conversation_id=? AND t.finished_at IS NOT NULL AND t.started_at>?",
+    return c.execute("SELECT count(*) FROM attempts t JOIN messages m ON m.id=t.message_id WHERE t.bot_id=? "
+                     "AND m.conversation_id=? AND t.settled_at IS NOT NULL AND t.created_at>?",
                      (bot, conversation_id, since or "")).fetchone()[0]
 
 

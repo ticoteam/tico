@@ -18,9 +18,9 @@ def receipt(api, task, head=HEAD):
 
 def usage(c, task_id, bot, model="claude-sonnet-5-5", provider="anthropic"):
     turn = H.new_id()
-    c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES(?,?,?,?,?)",
+    c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,task_id) VALUES(?,?,?,?,?)",
               (turn, bot, H.now(), H.now(), task_id))
-    c.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,output_tokens,model,provider,runtime,"
+    c.execute("INSERT INTO attempt_usage_segments(attempt_id,position,input_tokens,output_tokens,model,provider,runtime,"
               "harness,effort) VALUES(?,0,20,20,?,?,? ,?,'high')",
               (turn, model, provider, "claude" if provider == "anthropic" else "codex",
                "claude" if provider == "anthropic" else "codex"))
@@ -57,7 +57,7 @@ def check(api, task, title="Review 1: PR #412", owner="bot:cmo"):
 def verdict(api, row, value, head=HEAD):
     with api.app.state.store.transaction() as c:
         H.task_update(c, row["owner_id"], row["id"], status="done", note="Reviewed.", verdict=value, verdict_head=head)
-        turn = c.execute("SELECT id FROM turns WHERE task_id=? ORDER BY started_at DESC,id DESC LIMIT 1",
+        turn = c.execute("SELECT id FROM attempts WHERE task_id=? ORDER BY created_at DESC,id DESC LIMIT 1",
                          (row["id"],)).fetchone()
         if turn:
             V.after_capture(c, row["id"], head, turn["id"])
@@ -158,10 +158,10 @@ def test_configured_other_family_checker_fallback_verdict_still_moves(api):
     task = ticket(api)
     review = check(api, task)
     with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM turn_usage_segments WHERE turn_id IN (SELECT id FROM turns WHERE task_id=?)",
+        c.execute("DELETE FROM attempt_usage_segments WHERE attempt_id IN (SELECT id FROM attempts WHERE task_id=?)",
                   (review["id"],))
-        turn = c.execute("SELECT id FROM turns WHERE task_id=?", (review["id"],)).fetchone()[0]
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,output_tokens,model,provider,runtime,"
+        turn = c.execute("SELECT id FROM attempts WHERE task_id=?", (review["id"],)).fetchone()[0]
+        c.execute("INSERT INTO attempt_usage_segments(attempt_id,position,input_tokens,output_tokens,model,provider,runtime,"
                   "harness,effort) VALUES(?,0,20,20,'gpt-6.1-sol','openai','codex','codex','high')", (turn,))
         from backend.check_independence import capture_attempt
         capture_attempt(c, task["id"], review["id"], HEAD, turn)
@@ -182,8 +182,8 @@ def test_unknown_executed_checker_family_is_recorded_but_does_not_block_verdict(
     task = ticket(api)
     review = check(api, task)
     with api.app.state.store.transaction() as c:
-        turn = c.execute("SELECT id FROM turns WHERE task_id=?", (review["id"],)).fetchone()[0]
-        c.execute("UPDATE turn_usage_segments SET model='synthetic-unknown-model',provider='unknown' WHERE turn_id=?",
+        turn = c.execute("SELECT id FROM attempts WHERE task_id=?", (review["id"],)).fetchone()[0]
+        c.execute("UPDATE attempt_usage_segments SET model='synthetic-unknown-model',provider='unknown' WHERE attempt_id=?",
                   (turn,))
         from backend.check_independence import capture_attempt
         capture_attempt(c, task["id"], review["id"], HEAD, turn)
@@ -201,7 +201,7 @@ def test_verdict_waits_for_its_exact_attempt_capture_then_moves_once(api):
     task = ticket(api)
     review = check(api, task)
     with api.app.state.store.transaction() as c:
-        turn = c.execute("SELECT id FROM turns WHERE task_id=?", (review["id"],)).fetchone()[0]
+        turn = c.execute("SELECT id FROM attempts WHERE task_id=?", (review["id"],)).fetchone()[0]
         c.execute("DELETE FROM check_head_provenance WHERE check_id=?", (review["id"],))
         H.task_update(c, review["owner_id"], review["id"], status="done", note="Reviewed.",
                       verdict="approve", verdict_head=HEAD)
@@ -221,7 +221,7 @@ def test_post_capture_callback_ignores_a_different_or_obsolete_attempt(api):
     task = ticket(api)
     review = check(api, task)
     with api.app.state.store.transaction() as c:
-        turn = c.execute("SELECT id FROM turns WHERE task_id=?", (review["id"],)).fetchone()[0]
+        turn = c.execute("SELECT id FROM attempts WHERE task_id=?", (review["id"],)).fetchone()[0]
         H.task_update(c, review["owner_id"], review["id"], status="done", note="Reviewed.",
                       verdict="approve", verdict_head=HEAD)
         assert V.after_capture(c, review["id"], "b" * 40, turn) is None
@@ -336,7 +336,7 @@ def test_a_check_finished_with_no_verdict_is_feedback_and_goes_to_on_fail(api):
     with api.app.state.store.transaction() as c:
         H.task_update(c, qa["owner_id"], qa["id"], status="done", note="Looked at it; the login form is odd.")
         from backend import check_pools
-        turn = c.execute("SELECT id FROM turns WHERE task_id=?", (qa["id"],)).fetchone()[0]
+        turn = c.execute("SELECT id FROM attempts WHERE task_id=?", (qa["id"],)).fetchone()[0]
         check_pools.capture_attempt(c, turn)
     assert step(api, task) == "QA Fixes"
     assert [m["refs"].get(V.HANDOFF) for m in builder_jobs(api)] == ["verdict"], [(m["refs"], m["body"][:200]) for m in builder_jobs(api)]

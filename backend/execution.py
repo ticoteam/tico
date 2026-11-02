@@ -145,7 +145,7 @@ def positive_effect(c, aid, body):
         parts = [usage, *list(getattr(usage, "segments", None) or [])]
         if any(getattr(part, "output_tokens", 0) for part in parts):
             return True
-    if c.execute("SELECT 1 FROM turns WHERE id=? AND coalesce(writes,0)>0", (aid,)).fetchone():
+    if c.execute("SELECT 1 FROM attempts WHERE id=? AND coalesce(writes,0)>0", (aid,)).fetchone():
         return True
     row = c.execute("SELECT bot_id,coalesce(started_at,created_at) began FROM attempts WHERE id=?", (aid,)).fetchone()
     if row and c.execute(
@@ -2051,8 +2051,7 @@ def live_tasks(c):
     if values is not None and key in values:
         return values[key]
     out = frozenset((r[0], r[1]) for r in c.execute(
-        "SELECT a.bot_id,t.task_id FROM attempts a JOIN turns t ON t.id=a.id "
-        "WHERE a.state IN ('leased','running') AND t.task_id IS NOT NULL"))
+        "SELECT bot_id,task_id FROM attempts WHERE state IN ('leased','running') AND task_id IS NOT NULL"))
     if values is not None:
         values[key] = out
     return out
@@ -2195,7 +2194,7 @@ def quiet_recheck(c, aid, body, task, msg):
     list (an approval decided, an answer, a steer, Tico's notice of a person's own act: wake_rules.ALWAYS_WAKE), or a
     person's message, or a notice of their act, folded into the turn (Execution.inputs)."""
     finished = min([t for t in (task.get("done_at"), task.get("closed_at")) if t] or [""])
-    row = c.execute("SELECT coalesce(t.writes,0),a.started_at FROM turns t JOIN attempts a ON a.id=t.id WHERE t.id=?",
+    row = c.execute("SELECT coalesce(writes,0),started_at FROM attempts WHERE id=? AND (job_id IS NULL OR trigger IS NOT NULL)",
                     (aid,)).fetchone()
     if not (task["status"] in ("done", "closed") and bool(finished) and bool(row) and bool(row[1])
             and finished < row[1] and not row[0] and not body.pushes):
@@ -2922,7 +2921,7 @@ class Execution:
                 # pushed, sent or paid, so it is held for a check (auto_reconcile), never put back in line blindly.
                 acted = row["state"] == "leased" and c.execute(
                     "SELECT 1 FROM attempt_events WHERE attempt_id=? AND kind='tool' UNION ALL "
-                    "SELECT 1 FROM turns WHERE id=? AND writes>0 LIMIT 1", (row["id"], row["id"])).fetchone()
+                    "SELECT 1 FROM attempts WHERE id=? AND writes>0 LIMIT 1", (row["id"], row["id"])).fetchone()
                 retry_state = state = "queued" if row["state"] == "leased" and not acted else "uncertain"
                 jobs = c.execute("SELECT j.id,j.message_id,t.status AS task_status FROM jobs j "
                                  "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
@@ -3602,11 +3601,10 @@ class Execution:
                             trigger_kind=woke, trigger_source=source,
                             purpose=run_triggers.purpose_of(msg, row["bot_id"], woke),
                             rule_id=wake_rule_engine.claimed_rule(msg, c.execute(
-                                "SELECT wake_class FROM jobs WHERE id=?", (row["id"],)).fetchone()))
+                                "SELECT wake_class FROM jobs WHERE id=?", (row["id"],)).fetchone()),
+                            lease={"job_id": row["id"], "runner_id": who.runner_id, "generation": row["generation"],
+                                   "token_hash": digest(token), "state": "leased", "lease_until": until, "lane": lane})
         aid = turn["id"]
-        c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,lane) "
-                  "VALUES(?,?,?,?,?,?,'leased',?,?,?)",
-                  (aid, row["id"], row["bot_id"], who.runner_id, row["generation"], digest(token), until, H.now(), lane))
         if body.start_places:
             start_places.claim(c, aid)
         c.execute('DELETE FROM org_turn_waits WHERE job_id=?', (row['id'],))
@@ -4003,7 +4001,7 @@ class Execution:
         from . import run_diagnostics
         run_diagnostics.restored(c, row["id"])
         c.execute("UPDATE jobs SET state='running' WHERE id=?", (row["job_id"],))
-        c.execute("UPDATE turns SET finished_at=NULL,exit=NULL,summary=NULL WHERE id=?", (row["id"],))
+        c.execute("UPDATE attempts SET settled_at=NULL,exit=NULL,summary=NULL WHERE id=?", (row["id"],))
         current = H.message(c, job["message_id"])
         settle_status(c, row["bot_id"], "running", "Responding to queued work",
                       claimed=row["created_at"], task_id=work_task_id(current) or "")
@@ -4086,7 +4084,7 @@ class Execution:
         result = dict(segments[-1])
         for key in ("input_tokens", "cached_tokens", "output_tokens"):
             result[key] = sum(p[key] for p in segments)
-        # Legacy readers of turns see API spend only for a mixed-billing run. Usage and limits
+        # Legacy readers of a run's totals see API spend only for a mixed-billing run. Usage and limits
         # consume the immutable segments and keep the subscription equivalent separate.
         billed = [p for p in segments if p["billing"] != "subscription"] or segments
         result["est_cost_usd"] = (sum(p["est_cost_usd"] for p in billed)
@@ -4106,7 +4104,7 @@ class Execution:
         """Mark a reply Tico posts for a run as that run's: counted as its write, with what it answered."""
         # A reply (to a person, or an answer to a bot's ask) is the run acting, though Tico posts it for
         # the run (backend/run_triggers.py). Only a newly written one: a reply already sent counts once.
-        c.execute("UPDATE turns SET writes=coalesce(writes,0)+1 WHERE id=?", (aid,))
+        c.execute("UPDATE attempts SET writes=coalesce(writes,0)+1 WHERE id=?", (aid,))
         # Which run wrote this and which messages it took in (the one it was started for and
         # what was folded into it), kept in the reply's refs for the frontends to show.
         handled = [msg["id"]] + [r[0] for r in c.execute(
@@ -4302,7 +4300,6 @@ class Execution:
             self.record_source_thread(c, row, source)
             return c.execute('SELECT message_id FROM jobs WHERE id=?', (row['job_id'],)).fetchone()[0]
         c.execute("UPDATE attempts SET thread_id=? WHERE id=?", (thread_id, row["id"]))
-        c.execute("UPDATE turns SET thread_id=? WHERE id=?", (thread_id, row["id"]))
         from .shared_bots import follow
         config = follow(c, row["bot_id"], json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()[0]))
         runtime, model = providers.bot_choice(c, self.store.settings, config)
@@ -4377,7 +4374,6 @@ class Execution:
         c.execute("UPDATE attempts SET thread_id=?,result=json_set(coalesce(result,'{}'),"
                   "'$.source_running',json('true'),'$.source_pending',json('false'),"
                   "'$.source_continuation',json(?)) WHERE id=?", (source['thread_id'], encode(source), row['id']))
-        c.execute('UPDATE turns SET thread_id=? WHERE id=?', (source['thread_id'], row['id']))
 
     def thread(self, c, who, aid, body):
         """A confirmed running provider session, persisted before work can need a lease continuation."""
@@ -4669,10 +4665,9 @@ class Execution:
         c.execute("UPDATE attempt_events SET payload=? WHERE attempt_id=? AND kind='message'",
                   (encode({"text": note}), aid))
         c.execute("DELETE FROM attempt_captures WHERE attempt_id=?", (aid,))
-        c.execute("DELETE FROM deltas WHERE turn_id=?", (aid,))
+        c.execute("DELETE FROM deltas WHERE attempt_id=?", (aid,))
         thread = c.execute("SELECT thread_id FROM attempts WHERE id=?", (aid,)).fetchone()[0]
         c.execute("UPDATE attempts SET thread_id=NULL WHERE id=?", (aid,))
-        c.execute("UPDATE turns SET thread_id=NULL WHERE id=?", (aid,))
         if thread:
             c.execute("DELETE FROM bot_sessions WHERE bot=? AND thread_id=?", (row["bot_id"], thread))
         c.execute("INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
@@ -5198,7 +5193,8 @@ class Execution:
         if (body.outcome == "completed" or yielded or source_pause) and not notice_only and body.text and checkpoint_task:
             # Where the task stood after this turn: a later turn that cannot resume this session
             # starts from it (runner prompt). It is not the task's activity, so `updated_at` stays.
-            started = (c.execute("SELECT started_at FROM turns WHERE id=?", (aid,)).fetchone() or [None])[0]
+            started = (c.execute("SELECT created_at FROM attempts WHERE id=? AND (job_id IS NULL OR trigger IS NOT NULL)",
+                                 (aid,)).fetchone() or [None])[0]
             c.execute("UPDATE tasks SET checkpoint=?,checkpoint_at=?,checkpoint_by_id=?,checkpoint_state=? WHERE id=?",
                       (split_runner_notices(body.text)[0].strip()[:CHECKPOINT_CHARS], H.now(), actor,
                        wake_rules.settled_state(c, checkpoint_task, row["bot_id"], started, aid) if started else None,
@@ -5837,10 +5833,10 @@ class Execution:
                          "a.stop_requested_at, a.job_id AS attempt_job, "
                          "r.decision AS pending_decision, r.note AS review_note, r.actor AS reviewer, "
                          "coalesce(a.finished_at, j.created_at) <= ? AS aged, "
-                         "(SELECT t.id FROM attempts t LEFT JOIN turns tt ON tt.id=t.id "
+                         "(SELECT t.id FROM attempts t "
                          "WHERE t.bot_id=j.bot_id AND t.state IN ('leased','running') AND (t.job_id=j.id "
                          "OR t.id IN (SELECT attempt_id FROM attempt_inputs WHERE message_id=j.message_id) "
-                         f"OR tt.task_id={task_sql} "
+                         f"OR t.task_id={task_sql} "
                          f"OR ({task_sql} IS NULL AND EXISTS(SELECT 1 FROM attempt_conversations ac "
                          "WHERE ac.attempt_id=t.id AND ac.conversation_id=m.conversation_id)) "
                          "OR t.lane=a.lane) LIMIT 1) AS blocking_attempt "
@@ -6062,7 +6058,7 @@ class Execution:
         request in its room, so running the request again would do that twice. A chat outside any task never counts:
         a later turn there may have answered something else, so that run resumes instead."""
         return bool(task_id) and c.execute(
-            "SELECT 1 FROM attempts a JOIN turns t ON t.id=a.id WHERE a.bot_id=? AND t.task_id=? AND a.state='completed' "
+            "SELECT 1 FROM attempts a WHERE a.bot_id=? AND a.task_id=? AND a.state='completed' "
             "AND a.started_at>? LIMIT 1", (row['bot_id'], task_id, row['finished_at'] or row['created_at'])).fetchone() is not None
 
     @staticmethod

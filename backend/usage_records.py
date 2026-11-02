@@ -2,13 +2,15 @@
 import json
 
 # New reports retain each primary/fallback segment. Legacy rows remain visible, without guessing their login or effort.
-RUNS = """(SELECT t.id,t.bot,t.started_at,t.finished_at,t.task_id,s.input_tokens,s.cached_tokens,s.output_tokens,
+# A run is its attempts row, when it has a run record (hubdb.TURN_SELECT); its columns keep the names they had in turns.
+RUNS = """(SELECT t.id,t.bot_id AS bot,t.created_at AS started_at,t.settled_at AS finished_at,t.task_id,
+ s.input_tokens,s.cached_tokens,s.output_tokens,
  s.model,s.provider,s.est_cost_usd,s.billing,s.runtime,s.harness,s.effort,s.profile,s.est_cost_low,
  NULL AS usage_reason
- FROM turns t JOIN turn_usage_segments s ON s.turn_id=t.id
- UNION ALL SELECT t.id,t.bot,t.started_at,t.finished_at,t.task_id,t.input_tokens,t.cached_tokens,t.output_tokens,
- t.model,t.provider,t.est_cost_usd,t.billing,NULL,NULL,NULL,NULL,NULL,t.usage_reason FROM turns t
- WHERE NOT EXISTS (SELECT 1 FROM turn_usage_segments s WHERE s.turn_id=t.id))"""
+ FROM attempts t JOIN attempt_usage_segments s ON s.attempt_id=t.id
+ UNION ALL SELECT t.id,t.bot_id,t.created_at,t.settled_at,t.task_id,t.input_tokens,t.cached_tokens,t.output_tokens,
+ t.usage_model,t.provider,t.est_cost_usd,t.billing,NULL,NULL,NULL,NULL,NULL,t.usage_reason FROM attempts t
+ WHERE (t.job_id IS NULL OR t.trigger IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM attempt_usage_segments s WHERE s.attempt_id=t.id))"""
 
 # Providers that name a seller, not the model's maker: Cursor `auto` and OpenRouter pick the model themselves.
 RESELLERS = {"cursor", "openrouter"}
@@ -37,11 +39,11 @@ def ran_on(c, turn_ids):
     for start in range(0, len(ids), 500):       # SQLite caps the parameters of one statement
         chunk = ids[start:start + 500]
         marks = ",".join("?" * len(chunk))
-        for row in c.execute(f"SELECT turn_id,model,provider,runtime,harness,effort FROM turn_usage_segments "
-                             f"WHERE turn_id IN ({marks}) ORDER BY turn_id,position", chunk):
-            parts.setdefault(row["turn_id"], []).append(
+        for row in c.execute(f"SELECT attempt_id,model,provider,runtime,harness,effort FROM attempt_usage_segments "
+                             f"WHERE attempt_id IN ({marks}) ORDER BY attempt_id,position", chunk):
+            parts.setdefault(row["attempt_id"], []).append(
                 {k: row[k] for k in ("model", "provider", "runtime", "harness", "effort")})
-        for row in c.execute(f"SELECT id,model,provider FROM turns WHERE id IN ({marks})", chunk):
+        for row in c.execute(f"SELECT id,usage_model AS model,provider FROM attempts WHERE id IN ({marks})", chunk):
             if row["id"] not in parts and (row["model"] or row["provider"]):
                 parts[row["id"]] = [{"model": row["model"], "provider": row["provider"], "runtime": None, "harness": None,
                                      "effort": None}]

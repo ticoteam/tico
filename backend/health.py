@@ -1030,10 +1030,10 @@ def _token_heavy(c, threshold):
     since = H.shift(H.now(), hours=-RECENT_HOURS)
     answer = [(r["bot"], r["n"]) for r in c.execute(
         "SELECT bot, sum(n) AS n FROM ("
-        "SELECT t.bot, coalesce(s.input_tokens,0) AS n FROM turns t "
-        "JOIN turn_usage_segments s ON s.turn_id=t.id WHERE t.started_at>=? "
-        "UNION ALL SELECT t.bot, coalesce(t.input_tokens,0) FROM turns t "
-        "WHERE t.started_at>=? AND NOT EXISTS (SELECT 1 FROM turn_usage_segments s WHERE s.turn_id=t.id)) "
+        "SELECT t.bot_id AS bot, coalesce(s.input_tokens,0) AS n FROM attempts t "
+        "JOIN attempt_usage_segments s ON s.attempt_id=t.id WHERE t.created_at>=? "
+        "UNION ALL SELECT t.bot_id, coalesce(t.input_tokens,0) FROM attempts t WHERE t.created_at>=? "
+        "AND (t.job_id IS NULL OR t.trigger IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM attempt_usage_segments s WHERE s.attempt_id=t.id)) "
         "GROUP BY bot HAVING sum(n)>? ORDER BY sum(n) DESC", (since, since, threshold))]
     _TOKEN_CACHE.clear()
     _TOKEN_CACHE[key] = (time.monotonic(), answer)

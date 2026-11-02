@@ -209,8 +209,10 @@ def install(app, store, auth):
 
         # Runs, with the bot turns page's checks: Read on the bot, then its message, its room and its tasks.
         items = []
-        for scanned, turn in enumerate(c.execute("SELECT id,bot,started_at,finished_at,exit,summary,message_id,task_id FROM turns "
-                                                 "WHERE started_at>=? AND started_at<? ORDER BY started_at", (first, last)), 1):
+        for scanned, turn in enumerate(c.execute(
+                "SELECT id,bot_id AS bot,created_at AS started_at,settled_at AS finished_at,exit,summary,message_id,"
+                "task_id FROM attempts WHERE (job_id IS NULL OR trigger IS NOT NULL) AND created_at>=? AND created_at<? ORDER BY created_at",
+                (first, last)), 1):
             if scanned > SCAN_MAX:
                 caps.append(turn["started_at"])
                 break

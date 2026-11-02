@@ -29,7 +29,7 @@ def complete(api, r, attempt, usage=None, **more):
 
 def turn(api, aid):
     with api.app.state.store.read() as c:
-        return dict(c.execute("SELECT * FROM turns WHERE id=?", (aid,)).fetchone())
+        return hubdb.turn(c, aid)
 
 
 def test_a_finished_run_keeps_its_tokens_model_and_list_price_cost(api):
@@ -53,8 +53,8 @@ def test_anthropic_cache_hits_follow_the_pricing_pages_multipliers():
 def test_the_migration_can_run_again_and_a_file_that_has_the_columns_catches_up(tmp_path):
     conn = hubdb.connect(tmp_path / "hub.db")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == len(hubdb.MIGRATIONS)
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(turns)")}
-    assert {"input_tokens", "cached_tokens", "output_tokens", "model", "provider", "est_cost_usd", "billing"} <= columns
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(attempts)")}
+    assert {"input_tokens", "cached_tokens", "output_tokens", "usage_model", "provider", "est_cost_usd", "billing"} <= columns
     conn.execute("PRAGMA user_version=%d" % (len(hubdb.MIGRATIONS) - 1))
     hubdb.migrate(conn)                                                # the change is there but the version is not
     hubdb.migrate(conn)
@@ -82,10 +82,10 @@ def seed(api):
             ("t6", "ops", "2026-08-01", (10, 0, 1), "gpt-6-sol", 0.01, "api", None),       # outside the range
         ]
         for tid, bot, day, (i, cache, o), model, est, billing, task in rows:
-            c.execute("INSERT INTO turns(id, bot, started_at, finished_at, exit, task_id, input_tokens, cached_tokens, output_tokens, "
-                      "model, est_cost_usd, billing) VALUES(?,?,?,?, 'completed', ?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO attempts(id, bot_id, created_at, settled_at, exit, task_id, input_tokens, cached_tokens, output_tokens, "
+                      "usage_model, est_cost_usd, billing) VALUES(?,?,?,?, 'completed', ?,?,?,?,?,?,?)",
                       (tid, bot, day + "T10:00:00.000000Z", day + "T10:05:00.000000Z", task, i, cache, o, model, est, billing))
-        c.execute("INSERT INTO turns(id, bot, started_at) VALUES('running','ops',?)", (DAY + "T11:00:00.000000Z",))   # not finished
+        c.execute("INSERT INTO attempts(id, bot_id, created_at) VALUES('running','ops',?)", (DAY + "T11:00:00.000000Z",))   # not finished
 
 
 def post_task(api, owner):
@@ -116,7 +116,7 @@ def test_usage_by_bot_is_sorted_by_spend_with_totals_and_subscription_kept_apart
 
 def test_usage_does_not_treat_unreported_zero_as_a_priced_run(api):
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO turns(id,bot,started_at,finished_at,input_tokens,cached_tokens,output_tokens,"
+        c.executemany("INSERT INTO attempts(id,bot_id,created_at,settled_at,input_tokens,cached_tokens,output_tokens,"
                       "est_cost_usd,billing,usage_reason) VALUES(?,'ops',?,?,0,0,0,0,?,?)", [
             (reason, DAY + "T10:00:00Z", DAY + "T10:05:00Z", billing, reason)
             for reason, billing in (("usage_unreported", "api"), ("usage_limited", None), ("no_result", "api"))])
@@ -127,16 +127,16 @@ def test_usage_does_not_treat_unreported_zero_as_a_priced_run(api):
                 *[r for r in detail["daily"] if r["runs"]]]
     assert all(r["est_cost_usd"] is None and r["unpriced_runs"] == 3 for r in amounts())
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started_at,finished_at,input_tokens,est_cost_usd,billing,usage_reason) "
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,input_tokens,est_cost_usd,billing,usage_reason) "
                   "VALUES('unknown','ops',?,?,100,NULL,'api','cost_unpriced')",
                   (DAY + "T10:00:00Z", DAY + "T10:05:00Z"))
     assert all(r["est_cost_usd"] is None and r["input_tokens"] == 100 for r in amounts())
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started_at,finished_at,est_cost_usd,billing) "
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,est_cost_usd,billing) "
                   "VALUES('measured','ops',?,?,2.5,'api')", (DAY + "T10:00:00Z", DAY + "T10:05:00Z"))
     assert all(r["est_cost_usd"] == 2.5 for r in amounts())
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE turns SET est_cost_usd=0 WHERE id='measured'")
+        c.execute("UPDATE attempts SET est_cost_usd=0 WHERE id='measured'")
     assert all(r["est_cost_usd"] == 0 for r in amounts())
 
 
@@ -299,7 +299,7 @@ def test_a_restore_zeroes_open_runs_and_keeps_a_finished_run_as_measured(api, tm
     restore_snapshot(backup, restored)
     with closing(sqlite3.connect(restored)) as db:
         db.row_factory = sqlite3.Row
-        rows = {x["id"]: dict(x) for x in db.execute("SELECT * FROM turns")}
+        rows = {x["id"]: dict(x) for x in db.execute(f"SELECT {hubdb.TURN_SELECT} FROM attempts")}
     zero_usage(rows[open_run["id"]], "no_result")
     assert rows[open_run["id"]]["exit"] == "interrupted"
     kept = rows[done["id"]]

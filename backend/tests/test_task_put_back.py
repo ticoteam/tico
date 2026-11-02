@@ -97,7 +97,7 @@ def test_linking_a_blocker_reverses_only_an_automatic_start_before_a_finished_ru
     blocker = post(api, 'tasks', {'owner': 'ana', 'title': 'Finish prerequisite', 'body': 'Finish it.'})
     with api.app.state.store.read() as c:
         jobs = c.execute('SELECT count(*) FROM jobs').fetchone()[0]
-        turns = c.execute('SELECT count(*) FROM turns').fetchone()[0]
+        turns = c.execute('SELECT count(*) FROM attempts').fetchone()[0]
     for task in tasks:
         post(api, 'tasks/' + task['id'] + '/relations', {'kind': 'blocked_by', 'task': blocker['id']})
     rows = [get(api, 'tasks/' + t['id'])['task'] for t in tasks]
@@ -105,7 +105,7 @@ def test_linking_a_blocker_reverses_only_an_automatic_start_before_a_finished_ru
     assert rows[2]['step']['name'] == 'On Deck'
     with api.app.state.store.read() as c:
         assert c.execute('SELECT count(*) FROM jobs').fetchone()[0] == jobs
-        assert c.execute('SELECT count(*) FROM turns').fetchone()[0] == turns
+        assert c.execute('SELECT count(*) FROM attempts').fetchone()[0] == turns
         assert auto_tasks.waiting(c, H.task(c, tasks[2]['id']))
 
 

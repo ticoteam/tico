@@ -646,9 +646,9 @@ def _session_checks(c):
     since = H.shift(H.now(), hours=-24)
     marks = ",".join("?" * len(SESSION_LOST))
     out = []
-    for r in c.execute(f"SELECT bot, count(*) AS n, group_concat(DISTINCT session_why) AS why FROM turns "
-                       f"WHERE started_at>=? AND session_kind='new' AND session_why IN ({marks}) "
-                       f"GROUP BY bot HAVING count(*)>? ORDER BY n DESC, bot", (since, *SESSION_LOST, NEW_SESSIONS)):
+    for r in c.execute(f"SELECT bot_id AS bot, count(*) AS n, group_concat(DISTINCT session_why) AS why FROM attempts "
+                       f"WHERE created_at>=? AND session_kind='new' AND session_why IN ({marks}) "
+                       f"GROUP BY bot_id HAVING count(*)>? ORDER BY n DESC, bot", (since, *SESSION_LOST, NEW_SESSIONS)):
         bot = r["bot"]
         row = H.bot(c, bot) or {}
         name = row.get("display_name") or row.get("slug") or bot

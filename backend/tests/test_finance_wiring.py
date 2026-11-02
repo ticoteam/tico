@@ -20,7 +20,7 @@ NOON = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
 
 def _turn(c, bot, finished, cost, model="tico-medium", billing="api", tid=None):
     tid = tid or f"t{bot}{finished}{model}"
-    c.execute("INSERT INTO turns(id, bot, started_at, finished_at, model, est_cost_usd, billing) VALUES(?,?,?,?,?,?,?)",
+    c.execute("INSERT INTO attempts(id, bot_id, created_at, settled_at, usage_model, est_cost_usd, billing) VALUES(?,?,?,?,?,?,?)",
               (tid, bot, finished, finished, model, cost, billing))
     return tid
 

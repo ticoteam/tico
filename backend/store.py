@@ -194,12 +194,25 @@ CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(bot_id,state,created_at);
 CREATE TABLE IF NOT EXISTS job_recovery(
  job_id TEXT PRIMARY KEY REFERENCES jobs(id), attempt_id TEXT NOT NULL REFERENCES attempts(id),
  decision TEXT NOT NULL, note TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL);
+-- One row per run (backend/migrations/0060_turns_into_attempts.py). A run a runner leased has its whole lease (job_id,
+-- runner_id, generation, token_hash, state, lease_until); a run recorded with no lease (old history, the demo seed) has
+-- none of it. settled_at is when its record closed (exit, summary, usage); NULL while it is open. trigger is NULL for
+-- an attempt that never had a run record.
 CREATE TABLE IF NOT EXISTS attempts(
- id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id), bot_id TEXT NOT NULL,
- runner_id TEXT NOT NULL REFERENCES runners(id), generation INTEGER NOT NULL,
- token_hash TEXT NOT NULL UNIQUE, state TEXT NOT NULL, lease_until TEXT NOT NULL,
+ id TEXT PRIMARY KEY, job_id TEXT REFERENCES jobs(id), bot_id TEXT NOT NULL,
+ runner_id TEXT REFERENCES runners(id), generation INTEGER,
+ token_hash TEXT UNIQUE, state TEXT, lease_until TEXT,
  created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, thread_id TEXT,
- result TEXT, final_text TEXT, last_seq INTEGER NOT NULL DEFAULT 0);
+ result TEXT, final_text TEXT, last_seq INTEGER NOT NULL DEFAULT 0,
+ stop_requested_at TEXT, gateway_key_id TEXT, handed_runtime TEXT, handed_model TEXT,
+ lane TEXT NOT NULL DEFAULT 'main', wake TEXT, model TEXT,
+ settled_at TEXT, trigger TEXT, message_id TEXT, task_id TEXT, exit TEXT, summary TEXT,
+ trigger_kind TEXT, trigger_source TEXT, purpose TEXT, rule_id TEXT, writes INTEGER, outcome TEXT,
+ did_nothing INTEGER, rotated TEXT, session_kind TEXT, session_why TEXT,
+ input_tokens INTEGER, cached_tokens INTEGER, output_tokens INTEGER, prompt_tokens INTEGER,
+ usage_model TEXT, provider TEXT, est_cost_usd REAL, billing TEXT, usage_reason TEXT,
+ CHECK (job_id IS NULL OR (runner_id IS NOT NULL AND generation IS NOT NULL AND token_hash IS NOT NULL
+        AND state IS NOT NULL AND lease_until IS NOT NULL)));
 CREATE TABLE IF NOT EXISTS attempt_diagnostics(
  attempt_id TEXT PRIMARY KEY REFERENCES attempts(id), heartbeat_at TEXT, last_event_at TEXT, last_event TEXT,
  end_reason TEXT, ended_at TEXT, stalled_at TEXT, stderr_tail TEXT, stderr_at TEXT);
@@ -553,9 +566,9 @@ def sweep_tokens(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     """Delete the `attempt_events` kind 'tokens' rows of runs finished more than TOKEN_RETENTION_DAYS ago, in short
     transactions like `sweep_deltas`; returns the count.
 
-    Money and usage never come from these rows: a run's totals are its turns row (input_tokens, cached_tokens,
-    output_tokens, est_cost_usd, written by turn_finish), turn_usage_segments and attempts.result. The rows go only
-    once that turn is finished with its totals written, and no job of the run is 'uncertain': auto_reconcile's hop_failed
+    Money and usage never come from these rows: a run's totals are on its attempts row (input_tokens, cached_tokens,
+    output_tokens, est_cost_usd, written by turn_finish), attempt_usage_segments and attempts.result. The rows go only
+    once that run is settled with its totals written, and no job of the run is 'uncertain': auto_reconcile's hop_failed
     and review_jobs read them there. Attempts are walked in creation order from the mark 'tokens-sweep-mark', as
     sweep_deltas does; one still unfinished when the walk passes it keeps its rows."""
     at = now or H.now()
@@ -568,8 +581,8 @@ def sweep_tokens(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     while deleted < most:
         with store.read() as c:
             rows = c.execute(
-                "SELECT a.id,a.created_at,a.finished_at,EXISTS(SELECT 1 FROM turns t WHERE t.id=a.id AND t.finished_at IS NOT NULL "
-                "AND (t.input_tokens IS NOT NULL OR t.usage_reason IS NOT NULL)) "
+                "SELECT a.id,a.created_at,a.finished_at,(a.settled_at IS NOT NULL "
+                "AND (a.input_tokens IS NOT NULL OR a.usage_reason IS NOT NULL)) "
                 "AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.attempt_id=a.id AND j.state='uncertain') AS recorded "
                 "FROM attempts a WHERE a.created_at<? AND (a.created_at,a.id)>(?,?) ORDER BY a.created_at,a.id LIMIT 200",
                 (created_before, *mark)).fetchall()
@@ -1922,27 +1935,11 @@ class Store:
                 # The personal token a key was made with, which it never outlives (backend/service_keys.py); NULL for a
                 # key made signed in, and for every older key. Unversioned like the scope.
                 H.add_column(c, "service_keys", "made_with_token", "TEXT")
-                # Who asked a running turn to stop (backend/execution.py stop); the runner reads it on its next
-                # lease renewal. Unversioned like the key scope: an older release never reads the column.
-                H.add_column(c, "attempts", "stop_requested_at", "TEXT")
-                # Which gateway key the attempt's runner was handed (gateway_connection.run_credentials_for): what its
-                # Gateway segments are recorded under, even if the key is rotated or cleared before the run ends.
-                # NULL with none handed. Unversioned like stop_requested.
-                H.add_column(c, "attempts", "gateway_key_id", "TEXT")
-                # The runtime and model the claim handed the bot's turn (execution.ran_another_model): a model change
-                # while it is out is told from an effort change. NULL for a turn from before. Unversioned like
-                # stop_requested.
-                H.add_column(c, "attempts", "handed_runtime", "TEXT")
-                H.add_column(c, "attempts", "handed_model", "TEXT")
                 # A queued message a person sent with Stop and redirect (backend/execution.py stop): it is claimed
-                # before the bot's other queued work once the stopped turn ends. Unversioned like stop_requested.
+                # before the bot's other queued work once the stopped turn ends. Unversioned: an older release never reads it.
                 H.add_column(c, "jobs", "redirect", "INTEGER NOT NULL DEFAULT 0")
-                # An attempt's lane (clients/sessions.py lane): a task-keyed turn runs in its own lane beside
-                # the bot's other tasks, everything else in `main`. At most one active attempt per bot and lane;
-                # an existing row and an older runner's turn are `main`, so a bot without lanes stays serial.
-                # Unversioned like stop_requested; an older release must be drained before it runs again,
-                # since its per-bot index cannot be built over two active attempts.
-                H.add_column(c, "attempts", "lane", "TEXT NOT NULL DEFAULT 'main'")
+                # At most one active attempt per bot and lane (attempts.lane, clients/sessions.py lane): a task-keyed turn
+                # runs in its own lane beside the bot's other tasks, everything else in `main`.
                 c.execute("DROP INDEX IF EXISTS one_active_attempt_per_bot")
                 c.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_attempt_per_lane ON attempts(bot_id,lane) "
                           "WHERE state IN ('leased','running')")
@@ -1950,9 +1947,6 @@ class Store:
                 # Unversioned like redirect: an older release never reads the columns and claims every queued job.
                 from .wake_presets import ensure as ensure_wake_presets
                 ensure_wake_presets(c)
-                # What a turn in a task's session was handed, the bot's task model or the fallback from it, and why
-                # (backend/task_models.py). Unversioned: an older release never reads it.
-                H.add_column(c, "attempts", "model", "TEXT")
                 # The change log live events are read from (backend/events.py); idempotent.
                 from .events import ensure as ensure_changes
                 ensure_changes(c)
@@ -2021,10 +2015,17 @@ class Store:
                                    # query's expression word for word.
                                    ("task_links_pr_head", "task_links(json_extract(detail,'$.head_sha')) WHERE kind='pr'"),
                                    # A task's runs (the task view's runs and its Runs section, backend/run_view.py).
-                                   ("turns_task", "turns(task_id, started_at)"),
+                                   ("attempts_task", "attempts(task_id, created_at)"),
                                    # A message's runs: task_delete counts them on every delete, and topic_change
                                    # and the run visibility (sql.py) look them up by message.
-                                   ("turns_message", "turns(message_id)"),
+                                   ("attempts_message", "attempts(message_id)"),
+                                   # Runs by when their record closed: bot hours, health, the usage reads.
+                                   ("attempts_settled", "attempts(settled_at)"),
+                                   # A bot's last settled run (the team list's latest run, check_pools): one seek.
+                                   ("attempts_bot_settled",
+                                    "attempts(bot_id, settled_at, id) WHERE settled_at IS NOT NULL"),
+                                   # A bot's runs newest first (the bot's Runs page, H.turns).
+                                   ("attempts_bot_created", "attempts(bot_id, created_at)"),
                                    # A conversation's runs: task_delete counts them, the foreign key check of a
                                    # deleted conversation reads them, and stream_capture looks them up.
                                    ("attempt_conversations_conversation", "attempt_conversations(conversation_id)"),

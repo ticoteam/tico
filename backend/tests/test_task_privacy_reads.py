@@ -414,7 +414,7 @@ def test_task_page_reads_a_fixed_number_of_statements_and_hides_private_provenan
                           ("job-" + aid, asked["id"], H.now(), aid))
                 c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                           "VALUES(?,?,'ops','rn',0,?,'completed',?,?)", (aid, "job-" + aid, aid, H.now(), H.now()))
-                c.execute("INSERT INTO turns(id,bot,started_at,task_id,exit) VALUES(?,'ops',?,?,'ok')", (aid, H.now(), parent["id"]))
+                c.execute("INSERT INTO attempts(id,bot_id,created_at,task_id,exit) VALUES(?,'ops',?,?,'ok')", (aid, H.now(), parent["id"]))
                 H.task_comment(c, "bot:ops", parent["id"], f"Did {n}", wake=False, extra_refs={"turn_id": aid})
                 H.task_comment(c, "human:ana", parent["id"], f"See {n}", wake=False,
                                extra_refs={"see": "task:" + hidden["id"]} if n == 2 else None)
@@ -562,7 +562,7 @@ def test_bot_list_reads_a_fixed_number_of_statements_and_seeks_each_bots_last_ru
                 c.execute(f"INSERT INTO {table}({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
             H.task_create(c, "human:ana", f"Step {n}", "Do it.", f"bot:crew{n}", lint=False)
             for turn, finished in (("a", "2026-01-02"), ("b", "2026-01-03"), ("c", "2026-01-03"), ("d", None)):
-                c.execute("INSERT INTO turns(id,bot,started_at,finished_at) VALUES(?,?,?,?)",
+                c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at) VALUES(?,?,?,?)",
                           (f"t{n}{turn}", f"crew{n}", "2026-01-01", finished))
     before = {}
     for token in ("ana-test", "ben-test"):
@@ -579,16 +579,16 @@ def test_bot_list_reads_a_fixed_number_of_statements_and_seeks_each_bots_last_ru
         assert {flows.get(f"crew{n}")["waiting"] for n in range(40) if flows.get(f"crew{n}")} == {1}
         assert {flows.get(f"crew{n}")["waiting"] for n in range(40, 80) if flows.get(f"crew{n}")} == {0}
     with store.read() as c:
-        latest = dict(c.execute("SELECT bot,id FROM (SELECT bot,id,row_number() OVER(PARTITION BY bot ORDER BY "
-                                "finished_at DESC,id DESC) AS n FROM turns WHERE finished_at IS NOT NULL) WHERE n=1"))
+        latest = dict(c.execute("SELECT bot_id,id FROM (SELECT bot_id,id,row_number() OVER(PARTITION BY bot_id ORDER BY "
+                                "settled_at DESC,id DESC) AS n FROM attempts WHERE settled_at IS NOT NULL) WHERE n=1"))
         assert latest["crew3"] == "t3c"
         sought = dict(row for row in c.execute(
-            "SELECT b.slug,(SELECT t.id FROM turns t WHERE t.bot=b.slug AND t.finished_at IS NOT NULL "
-            "ORDER BY t.finished_at DESC,t.id DESC LIMIT 1) FROM bots b") if row[1])
+            "SELECT b.slug,(SELECT t.id FROM attempts t WHERE t.bot_id=b.slug AND t.settled_at IS NOT NULL "
+            "ORDER BY t.settled_at DESC,t.id DESC LIMIT 1) FROM bots b") if row[1])
         assert sought == {bot: tid for bot, tid in latest.items() if bot in sought} and "crew3" in sought
         plan = " ".join(r[3] for r in c.execute(
-            "EXPLAIN QUERY PLAN SELECT b.slug,(SELECT t.id FROM turns t WHERE t.bot=b.slug AND t.finished_at IS NOT NULL "
-            "ORDER BY t.finished_at DESC,t.id DESC LIMIT 1) FROM bots b"))
+            "EXPLAIN QUERY PLAN SELECT b.slug,(SELECT t.id FROM attempts t WHERE t.bot_id=b.slug AND t.settled_at IS NOT NULL "
+            "ORDER BY t.settled_at DESC,t.id DESC LIMIT 1) FROM bots b"))
         assert "turns_bot_finished" in plan and "TEMP B-TREE" not in plan, plan
 
 

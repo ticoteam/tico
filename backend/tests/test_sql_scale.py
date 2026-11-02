@@ -21,8 +21,8 @@ PEOPLE = ("human:ana", "human:ben", "human:cara")
 
 def queries():
     day = H.shift(H.now(), days=-1)
-    return [("SELECT id FROM turns LIMIT 1", []),
-            ("SELECT count(*) FROM turns WHERE started_at>=?", [day]),
+    return [("SELECT id FROM attempts LIMIT 1", []),
+            ("SELECT count(*) FROM attempts WHERE created_at>=?", [day]),
             ("SELECT id FROM attempts LIMIT 1", []),
             ("SELECT count(*) FROM attempts WHERE created_at>=?", [day]),
             ("SELECT count(*) FROM messages", [])]
@@ -107,7 +107,7 @@ def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=ME
         c.executemany("INSERT INTO jobs(id,message_id,bot_id,state,created_at,attempt_id) VALUES(?,?,?,?,?,?)", jobs)
         c.executemany("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,"
                       "started_at,finished_at) VALUES(?1,?2,substr(?3,5),?4,0,'synthetic-'||?1,'done',?5,?5,?5,?5)", attempts)
-        c.executemany("INSERT INTO turns(id,bot,started_at,finished_at,message_id,task_id,trigger_kind,outcome) "
+        c.executemany("INSERT INTO attempts(id,bot_id,created_at,settled_at,message_id,task_id,trigger_kind,outcome) "
                       "VALUES(?,?,?,?3,?,?,'message','acted')", turns)
         c.executemany("INSERT OR IGNORE INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", inputs)
         c.executemany("INSERT INTO events(id,created_at,actor,action,target,detail) VALUES"
@@ -204,7 +204,7 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
                                                                            r["refs"], r["in_reply_to"])}
             jobs = {r[0] for r in c.execute("SELECT id,bot_id,message_id FROM jobs") if r[1] not in hidden and r[2] in messages}
             attempts = {r[0] for r in c.execute("SELECT id,job_id FROM attempts") if r[1] in jobs and index.attempt(r[0])}
-            turns = {r[0] for r in c.execute("SELECT id,bot,message_id,task_id FROM turns")
+            turns = {r[0] for r in c.execute("SELECT id,bot_id,message_id,task_id FROM attempts")
                      if r[1] not in hidden and (r[2] is None or r[2] in messages)
                      and (r[3] is None or r[3] in tasks) and index.attempt(r[0])}
             return {"messages": messages, "turns": turns, "attempts": attempts}

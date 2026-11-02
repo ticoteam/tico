@@ -21,6 +21,8 @@ from .store import H, P, Problem, Store, encode, repo_url
 
 CORE_HISTORY = ("conversations", "messages", "tasks", "task_events", "turns", "meetings",
                 "meeting_versions", "meeting_deliveries")
+# A legacy table whose rows live in another table now: each legacy turn is an attempts row (migration 0060).
+HISTORY_NOW = {"turns": "attempts"}
 
 
 def registry_dir():
@@ -86,7 +88,7 @@ def migrate_legacy(source, destination, runtime, projects, *, queue_backlog=Fals
         store.enqueue_existing()
     archives = import_text_archives(store, runtime)
     with store.transaction() as c:
-        counts = {table: c.execute('SELECT count(*) FROM "' + table + '"').fetchone()[0]
+        counts = {table: c.execute('SELECT count(*) FROM "' + HISTORY_NOW.get(table, table) + '"').fetchone()[0]
                   for table in CORE_HISTORY}
         expected = {table: source_report["tables"].get(table, 0) for table in CORE_HISTORY}
         if counts != expected:

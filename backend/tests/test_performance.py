@@ -129,9 +129,8 @@ def test_a_bot_the_reader_may_not_see_is_unnamed_in_turns_overloads_and_the_summ
     start = (int(time.time()) // 60 - 12) * 60
     with api.app.state.store.transaction() as c:               # the Legal bot's turn ran on this computer
         counsel = H.resolve_bot(c, "counsel")["id"]
-        c.execute("UPDATE attempts SET bot_id=?,created_at=? WHERE id=?", (counsel, P._iso(start - 60), attempt["id"]))
-        c.execute("INSERT OR REPLACE INTO turns(id,bot,model) VALUES(?,?,'legal-model-x')",
-                  (attempt["id"], "bot:" + counsel))
+        c.execute("UPDATE attempts SET bot_id=?,created_at=?,usage_model='legal-model-x' WHERE id=?",
+                  (counsel, P._iso(start - 60), attempt["id"]))
     post(api, "runners/performance", {"samples": [sample(start + 60 * i, cpu=97.0) for i in range(10)]}, token=r["token"])
     cara = get(api, f"computers/{rid}/performance?hours=1", token="cara-test")
     assert cara["runs"][0]["bot"] == "counsel" and cara["runs"][0]["id"] == attempt["id"]

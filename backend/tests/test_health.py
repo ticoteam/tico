@@ -493,8 +493,8 @@ def test_a_bot_over_the_daily_token_threshold_is_flagged(environment):
     add_bot(api, "loop")
     api.app.state.store.settings.token_alert_input = 1000
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started_at,input_tokens,cached_tokens) VALUES('t1','loop',?,1100,90000)", (H.now(),))
-        c.execute("INSERT INTO turns(id,bot,started_at,input_tokens,cached_tokens) VALUES('t0','loop',?,9000,0)",
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,input_tokens,cached_tokens) VALUES('t1','loop',?,1100,90000)", (H.now(),))
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,input_tokens,cached_tokens) VALUES('t0','loop',?,9000,0)",
                   (H.shift(H.now(), hours=-30),))
     checks = health_of(api)[1]
     assert checks["tokens"]["status"] == "warn" and "1,100 uncached input tokens in 24 h" in checks["tokens"]["summary"]
