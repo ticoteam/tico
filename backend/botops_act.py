@@ -279,6 +279,16 @@ DO = _routes(
     ("PUT", r"screening"), ("POST", r"screening/test"),
     ("POST", r"settings/turn-budgets"),
     ("PUT", rf"system-routines/{_S}"), ("POST", rf"system-routines/{_S}/run"), ("POST", r"task-manager/turn-(on|off)"),
+    # The Company page's drafts, sources, stats and logo: the route checks the person is an owner or an admin. An
+    # edition is only drafted here; publishing, approving, overriding, retracting and correcting are not listed, so they
+    # are refused for BotOps (editions.require_person, require_own_click). Removing an audience's reader or invite is
+    # a way out, so it is direct.
+    ("POST", r"audiences"), ("PATCH", rf"audiences/{_S}"),
+    ("POST", rf"audiences/{_S}/sources"), ("DELETE", rf"audiences/{_S}/sources/{_S}"),
+    ("POST", r"company-page/stats"), ("PATCH", rf"company-page/stats/{_S}"), ("DELETE", rf"company-page/stats/{_S}"),
+    ("POST", r"company-page/logo"), ("DELETE", r"company-page/logo"),
+    ("POST", r"editions"), ("PATCH", rf"editions/{_S}"), ("POST", rf"editions/{_S}/check"),
+    ("DELETE", rf"readers/{_S}"), ("DELETE", rf"audiences/{_S}/invites/{_S}"),
 )
 
 # Cards again when the owner turned "BotOps changes providers and limits without asking" off. A limit lowered is
@@ -304,6 +314,11 @@ CONFIRM = _routes(
     ("POST", r"slack/disconnect"), ("POST", r"github/app/disconnect"),
     # Picking a seat's candidate makes a bot (recruiting._may_hire: only on the person's own confirmation).
     ("POST", rf"seats/{_S}/hire"),
+    # The Company page (backend/company_page): what the page or a reader can see is the owner's own tap. Taking a
+    # reader's access away is direct (below).
+    ("PATCH", r"company-page"), ("DELETE", rf"audiences/{_S}"),
+    ("PUT", rf"audiences/{_S}/disclosure"), ("POST", rf"audiences/{_S}/disclosure/preset"),
+    ("POST", r"readers"), ("POST", r"readers/import"), ("PATCH", rf"readers/{_S}"),
 )
 
 # The messages route is a card unless it names a bot (`classify`).
@@ -315,6 +330,8 @@ ADMIN_ONLY = _routes(
     ("POST", rf"(runners|computers)/{_S}/member-bots"),
     ("POST", r"system/update"), ("PUT", r"directory"), ("POST", r"directory/(sync|preview)"),
     ("POST", r"(slack|github/app)/disconnect"), ("POST", rf"credentials/{_S}/grants/{_S}/revoke"),
+    ("PATCH", r"company-page"), ("DELETE", rf"audiences/{_S}"), ("PUT", rf"audiences/{_S}/disclosure"),
+    ("POST", r"readers"), ("POST", r"readers/import"), ("PATCH", rf"readers/{_S}"),
 )
 
 # Always the person's own tap when BotOps acts for them, whatever they said in chat: handing over the company, updating
@@ -332,6 +349,8 @@ PERSON_ONLY = [
     ("POST", re.compile(API + rf"access/(people|humans)/{_S}/password"), "A person makes someone a password in Settings > Humans"),
     ("POST", re.compile(API + r"me/tokens"), "A person makes their own personal API token in Settings"),
     ("POST", re.compile(API + r"directory/scim-token"), "The owner makes a SCIM token in Settings > Humans"),
+    # The invite's link is the only copy of its token (readers.create_invite), so it goes to the person, not the chat.
+    ("POST", re.compile(API + rf"audiences/{_S}/invites"), "A person makes a reader's invite link in Company page > Readers"),
 ]
 DETAIL_PERSON_ONLY = ": its value never goes to a bot, so BotOps does not do this for you."
 
