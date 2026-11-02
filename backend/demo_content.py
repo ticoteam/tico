@@ -1,71 +1,76 @@
-"""What the demo company says: Acme, a fictional project-tracking software company.
+"""What the demo company says: Acme Lights, a fictional holiday projector company.
 
 Only words live here; backend/demo_seed.py decides when each thing happened. Names are the ones
 the test fixtures already use (Ana Rivera, Ben Okafor, Cara Mendes, Dana Reyes, Northwind,
 Brightline ...) and every address is acme.example or another .example domain.
 """
 
-COMPANY = "Acme"
-ANSWERS = {"what_we_do": "Acme runs cleanings, repairs and guest messages for 400 short-term rental hosts, on its own booking software.",
+COMPANY = "Acme Lights"
+ANSWERS = {"what_we_do": "Acme Lights makes holiday projectors that turn a house into a light show: set it up once, calibrate it with your phone, and play scenes rendered to fit your home. Families buy kits online; shops, hotels, malls and towns buy installs with scene licenses.",
            "customers": "both", "team_size": "11-50", "work_arrives": ["email", "tickets", "chat"],
-           "repetitive_work": "Guest replies, cleaner dispatch, listing checks, invoices and the weekly numbers."}
+           "repetitive_work": "Customer emails, calibration help, orders and shipping, business quotes and site surveys, parts buying, invoices and the weekly numbers."}
 
 PEOPLE = [
     {"id": "ana", "name": "Ana Rivera", "email": "ana@acme.example", "title": "Founder and CEO",
      "team": "leadership", "primary_for": ["*"], "reports_to": None},
-    {"id": "ben", "name": "Ben Okafor", "email": "ben@acme.example", "title": "Head of support",
+    {"id": "ben", "name": "Ben Okafor", "email": "ben@acme.example", "title": "Head of customer care",
      "team": "leadership", "primary_for": ["support-lead", "support", "support-qa", "escalations", "reputation", "inbox"],
      "reports_to": "ana"},
     {"id": "cara", "name": "Cara Mendes", "email": "cara@acme.example", "title": "Head of marketing",
-     "team": "leadership", "primary_for": ["marketing-lead", "content", "paid-media", "seo", "email-marketing"],
-     "reports_to": "ana"},
+     "team": "leadership", "primary_for": ["marketing-lead", "content", "video-producer", "paid-media", "email-marketing",
+                                          "seo", "community"], "reports_to": "ana"},
     {"id": "dana", "name": "Dana Reyes", "email": "dana@acme.example", "title": "Head of operations",
-     "team": "leadership", "primary_for": ["ops-manager", "dispatcher", "scheduling", "inspections", "pricing", "vendors"],
-     "reports_to": "ana"},
-    {"id": "eli", "name": "Eli Navarro", "email": "eli@acme.example", "title": "Engineering lead",
+     "team": "leadership", "primary_for": ["ops-manager", "procurement", "inventory", "logistics", "quality", "compliance",
+                                          "returns"], "reports_to": "ana"},
+    {"id": "eli", "name": "Eli Navarro", "email": "eli@acme.example", "title": "Head of engineering",
      "team": "leadership", "primary_for": ["product-manager", "pr-reviewer", "issue-triage", "devops", "release-notes",
-                                          "security", "health-monitor", "botops"], "reports_to": "ana"},
+                                          "health-monitor", "botops"], "reports_to": "ana"},
     {"id": "farah", "name": "Farah Haddad", "email": "farah@acme.example", "title": "Finance lead",
-     "team": "leadership", "primary_for": ["finance-lead", "bookkeeper", "ar-followup", "spend-watcher"], "reports_to": "ana"},
-    {"id": "june", "name": "June Park", "email": "june@acme.example", "title": "Head of sales",
-     "team": "leadership", "primary_for": ["sales-lead", "sales", "sdr", "account-manager", "sales-ops"], "reports_to": "ana"},
-    {"id": "lena", "name": "Lena Brandt", "email": "lena@acme.example", "title": "People and recruiting",
+     "team": "leadership", "primary_for": ["finance-lead", "bookkeeper", "ar-followup", "spend-watcher", "tax"],
+     "reports_to": "ana"},
+    {"id": "june", "name": "June Park", "email": "june@acme.example", "title": "Head of business sales",
+     "team": "leadership", "primary_for": ["sales-lead", "sales", "sdr", "account-manager", "sales-engineer", "sales-ops"],
+     "reports_to": "ana"},
+    {"id": "lena", "name": "Lena Brandt", "email": "lena@acme.example", "title": "People and legal",
      "team": "leadership", "primary_for": ["recruiter", "legal-review"], "reports_to": "ana"},
-    {"id": "gus", "name": "Gus Adeyemi", "email": "gus@acme.example", "title": "Support specialist",
+    {"id": "gus", "name": "Gus Adeyemi", "email": "gus@acme.example", "title": "Customer care specialist",
      "team": "leadership", "primary_for": [], "reports_to": "ben"},
-    {"id": "hana", "name": "Hana Sato", "email": "hana@acme.example", "title": "Support specialist",
+    {"id": "hana", "name": "Hana Sato", "email": "hana@acme.example", "title": "Customer care specialist",
      "team": "leadership", "primary_for": [], "reports_to": "ben"},
-    {"id": "ivan", "name": "Ivan Petrov", "email": "ivan@acme.example", "title": "Software engineer",
+    {"id": "ivan", "name": "Ivan Petrov", "email": "ivan@acme.example", "title": "Software engineer, calibration",
      "team": "leadership", "primary_for": [], "reports_to": "eli"},
-    {"id": "kai", "name": "Kai Lindqvist", "email": "kai@acme.example", "title": "Operations coordinator",
-     "team": "leadership", "primary_for": [], "reports_to": "dana"},
+    {"id": "kai", "name": "Kai Lindqvist", "email": "kai@acme.example", "title": "Installations lead",
+     "team": "leadership", "primary_for": [], "reports_to": "june"},
 ]
 
 # slug, catalog template, reports to. Each department has a lead bot under the Assistant (coo).
 BOTS = [("coo", "assistant", None), ("botops", "botops", "coo"),
-        # Operations
-        ("ops-manager", "ops-manager", "coo"), ("dispatcher", "dispatcher", "ops-manager"),
-        ("scheduling", "scheduling-bookings", "ops-manager"), ("inspections", "quality-inspections", "ops-manager"),
-        ("pricing", "pricing", "ops-manager"), ("vendors", "vendor-manager", "ops-manager"),
-        # Support
+        # Operations and supply chain
+        ("ops-manager", "ops-manager", "coo"), ("procurement", "procurement", "ops-manager"),
+        ("inventory", "inventory", "ops-manager"), ("logistics", "logistics", "ops-manager"),
+        ("quality", "quality-inspections", "ops-manager"), ("compliance", "compliance", "ops-manager"),
+        ("returns", "returns", "ops-manager"),
+        # Engineering: calibration cloud, player, phone app
+        ("product-manager", "product-manager", "coo"), ("pr-reviewer", "pr-reviewer", "product-manager"),
+        ("issue-triage", "issue-triage", "product-manager"), ("devops", "devops-engineer", "product-manager"),
+        ("release-notes", "release-notes", "product-manager"), ("health-monitor", "health-monitor", "product-manager"),
+        # Marketing and content (consumer)
+        ("marketing-lead", "marketing-lead", "coo"), ("content", "content", "marketing-lead"),
+        ("video-producer", "video-producer", "marketing-lead"), ("paid-media", "paid-media", "marketing-lead"),
+        ("email-marketing", "email-marketing", "marketing-lead"), ("seo", "seo-visibility", "marketing-lead"),
+        ("community", "community", "marketing-lead"),
+        # Customer care
         ("support-lead", "support-lead", "coo"), ("support", "support", "support-lead"),
         ("support-qa", "support-qa", "support-lead"), ("escalations", "escalations", "support-lead"),
         ("reputation", "reputation", "support-lead"), ("inbox", "inbox", "support-lead"),
-        # Marketing
-        ("marketing-lead", "marketing-lead", "coo"), ("content", "content", "marketing-lead"),
-        ("paid-media", "paid-media", "marketing-lead"), ("seo", "seo-visibility", "marketing-lead"),
-        ("email-marketing", "email-marketing", "marketing-lead"),
-        # Sales
+        # Business sales (B2B)
         ("sales-lead", "sales-lead", "coo"), ("sales", "sales", "sales-lead"), ("sdr", "sdr-research", "sales-lead"),
-        ("account-manager", "account-manager", "sales-lead"), ("sales-ops", "sales-ops", "sales-lead"),
-        # Engineering and product
-        ("product-manager", "product-manager", "coo"), ("pr-reviewer", "pr-reviewer", "product-manager"),
-        ("issue-triage", "issue-triage", "product-manager"), ("devops", "devops-engineer", "product-manager"),
-        ("release-notes", "release-notes", "product-manager"), ("security", "security-engineer", "product-manager"),
-        ("health-monitor", "health-monitor", "product-manager"),
+        ("account-manager", "account-manager", "sales-lead"), ("sales-engineer", "sales-engineer", "sales-lead"),
+        ("sales-ops", "sales-ops", "sales-lead"),
         # Finance
         ("finance-lead", "finance-lead", "coo"), ("bookkeeper", "bookkeeper", "finance-lead"),
         ("ar-followup", "ar-followup", "finance-lead"), ("spend-watcher", "spend-watcher", "finance-lead"),
+        ("tax", "tax", "finance-lead"),
         # People and legal
         ("recruiter", "recruiting", "coo"), ("legal-review", "legal-review", "coo")]
 
