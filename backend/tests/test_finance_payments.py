@@ -20,7 +20,7 @@ from backend.finance.actions import FinanceError
 from backend.finance.mercury import Answer
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
-from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.test_api import api, get, headers, post  # noqa: F401
 
 HOURS = [f"2026-10-15T{h:02d}:30:00.000000Z" for h in range(13, 24)]
 
@@ -1025,3 +1025,25 @@ def test_a_send_time_rule_on_who_asks_cancels_a_payment_someone_else_queued(book
     with books.read() as c:
         status = c.execute("SELECT status || ':' || coalesce(last_error, '') FROM fin_payments").fetchone()[0]
         assert status.startswith("canceled:Only the owner pays"), status
+
+
+def test_a_money_action_commits_synced_and_its_connection_goes_back_at_the_default(api, monkeypatch):
+    """A finance action's commit is synchronous=FULL while the action writes (store.mutate durable), and the pooled
+    connection it used goes back at the company's default afterwards."""
+    store = api.app.state.store
+    default = {"OFF": 0, "NORMAL": 1}[H.synchronous("NORMAL")]
+    seen = []
+    real_act = FA.act
+
+    def watched(c, *args, **kwargs):
+        seen.append(c.execute("PRAGMA synchronous").fetchone()[0])     # 0 OFF, 1 NORMAL, 2 FULL
+        return real_act(c, *args, **kwargs)
+
+    monkeypatch.setattr(FA, "act", watched)
+    r = api.post("/api/v2/finance/actions", json={"kind": "recipient_add", "payload": PAYEE},
+                 headers=headers("ben-test", "money-durable-1"))
+    assert r.status_code < 500, r.text
+    assert seen == [2], seen                                             # the action ran fully synced
+    with store.read() as c:
+        assert c.execute("PRAGMA synchronous").fetchone()[0] == default
+    assert store.pool and all(p.execute("PRAGMA synchronous").fetchone()[0] == default for p in store.pool)
