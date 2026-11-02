@@ -3474,12 +3474,17 @@ def create_app(settings=None):
     def batch_commit(request: Request, bid: str, body: M.Empty):
         who = request.state.identity
         views.human_only(who)
+        boards = []
         def work(c):
-            out = batch.commit(c, auth, who, bid, batch_send)
+            out = batch.commit(c, auth, who, bid, batch_send, boards)
             rows, notes, _ = batch.candidates(c, who.actor, views.needs_items(c, auth, who, task_view))
             line = batch.lineup(c, who.actor, notes + rows)
             return {**out, "lineup": line, "up_next": batch.up_next(line, out["scope"])}
-        return mutate(request, body, work)
+        result = mutate(request, body, work)
+        from .company_page import editions
+        for board in boards:
+            editions.release_board(store, board)                 # after the commit, as the decide route does
+        return result
 
     @app.post("/api/v2/batch/{bid}/abandon")
     def batch_abandon(request: Request, bid: str, body: M.Empty):
@@ -5384,6 +5389,7 @@ def create_app(settings=None):
     @app.post("/api/v2/approvals/{aid}")
     def decide(request: Request, aid: str, body: M.ApprovalDecision):
         who = request.state.identity
+        boards = []
         def work(c):
             row = auth.approval(c, who, aid, decide=True)
             if row["kind"] == "support":
@@ -5397,14 +5403,20 @@ def create_app(settings=None):
             privacy.require_payload(c, who, row)
             decided = H.approval_decide(c, who.actor, aid, body.decision, body.note)
             if own_click:
-                editions.approval_decided(c, decided)
+                board = editions.approval_decided(c, decided)
+                if board:
+                    boards.append(board)
             if row["kind"] in proposals.KINDS and body.decision == "approved":
                 proposals.apply(c, auth, settings, who, row)     # the hub applies it itself (CONTRACT §5)
             if row["kind"] in ("finance", "spend"):
                 from .finance import actions as finance
                 finance.approval_decided(c, aid)                 # Finance acts on it in the same transaction
             return decided
-        return mutate(request, body, work)
+        result = mutate(request, body, work)
+        from .company_page import editions
+        for board in boards:
+            editions.release_board(store, board)                 # after the commit: the rebuild takes its own transaction
+        return result
 
     @app.post("/api/v2/approvals/{aid}/undo")
     def undo_decision(request: Request, aid: str, body: M.Empty):

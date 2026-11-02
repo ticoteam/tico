@@ -459,7 +459,7 @@ def summary(batch):
             "counts": counts, "approving": approving, "declining": declining}
 
 
-def _apply_decide(c, auth, who, item, r):
+def _apply_decide(c, auth, who, item, r, boards):
     """One decision with the person's own identity: exactly what the Needs-you buttons do."""
     decision, text = r["decision"], r.get("text") or ""
     kind, ident = item["key"].split(":", 1)
@@ -479,7 +479,9 @@ def _apply_decide(c, auth, who, item, r):
         verdict = "approved" if decision == "approve" else "declined"
         decided = H.approval_decide(c, who.actor, ident, verdict, note=text[:2000])
         if own_click:
-            editions.approval_decided(c, decided)
+            board = editions.approval_decided(c, decided)
+            if board:
+                boards.append(board)                             # the caller puts a Public board on the page after commit
         if row["kind"] in ("finance", "spend"):
             from .finance import actions as finance
             finance.approval_decided(c, ident)                   # Finance acts on it in the same transaction
@@ -621,11 +623,11 @@ def _record_line(item, r, line):
     return f"- {line}" + (f": \"{text}\"" if text and r["kind"] == "decide" else "")
 
 
-def commit(c, auth, who, batch_id, send):
+def commit(c, auth, who, batch_id, send, boards):
     """Apply every response. Decisions and snoozes here; then one message to each bot the items
     came from, in the person's chat with it: what was decided, and the questions, instructions and
     rules it must act on, whose reply comes back on those items. One item's failure is recorded,
-    not fatal."""
+    not fatal. Board rows recorded by a decision are appended to `boards` for the caller to release after commit."""
     batch = _load(c, who.actor, batch_id)
     if batch["state"] != "open":
         raise Problem("state", f"This batch is {batch['state']}", 409)
@@ -640,7 +642,7 @@ def commit(c, auth, who, batch_id, send):
             try:
                 line = None
                 if r["kind"] == "decide":
-                    line = _apply_decide(c, auth, who, item, r)
+                    line = _apply_decide(c, auth, who, item, r, boards)
                 elif r["kind"] == "rule":
                     H.event(c, who.actor, "batch.rule", key, {"text": r["text"], "bot": to, "batch": batch["id"], "item": key})
                     applied.append(f"Rule for {H.actor_id(to)}: {_clip(r['text'], 120)}")

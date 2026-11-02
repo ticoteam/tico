@@ -915,6 +915,22 @@ def release_published(store, edition):
     return {**edition, "release_failed": bool(done and done.get("failed"))}
 
 
+def release_board(store, board_row_id):
+    """Put a just-recorded stats board yes on the Public page, after its transaction. Only the Public audience has a page
+    to change: a Private board's figures reach its readers when they're next built. A failed rebuild closes the page (as
+    `release.rebuild` does) and is logged; the decision stands and the day's refresh tries again."""
+    from . import release
+    with store.read() as c:
+        row = c.execute("SELECT a.kind FROM stat_board_approvals s JOIN audiences a ON a.id = s.audience_id "
+                        "WHERE s.id=?", (board_row_id,)).fetchone()
+    if not row or row["kind"] != "public":
+        return
+    try:
+        release.rebuild(store, "board approved")
+    except Exception as exc:  # noqa: BLE001 - the decision is recorded; the page is what failed
+        LOG.error("Company page rebuild after a board approval failed: %s", type(exc).__name__)
+
+
 def _notify(c, edition_id):
     """Queue the readers' link. A notice that can't be queued never undoes a publication."""
     from .schedule import transparency
@@ -992,7 +1008,8 @@ def request_board_approval(c, who, audience_id):
 def approval_decided(c, found):
     """After an own-click approval is decided, in that transaction. An edition waits for `publish`. A stats board has
     nothing further to do, so a yes is spent and recorded now, while it still describes the board. If it doesn't any
-    more, no row is written and the page shows it as stale."""
+    more, no row is written and the page shows it as stale. Returns the new board row's id, or None; the caller passes
+    it to `release_board` once the transaction has committed."""
     url = str((found.get("payload") or {}).get("url") or "").strip()
     if not url.startswith(BOARD_URL) or not _decided_by_addressee(found):
         return None

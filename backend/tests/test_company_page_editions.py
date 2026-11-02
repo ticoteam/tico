@@ -341,11 +341,11 @@ def test_the_batch_decide_path_takes_only_the_persons_own_click(page):
     for token in ("ana-token", "ana-assistant"):
         with pytest.raises(Problem):
             with page.store.transaction() as c:
-                batch._apply_decide(c, auth, identities[token], item, say_yes)
+                batch._apply_decide(c, auth, identities[token], item, say_yes, [])
     with page.store.read() as c:
         assert H.approval(c, aid)["decision"] is None
     with page.store.transaction() as c:
-        batch._apply_decide(c, auth, identities["ana-test"], item, say_yes)
+        batch._apply_decide(c, auth, identities["ana-test"], item, say_yes, [])
     with page.store.read() as c:
         assert H.approval(c, aid)["decision"] == "approved"
 
