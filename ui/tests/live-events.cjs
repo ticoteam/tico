@@ -43,7 +43,7 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
       {name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
     if (p === '/api/issues') return json([]);
-    if (p === '/api/v2/events') { streams.push({url, route}); return; }        // held open until the test sends
+    if (p === '/api/v2/events') { streams.push({url, route, document: route.request().headers().referer}); return; }        // held open until the test sends
     const answer = threads(p, url, route.request().method());
     if (answer !== undefined) return json(answer);
     if (p === '/api/v2/assistant') return json(assistantView('c-ops', snapshot));
@@ -71,11 +71,12 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     }
     return json(unrouted(p));
   });
-  // The newest stream the page holds that `match` accepts, answered with `blocks` (it then ends, and the page reconnects).
+  // Answer only this document's newest matching stream: a held route from before navigation can still be queued.
   const send = async (match, ...blocks) => {
     const deadline = Date.now() + t(8000);
+    const document = new URL(page.url()); document.hash = '';
     let stream;
-    while (!(stream = streams.filter(s => match(s.url)).at(-1))) {
+    while (!(stream = streams.filter(s => s.document === document.href && match(s.url)).at(-1))) {
       if (Date.now() > deadline) throw new Error('no stream: ' + streams.map(s => s.url.search).join(' | '));
       await new Promise(r => setTimeout(r, 50));
     }
@@ -194,7 +195,7 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     await page.locator('#bot-tip:not([hidden])').waitFor();
     assert.doesNotMatch(await page.locator('#bot-tip').innerText(), /Waiting for.*ChatGPT/);
     const waiting = 'Waiting for the ChatGPT login (held by Scribe on #7 Count the words since 19:06Z; position 2)';
-    const onBotPage = await send(() => true, block(seq++, 'bots', {bot: 'ops', status: {bot: 'ops', state: 'waiting_bot', focus: waiting,
+    const onBotPage = await send(url => url.searchParams.get('party') === 'bot:ops', block(seq++, 'bots', {bot: 'ops', status: {bot: 'ops', state: 'waiting_bot', focus: waiting,
       waiting, since: now, open_tasks: 1, needs_human: 0}}));
     assert.equal(onBotPage.searchParams.get('party'), 'bot:ops', "a bot's page is sent its own tasks' changes, not every task's");
     await page.waitForFunction(text => !document.querySelector('#bot-tip').hidden
