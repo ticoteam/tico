@@ -475,6 +475,7 @@ async function renderSettingsAssistantApprovals() {
   let v, list;
   try { [v, list] = await Promise.all([get('/v2/assistant/settings'), get('/v2/assistant/decisions')]); }
   catch (e) { host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!host.isConnected) return;   // Settings redrew while this loaded; the new page draws its own
   const name = esc(assistantName());
   const rows = (list.decisions || []).map(d => {
     const words = d.decided_for?.words ? `“${esc(d.decided_for.words)}”` : '';
@@ -489,7 +490,7 @@ async function renderSettingsAssistantApprovals() {
       ? `When you ask in its chat, your ${name} approves or declines your approvals. It reads the list back first, and only your own words count.`
       : 'Your team’s owner has turned this off for everyone (Settings > People).'}</p>
     ${rows ? `<h3>Decided by ${name} for you</h3><ul class="assistant-decisions">${rows}</ul>` : ''}`;
-  $('#assistant-decides').onchange = async ev => {
+  host.querySelector('#assistant-decides').onchange = async ev => {
     const box = ev.target;
     try { await post('/v2/assistant/settings', {decides_approvals: box.checked}); toast('Saved'); void renderSettingsAssistantApprovals(); }
     catch (e) { box.checked = !box.checked; settingsFieldError(box, e.message); }
