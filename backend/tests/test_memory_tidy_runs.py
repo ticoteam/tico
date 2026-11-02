@@ -50,6 +50,28 @@ def test_no_change_is_free_and_logs_without_creating_any_task(api, monkeypatch):
         assert runs.admit(c, store.settings, AT) == []
 
 
+def test_private_container_cannot_start_an_ordinary_turn_while_its_check_runs(api, monkeypatch):
+    from backend.tests.test_api import assign, claim, runner
+    from backend.tests.test_check_models import all_ready
+
+    monkeypatch.setattr(H, 'now', lambda: runs.stamp(AT))
+    store = setup(api)
+    machine = runner(api)
+    assign(api, machine, 'ops')
+    all_ready(api, machine)
+    monkeypatch.setattr(runs, 'packet_runner', lambda *args: True)
+    with store.transaction() as c:
+        commit(c)
+        runs.admit(c, store.settings, AT)
+        row = c.execute('SELECT * FROM memory_tidy_passes').fetchone()
+        assert H.task(c, row['parent_task_id'])['status'] == 'waiting'
+    check = claim(api, machine)
+    assert check['task']['id'] == row['check_task_id']
+    # Claim backfill considers same-owner subtasks separately, even without a
+    # queued notice. The container must stay asleep when another slot is free.
+    assert claim(api, machine) is None
+
+
 @pytest.mark.parametrize('reason', ['skipped: model floor', 'skipped: spend limit'])
 def test_ordered_skips_leave_no_partial_parent_or_check(api, monkeypatch, reason):
     store = setup(api)

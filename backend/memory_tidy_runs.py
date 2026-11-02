@@ -209,6 +209,9 @@ def admit(c, settings, at):
                 'the attachment, runs checks, files the card, then closes it. Deadline 05:00 Pacific.',
                 'bot:' + bot, parent_id=parent['id'], private=True, lint=False, deduplicate=False)
             check_models.file_pass(c, settings, child['id'], model)
+            # Quiet creation suppresses the notice wake, but an open container
+            # is still eligible for automatic pickup on another free turn.
+            H.task_update(c, H.KEEPER, parent['id'], status='waiting', quiet=True)
             c.execute("UPDATE memory_tidy_passes SET parent_task_id=?,check_task_id=? WHERE id=?",
                       (parent['id'], child['id'], ident))
             log(c, bot, 'filed: ' + model)
