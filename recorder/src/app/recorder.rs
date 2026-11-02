@@ -290,7 +290,7 @@ pub struct Recorder {
     asking_for: Option<String>,
     pub demo: bool,
     /// The action item being sent to Tico right now.
-    sending: Option<String>,
+    pub(super) sending: Option<String>,
     /// People and bots chosen in People, shown at once and added in Tico in the background.
     adding_people: Vec<Adding>,
     /// Why Tico refused the last people or bots added; shown in People.
@@ -298,7 +298,7 @@ pub struct Recorder {
     /// The meeting being sent and the step it is on, written by the send job as it goes.
     send_step: Arc<Mutex<Option<(String, String)>>>,
     /// The action item whose send failed, and why.
-    item_error: Option<(String, String)>,
+    pub(super) item_error: Option<(String, String)>,
     /// Who the last action item went to, offered first for the next one.
     last_owner: String,
     /// Choosing the Tico that action items go to.
@@ -1300,6 +1300,22 @@ impl Recorder {
         self.report(result);
         self.reload();
     }
+    pub fn control_live(&mut self, action: &str) {
+        let Ok(record) = self.open_record() else {
+            return;
+        };
+        let at_ms = self
+            .active
+            .as_ref()
+            .filter(|(id, _)| id == &record.id)
+            .map(|(_, handle)| handle.status().elapsed_ms)
+            .unwrap_or_else(|| tico_recorder_native::live::capture_time(&record));
+        let action = action.to_owned();
+        self.network_job("control", move |tico, store, id| {
+            tico.control_live(&store, &id, &action, at_ms)?;
+            Ok(json!({}))
+        });
+    }
     /// A person's edit of a line already shared live, or its removal when `text` is None. It only
     /// changes the meeting the window has open, and only when that is the meeting named.
     pub fn edit_shared_line(&mut self, id: &str, seq: i64, text: Option<&str>) {
@@ -1409,6 +1425,29 @@ impl Recorder {
     }
     /// Sends one action item to `owner` as a private Tico task with its quote and the meeting link.
     pub fn send_item(&mut self, item_id: &str, owner: &str) {
+        self.send_item_confirmed(item_id, owner, false);
+    }
+    pub fn send_item_confirmed(&mut self, item_id: &str, owner: &str, paused_confirmed: bool) {
+        // Check durable state as well as the displayed snapshot; sync may have changed it.
+        if let Some(id) = &self.meeting {
+            match self.store.context(id) {
+                Ok(context) => {
+                    let reason = tico_recorder_native::live::item_send_blocked(&context)
+                        .map(str::to_owned)
+                        .or_else(|| (!paused_confirmed && !context.paused_windows.is_empty()
+                            && context.items.iter().any(|i| i.id == item_id && (!i.quote.trim().is_empty() || !i.title.trim().is_empty())))
+                            .then(|| "This action item may quote paused speech. Review its title and quote before sending".into()));
+                    if let Some(reason) = reason {
+                        self.item_error = Some((item_id.to_owned(), reason));
+                        return;
+                    }
+                }
+                Err(error) => {
+                    self.item_error = Some((item_id.to_owned(), error.to_string()));
+                    return;
+                }
+            }
+        }
         if self.updating {
             self.error = UPDATING.into();
             return;
@@ -1451,8 +1490,15 @@ impl Recorder {
         let (config, store, destination) = (self.config.clone(), self.store.clone(), self.router());
         let (item_id, owner) = (item_id.to_owned(), owner.to_owned());
         self.job_for("task", Some(id.clone()), move || {
-            Tico::saved(&config, &destination)?
-                .send_task(&store, &id, &item_id, &owner, &name, private)?;
+            Tico::saved(&config, &destination)?.send_task_confirmed(
+                &store,
+                &id,
+                &item_id,
+                &owner,
+                &name,
+                private,
+                paused_confirmed,
+            )?;
             Ok(json!({"message":format!("Sent to {name}")}))
         });
     }
@@ -1695,6 +1741,9 @@ impl Recorder {
     /// Send does every step in one go: it stops this recording, waits for its last words,
     /// finishes a live meeting in Tico, then files it. Only what no step can fix stops it here.
     pub fn send_meeting(&mut self, id: &str, destination: &str) {
+        self.send_meeting_confirmed(id, destination, false);
+    }
+    pub fn send_meeting_confirmed(&mut self, id: &str, destination: &str, paused_confirmed: bool) {
         if self.updating {
             self.error = UPDATING.into();
             return;
@@ -1702,6 +1751,21 @@ impl Recorder {
         let Ok(record) = self.store.get(id) else {
             return;
         };
+        if let Ok(context) = self.store.context(id) {
+            if context.live_discarded {
+                self.error =
+                    "This meeting was discarded; its recording stays on this computer".into();
+                return;
+            }
+            if context.live_state == "paused" {
+                self.error = "Resume sharing before Finish or Send".into();
+                return;
+            }
+            if !paused_confirmed && tico_recorder_native::live::paused_review_required(&context) {
+                self.error = "A kept action item may quote paused speech. Review it and confirm Send in the Send menu.".into();
+                return;
+            }
+        }
         let recording_here = self.active.as_ref().is_some_and(|(active, _)| active == id);
         if !recording_here && let Some(error) = self.send_blocked(&record) {
             self.error = error;
@@ -1760,7 +1824,10 @@ impl Recorder {
                 say(label);
                 std::thread::sleep(Duration::from_millis(250));
             }
-            network::ready(&store.get(&id)?)?;
+            let record = store.get(&id)?;
+            network::ready(&record)?;
+            anyhow::ensure!(paused_confirmed || !tico_recorder_native::live::paused_review_required(&store.context(&id)?),
+                "A kept action item may quote paused speech. Review it and confirm Send in the Send menu.");
             let tico = Tico::saved(&config, &destination)?;
             if !store.context(&id)?.live_id.is_empty() {
                 say("Finishing…");
@@ -2087,6 +2154,8 @@ impl Recorder {
                 } else {
                     Some(("Tico sync needs attention".into(), "amber"))
                 };
+                let context = self.store.context(&record.id).unwrap_or_default();
+                let status = if context.live_discarded { Some(if context.live_state == "ended" { ("Discarded · saved locally".into(), "muted") } else { ("Discard pending · saved locally".into(), "amber") }) } else { status };
                 let sent = self.sent_everywhere(&record.deliveries);
                 json!({
                     "id": record.id,
@@ -2094,10 +2163,11 @@ impl Recorder {
                     "started_at": record.started_at,
                     "duration_ms": record.duration_ms,
                     "recording": recording,
+                    "paused_warning": !context.paused_windows.is_empty(),
                     "status": status.map(|(label, tone)| json!({"label":label,"tone":tone})),
                     "sync_error": sync_error,
                     "sent": sent,
-                    "can_send": !self.config.destinations.is_empty() && !sent && !recording && record.chunks > 0 && !self.busy,
+                    "can_send": !context.live_discarded && !self.config.destinations.is_empty() && !sent && !recording && record.chunks > 0 && !self.busy,
                     "targets": self.targets(&record.live_destination, &record.deliveries),
                 })
             })
@@ -2250,7 +2320,9 @@ impl Recorder {
             .chunks
             .iter()
             .any(|chunk| !chunk.text.trim().is_empty());
-        let blocked = if recording_here {
+        let blocked = if self.context.live_state == "paused" {
+            Some("Resume sharing before Finish or Send".into())
+        } else if recording_here {
             None
         } else {
             self.send_blocked(&record)
@@ -2274,7 +2346,13 @@ impl Recorder {
                 (false, false) => "Private in Tico",
             }) } else { None },
             "live_url": self.live_url(),
-            "can_finish": live && record.state != "recording" && record.deliveries.is_empty()
+            "paused_warning": !self.context.paused_windows.is_empty(),
+            "live_state": self.context.live_state,
+            "can_control": live && !ended && !self.context.live_discarded,
+            "can_discard": live && !ended && record.state != "recording" && record.deliveries.is_empty(),
+            "discarded": self.context.live_discarded,
+            "discard_pending": self.context.live_discarded && !ended,
+            "can_finish": live && self.context.live_state != "paused" && !self.context.live_discarded && record.state != "recording" && record.deliveries.is_empty()
                 && (!ended || has_text),
             "place": if live { format!("Shared live · {org}") } else { "Private · on this Mac".into() },
             "sync_error": if sync_error.is_empty() { String::new() } else {
@@ -2311,7 +2389,8 @@ impl Recorder {
         // Bots first: most action items go to one.
         let mut owners = self.roster.clone();
         owners.sort_by_key(|row| !row.0.starts_with("bot:"));
-        let can_send = mode == "ready" && self.sending.is_none();
+        let send_blocked = tico_recorder_native::live::item_send_blocked(&self.context);
+        let can_send = mode == "ready" && self.sending.is_none() && send_blocked.is_none();
         let items = &self.context.items;
         let order = items
             .iter()
@@ -2346,6 +2425,8 @@ impl Recorder {
                     "sent_to": item.sent_to,
                     "task_url": item.task_url,
                     "sending": self.sending.as_deref() == Some(item.id.as_str()),
+                    "send_blocked": send_blocked,
+                    "paused_warning": !self.context.paused_windows.is_empty() && (!item.quote.trim().is_empty() || !item.title.trim().is_empty()),
                     "can_send": can_send && !chosen.is_empty() && !item.title.trim().is_empty(),
                     "error": error,
                 })

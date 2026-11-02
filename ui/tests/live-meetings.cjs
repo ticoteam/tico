@@ -246,6 +246,7 @@ async function main() {
     await page.locator('#meet-live-now').waitFor();
     assert.deepEqual(errors, []);
     await context.close();
+    await require('./support/recorder-pause.cjs')(browser);
   } finally { await browser.close(); }
 }
 
