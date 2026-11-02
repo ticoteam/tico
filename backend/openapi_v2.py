@@ -2330,9 +2330,9 @@ PROBLEM = {"type": "object", "required": ["error"], "properties": {"error": {
 TAGS['Cards and pins'] = ("Tico's built-in cards and where pages and cards are pinned: the Dashboard, team pages, bot "
                           "sidebars and tasks (docs/overview.md). A card shows each reader only what they may see.")
 STABLE.extend([
-    ('/api/v2/places/{place}', 'get', 'Cards and pins', 'getPlace', 'A place\'s pins in order (dashboard, team:<group>, '
-     'bot:<id>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable pages are '
-     'left out', 'Place'),
+    ('/api/v2/places/{place}', 'get', 'Cards and pins', 'getPlace', 'A place\'s pins in order (dashboard, growth, '
+     'team:<group>, bot:<id>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable '
+     'pages are left out. growth takes `month` (YYYY-MM) and answers `month` and `months`, the picker\'s choices', 'Place'),
     ('/api/v2/places/{place}', 'put', 'Cards and pins', 'savePlace', 'Save a Dashboard, team page or My dashboard (its '
      'default cards become pins); a team page\'s audience sets its group\'s Read', 'Place'),
     ('/api/v2/places/{place}/order', 'post', 'Cards and pins', 'orderPlace', 'Put every pin at a place in this order', 'Place'),
@@ -2344,7 +2344,7 @@ STABLE.extend([
      '`ids` reads up to 50', 'CardList'),
     ('/api/v2/cards', 'post', 'Cards and pins', 'addCard', 'A built-in card, pinned at `place` in the same write', None),
     ('/api/v2/cards/choices', 'get', 'Cards and pins', 'getCardChoices', 'Card templates and their settings, the teams, '
-     'and the KPIs and pages the caller may pick', None),
+     'the KPIs and pages the caller may pick, the Growth page\'s metrics and channels; `place=growth` adds its templates', None),
     ('/api/v2/cards/{cid}', 'patch', 'Cards and pins', 'updateCard', 'Change a card\'s heading or settings', None),
     ('/api/v2/cards/{cid}', 'delete', 'Cards and pins', 'removeCard', 'Remove a card and every pin of it', None),
 ])
@@ -2387,12 +2387,17 @@ SCHEMAS['RulesByTeammate'] = obj({
 })
 SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done_per_week', 'needs_you', 'spend', 'kpi',
                                                         'automation_runs', 'latest_pages', 'needs_attention',
-                                                        'unread_threads', 'my_tasks', 'updates']},
+                                                        'unread_threads', 'my_tasks', 'updates', 'growth_number',
+                                                        'growth_funnel', 'growth_channels', 'growth_retention',
+                                                        'growth_board']},
                        'title': 's', 'heading': 's', 'name': 's', 'team_name': 's', 'settings': 'o', 'hidden': 'b',
                        'data': {'type': ['object', 'null'], 'description': 'What the card shows the caller; null when hidden'}},
                       required=['id', 'template', 'heading', 'settings', 'hidden', 'data'])
 SCHEMAS['CardList'] = obj({'cards': items(ref('Card')), 'next': 'n'})
-SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'team', 'bot', 'task', 'person']}, 'saved': 'b', 'can_edit': 'b',
+SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'growth', 'team', 'bot', 'task', 'person']}, 'saved': 'b',
+                        'can_edit': 'b', 'month': {'type': 'string', 'description': 'growth: the month its cards read (YYYY-MM)'},
+                        'months': {'type': 'array', 'items': {'type': 'string'},
+                                   'description': 'growth: the newest 24 months with cohort rows, oldest first'},
                         'pins': items(obj({'id': 'n', 'item': 'n', 'position': 'i', 'size': {'enum': ['small', 'medium', 'large']},
                                            'card': ref('Card'),
                                            'page': obj({'file_id': 's', 'title': 's', 'bot': 's', 'updated_at': 's', 'archived': 'b'})},

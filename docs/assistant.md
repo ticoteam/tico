@@ -2,11 +2,11 @@
 
 Every human has one private DM with the team's assistant (the `coo` bot; you may have renamed it): a personal
 bot that knows how Tico is laid out and does things in it on your behalf. **Ask Tico** opens it from any page: on a
-computer it is the sidebar's bottom row, above your account, with Search's icon (⌘K) at its end; it (or ⌘J / Ctrl+J)
+computer it is the sidebar's bottom row, above your account, with Search's icon (⌘K) and the Tico team's **?** at its end; it (or ⌘J / Ctrl+J)
 opens a small panel straight above that row, over the sidebar, and nothing floats over the page. On a phone the Liquid Dot in the
 middle of the tab bar opens it as a sheet. The panel names the page it sees, and a message sent from it carries that
 page, so "this" and "here" mean what you are looking at. The panel is called **Tico Assistant** (or the name your team
-gave the assistant); its header has the dot, the name, the page it sees and **Loop in Support**. The DM is also a
+gave the assistant); its header has the dot, the name and the page it sees. The DM is also a
 page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's Home, with a
 few things to ask while it is empty. The **Assistant** tab, first on your own page (`#/person/<you>`), opens the same
 page. Attach files or
@@ -20,18 +20,9 @@ header: opening flies it up from the row (or tab) to its place beside the name, 
 panel is open a close mark holds the dot's place. Bots' questions
 and Confirm cards sit in the thread by when they were asked, among the messages, so nothing waits out of sight.
 
-**Loop in Support**, a link at the top right of the panel, brings Tico support into the DM. It rides on your support
-requests ([Support](support.md)): while one of your open requests is in the DM, its chip **Tico Support ×** sits at
-the top, a line in the thread says "You added Tico Support. They can now see chats.", support's messages flow in by
-time as blue-gray bubbles under a headset (yours on the right), a reply seen there is read, and the box writes to
-support instead of the Assistant; the link hides while support is in. Looping support in shares the DM, as the line says: the DM's last 20 turns
-(yours and the Assistant's, one line each, up to 4000 characters) go to the request at once, with keys and tokens cut
-out by the same rules support reports use (`backend/redaction.py`), and the thread doesn't draw that message again.
-With no open request, it sends a new request holding them, with no form; a request taken out earlier comes
-back and gets them instead. The chip's **×** takes it out: "Tico Support can no longer see chats."
-Nothing more from this DM goes to support; the request itself stays open in Support, only this DM stops showing it
-(remembered on this browser). Support itself (every request, diagnostics, a new request) opens from any link to
-`#/support`, such as the Assistant's "Loop in Tico support" reply.
+The Ask panel is only the Assistant. Talking to the people at Tico is a separate chat: the **?** beside Search (on a
+phone, beside Search in the More drawer), or any link to `#/support`, such as the Assistant's "Message the Tico team"
+reply, opens it ([Support](support.md)). Nothing from the DM goes to the Tico team.
 
 A **peek** is a few words beside the closed dot, just past the sidebar level with the Ask row (above the tab bar on a phone), Tico saying something waits on you:
 "Got a quick question for you", "3 questions are waiting on you", "Need your OK on something". Six words at most,

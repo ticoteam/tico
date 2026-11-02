@@ -72,9 +72,11 @@ def probe(provider: Provider) -> tuple[dict[str, object], str]:
     for a in listed(accounts, "accounts"):
         if str(a.get("type") or "mercury") != "mercury":
             continue
-        rows.append({"id": str(a.get("id")), "name": str(a.get("nickname") or a.get("name") or "Mercury")[:120],
+        four = F.last4(a.get("accountNumber"))
+        rows.append({"id": str(a.get("id")),
+                     "name": F.bare_name(a.get("nickname") or a.get("name") or "Mercury", four)[:120],
                      "kind": str(a.get("kind") or ""), "status": str(a.get("status") or "active"),
-                     "last4": F.last4(a.get("accountNumber")), "current": _cents(a.get("currentBalance")),
+                     "last4": four, "current": _cents(a.get("currentBalance")),
                      "available": _cents(a.get("availableBalance"))})
     found: dict[str, object] = {"accounts": rows, "credit": [
         {"id": str(a.get("id")), "status": str(a.get("status") or "active"), "current": _cents(a.get("currentBalance")),
@@ -231,14 +233,19 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
             banking.refresh_connection_openings(load(c, now), cid)
     with store.transaction() as c:
         fields: dict[str, object] = {"last_sync_at": now, "updated_at": now}
+        # A first backfill still under way goes on at once (rung below), not a poll later: until it ends the books
+        # carry part of the history and no opening balance.
+        going = due and not problems and not _settings(SK.get(c, "fin_connections", cid)).get("backfilled")
         if due:
-            fields["next_sync_at"] = _after(now, POLL_MINUTES * 60)
+            fields["next_sync_at"] = now if going else _after(now, POLL_MINUTES * 60)
         if problems:
             fields.update({"status": "error", "last_error": problems[0][:300]})
             banking.sync_failed(load(c, now), cid, str(row["status"]), problems[0])
         else:
             fields.update({"status": "active", "last_error": None, "last_ok_at": now})
         SK.update(c, "fin_connections", cid, fields)
+    if going:
+        BELL.ring()
     return "failed" if problems else "ok"
 
 
@@ -358,23 +365,34 @@ def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
         with store.transaction() as c:
             SK.update(c, "fin_connections", cid, {"events_cursor": str(first[0].get("id")) if first else "start"})
     cursor = str(row["cursor"] or "") or None
+    repeat = False                      # the page before was all rows already taken in
     for _ in range(BACKFILL_PAGES):
         page = provider.transactions(cursor)
         if not page.ok:
             return [error_text(page)]
         raws = listed(page, "transactions")
+        with store.read() as c:
+            known = SK.known_txns(c, cid, [str(r.get("id")) for r in raws if r.get("id")])
         _ingest_all(store, cid, raws, now)
-        cursor = next_page(page) or (str(raws[-1].get("id")) if raws else cursor)
-        done = not raws or not next_page(page) and len(raws) < 500
+        before, cursor = cursor, next_page(page) or (str(raws[-1].get("id")) if raws else cursor)
+        # The end: an empty or short last page, or (whatever Mercury's page says) a page that moves the cursor nowhere
+        # or a second page in a row of rows already taken in, so a list that keeps naming a next page still ends. One
+        # such page alone is a pass cut off before its cursor was kept (the cursor is kept every page): it goes on.
+        seen = bool(raws) and known == len(raws)
+        done = not raws or cursor == before or not next_page(page) and len(raws) < 500 or seen and repeat
+        repeat = seen
         with store.transaction() as c:
+            fresh = _settings(SK.get(c, "fin_connections", cid))
             SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings": SK.dump(
-                {**conf, "backfilled": True}) if done else row["settings"]})
+                {**fresh, "backfilled": True, "opened": []}) if done else SK.dump(fresh)})
             if done:
-                # The balances read at the start of this pass and the whole feed: each account's opening balance.
+                # The balances read at the start of this pass and the whole feed: each account's opening balance. One
+                # with no balance read yet gets its opening on a later pass (banking.refresh_opening).
                 ctx = load(c, now)
-                for m in SK.money_accounts(c, ctx.book.id):
-                    if str(m["connection_id"] or "") == cid:
-                        banking.opening_balance(ctx, str(m["id"]))
+                mine = [m for m in SK.money_accounts(c, ctx.book.id) if str(m["connection_id"] or "") == cid]
+                for m in mine:
+                    banking.opening_balance(ctx, str(m["id"]))
+                banking.mark_opened(ctx, cid, [str(m["id"]) for m in mine if m["balance"] is not None and m["account_id"]])
         if done:
             break
     return []

@@ -389,10 +389,42 @@ def container_healthy(seconds):
     return False
 
 
+CRASH_RESTARTS = 2   # this many restarts since the wait began is a crash loop: waiting out the window changes nothing
+HEALTH_GAVE_UP = ""  # why the last healthy() stopped before its window ended; the failure message names it
+
+
+def server_crash(restarts):
+    """Why the server container is clearly crashing, or "" (returns (reason, restarts)). `restarts` is the restart count
+    when the wait began, None until it is read. Any failure to read the container is "": the poll just goes on."""
+    try:
+        rows = []
+        for ident in compose("ps", "-a", "-q", SERVICE, timeout=INSPECT_SECONDS).split():
+            row = docker_run(["docker", "inspect", "--format", '{{.State.Status}}|{{.RestartCount}}|'
+                             '{{index .Config.Labels "com.docker.compose.oneoff"}}', ident],
+                             capture_output=True, text=True, timeout=INSPECT_SECONDS).stdout.strip().split("|")
+            if len(row) == 3 and row[2] != "True":   # a one-off run of the service is not the server
+                rows.append(row)
+        if len(rows) != 1:
+            return "", restarts
+        state, count = rows[0][0], int(rows[0][1])
+    except (RuntimeError, OSError, subprocess.SubprocessError, ValueError):
+        return "", restarts
+    if restarts is None:
+        restarts = count
+    if state in ("exited", "dead"):
+        return "the %s container %s during start" % (SERVICE, state), restarts
+    if count - restarts >= CRASH_RESTARTS:
+        return "the %s container restarted %d times during start" % (SERVICE, count - restarts), restarts
+    return "", restarts
+
+
 def healthy(seconds):
+    global HEALTH_GAVE_UP
+    HEALTH_GAVE_UP = ""
     if MODE == "runner":
         return container_healthy(seconds)
     deadline = time.time() + seconds
+    restarts = None
     while time.time() < deadline:
         try:
             with urllib.request.urlopen(HEALTH_URL, timeout=3) as reply:
@@ -400,6 +432,11 @@ def healthy(seconds):
                     return True
         except OSError:
             pass
+        reason, restarts = server_crash(restarts)
+        if reason:
+            HEALTH_GAVE_UP = reason
+            print("tico-updater: %s; not waiting the full %d seconds" % (reason, seconds), flush=True)
+            return False
         time.sleep(POLL_SECONDS)
     return False
 
@@ -1151,6 +1188,9 @@ def update(version, running=""):
             with step("Starting the new %s" % SERVICE):
                 compose("up", "-d", "--no-deps", "--pull", "never", SERVICE, tag=version)
             if not healthy(HEALTH_SECONDS):
+                if HEALTH_GAVE_UP:
+                    raise RuntimeError("the server did not come up healthy: %s, so the wait stopped early, not after %d seconds"
+                                       % (HEALTH_GAVE_UP, HEALTH_SECONDS))
                 raise RuntimeError(("the runner" if MODE == "runner" else "the server") + " did not come up healthy within %d seconds" % HEALTH_SECONDS)
             with step("Checking the new version"):
                 check_switched(version, target)

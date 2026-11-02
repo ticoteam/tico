@@ -231,10 +231,18 @@ function finDialog(title, body, saveLabel, onSave) {
   dlg.querySelectorAll('[data-close]').forEach(b => { b.onclick = () => dlg.close(); });
   dlg.onclose = () => dlg.remove();
   const form = dlg.querySelector('form'), err = dlg.querySelector('[data-error]'), save = dlg.querySelector('[type=submit]');
+  // While a save runs the button says so (a Mercury connect tests the token and maps accounts, which takes seconds).
+  // A save that relabels the button (Preview → Import, Send, Done) keeps its label: only the busy text is put back.
+  let idle = '';
+  const busy = on => {
+    save.disabled = on; save.setAttribute('aria-busy', on ? 'true' : 'false');
+    if (on) { idle = save.textContent; save.textContent = `${idle}…`; }
+    else if (save.textContent === `${idle}…`) save.textContent = idle;
+  };
   form.onsubmit = async ev => {
-    ev.preventDefault(); err.hidden = true; save.disabled = true;
-    try { if (await onSave(form) === false) save.disabled = false; else dlg.close(); }
-    catch (e) { err.textContent = e.message; err.hidden = false; save.disabled = false; }
+    ev.preventDefault(); err.hidden = true; busy(true);
+    try { if (await onSave(form) === false) busy(false); else dlg.close(); }
+    catch (e) { err.textContent = e.message; err.hidden = false; busy(false); }
   };
   dlg.showModal();
   form.querySelector('input:not([type=hidden]),select')?.focus();

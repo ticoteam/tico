@@ -896,7 +896,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
     // (one the rules send for approval names the approver first); the Balance sheet's "+ Add" posts a journal entry.
     {
       const tag = 'payables';
-      const {page, errors, writes, reads} = await open(browser, {hash: '#/finance/payables'});
+      const {page, errors, writes, reads, hub} = await open(browser, {hash: '#/finance/payables'});
       const today = await page.evaluate(() => finToday());
       const heads = async () => (await page.locator('.fin-doc-t').first().locator('thead th').allInnerTexts()).map(t => t.toUpperCase());
       await page.locator(READY.payables).waitFor();
@@ -1049,6 +1049,23 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.deepEqual(await page.locator('#fin-add [role=menuitem]').allInnerTexts(), ['Bank account', 'Card account', 'Payments', 'Invoice', 'Bill', 'Loan or credit line', 'Asset', 'Journal entry', 'Import history'],
         tag + ': what the owner may add');
       await shot(page, 'balance-add-desktop');
+      // Import history: while the dry run runs the button says Preview… (disabled, aria-busy); after it, Import stays.
+      await page.locator('[data-fin-add-item="import"]').click();
+      await page.locator('dialog.fin-dlg input[name="file"]').setInputFiles({name: 'acme.csv', mimeType: 'text/csv',
+        buffer: Buffer.from('month,line,amount\n2026-01,Software,1200\n')});
+      await page.locator('dialog.fin-dlg select[data-fin-sheet-line]').first().selectOption('a-6100');
+      let unhold = () => {};
+      hub.hold = new Promise(r => { unhold = r; });
+      const go2 = page.locator('dialog.fin-dlg [type=submit]');
+      await go2.click();
+      await page.waitForFunction(() => document.querySelector('dialog.fin-dlg [type=submit]')?.getAttribute('aria-busy') === 'true');
+      assert.deepEqual([await go2.innerText(), await go2.isDisabled()], ['Preview…', true], tag + ': the button shows the save running');
+      unhold(); hub.hold = null;
+      await page.waitForFunction(() => document.querySelector('dialog.fin-dlg [type=submit]')?.getAttribute('aria-busy') === 'false');
+      assert.deepEqual([await go2.innerText(), await go2.isDisabled()], ['Import', false], tag + ': the preview relabels the button and keeps it');
+      await page.locator('dialog.fin-dlg [data-close]').first().click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      await page.locator('[data-fin-add]').click();
       await page.locator('[data-fin-add-item="journal"]').click();
       const jl = page.locator('dialog.fin-dlg [data-fin-jl] .fin-jl');
       await jl.nth(0).locator('select').selectOption('a-6100');

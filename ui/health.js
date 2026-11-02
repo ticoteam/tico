@@ -290,7 +290,7 @@ async function hlCheckUpdates() {
 
 // Setup check: `tico-setup doctor`'s checks run by the server against its own address, and Health's failing lines
 // (POST /v2/support/setup-check, backend/setup_check.py). It sits beside the Health list, not in it, so the minute's
-// redraw of that list keeps the result on screen; Send to support attaches it to a request (ui/support.js).
+// redraw of that list keeps the result on screen; Send to Tico team attaches it to a message in the Tico team chat (ui/support.js).
 const hlSetupCheckHTML = () => `<section class="card hl-setup" id="hl-setup-check" aria-labelledby="hl-setup-h"><header><h2 id="hl-setup-h">Setup check</h2></header>
   <p class="muted">Runs the installer's checks from here and says how to fix what fails.</p>
   <button class="ghost" type="button" data-hl-setup-check>Setup check</button>
@@ -310,7 +310,7 @@ async function hlSetupCheck(button) {
       <ul class="hl-list">${rows.map(c => `<li class="hl-check ${esc(c.status)}" data-hl-setup-row="${esc(c.status)}"><span class="nav-icon hl-icon" aria-hidden="true">${HL_ICONS[c.status] || HL_ICONS.unknown}</span>
         <div class="hl-main"><strong>${esc(c.name)}</strong><p>${esc(c.detail)}</p>${c.status !== 'ok' && c.fix ? `<p class="hl-setup-fix">Fix: ${esc(c.fix)}</p>` : ''}</div></li>`).join('')}</ul>
       <p class="muted">${esc(r.doctor_only || '')}</p>
-      ${window.supportOn?.() && window.talkToUs ? '<button class="ghost" type="button" data-hl-setup-send>Send to support</button>' : ''}`;
+      ${window.supportOn?.() && window.talkToUs ? '<button class="ghost" type="button" data-hl-setup-send>Send to Tico team</button>' : ''}`;
     host.querySelector('[data-hl-setup-send]')?.addEventListener('click', () => window.talkToUs({kind: 'setup_check', title: head, checks: rows,
       group: 'setup_check:' + rows.filter(c => c.status === 'bad').map(c => c.name).join(',')}));
   } catch (e) {
