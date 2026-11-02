@@ -734,7 +734,7 @@ def create_app(settings=None):
                 # The recorder's speech-to-text clip (backend/recorder_relay.py): up to 25 MB, from a person.
                 recorder_audio = (request.url.path == "/api/v2/recorder/audio/transcriptions"
                                   and request.state.identity.role in ("human", "owner"))
-                limit = (26_214_400 if recorder_audio else 1024 * 1024 if request.url.path == "/api/v2/team/icon" else settings.upload_max_bytes if media_raw else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) or request.url.path == "/api/v2/task-questions" else MAX_REPORT_BYTES if memory_report else 27_000_000 if published else 12_000_000 if captured else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
+                limit = (26_214_400 if recorder_audio else 1024 * 1024 if request.url.path == "/api/v2/team/icon" else 2 * 1024 * 1024 if request.url.path == "/api/v2/company-page/logo" else settings.upload_max_bytes if media_raw else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) or request.url.path == "/api/v2/task-questions" else MAX_REPORT_BYTES if memory_report else 27_000_000 if published else 12_000_000 if captured else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
                          else 2_000_000)
                 if int(size) > limit:
                     raise Problem("too_large", f"Upload exceeds the file limit of {settings.upload_max_bytes} bytes" if streamed else "Request exceeds the upload limit", 413)
@@ -3478,12 +3478,17 @@ def create_app(settings=None):
     def batch_commit(request: Request, bid: str, body: M.Empty):
         who = request.state.identity
         views.human_only(who)
+        boards = []
         def work(c):
-            out = batch.commit(c, auth, who, bid, batch_send)
+            out = batch.commit(c, auth, who, bid, batch_send, boards)
             rows, notes, _ = batch.candidates(c, who.actor, views.needs_items(c, auth, who, task_view))
             line = batch.lineup(c, who.actor, notes + rows)
             return {**out, "lineup": line, "up_next": batch.up_next(line, out["scope"])}
-        return mutate(request, body, work)
+        result = mutate(request, body, work)
+        from .company_page import editions
+        for board in boards:
+            editions.release_board(store, board)                 # after the commit, as the decide route does
+        return result
 
     @app.post("/api/v2/batch/{bid}/abandon")
     def batch_abandon(request: Request, bid: str, body: M.Empty):
@@ -5356,6 +5361,10 @@ def create_app(settings=None):
             if body.task_id:
                 auth.task(c, who, body.task_id)
             to = None
+            from .company_page import editions
+            if editions.own_click_approval(body.payload):
+                # Only the Company page's own routes ask for these: nobody words what an outside edition approves.
+                raise Problem("forbidden", "Ask for this from the Company page", 403)
             if body.kind in proposals.KINDS:     # a redesign proposal: checked now, decided by the top of the org
                 proposals.check(c, body.kind, body.payload)
                 to = proposals.decider(c)
@@ -5384,21 +5393,34 @@ def create_app(settings=None):
     @app.post("/api/v2/approvals/{aid}")
     def decide(request: Request, aid: str, body: M.ApprovalDecision):
         who = request.state.identity
+        boards = []
         def work(c):
             row = auth.approval(c, who, aid, decide=True)
             if row["kind"] == "support":
                 # Sending off the install is a person's own tap: not their token or the Assistant (which may have drafted it).
                 from .support import require_person
                 require_person(who)
+            from .company_page import editions
+            own_click = editions.own_click_approval(row.get("payload"))
+            if own_click:
+                editions.require_own_click(who)      # what goes outside the company: never a token or the Assistant
             privacy.require_payload(c, who, row)
             decided = H.approval_decide(c, who.actor, aid, body.decision, body.note)
+            if own_click:
+                board = editions.approval_decided(c, decided)
+                if board:
+                    boards.append(board)
             if row["kind"] in proposals.KINDS and body.decision == "approved":
                 proposals.apply(c, auth, settings, who, row)     # the hub applies it itself (CONTRACT §5)
             if row["kind"] in ("finance", "spend"):
                 from .finance import actions as finance
                 finance.approval_decided(c, aid)                 # Finance acts on it in the same transaction
             return decided
-        return mutate(request, body, work)
+        result = mutate(request, body, work)
+        from .company_page import editions
+        for board in boards:
+            editions.release_board(store, board)                 # after the commit: the rebuild takes its own transaction
+        return result
 
     @app.post("/api/v2/approvals/{aid}/undo")
     def undo_decision(request: Request, aid: str, body: M.Empty):
@@ -5418,6 +5440,9 @@ def create_app(settings=None):
             row = auth.approval(c, who, aid)
             if row["requested_by"] != who.actor or row["payload_hash"] != body.payload_hash:
                 raise Problem("approval", "Consume requires the requester and exact approved payload", 403)
+            from .company_page import editions
+            if editions.own_click_approval(row.get("payload")):
+                raise Problem("approval", "The Company page spends this approval when it publishes", 403)
             return H.approval_consume(c, who.actor, aid)
         return mutate(request, body, work)
 
@@ -7828,6 +7853,8 @@ def create_app(settings=None):
     install_internal(app, store, auth, mutate, mover)
     from .public_roadmaps import install as install_public_roadmaps
     install_public_roadmaps(app, store, auth, mutate)
+    from .company_page import api as company_page_api
+    company_page_api.register(app, store, auth, mutate, settings)
     from .service_keys import install_service_keys
     install_service_keys(app, store, auth, mutate)
     install_views(app, store, auth, mutate, task_view)
@@ -7942,6 +7969,10 @@ def create_app(settings=None):
     screening.install(app, store, auth, mutate)    # prompt-injection screening at webhooks, mail, ideas and watchers
     from . import finance_routes
     finance_routes.install(app, store, auth, mutate)    # Finance: budgets, P&L, expenses, actions (backend/finance)
+    from .company_page import api_readers
+    api_readers.register(app, store, auth, mutate)      # Company page readers, invites and messages, for owners and admins
+    from .company_page import api_editions
+    api_editions.register(app, store, auth, mutate)     # the Company page's editions and their approvals
     from . import bills_address
     bills_address.install(app, store, auth)             # the bills address: emailed bills become draft bills
     outcome_stats.install(app, store, auth)
@@ -8145,4 +8176,6 @@ def create_app(settings=None):
         demo.install(app, auth, settings)
     from . import cors
     cors.install(app, settings)          # last, so it is outermost: a preflight is answered before sign-in
+    from .company_page import reader_app
+    reader_app.install(app, store, auth, settings)      # outside even that: the reader origin never reaches anything above
     return app

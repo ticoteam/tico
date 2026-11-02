@@ -36,6 +36,10 @@ from .store import H, Problem
 LIMITS = {"owner": (5000, 20.0), "human": (500, 5.0), "bot": (500, 5.0)}
 # Readable as they are, by everyone: nothing personal, nothing secret, plus the schema.
 OPEN = {"cloud_migrations", "rate_limits", "service_health", "learnings", "sqlite_master"}
+# The Company page's tables the owner reads as the page's API does; the readers' own tables are not here at all.
+COMPANY_PAGE_OWNER_TABLES = ("company_page_settings", "audiences", "audience_sources", "disclosure_revisions",
+                             "disclosure_rules", "editions", "edition_sources", "edition_checks", "page_stats",
+                             "stat_board_approvals", "page_releases")
 # Table-valued functions SQLite reports like tables of the main schema.
 TABLE_FUNCTIONS = {"json_each", "json_tree"}
 SAFE_COLUMNS = {"slack_posts": {"message_id", "bot", "state", "attempts", "next_attempt",
@@ -440,6 +444,10 @@ def guarded(c, auth, who, inner, function, columns=None):
         "mail_mailboxes": "1" if owner else "0",
         "mail_messages": "1" if owner else "0",
         "mail_fts": "1" if owner else "0",
+        # The Company page's own rules, drafts, stats and approvals: the owner's, as the page's API shows them. The
+        # readers' tables (who they are, their sessions and invites, what they wrote, what they read) are not listed, so
+        # they are denied to everyone, the owner included.
+        **{table: "1" if owner else "0" for table in COMPANY_PAGE_OWNER_TABLES},
         "slack_posts": by_message if owner else "message_id IS NULL",
         # Which history rows are settled (backend/read_deps.py): read by the message and run gates, by no caller.
         "read_index": "key IS NULL",

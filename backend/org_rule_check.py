@@ -382,6 +382,66 @@ def preflight(store, primary, who, operation, output, recipients=(), context=Non
         return None
 
 
+def outside_edition(store, primary, output, to=""):
+    """A Company page edition against the rules whose Who is Outside editions. Not `preflight`: that one skips a person's
+    writes and fails open, and an edition goes outside the company whoever wrote it. Here anything short of the judge
+    finding the whole text clean (a broken rule of any strength, checks Off, no engine, the budget, the day's cap, a
+    failed or malformed answer) is `held`. Runs outside any transaction. Returns {"outcome": "pass"|"held", "reason",
+    "broken", "rules"}; events and the answer never carry the text."""
+    rules = []
+
+    def result(outcome, reason=None, broken=()):
+        return {"outcome": outcome, "reason": reason, "broken": list(broken),
+                "rules": [{"id": r["id"], "version": r["version"], "text": r["text"]} for r in rules]}
+    try:
+        with store.read() as c:
+            rules = _rule_rows(R.outside_edition_rules(c))
+            if not rules:
+                return result("pass", "no_rules")
+            if not on(c):
+                return result("held", "checks_off")
+            if len(rules) > J.MAX_QUESTIONS:
+                return result("held", "too_many_rules")
+            level = store.settings.rule_check_level or "medium"
+            qset = J.load_set(QUESTION_SET)
+            key = digest("outside_edition", "", [to], output, "", rules, qset["label"], level)
+            hit = c.execute("SELECT broken_json FROM org_rule_verdicts WHERE digest=?", (key,)).fetchone()
+            if hit:
+                broken, _ = _cached(hit[0])
+                return result("held", "broken", broken) if broken else result("pass")
+            questions = _questions(qset, rules)
+            state = {"rules": [{"id": f"r{n}", "text": r["text"]} for n, r in enumerate(rules, 1)],
+                     "operation": "an edition sent outside the company", "output": output, "from": "the company",
+                     "to": [to] if to else [], "context": {}}
+            if len(json.dumps(state, default=str)) > J.MAX_STATE_CHARS:
+                return result("held", "too_large")
+            engine = B.server_engine(store, c, primary, BUDGET)
+            if engine is None:
+                return result("held", "budget" if B.over_spend_cap(c, store.settings, None, BUDGET) else "no_engine")
+            if calls_today(c) >= B.daily_cap(store.settings, "bot"):
+                return result("held", "day_cap")
+        answer, error = _ask(calls_for(store), engine, state, questions, qset["label"], level)
+        if error:
+            return result("held", error)
+        if not isinstance(answer, dict):
+            return result("held", "shape")
+        answers = J.check_answers(answer.get("answers"), questions)
+        cut = float(qset["thresholds"]["broken"])
+        broken = [rules[int(qid[1:]) - 1]["id"] for qid in questions if J.noul(answers, qid) >= cut]
+        with store.transaction() as c:
+            call = H.event(c, H.KEEPER, "judge.call", qset["label"],
+                           {"label": qset["label"], "questions": len(questions), "operation": "outside_edition",
+                            "level": level, "broken": len(broken), **B.audit_detail(answer)})
+            c.execute("INSERT OR REPLACE INTO org_rule_verdicts(digest, broken_json, call_id, created) VALUES(?,?,?,?)",
+                      (key, json.dumps(broken), call["id"], H.now()))
+        return result("held", "broken", broken) if broken else result("pass")
+    except J.JudgeError:
+        return result("held", "shape")
+    except Exception as exc:  # noqa: BLE001 - whatever went wrong, the edition is held for a person
+        LOG.warning("Edition rule check failed: %s", type(exc).__name__)
+        return result("held", "error")
+
+
 def holds(verdict):
     """Whether a verdict will hold the write (so a caller skips ask ingest's own call: a block skips it)."""
     if not verdict or verdict["outcome"] not in ("broken", "too_large"):
