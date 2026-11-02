@@ -2122,9 +2122,9 @@ def _record(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], p
             tico.needs_you(c, SX.connection_owner(c, cid), f"QuickBooks refused the {RECORD_KINDS[kind][2]} write",
                            sent.error[:300])
     else:
-        delay = WRITE_SCHEDULE.after(attempts)
+        delay = WRITE_SCHEDULE.wait_for(attempts)
         SK.update(c, "fin_outbox", oid, {"attempts": attempts, "claimed_at": None, "last_error": sent.error[:300],
-                                         "next_try_at": M.stamp(now, delay * 1_000_000), "updated_at": now})
+                                         "next_try_at": M.stamp(now, int(delay * 1_000_000)), "updated_at": now})
 
 
 # The creates a provider may already hold when a retry comes: a cut-off call can have landed, and a provider's

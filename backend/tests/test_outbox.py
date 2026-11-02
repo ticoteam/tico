@@ -69,6 +69,9 @@ def test_repeat_last_schedule_never_gives_up_and_keeps_its_last_wait():
     schedule = O.Waits((60, 300), repeat_last=True)
     assert schedule.max_attempts is None
     assert [schedule.after(n) for n in (1, 2, 3, 9)] == [60, 300, 300, 300]
+    assert schedule.wait_for(9) == 300
+    with pytest.raises(ValueError):
+        O.Waits((60,)).wait_for(2)                  # a schedule that gives up has no wait past its last attempt
 
 
 def test_a_row_gives_up_after_its_last_attempt_and_is_never_claimed_again(c):

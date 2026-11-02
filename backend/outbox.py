@@ -22,6 +22,7 @@ import random
 import threading
 from collections import Counter
 from dataclasses import dataclass
+from typing import Any
 
 LOG = logging.getLogger(__name__)
 
@@ -47,15 +48,15 @@ class Waits:
     """Seconds to wait after the 1st, 2nd... failed attempt. With `repeat_last` the last wait repeats and nothing gives
     up; otherwise the attempt after the last wait is the one that gives up. `jitter` spreads each wait by up to that
     fraction either way."""
-    seconds: tuple
+    seconds: tuple[float, ...]
     jitter: float = 0.0
     repeat_last: bool = False
 
     @property
-    def max_attempts(self):
+    def max_attempts(self) -> int | None:
         return None if self.repeat_last else len(self.seconds) + 1
 
-    def after(self, failed, rng=random):
+    def after(self, failed: int, rng: Any = random) -> float | None:
         """Seconds until the next attempt after `failed` failed attempts, or None when none are left."""
         if failed < 1:
             raise ValueError("failed must count at least one attempt")
@@ -67,6 +68,13 @@ class Waits:
             base = self.seconds[failed - 1]
         return base * rng.uniform(1 - self.jitter, 1 + self.jitter) if self.jitter else base
 
+    def wait_for(self, failed: int) -> float:
+        """The wait after `failed` failed attempts, for a schedule that never gives up (`repeat_last`)."""
+        wait = self.after(failed)
+        if wait is None:
+            raise ValueError("this schedule gives up: it has no wait past its last attempt")
+        return wait
+
 
 @dataclass(frozen=True)
 class Doubling:
@@ -76,7 +84,7 @@ class Doubling:
     cap: float
     steps: int = 8
 
-    def after(self, failed, rng=random):
+    def after(self, failed: int, rng: Any = random) -> float:
         return min(self.cap, self.first * 2 ** min(failed, self.steps))
 
 

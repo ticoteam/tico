@@ -642,7 +642,7 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
         final, why = True, f"{why}; it may have gone through: check Mercury before trying again"
     SK.update(c, "fin_outbox", str(o["id"]), {
         "status": "failed" if final else "pending", "attempts": attempts, "last_error": why, "claimed_at": None,
-        "next_try_at": None if final else _after(now, WRITE_SCHEDULE.after(attempts)), "updated_at": now})
+        "next_try_at": None if final else _after(now, WRITE_SCHEDULE.wait_for(attempts)), "updated_at": now})
     if op == "transfer_create" and final:
         transfers.not_sent(load(c, now), body, why, unknown=answer.status is None or answer.status >= 500,
                            started=now)
