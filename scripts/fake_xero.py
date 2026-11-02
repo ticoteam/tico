@@ -9,7 +9,8 @@ refuses it.
 Control endpoints under /_fake/ are not Xero's:
   POST /_fake/seed     {"Accounts": [...], "Contacts": [...], ...} adds rows
   POST /_fake/change   the same shape: a row with an existing id replaces that row; the change time is now
-  POST /_fake/expire   the next call is refused with 401 once (the token has expired)
+  POST /_fake/expire   the next call is refused with 401 once (the token has expired); {"writes_only": true} makes the
+                       next write (PUT or POST) the one refused, so a background read cannot use up the 401
   POST /_fake/throttle {"times": n} the next n calls are refused with 429 and Retry-After: 1
   POST /_fake/lose     {"times": n} the next n writes (PUT or POST) are applied, then the connection closes with no
                        answer, as when a reply is lost on the way back to the install
@@ -232,6 +233,19 @@ def listing(endpoint: str, query: dict[str, str], since: int | None) -> tuple[in
         rows = [r for r in rows if r.get("ContactStatus") != "ARCHIVED"]
     if since is not None:
         rows = [r for r in rows if (ms_of(r.get("UpdatedDateUTC")) or 0) > since]
+    if endpoint == "Invoices":
+        # Xero computes these on every invoice (the Invoice schema marks both readOnly): AmountPaid is the authorised
+        # payments on it, AmountDue what is left of its Total; a voided or deleted invoice owes nothing.
+        paid: dict[str, Decimal] = {}
+        for pay in STATE["books"]["Payments"]:  # type: ignore[index,union-attr]
+            if pay.get("Status") == "AUTHORISED":
+                key = str((pay.get("Invoice") or {}).get("InvoiceID"))
+                paid[key] = paid.get(key, Decimal(0)) + Decimal(str(pay.get("Amount") or 0))
+        for row in rows:
+            got = paid.get(str(row.get("InvoiceID")), Decimal(0))
+            row["AmountPaid"] = got
+            row["AmountDue"] = (Decimal(0) if row.get("Status") in ("VOIDED", "DELETED")
+                                else Decimal(str(row.get("Total") or 0)) - got)
     order = query.get("order", "")
     if order:
         rows.sort(key=lambda r: ms_of(r.get("UpdatedDateUTC")) or 0, reverse=order.endswith("DESC"))
@@ -286,7 +300,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(401, {"Message": "Unauthorized"})
             if self.headers.get("xero-tenant-id") != TENANT[0]:
                 return self._send(403, {"Message": "Forbidden: unknown tenant"})
-            if STATE["expire"]:
+            if STATE["expire"] and (not STATE.get("expire_writes") or method != "GET"):
                 STATE["expire"] = False
                 return self._send(401, {"Message": "token expired"})
             if STATE["throttle"]:
@@ -318,6 +332,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True})
         if path == "/_fake/expire":
             STATE["expire"] = True
+            STATE["expire_writes"] = bool(body.get("writes_only"))
             return self._send(200, {"ok": True})
         if path == "/_fake/throttle":
             STATE["throttle"] = int(body.get("times") or 0)

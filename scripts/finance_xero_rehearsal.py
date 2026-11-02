@@ -44,6 +44,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 import urllib.request
 from decimal import Decimal
 from pathlib import Path
@@ -61,8 +62,14 @@ ENDPOINT_PATH = {"Accounts": "Accounts", "Contacts": "Contacts", "Items": "Items
 TOKEN = "rehearsal-token-not-a-secret"
 MONTH_SEPT, MONTH_OCT, MONTH_NOV = "2026-09", "2026-10", "2026-11"
 WINDOW = ("2026-09-01", "2026-11-30")          # the P&L window every check reads: Sept (closed), Oct, Nov (open)
-BALANCE_DAY = "2026-11-01"                     # the balance sheet as of today
 TODAY = "2026-11-01"
+
+
+def as_of_day() -> str:
+    """The balance sheet's as-of day: today on the clock Tico posts by (a sync entry's day is the UTC day of its pass, see
+    context.py Ctx.today), and never before the rehearsal's own dates. A reversal made after midnight UTC is dated the new
+    day, so a constant would leave it out of the balance sheet."""
+    return max(TODAY, dt.datetime.now(dt.timezone.utc).date().isoformat())
 BAL_MONTHS = (MONTH_SEPT, MONTH_OCT, MONTH_NOV)
 
 
@@ -356,6 +363,7 @@ class XeroRehearsal:
         self.link: Any = None
         self.pre: dict[str, list[dict[str, Any]]] = {}
         self.notes: dict[str, Any] = {}
+        self.edit_t = 0.0                                           # when the polled edits were made (unix seconds)
 
     # -- the fake Xero, started and stopped by PID
     def start_fake(self) -> None:
@@ -527,7 +535,7 @@ class XeroRehearsal:
         return {m: (int(income[i]), int(expense[i])) for i, m in enumerate(months)}
 
     def balances(self) -> tuple[int, int, int]:
-        bs = self.get(f"/finance/balance-sheet?as_of={BALANCE_DAY}")
+        bs = self.get(f"/finance/balance-sheet?as_of={as_of_day()}")
 
         def named(rows: list[dict[str, Any]], name: str) -> int:
             return sum(int(r["balance"]) for r in rows if r.get("name") == name)
@@ -652,6 +660,7 @@ class XeroRehearsal:
         calls_before = len(self.fake_calls())
         receipt = next(r for r in self.pre["Payments"] if r["PaymentType"] == "ACCRECPAYMENT"
                        and r["DateString"][:7] == MONTH_SEPT)
+        self.edit_t = time.time()
         self.edit("Payments", receipt["PaymentID"], lambda r: r.update({"Status": "DELETED"}))
         # Xero reopens an invoice whose receipt is deleted; the invoice row moves too.
         self.edit("Invoices", receipt["Invoice"]["InvoiceID"],
@@ -663,8 +672,12 @@ class XeroRehearsal:
         done = self.settle(lambda: self.pnl_months() == want and self.balances() == want_bs, 720)
         polled = [c for c in self.fake_calls()[calls_before:] if c["method"] == "GET"
                   and c["path"].rsplit("/", 1)[-1] in ("Payments", "ManualJournals") and c["if_modified_since"]]
+        bs_got = self.balances()
         res.check("the change feed (modified-since) brings the polled payment delete and journal void, with no webhook",
-                  done and len(polled) >= 2, f"modified-since reads of those lists: {len(polled)}")
+                  done and len(polled) >= 2,
+                  f"modified-since reads of those lists: {len(polled)}; balances want={want_bs} got={bs_got}; "
+                  f"pnl want={ {m: fmt(want[m]) for m in BAL_MONTHS} } got={ {m: fmt(self.pnl_months()[m]) for m in BAL_MONTHS} }; "
+                  f"{self.diag(self.poll_diag, receipt, calls_before)}")
         self.notes["polled_settled"] = done
 
         # Webhook changes: invoice and bill edits, a void and a delete, each relayed as a Xero event.
@@ -694,7 +707,7 @@ class XeroRehearsal:
         got = self.pnl_months()
         res.check("the provider's edits, voids and deletes land: Sept frozen, Oct and Nov as the spec says, balance sheet today",
                   done, f"want={ {m: fmt(want[m]) for m in BAL_MONTHS} } got={ {m: fmt(got[m]) for m in BAL_MONTHS} } "
-                        f"bs want={want_bs} got={self.balances()}")
+                        f"bs want={want_bs} got={self.balances()}; {self.diag(self.ap_diag, rows)}")
         res.check("September itself stays as it closed (the frozen month)", got[MONTH_SEPT] == expect_pre[MONTH_SEPT],
                   f"sept now {fmt(got[MONTH_SEPT])}, at close {fmt(expect_pre[MONTH_SEPT])}")
         # the close snapshot's marker shows on a closed month's P&L read (the close checklist does not carry it)
@@ -750,7 +763,8 @@ class XeroRehearsal:
         res.check("a journal from Tico is queued", status == 200 and body.get("status") != "failed", str(body)[:160])
         self.wait_settled()
         res.check("the journal is confirmed in the provider with the same amounts and accounts (Rent 424 and Checking)",
-                  self.fake_journal("Tico journal", [("acc-exp-rent", 10000), ("acc-bank", -10000)]))
+                  self.fake_journal("Tico journal", [("acc-exp-rent", 10000), ("acc-bank", -10000)]),
+                  self.diag(self.journal_diag, "Tico journal", [("acc-exp-rent", 10000), ("acc-bank", -10000)]))
         # A lost reply: the write lands at the provider, its answer does not reach the install, the retry must not add a copy.
         self.fake_post("/_fake/lose", {"times": 1})
         status, body = self.act("bill_create", {"vendor_id": vendor, "number": "T-BILL-2", "bill_date": TODAY,
@@ -764,7 +778,8 @@ class XeroRehearsal:
         self.notes["lost_reply_writes"] = self.fake_count("Invoices", "InvoiceNumber", "T-BILL-2")
         # An expired token: the provider refuses once with 401, the install asks HQ for a new token and tries again.
         refreshes = self.hq.refreshes
-        self.fake_post("/_fake/expire", {})
+        calls_mark = len(self.fake_calls())
+        self.fake_post("/_fake/expire", {"writes_only": True})     # the next write is refused, not a background read
         status, body = self.act("journal", {"date": TODAY, "memo": "Tico journal after expiry", "source": "manual",
                                             "lines": [{"account_id": rent, "amount": 2000},
                                                       {"account_id": bank, "amount": -2000}]})
@@ -772,7 +787,9 @@ class XeroRehearsal:
         res.check("a 401 from the provider refreshes the token through HQ, then the write goes through",
                   self.hq.refreshes > refreshes and self.fake_journal("Tico journal after expiry",
                                                                        [("acc-exp-rent", 2000), ("acc-bank", -2000)]),
-                  f"refreshes {refreshes} -> {self.hq.refreshes}")
+                  f"refreshes {refreshes} -> {self.hq.refreshes}; action {body.get('status')}; the fake's calls after "
+                  f"the expiry (method, last path part): {self.calls_since(calls_mark)}; "
+                  f"{self.diag(self.journal_diag, 'Tico journal after expiry', [('acc-exp-rent', 2000), ('acc-bank', -2000)])}")
 
     def step_refusals(self) -> None:
         from backend.finance import mirror
@@ -790,7 +807,8 @@ class XeroRehearsal:
                 continue
             status, body = self.act(kind, REFUSAL_PAYLOADS.get(kind, {}))
             reason = str(body.get("reason") or "")
-            ok = body.get("status") == "failed" and body.get("code") == NOT_AVAILABLE and "mirror mode" in reason
+            # A kind the mirror does not take is denied (actions.py DENIAL_CODES: not_available), not failed.
+            ok = body.get("status") == "denied" and body.get("code") == NOT_AVAILABLE and "mirror mode" in reason
             clear = clear and ok
             seen.append(f"{kind}: {body.get('status')} {body.get('code')} {reason[:110]}")
         res.check("every kind §10 keeps provider-only is refused with the mirror-mode reason", clear, "; ".join(seen))
@@ -873,6 +891,7 @@ class XeroRehearsal:
         res.step = "7 disconnect"
         self.wait_settled()
         before = self.pnl_months(), self.balances()
+        before_lines = self.bs_lines()
         writes_before = len(self.fake_writes())
         status, body = http("POST", self.base + f"/finance/books/{self.cid}/disconnect", {}, token=self.token)
         via = "HTTP"
@@ -910,9 +929,16 @@ class XeroRehearsal:
         want = months_of(rows, MONTH_SEPT, self.pre)
         want_bs = balances_of(rows)
         got = self.pnl_months()
+        after_lines = self.bs_lines()
+        moved = {k: (before_lines.get(k), after_lines.get(k)) for k in sorted(set(before_lines) | set(after_lines))
+                 if before_lines.get(k) != after_lines.get(k)}
         res.check("after reconnect the books equal the provider's rows (every month and the balance sheet)",
                   got == want and self.balances() == want_bs, f"got={ {m: fmt(got[m]) for m in BAL_MONTHS} } "
-                                                             f"want={ {m: fmt(want[m]) for m in BAL_MONTHS} }")
+                                                             f"want={ {m: fmt(want[m]) for m in BAL_MONTHS} } "
+                                                             f"bs want={want_bs} got={self.balances()}; "
+                                                             f"balance-sheet lines that moved (before disconnect, after reconnect; "
+                                                             f"{len(before_lines)} lines before, {len(after_lines)} after): "
+                                                             f"{moved}; {self.diag(self.ap_diag, rows)}")
 
     # -- helpers for the steps
     def kinds(self) -> list[str]:
@@ -971,11 +997,98 @@ class XeroRehearsal:
                    and p.get("Account", {}).get("AccountID") == BANK)
 
     def fake_journal(self, narration: str, lines: list[tuple[str, int]]) -> bool:
+        """A journal Tico wrote: its narration is the memo and then the Tico reference (see core/xero.py marked())."""
         for jrn in self.fake_rows()["ManualJournals"]:
-            if jrn.get("Narration") == narration:
+            if str(jrn.get("Narration") or "").startswith(narration):
                 got = sorted((line["AccountID"], cents(line["LineAmount"])) for line in jrn["JournalLines"])
                 return got == sorted(lines)
         return False
+
+    def journal_diag(self, narration: str, lines: list[tuple[str, int]]) -> str:
+        """The journal the check looks for, as the provider holds it: its narration and its lines (want and got)."""
+        got = [(str(j.get("Narration")), [(str(x.get("AccountID")), str(x.get("LineAmount"))) for x in j.get("JournalLines", [])])
+               for j in self.fake_rows()["ManualJournals"] if narration in str(j.get("Narration") or "")]
+        return f"want lines {lines}; provider journals with '{narration}' in the narration: {got}"
+
+    def diag(self, fn: Callable[..., str], *args: Any) -> str:
+        """A diagnostic for a check's detail. Its own failure is written out, and never ends the step."""
+        try:
+            return fn(*args)
+        except Exception as exc:
+            return f"diagnostic failed: {type(exc).__name__}: {str(exc)[:200]}"
+
+    def bs_lines(self) -> dict[str, int]:
+        """Every balance-sheet line as the books show it today: 'section: name' to its balance."""
+        bs = self.get(f"/finance/balance-sheet?as_of={as_of_day()}")
+        return {f"{section}: {r.get('name')}": int(r.get("balance", 0)) for section in ("assets", "liabilities", "equity")
+                for r in bs.get(section, [])}
+
+    def calls_since(self, mark: int) -> list[tuple[str, str]]:
+        """The first calls the fake took after a mark (method, last path part): a refused one is the first."""
+        return [(c["method"], str(c["path"]).rsplit("/", 1)[-1]) for c in self.fake_calls()[mark:]][:8]
+
+    def poll_diag(self, receipt: dict[str, Any], calls_before: int) -> str:
+        """What the change feed did with the polled payment delete: each modified-since read the install made, replayed
+        against the fake with its own header (does the receipt come back in it?), and the receipt as the fake holds it."""
+        rcpt = str(receipt["PaymentID"])
+        reads: list[str] = []
+        for call in self.fake_calls()[calls_before:]:
+            name = str(call["path"]).rsplit("/", 1)[-1]
+            if call["method"] != "GET" or name not in ("Payments", "ManualJournals") or not call["if_modified_since"]:
+                continue
+            head = {"Authorization": "Bearer " + TOKEN, "xero-tenant-id": XERO_TENANT, "If-Modified-Since": call["if_modified_since"]}
+            url = f"http://127.0.0.1:{FAKE_PORT}{call['path']}?{urllib.parse.urlencode(call['query'])}"
+            with NO_PROXY.open(urllib.request.Request(url, headers=head), timeout=30) as reply:
+                listed = json.loads(reply.read() or b"{}").get(name, [])
+            ids = [str(r.get(self.id_key(name))) for r in listed]
+            reads.append(f"{name} page={call['query'].get('page')} if-modified-since={call['if_modified_since']} "
+                         f"rows={len(ids)} receipt_in_rows={rcpt in ids}")
+        at_fake = self.fake_row("Payments", rcpt)
+        return (f"receipt {rcpt} at the fake: Status={at_fake.get('Status')} UpdatedDateUTC={at_fake.get('UpdatedDateUTC')}; "
+                f"edit at unix {self.edit_t:.1f}; polled reads: {reads}")
+
+    def docs_with(self, node: object, field: str) -> list[dict[str, Any]]:
+        """Every dict under `node` that holds `field` (a list page holds its documents as dicts)."""
+        if isinstance(node, dict):
+            found = [node] if field in node else []
+            for child in node.values():
+                found += self.docs_with(child, field)
+            return found
+        if isinstance(node, list):
+            return [d for child in node for d in self.docs_with(child, field)]
+        return []
+
+    def ap_diag(self, rows: dict[str, list[dict[str, Any]]]) -> str:
+        """Payables and receivables as the balance sheet names them (every line with 'payable' or 'receivable' in its name, with
+        its balance), then Tico's bills and invoices against the provider's, document by document, where the open amounts
+        differ. Tico's open is the list row's `remaining` (total less paid and written off), and a draft or void owes nothing
+        at the provider; the provider's open is AmountDue on an AUTHORISED document. The detail says how many documents each
+        side read, so a short read cannot pass for a match.
+        Read through the public routes and the fake's own rows only; no store reads from a script (scripts/finance_lint.py)."""
+        lines = {k: v for k, v in self.bs_lines().items() if "payable" in k.lower() or "receivable" in k.lower()}
+        tico: dict[str, tuple[str, int, int]] = {}
+        for path in ("/finance/bills?limit=200", "/finance/invoices?limit=200"):
+            for doc in self.docs_with(self.get(path), "number"):
+                tico[str(doc["number"])] = (str(doc.get("status")), int(doc.get("total") or 0),
+                                            int(doc.get("remaining") or 0))
+        prov: dict[str, tuple[str, int, int]] = {}
+        for doc in rows["Invoices"]:
+            if doc.get("Type") not in ("ACCPAY", "ACCREC"):
+                continue
+            status = str(doc.get("Status"))
+            prov[str(doc.get("InvoiceNumber"))] = (status, cents(doc.get("Total")),
+                                                   cents(doc.get("AmountDue")) if status == "AUTHORISED" else 0)
+        diffs: list[str] = []
+        for number in sorted(set(tico) | set(prov)):
+            t, p = tico.get(number), prov.get(number)
+            t_open = 0 if t is None or t[0] in ("draft", "void") else t[2]
+            p_open = 0 if p is None else p[2]
+            if t_open != p_open:
+                diffs.append(f"{number}: tico[{t[0] if t else '-'} total={t[1] if t else '-'} open={t_open}] "
+                             f"provider[{p[0] if p else '-'} total={p[1] if p else '-'} open={p_open}]")
+        return (f"payable and receivable lines on the balance sheet (name: balance): {lines}; documents read: tico "
+                f"{len(tico)}, provider {len(prov)}; documents whose open amount differs (tico vs provider): "
+                f"{diffs or 'none'}")
 
     def wait_settled(self) -> None:
         self.settle(self.writes_settled, 240)
