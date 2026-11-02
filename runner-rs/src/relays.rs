@@ -148,8 +148,9 @@ pub fn poll(runner: &Arc<Runner>) {
                         tools.lock().unwrap().want(&runtimes, &default);
                     }
                 }
-                let active = me.active.lock().unwrap().clone();
-                let busy = crate::harness_tools::busy(&active);
+                // Read at the moment of a switch, not here: a turn can start while `tick` waits on the server.
+                let turns = me.clone();
+                let busy = move || crate::harness_tools::busy(&turns.active.lock().unwrap().clone());
                 let ask = wants(&me, "harness", crate::harness_tools::POLL_S);
                 harness.relay.get_or_insert_with(crate::harness_tools::Relay::new).tick(&tools, &me.client, busy, ask).await
             }

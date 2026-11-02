@@ -1,6 +1,7 @@
-/* ui/app/growth-learning.js — Growth › Learning (#/growth/learning, growth spec §4.5): per bet, its ideas as a
-   tree (each follow-up under the idea it follows, coloured by verdict) and the bet's evidence tally from
-   GET /api/v2/growth/evidence; Log is every verdict, newest first.
+/* ui/app/growth-learning.js — Growth › Learning (#/growth/learning, the brain icon in Growth's head; growth spec §4.5):
+   per bet, its ideas as a tree (each follow-up under the idea it follows, coloured by verdict) and the bet's evidence
+   tally from GET /api/v2/growth/evidence; Log is every verdict, newest first. Below either, the go-to-market's
+   published versions with their notes (GET /api/v2/gtm), each opening read-only.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -9,13 +10,13 @@ function pageGrowthLearning(state) {
   void glRead(state);
 }
 async function glRead(state) {
-  let ideas, ev, refs;
+  let ideas, ev, refs, gtm;
   try {
-    [ideas, ev, refs] = await Promise.all([get('/v2/growth/ideas', {fresh: true}).then(r => r.ideas || []),
-      get('/v2/growth/evidence', {fresh: true}).then(r => r.bets || []).catch(() => []), grRefs()]);
+    [ideas, ev, refs, gtm] = await Promise.all([get('/v2/growth/ideas', {fresh: true}).then(r => r.ideas || []),
+      get('/v2/growth/evidence', {fresh: true}).then(r => r.bets || []).catch(() => []), grRefs(), get('/v2/gtm', {fresh: true}).catch(() => null)]);
   } catch (e) { if (GR === state) $('#gr-body').innerHTML = grFail(e); return; }
   if (GR !== state) return;
-  state.data = {ideas, ev, ...refs};
+  state.data = {ideas, ev, gtm, ...refs};
   glDraw(state);
 }
 const glTally = t => {
@@ -40,10 +41,11 @@ function glDraw(state) {
   if (state.view === 'log') {
     const done = d.ideas.filter(i => i.verdict_at || GR_RESULTS.includes(i.status)).sort((a, b) => String(b.verdict_at || '').localeCompare(String(a.verdict_at || '')));
     const betOf = id => d.bets.find(b => b.id === id);
-    html = done.length ? `<div class="card gr-scroll"><table class="gr-t gl-log"><thead><tr><th scope="col">Date</th><th scope="col">Idea</th><th scope="col">Verdict</th>
-      <th scope="col">Result</th><th scope="col">Learning</th><th scope="col">Bet</th></tr></thead><tbody>${done.map(i => `<tr><td>${esc(grDay(i.verdict_at))}</td>
-      <th scope="row"><a href="${grTaskHref(i.task_id)}">${esc(i.title)}</a></th><td>${grStatus(i.status)}</td><td>${esc(i.result || '')}</td><td>${esc(i.learning || '')}</td>
-      <td>${betOf(i.bet_id) ? esc(`${betOf(i.bet_id).n}${i.bet_effect && i.bet_effect !== 'none' ? ' · ' + (i.bet_effect === 'supports' ? 'Supports' : 'Weakens') : ''}`) : ''}</td></tr>`).join('')}</tbody></table></div>` : '';
+    html = done.length ? `<section class="card gr-sec gl-log">${done.map(i => {
+      const bet = betOf(i.bet_id), effect = i.bet_effect && i.bet_effect !== 'none' ? (i.bet_effect === 'supports' ? 'Supports' : 'Weakens') : '';
+      return `<a class="gr-row" href="${grTaskHref(i.task_id)}"><span class="gr-row-t">${esc(i.title)}</span>${grStatus(i.status)}<span class="muted gr-num">${esc(grDay(i.verdict_at))}</span>
+        ${i.result || i.learning || bet ? `<span class="gr-row-l">${esc([i.result, i.learning, bet ? [`Bet ${bet.n}`, effect].filter(Boolean).join(' · ') : ''].filter(Boolean).join(' · '))}</span>` : ''}</a>`;
+    }).join('')}</section>` : '';
   } else {
     const ids = new Set(d.ideas.map(i => i.task_id)), kids = new Map();
     for (const i of d.ideas) if (i.follow_up_of && ids.has(i.follow_up_of)) { if (!kids.has(i.follow_up_of)) kids.set(i.follow_up_of, []); kids.get(i.follow_up_of).push(i); }
@@ -57,7 +59,11 @@ function glDraw(state) {
         ${mine.length ? `<ul class="gl-tree">${mine.map(i => glNode(i, kids, d)).join('')}</ul>` : ''}</section>`;
     }).join('');
   }
-  body.innerHTML = grTools(tools) + `<div class="gl-body">${html}</div>`;
+  const vers = (d.gtm?.versions || []).slice().sort((a, b) => b.n - a.n);
+  const gtm = vers.length ? `<section class="card gr-sec gl-vers" aria-label="Go-to-market versions"><h3 class="gr-k">Go-to-market versions</h3><ul class="gr-vers">${vers.map(x =>
+    `<li><button type="button" class="gr-ver" data-gtm-ver="${esc(x.n)}"><b>v${esc(x.n)}</b><span>${esc(x.note || '')}</span><span class="muted">${esc(grWho(x.published_by))} · ${esc(grDay(x.published_at))}</span></button></li>`).join('')}</ul></section>` : '';
+  body.innerHTML = grTools(tools) + `<div class="gl-body">${html}${gtm}</div>`;
+  body.querySelectorAll('[data-gtm-ver]').forEach(b => { b.onclick = () => void grDocVersions('/v2/gtm', d.gtm, gtmBookHtml, b.dataset.gtmVer); });
   body.querySelector('[data-gr-seg="gl"]').onclick = ev => {
     const b = ev.target.closest('button[data-v]'); if (!b || b.dataset.v === state.view) return;
     state.view = b.dataset.v;

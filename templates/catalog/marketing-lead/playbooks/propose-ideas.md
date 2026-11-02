@@ -10,7 +10,8 @@ Nothing is started here; the weekly meeting starts tests.
 ## 1. Read the position
 
     hub strategy show              bets, what we will not do, goals_by_bet
-    hub gtm show                   motion, buyer, channels working now, wishes
+    hub gtm show                   motion, buyer, channels working now
+    hub rules list --mine          the rules that apply to you: spend limits, standing instructions
     hub brand summary              positioning and voice, for the wording
     hub growth economics           CAC, LTV and payback by channel, and the Unknown row
     hub growth evidence            each bet: supports, weakens, none

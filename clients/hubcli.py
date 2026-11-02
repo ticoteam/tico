@@ -154,6 +154,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub goal show <id>                     the goal, its KPIs (target, colour), tasks, check-ins, history
     hub goal read-back '[{"kind":"goal_create","owner":"company","title":"..."}]'
     hub goal save POST /api/v2/goals '<body_json>' --on-behalf-of turn
+    hub goal save POST /api/v2/goal-proposals/turned-down '<body_json>' --on-behalf-of turn
+                                           the owner's "no" to a suggestion you made in chat: stored at once as turned down
     hub goal create --owner me|X --title "..." [--parent ID] [--body "..."|--body-file f] [--top] [--bet ID]
                                            set a goal; a parent is optional. With one, it supports that goal
     hub goal status <id> red|yellow|green|done|dropped "<one sentence>"
@@ -245,7 +247,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub brand show [--section S] [--version N] | summary | check <file|->
                                            the brand; check: avoided words, wrong names, never-made claims in a draft
     hub gtm show [--section S] [--version N] | summary | sources
-                                           the go-to-market: motion, buyer, wishes, playbooks; sources of truth
+                                           the go-to-market: motion, buyer, playbooks; sources of truth
     hub brand|gtm draft --section S --body JSON [--revision N] | publish [--note "..."]
                                            owner or admin; a bot proposes with --kind brand_draft|gtm_draft
     hub growth segment list | create --name ...|--segment-id ID [--status S --motion M --who-buys ... --deal-size ...
@@ -1558,7 +1560,8 @@ def parser():
     s.add_argument("changes", help="JSON array: kind goal_create, goal_update, measure_add, target_set, measure_remove or suggestion, "
                                   "and that change's fields")
     s.set_defaults(fn="goal read-back")
-    s = goal.add_parser("save", help="save one exact read-back step after the owner's plain yes")
+    s = goal.add_parser("save", help="save one exact read-back step after the owner's plain yes, or record the owner's "
+                                     "\"no\" to a suggestion (goal-proposals/turned-down)")
     s.add_argument("method", choices=["POST"])
     s.add_argument("path", help="the step's /api/v2 path")
     s.add_argument("body_json", help="the step's exact body_json string, unchanged")
@@ -1928,9 +1931,9 @@ def parser():
         return s
 
     brand_sections = ("name", "positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples")
-    gtm_sections = ("motion", "buyer", "wishes", "playbooks")
+    gtm_sections = ("motion", "buyer", "playbooks")
     for kind, title, sections in (("brand", "the brand: voice, words, names, claims", brand_sections),
-                                  ("gtm", "the go-to-market: motion, buyer, wishes, playbooks", gtm_sections)):
+                                  ("gtm", "the go-to-market: motion, buyer, playbooks", gtm_sections)):
         page = sub.add_parser(kind, help=title).add_subparsers(dest="sub")
         s = json_flag(page.add_parser("show", help="the published page; owner and admins also get the draft"))
         s.add_argument("--section", choices=sections, help="only this section")

@@ -643,6 +643,55 @@ def test_a_read_only_reviewer_given_every_repository_keeps_its_denies(environmen
     assert "reviewer may write to acme/product" in summary and "gh pr create, gh pr comment" in summary
 
 
+def test_harness_denies_answers_each_bot_as_a_bot_by_bot_pass_does(environment, monkeypatch):
+    """The shared reads behind harness_denies give each bot the answer its own listing gives, for bots in each state."""
+    from backend import bot_tools
+    from backend.health import harness_denies
+    api = environment()
+    settings = api.app.state.store.settings
+    monkeypatch.setattr(settings, "github_owner", "acme")
+    runner = enrolled(api)
+    deny = "Claude Code settings deny: gh pr create, git push"
+    write = {"service": "github", "identity": "acme/app", "can": ["read", "write", "pull_requests"], "scope": {"repo": "acme/app"}}
+    states = {                                  # bot: (its bot_config row's settings, or None for no row, its bot.yaml tools)
+        "chosen": ('{"repo_access_mode": "chosen"}', [write]),
+        "reader": ('{"repo_access_mode": "own"}', [dict(write, can=["read"])]),
+        "owner": ('{"repo_access_mode": "own"}', [dict(write, identity="acme/bot-owner", scope={"repo": "acme/bot-owner"})]),
+        "everywhere": ('{"repo_access_mode": "all"}', [dict(write, identity="acme/other", scope={"repo": "acme/other"})]),
+        "unconfigured": (None, [write]),
+    }
+    readiness = {}
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO repositories(full_name,enabled,bot_repo) VALUES('acme/shared',1,0)")
+    for slug, (config, tools) in states.items():
+        add_bot(api, slug)
+        readiness[slug] = {"ready": True, "runtime": "claude", "warnings": [deny], "tools": tools}
+        with api.app.state.store.transaction() as c:
+            if config:
+                c.execute("INSERT INTO bot_config(bot,config_json,repo,operator) VALUES(?,?,?,'ana')", (slug, config, "bot-" + slug))
+            c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'t')", (slug, runner, H.now()))
+            if slug == "chosen":
+                c.execute("INSERT INTO bot_repo_access VALUES('chosen','acme/app','write')")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET label='Team box', last_seen=?, readiness_json=? WHERE id=?",
+                  (H.now(), json.dumps({"schema_version": 1, "runtimes": SIGNED_IN, "bots": readiness}), runner))
+    with api.app.state.store.read_transaction() as c:
+        batched = harness_denies(c, settings)
+        # The bot-by-bot pass: each bot's listing reads its own rows, with nothing primed and no shared reads.
+        listing = bot_tools.listing
+        monkeypatch.setattr(bot_tools, "prime_state", lambda c, bots: None)
+        monkeypatch.setattr(bot_tools, "listing", lambda c, settings, bot, reads=None: listing(c, settings, bot))
+        bot_by_bot = harness_denies(c, settings)
+    assert batched == bot_by_bot
+    assert {bot for bot, _, _ in batched} == {"chosen", "everywhere", "unconfigured"}
+    # A failure in the shared read falls back to the bot-by-bot pass instead of ending the health response.
+    def unreadable(c, bots):
+        raise RuntimeError("unreadable")
+    with api.app.state.store.read_transaction() as c:
+        monkeypatch.setattr(bot_tools, "prime_state", unreadable)
+        assert harness_denies(c, settings) == batched
+
+
 def _listened(api, *, routed_days_ago, saved_days_ago, judged=None):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO listen_items(id,source,native_id,url,content,content_hash,first_seen_at) "
@@ -1212,3 +1261,41 @@ def test_a_pile_up_is_judged_against_two_sync_intervals_of_local_files(monkeypat
     assert check(3600)["status"] == "ok" and check(7200)["status"] == "ok"
     stuck = check(7201)
     assert stuck["status"] == "warn" and "7,201 unsent files" in stuck["summary"]
+
+
+def test_batched_computer_load_and_overload_reads_answer_what_each_computer_read_would(environment):
+    """Health and the computers list read every computer's load and overload in one pass (performance.py); each
+    answer must be the one that computer's own read gives: off, revoked, calm, overloaded and recently overloaded."""
+    from backend import performance
+    api = environment()
+    now = 1_800_000_000
+    busy, off, calm, revoked = enrolled(api), "r-off", "r-calm", "r-gone"
+    with api.app.state.store.transaction() as c:
+        for rid in (off, calm, revoked):
+            c.execute("INSERT INTO runners(id,label,operator,token_hash,created,last_seen) "
+                      "SELECT ?,?,operator,?,created,last_seen FROM runners WHERE id=?", (rid, rid, "h" + rid, busy))
+        c.execute("UPDATE runners SET performance='off' WHERE id=?", (off,))
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), revoked))
+        for rid, cpu in ((busy, 95), (off, 95), (calm, 10), (revoked, 95)):
+            for k in range(6):                       # six readings a minute apart, the newest just now
+                ts = now - 60 * k
+                c.execute("INSERT INTO runner_load_samples VALUES(?,?,?,?,?,?,?,?,?)",
+                          (rid, ts, ts, cpu, 90, 100, 0, 0, 1))
+        c.execute("INSERT INTO perf_overloads(runner_id,started,last,ended,reasons,cpu_max,mem_max,runs_max) "
+                  "VALUES(?,?,?,?,'[]',99,99,1)", (busy, now - 7200, now - 3600, now - 3500))      # ended long ago
+        c.execute("INSERT INTO perf_overloads(runner_id,started,last,ended,reasons,cpu_max,mem_max,runs_max) "
+                  "VALUES(?,?,?,?,'[]',99,99,1)", (busy, now - 900, now - 100, now - 50))         # ended just now
+        c.execute("INSERT INTO perf_overloads(runner_id,started,last,ended,reasons,cpu_max,mem_max,runs_max) "
+                  "VALUES(?,?,?,NULL,'[]',99,99,1)", (calm, now - 900, now - 100))                # still open
+    ids = [busy, off, calm, revoked]
+    with api.app.state.store.read() as c:
+        loads = performance.load_statuses(c, ids, now=now)
+        overloads = performance.recent_overloads(c, ids, now=now)
+        for rid in ids:
+            assert loads[rid] == performance.load_status(c, rid, now=now)
+            assert overloads[rid] == performance.recent_overload(c, rid, now=now)
+    assert loads[busy]["overloaded"] and not loads[off]["overloaded"] and loads[off]["latest_sample"] is None
+    assert not loads[calm]["overloaded"] and loads[calm]["latest_sample"]["cpu_pct"] == 10
+    assert not loads[revoked]["overloaded"]
+    assert overloads[busy]["ended"] == now - 50 and overloads[calm]["ended"] is None
+    assert overloads[off] is None and overloads[revoked] is None

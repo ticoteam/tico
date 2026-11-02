@@ -44,7 +44,7 @@
 .support-msg.staff{align-self:flex-start;background:color-mix(in srgb,var(--ink) 7%,var(--surface));border:1px solid color-mix(in srgb,var(--ink) 30%,var(--line));border-bottom-left-radius:3px}
 .support-body{white-space:pre-wrap}
 .support-who{display:block;font-size:var(--t-xs);color:var(--muted);margin-bottom:4px}.support-msg.you .support-who{text-align:right}
-.support-delivered{align-self:flex-end;font-size:var(--t-xs);color:var(--muted);margin:-4px 0 6px}
+.support-delivered{align-self:flex-end;max-width:100%;text-align:right;overflow-wrap:anywhere;font-size:var(--t-xs);color:var(--muted);margin:-4px 0 6px}
 .support-empty{margin:auto 0;padding:12px 4px;text-align:center;color:var(--muted);font-size:var(--t-base);line-height:var(--lh)}
 .support-empty p{margin:0 0 6px}
 .support-sent{font-size:var(--t-sm);color:var(--muted);line-height:var(--lh);overflow-wrap:anywhere;margin:6px 0}

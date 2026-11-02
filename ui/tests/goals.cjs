@@ -107,8 +107,8 @@ const kpi = (id, name, over) => ({id, name, unit: '%', direction: 'up', cadence:
     assert.equal(await page.locator('#goal-body button').filter({hasText: /Goal|KPI/}).count(), 0, 'no + Goal, + Company goal or + KPI');
     assert.doesNotMatch(await page.locator('#goal-body').innerText(), /\+ ?(Goal|Company goal|KPI)/);
     assert.equal(await page.locator('#strat-actions #goal-new').innerText(), '+ Goal');
-    // Two requests draw the page: the tree and Needs you.
-    assert.deepEqual(requests.filter(r => /goals|kpis/.test(r)).sort(), ['GET /api/v2/goals/needs-you', 'GET /api/v2/goals/tree']);
+    // Three requests draw the page: the tree, Needs you and the KPI views.
+    assert.deepEqual(requests.filter(r => /goals|kpis/.test(r)).sort(), ['GET /api/v2/goals/needs-you', 'GET /api/v2/goals/tree', 'GET /api/v2/growth/kpis']);
 
     // Every person and every bot that is not archived, goal or not, nested as the org chart nests them; helper bots off it.
     const lines = await page.locator('#goal-tree > li').evaluateAll(els => els.map(el => el.classList.contains('gt-cont') ? '+' + el.dataset.goal : `${el.dataset.owner}@${el.style.getPropertyValue('--d')}`));

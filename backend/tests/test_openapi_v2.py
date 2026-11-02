@@ -2,9 +2,12 @@
 resources, committed as docs/openapi/v2.json, and true to what the API answers."""
 
 import re
+import uuid
 
 from backend import openapi_v2
+from backend.finance import actions as FA
 from backend.tests.test_api import api, headers  # noqa: F401  (the api fixture)
+from backend.tests.test_finance_fixtures import account
 
 
 def conforms(value, schema, root, where="$"):
@@ -183,6 +186,49 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("getUsage", "get", "/api/v2/usage", params={"bot": "ops", "from": "2026-01-01", "to": "2026-01-03"})
     call("getHealth", "get", "/api/v2/health")
 
+
+
+def test_the_finance_record_and_order_answers_match_the_live_ones(api):
+    document = api.get("/api/v2/openapi.json", headers=headers()).json()
+    by_id = {op["operationId"]: op for ops in document["paths"].values() for op in ops.values()}
+
+    def call(operation, path, params=None):
+        response = api.get(path, headers=headers(), params=params)
+        assert response.status_code == 200, (path, response.text)
+        schema = by_id[operation]["responses"]["200"]["content"]["application/json"]["schema"]
+        problem = conforms(response.json(), schema, document)
+        assert problem is None, (operation, problem, response.text[:400])
+        return response.json()
+
+    store = api.app.state.store
+    with store.transaction() as c:
+        assert FA.ensure_setup(c, store.settings.owner_email)
+
+        def make(kind, payload):
+            done = FA.act(c, "human:ana", kind, payload, str(uuid.uuid4()))
+            assert done.status == "committed", done.reason
+            return done.result
+
+        location = make("location_create", {"name": "Denver"})["location_id"]
+        item = make("item_create", {"name": "Consulting", "kind": "service", "sku": "CONSULT", "price":
+        15_000})["item_id"]
+        project = make("project_create", {"name": "Job 12"})["project_id"]
+        vendor = make("contact_create", {"name": "Acme Supplies", "kind": "vendor"})["contact_id"]
+        customer = make("contact_create", {"name": "Acme Retail", "kind": "customer"})["contact_id"]
+        po = make("po_create", {"vendor_id": vendor, "po_date": "2026-10-10", "lines": [
+            {"account_id": account(c, "6100"), "amount": 40_000, "description": "Seats"}]})["po_id"]
+        estimate = make("estimate_create", {"customer_id": customer, "estimate_date": "2026-10-10", "lines": [
+            {"account_id": account(c, "4000"), "amount": 90_000, "description": "Design"}]})["estimate_id"]
+    call("listLocations", "/api/v2/locations")
+    call("getLocation", "/api/v2/locations/" + location)
+    call("listItems", "/api/v2/items", {"q": "consult"})
+    call("getItem", "/api/v2/items/" + item)
+    call("listProjects", "/api/v2/projects")
+    call("getProject", "/api/v2/projects/" + project)
+    call("listPurchaseOrders", "/api/v2/purchase-orders")
+    call("getPurchaseOrder", "/api/v2/purchase-orders/" + po)
+    call("listEstimates", "/api/v2/estimates")
+    call("getEstimate", "/api/v2/estimates/" + estimate)
 
 
 def test_closed_status_uses_close_permissions_and_rejects_combined_edits(api):

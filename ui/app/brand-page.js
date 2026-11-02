@@ -3,7 +3,8 @@
    is the subsections on the left, one editor in the middle and a rail with the proposed changes (brand_draft proposals,
    decided through /api/v2/proposals), Check copy (POST /api/v2/brand/check) and the versions. The draft saves with its
    revision; a draft changed elsewhere (409) is read again and drawn as it is now. Publishing takes a note.
-   Also the draft, publish and versions pieces the Go-to-market page shares (ui/app/gtm-page.js).
+   Also the draft, publish and versions pieces the go-to-market shares (Growth's Buyers and Learning, growth-buyers.js
+   and growth-learning.js), and the list editor's rows.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -21,7 +22,6 @@ const BR_COLS = {
   colors: [['name', 'Name'], ['hex', 'Colour', 'color']],
   allowed: [['claim', 'Claim', 'long'], ['proof', 'Proof', 'long'], ['check', 'Check'], ['status', 'Status', ['proven', 'due']]],
   examples: [['text', 'Text', 'wide'], ['verdict', 'Verdict', ['on', 'off']], ['why', 'Why', 'long']],
-  wishes: [['text', 'Wish', 'wide'], ['scope', 'Scope'], ['level', 'Level', ['block', 'warn', 'setting']]],
 };
 const BR_LEVEL = {block: 'fail', warn: 'waiting', setting: ''};
 const brHex = h => /^#[0-9a-f]{3}([0-9a-f]{3})?([0-9a-f]{2})?$/i.test(String(h || '').trim()) ? String(h).trim() : '';
@@ -34,7 +34,7 @@ function brInk(hex) {
 }
 const brSw = (c, size = '') => brHex(c.hex) ? `<span class="br-sw${size ? ' ' + size : ''}" style="background:${brHex(c.hex)}" title="${esc(c.name || c.hex)}"></span>` : '';
 
-// ----------------------------------------------------------------- shared with Go-to-market: draft, publish, versions
+// ----------------------------------------------------------------- shared with the go-to-market: draft, publish, versions
 const grDocMay = d => d?.may_edit ?? grAdmin();
 const grDocChanged = d => d?.draft?.changed?.length || 0;
 function grDocToolsHtml(d, state, publish = true) {

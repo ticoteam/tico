@@ -248,6 +248,11 @@ TRIGGERS = [
      _needs("approval", "(SELECT to_actor FROM messages WHERE id=NEW.message_id)")),
     ("changes_approvals_update", "UPDATE", "approvals", _changed("decision", "consumed_at"),
      _needs("approval", "(SELECT to_actor FROM messages WHERE id=NEW.message_id)")),
+    # Standalone tidy cards notify the human reviewer’s inbox, never a parent task.
+    ("changes_memory_tidy_cards_insert", "INSERT", "memory_tidy_cards", None,
+     _needs("memory_tidy", "NEW.reviewer")),
+    ("changes_memory_tidy_cards_update", "UPDATE", "memory_tidy_cards", _changed("status"),
+     _needs("memory_tidy", "NEW.reviewer")),
     # A stale ticket suggestion is on its owner's card until they accept or skip it (backend/stale_review.py).
     ("changes_stale_suggestions_insert", "INSERT", "stale_suggestions", None, _needs("stale", "NEW.owner")),
     ("changes_stale_suggestions_update", "UPDATE", "stale_suggestions", _changed("outcome"),

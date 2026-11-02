@@ -1313,7 +1313,9 @@ def goal_read_back(api, args):
 
 
 @tool("hub_goal_save", "Save one exact method/path/body_json step returned by hub_goal_read_back after the owner's plain yes. "
-      "For later steps of a new goal, created_goal is the id from its first save. On not_agreed read back again; do not retry.",
+      "For later steps of a new goal, created_goal is the id from its first save. On not_agreed read back again; do not retry. "
+      "Also records the owner's \"no\" to a suggestion you made in chat: path /api/v2/goal-proposals/turned-down, with the "
+      "suggestion's kind, goal_id, kpi_id, payload and reason as the body; the owner's words become its reason.",
       {"method": {"type": "string", "enum": ["POST"]}, "path": _s("The step's /api/v2 path"),
        "body_json": _s("The exact body_json string, unchanged"), "created_goal": _s("First save's goal id for {new}"),
        "on_behalf_of": GOAL_YES}, required=("method", "path", "body_json", "on_behalf_of"), writes=True)
@@ -1326,7 +1328,8 @@ def goal_save(api, args):
         path = path.replace("{new}", created)
     # This helper only replays goal read-back writes; the server checks the cited yes and exact body.
     if args["method"] != "POST" or not re.fullmatch(
-            r"/api/v2/(?:goals(?:/[^/]+(?:/why|/kpis(?:/[^/]+(?:/unlink)?)?)?)?|goal-proposals/[^/]+/decide)", path):
+            r"/api/v2/(?:goals(?:/[^/]+(?:/why|/kpis(?:/[^/]+(?:/unlink)?)?)?)?|goal-proposals/(?:[^/]+/decide|turned-down))",
+            path):
         raise ValueError("path must be a goal read-back save step")
     if not args.get("on_behalf_of"):
         raise ValueError("cite the owner's plain yes with on_behalf_of")
@@ -1860,7 +1863,7 @@ def strategy_bet_retire(api, args):
 # ----------------------------------------------------------------------------- brand, go-to-market, growth
 PAGE_TITLES = {"brand": "brand", "gtm": "go-to-market"}
 BRAND_SECTIONS = ("name", "positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples")
-GTM_SECTIONS = ("motion", "buyer", "wishes", "playbooks")
+GTM_SECTIONS = ("motion", "buyer", "playbooks")
 
 
 def _page_show(api, kind, args):
@@ -5163,7 +5166,8 @@ def message_redact(api, args):
       "product answered, the bot and the version. No secrets, no other people's details.",
       {"message": _s("What happened and what is missing, in plain words")}, required=("message",), writes=True)
 def support_file(api, args):
-    return _as_person(api).post("support/tickets", {"message": "[BotOps] " + args["message"], "include_ids": True}, key=_key(args))
+    return _as_person(api).post("support/tickets", {"message": "[BotOps] " + args["message"], "include_ids": True,
+                                                    "source": "botops"}, key=_key(args))
 
 
 

@@ -16,6 +16,10 @@ const INSTALL = '6f1c2a9e-3b7d-4c58-9a10-2d4e8b7f5a63';
 const DIAGNOSTICS_TEXT = '{\n  "format": 1,\n  "versions": {\n    "tico": "0.2.17"\n  }\n}';
 const HOSTILE = '<img src=x onerror="window.__pwned=1"> <b>bold</b>';
 const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a moment.';
+// The reply promise (reply-promise.md): before sending and after it.
+const PROMISE = 'We usually reply within 1 business day (Monday to Friday).';
+const EMPTY = ['Ask us anything. ' + PROMISE, "Tico's support assistant answers first and brings in a person when it needs one."];
+const DELIVERED = `Delivered to Tico support. ${PROMISE} The reply will appear here.`;
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
@@ -157,7 +161,11 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     assert.equal(await pop.locator('[data-whats-new]').innerText(), "What's new (2)");
     assert.equal(await pop.locator('[data-mine]').innerText(), 'Your requests');
     // No requests yet: an empty chat and the box; Attach details closed, with the diagnostics on for a new request.
-    assert.equal(await pop.locator('.support-empty').innerText(), 'Ask us anything. A person at Tico reads every message.');
+    // The promise and who answers, as two lines of text read in order (a screen reader gets the same paragraphs).
+    assert.deepEqual(await pop.locator('.support-empty p').allInnerTexts(), EMPTY);
+    assert.equal(await pop.locator('.support-empty').innerText(), EMPTY.join('\n\n'));
+    assert.doesNotMatch(await pop.innerText(), /A person at Tico reads every message/);
+    assert.equal(await pop.locator('.support-empty [aria-hidden], .support-empty [hidden]').count(), 0);
     assert.equal(await pop.locator('[data-head]').isVisible(), false);
     const form = pop.locator('[data-compose]'), box = form.locator('[name=message]'), attach = form.locator('[data-attach]');
     assert.equal(await box.getAttribute('placeholder'), 'Message Tico support…');
@@ -194,7 +202,7 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     assert.match(await pop.locator('[data-title]').innerText(), /^The board will not load\.$/, 'the first line is the title');
     assert.match(await pop.locator('[data-status] .support-badge').innerText(), /Open/);
     assert.equal(await pop.locator('.support-msg.you .support-who').innerText().then(s => s.split(' · ')[0]), 'You');
-    assert.equal(await pop.locator('.support-delivered').innerText(), 'Delivered to Tico support. Their reply will appear here.');
+    assert.equal(await pop.locator('.support-delivered').innerText(), DELIVERED);
     assert.match(await pop.locator('[data-thread]').innerText(), /<img src=x/);
     assert.equal(await page.locator('[data-thread] img, [data-thread] b, [data-requests] img').count(), 0);
     assert.equal(await page.evaluate(() => window.__pwned), undefined);
@@ -264,6 +272,7 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
       assert.equal(await box.inputValue(), 'Is anyone there?');
       assert.equal(await form.getByRole('button', {name: 'Send'}).isDisabled(), false);
       assert.equal(await pop.locator('.support-msg').count(), 3);
+      assert.doesNotMatch(await pop.locator('[data-thread]').innerText(), /business day/, 'no promise on an answered request or a failed send');
       v.hq[how] = false;
     }
     // A check for replies that fails says so; what was loaded stays.
@@ -348,10 +357,11 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     assert.equal(await vpop.locator('[data-compose]').isVisible(), false);
     assert.equal(await vpop.locator('[data-access]').isVisible(), false);
     assert.match(await vpop.locator('[data-closed]').innerText(), /This request is closed/);
+    assert.doesNotMatch(await vpop.locator('[data-thread]').innerText(), /business day/, 'no promise on a closed request');
     // New request starts an empty one, even with open requests about.
     await vpop.getByRole('button', {name: 'New request'}).click();
     assert.equal(await vpop.locator('[data-title]').innerText(), 'New request');
-    assert.equal(await vpop.locator('.support-empty').innerText(), 'Ask us anything. A person at Tico reads every message.');
+    assert.equal(await vpop.locator('.support-empty').innerText(), EMPTY.join('\n\n'));
     assert.equal((await active(v.page)).name, 'message');
     // A long conversation opens at its newest reply. Scrolled up to read, a new reply doesn't move it: the pill offers it.
     const long = v.hq.tickets.find(x => x.id === 'sup_c');
@@ -384,7 +394,7 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     await v.page.keyboard.press('Escape');
     await v.page.evaluate(() => window.supportPoll());
     await openSupport(v.page);
-    assert.equal(await vpop.locator('.support-empty').innerText(), 'Ask us anything. A person at Tico reads every message.\n\nYour last request, Old question, is closed. View it');
+    assert.equal(await vpop.locator('.support-empty').innerText(), EMPTY.join('\n\n') + '\n\nYour last request, Old question, is closed. View it');
     assert.equal(await vpop.locator('[data-compose]').isVisible(), true, 'a new request can be started');
     await vpop.getByRole('button', {name: 'View it'}).click();
     assert.equal(await vpop.locator('[data-title]').innerText(), 'Old question');
@@ -626,6 +636,11 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
     assert.equal(await v.page.locator('#mobile-ask .ldot').isVisible(), true);
     await openSupport(v.page);
     assert.deepEqual(await active(v.page), {id: 'support-message', name: 'message', inPop: true});
+    // The empty chat at phone width: both lines on screen, nothing sideways.
+    const phonePop = v.page.locator('#support-pop');
+    assert.deepEqual(await phonePop.locator('.support-empty p').allInnerTexts(), EMPTY);
+    for (const p of await phonePop.locator('.support-empty p').all()) assert.equal(await p.isVisible(), true);
+    assert.equal(await phonePop.evaluate(el => el.scrollWidth <= el.clientWidth && [...el.querySelectorAll('.support-empty, .support-empty *')].every(x => x.getBoundingClientRect().right <= innerWidth + 1 && x.scrollWidth <= x.clientWidth + 1)), true, 'the promise fits a phone');
     const dark = await v.page.locator('#support-pop').evaluate(el => [getComputedStyle(el).backgroundColor, getComputedStyle(el).color]);
     assert.notDeepEqual(dark[0], 'rgb(255, 255, 255)', 'the dark theme reaches the pop-up');
     await v.page.locator('[data-attach-label]').click();

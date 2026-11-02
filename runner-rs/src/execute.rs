@@ -2372,6 +2372,17 @@ impl Runner {
         let active = self.active.lock().unwrap().len();
         let completion = crate::perf::with_snapshot(Value::Object(completion), active).await.as_object().unwrap().clone();
         mark("finished", &aid);
+        // A nightly memory tidy pass commits and pushes nothing, whatever ended its turn: what it changed in its
+        // checkout is discarded here, before the turn settles, and the run log says what it was (criterion 24).
+        if crate::continuity::memory_pass(&attempt["config"]) {
+            if let Some(p) = place.as_ref() {
+                match self.discard_pass_place(p, &env).await {
+                    Ok(changed) if changed.is_empty() => {}
+                    Ok(changed) => self.diagnose(&aid, &format!("Nightly memory tidy: this pass changed {} in its checkout; those changes were discarded and nothing was committed or pushed.", changed.join(", "))),
+                    Err(problem) => self.diagnose(&aid, &format!("Nightly memory tidy: could not discard this pass's checkout ({problem}); nothing was pushed.")),
+                }
+            }
+        }
         let settled: Result<(), String> = async {
             let id = aid.clone();
             let completion = self.state.off(move |s| s.finish(&id, &completion)).await?;
@@ -2404,11 +2415,16 @@ impl Runner {
                     let repository = crate::appdriver::delivery(&config).is_none();
                     // A private meeting's copy is never committed, pushed, published or reported (sessions.rs).
                     if let Some(p) = place.as_ref().filter(|p| drove.outcome == "completed" && host.is_some() && repository && !p.private) {
-                        if !committed_secret && p.session_path.is_none() {
+                        if !committed_secret && p.session_path.is_none() && !crate::continuity::memory_pass(&attempt["config"]) {
                             self.publish(&bot, &execution_path, &env).await;
                         }
                         let closed = p.session_path.is_some() && self.task_closed(&attempt).await;
-                        let pushed = self.finish_place(p, &attempt, &env, &skipped, committed_secret).await;
+                        // A nightly memory tidy pass was discarded above and never pushes (criterion 24).
+                        let pushed = if crate::continuity::memory_pass(&attempt["config"]) {
+                            false
+                        } else {
+                            self.finish_place(p, &attempt, &env, &skipped, committed_secret).await
+                        };
                         let relative: Vec<String> = skipped
                             .iter()
                             .map(|f| Path::new(f).strip_prefix(&execution_path).map_or_else(|_| f.clone(), |r| r.display().to_string()))
@@ -3677,6 +3693,14 @@ for line in sys.stdin:
     /// over each attempt, and `ready` called with the projects folder first. Also returns what each process was
     /// written after its prompt, while it ran (empty when nothing).
     async fn claude_rig(turns: &[Value], compacting: &[usize], missing: &[usize], failing: &[usize], extra: Value, ready: impl Fn(&Path)) -> (Vec<String>, Vec<String>, Vec<Value>, Vec<String>) {
+        let (threads, prompts, completions, injected, _, dir) = claude_rig_kept(turns, compacting, missing, failing, extra, ready).await;
+        std::fs::remove_dir_all(&dir).ok();
+        (threads, prompts, completions, injected)
+    }
+
+    /// `claude_rig`, keeping its folder for the caller to inspect (remove it when done), and returning every request the
+    /// recording server saw, in order.
+    async fn claude_rig_kept(turns: &[Value], compacting: &[usize], missing: &[usize], failing: &[usize], extra: Value, ready: impl Fn(&Path)) -> (Vec<String>, Vec<String>, Vec<Value>, Vec<String>, Vec<(String, String, Value)>, PathBuf) {
         let _controls = RunControls;
         RUN_SESSION.with(|on| on.set(Some(true)));
         let dir = std::env::temp_dir().join(format!("tico-claude-session-{}", uuid::Uuid::new_v4().simple()));
@@ -3702,6 +3726,7 @@ for line in sys.stdin:
              if [ -e '{d}/missing-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"error_during_execution\", \"is_error\": true, \"num_turns\": 0, \"errors\": [\"No conversation found with session ID: '$id'\"], \"usage\": {{\"input_tokens\": 0, \"output_tokens\": 0}}}}'; exit 1; fi\n\
              echo '{{\"type\": \"system\", \"subtype\": \"init\", \"session_id\": \"'$id'\"}}'\n\
              for c in $(cat '{d}/compacts-'$n 2>/dev/null); do echo '{{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"compact_metadata\": {{\"trigger\": \"auto\"}}}}'; done\n\
+             if [ -e '{d}/edits-'$n ]; then mkdir -p memory && echo 'rewritten' > memory/learnings.md && echo 'stray' > stray.txt && git add -A && git -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm 'a pass commit' && echo 'more' >> memory/learnings.md; fi\n\
              if [ -e '{d}/fails-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"error_during_execution\", \"is_error\": true, \"num_turns\": 1, \"errors\": [\"Synthetic failure\"], \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'; exit 1; fi\n\
              echo '{{\"type\": \"assistant\", \"message\": {{\"id\": \"m1\", \"content\": [{{\"type\": \"text\", \"text\": \"Done.\"}}]}}}}'\n\
              echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": false, \"result\": \"Done.\", \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'\n\
@@ -3740,8 +3765,7 @@ for line in sys.stdin:
             let found: Vec<&Value> = seen.iter().filter(|(_, p, _)| p.ends_with(&format!("/attempts/a-claude-{n}/complete"))).map(|(_, _, b)| b).collect();
             found.first().map_or(Value::Null, |b| (*b).clone())
         }).collect();
-        std::fs::remove_dir_all(&dir).ok();
-        (threads, prompts, completions, injected)
+        (threads, prompts, completions, injected, seen, dir)
     }
 
     #[tokio::test]
@@ -4580,6 +4604,96 @@ for line in sys.stdin:
             assert!(runner.state.pending("a-start-wait").unwrap().is_empty(), "handback must flush its history");
             std::fs::remove_dir_all(dir).ok();
         }
+    }
+
+    #[tokio::test]
+    async fn a_memory_pass_without_a_checkout_of_its_own_is_refused_and_an_ordinary_task_still_falls_back_to_the_bots_checkout() {
+        let (url, _seen, server) = recording_server().await;
+        let (runner, dir) = drain_runner_on(&url, 300).await;
+        let env = crate::env::Env::new();
+        let bot = format!("pass-{}", uuid::Uuid::new_v4().simple());
+        let config = json!({"runtime": "pi", "harness": "pi", "model": "synthetic"});
+        // A folder that is no git checkout: its task worktree cannot be made, so the placement has no checkout of its own.
+        let main = crate::sessions::local_path(&runner.config, &bot, &config);
+        std::fs::create_dir_all(&main).unwrap();
+        for pass in [true, false] {
+            let mut config = config.clone();
+            if pass {
+                config["memory_pass"] = json!(true);
+            }
+            let mut attempt = json!({"id": format!("a-pass-{pass}"), "bot": bot, "token": "synthetic", "lease_seconds": 120,
+                                     "lane": "task:t-pass", "task": {"id": "t-pass"},
+                                     "conversation": {"id": "c1"}, "message": {"refs": {}}, "config": config});
+            let lost = AtomicBool::new(false);
+            let mut place = runner.enter_lanes(&attempt, &lost).await.unwrap();
+            let placed = runner.place_turn(&mut place, &mut attempt, &env, &lost).await;
+            if pass {
+                assert!(placed.unwrap_err().contains("no checkout of its own"), "a pass must not run in the bot's checkout");
+            } else {
+                assert!(placed.is_ok(), "an ordinary task keeps its fallback: {placed:?}");
+                assert!(place.session_path.is_none(), "an ordinary task runs in the bot's checkout as before");
+            }
+            drop(place);
+        }
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    fn repo_git(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[tokio::test]
+    async fn a_memory_pass_that_edits_commits_and_fails_is_discarded_before_its_turn_settles() {
+        let base = Arc::new(Mutex::new(String::new()));
+        let remote_path = Arc::new(Mutex::new(PathBuf::new()));
+        let (base_out, remote_out) = (base.clone(), remote_path.clone());
+        let (_threads, _prompts, completions, _injected, seen, dir) = claude_rig_kept(
+            &[json!({"memory_pass": true})],
+            &[],
+            &[],
+            &[0],
+            json!({"lane": "task:t-pass", "task": {"id": "t-pass"}}),
+            move |projects: &Path| {
+                // A real checkout of the bot's repository, with a remote to compare main against.
+                let root = projects.parent().unwrap().to_path_buf();
+                let checkout = projects.join("bot-ops");
+                std::fs::remove_dir_all(&checkout).ok();
+                let remote = root.join("remote.git");
+                repo_git(&root, &["init", "--bare", "-q", "-b", "main", remote.to_str().unwrap()]);
+                let seed = root.join("seed");
+                repo_git(&root, &["clone", "-q", remote.to_str().unwrap(), seed.to_str().unwrap()]);
+                std::fs::write(seed.join("AGENT.md"), "# Ops\n").unwrap();
+                repo_git(&seed, &["add", "-A"]);
+                repo_git(&seed, &["commit", "-qm", "start"]);
+                repo_git(&seed, &["push", "-q", "origin", "HEAD:main"]);
+                repo_git(&root, &["clone", "-q", remote.to_str().unwrap(), checkout.to_str().unwrap()]);
+                *base_out.lock().unwrap() = repo_git(&checkout, &["rev-parse", "HEAD"]);
+                *remote_out.lock().unwrap() = remote;
+                // Process 0 of the fake Claude edits memory, commits, leaves more uncommitted, then fails.
+                std::fs::write(root.join("edits-0"), "").unwrap();
+            },
+        ).await;
+        let base = base.lock().unwrap().clone();
+        let remote = remote_path.lock().unwrap().clone();
+        assert_eq!(completions[0]["outcome"], "failed", "{:?}", completions[0]);
+        let session = crate::sessions::path_for(&dir.join("projects"), "ops", "t-pass");
+        assert_eq!(repo_git(&session, &["status", "--porcelain"]), "", "the pass left nothing uncommitted");
+        assert_eq!(repo_git(&session, &["rev-parse", "HEAD"]), base, "the pass's own commit was dropped");
+        assert!(!session.join("stray.txt").exists() && !session.join("memory").exists(), "the pass's files were removed");
+        assert_eq!(repo_git(&remote, &["rev-parse", "main"]), base, "main did not move");
+        let discarded = seen.iter().position(|(_, _, body)| body.to_string().contains("Nightly memory tidy: this pass changed"))
+            .expect("the discard was not recorded on the run");
+        let settled = seen.iter().position(|(_, path, _)| path.ends_with("/attempts/a-claude-0/complete")).expect("the turn settled");
+        assert!(discarded < settled, "the discard is recorded before the turn settles");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     async fn placement_wait_survives_start_window(kind: &str) {

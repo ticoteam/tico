@@ -1042,6 +1042,19 @@ export type DueSatisfied = {
 
 export type Empty = Record<string, unknown>;
 
+export type Estimate = (FinanceOrderRow & {
+  lines: Array<{
+  id: string;
+  line_no: number;
+}>;
+  view_version?: number;
+});
+
+export type Estimates = {
+  estimates: Array<FinanceOrderRow>;
+  next_cursor: string | null;
+};
+
 export type EventType = {
   aliases?: Array<string>;
   description: string;
@@ -1614,6 +1627,20 @@ export type FinanceOpenTotal = {
   remaining: number;
 };
 
+export type FinanceOrderRow = {
+  contact: {
+  id: string;
+  name: string;
+};
+  currency: string;
+  date: string;
+  id: string;
+  memo: string;
+  number: string;
+  status: string;
+  total: number;
+};
+
 export type FinancePayFrom = {
   accounts: Array<{
   available_balance?: number | null;
@@ -1742,7 +1769,7 @@ export type FinanceReport = {
 };
 
 export type FinanceReportOf = {
-  kind: "pnl" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
+  kind: "pnl" | "pnl_by" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
   prior?: Record<string, unknown>;
 };
 
@@ -1789,7 +1816,7 @@ export type FinanceSearch = {
   next_cursor: string | null;
   results: Array<{
   id: string;
-  kind: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule";
+  kind: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project";
   label: string;
 }>;
   view_version: number;
@@ -2452,6 +2479,29 @@ export type InternalDocVersions = {
   versions: Array<InternalDocVersion>;
 };
 
+export type Item = {
+  archived_at?: string | null;
+  asset_account_id?: string | null;
+  currency: string;
+  expense_account_id?: string | null;
+  id: string;
+  income_account_id?: string | null;
+  kind: "service" | "inventory" | "non_inventory" | "bundle" | "category";
+  name: string;
+  price?: number | null;
+  sku: string;
+  unit: string;
+};
+
+export type ItemOne = {
+  item: Item;
+};
+
+export type Items = {
+  items: Array<Item>;
+  next_cursor: string | null;
+};
+
 export type Kpi = {
   archived_at?: string | null;
   archived_by?: string | null;
@@ -2720,6 +2770,24 @@ export type LocalFinding = {
   process: string;
 };
 
+export type Location = {
+  address: Record<string, unknown>;
+  archived_at?: string | null;
+  id: string;
+  kind: string;
+  name: string;
+  parent_id?: string | null;
+};
+
+export type LocationOne = {
+  location: Location;
+};
+
+export type Locations = {
+  locations: Array<Location>;
+  next_cursor: string | null;
+};
+
 export type MarketAnswers = {
   buyers?: string;
   competitors?: string;
@@ -2755,6 +2823,38 @@ export type MeetingSearch = {
   mode: string;
   next_offset: number | null;
   results: Array<unknown>;
+};
+
+export type MemoryTidyCard = {
+  bot: string;
+  cost_usd: number;
+  created: string;
+  diary: string;
+  diff?: string;
+  expires: string;
+  id: string;
+  keep_available: boolean;
+  keep_pending?: boolean;
+  kind: "memory_tidy";
+  memory_commit: string;
+  model: string;
+  reason: string;
+  requester: string;
+  reviewer: string;
+  status: "open" | "withdrawn" | "discarded" | "kept";
+  title: string;
+};
+
+export type MemoryTidyCardResult = {
+  card: MemoryTidyCard;
+};
+
+export type MemoryTidyCards = {
+  cards: Array<MemoryTidyCard>;
+};
+
+export type MemoryTidyDecision = {
+  decision: "keep" | "discard";
 };
 
 export type MemoryTidyPilot = {
@@ -3133,6 +3233,23 @@ export type ProfileChoices = {
   profiles: Array<ProfileChoice>;
 };
 
+export type Project = {
+  archived_at?: string | null;
+  customer_id?: string | null;
+  id: string;
+  name: string;
+  status: "open" | "closed";
+};
+
+export type ProjectOne = {
+  project: Project;
+};
+
+export type Projects = {
+  next_cursor: string | null;
+  projects: Array<Project>;
+};
+
 export type PublicComment = {
   author: "Team" | "Visitor";
   created: string;
@@ -3187,6 +3304,19 @@ export type PublicationInput = {
   public_summary?: string | null;
   public_title?: string | null;
   visibility?: string | null;
+};
+
+export type PurchaseOrder = (FinanceOrderRow & {
+  lines: Array<{
+  id: string;
+  line_no: number;
+}>;
+  view_version?: number;
+});
+
+export type PurchaseOrders = {
+  next_cursor: string | null;
+  orders: Array<FinanceOrderRow>;
 };
 
 export type QuestionOption = {
@@ -5399,6 +5529,14 @@ export type DecideGoalProposalParams = {
 export type DecideGoalProposalBody = GoalProposalDecision;
 export type DecideGoalProposalResponse = GoalProposalResult;
 
+/** POST /api/v2/memory-tidy/cards/{ident}/decide */
+export type DecideMemoryTidyCardParams = {
+  "Idempotency-Key": string;
+  ident: string;
+};
+export type DecideMemoryTidyCardBody = MemoryTidyDecision;
+export type DecideMemoryTidyCardResponse = MemoryTidyCardResult;
+
 /** POST /api/v2/stale-review/{suggestion_id} */
 export type DecideStaleSuggestionParams = {
   "Idempotency-Key": string;
@@ -5782,6 +5920,14 @@ export type GetDocumentParams = {
 export type GetDocumentBody = never;
 export type GetDocumentResponse = unknown;
 
+/** GET /api/v2/estimates/{estimate_id} */
+export type GetEstimateParams = {
+  estimate_id: string;
+  view_as?: string | null;
+};
+export type GetEstimateBody = never;
+export type GetEstimateResponse = Estimate;
+
 /** GET /api/v2/docs/external/{document_id} */
 export type GetExternalDocParams = {
   document_id: string;
@@ -5867,7 +6013,7 @@ export type GetFinanceCloseChecklistResponse = FinanceCloseChecklist;
 /** GET /api/v2/finance/expenses */
 export type GetFinanceExpensesParams = {
   account_id?: string | null;
-  by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account";
+  by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account" | "location" | "class" | "project" | "location_class" | "location_project" | "class_project";
   end?: string | null;
   start?: string | null;
   team?: string | null;
@@ -5950,10 +6096,10 @@ export type GetFinancePnlResponse = FinancePnl;
 /** GET /api/v2/finance/reports/{kind} */
 export type GetFinanceReportParams = {
   basis?: "cash" | "accrual" | null;
-  by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account";
+  by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account" | "location" | "class" | "project" | "location_class" | "location_project" | "class_project" | null;
   compare?: "prior" | null;
   end?: string | null;
-  kind: "pnl" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
+  kind: "pnl" | "pnl_by" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
   period?: "day" | "week" | "month" | "quarter" | "year";
   start?: string | null;
   top_n?: number;
@@ -6046,6 +6192,14 @@ export type GetInternalDocVersionParams = {
 export type GetInternalDocVersionBody = never;
 export type GetInternalDocVersionResponse = InternalDocVersionResult;
 
+/** GET /api/v2/items/{item_id} */
+export type GetItemParams = {
+  item_id: string;
+  view_as?: string | null;
+};
+export type GetItemBody = never;
+export type GetItemResponse = ItemOne;
+
 /** GET /api/v2/kpis/{kid} */
 export type GetKpiParams = {
   kid: string;
@@ -6067,6 +6221,14 @@ export type GetLibrarianSetupResponse = LibrarianSetup;
 export type GetLivenessParams = Record<string, never>;
 export type GetLivenessBody = never;
 export type GetLivenessResponse = unknown;
+
+/** GET /api/v2/locations/{location_id} */
+export type GetLocationParams = {
+  location_id: string;
+  view_as?: string | null;
+};
+export type GetLocationBody = never;
+export type GetLocationResponse = LocationOne;
 
 /** GET /api/v2/me */
 export type GetMeParams = Record<string, never>;
@@ -6093,6 +6255,13 @@ export type GetMeetingTranscriptParams = {
 };
 export type GetMeetingTranscriptBody = never;
 export type GetMeetingTranscriptResponse = unknown;
+
+/** GET /api/v2/memory-tidy/cards/{ident} */
+export type GetMemoryTidyCardParams = {
+  ident: string;
+};
+export type GetMemoryTidyCardBody = never;
+export type GetMemoryTidyCardResponse = MemoryTidyCardResult;
 
 /** GET /api/v2/messages/{mid} */
 export type GetMessageParams = {
@@ -6147,6 +6316,14 @@ export type GetPlaceParams = {
 export type GetPlaceBody = never;
 export type GetPlaceResponse = Place;
 
+/** GET /api/v2/projects/{project_id} */
+export type GetProjectParams = {
+  project_id: string;
+  view_as?: string | null;
+};
+export type GetProjectBody = never;
+export type GetProjectResponse = ProjectOne;
+
 /** GET /public/roadmaps/{label}/tasks/{tid} */
 export type GetPublicRoadmapTaskParams = {
   Origin?: string;
@@ -6157,6 +6334,14 @@ export type GetPublicRoadmapTaskParams = {
 };
 export type GetPublicRoadmapTaskBody = never;
 export type GetPublicRoadmapTaskResponse = PublicRoadmapTask;
+
+/** GET /api/v2/purchase-orders/{po_id} */
+export type GetPurchaseOrderParams = {
+  po_id: string;
+  view_as?: string | null;
+};
+export type GetPurchaseOrderBody = never;
+export type GetPurchaseOrderResponse = PurchaseOrder;
 
 /** GET /api/v2/org/order/{manager} */
 export type GetReportOrderParams = {
@@ -6591,6 +6776,18 @@ export type ListDocsConversationsParams = {
 export type ListDocsConversationsBody = never;
 export type ListDocsConversationsResponse = DocsConversations;
 
+/** GET /api/v2/estimates */
+export type ListEstimatesParams = {
+  cursor?: string | null;
+  customer_id?: string | null;
+  limit?: number;
+  q?: string;
+  status?: string | null;
+  view_as?: string | null;
+};
+export type ListEstimatesBody = never;
+export type ListEstimatesResponse = Estimates;
+
 /** GET /api/v2/event-types */
 export type ListEventTypesParams = {
   group?: string | null;
@@ -6885,6 +7082,17 @@ export type ListInternalDocsParams = {
 export type ListInternalDocsBody = never;
 export type ListInternalDocsResponse = InternalDocList;
 
+/** GET /api/v2/items */
+export type ListItemsParams = {
+  archived?: "hide" | "only" | "all";
+  cursor?: string | null;
+  limit?: number;
+  q?: string;
+  view_as?: string | null;
+};
+export type ListItemsBody = never;
+export type ListItemsResponse = Items;
+
 /** GET /api/v2/kpis/{kid}/readings */
 export type ListKpiReadingsParams = {
   effective?: boolean;
@@ -6909,6 +7117,17 @@ export type ListLinkedDocsParams = Record<string, never>;
 export type ListLinkedDocsBody = never;
 export type ListLinkedDocsResponse = LinkedDocList;
 
+/** GET /api/v2/locations */
+export type ListLocationsParams = {
+  archived?: "hide" | "only" | "all";
+  cursor?: string | null;
+  limit?: number;
+  q?: string;
+  view_as?: string | null;
+};
+export type ListLocationsBody = never;
+export type ListLocationsResponse = Locations;
+
 /** GET /api/v2/meetings */
 export type ListMeetingsParams = {
   q?: string;
@@ -6916,6 +7135,11 @@ export type ListMeetingsParams = {
 };
 export type ListMeetingsBody = never;
 export type ListMeetingsResponse = MeetingReviewList;
+
+/** GET /api/v2/memory-tidy/cards */
+export type ListMemoryTidyCardsParams = Record<string, never>;
+export type ListMemoryTidyCardsBody = never;
+export type ListMemoryTidyCardsResponse = MemoryTidyCards;
 
 /** GET /api/v2/conversations/{cid}/messages */
 export type ListMessagesParams = {
@@ -6970,6 +7194,17 @@ export type ListProfilesParams = Record<string, never>;
 export type ListProfilesBody = never;
 export type ListProfilesResponse = ProfileChoices;
 
+/** GET /api/v2/projects */
+export type ListProjectsParams = {
+  archived?: "hide" | "only" | "all";
+  cursor?: string | null;
+  limit?: number;
+  q?: string;
+  view_as?: string | null;
+};
+export type ListProjectsBody = never;
+export type ListProjectsResponse = Projects;
+
 /** GET /public/roadmaps/{label} */
 export type ListPublicRoadmapParams = {
   Origin?: string;
@@ -6990,6 +7225,18 @@ export type ListPublicRoadmapCommentsParams = {
 };
 export type ListPublicRoadmapCommentsBody = never;
 export type ListPublicRoadmapCommentsResponse = PublicRoadmapComments;
+
+/** GET /api/v2/purchase-orders */
+export type ListPurchaseOrdersParams = {
+  cursor?: string | null;
+  limit?: number;
+  q?: string;
+  status?: string | null;
+  vendor_id?: string | null;
+  view_as?: string | null;
+};
+export type ListPurchaseOrdersBody = never;
+export type ListPurchaseOrdersResponse = PurchaseOrders;
 
 /** GET /api/v2/automations/question-sets */
 export type ListQuestionSetsParams = Record<string, never>;
@@ -7876,7 +8123,7 @@ export type SearchFinanceParams = {
   contact_kind?: "vendor" | "customer" | "both" | null;
   cursor?: string | null;
   end?: string | null;
-  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | null;
+  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project" | "po" | "estimate" | null;
   limit?: number;
   money_account_id?: string | null;
   q?: string;

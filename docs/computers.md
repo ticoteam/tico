@@ -22,9 +22,11 @@ computer, and a run uses, in order, that computer's subscription for the run's A
 computer, then Tico Gateway when it is on. Otherwise the run waits.
 
 1. Open **Settings → Models** and click **Add subscription**.
-2. Pick the **Kind**: **Claude plan** (paste the token from `claude setup-token`), **ChatGPT plan** (paste Codex's
-   `auth.json`), or an Anthropic or OpenAI API key.
-3. Enter a **Name**, such as *Claude Max*, and click **Save**.
+2. Pick the **Kind**: **Claude plan**, **ChatGPT plan**, or an Anthropic or OpenAI API key, and enter a **Name**, such as
+   *Claude Max*.
+3. For a plan, click **Connect**, open the link and sign in with the account that has the plan (paste back the code the
+   page shows, or enter the code Tico shows). Tico saves the result. Or paste it and click **Save**: the token from
+   `claude setup-token`, or Codex's `auth.json`. An API key is always pasted.
 4. Open **Settings → Computers** and pick the subscription in the computer's **Claude Code** or **Codex** column.
 
 Switching a computer's subscription stops that tool's running tasks on that computer and starts them again, and every
@@ -33,7 +35,7 @@ subscription does the same on each computer that had it. A computer on an older 
 picker until it updates.
 
 Each row shows how many computers use it and its usage: the share of the 5-hour or weekly window used, or an API key's
-cost this month. **Reconnect** means the saved login stopped working; paste a new one from the row's menu. A new value
+cost this month. **Reconnect** means the saved login stopped working; connect again or paste a new one from the row's menu. A new value
 restarts the running tasks on each computer that has the subscription, as a switch does, so no run goes on with the
 old one. The page asks first and says how many.
 
@@ -69,8 +71,13 @@ its work returns to the queue without changing the task. After 10 missed starts 
 started, Tico reports a pre-start failure instead of retrying forever. Check the computer named in the failure.
 
 CPU or memory strictly above **90% for 5 minutes** holds new starts on that computer with **waiting: computer busy**.
+Memory at **85% or more** holds them too, with **waiting: computer busy: memory N%**; they start again once memory is
+below **80%**, so the queue does not flap. A computer whose last sample is more than **2 minutes** old holds new starts
+with **waiting: computer not reporting**, because a computer that stops reporting may be frozen. A computer that has
+never reported is not held. The server also ends a run that has gone silent (no heartbeat or event for 5 minutes)
+once it is past its bot's max_run_minutes plus 5 minutes, without waiting for the computer.
 This includes turns with a reservation that have not started yet. Running turns continue. New starts resume when
-the sustained overload clears. A person's own message to a bot (a chat, a message in its task) still starts, ahead of
+the hold clears. A person's own message to a bot (a chat, a message in its task) still starts, ahead of
 the waiting turns, when the computer has a free turn; Tico's notices and messages between bots wait. This brake does
 not change your account, model or computer size.
 
@@ -199,7 +206,15 @@ not here.
 
 A **subscription** is one of the company's model logins or keys, saved once in Tico rather than on a computer: a
 Claude setup-token (from `claude setup-token`), a ChatGPT login (the `auth.json` from a computer where `codex login` is
-signed in, usually `~/.codex/auth.json`), or an Anthropic or OpenAI API key. It belongs to the company; the list says
+signed in, usually `~/.codex/auth.json`), or an Anthropic or OpenAI API key.
+
+**Connect** signs a plan in without pasting. Tico picks an online computer on the latest release with that tool
+installed, the person's own first, and runs the sign-in there: `claude setup-token`, or `codex login` in a folder of its
+own. That computer's own login stays as it was. The page shows the link and any code, never the result, which the
+computer sends straight to Tico and keeps no copy of. If it has to run on someone else's computer, the page says so before
+the sign-in, since the result passes through that computer; cancel and paste to avoid that. With no such computer,
+**Connect** is off and pasting still works. A sign-in the command reports as failed saves nothing.
+Connecting a saved subscription is **Reconnect**, and asks first as a pasted value does. It belongs to the company; the list says
 who added it. Owners and admins add, rename, reconnect and remove them in **Settings > Models**; anyone who sees that
 page sees the list (name, kind, status, computers, usage), never a value.
 
@@ -216,9 +231,9 @@ computers. Every bot on that computer then runs that tool on it.
   refreshed login is sent back to Tico. Each token in it is masked in what the turn leaves.
 - A usage limit met on a subscription holds it on every computer it is given to until the reset. Meanwhile it is
   passed over: turns there run on the computer's own login, else the Gateway under the company's models choice,
-  else wait.
+  else wait. A bot waiting on the old plan's limit resumes on the new plan at once when a computer is switched to it.
 - If the provider refuses it, it shows **Needs reconnect** and is passed over (the computer's own login, then the
-  Gateway) until someone pastes a new value with **Reconnect**. The computer's own login is left alone.
+  Gateway) until someone saves a new value with **Reconnect**. The computer's own login is left alone.
 - A computer on an older runner does not take subscriptions; its bots run as before until it updates.
 
 One computer is one trust group ([SECURITY.md](../SECURITY.md#bots-on-one-computer-share-a-trust-boundary-on-purpose)):

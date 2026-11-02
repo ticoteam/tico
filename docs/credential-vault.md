@@ -145,7 +145,9 @@ idempotent, and when the vault cannot be opened at start they are sealed on the 
 
 **Company model subscriptions.** A Claude setup-token, ChatGPT login or model API key an owner or admin saves in
 Settings > Models ([Computers](computers.md#company-subscriptions)) is sealed the same way (`model_subscriptions.sealed`,
-bound to the subscription), saved through the vault's keyed request fingerprint, and never returned by a list. Bots, the
+bound to the subscription), saved through the vault's keyed request fingerprint, and never returned by a list. **Connect**
+gets the same value from a sign-in on a computer, which sends it once in its own request, outside the sign-in relay and
+any request receipt; the browser never holds it. Bots, the
 Assistant or BotOps acting for a person, and support sessions cannot save one. Only a run its claim handed the
 subscription (its computer's, recorded in `attempt_subscriptions`) reads the value, from `credential-runtime` with its
 run token, while that run is live; each read is recorded (`subscription.sent_to_computer`).

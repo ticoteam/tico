@@ -840,7 +840,7 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     """(label, readiness_reason) for a bot's queued work: what it is waiting for, in a person's words. `human`: a
     person's message; `behind`: the bot is still answering earlier work in this same conversation; `queued`: it was
     sent with queue, so it waits for that turn to end rather than steering into it (backend/delivery.py)."""
-    from .performance import load_status
+    from .start_places import computer_hold
     from . import org_turns
     bot_state = H.bot(c, bot)["state"]
     label, readiness_reason = "Saved — queued", ""
@@ -867,10 +867,10 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     elif settings and org_turns.admission(c)['at_stop']:
         # Admission only: queued labels must not classify every bot's readiness and spend on each chat/status poll.
         label = 'Saved — ' + org_turns.REASON
-    elif not human and (location.get("machine") or {}).get("runner_id") and load_status(
-            c, location["machine"]["runner_id"])["overloaded"]:
+    elif not human and (location.get("machine") or {}).get("runner_id") and (
+            hold := computer_hold(c, location["machine"]["runner_id"])):
         # A person's own message still starts on a busy computer (start_places.from_person); it may wait for a turn.
-        label = "Saved — waiting: computer busy"
+        label = "Saved — waiting: " + hold[1]
     elif not location["ready"]:
         problems = (location.get("readiness") or {}).get("problems") or []
         if any(str(p).startswith("No AI provider is chosen") for p in problems):
@@ -1209,7 +1209,7 @@ def yes_no_ask(text):
 def need_of(item):
     """The group a Needs you card goes in (NEED_GROUPS)."""
     kind = item.get("kind")
-    if kind == "stale":
+    if kind in ("stale", "memory_tidy"):
         return "decide"         # Accept or Skip, row by row
     if kind == "setup":
         return "connect"        # sign in to a provider (backend/models_preset.py)
@@ -1757,6 +1757,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                 item["title"] = "Send this to Tico support?"
                 item["support"] = {"to": hq_url().split("://", 1)[-1].split("/", 1)[0]}
             items.append(item)
+    from . import memory_tidy_cards
+    items.extend(memory_tidy_cards.cards_for(c, who.actor))
     from . import stale_review
     stale = stale_review.card(c, who.actor) if H.is_human(who.actor) else None
     if stale:

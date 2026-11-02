@@ -1,6 +1,8 @@
 """The brand and go-to-market pages (backend/brand_gtm.py): admins write a draft and publish numbered versions, bots
 propose, and the brand check finds avoided words, wrong names and never-made claims. Examples use Acme."""
 
+import json
+
 from backend import brand_gtm as B
 from backend.tests.test_api import api, get, post, put  # noqa: F401
 from backend.tests.test_company import bot
@@ -91,6 +93,16 @@ def test_bots_propose_members_read_only_published_and_admins_confirm(api):
     gtm = get(api, "gtm")
     assert gtm["published"] is None and gtm["draft"]["body"]["motion"] == {"primary": "local", "secondary": "self_serve"}
 
+    # A proposal filed before wishes were retired still confirms; the wishes are dropped.
+    old = post(api, "goal-proposals", {"kind": "gtm_draft", "reason": "Old", "payload": {
+        "sections": {"playbooks": ["Referrals"]}}}, token=ops)["proposal"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE goal_proposals SET payload_json=? WHERE id=?", (json.dumps(
+            {"sections": {"playbooks": ["Referrals"], "wishes": [{"text": "No cold SMS"}]}}), old["id"]))
+    post(api, f"goal-proposals/{old['id']}/decide", {"decision": "confirm"}, token="ben-test")
+    body = get(api, "gtm")["draft"]["body"]
+    assert body["playbooks"] == ["Referrals"] and "wishes" not in body
+
 
 def test_publish_emits_the_event_and_gtm_summary_names_motion_and_channels(api):
     draft(api, "gtm", {"motion": {"primary": "local"}, "buyer": {"who_buys": "Homeowners", "deal_size": "$90/month"}})
@@ -152,6 +164,28 @@ def test_gtm_summary_names_served_and_tested_segments_after_the_buyer_within_the
     with api.app.state.store.read() as c:
         full = B._segments_line(c)[0]
     assert full.startswith(shown) and full[len(shown)] in " ,;"                   # cut at a word, never inside one
+
+
+def test_a_row_written_with_the_removed_wishes_section_reads_without_it(api):
+    """Rows saved before the wishes section was removed still hold it: reads drop it, the summary never names it, and a
+    write goes through as it would on a row that never had it."""
+    draft(api, "gtm", {"motion": {"primary": "local"}, "buyer": {"who_buys": "Homeowners"}})
+    post(api, "gtm/publish", {"note": "First"})
+    legacy = {"motion": {"primary": "local"}, "buyer": {"who_buys": "Homeowners"},
+              "wishes": [{"text": "No cold SMS", "level": "block"}]}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE gtm_versions SET body_json=? WHERE n=1", (json.dumps(legacy),))
+        c.execute("UPDATE gtm_drafts SET body_json=?, revision=revision+1 WHERE id=1", (json.dumps(legacy),))
+    page = get(api, "gtm")
+    assert page["published"]["body"] == {"motion": {"primary": "local"}, "buyer": {"who_buys": "Homeowners"}}
+    assert page["draft"]["body"] == page["published"]["body"] and page["draft"]["changed"] == []
+    assert get(api, "gtm/versions/1")["body"] == page["published"]["body"]
+    assert "No cold SMS" not in get(api, "gtm/summary")["text"]
+    draft(api, "gtm", {"wishes": []}, expected=422)
+    draft(api, "gtm", {"playbooks": ["Outbound list"]})
+    post(api, "gtm/publish", {"note": "Playbooks"})
+    published = get(api, "gtm/versions/2")["body"]
+    assert set(published) == {"motion", "buyer", "playbooks"} and published["playbooks"] == ["Outbound list"]
 
 
 def test_clip_keeps_abbreviations_and_whole_words():
