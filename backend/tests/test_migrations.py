@@ -3,6 +3,7 @@ migration rolls back its DDL and its row and runs again once fixed, an applied f
 code must not open is refused before anything is written to it."""
 import gzip
 import hashlib
+import json
 import re
 import shutil
 import sqlite3
@@ -250,3 +251,28 @@ def test_a_database_below_the_bridge_is_refused_before_anything_is_written(tmp_p
 def test_cloud_version_is_the_newest_cloud_step_store_writes():
     newest = max(int(n) for n in re.findall(r"INSERT INTO cloud_migrations VALUES\((\d+),", STORE_SOURCE.read_text()))
     assert migrations.CLOUD_VERSION == newest
+
+
+def test_a_session_link_keeps_its_thread_once_in_its_url(tmp_path):
+    """Migration 0090 strips the thread_id copy from session rows whose url names it, and leaves every other row alone."""
+    import importlib
+    up = importlib.import_module("backend.migrations.0090_task_session_thread_once").up
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE task_links(id TEXT PRIMARY KEY, kind TEXT, url TEXT, detail TEXT)")
+    rows = {
+        "bot": ("session", "session:ops/t-1", '{"primary": true, "harness": "codex", "bot": "ops", "thread_id": "t-1"}'),
+        "resume": ("session", "session:cd /tmp/ops && codex resume abc123",
+                   '{"primary": false, "harness": "codex", "thread_id": "abc123"}'),
+        "reference": ("session", "session:orca ref", '{"primary": false, "thread_id": "elsewhere"}'),
+        "pr": ("pr", "https://github.com/acme/app/pull/1", '{"thread_id": "t-1"}'),
+        "broken": ("session", "session:ops/t-2", "not json"),
+    }
+    conn.executemany("INSERT INTO task_links VALUES(?,?,?,?)", [(key, *row) for key, row in rows.items()])
+    up(conn)
+    stored = dict(conn.execute("SELECT id, detail FROM task_links").fetchall())
+    assert {key: json.loads(stored[key]) for key in ("bot", "resume")} == {
+        "bot": {"primary": True, "harness": "codex", "bot": "ops"}, "resume": {"primary": False, "harness": "codex"}}
+    assert stored["reference"] == rows["reference"][2] and stored["pr"] == rows["pr"][2] and stored["broken"] == "not json"
+    up(conn)
+    assert dict(conn.execute("SELECT id, detail FROM task_links").fetchall()) == stored
+    up(sqlite3.connect(":memory:"))                 # a database with no task_links has nothing to strip
