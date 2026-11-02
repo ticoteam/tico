@@ -12,36 +12,26 @@ ANSWERS = {"what_we_do": "Acme Lights makes holiday projectors that turn a house
 
 PEOPLE = [
     {"id": "ana", "name": "Ana Rivera", "email": "ana@acme.example", "title": "Founder and CEO",
-     "team": "leadership", "primary_for": ["*"], "reports_to": None},
-    {"id": "ben", "name": "Ben Okafor", "email": "ben@acme.example", "title": "Head of customer care",
-     "team": "leadership", "primary_for": ["support-lead", "support", "support-qa", "escalations", "reputation", "inbox"],
+     "team": "leadership", "primary_for": ["*", "finance-lead", "bookkeeper", "ar-followup", "accounts-payable",
+                                           "spend-watcher", "tax", "pricing", "recruiter", "legal-review"],
+     "reports_to": None},
+    {"id": "ben", "name": "Ben Okafor", "email": "ben@acme.example", "title": "Head of operations and customer care",
+     "team": "leadership", "primary_for": ["ops-manager", "procurement", "inventory", "logistics", "quality",
+                                           "compliance", "returns", "support-lead", "support", "support-qa",
+                                           "technical-support", "escalations", "reputation", "inbox"],
      "reports_to": "ana"},
-    {"id": "cara", "name": "Cara Mendes", "email": "cara@acme.example", "title": "Head of marketing",
-     "team": "leadership", "primary_for": ["marketing-lead", "content", "video-producer", "paid-media", "email-marketing", "marketplace",
-                                          "seo", "community"], "reports_to": "ana"},
-    {"id": "dana", "name": "Dana Reyes", "email": "dana@acme.example", "title": "Head of operations",
-     "team": "leadership", "primary_for": ["ops-manager", "procurement", "inventory", "logistics", "quality", "compliance",
-                                          "returns"], "reports_to": "ana"},
+    {"id": "cara", "name": "Cara Mendes", "email": "cara@acme.example", "title": "Head of growth",
+     "team": "leadership", "primary_for": ["marketing-lead", "content", "scene-designer", "video-producer",
+                                           "paid-media", "email-marketing", "seo", "community", "creators",
+                                           "marketplace", "sales-lead", "sales", "sdr", "account-manager",
+                                           "customer-success", "sales-engineer", "sales-ops", "retail", "partners",
+                                           "bids"],
+     "reports_to": "ana"},
     {"id": "eli", "name": "Eli Navarro", "email": "eli@acme.example", "title": "Head of engineering",
-     "team": "leadership", "primary_for": ["product-manager", "pr-reviewer", "issue-triage", "devops", "release-notes", "firmware", "mobile",
-                                          "health-monitor", "botops"], "reports_to": "ana"},
-    {"id": "farah", "name": "Farah Haddad", "email": "farah@acme.example", "title": "Finance lead",
-     "team": "leadership", "primary_for": ["finance-lead", "bookkeeper", "ar-followup", "spend-watcher", "tax"],
+     "team": "leadership", "primary_for": ["product-manager", "pr-reviewer", "issue-triage", "devops", "firmware",
+                                           "mobile", "cloud", "product-analyst", "release-notes", "health-monitor",
+                                           "botops"],
      "reports_to": "ana"},
-    {"id": "june", "name": "June Park", "email": "june@acme.example", "title": "Head of business sales",
-     "team": "leadership", "primary_for": ["sales-lead", "sales", "sdr", "account-manager", "sales-engineer", "sales-ops",
-                                          "retail", "partners", "bids"],
-     "reports_to": "ana"},
-    {"id": "lena", "name": "Lena Brandt", "email": "lena@acme.example", "title": "People and legal",
-     "team": "leadership", "primary_for": ["recruiter", "legal-review"], "reports_to": "ana"},
-    {"id": "gus", "name": "Gus Adeyemi", "email": "gus@acme.example", "title": "Customer care specialist",
-     "team": "leadership", "primary_for": [], "reports_to": "ben"},
-    {"id": "hana", "name": "Hana Sato", "email": "hana@acme.example", "title": "Customer care specialist",
-     "team": "leadership", "primary_for": [], "reports_to": "ben"},
-    {"id": "ivan", "name": "Ivan Petrov", "email": "ivan@acme.example", "title": "Software engineer, calibration",
-     "team": "leadership", "primary_for": [], "reports_to": "eli"},
-    {"id": "kai", "name": "Kai Lindqvist", "email": "kai@acme.example", "title": "Installations lead",
-     "team": "leadership", "primary_for": [], "reports_to": "june"},
 ]
 
 # slug, catalog template, reports to. Each department has a lead bot under the Assistant (coo).
@@ -56,30 +46,35 @@ BOTS = [("coo", "assistant", None), ("botops", "botops", "coo"),
         ("issue-triage", "issue-triage", "product-manager"), ("devops", "devops-engineer", "product-manager"),
         ("release-notes", "release-notes", "product-manager"), ("health-monitor", "health-monitor", "product-manager"),
         ("firmware", "software-architect", "product-manager"), ("mobile", "software-architect", "product-manager"),
+        ("cloud", "software-architect", "product-manager"), ("product-analyst", "product-analyst", "product-manager"),
         # Marketing and content (consumer)
         ("marketing-lead", "marketing-lead", "coo"), ("content", "content", "marketing-lead"),
+        ("scene-designer", "content", "marketing-lead"), ("creators", "partnerships", "marketing-lead"),
         ("video-producer", "video-producer", "marketing-lead"), ("paid-media", "paid-media", "marketing-lead"),
         ("email-marketing", "email-marketing", "marketing-lead"), ("seo", "seo-visibility", "marketing-lead"),
         ("community", "community", "marketing-lead"), ("marketplace", "partnerships", "marketing-lead"),
         # Customer care
         ("support-lead", "support-lead", "coo"), ("support", "support", "support-lead"),
-        ("support-qa", "support-qa", "support-lead"), ("escalations", "escalations", "support-lead"),
+        ("support-qa", "support-qa", "support-lead"), ("technical-support", "technical-support", "support-lead"), ("escalations", "escalations", "support-lead"),
         ("reputation", "reputation", "support-lead"), ("inbox", "inbox", "support-lead"),
         # Business sales (B2B)
         ("sales-lead", "sales-lead", "coo"), ("sales", "sales", "sales-lead"), ("sdr", "sdr-research", "sales-lead"),
-        ("account-manager", "account-manager", "sales-lead"), ("sales-engineer", "sales-engineer", "sales-lead"),
+        ("account-manager", "account-manager", "sales-lead"),
+        ("customer-success", "customer-success", "sales-lead"), ("sales-engineer", "sales-engineer", "sales-lead"),
         ("sales-ops", "sales-ops", "sales-lead"), ("retail", "partnerships", "sales-lead"),
         ("partners", "partnerships", "sales-lead"), ("bids", "sales", "sales-lead"),
         # Finance
         ("finance-lead", "finance-lead", "coo"), ("bookkeeper", "bookkeeper", "finance-lead"),
         ("ar-followup", "ar-followup", "finance-lead"), ("spend-watcher", "spend-watcher", "finance-lead"),
-        ("tax", "tax", "finance-lead"),
+        ("tax", "tax", "finance-lead"), ("accounts-payable", "accounts-payable", "finance-lead"),
+        ("pricing", "pricing", "finance-lead"),
         # People and legal
         ("recruiter", "recruiting", "coo"), ("legal-review", "legal-review", "coo")]
 
 # Job titles for bots whose catalog template is only a starting point.
 BOT_NAMES = {"firmware": "Firmware Engineer", "mobile": "Mobile App Engineer", "marketplace": "Marketplace Manager",
-             "retail": "Retail Partners Manager", "partners": "Installer Partners Manager", "bids": "Public Bids Manager"}
+             "retail": "Retail Partners Manager", "partners": "Installer Partners Manager", "bids": "Public Bids Manager",
+             "cloud": "Render Cloud Engineer", "scene-designer": "Scene Designer", "creators": "Creator Partnerships"}
 
 # Six daily updates per bot and one for Friday's week in review. Each bullet is one plain line.
 UPDATES = {
