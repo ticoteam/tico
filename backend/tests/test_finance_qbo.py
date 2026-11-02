@@ -669,3 +669,19 @@ def test_every_quickbooks_call_names_minor_version_75_the_current_one():
     wire = Wire(QC.Reply(200, {"QueryResponse": {}}))
     _client(wire).find("account.create", {"name": "Checking"}, "account:checking")
     assert urllib.parse.parse_qs(urllib.parse.urlsplit(wire.sent[0][1]).query)["minorversion"] == ["75"]
+
+
+def test_a_429_with_no_retry_after_waits_the_sixty_seconds_quickbooks_asks_before_it_is_tried_again():
+    waits: list[float] = []
+    wire = Wire(QC.Reply(429), QC.Reply(200, {"QueryResponse": {}}))
+    client = QC.QuickBooks("123", lambda force: "tok", base="http://127.0.0.1:9", transport=wire, sleep=waits.append)
+    client.find("account.create", {"name": "Checking"}, "account:checking")
+    assert waits == [60.0] and len(wire.sent) == 2
+
+
+def test_a_429_with_retry_after_waits_that_long_and_no_more_than_the_cap():
+    waits: list[float] = []
+    wire = Wire(QC.Reply(429, retry_after=7.0), QC.Reply(429, retry_after=500.0), QC.Reply(200, {"QueryResponse": {}}))
+    client = QC.QuickBooks("123", lambda force: "tok", base="http://127.0.0.1:9", transport=wire, sleep=waits.append)
+    client.find("account.create", {"name": "Checking"}, "account:checking")
+    assert waits == [7.0, QC.MAX_WAIT]

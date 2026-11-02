@@ -30,7 +30,8 @@ OVERRIDE_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "sandbox-quickbooks
 NAMESPACE = M.REFERENCE_NAMESPACE      # RequestIds are uuid5 of the outbox key in this namespace (core/mirror.reference)
 TIMEOUT = 20
 TRIES_429 = 3
-MAX_WAIT = 30.0
+MAX_WAIT = 30.0                        # the longest wait a Retry-After header may ask for
+RATE_WAIT = 60.0                       # QuickBooks asks for 60 seconds before a throttled call is tried, when no Retry-After
 MAX_TEXT = 300
 PAGE = 1000                            # QuickBooks' most rows in one query or one change-feed entity
 MAX_PAGES = 100                        # a list of items larger than this is refused rather than read forever
@@ -179,7 +180,7 @@ class QuickBooks:
                 continue
             if reply.status == 429 and tries < TRIES_429:
                 tries += 1
-                self.sleep(min(max(reply.retry_after, 1.0), MAX_WAIT))
+                self.sleep(RATE_WAIT if reply.retry_after <= 0 else min(reply.retry_after, MAX_WAIT))
                 continue
             return reply
 
