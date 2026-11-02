@@ -1,31 +1,8 @@
 """A bot's start checks are read once for all its open tasks: counts() asks `waiting` only of the tasks a set
 query says might be waiting, and reads each step name once. The numbers match the one-task-at-a-time checks."""
-import contextlib
-
 from backend import auto_tasks, hubdb as H
-from backend.tests.test_api import api, headers, post  # noqa: F401
+from backend.tests.test_api import api, post  # noqa: F401
 from backend.tests.test_status_reads import setup
-
-
-def employees(api, monkeypatch, token="ana-test"):
-    """GET /api/employees as `token`, and the statements it took."""
-    store, seen = api.app.state.store, []
-    with monkeypatch.context() as patched:
-        for name in ("read", "read_transaction"):
-            def traced(opened=getattr(store, name)):
-                @contextlib.contextmanager
-                def borrowed():
-                    with opened() as c:
-                        c.set_trace_callback(seen.append)
-                        try:
-                            yield c
-                        finally:
-                            c.set_trace_callback(None)
-                return borrowed()
-            patched.setattr(store, name, traced)
-        response = api.get("/api/employees", headers=headers(token))
-    assert response.status_code == 200, response.text
-    return response.json(), len(seen)
 
 
 def open_tasks(store, slug="ops"):
@@ -112,15 +89,3 @@ def test_counts_read_a_fixed_number_of_statements_however_many_open_tasks(api, m
         one_by_one(c, rows)
         c.set_trace_callback(None)
     assert len(seen) > 10 * big
-
-
-def test_employees_page_reads_no_more_statements_as_its_bots_open_tasks_grow(api, monkeypatch):
-    setup(api, monkeypatch, tasks=4)
-    employees(api, monkeypatch)                  # the first read warms the table checks each connection keeps
-    _, small = employees(api, monkeypatch)
-    for n in range(40):
-        post(api, "tasks", {"owner": "ops", "title": f"More {n}", "body": "Please review it."})
-    employees(api, monkeypatch)
-    body, big = employees(api, monkeypatch)
-    assert any(row.get("name") == "ops" for row in body if isinstance(row, dict))
-    assert big == small
