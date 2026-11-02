@@ -465,7 +465,8 @@ threads.mark_all_read(c, viewer, thread_id) -> {"threads": n}        # the whole
 threads.unread(c, viewer, thread_id) -> {"unread": n, "activity": bool}
 ```
 - Join: read up to now. Deletes and backfill (imports, migration, replays) are never unread. Losing access: the
-  follower row is dropped on the next read.
+  follower row is dropped on the next read. A task's own thread is read up to now by its maker when the task is made
+  (`threads.task_opened`), and a requester who did not make it gets its first notice as a silent delivery (mode `none`).
 - Unread count for a viewer = messages in the thread with `seq > last_read_seq` that are human-authored or
   addressed to that viewer (a delivery row for them), excluding their own. Other bot posts are **activity** (a
   dot, never a count).

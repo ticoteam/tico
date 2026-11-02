@@ -2679,17 +2679,37 @@ def mark_read(c, v, thread_id, seq):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = require(c, v, thread_id)
     seq = min(max(int(seq or 0), 0), int(row.get("last_seq") or 0))
+    return {"thread_id": row["id"], "last_read_seq": _read_to(c, row, v.actor, seq)}
+
+
+def _read_to(c, row, actor, seq):
+    """Move `actor`'s read mark in a thread up to `seq` (never back), and read the deliveries up to it. Returns the mark."""
     now = _now()
     c.execute("INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,created_at,"
               "updated_at) VALUES(?,?,?,0,'live','read',?,?,?) ON CONFLICT(thread_id,actor) DO UPDATE SET "
               "last_read_seq=MAX(last_read_seq,excluded.last_read_seq), updated_at=excluded.updated_at "
-              "WHERE excluded.last_read_seq>last_read_seq", (_new_id(), row["id"], v.actor, seq, now, now))
+              "WHERE excluded.last_read_seq>last_read_seq", (_new_id(), row["id"], actor, seq, now, now))
     c.execute("UPDATE message_deliveries SET state='read', read_at=?, updated_at=? WHERE recipient=? AND thread_id=? "
               "AND state IN ('pending','delivered') AND message_id IN (SELECT id FROM messages WHERE conversation_id=? "
-              "AND seq<=?) AND recipient NOT LIKE 'bot:%'", (now, now, v.actor, row["id"], row["id"], seq))
+              "AND seq<=?) AND recipient NOT LIKE 'bot:%'", (now, now, actor, row["id"], row["id"], seq))
     got = c.execute("SELECT last_read_seq FROM thread_followers WHERE thread_id=? AND actor=?",
-                    (row["id"], v.actor)).fetchone()
-    return {"thread_id": row["id"], "last_read_seq": got[0] if got else seq}
+                    (row["id"], actor)).fetchone()
+    return got[0] if got else seq
+
+
+def task_opened(c, conversation, actor, requester, notice):
+    """A task's own thread, as hubdb.task_create makes it (a thread of its own, not a chat it was filed from). Its maker
+    reads the thread up to now, so the notice their own action wrote is not unread for them. A requester who did not
+    make the task hears of it as new: a silent delivery (mode none, which wakes and pushes nothing), so the thread
+    lists in the sidebar until they read it."""
+    row = thread_row(c, conversation["id"])
+    if row is None:
+        return
+    if H.is_human(actor):
+        _read_to(c, row, actor, int(row.get("last_seq") or 0))
+    message = H.message(c, notice["id"]) if notice and notice.get("id") else None
+    if message and H.is_human(requester) and requester != actor and not remote_guest(c, requester):
+        _insert_delivery(c, message, requester, row, root_of(c, row), "none", "member")
 
 
 def mark_all_read(c, v, thread_id):
