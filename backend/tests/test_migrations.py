@@ -133,7 +133,25 @@ def test_an_existing_database_loses_the_redundant_task_indexes_once(tmp_path):
     assert snapshot(path) == first
 
 
-FAMILY = ("CREATE TABLE parent(id TEXT PRIMARY KEY, name TEXT);\n"
+def test_an_existing_database_loses_the_two_duplicate_indexes_once(tmp_path):
+    """Migration 0040 drops invariants_lease (a prefix of attempts_live_lease) and invariants_open_approvals (a copy of
+    approvals_open_created); the indexes that serve the same reads stay, and booting again changes nothing."""
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("CREATE INDEX invariants_lease ON attempts(lease_until) WHERE state IN ('leased','running')")
+        c.execute("CREATE INDEX invariants_open_approvals ON approvals(created_at) WHERE decision IS NULL")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0040' AND version NOT LIKE 'legacy_%'")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        indexes = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        assert not {"invariants_lease", "invariants_open_approvals"} & indexes
+        assert {"attempts_live_lease", "approvals_open_created"} <= indexes
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
+FAMILY =("CREATE TABLE parent(id TEXT PRIMARY KEY, name TEXT);\n"
           "CREATE TABLE child(id TEXT PRIMARY KEY, parent_id TEXT REFERENCES parent(id) ON DELETE CASCADE);\n"
           "INSERT INTO parent VALUES('p1','one');\nINSERT INTO child VALUES('c1','p1');\n")
 REBUILD = ("FOREIGN_KEYS_OFF = True\n\n\ndef up(conn):\n"

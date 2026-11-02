@@ -7,7 +7,7 @@ shows on Health with its count and example ids (`health_checks`) and raises ONE 
 path as a Needs-you task for a stopped bot (`H.task_create`). While the check keeps firing no second task is raised,
 even if the first was closed by hand. When it passes again its task is closed. Nothing is fixed automatically.
 
-Each check reads indexed rows only (the partial indexes in SCHEMA; EXPLAIN QUERY PLAN checked in backend/tests/
+Each check reads indexed rows only (partial indexes here and in backend/store.py's index list; EXPLAIN QUERY PLAN checked in backend/tests/
 test_invariants.py). A rehearsal or demo copy checks nothing: its data is a copy of a live install's and its runners
 do not run.
 """
@@ -26,9 +26,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS invariant_state(
  check_id TEXT PRIMARY KEY, firing INTEGER NOT NULL DEFAULT 0, count INTEGER NOT NULL DEFAULT 0,
  examples TEXT NOT NULL DEFAULT '[]', checked_at TEXT, since TEXT, task_id TEXT);
-CREATE INDEX IF NOT EXISTS invariants_lease ON attempts(lease_until) WHERE state IN ('leased','running');
 CREATE INDEX IF NOT EXISTS invariants_doing ON tasks(updated_at) WHERE status='doing';
-CREATE INDEX IF NOT EXISTS invariants_open_approvals ON approvals(created_at) WHERE decision IS NULL;
 """
 
 LIMIT = 500                  # rows read per check; a count at this many is "500 or more"

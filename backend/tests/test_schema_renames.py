@@ -113,8 +113,10 @@ def test_indexes_triggers_and_views_survive_and_name_no_old_column(upgraded):
     _store, conn, before = upgraded
     for kind in ("index", "trigger", "view"):
         now = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type=?", (kind,))}
-        # Growth segments put growth_cohorts_month_segment in place of the month-only unique index.
-        assert before[kind + "es" if kind == "index" else kind + "s"] - {"growth_cohorts_month"} <= now, kind
+        # Growth segments put growth_cohorts_month_segment in place of the month-only unique index. Migration 0040
+        # drops two indexes that duplicate or are a prefix of a kept one (backend/migrations/0040_*.sql).
+        dropped = {"growth_cohorts_month", "invariants_lease", "invariants_open_approvals"}
+        assert before[kind + "es" if kind == "index" else kind + "s"] - dropped <= now, kind
     # An old name may live on as a column elsewhere (or as another rename's new name), so look only for names
     # that no table has any more, outside string literals.
     current = set().union(*(columns(conn, t) for (t,) in conn.execute(

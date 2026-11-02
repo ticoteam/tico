@@ -36,7 +36,7 @@ backend/hook_relay_schema.py:3
 backend/hubdb.py:294
 backend/idempotency_messages.py:6
 backend/inbound.py:5
-backend/invariants.py:4
+backend/invariants.py:2
 backend/invites.py:1
 backend/learned.py:2
 backend/learnings.py:4
