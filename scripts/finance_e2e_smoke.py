@@ -1416,7 +1416,7 @@ def schedule_and_address(page: Page, run: Run, base: str, shots: str) -> None:
     open_draft(page, number, "Open")
     dlg = open_dialog(page, "[data-fin-do=schedule]")
     run.note("5 schedule dialog fields", ", ".join(dlg.locator("input").evaluate_all("els => els.map(e => e.name || e.type).filter(Boolean)")))
-    used = p2_fill(dlg, ("date", "when", "scheduled_for", "pay_on", "run_on"), "2026-11-20")
+    used = p2_fill(dlg, ("date", "when", "scheduled_for", "pay_on", "run_on", "on"), "2026-11-20")
     if not used and dlg.locator("input[type=date]").count():
         dlg.locator("input[type=date]").first.fill("2026-11-20")
         used = "type=date"
@@ -1432,7 +1432,7 @@ def schedule_and_address(page: Page, run: Run, base: str, shots: str) -> None:
     status = "Scheduled" if page.locator("[role=radio]", has_text="Scheduled").count() else "Open"
     open_draft(page, number, status)
     dlg = open_dialog(page, "[data-fin-do=schedule]")
-    p2_fill(dlg, ("date", "when", "scheduled_for", "pay_on", "run_on"), "2026-11-25")
+    p2_fill(dlg, ("date", "when", "scheduled_for", "pay_on", "run_on", "on"), "2026-11-25")
     problem = submit(page, dlg)
     _, data = get_json(page, base, "/api/v2/finance/bills?limit=200")
     bill = next((r for r in rows_of(data) if r.get("number") == number), {})
@@ -1500,6 +1500,8 @@ def item8(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
         scroll_fit(page, run, "8 phone: P&L with a range", shots, "item8-range-phone-fit.png")
     if width == "desktop":
         go(page, base, "#/finance/pnl")
+        # November, not the October default: the Software budget starts in November, so October shows no version.
+        p2_range(page, "2026-11-01", "2026-11-30")
         before = page.locator("#fin-pl thead th").evaluate_all("els => els.map(e => e.textContent.trim())")
         options = p2_options(page, "select[data-fin-compare]")
         run.note("8 compare: budget versions offered", " | ".join(options) or "none")
@@ -1674,12 +1676,11 @@ def item11(page: Page, run: Run, base: str, fake: str, shots: str, width: str) -
             page.wait_for_load_state("networkidle")
             warn = vendor_rows.first.inner_text()
             run.note("11 vendor row after a 100 budget", " ".join(warn.split())[:200])
-            account = href.split("/line/")[1].split("?")[0] if "/line/" in href else ""
-            _, line = get_json(page, base, f"/api/v2/finance/lines/{account}")
-            vendor_hits = find_all(line, lambda d: d.get("name") == "Rehearsal vendor" or d.get("vendor") == "Rehearsal vendor")
-            budgets = [{k: v for k, v in d.items() if "budget" in k} for d in vendor_hits]
-            run.check("11 the vendor budget reads back (100 dollars = 10000 cents)",
-                      any(10000 in b.values() or 100 in b.values() for b in budgets), f"{budgets}")
+            # The vendor's budget is a child budget of the line budget: read it from the budgets API by its vendor id.
+            _, budget_data = get_json(page, base, "/api/v2/finance/budgets?include_inactive=true")
+            budget_rows = (budget_data.get("budgets") if isinstance(budget_data, dict) else budget_data) or []
+            amounts = [(r.get("state") or {}).get("amount") for r in budget_rows if r.get("vendor") == vendor.get("id")]
+            run.check("11 the vendor budget reads back (100 dollars = 10000 cents)", 10000 in amounts, f"amounts {amounts}")
         else:
             run.note("11 vendor budget", "no budget field on the vendor row")
     if width == "phone":
