@@ -133,6 +133,7 @@ class FakeMercury:
         self.balances: dict[str, float] = {}       # account id -> currentBalance, in place of the recorded one
         self.unlisted: set[str] = set()            # request ids Mercury no longer lists (sent): still answered by id
         self.card_page = 500
+        self.txn_page = 500                        # most rows one account-transactions answer gives (its limit caps it)
 
     def _answer(self, name: str, arg: object, default: object):
         self.calls.append((name, arg))
@@ -172,12 +173,16 @@ class FakeMercury:
         raw = self.txns.get(txn_id)
         return self._answer("transaction", txn_id, raw if raw is not None else self.Answer(404, {}))
 
-    def account_transactions(self, account_id, search=None, start=None, end=None, start_after=None, limit=500):
-        """One account's transactions a page at a time: `search` (when given) matches a transaction's note, description
-        or counterparty; `start` and `end` (dates, YYYY-MM-DD) bound its created day; `start_after` reads on from the
-        last page's nextPage, as the other lists do."""
+    def account_transactions(self, account_id, search=None, start=None, end=None, offset=0, request_id=None, limit=500):
+        """One account's transactions as Mercury lists them: offset paging (no start_after or nextPage), and an answer's
+        `total` counts every match. `search` finds a note, description or counterparty name (not a memo-only
+        key: the docs' "recipient memo" is not mapped to externalMemo); `start` and `end` bound the created day
+        (YYYY-MM-DD); `request_id` finds the transaction a request became.
+        One answer gives at most `txn_page` rows."""
         def hit(txn: dict) -> bool:
             if str(txn.get("accountId")) != account_id:
+                return False
+            if request_id and str(txn.get("requestId") or "") != request_id:
                 return False
             if search and not any(search.lower() in str(txn.get(f) or "").lower()
                                   for f in ("note", "bankDescription", "counterpartyName")):
@@ -185,13 +190,9 @@ class FakeMercury:
             day = str(txn.get("createdAt") or "")[:10]
             return (not start or day >= start) and (not end or day <= end)
         hits = [t for t in self.txns.values() if hit(t)]
-        ids = [str(t["id"]) for t in hits]
-        first = ids.index(start_after) + 1 if start_after in ids else 0
-        chunk = hits[first:first + limit]
-        more = first + limit < len(hits)
-        page = {"nextPage": str(chunk[-1]["id"])} if more and chunk else {}
+        chunk = hits[offset:offset + min(limit, self.txn_page)]
         return self._answer("account_transactions", (account_id, search, start, end),
-                            {"transactions": chunk, "page": page})
+                            {"transactions": chunk, "total": len(hits)})
 
     def events(self, start_after, limit=500, newest=False):
         found = list(reversed(self.events_list))[:limit] if newest else self.events_list

@@ -114,8 +114,8 @@ def plan_internal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def request_body(payload: Mapping[str, Any]) -> dict[str, object]:
     """Mercury's transfer body: the documented fields, the amount in dollars, and Finance's key for this transfer.
-    The key also goes in `note` (payments.request_body does the same): an unknown transfer is found by it in Mercury's
-    transactions. `note` is not among the documented transfer fields, so it must be confirmed against Mercury."""
+    The key also goes in `note`, a documented field (payments.request_body does the same): an unknown transfer is found
+    by it in Mercury's transactions."""
     key = str(payload["idempotency_key"])
     return {"sourceAccountId": str(payload["source_account"]),
             "destinationAccountId": str(payload["destination_account"]),

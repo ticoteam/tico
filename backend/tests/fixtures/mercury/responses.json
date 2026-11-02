@@ -14,9 +14,9 @@
     {"id": "credit-io", "status": "active", "createdAt": "2026-01-05T15:00:00Z", "availableBalance": -1250.25, "currentBalance": -1250.25}
   ]},
   "users": {"users": [
-    {"id": "user-ana", "firstName": "Ana", "lastName": "Acme", "email": "ana@acme.example", "role": "admin"},
-    {"id": "user-ben", "firstName": "Ben", "lastName": "Acme", "email": "ben@acme.example", "role": "admin"},
-    {"id": "user-eve", "firstName": "Eve", "lastName": "Acme", "email": "eve@acme.example", "role": "custom"}
+    {"userId": "user-ana", "firstName": "Ana", "lastName": "Acme", "email": "ana@acme.example", "organizationRole": "administrator"},
+    {"userId": "user-ben", "firstName": "Ben", "lastName": "Acme", "email": "ben@acme.example", "organizationRole": "administrator"},
+    {"userId": "user-eve", "firstName": "Eve", "lastName": "Acme", "email": "eve@acme.example", "organizationRole": "customUser"}
   ]},
   "txn_card_pending": {"id": "txn-card-1", "accountId": "credit-io", "amount": -42.5, "createdAt": "2026-10-14T18:01:02Z",
     "postedAt": null, "status": "pending", "kind": "creditCardTransaction", "counterpartyName": "ACME CLOUD HOSTING",
@@ -55,6 +55,6 @@
     "numberOfApproversRequired": 1, "requesterMayApprove": false},
   "send_request_rejected": {"requestId": "req-1", "status": "rejected", "requestedByUserId": "user-ana",
     "reviews": [{"userId": "user-ben", "decision": "rejected"}]},
-  "card_created": {"cardId": "card-eve", "lastFourDigits": "4242", "nameOnCard": "Eve Acme", "status": "active",
+  "card_created": {"id": "card-eve", "lastFour": "4242", "nameOnCard": "Eve Acme", "status": "active",
     "spendLimit": {"amountCents": 20000, "interval": "monthly"}}
 }

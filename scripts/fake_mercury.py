@@ -19,6 +19,8 @@ or cancelled; any other is a 400) and a limit from 1 to 1000 (else a 400). A req
 transaction, and the request list no longer shows it (the docs do not say whether it stays): it is still answered by
 id, and its transaction carries its request id and the key in externalMemo, as a finance lookup reads it back.
 POST /account/<id>/transactions is a direct send: a transaction at once, with no approver.
+GET /account/<id>/transactions pages by offset (limit 1 to 1000, and an answer's `total` counts every match); it has
+no start_after.
 
   python3 scripts/fake_mercury.py --port 18790
 """
@@ -173,10 +175,7 @@ def mercury(method: str, path: str, q: dict, body: dict) -> tuple[int, dict]:
         chunk = events[:limit]
         return 200, {"events": chunk, "page": {"nextPage": chunk[-1]["id"]} if len(events) > limit and chunk else {}}
     if method == "GET" and len(parts) == 3 and parts[0] == "account" and parts[2] == "transactions":
-        mine = [t for t in STATE.txns if str(t.get("accountId")) == parts[1] and in_search(t, one(q, "search"))
-                and in_days(t, one(q, "start"), one(q, "end"))]
-        chunk, nxt = page(mine, "id", after, limit)
-        return 200, {"transactions": chunk, "page": nxt}
+        return account_transactions(parts[1], q)
     if method == "POST" and path == "/transfer":
         return transfer(body)
     if method == "GET" and parts[0] == "account" and parts[-1] == "statements":
@@ -253,16 +252,16 @@ def direct_send(account: str, body: dict) -> tuple[int, dict]:
 
 
 def new_card(body: dict) -> dict:
-    """POST /cards: a virtual card, usable at once, in Mercury's card shape (the create answer's cardId and
-    lastFourDigits beside the card fields). A credit card with no accountId is on the org's IO credit account."""
+    """POST /cards: a virtual card, usable at once, in Mercury's Card shape (id, lastFour, and the rest of the card
+    fields). A credit card with no accountId is on the org's IO credit account."""
     cid = STATE.new("card")
     four = LAST_FOUR[len(STATE.cards) % len(LAST_FOUR)]
-    user = next((u for u in FIXTURES["users"]["users"] if u["id"] == body.get("userId")), None)
+    user = next((u for u in FIXTURES["users"]["users"] if u["userId"] == body.get("userId")), None)
     holder = f"{user['firstName']} {user['lastName']}" if user else "Acme"
     at = now()
-    card = {**copy.deepcopy(FIXTURES["card_created"]), "id": cid, "cardId": cid, "userId": body.get("userId"),
+    card = {**copy.deepcopy(FIXTURES["card_created"]), "id": cid, "userId": body.get("userId"),
             "accountId": body.get("accountId") or CARD, "nameOnCard": holder, "nickname": body.get("nickname"),
-            "lastFour": four, "lastFourDigits": four, "expiration": {"month": 11, "year": int(at[:4]) + 3},
+            "lastFour": four, "expiration": {"month": 11, "year": int(at[:4]) + 3},
             "type": "virtual", "kind": body.get("kind", "credit"), "status": "active",
             "spendLimit": body.get("spendLimit"), "spendLimitType": "cardLimit", "isAgentCard": False,
             "physicalCardStatus": None, "createdAt": at, "updatedAt": at}
@@ -298,9 +297,27 @@ def card_spend(body: dict) -> tuple[int, dict]:
 
 
 def in_search(txn: dict, search: str | None) -> bool:
-    """Mercury's search of an account's transactions: the text sits in the note, description or counterparty."""
+    """Mercury's search of an account's transactions: the text sits in the note, description or counterparty name. The
+    docs also say "recipient memo", which they never map to externalMemo, so a memo-only key is not assumed to match."""
     text = (search or "").lower()
-    return not text or any(text in str(txn.get(f) or "").lower() for f in ("note", "bankDescription", "counterpartyName"))
+    return not text or any(text in str(txn.get(f) or "").lower()
+                           for f in ("note", "bankDescription", "counterpartyName"))
+
+
+def account_transactions(account: str, q: dict) -> tuple[int, dict]:
+    """GET /account/<id>/transactions as documented: `search`, `start` and `end` (the created day), `requestId`, and
+    offset paging with `total` (every match). `limit` is 1 to 1000 (1000 when left out); there is no start_after."""
+    try:
+        limit = int(one(q, "limit", "1000") or 1000)
+        offset = int(one(q, "offset", "0") or 0)
+    except ValueError:
+        return 400, {"message": "limit and offset are whole numbers"}
+    if not 1 <= limit <= 1000 or offset < 0:
+        return 400, {"message": "limit is from 1 to 1000; offset is 0 or more"}
+    request = one(q, "requestId")
+    mine = [t for t in STATE.txns if str(t.get("accountId")) == account and in_search(t, one(q, "search"))
+            and in_days(t, one(q, "start"), one(q, "end")) and (not request or t.get("requestId") == request)]
+    return 200, {"transactions": mine[offset:offset + limit], "total": len(mine)}
 
 
 def in_days(txn: dict, start: str | None, end: str | None) -> bool:

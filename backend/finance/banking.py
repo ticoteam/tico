@@ -307,6 +307,8 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     fid = str(row["id"])
     if ctx.book.mode == "mirror":
         from .mirror import settle_row
+        if not (t.pending or t.void or t.reversed):
+            _cancelled_debit(ctx, money, fid, t)     # a mirror's Mercury can still pay: the same ask, then mirror it
         settle_row(ctx, row, money, t)
         return
     program = str(money["kind"]) == "card_program"
@@ -337,16 +339,8 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         row = SK.get(ctx.c, "fin_feed_txns", fid)
     if str(row["status"]) == "ignored":
         return
-    cut = _cancelled(ctx, money, t) if t.amount < 0 else None
-    if cut is not None:
-        # Mercury sent a payment Finance had cancelled: its key is on this debit. The payment stays cancelled and the
-        # bill it paid stays open (payment_ended reopened it); nothing here pays it, and one Needs-you asks a person.
-        tico.needs_you(ctx.c, payments.admin_person(ctx) or ctx.org.owner,
-                       f"Check a bank debit for cancelled payment {cut['id']}",
-                       f"Bank transaction {fid} carries the key of payment {cut['id']}, which Finance cancelled: "
-                       "Mercury may have sent it after all. The payment stays cancelled and its bill stays open. "
-                       "Check Mercury before anything else.", private=True)
-        return
+    if _cancelled_debit(ctx, money, fid, t):
+        return          # the payment stays cancelled and its bill stays open (payment_ended reopened it); nothing pays
     gl = _gl(ctx, money)
     pay = SK.payment_by_request(ctx.c, t.request_id) if t.request_id else None
     if pay is None and t.amount < 0:
@@ -431,6 +425,22 @@ def _cancelled(ctx: Ctx, money: Any, t: F.FeedTxn) -> Any:
         if f"{payments.NOTE}{pay['idempotency_key']}" in shown:
             return pay
     return None
+
+
+def _cancelled_debit(ctx: Ctx, money: Any, fid: str, t: F.FeedTxn) -> bool:
+    """A debit that carries a cancelled payment's key: Mercury sent what Finance had cancelled. One Needs-you asks a
+    person; nothing here pays the bill. True when the debit is one (its caller then stops the normal settlement)."""
+    if t.amount >= 0:
+        return False
+    cut = _cancelled(ctx, money, t)
+    if cut is None:
+        return False
+    tico.needs_you(ctx.c, payments.admin_person(ctx) or ctx.org.owner,
+                   f"Check a bank debit for cancelled payment {cut['id']}",
+                   f"Bank transaction {fid} carries the key of payment {cut['id']}, which Finance cancelled: "
+                   "Mercury may have sent it after all. The payment stays cancelled and its bill stays open. "
+                   "Check Mercury before anything else.", private=True)
+    return True
 
 
 def _marked(ctx: Ctx, money: Any, t: F.FeedTxn) -> Any:

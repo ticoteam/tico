@@ -59,7 +59,7 @@ class Provider(Protocol):
     def transactions(self, start_after: str | None, limit: int = PAGE) -> Answer: ...
     def transaction(self, txn_id: str) -> Answer: ...
     def account_transactions(self, account_id: str, search: str | None, start: str, end: str,
-                             start_after: str | None = None) -> Answer: ...
+                             offset: int = 0, request_id: str | None = None) -> Answer: ...
     def events(self, start_after: str | None, limit: int = PAGE, newest: bool = False) -> Answer: ...
     def statements(self, account_id: str, start: str, end: str) -> Answer: ...
     def credit_statements(self, account_id: str) -> Answer: ...
@@ -163,13 +163,15 @@ class Mercury:
         return self._call("GET", f"/transaction/{urllib.parse.quote(txn_id)}")
 
     def account_transactions(self, account_id: str, search: str | None, start: str, end: str,
-                             start_after: str | None = None) -> Answer:
-        """One account's transactions created from `start` through `end` (YYYY-MM-DD), that `search` finds (its note,
-        description or counterparty) when it is given. A page at a time: `start_after` reads on from the last page's
-        next page. An unknown transfer's lookup reads one page by its note; an unknown payment's reads back every page
-        to its creation (sync.py)."""
+                             offset: int = 0, request_id: str | None = None) -> Answer:
+        """One account's transactions created from `start` through `end` (YYYY-MM-DD), a page of up to PAGE from
+        `offset`. Mercury pages this list by offset and its answer carries `total` (every match): a read goes on until
+        offset reaches it (sync.py). `search` finds a transaction by its note, description, recipient memo or
+        counterparty name; `request_id` finds the transaction a send-money request became. The list has no start_after,
+        cursor or nextPage (docs.mercury.com listaccounttransactions)."""
         return self._call("GET", f"/account/{urllib.parse.quote(account_id)}/transactions",
-                          {"search": search, "start": start, "end": end, "limit": PAGE, "start_after": start_after})
+                          {"search": search, "start": start, "end": end, "limit": PAGE, "offset": offset,
+                           "requestId": request_id})
 
     def events(self, start_after: str | None, limit: int = PAGE, newest: bool = False) -> Answer:
         return self._call("GET", "/events", {"limit": limit, "order": "desc" if newest else "asc",

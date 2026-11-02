@@ -87,7 +87,8 @@ def probe(provider: Provider) -> tuple[dict[str, object], str]:
 
 def user_rows(users: Answer) -> list[dict[str, object]]:
     """Mercury's users as Finance keeps them: id, name, email (lowercased) and role."""
-    return [{"id": str(u.get("id") or ""), "email": str(u.get("email") or "").lower(), "role": str(u.get("role") or ""),
+    return [{"id": str(u.get("userId") or ""), "email": str(u.get("email") or "").lower(),
+             "role": str(u.get("organizationRole") or ""),
              "name": " ".join(str(u.get(k) or "").strip() for k in ("firstName", "lastName")).strip()[:120]}
             for u in listed(users, "users")]
 
@@ -620,8 +621,8 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
         elif op == "card_create" and not answer.body.get("skipped"):
             limit = int(answer.body.get("sent_limit") or body["monthly"])     # what was asked for, not a later edit
             SK.update(c, "fin_cards", card_id, {
-                "provider_card_id": str(answer.body.get("cardId") or answer.body.get("id") or ""),
-                "last4": str(answer.body.get("lastFourDigits") or "")[-4:] or None, "provider_status": "active",
+                "provider_card_id": str(answer.body.get("id") or ""),
+                "last4": str(answer.body.get("lastFour") or "")[-4:] or None, "provider_status": "active",
                 "provider_limit": limit, "sync_status": "ok", "synced_at": now, "updated_at": now})
             cards.created(load(c, now), card_id, str(o["action_id"] or ""), str(o["id"]))
         elif op == "card_create":
@@ -735,14 +736,43 @@ def _requests(provider: Provider, account: str) -> tuple[list[dict[str, Any]], b
     return out, whole
 
 
+TXN_PAGES = 1000                  # pages one read back may take of an account's transactions (500 a page)
+
+
 def _read_back(provider: Provider, account: str, pay: Any, now: str) -> tuple[list[dict[str, Any]], bool]:
     """The account's transactions from the payment's creation day through the day after now (Mercury's days are UTC),
-    every page (up to REQUEST_PAGES): the rows, and whether the whole span was read."""
+    every page: the rows, and whether the whole span was read. Mercury's filters narrow it to this payment: its request
+    id when one is known (a request's transaction carries it; a direct send is its own transaction and has none), else
+    the key in its note (payments.NOTE + key), which Mercury's search matches."""
     if not account:
         return [], False
     start = str(pay["created_at"])[:10]
     end = (datetime.fromisoformat(now.replace("Z", "+00:00")) + timedelta(days=1)).date().isoformat()
-    return _every_page(lambda after: provider.account_transactions(account, None, start, end, after), "transactions")
+    request = "" if str(pay["mode"]) == "direct" else str(pay["provider_request_id"] or "")
+    search = None if request else f"{payments.NOTE}{pay['idempotency_key']}"
+    return _offset_pages(lambda offset: provider.account_transactions(account, search, start, end, offset,
+                                                                      request or None), "transactions")
+
+
+def _offset_pages(read: Callable[[int], Answer], rows_key: str) -> tuple[list[dict[str, Any]], bool]:
+    """One of Mercury's account lists read to its end by offset: each page's rows until the answer's `total` (every
+    match) is reached. A failed read, an answer with no total, or a page that ends short of the total is not whole: it
+    never counts as "not there"."""
+    out: list[dict[str, Any]] = []
+    for _ in range(TXN_PAGES):
+        page = read(len(out))
+        if not page.ok:
+            return out, False
+        rows = listed(page, rows_key)
+        total = page.body.get("total")
+        if not isinstance(total, int) or isinstance(total, bool):
+            return out + rows, False
+        out += rows
+        if len(out) >= total:
+            return out, True
+        if not rows:
+            return out, False
+    return out, False
 
 
 def _every_page(read: Callable[[str | None], Answer], rows_key: str) -> tuple[list[dict[str, Any]], bool]:

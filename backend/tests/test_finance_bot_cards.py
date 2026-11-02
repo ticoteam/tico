@@ -47,8 +47,8 @@ def _world(books, fake):
     """Acme's Mercury connected; a 50.00 budget with a 20.00 standing card for each bot, both synced to Mercury (the
     fake answers card-coder and card-seller); both bots granted finance.cards."""
     connect(books, fake)
-    fake.queue["create_card"] = [{**MERCURY["card_created"], "cardId": "card-coder", "lastFourDigits": "1111"},
-                                 {**MERCURY["card_created"], "cardId": "card-seller", "lastFourDigits": "2222"}]
+    fake.queue["create_card"] = [{**MERCURY["card_created"], "id": "card-coder", "lastFour": "1111"},
+                                 {**MERCURY["card_created"], "id": "card-seller", "lastFour": "2222"}]
     with books.transaction() as c:
         budget = _budget(c)
         coder = str(_bot_card(c, budget, "bot:coder").result["card_id"])
@@ -251,18 +251,20 @@ def test_the_card_help_says_the_mercury_user_may_be_left_out_because_tico_finds_
 def test_a_card_for_a_teammate_is_issued_to_the_mercury_user_with_the_same_email(books):
     fake = FakeMercury()
     connect(books, fake)
-    fake.queue["create_card"] = [{**MERCURY["card_created"], "cardId": "card-ben", "lastFourDigits": "3333"}]
+    fake.queue["create_card"] = [{**MERCURY["card_created"], "id": "card-ben", "lastFour": "3333"}]
     with books.transaction() as c:
         made = act(c, OWNER, "card_create", {"holder": "human:ben", "budget_id": _budget(c), "amount": 20_000})
         assert made.status == "committed", (made.code, made.reason)
     sync_once(books, fake)
     assert fake.sent("create_card") == [("user-ben", 20_000)]
+    with books.read() as c:       # Mercury's Card answer: its id, and its last four (lastFour) kept on the card
+        assert tuple(c.execute("SELECT provider_card_id, last4 FROM fin_cards").fetchone()) == ("card-ben", "3333")
 
 
 def test_a_card_with_no_named_or_found_mercury_user_takes_the_connections_card_user_or_is_refused(books):
     fake = FakeMercury()
     connect(books, fake)
-    fake.queue["create_card"] = [{**MERCURY["card_created"], "cardId": "card-coder", "lastFourDigits": "1111"}]
+    fake.queue["create_card"] = [{**MERCURY["card_created"], "id": "card-coder", "lastFour": "1111"}]
     with books.transaction() as c:
         budget = _budget(c)
         refused = act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": budget, "amount": 20_000})
@@ -286,7 +288,7 @@ def test_a_card_request_may_name_its_merchant_which_is_kept_on_the_card_and_not_
     assert {f["name"] for f in FA.help("card_create")["fields"]} >= {"merchant"}
     fake = FakeMercury()
     connect(books, fake)
-    fake.queue["create_card"] = [{**MERCURY["card_created"], "cardId": "card-coder", "lastFourDigits": "1111"}]
+    fake.queue["create_card"] = [{**MERCURY["card_created"], "id": "card-coder", "lastFour": "1111"}]
     with books.transaction() as c:
         made = act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": _budget(c), "amount": 20_000,
                                              "provider_user_id": "user-cara", "merchant": "Acme Cloud"})

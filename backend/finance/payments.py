@@ -534,10 +534,29 @@ def end(ctx: Ctx, pay: Any, status: str, why: str = "") -> None:
     from .documents import payment_ended
     payment_ended(ctx, pay)                        # a bill it paid is owed again
     if status == "failed":
-        maker = str(pay["created_by"])
-        person = maker if maker in ctx.org.humans else (admin_person(ctx, maker) or maker)
-        tico.needs_you(ctx.c, person, f"Payment of {int(pay['amount']) / 100:.2f} failed",
-                       f"Mercury refused payment {pay['id']}: {why[:300]}. Fix it and pay again.", private=True)
+        _ask_maker(ctx, pay, f"Payment of {int(pay['amount']) / 100:.2f} failed",
+                   f"Mercury refused payment {pay['id']}: {why[:300]}. Fix it and pay again.")
+
+
+def _ask_maker(ctx: Ctx, pay: Any, title: str, body: str) -> None:
+    """A Needs-you for the payment's maker when a person made it, else the finance admin (the maker when no one else is
+    one). Private: it names an amount."""
+    maker = str(pay["created_by"])
+    person = maker if maker in ctx.org.humans else (admin_person(ctx, maker) or maker)
+    tico.needs_you(ctx.c, person, title, body, private=True)
+
+
+def _refused_in_mercury(ctx: Ctx, pay: Any, word: str) -> None:
+    """A payment Mercury rejected or cancelled (never a person's cancel in Finance, which ends it without a Needs-you):
+    it ends `cancelled`, so the bill it paid is owed again, and its maker or the finance admin is asked to look at it.
+    The Needs-you names the payment, the payee and the obligation it was paying."""
+    end(ctx, pay, "cancelled", f"{word} in Mercury")
+    rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))
+    payee = str(rec["name"]) if rec is not None else "a payee"
+    paying = f" for {pay['obligation']}" if pay["obligation"] else ""
+    _ask_maker(ctx, pay, f"Payment {pay['id']} of {int(pay['amount']) / 100:.2f} was {word} in Mercury",
+               f"Mercury {word} payment {pay['id']} to {payee}{paying}. The bill it paid is open again. Check Mercury; "
+               "pay it again only if it is still owed.")
 
 
 def admin_person(ctx: Ctx, requester: str = SYSTEM) -> str:
@@ -821,7 +840,7 @@ def _accepted(ctx: Ctx, pay: Any, answer: Answer, attempts: int) -> None:
         "attempts": attempts, "last_error": None, "unknown_since": None, "next_try_at": _later(ctx, 1),
         "updated_at": ctx.at})
     if status == "cancelled":
-        end(ctx, pay, "cancelled", "rejected in Mercury")
+        _refused_in_mercury(ctx, pay, "rejected")
 
 
 def unknown(ctx: Ctx, pay: Any, why: str, attempts: int | None = None) -> None:
@@ -868,7 +887,7 @@ def polled(ctx: Ctx, pay: Any, answer: Answer) -> None:
         return
     status = F.request_status(answer.body.get("status"))
     if status == "cancelled":
-        end(ctx, pay, "cancelled", f"{answer.body.get('status')} in Mercury")
+        _refused_in_mercury(ctx, pay, str(answer.body.get("status") or "cancelled"))
         return
     fields: dict[str, object] = {"next_try_at": _later(ctx, 1), "updated_at": ctx.at}
     if status and status != str(pay["status"]):
