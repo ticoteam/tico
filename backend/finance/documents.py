@@ -16,13 +16,18 @@ network. Finance records on accrual underneath and derives the cash view from se
 - A write-off posts Dr the write-off line / Cr AR with basis `accrual`: the cash view never had that income.
 - Stage events: finance.bill.received once per bill, finance.bill.due_soon and finance.invoice.overdue once per
   document per stage (the hourly `watch`)."""
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any, cast
 
+from .. import automation_due
+from .. import due_date_flow as FLOW
+from .. import hubdb as H
 from ..records import reads as RR
 from . import budgeting, posting, shared
+from . import context as FC
 from .context import Ctx
 from .core import ap as AP
 from .core import budgets as B
@@ -1635,6 +1640,49 @@ def pay_due(ctx: Ctx) -> int:
     return n
 
 
+def _renewal_task(ctx: Ctx, vendor: Any, today: date) -> None:
+    """The task that puts a vendor's renewal in front of someone (plan P3). It opens the vendor's notice days before its
+    cancel-by day and falls due on that day, once per renewal date. It goes to the vendor's owner, else to the install
+    owner; a vendor whose owner can't take work sends the install owner a Needs-you item instead."""
+    renewal_on = str(vendor["renewal_on"])
+    notice_by = AP.renewal_notice_by(renewal_on, int(vendor["renewal_notice_days"] or 0))
+    if notice_by is None:
+        return
+    cancel_by = dates.day(notice_by)
+    opens = cancel_by - timedelta(days=int(vendor["renewal_notice_days"] or 0))
+    if not opens <= today <= cancel_by:
+        return
+    key = f"vendor-renewal-task:{vendor['id']}:{renewal_on}"
+    if ctx.c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (key,)).fetchone() is not None:
+        return
+    install = FC.owner(ctx.c)
+    name = str(vendor["name"])
+    target = str(vendor["owner_id"] or "") or install
+    if not target:
+        return
+    actor, why = FLOW.assignee(ctx.c, target)
+    if why:
+        if install:
+            TI.needs_you(ctx.c, install, f"Vendor renewal needs a teammate: {name}"[:200],
+                         f"{name} renews on {renewal_on} and its notice runs out on {cancel_by.isoformat()}. Its owner "
+                         f"{why}, so no one has its renewal task. Give the vendor an active owner (contact_update "
+                         "owner_id) and the next pass opens the task.")
+        return
+    title = f"Vendor renewal: {name}"[:200]
+    body = (f"{name} renews on {renewal_on}, and its notice runs out on {cancel_by.isoformat()}. Decide before then "
+            "whether to renew, renegotiate or cancel.")
+    try:
+        task = H.task_create(ctx.c, H.KEEPER, title, body, actor, due=automation_due.due_end(cancel_by, FLOW.zone()),
+                             deduplicate=False, trigger="schedule", trigger_source="vendor_renewal")
+    except H.Refused as exc:
+        if install:
+            TI.needs_you(ctx.c, install, f"Vendor renewal could not open: {name}"[:200],
+                         f"{title} was refused: {exc}")
+        return
+    ctx.c.execute("INSERT INTO registry_metadata(key, value_json) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
+                  "value_json=excluded.value_json", (key, json.dumps(str(task["id"]))))
+
+
 def watch(ctx: Ctx) -> int:
     """Raise each open bill's due-soon stage and each sent invoice's overdue stage, once per document per stage."""
     today = dates.day(ctx.today)
@@ -1653,6 +1701,7 @@ def watch(ctx: Ctx) -> int:
             n += 1
     for vendor in SAP.renewals_due(ctx.c, ctx.book.id):
         # Counted to the cancel-by day, so the task lands before the vendor's notice runs out (P3).
+        _renewal_task(ctx, vendor, today)
         notice_by = AP.renewal_notice_by(vendor["renewal_on"], vendor["renewal_notice_days"])
         stage = AP.renewal_stage(notice_by, today)
         if stage:
