@@ -7869,6 +7869,8 @@ def create_app(settings=None):
     install_brand(app, store, auth, mutate)
     from .growth import install as install_growth
     install_growth(app, store, auth, mutate)   # channels, sources, cohorts, unit economics, KPIs
+    from .growth_numbers import install as install_growth_numbers
+    install_growth_numbers(app, store, auth)   # the Growth page's numbers (read-only)
     from .strategy_setup import install as install_strategy_setup
     install_strategy_setup(app, store, auth, mutate)
     from .lenses import install as install_lenses
