@@ -88,7 +88,7 @@ def verdict_while_snoozed(run):
     since, until, _ = run.snoozed[tid]
     got = [c for c in run.w.checks(tid) if c["verdict"] and any(
         since <= run.w.H.parse_ts(e["created_at"]) < until for e in run.w.sql(
-            "SELECT created_at FROM task_events WHERE task_id=? AND field='status' AND new='done'", (c["id"],)))]
+            "SELECT created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' AND new='done'", (c["id"],)))]
     return bool(got), f"{len(got)} verdicts in the snooze"
 
 
@@ -116,7 +116,7 @@ def unsnooze_wakes_once(run):
         return False, "the parked ticket was not unsnoozed"
     woke = notices(run, run.parked, "Unsnoozed:")
     ran = owner_turns(run, run.parked, early, until)
-    moved = run.w.sql("SELECT 1 FROM task_events WHERE task_id=? AND field='step' AND created_at>=?",
+    moved = run.w.sql("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' AND created_at>=?",
                       (run.parked, early.strftime("%Y-%m-%dT%H:%M:%S.%fZ")))
     ok = len(woke) == 1 and woke[0]["woke"] and bool(ran) and bool(moved)
     return ok, f"{len(woke)} unsnooze notices, " + \

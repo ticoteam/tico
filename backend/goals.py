@@ -9,10 +9,10 @@ A goal links to KPIs (backend/kpis.py) and its colour is set automatically from 
 Manager, or from its owner's check-ins and its tasks when it has none. A person may override that:
 the colour they set sticks (`status_source` is `person`, with their note) until a person hands it
 back, and the Strategy Bot may only *suggest* a different one. Every colour is stored with who set
-it (`status_by`) and how (`status_source`, auto or person), in `goals` and in `goal_events`.
+it (`status_by`) and how (`status_source`, auto or person), in `goals` and in its history rows.
 
-Rows are appended, never deleted: `dropped` is a status. Every change leaves a `goal_events` row, as
-`task_events` does for tasks. Changes to a definition or a target that the Strategy Bot wants are
+Rows are appended, never deleted: `dropped` is a status. Every change leaves a `history_events` row (subject_type
+`goal`, `status_by`/`status_source` in its `data`), as a task's changes do. Changes to a definition or a target that the Strategy Bot wants are
 proposals (`goal_proposals`) that the goal's or KPI's owner confirms.
 """
 
@@ -86,8 +86,14 @@ def children(conn, goal_id):
     return H._rows(conn.execute("SELECT * FROM goals WHERE parent_id=? ORDER BY owner_id, rank, created_at", (goal_id,)))
 
 
+# A goal's history rows, read the way the old goal_events rows were.
+GOAL_EVENT_COLUMNS = ("id, subject_id AS goal_id, created_at, actor_id AS actor, kind AS field, old, new, note, "
+                      "json_extract(data, '$.status_by') AS status_by, json_extract(data, '$.status_source') AS status_source")
+GOAL_EVENTS = "history_events WHERE subject_type='goal' AND subject_id=?"
+
+
 def history(conn, goal_id):
-    return H._rows(conn.execute("SELECT * FROM goal_events WHERE goal_id=? ORDER BY created_at", (goal_id,)))
+    return H._rows(conn.execute(f"SELECT {GOAL_EVENT_COLUMNS} FROM {GOAL_EVENTS} ORDER BY created_at, rowid", (goal_id,)))
 
 
 def kpis(conn, goal_id):
@@ -223,11 +229,8 @@ def reports_of(actor, roster, entries, archived=(), bare_people=False):
 
 # ----------------------------------------------------------------------------- writes
 def _event(conn, goal_id, actor, field, old, new, note="", status_by=None, status_source=None, ts=None):
-    conn.execute("INSERT INTO goal_events (id, goal_id, created_at, actor, field, old, new, note, status_by, status_source) "
-                 "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                 (H.new_id(), goal_id, ts or H.now(), actor, field,
-                  None if old is None else str(old), None if new is None else str(new), note or "",
-                  status_by, status_source))
+    status = {k: v for k, v in (("status_by", status_by), ("status_source", status_source)) if v is not None}
+    H.history_event(conn, "goal", goal_id, actor, field, old, new, note or "", status or None, created_at=ts)
 
 
 def _next_rank(conn, owner, top=False):
@@ -303,7 +306,7 @@ def set_status(conn, actor, goal_id, status, note=""):
 def _before_finish(conn, goal_id):
     """The status a done or dropped goal had while it was live: its last change from a live status (or none) to done
     or dropped. None when it had no colour yet."""
-    row = conn.execute("SELECT old FROM goal_events WHERE goal_id=? AND field='status' AND new IN ('done','dropped') "
+    row = conn.execute(f"SELECT old FROM {GOAL_EVENTS} AND kind='status' AND new IN ('done','dropped') "
                        "AND (old IS NULL OR old NOT IN ('done','dropped')) ORDER BY created_at DESC, rowid DESC LIMIT 1",
                        (goal_id,)).fetchone()
     return row[0] if row else None
@@ -314,12 +317,12 @@ def _before_drop(conn, goal_id):
     history so Undo puts back what was there, not what a page says was there. A reopen's own `status` event carries
     its reason, so the colour it gave is read from the `status_restore` row it writes beside it. None when the colour
     was automatic or there was none (a proposal)."""
-    drop = conn.execute("SELECT created_at, rowid FROM goal_events WHERE goal_id=? AND field='status' AND new='dropped' "
+    drop = conn.execute(f"SELECT created_at, rowid FROM {GOAL_EVENTS} AND kind='status' AND new='dropped' "
                         "ORDER BY created_at DESC, rowid DESC LIMIT 1", (goal_id,)).fetchone()
     if not drop:
         return None
-    prior = conn.execute("SELECT field, old, new, note, status_by, status_source, created_at FROM goal_events WHERE goal_id=? "
-                         "AND field IN ('status','status_source','status_restore') "
+    prior = conn.execute(f"SELECT {GOAL_EVENT_COLUMNS} FROM {GOAL_EVENTS} "
+                         "AND kind IN ('status','status_source','status_restore') "
                          "AND (created_at < ? OR (created_at = ? AND rowid < ?)) ORDER BY created_at DESC, rowid DESC LIMIT 1",
                          (goal_id, drop[0], drop[0], drop[1])).fetchone()
     if not prior or prior["field"] == "status_source" or prior["status_source"] != "person" or prior["new"] not in COLOURS:

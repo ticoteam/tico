@@ -48,7 +48,7 @@ def retained(rows):
 
 def domain(api):
     with api.app.state.store.read() as c:
-        tables = ('messages', 'jobs', 'notes', 'conversations', 'tasks', 'task_events', 'task_delegations')
+        tables = ('messages', 'jobs', 'notes', 'conversations', 'tasks', 'history_events', 'task_delegations')
         return {t: [tuple(r) for r in c.execute('SELECT * FROM ' + t + ' ORDER BY rowid')] for t in tables} | {
             'events': [tuple(r) for r in c.execute("SELECT * FROM events WHERE action<>'refused' ORDER BY rowid")]}
 

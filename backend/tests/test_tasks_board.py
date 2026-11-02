@@ -372,7 +372,7 @@ def test_related_tasks_list_each_other_hide_private_ones_and_survive_a_restore(a
     assert related(follow, "follow_up", "out") == [api_half["id"]]
     with api.app.state.store.read() as c:
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
-        fields = {r[0] for r in c.execute("SELECT field FROM task_events WHERE task_id=?", (api_half["id"],))}
+        fields = {r[0] for r in c.execute("SELECT kind AS field FROM history_events WHERE subject_type='task' AND subject_id=?", (api_half["id"],))}
         assert {"related", "duplicated_by", "follow_ups"} <= fields
 
 
@@ -720,7 +720,7 @@ def test_a_type_grants_extra_bot_permissions_while_ordinary_tasks_are_readable(a
 
 # ----------------------------------------------------------------------------- stats
 def test_task_flow_counts_status_changes_by_day_and_filters_by_owner(api):
-    """The Tasks page's stats read task_events: what entered each status, by day and by owner."""
+    """The Tasks page's stats read the task history: what entered each status, by day and by owner."""
     ops = post(api, "tasks", {"owner": "ops", "title": "Check the invoices", "body": "x"})
     post(api, "tasks", {"owner": "ana", "title": "Approve the budget", "body": "x"})
     post(api, "tasks/" + ops["id"], {"version": ops["version"], "status": "doing"})
@@ -787,7 +787,7 @@ def test_the_owner_bot_finishes_its_marketing_idea_on_an_outcome_step_and_the_re
         H.task_update(c, "bot:cmo", tid, step="Testing", note="Started.")
         H.task_update(c, "bot:cmo", tid, step="Won", note="Result: CPA 31")
         task = H.task(c, tid)
-        last = c.execute("SELECT field, old, new FROM task_events WHERE task_id=? AND field='step' "
+        last = c.execute("SELECT kind AS field, old, new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' "
                          "ORDER BY rowid DESC LIMIT 1", (tid,)).fetchone()
         second = marketing_idea(c)
         H.task_close(c, "bot:cmo", second, note="Lost on cost.", step="Lost")

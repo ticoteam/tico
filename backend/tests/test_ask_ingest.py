@@ -734,7 +734,7 @@ def test_a_sent_back_task_ask_keeps_the_bots_note_and_says_why_in_a_quiet_commen
     with api.app.state.store.read() as c:
         row = H.task(c, task["id"])
         assert (row["status"], row["note"]) == ("doing", "Drafting the venue shortlist")
-        assert not c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='status' AND new='waiting'",
+        assert not c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' AND new='waiting'",
                              (task["id"],)).fetchone(), "never parked, so nothing to put back"
         said = [m for m in H.task_comments(c, task["id"]) if m["sender_id"] == H.KEEPER]
     assert [m["body"] for m in said] == [r.json()["ingest"]["text"]]

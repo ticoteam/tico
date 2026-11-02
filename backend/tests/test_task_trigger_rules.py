@@ -36,7 +36,7 @@ def make(c, title="Synthetic work", **kw):
 
 
 def history(c, tid):
-    return [dict(r) for r in c.execute("SELECT * FROM task_events WHERE task_id=? AND field='rule' ORDER BY rowid", (tid,))]
+    return [dict(r) for r in c.execute("SELECT id, subject_id AS task_id, created_at, actor_id AS actor, kind AS field, old, new, note, action_id, via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='rule' ORDER BY rowid", (tid,))]
 
 
 def task_type(c, name="Dev tickets"):

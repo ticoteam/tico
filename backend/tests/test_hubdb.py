@@ -109,7 +109,7 @@ class Schema(HubCase):
         names = {r["name"] for r in self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertLessEqual({"bots", "humans", "conversations", "messages", "tasks",
-                              "task_events", "approvals", "bot_status", "bot_status_history",
+                              "history_events", "approvals", "bot_status", "bot_status_history",
                               "schedules", "turns", "deltas", "rate_limits", "refusals",
                               "events"}, names)
         indexes = {r["name"] for r in self.conn.execute(
@@ -372,7 +372,7 @@ class Rule5Tasks(HubCase):
         self.assertEqual(opened["status"], "open")
         for column, field in (("done_at", "done_at"), ("closed_at", "closed_at"), ("closed_by_id", "closed_by")):
             self.assertIsNone(opened[column])
-            event = self.conn.execute("SELECT old,new FROM task_events WHERE task_id=? AND field=? ORDER BY id DESC LIMIT 1",
+            event = self.conn.execute("SELECT old,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? ORDER BY id DESC LIMIT 1",
                                       (row["id"], field)).fetchone()
             self.assertEqual(event["old"], closed[column])
             self.assertIsNone(event["new"])
@@ -434,7 +434,6 @@ class Rule5Tasks(HubCase):
         # Superseding its ask card exercises the server's versioned unblock path.
         self.conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
         self.conn.execute(re.search(r"CREATE TABLE IF NOT EXISTS bot_config\(.*?\);", SCHEMA, re.S).group(0))
-        self.conn.execute(BS.TABLE)
         self.conn.execute("ALTER TABLE bot_config ADD COLUMN access TEXT")
         self.conn.execute("ALTER TABLE bot_config ADD COLUMN onboarding_state TEXT")
         self.conn.execute("INSERT INTO bot_config(bot,owner_id) VALUES('cmo','ana')")
@@ -939,7 +938,7 @@ class WaitingWithDependency(HubCase):
         self.assertEqual(done['status'], 'done')
         self.assertEqual(H.task(self.conn, child['id'])['status'], 'open', 'the subtask stays open')
         said = [e['new'] for e in H._rows(self.conn.execute(
-            "SELECT new FROM task_events WHERE task_id=? AND field='children'", (parent['id'],)))]
+            "SELECT new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='children'", (parent['id'],)))]
         self.assertEqual(said, ['Still open: Approve the final copy'])
 
     def test_invalid_dependency_is_refused(self):

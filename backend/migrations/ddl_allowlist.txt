@@ -2,7 +2,7 @@
 # file, then lower its count. See backend/tests/test_ddl_guard.py and docs/releasing.md (Migrations).
 # Derived constraints from the lists, idempotent per start (status_values.enforce); the upgrade is migration 0002.
 backend/ask_ingest.py:5
-backend/assistant.py:4
+backend/assistant.py:3
 backend/automations.py:16
 backend/bills_address.py:2
 backend/blocker_asks.py:2
@@ -16,7 +16,7 @@ backend/chat_goals_schema.py:3
 backend/check_independence.py:3
 backend/check_pools.py:6
 backend/cloud_machines.py:2
-backend/company.py:6
+backend/company.py:4
 backend/company_page/schema.py:31
 backend/company_storage.py:2
 backend/counsel.py:3
@@ -37,7 +37,7 @@ backend/github_reviews.py:1
 backend/google_connect.py:4
 backend/health_monitor.py:2
 backend/hook_relay_schema.py:3
-backend/hubdb.py:294
+backend/hubdb.py:290
 backend/idempotency_messages.py:6
 backend/inbound.py:7
 backend/invariants.py:4
@@ -93,7 +93,7 @@ backend/status_values.py:5
 backend/step_flow.py:1
 backend/storage_schema.py:11
 backend/store.py:183
-backend/strategy.py:8
+backend/strategy.py:5
 backend/subscriptions_schema.py:2
 backend/support.py:2
 backend/support_access.py:4

@@ -81,8 +81,8 @@ def _entered(c, ids):
     out = {}
     for part in H.chunks(sorted(ids)):
         out.update(dict(c.execute(
-            f"SELECT task_id, max(created_at) FROM task_events WHERE task_id IN ({','.join('?' * len(part))}) "
-            "AND field IN ('step','status') GROUP BY task_id", part).fetchall()))
+            f"SELECT subject_id, max(created_at) FROM history_events WHERE subject_type='task' "
+            f"AND subject_id IN ({','.join('?' * len(part))}) AND kind IN ('step','status') GROUP BY subject_id", part).fetchall()))
     return out
 
 

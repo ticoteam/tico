@@ -391,7 +391,8 @@ def handed(c, attempt_id, task_id, record):
     c.execute("UPDATE attempts SET model=? WHERE id=?", (json.dumps(record), attempt_id))
     if (record["source"] != "fallback" and not record.get("below_minimum")) or not task_id:
         return
-    last = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='task_model' ORDER BY rowid DESC LIMIT 1",
+    last = c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='task_model' "
+                     "ORDER BY rowid DESC LIMIT 1",
                      (task_id,)).fetchone()
     if not last or last[0] != record["note"]:
         H._task_event(c, task_id, H.KEEPER, "task_model", label(record["asked"]),

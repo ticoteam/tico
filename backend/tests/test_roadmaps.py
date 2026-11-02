@@ -148,7 +148,7 @@ def _item(api, title, step='Approved'):
 
 def _item_moves(api, item):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='step'", (item['id'],)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step'", (item['id'],)).fetchone()[0]
 
 
 def test_an_item_whose_only_engineering_link_is_blocked_by_moves_when_that_ticket_moves(api):
@@ -870,10 +870,10 @@ def test_first_version_copies_edited_since_or_published_at_creation_are_cleared(
         assert state(draft['id']) == ('private', 'Written draft', '')              # written public text stays
         assert state(shown['id']) == ('public', 'Shown idea', 'Shown notes')       # written at creation, so it stays
         assert state(kept['id']) == ('public', 'Kept public', 'Kept summary')      # only an exact copy goes
-        note = c.execute("SELECT note FROM task_events WHERE task_id=? AND field='visibility'", (copied['id'],)).fetchone()
+        note = c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='visibility'", (copied['id'],)).fetchone()
         assert 'copy of the internal title' in note[0]
-        cleared = c.execute("SELECT field,old,new,note FROM task_events WHERE task_id=? AND note LIKE 'Cleared:%' "
-                            "ORDER BY field", (edited['id'],)).fetchall()
+        cleared = c.execute("SELECT kind AS field,old,new,note FROM history_events WHERE subject_type='task' AND subject_id=? AND note LIKE 'Cleared:%' "
+                            "ORDER BY kind", (edited['id'],)).fetchall()
         assert [tuple(r[:3]) for r in cleared] == [('public_summary', 'Old notes', ''), ('public_title', 'Old title', '')]
         c.execute("UPDATE tasks SET public_title='Old title' WHERE id=?", (edited['id'],))
         R.migrate(c)                                                                # once only
@@ -906,9 +906,9 @@ def test_first_version_copies_are_cleared_per_field_when_only_the_public_title_w
         assert state(hidden['id']) == ('private', 'E written', '')
         assert state(retitled['id']) == ('private', '', 'Written summary, public')
         # Each clearing leaves its event, so it can be put back.
-        assert tuple(c.execute("SELECT old,new FROM task_events WHERE task_id=? AND field='public_summary' "
+        assert tuple(c.execute("SELECT old,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='public_summary' "
                                "AND note LIKE 'Cleared:%'", (shown['id'],)).fetchone()) == ('secret internal body', '')
-        assert c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='visibility' AND note LIKE 'Unpublished:%'",
+        assert c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='visibility' AND note LIKE 'Unpublished:%'",
                          (retitled['id'],)).fetchone()
 
 

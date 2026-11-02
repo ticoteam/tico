@@ -70,7 +70,12 @@ def restore(path):
 
 # Dropped by backend/migrations/0035_growth_rethink.py after the renames ran on them.
 RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",
-           "gtm_versions", "gtm_drafts"}
+           "gtm_versions", "gtm_drafts",
+           # 0103_history_events moves these five logs into history_events (backend/tests/test_history_events.py).
+           "task_events", "goal_events", "market_events", "company_events", "strategy_events"}
+# Columns a later migration moved out of their table after the renames ran on them: 0100_bot_settings moves
+# bot_config.config into bot_settings (backend/tests/test_bot_settings.py).
+MOVED_COLUMNS = {("bot_config", "config")}
 
 
 @pytest.fixture(scope="module")
@@ -106,6 +111,9 @@ def test_every_column_has_its_new_name_and_the_rows_kept_their_values(upgraded):
             continue
         have = columns(conn, table)
         renamed = NEW.get((table, renamed), renamed)
+        if (table, renamed) in MOVED_COLUMNS:
+            assert renamed not in have and old not in have, (table, old, renamed)
+            continue
         assert renamed in have and old not in have, (table, old, renamed)
     task = conn.execute("SELECT * FROM tasks WHERE id='task-1'").fetchone()
     assert json.loads(task[new("tasks", "labels_json")]) == ["launch"]

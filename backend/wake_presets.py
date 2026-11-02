@@ -540,7 +540,8 @@ def _runs(c, job_ids):
 def _blocked(c, task_id):
     """Seconds the task spent blocked or waiting, from its status history."""
     total, entered = 0.0, None
-    for row in c.execute("SELECT created_at,new FROM task_events WHERE task_id=? AND field='status' ORDER BY created_at,rowid",
+    for row in c.execute("SELECT created_at,new FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='status' ORDER BY created_at,rowid",
                          (task_id,)):
         if row["new"] in ("blocked", "waiting"):
             entered = entered or row["created_at"]

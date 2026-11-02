@@ -29,8 +29,8 @@ def page_ledger(c, rows):
     for part in H.chunks(row['id'] for row in rows):
         marks = ','.join('?' * len(part))
         for task_id, event_id, ts in c.execute(
-                f"SELECT task_id,id,created_at FROM task_events WHERE field='owner' AND task_id IN ({marks}) "
-                "ORDER BY task_id,created_at DESC,rowid DESC", part):
+                f"SELECT subject_id,id,created_at FROM history_events WHERE subject_type='task' AND kind='owner' "
+                f"AND subject_id IN ({marks}) ORDER BY subject_id,created_at DESC,rowid DESC", part):
             owners.setdefault(task_id, (event_id, ts))
         for target, detail in c.execute(
                 f"SELECT target,detail FROM events WHERE action=? AND target IN ({marks}) ORDER BY target,created_at DESC",
@@ -59,7 +59,7 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
     scope = f" AND t.id IN ({','.join('?' for _ in task_ids)})" if task_ids else ''
     params.extend(task_ids or ())
     # Select the current assignment's ledger entry before reading task bodies or provenance.
-    assignment_key = "coalesce((SELECT id FROM task_events WHERE task_id=t.id AND field='owner' ORDER BY created_at DESC,rowid DESC LIMIT 1),t.owner_id||':'||t.created_at)"
+    assignment_key = "coalesce((SELECT id FROM history_events WHERE subject_type='task' AND subject_id=t.id AND kind='owner' ORDER BY created_at DESC,rowid DESC LIMIT 1),t.owner_id||':'||t.created_at)"
     ledger = ("SELECT 1 FROM events e WHERE e.target=t.id AND e.action='task.assignment-rewake' "
               f"AND json_extract(e.detail,'$.assignment')={assignment_key}")
     if recorded is not None:

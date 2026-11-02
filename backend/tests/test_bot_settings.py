@@ -88,7 +88,8 @@ def _old_shape(path):
         c.execute("DROP TABLE bot_settings")
         c.execute("ALTER TABLE bot_config ADD COLUMN config TEXT NOT NULL DEFAULT '{}'")
         c.execute("CREATE TRIGGER old_reads_config AFTER UPDATE OF config ON bot_config BEGIN SELECT 1; END")
-        c.execute("DELETE FROM schema_migrations WHERE version='0100_bot_settings'")
+        # The records from 0100 on are forgotten, so migrations.apply runs 0100 and every later file again.
+        c.execute("DELETE FROM schema_migrations WHERE version>='0100_bot_settings' AND version NOT LIKE 'legacy%'")
         rows = [("full", {**SETTINGS, **ODD}), ("empty", {}), ("broken", None), ("list", [1, 2]),
                 *((f"many{n}", {"model": f"m{n}", "turns_per_day": n, "team": "ops"}) for n in range(1200))]
         for bot, config in rows:

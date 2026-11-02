@@ -61,8 +61,7 @@ CREATE TABLE IF NOT EXISTS bot_config(
  description TEXT NOT NULL DEFAULT '', reports_to TEXT, repo TEXT NOT NULL DEFAULT '',
  thread_mode TEXT, definition_updated_at TEXT,
  definition_updated_by TEXT, goals TEXT NOT NULL DEFAULT '');
--- A bot's declared settings (backend/bot_settings.py, the only module that reads or writes them).
-""" + BS.TABLE + """;
+-- A bot's declared settings are in bot_settings (migration 0100; backend/bot_settings.py reads and writes them).
 CREATE TABLE IF NOT EXISTS bot_control(bot TEXT PRIMARY KEY REFERENCES bots(id), draining INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS bot_transitions(
  id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(id), kind TEXT NOT NULL,
@@ -1589,11 +1588,11 @@ class Store:
                               "SELECT source,'call',external_id,meeting_id,created_at FROM import_refs")
                     c.execute("INSERT INTO cloud_migrations VALUES(31,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=32").fetchone():
-                    # The market graph (backend/market.py). hubdb's MARKET_SCHEMA creates the
-                    # tables on connect; this marker is the cloud contract. The curator is
-                    # added once a roster exists, so a first import can still load employees.yaml.
-                    from .hubdb import MARKET_SCHEMA
-                    c.executescript(MARKET_SCHEMA)
+                    # The market graph (backend/market.py). hubdb's MARKET_SCHEMA step created the
+                    # tables on connect; this marker is the cloud contract. Running that script
+                    # again here would bring back market_events, which a migration file has since
+                    # moved into history_events (backend/migrations/0103_history_events.py). The
+                    # curator is added once a roster exists, so a first import can still load employees.yaml.
                     c.execute("INSERT INTO cloud_migrations VALUES(32,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=33").fetchone():
                     # Task list pages filter by lane and status, page finished work by its

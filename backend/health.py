@@ -1427,7 +1427,8 @@ def silent_waits(c, at=None):
     cutoff = H.shift(at or H.now(), hours=-SILENT_WAIT_HOURS)
     return [dict(r) for r in c.execute(
         "SELECT * FROM (SELECT t.id, t.title, t.owner_id, t.waiting_on, t.conversation_id, t.private, "
-        "coalesce((SELECT max(e.created_at) FROM task_events e WHERE e.task_id=t.id AND e.field='waiting_on' "
+        "coalesce((SELECT max(e.created_at) FROM history_events e WHERE e.subject_type='task' AND e.subject_id=t.id "
+        "AND e.kind='waiting_on' "
         "AND e.new=t.waiting_on), t.updated_at) AS since FROM tasks t "
         "WHERE t.waiting_on IS NOT NULL AND t.status='waiting') w WHERE w.since<? "
         "AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.recipient_id=w.waiting_on AND m.sender_id=w.owner_id "

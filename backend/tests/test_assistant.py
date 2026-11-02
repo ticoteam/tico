@@ -101,7 +101,7 @@ def test_the_assistant_acts_as_the_person_and_never_more(api):
     made = post(api, "tasks", {"owner": "human:ben", "title": "Draft the launch post", "body": "For Oct 1."}, token=token)
     assert made["requester_id"] == "human:ben"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT via FROM task_events WHERE task_id=? ORDER BY created_at LIMIT 1", (made["id"],)).fetchone()[0] == "assistant"
+        assert c.execute("SELECT via FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY created_at LIMIT 1", (made["id"],)).fetchone()[0] == "assistant"
         assert c.execute("SELECT count(*) FROM events WHERE detail LIKE '%\"via\": \"assistant\"%'").fetchone()[0] > 0
     # The runner's own lease calls are still the runner's.
     post(api, f"attempts/{attempt['id']}/renew", {}, token=r["token"], expected=200)
@@ -236,7 +236,7 @@ def test_the_assistant_creates_a_task_for_another_person_without_a_card(api):
     assert made["owner_id"] == "human:cara" and made["requester_id"] == "human:ben"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM assistant_actions WHERE status='pending'").fetchone()[0] == 0
-        assert c.execute("SELECT via FROM task_events WHERE task_id=? ORDER BY created_at LIMIT 1",
+        assert c.execute("SELECT via FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY created_at LIMIT 1",
                          (made["id"],)).fetchone()[0] == "assistant"
     # The person is named by their full actor id, as for the person's own tasks: a bare name is not enough.
     post(api, "tasks", {"owner": "cara", "title": "Review it again", "body": "Please."}, token=token, expected=403)
@@ -326,7 +326,7 @@ def test_the_assistant_does_the_task_actions_the_person_asked_for_in_their_chat(
     assert handed["owner_id"] == "human:ana"
     with api.app.state.store.read() as c:
         # Recorded as ben, via the assistant, for the message he sent.
-        row = c.execute("SELECT actor,via FROM task_events WHERE task_id=? AND field='status' ORDER BY created_at DESC LIMIT 1",
+        row = c.execute("SELECT actor_id AS actor,via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' ORDER BY created_at DESC LIMIT 1",
                         (launch["id"],)).fetchone()
         assert (row["actor"], row["via"]) == ("human:ben", "assistant")
         close = c.execute("SELECT actor,detail FROM events WHERE action='task.close' AND target=?",
@@ -477,7 +477,7 @@ def test_a_group_of_task_actions_is_one_card_and_one_click(api):
         assert all(H.task(c, t["id"])["status"] == "closed" for t in tasks)
         assert H.task(c, secret["id"])["status"] == "open"
         assert H.approval(c, approval)["decision"] is None
-        assert c.execute("SELECT count(*) FROM task_events WHERE field='status' AND new='closed' AND actor='human:ben' "
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND kind='status' AND new='closed' AND actor_id='human:ben' "
                          "AND via='assistant'").fetchone()[0] == 25
 
 

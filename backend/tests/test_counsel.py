@@ -1200,7 +1200,7 @@ def test_a_completed_counsel_turn_finishes_its_read_task_and_a_failed_one_does_n
                  "exposure, ask a lawyer.*"}, token=r["token"])
     assert task_state(api, first["task_id"])["status"] == "done"
     with api.app.state.store.read() as c:
-        notes = [x[0] for x in c.execute("SELECT note FROM task_events WHERE task_id=? AND field='status' AND new='done'",
+        notes = [x[0] for x in c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' AND new='done'",
                                          (first["task_id"],))]
     assert notes == ["Wrote 3 suggestions, 0 quotes dropped; read, nothing else for us."]
     # A failed run leaves its read task to the normal retry.
@@ -1277,7 +1277,7 @@ def test_a_run_carrying_a_second_private_task_neither_publishes_nor_finishes_the
     finish(api, r, attempt, text="Read it. Globex price list is secret.")
     assert task_state(api, read["task_id"])["status"] != "done"
     with api.app.state.store.read() as c:
-        notes = [x[0] or "" for x in c.execute("SELECT note FROM task_events WHERE task_id=?", (read["task_id"],))]
+        notes = [x[0] or "" for x in c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=?", (read["task_id"],))]
     assert not any("Globex" in note for note in notes)
 
 

@@ -13,4 +13,4 @@ Pages are rows in `documents` with `collection = market`. You own them. A page c
 | Theses | Claims you will defend, each with evidence. |
 | Open questions | What the graph cannot answer yet. |
 | Customer themes | What customers keep asking for, complaining about and objecting to, from team meetings. Each theme has a count, a last-seen date and short quotes; three or more meetings make it a thesis. |
-| Weekly delta | Produced from `market_events`. Refresh it on Mondays. Leave it alone on other days. |
+| Weekly delta | Produced from the market rows of `history_events` (`subject_type` starting `market_`). Refresh it on Mondays. Leave it alone on other days. |

@@ -627,7 +627,7 @@ def test_overdue_reads_its_page_in_fixed_statements_not_per_task(api, clock, n):
     found, seen = traced_overdue(api)
     assert sorted(row['id'] for row in found) == sorted(t['id'] for t in tasks)
     # The page's assignment and ledger rows come in one statement each, not one per task.
-    assert [s for s in seen if s.startswith('SELECT id,created_at FROM task_events WHERE task_id=')] == []
+    assert [s for s in seen if s.startswith("SELECT id,created_at FROM history_events WHERE subject_type='task' AND subject_id=")] == []
     assert [s for s in seen if s.startswith('SELECT detail FROM events WHERE target=')] == []
     # A short page is the last one: no second, empty page query.
     assert sum(s.startswith('SELECT t.* FROM tasks t JOIN bots b') for s in seen) == 1

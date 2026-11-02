@@ -116,7 +116,7 @@ def install(app, store, auth, mutate, settings):
             # A save the owner agreed to in words (backend/goal_read_back.py): checked again inside this write, so two
             # saves of one step never both land, and recorded with the history rows it wrote.
             claim = GR.active() and agreed_save(c, request)
-            mark = c.execute("SELECT coalesce(max(rowid), 0) FROM goal_events").fetchone()[0] if claim else 0
+            mark = c.execute("SELECT coalesce(max(rowid), 0) FROM history_events").fetchone()[0] if claim else 0
             out = work(c)
             if claim:
                 gid = GR.record(c, request.state.identity.actor, claim, mark, out) or claim.get("goal_id")

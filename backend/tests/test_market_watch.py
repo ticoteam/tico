@@ -32,7 +32,7 @@ def counts(api):
     with api.app.state.store.read() as c:
         return {t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
                 for t in ("market_insights", "market_evidence")} | {
-            "page_events": c.execute("SELECT count(*) FROM market_events WHERE field LIKE 'page.%'").fetchone()[0]}
+            "page_events": c.execute("SELECT count(*) FROM history_events WHERE subject_type IN ('market_entity','market_edge','market_evidence','market_document') AND kind LIKE 'page.%'").fetchone()[0]}
 
 
 @pytest.fixture
@@ -100,7 +100,8 @@ def test_a_real_change_files_one_insight_one_evidence_and_one_event_once(seeded,
     assert {k: after[k] - before[k] for k in after} == {"market_insights": 1, "market_evidence": 1, "page_events": 1}
     with seeded.app.state.store.read() as c:
         evidence = H._rows(c.execute("SELECT source_kind, source_url, quote FROM market_evidence"))[-1]
-        event = H._rows(c.execute("SELECT subject_kind, subject_id, field FROM market_events WHERE field LIKE 'page.%'"))[0]
+        event = H._rows(c.execute("SELECT substr(subject_type, 8) AS subject_kind, subject_id, kind AS field FROM history_events "
+                                  "WHERE subject_type LIKE 'market%' AND kind LIKE 'page.%'"))[0]
         insight = H._rows(c.execute("SELECT kind, about, status FROM market_insights WHERE about = 'Northwind'"))[0]
     assert evidence["source_kind"] == "page-change" and evidence["source_url"] == PAGE
     assert "Pro plan now costs" in evidence["quote"]

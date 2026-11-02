@@ -54,7 +54,7 @@ def test_at_level_3_one_decision_changes_bot_tasks_under_one_action_id_and_the_o
     assert task(api, first)["owner_id"] == "bot:finance" and task(api, stale)["status"] == "closed"
     new = made["done"][0]["task_id"]
     with api.app.state.store.read() as c:
-        stamped = {r[0] for r in c.execute("SELECT DISTINCT task_id FROM task_events WHERE action_id=?", (made["id"],))}
+        stamped = {r[0] for r in c.execute("SELECT DISTINCT subject_id AS task_id FROM history_events WHERE subject_type='task' AND action_id=?", (made["id"],))}
     assert {first, second, stale} <= stamped
 
     log = get(api, "strategy-bot/log")

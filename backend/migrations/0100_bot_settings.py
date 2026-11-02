@@ -8,7 +8,8 @@ whose bot is gone has no settings row: bot_settings refers to bots(id).
 
 The triggers that read bot_config.config are dropped first (SQLite refuses to drop a column a trigger names);
 Store.initialize makes their new versions, which read bot_settings, right after the migrations. Then the column goes.
-On a new file bot_config does not exist yet and store.SCHEMA makes both tables in their new shape.
+This file makes bot_settings on every database, new ones included (no other code makes it). On a new file
+bot_config does not exist yet; store.SCHEMA makes it without the column.
 """
 import json
 import re
@@ -66,9 +67,9 @@ def split(text):
 
 
 def up(conn):
+    conn.execute(TABLE)
     if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bot_config'").fetchone():
         return
-    conn.execute(TABLE)
     if "config" not in {row[1] for row in conn.execute("PRAGMA table_info(bot_config)")}:
         return
     insert = (f"INSERT OR REPLACE INTO bot_settings(bot_id,{','.join(COLUMNS)},extra,updated_at) "

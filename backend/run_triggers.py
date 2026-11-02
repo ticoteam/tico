@@ -227,7 +227,8 @@ def turn_result(conn, actor, row, outcome, event, to=None):
     if (outcome not in TASK_OUTCOMES or row.get("status") not in RESULT_STATES or not owner.startswith("bot:")
             or actor in (owner, "keeper")):
         return None
-    reached = conn.execute("SELECT max(created_at) FROM task_events WHERE task_id=? AND field='status' AND new=?",
+    reached = conn.execute("SELECT max(created_at) FROM history_events WHERE subject_type='task' AND subject_id=? "
+                           "AND kind='status' AND new=?",
                            (row["id"], row["status"])).fetchone()[0]
     turn = conn.execute("SELECT id FROM turns WHERE bot=? AND task_id=? AND (? IS NULL OR started_at<=?) "
                         "ORDER BY started_at DESC LIMIT 1", (owner[4:], row["id"], reached, reached)).fetchone()

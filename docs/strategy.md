@@ -309,7 +309,7 @@ A bet's `wrong_if` is `{kind: kpi|thesis|text, kpi_id?, direction?, threshold?, 
 `strategy_draft` proposal's payload is partial `{summary?, vision?, sections?, bets?: [{id?, statement, why?,
 rules_out?, wrong_if?, cites?, status?}], source?, lens?}` (the server sets `source: "lens"` and `lens` for a lens run). Goals take `bet_id` on `POST /goals` and `POST /goals/{id}` and return
 it in `GET /goals` and `/goals/tree` ([Goals and KPIs](goals-and-kpis.md#hub-and-the-api)); goal proposals carry it
-too. Every change is a row in `strategy_events`, like `market_events`.
+too. Every change is a `history_events` row (`subject_type` `strategy`), as the market's are.
 
 Related: [Growth](growth.md), [Goals and KPIs](goals-and-kpis.md), [Your Strategy Bot](strategy-bot.md), [Librarian](librarian.md),
 [Routines](routines.md), [Agent context](agent-context.md).
