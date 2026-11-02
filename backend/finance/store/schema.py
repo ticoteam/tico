@@ -419,6 +419,7 @@ CREATE INDEX IF NOT EXISTS fin_feed_txns_card ON fin_feed_txns(card_id, txn_date
 CREATE INDEX IF NOT EXISTS fin_feed_txns_request ON fin_feed_txns(request_id);
 CREATE INDEX IF NOT EXISTS fin_feed_txns_entry ON fin_feed_txns(entry_id);
 CREATE INDEX IF NOT EXISTS fin_feed_txns_entry_line ON fin_feed_txns(entry_line_id);
+CREATE INDEX IF NOT EXISTS fin_feed_txns_refund ON fin_feed_txns(refund_of);
 CREATE INDEX IF NOT EXISTS fin_money_accounts_provider ON fin_money_accounts(connection_id, provider_account_id);
 CREATE INDEX IF NOT EXISTS fin_cards_provider ON fin_cards(provider, provider_card_id);
 CREATE INDEX IF NOT EXISTS fin_card_saves_vendor ON fin_card_saves(book_id, vendor_key, active);
@@ -545,6 +546,9 @@ ADDED = (
     ("fin_bill_lines", "po_line_id", "TEXT"),
     # a prepaid bill line: the month its expense starts and the months it is spread over (migration 78)
     ("fin_bill_lines", "prepaid_start", "TEXT"), ("fin_bill_lines", "prepaid_months", "INTEGER"),
+    # the money-out row a money-in row refunds (migration 79, backend/finance/refunds.py). A column, not raw_json: a
+    # provider's update rewrites raw_json, and the link must survive it.
+    ("fin_feed_txns", "refund_of", "TEXT"),
 )
 
 
@@ -784,6 +788,12 @@ def purchasing(c: sqlite3.Connection) -> None:
 def prepaids(c: sqlite3.Connection) -> None:
     """Cloud migration 78: prepaid bill lines (their schedule) and the months they were expensed. Idempotent: `create`
     makes whatever is missing."""
+    create(c)
+
+
+def refunds(c: sqlite3.Connection) -> None:
+    """Cloud migration 79: the money-out row a refund reverses (fin_feed_txns.refund_of). Idempotent: `create` adds
+    whatever is missing."""
     create(c)
 
 

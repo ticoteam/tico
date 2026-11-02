@@ -363,6 +363,10 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         # else the card's budget line, tagged with its holder either way.
         # A charge paying an entered bill goes to AP instead (the bill already took the expense); the card's use and
         # hold work the same either way.
+        if t.amount > 0:
+            from . import refunds        # lazy: a refund reverses its original through this module's helpers
+            if refunds.settle(ctx, row, money, t, card):
+                return
         account, tags = card_line(ctx, card)
         found = documents.match_feed(ctx, row, t) if t.amount < 0 else None
         if isinstance(found, str):      # it may pay a bill past what was looked at, or one of several: a person links it
@@ -415,6 +419,10 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         mark_posted(ctx, [fid], entry)
         documents.feed_paid(ctx, row, kind, doc, entry)
         return
+    if t.amount > 0:                    # after the invoice match above: a money-in row that refunds a money-out row
+        from . import refunds            # lazy: as above
+        if refunds.settle(ctx, row, money, t, None):
+            return
     if posting_rules.post_feed(ctx, row, money, t, gl.id):
         return
     if t.amount < 0:
@@ -593,14 +601,15 @@ def vendor_lines(ctx: Ctx, lines: Sequence[dict[str, object]]) -> list[dict[str,
 
 
 def post_row(ctx: Ctx, fid: str, t: F.FeedTxn, lines: list[dict[str, object]], gl_id: str, holds: Sequence[str],
-             day: str = "") -> str:
+             day: str = "", memo: str = "") -> str:
     """One entry for a feed row: its other lines, then the money account's own line (`gl_id`), recorded as such
     (L.MONEY_ROLE, kept by reversals): a card's use is read from that line as it was posted, whatever account the
     card program maps to later (store/budgets.card_used). Every revision gets its own source id (`fresh_source`),
-    so a repost is never deduped onto an earlier, reversed entry. `day` overrides the row's own open day."""
+    so a repost is never deduped onto an earlier, reversed entry. `day` overrides the row's own open day; `memo`
+    replaces the counterparty as the entry's memo."""
     source = "card" if t.card else "bank"
     when = day or open_day(ctx, t.txn_date)
-    memo = (t.counterparty or t.description)[:200]
+    memo = memo[:200] if memo else (t.counterparty or t.description)[:200]
     if when != t.txn_date:      # a late item posts in an open period: its own date stays in the description (spec §4.1)
         memo = f"{memo[:160]} (dated {t.txn_date})"
     done = posting.post_entry(ctx.c, {"date": when, "source": source,

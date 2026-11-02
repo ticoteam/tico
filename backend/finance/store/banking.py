@@ -1014,6 +1014,19 @@ def stripe_reversal(c: sqlite3.Connection, money_account_id: str, kinds: Sequenc
                      (money_account_id, *kinds, source)).fetchone()
 
 
+def refund_candidates(c: sqlite3.Connection, money_account_id: str, start: str, end: str) -> list[Any]:
+    """Posted money-out rows on this money account dated in a window: a refund's possible originals, newest first."""
+    return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND amount<0 AND txn_date BETWEEN ? AND ? AND "
+                     "status='posted' AND entry_id IS NOT NULL AND pending=0 ORDER BY txn_date DESC, id DESC",
+                     (money_account_id, start, end)).fetchall()
+
+
+def refunds_of(c: sqlite3.Connection, original_id: str) -> list[Any]:
+    """The posted money-in rows that refund this money-out row (fin_feed_txns.refund_of)."""
+    return c.execute("SELECT * FROM fin_feed_txns WHERE refund_of=? AND status='posted' AND entry_id IS NOT NULL "
+                     "ORDER BY txn_date, id", (original_id,)).fetchall()
+
+
 def stripe_summary_rows(c: sqlite3.Connection, money_account_id: str) -> list[Any]:
     """Stripe rows marked for their day's summary entry that have not posted yet."""
     return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND status='new' AND entry_id IS NULL AND "
