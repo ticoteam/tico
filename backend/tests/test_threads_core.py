@@ -737,9 +737,9 @@ def test_a_remote_author_writes_only_through_the_keeper_in_its_installs_namespac
         owner = threads.viewer(auth, owner_of(c, auth))
         linked = threads.create(c, owner, title="Partner", audience="members", members=[])["id"]
         other = threads.create(c, owner, title="Inside", audience="members", members=[])["id"]
-        threads.add_member(c, owner, linked, "peer:peer.acme.example")
+        threads.add_member(c, H.KEEPER, linked, "peer:peer.acme.example")    # sharing's door: a person cannot (test_federation)
         with pytest.raises(Problem) as owner_role:
-            threads.add_member(c, owner, linked, "human:ana@peer.acme.example", role="owner")
+            threads.add_member(c, H.KEEPER, linked, "human:ana@peer.acme.example", role="owner")
         assert owner_role.value.status == 422, "a remote member is never an owner"
         for principal, actor, via in ((owner, "human:ana@peer.acme.example", "peer"),
                                       (H.KEEPER, "human:ana@peer.acme.example", None)):
