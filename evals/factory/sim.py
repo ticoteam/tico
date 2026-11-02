@@ -459,10 +459,10 @@ class Run:
             out.append(f"lost probe {lp['job'][:6]} bot {lp['bot_id']} attempt {lp['attempt'][:6]} ({lp['mode']} at "
                        f"{lp['at']:%H:%M}): {len(posts)} sim posts to it, {len(off)} sent while its bot was off")
         for b in self.back_lines:
-            out.append(f"back {b['bot_id']} at {b['at']:%H:%M}: server_ready {b['server_ready']}; "
+            out.append(f"back {b['bot']} at {b['at']:%H:%M}: server_ready {b['server_ready']}; "
                        + " | ".join(b["reasons"]))
         for win in w.limit_windows:
-            out.append(f"limit {win['bot_id']} since {win['since']} until {win['until']} ({win['source']}, "
+            out.append(f"limit {win['bot']} since {win['since']} until {win['until']} ({win['source']}, "
                        f"streak {win['streak']})")
         for job in sorted(self.probe_seen):
             for row in w.sql("SELECT id,state,created_at,started_at,finished_at,lease_until FROM attempts "
