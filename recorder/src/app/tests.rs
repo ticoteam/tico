@@ -774,9 +774,9 @@ fn meeting_chat_shows_people_bots_and_private_questions_in_time_order() {
         "humans": [{"actor": "human:2", "name": "Arthur Silva"}],
         "bots": [{"bot": "librarian"}, {"bot": "head-of-engineering"}],
         "chat": [
-            {"id": "c1", "actor": "human:2", "role": "human", "text": "Hi all", "created": "2026-10-29T15:00:00.000000Z"},
-            {"id": "c2", "actor": "bot:librarian", "role": "bot", "text": "Notes are linked.", "created": "2026-10-29T15:01:00.000000Z"},
-            {"id": "c3", "actor": "human:1", "role": "human", "text": "Thanks", "created": "2026-10-29T15:00:10.000000Z"},
+            {"id": "c1", "actor": "human:2", "role": "human", "text": "Hi all", "created_at": "2026-10-29T15:00:00.000000Z"},
+            {"id": "c2", "actor": "bot:librarian", "role": "bot", "text": "Notes are linked.", "created_at": "2026-10-29T15:01:00.000000Z"},
+            {"id": "c3", "actor": "human:1", "role": "human", "text": "Thanks", "created_at": "2026-10-29T15:00:10.000000Z"},
         ],
         "router": {"turns": [
             {"bot": "head-of-engineering", "status": "claimed"},

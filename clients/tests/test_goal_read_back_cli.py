@@ -48,7 +48,7 @@ def test_exact_save_cli_mcp_and_new_goal_substitution(api):
     body = '{"why":"The owner’s words"}'
     cli = ['goal', 'save', 'POST', '/api/v2/goals/{new}/why', body, '--created-goal', 'new-goal', '--on-behalf-of', 'turn']
     result = remotecli.run(hubcli.parser().parse_args(cli))
-    assert result == hubtools.goal_save(api, {'method': 'POST', 'path': '/api/v2/goals/{new}/why', 'body_json': body,
+    assert result == hubtools.goal_save(api, {'method': 'POST', 'path': '/api/v2/goals/{new}/why', 'body': body,
                                             'created_goal': 'new-goal', 'on_behalf_of': 'turn',
                                             'operation_id': 'synthetic-operation'})
     assert api.calls[0] == api.calls[1] == ('POST', 'goals/new-goal/why', json.loads(body), 'synthetic-operation', 'turn')
@@ -99,7 +99,7 @@ def test_goal_help_explains_plain_yes(capsys):
     assert 'read-back' in text and 'Saves nothing without a plain yes' in text
     assert hubcli.main(['goal', 'read-back', '--help']) == 0
     text = ' '.join(capsys.readouterr().out.split())
-    assert 'body_json' in text and 'not_agreed' in text
+    assert 'body' in text and 'not_agreed' in text
 
 
 def test_mcp_discovery_call_refusal_and_missing_command(api):
@@ -116,7 +116,7 @@ def test_mcp_discovery_call_refusal_and_missing_command(api):
         raise APIError('not_agreed', 'The owner did not say yes; nothing was saved.', 403, False)
     api.call = refuse
     result = request('tools/call', name='hub_goal_save', arguments={
-        'method': 'POST', 'path': '/api/v2/goals', 'body_json': '{}', 'on_behalf_of': 'turn'})['result']
+        'method': 'POST', 'path': '/api/v2/goals', 'body': '{}', 'on_behalf_of': 'turn'})['result']
     assert result['isError'] and result['structuredContent']['error'] == 'not_agreed'
     assert result['structuredContent']['detail'] == 'The owner did not say yes; nothing was saved.'
 
@@ -125,5 +125,5 @@ def test_mcp_discovery_call_refusal_and_missing_command(api):
 def test_save_requires_created_goal_before_substitution(api, extra):
     with pytest.raises(ValueError, match='created_goal'):
         hubtools.goal_save(api, {'method': 'POST', 'path': '/api/v2/goals/{new}/why',
-                                'body_json': '{}', 'on_behalf_of': 'turn', **extra})
+                                'body': '{}', 'on_behalf_of': 'turn', **extra})
     assert not api.calls

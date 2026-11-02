@@ -125,7 +125,8 @@ def metadata(client, name):
 
 
 def _detail(link):
-    value = link.get('detail_json') or '{}'
+    # Runner wire rows keep `detail_json`; public task-link rows (GET tasks/{id}/links) say `detail`.
+    value = link.get('detail_json', link.get('detail')) or '{}'
     return json.loads(value) if isinstance(value, str) else dict(value)
 
 

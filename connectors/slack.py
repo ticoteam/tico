@@ -498,6 +498,16 @@ def check_not_onboarding(slug):
                       "answers.")
 
 
+def _bot_names(slug):
+    """The label and the id of one bot, lowercased. A channel's readers hold bot ids (Tico stores the id the label
+    resolves to), so a bot named by its label matches them by its id. Without a Tico row only the label is known."""
+    names = {str(slug).strip().lower()}
+    row = HUB_GET(f"bots/{slug}") if slug else None
+    if isinstance(row, dict) and row.get("id"):
+        names.add(str(row["id"]).strip().lower())
+    return names
+
+
 def check_history_scope(manifest, slug, refs, channels=None):
     """Refuse a history read outside an employee's declared channel scope.
 
@@ -522,8 +532,9 @@ def check_history_scope(manifest, slug, refs, channels=None):
         except Refused:
             continue                                    # declared but not listed: only the words it was declared in
         allowed.update({norm_ref(channel.get("name")), norm_ref(channel.get("id"))} - {""})
+    names = _bot_names(slug)
     for channel in registry:
-        if slug in [str(r).strip().lower() for r in (channel.get("readers") or [])]:
+        if names & {str(r).strip().lower() for r in (channel.get("readers") or [])}:
             allowed.update({norm_ref(channel.get("name")), norm_ref(channel.get("id"))} - {""})
     for ref in refs:
         channel = find_registry_channel(registry, ref)

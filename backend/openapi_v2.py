@@ -508,7 +508,7 @@ STABLE = [
      "The Strategy Bot only, in the owner's own chat: Tico writes the read-back of up to 20 "
      "changes to goals, measures and "
      "suggestions as its reply and stores the exact saves. The owner's yes to it (a plain yes, or a yes to some by number) "
-     "within 30 minutes lets exactly those saves through (each step's method, path and body_json, sent as it is), cited "
+     "within 30 minutes lets exactly those saves through (each step's method, path and body, sent as it is), cited "
      "with X-Tico-On-Behalf-Of; anything else is 403 not_agreed. "
      "A colour, done or dropped, archiving, a reading or the Vision is refused here: it stays a click", None),
     ("/api/v2/goals/read-back/{mid}", "get", "Goals", "getGoalReadBack",

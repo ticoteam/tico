@@ -273,8 +273,8 @@ def turn_tools(f):
         return False, "no turn claimed"
     me = f.get("me")
     body = me.body if me is not None and isinstance(me.body, dict) else {}
-    ok = body.get("actor") == "bot:" + CLAUDE_ID and body.get("attempt_id") == got(f, "turn1")
-    return ok, f"the turn's calls act as {body.get('actor')} (attempt {body.get('attempt_id')})"
+    ok = body.get("actor") == "bot:" + CLAUDE_ID and body.get("run_id") == got(f, "turn1")
+    return ok, f"the turn's calls act as {body.get('actor')} (run {body.get('run_id')})"
 
 
 def second_held(f):

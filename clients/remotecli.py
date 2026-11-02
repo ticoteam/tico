@@ -974,7 +974,8 @@ def bots(client, args):
                                folder=(registered or {}).get("folder"))
     result = {"path": str(path), "template": args.template, "slug": slug,
               "committed": catalog.committed(path),
-              "automations": seed_automations(client if registered is None else _person(client), slug, path),
+              "automations": seed_automations(client if registered is None else _person(client), slug, path,
+                                              (registered or {}).get("id")),
               **({"registered": registered} if registered else {})}
     result["github"] = github_repository(client, slug, path)
     return result
@@ -1038,10 +1039,11 @@ def _person(client):
     return hubtools._as_person(client)
 
 
-def seed_automations(client, slug, path):
+def seed_automations(client, slug, path, bot_id=None):
     """The template's `routines:` (older: `schedules:`) become the new bot's first automations: each a schedule (or an
     event, or a webhook trigger) and one bot turn with the routine's text. The manifest is read once, here, with its
-    playbooks already rendered; from now on they are edited in Automations."""
+    playbooks already rendered; from now on they are edited in Automations. The actor is `bot:<id>` (a bot's id is
+    its primary key; its slug is only a label), looked up by slug when the registration did not return it."""
     from clients.manifest import manifest_path, routines_of
     from clients.routines import validate_schedules
     import yaml
@@ -1050,6 +1052,12 @@ def seed_automations(client, slug, path):
         entries = validate_schedules(declared, lambda rel: (path / rel).read_text())
     except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
         return {"error": f"bot.yaml routines: {exc}"}
+    if not entries:
+        return []
+    try:
+        actor = "bot:" + (bot_id or client.get("bots/" + slug)["id"])
+    except (APIError, KeyError, TypeError) as exc:
+        return {"error": f"the bot's id for its routines: {exc}"}
     seeded = []
     for entry in entries:
         on = entry["on"] or ""
@@ -1057,8 +1065,8 @@ def seed_automations(client, slug, path):
                    {"type": "event", "name": on} if on else
                    {"type": "schedule", "cron": entry["cron"], "tz": entry["timezone"]})
         made = client.post("automations", {
-            "name": entry["title"][:120], "owner": "bot:" + slug, "enabled": entry["enabled"], "trigger": trigger,
-            "steps": [{"id": "turn", "type": "bot_turn", "bot": "bot:" + slug,
+            "name": entry["title"][:120], "owner": actor, "enabled": entry["enabled"], "trigger": trigger,
+            "steps": [{"id": "turn", "type": "bot_turn", "bot": actor,
                        "prompt": entry["instructions"] or "Do this routine's work."}]})
         seeded.append(made.get("id") or (made.get("automation") or {}).get("id"))
     return seeded

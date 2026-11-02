@@ -285,7 +285,7 @@ def dismiss_held(org, attempt):
     is held). Its operator reviews it and dismisses it, the way a person does under Needs you, so the bot is free for
     the next turn. The run already has the failure."""
     reply = org.api("post", f"/api/v2/jobs/{attempt['job_id']}/reconcile",
-                    {"attempt_id": attempt["id"], "decision": "dismiss", "acknowledge_uncertain_effects": True,
+                    {"run_id": attempt["id"], "decision": "dismiss", "acknowledge_uncertain_effects": True,
                      "note": "The turn failed in the matrix run; nothing it did needs repeating."},
                     who=DANA, wave=W3)
     if not 200 <= reply.status < 300:
