@@ -134,6 +134,24 @@ def test_usage_by_task_names_each_task_and_bots_narrows_to_those_bots(api):
     assert [r["bot"] for r in usage(api, "ben-test", bots="ops,cpo")["rows"]] == ["cpo"]     # not a way past who may see
 
 
+def test_a_task_the_reader_cannot_open_is_not_named_and_bots_takes_a_renamed_slug(api, monkeypatch):
+    """A run of a bot this person may see can be on a task since moved to a bot whose activity they may not read: the
+    breakdown counts it without its title. `bots` takes a bot's slug as it reads now, not only its first one."""
+    seed(api)
+    moved = post(api, "tasks", {"owner": "ops", "title": "Payroll fix", "body": "Do it."})["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE turns SET task_id=? WHERE bot='cpo'", (moved,))
+    as_member(api, "ben@acme.example")
+    auth = api.app.state.auth
+    monkeypatch.setattr(type(auth), "unreadable_bots", lambda self, c, who: {"ops"} if who.role == "human" else set())
+    got = usage(api, "ben-test", group="task")
+    assert "Payroll fix" not in json.dumps(got) and [r["name"] for r in got["rows"]] == ["A task you can't open"]
+    assert [r["name"] for r in usage(api, group="task", bots="cpo")["rows"]] == ["Payroll fix"]     # the owner reads it
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET slug='ops-renamed' WHERE id='ops'")
+    assert [r["bot"] for r in usage(api, bots="ops-renamed")["rows"]] == ["ops"]
+
+
 def test_usage_does_not_treat_unreported_zero_as_a_priced_run(api):
     with api.app.state.store.transaction() as c:
         c.executemany("INSERT INTO turns(id,bot,started_at,finished_at,input_tokens,cached_tokens,output_tokens,"

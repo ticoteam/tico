@@ -25,9 +25,15 @@ DIMENSIONS = {"harness": "coalesce(t.harness, '')", "model": "coalesce(t.model, 
               "effort": "coalesce(t.effort, '')", "subscription": "CASE WHEN t.billing='subscription' AND coalesce(t.profile, '') != '' "
               "THEN coalesce((SELECT 'subscription:' || json_array(a.runner_id, t.profile) FROM attempts a WHERE a.id=t.id), "
               "'legacy-profile:' || t.profile) ELSE '' END"}
-# A run's task by its title, so a routine's runs add up under one row; a private task is named only as one, and a run with
-# no task (a chat, a check) is "".
-TASK = "coalesce((SELECT CASE WHEN tk.private=1 THEN 'A private task' ELSE tk.title END FROM tasks tk WHERE tk.id=t.task_id), '')"
+# A run's task by its title, so a routine's runs add up under one row; a private task is named only as one, a task the
+# reader cannot open now (moved to a bot whose activity they may not read) only as that, and a run with no task (a chat,
+# a check) is "". `visible` is auth.task_sql for the reader; its bare columns are the task's.
+HIDDEN_TASK = "A task you can't open"
+
+
+def task_key(visible):
+    return (f"coalesce((SELECT CASE WHEN tk.private=1 THEN 'A private task' WHEN NOT ({visible}) THEN "
+            f"'{HIDDEN_TASK.replace(chr(39), chr(39) * 2)}' ELSE tk.title END FROM tasks tk WHERE tk.id=t.task_id), '')")
 GROUPS = ("bot", "day", "routine", "task", *DIMENSIONS)
 MAX_DAYS = 366
 TOP_ROUTINES = 10
@@ -268,6 +274,13 @@ def install(app, store, auth, mutate, settings):
                             "spent": usage_limits.spent_now(c, scope=usage_limits.COMPANY, default=default)},
                 "groups": groups}
 
+    def usage_bots(c, auth, who):
+        """The bots whose spend the caller sees: their own, plus a group lead's led bots, as /usage/limits lists them."""
+        allowed = own_bots(c, auth, who)
+        if auth.bot_admin(who):
+            return allowed
+        return allowed | (led_bots(c, who) & {row["id"] for row in H.bots(c)})
+
     @app.get("/api/v2/usage/limits")
     def limits(request: Request):
         """The company default, the limits of every bot the caller may see usage for (a lead's: also the bots in the
@@ -354,7 +367,7 @@ def install(app, store, auth, mutate, settings):
             raise Problem("group", "group must be one of: " + ", ".join(GROUPS), 422)
         filters = {key: request.query_params[key] for key in DIMENSIONS if request.query_params.get(key)}
         with store.read() as c:
-            allowed = own_bots(c, auth, who)
+            allowed = usage_bots(c, auth, who)
             people, configs = views.roster(c), views.entries(c, settings.github_owner)
             depts = {slug: P.team_of(slug, configs, people) or "" for slug in allowed}
             names = {row["id"]: row["display_name"] or row["slug"] for row in H.bots(c)}
@@ -376,7 +389,8 @@ def install(app, store, auth, mutate, settings):
                         "limit": limit_view(c, who, bot, usage_limits.company(c), allowed),
                         "totals": totals(query(c, "'all'", "", {bot}, first, last, filters)), "daily": series,
                         "routines": routines[:TOP_ROUTINES]}
-            only = {s.strip() for s in (request.query_params.get("bots") or "").split(",") if s.strip()}
+            only = {(H.resolve_bot(c, s) or {}).get("id", s)
+                    for s in (s.strip() for s in (request.query_params.get("bots") or "").split(",")) if s}
             slugs = {s for s in allowed if (not department or depts.get(s) == department) and (not only or s in only)}
             total = totals(query(c, "'all'", "", slugs, first, last, filters))
             if group == "bot":
@@ -388,7 +402,7 @@ def install(app, store, auth, mutate, settings):
                 rows = [{"day": r["k"], **figures(r)} for r in query(c, "substr(t.started_at, 1, 10)", "", slugs, first, last, filters)]
             elif group == "task":
                 rows = [{"value": r["k"] or None, "name": r["k"] or "Chats and other runs", **figures(r)}
-                        for r in query(c, TASK, "", slugs, first, last, filters)]
+                        for r in query(c, task_key(auth.task_sql(c, who)), "", slugs, first, last, filters)]
             elif group in DIMENSIONS:
                 rows = [{"value": r["k"] or None, "name": usage_label(c, r["k"] or "") if group == "subscription" else r["k"] or "Not recorded / not applicable", **figures(r)}
                         for r in query(c, DIMENSIONS[group], "", slugs, first, last, filters)]
