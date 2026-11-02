@@ -1,9 +1,10 @@
 # One explicitly requested release check, split across isolated native VMs that run side by side.
 # The VMs are RunsOn instances in Tico's own AWS account (manual runs only, never fork code).
 # No PR/push tests, schedule or publication: the release command dispatches it for the frozen candidate.
-# It builds the release once: the runner and relay binaries for every platform (clean, no cache) and the three images
-# for both architectures, pushed by digest only. The gate tests those binaries and images, and release.yml publishes
-# exactly them for the tag, so what shipped is what was tested.
+# It builds the release once: the Linux runner and relay binaries and the three images for both architectures, pushed by
+# digest only. The gate tests those binaries and images, and release.yml publishes exactly them for the tag, so what
+# shipped is what was tested. The Mac binaries are built by release.yml after the tag (no gate part runs on a Mac, and a
+# GitHub macOS runner can take 5-15 minutes to start), or carried forward when the runner sources did not change.
 name: Release validation
 run-name: Validate ${{ inputs.candidate_sha }} as ${{ inputs.version }} from ${{ inputs.previous_release }}
 
@@ -51,8 +52,8 @@ jobs:
           [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::version must be vX.Y.Z"; exit 1; }
           { echo "sha=$SHA"; echo "previous=$PREVIOUS"; echo "version=$VERSION"; } >> "$GITHUB_OUTPUT"
 
-  # The runner and screen relay for every platform, built once from the candidate. Linux builds are clean (no build cache);
-  # macOS builds reuse compiled dependencies from a cache only main writes (Chris, Nov 2). Linux builds are static (musl): the images, Linux checkouts and
+  # The runner and screen relay for Linux, built once from the candidate, reusing compiled dependencies from a cache only
+  # main writes. Linux builds are static (musl): the images, Linux checkouts and
   # the gate all run these same files. On-demand VMs, so an interruption never leaves a half-built release.
   native-linux:
     needs: candidate
@@ -107,57 +108,6 @@ jobs:
           else
             echo "::notice::runner-rs/build.rs predates the release stamp; tico-runner --release not checked"
           fi
-          mkdir -p dist
-          gzip -9 -c "runner-rs/target/$TARGET/release/tico-runner" > "dist/tico-runner-$NAME.gz"
-          gzip -9 -c "relay-rs/target/$TARGET/release/tico-screen-relay" > "dist/tico-screen-relay-$NAME.gz"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: runner-${{ matrix.name }}
-          path: dist/*.gz
-          retention-days: 30
-          if-no-files-found: error
-
-  # The Mac builds only ship: no gate part runs on a Mac, so nothing waits for them but the verdict.
-  native-macos:
-    needs: candidate
-    strategy:
-      matrix:
-        include:
-          - {name: macos-arm64, target: aarch64-apple-darwin}
-          - {name: macos-x86_64, target: x86_64-apple-darwin}
-    runs-on: macos-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ needs.candidate.outputs.sha }}
-          persist-credentials: false
-      - name: Install Rust
-        env:
-          TARGET: ${{ matrix.target }}
-        run: rustup toolchain install 1.92 --profile minimal --target "$TARGET" && rustup default 1.92
-      # Chris, Nov 2: cache the macOS builds' compiled dependencies (not our own crates: rust-cache drops workspace
-      # artifacts). Keyed on Cargo.lock, toolchain and target; only Release validation runs on main write it.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: |
-            runner-rs -> target
-            relay-rs -> target
-          key: ${{ matrix.target }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build tico-runner and tico-screen-relay
-        env:
-          TARGET: ${{ matrix.target }}
-          NAME: ${{ matrix.name }}
-          TICO_VERSION: ${{ needs.candidate.outputs.version }}
-        run: |
-          # Two crates with their own target directories, built side by side (dependencies from the rust cache above); both must succeed.
-          (cd runner-rs && cargo build --release --locked --target "$TARGET") & runner=$!
-          (cd relay-rs && cargo build --release --locked --target "$TARGET") & relay=$!
-          status=0
-          wait "$runner" || { echo "::error::tico-runner did not build"; status=1; }
-          wait "$relay" || { echo "::error::tico-screen-relay did not build"; status=1; }
-          [ "$status" = 0 ] || exit 1
           mkdir -p dist
           gzip -9 -c "runner-rs/target/$TARGET/release/tico-runner" > "dist/tico-runner-$NAME.gz"
           gzip -9 -c "relay-rs/target/$TARGET/release/tico-screen-relay" > "dist/tico-screen-relay-$NAME.gz"
@@ -556,9 +506,9 @@ jobs:
             awk '/^== /{h=$0; next} /^ +(FAIL|NOTE) /{if(h){print h; h=""} print} /scenario runs in/' "$RUNNER_TEMP/sim.log"
             echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
-  # The one verdict: the release passes only when every part passed and every platform's binaries built.
+  # The one verdict: the release passes only when every part passed and the Linux binaries and images built.
   release-check:
-    needs: [gate, native-macos, factory-sim, images]
+    needs: [gate, factory-sim, images]
     if: always()
     # Only compares results: GitHub-hosted starts in seconds, where a RunsOn VM boots for ~20 s at the run's very end.
     runs-on: ubuntu-24.04
@@ -567,9 +517,8 @@ jobs:
       - name: Every part of the release gate passed
         env:
           GATE: ${{ needs.gate.result }}
-          MACOS: ${{ needs.native-macos.result }}
           SIM: ${{ needs.factory-sim.result }}
           IMAGES: ${{ needs.images.result }}
         run: |
-          echo "Release gate parts: $GATE; Mac binaries: $MACOS; factory sim: $SIM; images: $IMAGES"
-          test "$GATE" = success && test "$MACOS" = success && test "$SIM" = success && test "$IMAGES" = success
+          echo "Release gate parts: $GATE; factory sim: $SIM; images: $IMAGES"
+          test "$GATE" = success && test "$SIM" = success && test "$IMAGES" = success
