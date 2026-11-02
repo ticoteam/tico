@@ -2771,17 +2771,37 @@ def mark_read(c, v, thread_id, seq):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     row = require(c, v, thread_id)
     seq = min(max(int(seq or 0), 0), int(row.get("last_seq") or 0))
+    return {"thread_id": row["id"], "last_read_seq": _read_to(c, row, v.actor, seq)}
+
+
+def _read_to(c, row, actor, seq):
+    """Move `actor`'s read mark in a thread up to `seq` (never back), and read the deliveries up to it. Returns the mark."""
     now = _now()
     c.execute("INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,created_at,"
               "updated_at) VALUES(?,?,?,0,'live','read',?,?,?) ON CONFLICT(thread_id,actor) DO UPDATE SET "
               "last_read_seq=MAX(last_read_seq,excluded.last_read_seq), updated_at=excluded.updated_at "
-              "WHERE excluded.last_read_seq>last_read_seq", (_new_id(), row["id"], v.actor, seq, now, now))
+              "WHERE excluded.last_read_seq>last_read_seq", (_new_id(), row["id"], actor, seq, now, now))
     c.execute("UPDATE message_deliveries SET state='read', read_at=?, updated_at=? WHERE recipient=? AND thread_id=? "
               "AND state IN ('pending','delivered') AND message_id IN (SELECT id FROM messages WHERE conversation_id=? "
-              "AND seq<=?) AND recipient NOT LIKE 'bot:%'", (now, now, v.actor, row["id"], row["id"], seq))
+              "AND seq<=?) AND recipient NOT LIKE 'bot:%'", (now, now, actor, row["id"], row["id"], seq))
     got = c.execute("SELECT last_read_seq FROM thread_followers WHERE thread_id=? AND actor=?",
-                    (row["id"], v.actor)).fetchone()
-    return {"thread_id": row["id"], "last_read_seq": got[0] if got else seq}
+                    (row["id"], actor)).fetchone()
+    return got[0] if got else seq
+
+
+def task_opened(c, conversation, actor, requester, notice):
+    """A task's own thread, as hubdb.task_create makes it (a thread of its own, not a chat it was filed from). Its maker
+    reads the thread up to now, so the notice their own action wrote is not unread for them. A requester who did not
+    make the task hears of it as new: a silent delivery (mode none, which wakes and pushes nothing), so the thread
+    lists in the sidebar until they read it."""
+    row = thread_row(c, conversation["id"])
+    if row is None:
+        return
+    if H.is_human(actor):
+        _read_to(c, row, actor, int(row.get("last_seq") or 0))
+    message = H.message(c, notice["id"]) if notice and notice.get("id") else None
+    if message and H.is_human(requester) and requester != actor and not remote_guest(c, requester):
+        _insert_delivery(c, message, requester, row, root_of(c, row), "none", "member")
 
 
 def mark_all_read(c, v, thread_id):
@@ -3443,8 +3463,10 @@ def sidebar(c, v, *, cursor=None, limit=50):
     needs their attention first, then what is unread for them, then the rest, each newest activity first. Following a
     sub-thread lists its root. A root row speaks for its whole subtree, for this viewer (`subtree_summaries`), and a
     sub-thread is never a row of its own. `threads` and `dms` are ranked and paged apart, up to `limit` rows each, so
-    someone with many threads still gets their DMs: one query each, whatever the page holds. `attention` is the page's
-    rows with an open Needs attention item. `cursor` is the `next_cursor` of the page before."""
+    someone with many threads still gets their DMs: one query each, whatever the page holds. A task's thread is listed
+    only while it has unread for the viewer (its parties and posters are no reason), so task threads never crowd out
+    the rest. `attention` is the page's rows with an open Needs attention item. `cursor` is the `next_cursor` of the
+    page before."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     limit = max(1, min(int(limit or 50), MAX_PAGE))
     readable = readable_sql(c, v, "r")
@@ -3471,7 +3493,11 @@ def sidebar(c, v, *, cursor=None, limit=50):
                  "AND f.actor=d.recipient WHERE d.recipient=:me AND d.state IN ('pending','delivered','capped','held') "
                  f"AND {_SUBTREE_OPEN} AND m.seq>{mark} AND m.from_actor<>:me AND m.deleted_at IS NULL)")
     place = f"CASE WHEN {is_needing} THEN 0 WHEN NOT {is_history} AND ({by_person} OR {to_viewer}) THEN 1 ELSE 2 END"
+    # A task's thread lists only while it has unread for the viewer: its parties (maker, requester, owner) and anyone who
+    # posted in it are no reason on their own. The full Threads page, the Tasks page and search still show it.
+    is_task = f"COALESCE(r.audience,{_derived_audience('r')})='task'"
     where = ["r.parent_id IS NULL", "r.archived_at IS NULL", "r.closed_at IS NULL",
+             f"(NOT {is_task} OR {by_person} OR {to_viewer})",
              f"(r.audience IN ('company','team') OR r.owner_actor=:me OR {is_needing} OR EXISTS (SELECT 1 FROM "
              f"thread_members m WHERE m.thread_id=r.id AND m.actor IN ({marks})) OR EXISTS (SELECT 1 FROM "
              f"thread_followers f JOIN conversations s ON s.id=f.thread_id WHERE s.root_id=r.id AND f.actor=:me "
@@ -3650,6 +3676,16 @@ def _set_progress(c, step, rowid):
               (MIGRATION_PROGRESS_KEY, json.dumps({"step": step, "rowid": rowid})))
 
 
+def rename_rule_reviews(c):
+    """Rule-review threads made before the plain title (org_rule_check.REVIEW_TITLE) took the task's "Held: ..." or
+    "Appeal: ..." title as their subject. Only the threads of tasks labelled as rule reviews change; any other held
+    thread (a screening hold, say) keeps its title. Returns how many changed."""
+    from .org_rule_check import REVIEW_LABEL, REVIEW_TITLE
+    return c.execute("UPDATE conversations SET subject=?, updated_at=? WHERE task_id IN (SELECT tt.task_id FROM task_tags tt "
+                     "JOIN tags g ON g.id=tt.tag_id WHERE g.key=?) AND (subject LIKE 'Held: %' OR subject LIKE 'Appeal: %')",
+                     (REVIEW_TITLE, _now(), REVIEW_LABEL)).rowcount
+
+
 def _migrate(c):
     now = _now()
     # Two open shared rooms for one bot (never written, but a Home is one per owner): the newest is the Home, the
@@ -3664,6 +3700,7 @@ def _migrate(c):
         c.execute("UPDATE conversations SET root_id=COALESCE(root_id,id), path=COALESCE(path,'/'||id||'/'), "
                   "updated_at=COALESCE(updated_at,last_message_at,created)")
         _store_shared_homes(c)
+        rename_rule_reviews(c)
     install = install_id(c)
     _backfill_messages(c, install, now)
     # Conversation counters read the stamped seqs; a temporary table of each conversation's last seq (one pass, no index

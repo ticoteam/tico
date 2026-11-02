@@ -6328,13 +6328,18 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     from . import profiles
     gate_child = {"wake": "review_request"} if profiles.is_review_task(conn, task(conn, row["id"])) \
         else {"news": "assignment"}
-    _wake(conn, task(conn, row["id"]), target, f"New task from {actor}: {title}",
-          {**({"reconcile": reconcile} if reconcile else {}), **({"filed_in": filed_in} if filed_in else {}),
-           **gate_child, **(wake_refs or {})} or None,
-          quiet_bots=next_run or quiet_notice, quiet=next_run or quiet_notice, trigger=trigger, source=trigger_source)
+    notice = _wake(conn, task(conn, row["id"]), target, f"New task from {actor}: {title}",
+                   {**({"reconcile": reconcile} if reconcile else {}), **({"filed_in": filed_in} if filed_in else {}),
+                    **gate_child, **(wake_refs or {})} or None,
+                   quiet_bots=next_run or quiet_notice, quiet=next_run or quiet_notice, trigger=trigger,
+                   source=trigger_source)
     if parent and is_bot(parent["owner"]) and is_human(target):
         # A bot's task now waits on a person: one line in the bot's main chat.
         task_report(conn, task(conn, parent["id"]), "blocked", f"Waiting on {actor_id(target)}: {title}")
+    if dedicated:
+        # Its own thread: the maker reads the notice their action wrote; a requester who did not make it sees it as new.
+        from . import threads
+        threads.task_opened(conn, conv, actor, requester, notice)
     _recount(conn, target)
     _recount(conn, actor)
     made = task(conn, row["id"])

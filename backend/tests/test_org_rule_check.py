@@ -13,6 +13,7 @@ import pytest
 
 from backend import call_slots as CS
 from backend import org_rule_check as K
+from backend import threads
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_api import claim, get, headers, post, setup_attempt  # noqa: F401
@@ -280,6 +281,37 @@ def test_the_third_block_in_a_day_escalates_with_one_review_task(ruled):
     assert outcomes == ["blocked", "blocked", "escalated", "escalated"]
     tasks = {row["task_id"] for row in sql(api, "SELECT task_id FROM org_rule_holds WHERE task_id IS NOT NULL")}
     assert len(tasks) == 1
+
+
+def test_a_rule_review_task_is_titled_plainly_and_its_thread_keeps_the_hold(ruled):
+    api, _ = ruled
+    color_rule(api)
+    [say(api, f"Try {n}: our favorite color is gold") for n in range(3)]
+    [task] = sql(api, "SELECT id, title, body, conversation_id FROM tasks WHERE id IN "
+                      "(SELECT task_id FROM org_rule_holds WHERE task_id IS NOT NULL)")
+    hold = sql(api, "SELECT id FROM org_rule_holds WHERE task_id=?", (task["id"],))[0]["id"]
+    assert task["title"] == "Rule review"
+    assert [s["subject"] for s in sql(api, "SELECT subject FROM conversations WHERE id=?", (task["conversation_id"],))] \
+        == ["Rule review"]
+    assert "Hold: " + hold in task["body"]
+
+
+def test_an_old_rule_review_row_takes_the_plain_title_and_no_other_held_row_does(ruled):
+    api, _ = ruled
+    color_rule(api)
+    [say(api, f"Try {n}: our favorite color is gold") for n in range(3)]
+    [review] = sql(api, "SELECT id, conversation_id FROM tasks WHERE id IN "
+                        "(SELECT task_id FROM org_rule_holds WHERE task_id IS NOT NULL)")
+    with api.app.state.store.transaction() as c:
+        # Rows as main wrote them: the review's thread took the task's "Held: ..." title, and a screening hold keeps its own.
+        c.execute("UPDATE conversations SET subject=? WHERE id=?", ("Held: ops and the rule 'old'", review["conversation_id"]))
+        screening = c.execute("INSERT INTO conversations(id, kind, subject, participants_json, scope, created) "
+                              "VALUES('screen-held', 'task', 'Held: Order', '[]', 'task', '2026-11-01')").rowcount
+        assert screening == 1
+        assert threads.rename_rule_reviews(c) == 1
+    subjects = {r["id"]: r["subject"] for r in sql(api, "SELECT id, subject FROM conversations WHERE id IN (?, 'screen-held')",
+                                                  (review["conversation_id"],))}
+    assert subjects == {review["conversation_id"]: "Rule review", "screen-held": "Held: Order"}
 
 
 def test_cache_hits_count_toward_repeats(ruled):

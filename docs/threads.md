@@ -73,6 +73,10 @@ Each reader follows a thread at one level:
 The list shows top-level threads only. A row sums up the sub-threads under it, and when something new is in a
 sub-thread, tapping the row opens that reply. Following only a sub-thread still lists its thread.
 
+A task's own thread is listed only while it has something unread for you. Being its maker, requester or owner, or having
+posted in it, is no reason to list it, and neither is a bot's activity there. Read it and it leaves the list; the Threads
+page, the Tasks page and search still find it. A task you make is not unread for you: its first notice is your own action.
+
 Only human messages, and anything addressed to you, count as unread. A bot's post in a thread you follow is activity:
 a dot, not a count. **Needs attention** at the top of the list holds the threads with something open on your Needs you list: a mention or
 ask you have not answered, an unread DM, a post of yours held for review or held for you to review, and any thread you
@@ -119,7 +123,7 @@ Each command is also an MCP tool with the same name and arguments ([Connect an a
 
 | Command | Tool | What it does |
 |---|---|---|
-| `hub thread list [--with ACTOR]` | `hub_thread_list` | your threads: needs attention, then unread, then recent; DMs apart; `--with` only the threads shared with that person, bot or group |
+| `hub thread list [--with ACTOR]` | `hub_thread_list` | your threads: needs attention, then unread, then recent; DMs apart; a task's thread only while it is unread; `--with` only the threads shared with that person, bot or group |
 | `hub thread show <thread>` | `hub_thread_show` | the messages in tree order, each sub-thread under its message |
 | `hub thread home <actor>` | `hub_thread_home` | a teammate's Home, made on first use; needs Read on them |
 | `hub thread dm <actor>` | `hub_thread_dm` | your DM with one person or bot, the open one or a new one; needs Write |
