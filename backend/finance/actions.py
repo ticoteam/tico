@@ -17,7 +17,7 @@ from . import purchasing
 from . import posting
 from . import raw_totals, runs
 from . import setup as setup_mod
-from . import rights, sync, tax, usage
+from . import books_sync, rights, sync, tax, usage
 from .context import Ctx, load
 from .core import kinds as K
 from .core import org as O
@@ -572,6 +572,7 @@ banking_ring = sync.ring
 banking_step = sync.step
 mercury_probe = sync.probe_credential
 stripe_delivery = sync.stripe_delivery
+books_delivery = books_sync.delivery
 stripe_probe = sync.stripe_probe
 
 

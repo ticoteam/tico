@@ -553,8 +553,8 @@ def _route(c, found, delivery, type_, via, body, headers, auth):
         return fired, [{"outcome": "finance", "target": "finance", "ok": True, "detail": "kept" if kept else "seen"}]
     if effective_preset(found) in ("intuit", "xero"):
         # QuickBooks and Xero events are Finance's too (spec §3.4, §10): kept once by event id for the books worker.
-        from .finance import books_sync
-        status = books_sync.delivery(c, effective_preset(found), payload if isinstance(payload, dict) else {})
+        from .finance import actions as finance
+        status = finance.books_delivery(c, effective_preset(found), payload if isinstance(payload, dict) else {})
         return fired, [{"outcome": "finance", "target": "finance", "ok": status != "refused", "detail": status}]
     if finance_owned(found):
         # Finance's calls (its bank's events, backend/finance/sync.py) are Finance's alone: kept once by event id, never

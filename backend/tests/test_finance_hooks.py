@@ -156,3 +156,21 @@ def test_the_public_address_refuses_intuit_even_with_a_signature_the_install_cou
     spoofed = api.post(url, content=body, headers={**headers, "via": "gateway", "x-tico-via": "gateway"})
     assert spoofed.status_code == 401
     assert _kept(api) == 0
+
+
+def test_a_relayed_quickbooks_call_is_handed_to_finance_actions_like_a_stripe_or_mercury_call(api, monkeypatch):
+    """Books calls go through the Finance door (finance/actions), as Stripe's and Mercury's do, not around it."""
+    from backend import triggers
+    _books_trigger(api)
+    seen = []
+    real = FA.books_delivery
+
+    def door(c, preset, body):
+        seen.append(preset)
+        return real(c, preset, body)
+    monkeypatch.setattr(FA, "books_delivery", door)
+    with api.app.state.store.transaction() as c:
+        got = triggers.receive(c, "books-qb", _envelope("evt-door"), {"content-type": "application/json"}, secret=None,
+                               via="gateway", delivery_id="relay-door", vault=None)
+    assert seen == ["intuit"] and got.outcome == "accepted"
+    assert got.rules[0]["detail"] == "kept" and _kept(api) == 1
