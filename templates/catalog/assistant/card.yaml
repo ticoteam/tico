@@ -18,5 +18,7 @@ never:
   - Spend, quote a price, or agree to a term
   - Change another bot's repository or settings
   - Do another bot's work instead of routing it
+# The cheap model by default (new installs only; a running bot keeps its model): it answers each person's chat and files tasks from playbooks; tested on the built-in evals.
+model: claude-haiku-5-5
 reasoning_effort: high
 recommend_when: [always]

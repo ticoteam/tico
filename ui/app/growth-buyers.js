@@ -139,16 +139,16 @@ function gtmBlockHtml(d) {
     ['Playbooks', (b.playbooks || []).join(' · ')]].filter(r => r[1]);
   if (!rows.length && !may) return '';
   const n = may ? grDocChanged(d) : 0;
-  return `<section class="card gb-gtm" aria-label="Go-to-market"><div class="gb-gtm-h"><h2 class="gr-k">Go-to-market</h2>
-      ${n ? `<span class="pill waiting">${n === 1 ? '1 change' : `${n} changes`}</span>` : ''}<span class="spacer"></span>
-      ${may ? '<button class="ghost small" type="button" data-gtm-edit>Edit</button>' : ''}</div>
-    ${rows.length ? `<dl class="br-dl">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}</section>`;
+  return `<section class="card gb-gtm" aria-label="How we sell">
+    ${rows.length ? `<dl class="br-dl">${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}
+    ${may ? `<div class="gb-gtm-h">${n ? `<span class="pill waiting">${n === 1 ? '1 change' : `${n} changes`}</span>` : ''}<span class="spacer"></span>
+      <button class="ghost small" type="button" data-gtm-edit>Edit</button></div>` : ''}</section>`;
 }
 // Edit writes the draft with the revision it was read at, then publishes it with the note (only when it differs).
 function gtmEdit(state) {
   let d = state.data.gtm;
   const b = gtBody(d), buyer = b.buyer || {}, m = b.motion || {};
-  grDialog('Go-to-market', `<div class="gr-pair">${grField('Motion', `<select name="primary">${grOpts(GT_MOTIONS, m.primary, '—')}</select>`)}
+  grDialog('How we sell', `<div class="gr-pair">${grField('Motion', `<select name="primary">${grOpts(GT_MOTIONS, m.primary, '—')}</select>`)}
     ${grField('Second motion', `<select name="secondary">${grOpts(GT_MOTIONS, m.secondary, '—')}</select>`)}</div>
     ${grField('Who uses it', `<input name="who_uses" maxlength="300" value="${esc(buyer.who_uses || '')}">`)}
     ${grField('Sales cycle', `<input name="cycle" maxlength="80" value="${esc(buyer.cycle || '')}">`)}

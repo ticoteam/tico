@@ -1,5 +1,6 @@
 One file per recurring kind of work. A playbook is the checklist you would hand a new hire.
 
+- `commands.md`: the hub commands for goal work, by job, with their arguments. Run only these; read it before your first hub call.
 - `which-run.md`: which playbook a run needs, by the work it starts from.
 - `levels.md`: what Passive, level 2 and level 3 each allow, and the limit on Needs you items.
 - `strategy-and-bets.md`: the strategy page, bets, goals, KPIs, and the commands that read and write them.

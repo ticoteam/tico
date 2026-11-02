@@ -1171,7 +1171,14 @@ fn without_streamed_text_finished_chunks_go_whole_and_a_paused_meeting_gets_noth
     let (tico, _, worker) = server(vec![]);
     worker.join().unwrap();
     tico.push_live(&store, id).unwrap();
-    // Resumed in Tico: the waiting turn goes again, then the streamed one.
+    // The synthetic capture clock has advanced beyond the words spoken while paused.
+    store
+        .mutate(id, |r| {
+            r.started_at = (chrono::Utc::now() - chrono::Duration::seconds(7)).to_rfc3339();
+            Ok(())
+        })
+        .unwrap();
+    // Resumed in Tico: the uncertain pending turn is only a removal marker.
     let (tico, seen, worker) = server(vec![Some(json!({"id":"live-fixture","state":"live"}))]);
     // A paused meeting is only read back.
     tico.sync_live(&store, id).unwrap();
@@ -1189,8 +1196,7 @@ fn without_streamed_text_finished_chunks_go_whole_and_a_paused_meeting_gets_noth
     assert_eq!(
         requests[0].1["chunks"],
         json!([
-            {"seq":1,"speaker":"Me","start_ms":0,"end_ms":5000,"text":"Morning all"},
-            {"seq":2,"speaker":"Me","start_ms":5500,"end_ms":6050,"text":"still talking"},
+            {"seq":1,"speaker":"Me","start_ms":0,"end_ms":5000,"text":"[removed]"}
         ])
     );
 }
@@ -1570,6 +1576,484 @@ fn edit_guards_and_the_shared_view_follow_what_tico_has() {
 }
 
 #[test]
+fn paused_capture_stays_local_through_resume_retry_recovery_and_final_corrections() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Off the record");
+    let id = &record.id;
+    streamed(&store, id, "me", 1000, "public opening", "");
+    let (tico, _, worker) = server(vec![Some(json!({"accepted":[1]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let (tico, _, worker) = server(vec![Some(json!({"state":"paused"}))]);
+    tico.control_live(&store, id, "pause", 5000).unwrap();
+    worker.join().unwrap();
+    streamed(&store, id, "me", 6000, "secret launch", "");
+    let store = Store::open(dir.path()).unwrap();
+    let (tico, _, worker) = server(vec![Some(json!({"state":"live"}))]);
+    tico.control_live(&store, id, "resume", 10000).unwrap();
+    worker.join().unwrap();
+    streamed(&store, id, "me", 11000, "public closing", "");
+    // A transport failure leaves only public text in the durable outbox.
+    let (tico, _, worker) = server(vec![None]);
+    assert!(tico.push_live(&store, id).is_err());
+    worker.join().unwrap();
+    let queued: String = store
+        .db()
+        .unwrap()
+        .query_row(
+            "SELECT group_concat(payload_json) FROM live_outbox WHERE recording_id=?",
+            [id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(!queued.contains("secret"));
+    let store = Store::open(dir.path()).unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[2]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert!(!seen.lock().unwrap()[0].1.to_string().contains("secret"));
+    finished_chunk(
+        &store,
+        id,
+        0,
+        8000,
+        vec![
+            word(1000, 1300, "Public opening.", ""),
+            word(6000, 6300, "Secret launch.", ""),
+        ],
+    );
+    finished_chunk(
+        &store,
+        id,
+        8000,
+        15000,
+        vec![
+            word(9000, 9300, "Secret plan.", ""),
+            word(11000, 11300, "Public closing.", ""),
+        ],
+    );
+    store.state(id, "stopped").unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({})),
+        Some(json!({})), // final corrections
+        Some(json!({"state":"live"})),
+        Some(json!({"state":"ended"})),
+        Some(json!({"meeting_id":"filed-fixture"})),
+    ]);
+    tico.finish_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert!(
+        requests
+            .iter()
+            .all(|(_, payload, _)| !payload.to_string().to_lowercase().contains("secret"))
+    );
+    assert_eq!(
+        store.get(id).unwrap().chunks[0].text,
+        "Public opening. Secret launch."
+    );
+    let mut context = store.context(id).unwrap();
+    context.items.push(crate::workspace::Item {
+        quote: "Secret launch.".into(),
+        at_ms: 6000,
+        ..Default::default()
+    });
+    assert!(crate::live::paused_quotes(
+        &store.get(id).unwrap(),
+        &context
+    ));
+    context.items[0].quote = "Public opening.".into();
+    context.items[0].at_ms = 1000;
+    assert!(!crate::live::paused_quotes(
+        &store.get(id).unwrap(),
+        &context
+    ));
+
+    // Quote starts outside the pause, so content matching must detect the paused suffix.
+    context.items[0].quote = "Public opening. Secret launch.".into();
+    assert!(crate::live::paused_quotes(
+        &store.get(id).unwrap(),
+        &context
+    ));
+    let mut untimed = store.get(id).unwrap();
+    untimed.chunks[0].words.clear();
+    assert!(crate::live::paused_quotes(&untimed, &context));
+    // A quote can cross two chunks as well as a pause boundary.
+    context.items[0].quote = "Secret launch. Secret plan. Public closing.".into();
+    assert!(crate::live::paused_quotes(
+        &store.get(id).unwrap(),
+        &context
+    ));
+}
+
+#[test]
+fn paused_finish_requires_resume_then_files_pending_public_speech() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Pause before final public upload");
+    let id = &record.id;
+    finished_chunk(
+        &store,
+        id,
+        0,
+        8000,
+        vec![
+            word(1000, 1400, "Public opening", ""),
+            word(6000, 6300, "Secret words", ""),
+        ],
+    );
+    store.state(id, "stopped").unwrap();
+    store
+        .update_context(id, |c| {
+            c.live_state = "paused".into();
+            c.locally_paused = true;
+            c.paused_windows = vec![(5000, None)];
+            Ok(())
+        })
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"state":"live"})),
+        Some(json!({"accepted":[1]})),
+        Some(json!({"state":"live"})),
+        Some(json!({"state":"ended"})),
+        Some(json!({"meeting_id":"filed-public"})),
+    ]);
+    assert!(
+        tico.finish_live(&store, id)
+            .unwrap_err()
+            .to_string()
+            .contains("Resume sharing")
+    );
+    assert!(seen.lock().unwrap().is_empty());
+    assert!(store.get(id).unwrap().deliveries.is_empty());
+    tico.control_live(&store, id, "resume", 10000).unwrap();
+    tico.finish_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests[1].1["chunks"][0]["text"], "Public opening");
+    assert!(requests[4].0.contains("/finalize"));
+    assert!(
+        !serde_json::to_string(&*requests)
+            .unwrap()
+            .contains("Secret")
+    );
+    let kept = store.get(id).unwrap();
+    assert_eq!(kept.deliveries[0].meeting_id, "filed-public");
+    assert!(kept.chunks[0].text.contains("Secret"));
+}
+
+#[test]
+fn finish_stops_if_final_readback_discovers_a_remote_pause() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Remote pause before finish");
+    store.state(&record.id, "stopped").unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"state":"paused"}))]);
+    assert!(
+        tico.finish_live(&store, &record.id)
+            .unwrap_err()
+            .to_string()
+            .contains("Resume sharing")
+    );
+    worker.join().unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert!(store.get(&record.id).unwrap().deliveries.is_empty());
+}
+
+#[test]
+fn uncertain_pause_stays_local_and_discard_never_finalizes_or_sends() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Discard locally kept recording");
+    let id = &record.id;
+    let (tico, _, worker) = server(vec![None]);
+    assert!(tico.control_live(&store, id, "pause", 5000).is_err());
+    worker.join().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let (tico, _, worker) = server(vec![Some(json!({"state":"live"}))]);
+    tico.sync_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert_eq!(store.context(id).unwrap().live_state, "paused");
+    assert_eq!(
+        store.context(id).unwrap().paused_windows,
+        vec![(5000, None)]
+    );
+    finished_chunk(
+        &store,
+        id,
+        0,
+        10000,
+        vec![word(6000, 6300, "Private words", "")],
+    );
+    store.state(id, "stopped").unwrap();
+    let (tico, _, worker) = server(vec![None]);
+    assert!(tico.control_live(&store, id, "discard", 10000).is_err());
+    worker.join().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    assert!(store.context(id).unwrap().live_discarded);
+    assert!(tico.finish_live(&store, id).is_err());
+    let (tico, seen, worker) = server(vec![Some(json!({"state":"ended"}))]);
+    tico.control_live(&store, id, "discard", 10000).unwrap();
+    worker.join().unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert_eq!(seen.lock().unwrap()[0].1, json!({"action":"end"}));
+    assert!(tico.finish_live(&store, id).is_err());
+    let kept = store.get(id).unwrap();
+    assert!(kept.deliveries.is_empty());
+    assert_eq!(kept.chunks[0].text, "Private words");
+    assert!(
+        std::path::Path::new(&kept.chunks[0].file).exists()
+            || dir.path().join(&kept.chunks[0].file).exists()
+    );
+}
+
+#[test]
+fn remote_pause_scrubs_pending_turns_chunks_and_corrections_before_resume() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Remote pause");
+    let id = &record.id;
+    streamed(&store, id, "me", 1000, "public opening", "");
+    let (tico, _, worker) = server(vec![Some(json!({"accepted":[1]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    streamed(&store, id, "me", 4000, "secret streamed", "");
+    finished_chunk(
+        &store,
+        id,
+        5000,
+        8000,
+        vec![word(6000, 6300, "secret finished", "")],
+    );
+    // A correction queued before discovering the remote pause must also stay private.
+    store.db().unwrap().execute("INSERT INTO live_corrections(recording_id,destination_id,seq,revision,payload_json) VALUES(?, 'synthetic',1,2,?)",rusqlite::params![id, json!({"revision":2,"speaker":"Me","start_ms":1000,"end_ms":1550,"text":"secret correction"}).to_string()]).unwrap();
+    let (tico, _, worker) = server(vec![
+        Some(json!({"status":409,"error":{"code":"meeting_state","message":"paused"}})),
+        Some(json!({"state":"paused"})),
+    ]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert_eq!(
+        store.context(id).unwrap().paused_windows,
+        vec![(1000, None)]
+    );
+    let db = store.db().unwrap();
+    let pending: String = db.query_row("SELECT group_concat(payload_json) FROM live_outbox WHERE recording_id=? AND acknowledged=0", [id], |r|r.get(0)).unwrap();
+    assert!(!pending.contains("secret"));
+    let corrections: String = db.query_row("SELECT group_concat(payload_json) FROM live_corrections WHERE recording_id=? AND state=0", [id], |r|r.get(0)).unwrap();
+    assert!(!corrections.contains("secret"));
+    drop(db);
+    let store = Store::open(dir.path()).unwrap();
+    store
+        .mutate(id, |r| {
+            r.started_at = (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
+            Ok(())
+        })
+        .unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({})), Some(json!({"state":"live"}))]);
+    tico.sync_live(&store, id).unwrap();
+    worker.join().unwrap();
+    assert!(
+        !seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, p, _)| p.to_string().contains("secret"))
+    );
+    streamed(&store, id, "me", 12000, "public resumed", "");
+    let (tico, _, worker) = server(vec![None]);
+    assert!(tico.push_live(&store, id).is_err());
+    worker.join().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"accepted":[2,3,4]}))]);
+    tico.push_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert!(!requests[0].1.to_string().contains("secret"));
+    assert!(requests[0].1.to_string().contains("public resumed"));
+    assert_eq!(store.get(id).unwrap().chunks[0].text, "secret finished");
+}
+
+#[test]
+fn item_send_refuses_paused_and_discarded_even_with_confirmation() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Synthetic item guards");
+    let (tico, seen, worker) = server(vec![]);
+    for discarded in [false, true] {
+        store
+            .update_context(&record.id, |c| {
+                c.live_state = if discarded { "ended" } else { "paused" }.into();
+                c.live_discarded = discarded;
+                Ok(())
+            })
+            .unwrap();
+        for confirmed in [false, true] {
+            let error = tico
+                .send_task_confirmed(
+                    &store,
+                    &record.id,
+                    "item",
+                    "bot:fixture",
+                    "Fixture",
+                    true,
+                    confirmed,
+                )
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains(if discarded { "discarded" } else { "Resume" }),
+                "{error}"
+            );
+        }
+    }
+    worker.join().unwrap();
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "state fences precede all HTTP"
+    );
+    assert!(!store.get(&record.id).unwrap().chunks.is_empty());
+}
+
+#[test]
+fn item_send_requires_quote_review_and_filters_the_surrounding_transcript() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Synthetic item excerpt");
+    store
+        .save_audio(
+            &record.id,
+            crate::audio::Channel::Microphone,
+            5000,
+            6000,
+            &vec![0.2; 16000],
+            16000,
+        )
+        .unwrap();
+    let claimed = store.claim_transcription().unwrap().unwrap();
+    store
+        .transcription_result(&claimed, "SECRET_PAUSED", "", json!({}))
+        .unwrap();
+    store
+        .update_context(&record.id, |c| {
+            c.paused_windows = vec![(5000, Some(6000))];
+            c.items = vec![crate::workspace::Item {
+                id: "item".into(),
+                title: "Follow up".into(),
+                quote: "SECRET_PAUSED".into(),
+                at_ms: 5500,
+                ..Default::default()
+            }];
+            Ok(())
+        })
+        .unwrap();
+    let who = json!({"actor":"human:test","name":"Fixture"});
+    let (tico, seen, worker) = server(vec![
+        Some(who.clone()),
+        Some(who),
+        Some(json!({"task":{"id":"synthetic-task"}})),
+    ]);
+    let error = tico
+        .send_task(&store, &record.id, "item", "bot:fixture", "Fixture", true)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("may quote paused speech"), "{error}");
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|r| !r.0.starts_with("POST"))
+    );
+    store
+        .update_context(&record.id, |c| {
+            c.items[0].quote = "I will send the proposal".into();
+            c.items[0].at_ms = 0;
+            Ok(())
+        })
+        .unwrap();
+    tico.send_task_confirmed(
+        &store,
+        &record.id,
+        "item",
+        "bot:fixture",
+        "Fixture",
+        true,
+        true,
+    )
+    .unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[0].0.starts_with("GET /api/v2/me "));
+    assert!(requests[1].0.starts_with("GET /api/v2/me "));
+    let tasks: Vec<_> = requests
+        .iter()
+        .filter(|r| r.0.starts_with("POST /api/v2/tasks "))
+        .collect();
+    assert_eq!(tasks.len(), 1);
+    let body = tasks[0].1["body"].as_str().unwrap();
+    assert!(body.contains("I will send the proposal"), "{body}");
+    assert!(!body.contains("SECRET_PAUSED"), "{body}");
+    assert!(
+        store
+            .get(&record.id)
+            .unwrap()
+            .chunks
+            .iter()
+            .any(|c| c.text.contains("SECRET_PAUSED"))
+    );
+}
+
+#[test]
+fn item_send_discovers_a_remote_pause_before_export() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Remote item pause");
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"state":"paused"})),
+    ]);
+    store
+        .update_context(&record.id, |c| {
+            c.live_id = "live-fixture".into();
+            c.live_destination = tico.destination.id.clone();
+            c.live_state = "live".into();
+            Ok(())
+        })
+        .unwrap();
+    let error = tico
+        .send_task_confirmed(
+            &store,
+            &record.id,
+            "item",
+            "bot:fixture",
+            "Fixture",
+            true,
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Resume"), "{error}");
+    worker.join().unwrap();
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|r| !r.0.starts_with("POST"))
+    );
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].0.starts_with("GET /api/v2/me "));
+    assert!(
+        requests[1]
+            .0
+            .starts_with("GET /api/v2/live-meetings/live-fixture ")
+    );
+    assert!(!store.context(&record.id).unwrap().paused_windows.is_empty());
+}
+
+#[test]
 fn old_tico_refuses_private_connect_without_dropping_visibility() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
@@ -1594,4 +2078,79 @@ fn old_tico_refuses_private_connect_without_dropping_visibility() {
     }
     assert_eq!(requests[1].1["client"], "tico-recorder");
     assert!(requests[2].1.get("client").is_none());
+}
+
+#[test]
+fn title_only_item_needs_confirmation_after_each_edit_before_any_task_post() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Synthetic title review");
+    store
+        .update_context(&record.id, |c| {
+            c.paused_windows = vec![(5000, Some(6000))];
+            c.items = vec![crate::workspace::Item {
+                id: "title-only".into(),
+                title: "Secret launch date".into(),
+                ..Default::default()
+            }];
+            Ok(())
+        })
+        .unwrap();
+    let who = json!({"actor":"human:test","name":"Fixture"});
+    let (tico, seen, worker) = server(vec![
+        Some(who.clone()),
+        Some(who.clone()),
+        Some(who),
+        Some(json!({"task":{"id":"synthetic-title-task"}})),
+    ]);
+    for title in ["Secret launch date", "Changed secret launch date"] {
+        store
+            .update_context(&record.id, |c| {
+                c.items[0].title = title.into();
+                Ok(())
+            })
+            .unwrap();
+        let error = tico
+            .send_task(
+                &store,
+                &record.id,
+                "title-only",
+                "bot:fixture",
+                "Fixture",
+                true,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Review its title and quote"), "{error}");
+        assert!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .all(|r| !r.0.starts_with("POST"))
+        );
+    }
+    tico.send_task_confirmed(
+        &store,
+        &record.id,
+        "title-only",
+        "bot:fixture",
+        "Fixture",
+        true,
+        true,
+    )
+    .unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 4);
+    assert!(
+        requests[..3]
+            .iter()
+            .all(|r| r.0.starts_with("GET /api/v2/me "))
+    );
+    assert!(requests[3].0.starts_with("POST /api/v2/tasks "));
+    assert_eq!(requests[3].1["title"], "Changed secret launch date");
+    assert_eq!(
+        store.context(&record.id).unwrap().items[0].task_id,
+        "synthetic-title-task"
+    );
 }

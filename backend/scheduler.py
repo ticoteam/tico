@@ -196,6 +196,7 @@ def run_now(store, auth, key, actor):
 class Scheduler:
     def __init__(self, store, execution):
         self.store, self.execution = store, execution
+        self.listening_since = H.now()  # when this server began listening; a computer is not silent before it
         self.swept = None
         self.stranded = None
         self.asks_checked = None
@@ -313,7 +314,7 @@ class Scheduler:
             with SR.recording(self.store, "stall_marks", failures) as run:
                 with locked("stall_marks") as c:
                     from . import run_diagnostics
-                    run_diagnostics.sweep(c, stamp(at))
+                    run_diagnostics.sweep(c, stamp(at), listening_since=self.listening_since)
                 run.did("Checked", quiet=True)
         # The turn fixer first: a start it proves dead is freed with a note on its task before plain expiry takes it.
         # Fleet classification for the Health finding runs on a read connection between two short writes, so claim

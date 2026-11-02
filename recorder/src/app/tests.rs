@@ -998,6 +998,130 @@ fn the_open_meetings_bot_notices_show_with_the_bots_name() {
 }
 
 #[test]
+fn send_requires_review_of_paused_quotes_and_discard_keeps_the_local_recording() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    seed_demo(&store).unwrap();
+    let mut app = app(store, directory.path());
+    let id = app
+        .records
+        .iter()
+        .find(|r| r.chunks > r.silent && r.deliveries.is_empty())
+        .unwrap()
+        .id
+        .clone();
+    app.config.destinations = vec![connection("first", "acme.example")];
+    app.store
+        .update_context(&id, |c| {
+            c.paused_windows = vec![(5000, Some(10000))];
+            c.items = vec![Item {
+                quote: "Paused quote".into(),
+                at_ms: 6000,
+                ..Default::default()
+            }];
+            Ok(())
+        })
+        .unwrap();
+    app.send_meeting(&id, "first");
+    assert!(app.error.contains("may quote paused speech"));
+    assert!(!app.busy);
+    assert!(app.store.get(&id).unwrap().deliveries.is_empty());
+    // Confirmation reaches the bypass before the busy guard, without starting any network job.
+    app.busy = true;
+    app.error.clear();
+    app.send_meeting_confirmed(&id, "first", true);
+    assert!(app.error.is_empty());
+    app.busy = false;
+    app.store
+        .update_context(&id, |c| {
+            c.items[0].quote = "Normalized or reworded quote".into();
+            c.items[0].at_ms = 1000;
+            Ok(())
+        })
+        .unwrap();
+    app.send_meeting(&id, "first");
+    assert!(app.error.contains("may quote paused speech"));
+    app.store
+        .update_context(&id, |c| {
+            c.live_state = "paused".into();
+            Ok(())
+        })
+        .unwrap();
+    app.send_meeting_confirmed(&id, "first", true);
+    assert!(app.error.contains("Resume sharing"));
+    assert!(!app.busy);
+    app.store
+        .update_context(&id, |c| {
+            c.live_discarded = true;
+            Ok(())
+        })
+        .unwrap();
+    app.send_meeting_confirmed(&id, "first", true);
+    assert!(app.error.contains("discarded"));
+    assert!(!app.busy);
+    assert!(!app.store.get(&id).unwrap().chunks.is_empty());
+    assert!(
+        full_view(&mut app)["library"]["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == id && r["status"]["label"] == "Discard pending · saved locally")
+    );
+}
+
+#[test]
+fn individual_item_send_uses_durable_pause_discard_and_quote_guards() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = store.create("Synthetic item guards").unwrap();
+    store
+        .update_context(&record.id, |c| {
+            c.paused_windows = vec![(5000, Some(10000))];
+            c.items = vec![Item {
+                id: "item".into(),
+                title: "Follow up".into(),
+                quote: "Reworded paused quote".into(),
+                owner: "bot:fixture".into(),
+                ..Default::default()
+            }];
+            Ok(())
+        })
+        .unwrap();
+    let mut app = app(store.clone(), dir.path());
+    app.open(&record.id).unwrap();
+    app.send_item("item", "bot:fixture");
+    assert!(
+        app.item_error
+            .as_ref()
+            .unwrap()
+            .1
+            .contains("may quote paused speech")
+    );
+    assert!(app.sending.is_none());
+    // The displayed context stays stale: the durable guard must still refuse a direct command.
+    for discarded in [false, true] {
+        store
+            .update_context(&record.id, |c| {
+                c.live_state = "paused".into();
+                c.live_discarded = discarded;
+                Ok(())
+            })
+            .unwrap();
+        app.send_item_confirmed("item", "bot:fixture", true);
+        assert!(app.item_error.as_ref().unwrap().1.contains(if discarded {
+            "discarded"
+        } else {
+            "Resume"
+        }));
+        assert!(app.sending.is_none());
+        app.context = store.context(&record.id).unwrap();
+        let view = full_view(&mut app)["meeting"]["data"]["actions"].clone();
+        assert_eq!(view["items"][0]["can_send"], false);
+        assert!(view["items"][0]["send_blocked"].as_str().is_some());
+    }
+}
+
+#[test]
 fn a_meeting_shared_live_shows_the_lines_tico_holds_with_controls_only_where_an_edit_can_reach_it()
 {
     use tico_recorder_native::live;
@@ -1131,4 +1255,50 @@ fn open_in_tico_stays_on_the_shared_meetings_instance() {
     // Losing the connection must not send this meeting to the new default instance.
     app.config.destinations.remove(0);
     assert!(full_view(&mut app)["meeting"]["data"]["live_url"].is_null());
+}
+
+#[test]
+fn a_title_without_a_quote_requires_fresh_review_after_each_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = store.create("Synthetic title review").unwrap();
+    store
+        .update_context(&record.id, |c| {
+            c.paused_windows = vec![(5000, Some(10000))];
+            c.items = vec![Item {
+                id: "title-only".into(),
+                title: "Secret launch date".into(),
+                owner: "bot:fixture".into(),
+                ..Default::default()
+            }];
+            Ok(())
+        })
+        .unwrap();
+    let mut app = app(store.clone(), dir.path());
+    app.open(&record.id).unwrap();
+    for title in ["Secret launch date", "Changed secret launch date"] {
+        store
+            .update_context(&record.id, |c| {
+                c.items[0].title = title.into();
+                Ok(())
+            })
+            .unwrap();
+        app.send_item("title-only", "bot:fixture");
+        assert!(
+            app.item_error
+                .as_ref()
+                .unwrap()
+                .1
+                .contains("Review its title and quote")
+        );
+        assert!(app.sending.is_none());
+        assert!(tico_recorder_native::live::paused_review_required(
+            &store.context(&record.id).unwrap()
+        ));
+    }
+    app.context = store.context(&record.id).unwrap();
+    assert_eq!(
+        full_view(&mut app)["meeting"]["data"]["actions"]["items"][0]["paused_warning"],
+        true
+    );
 }

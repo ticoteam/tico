@@ -127,7 +127,7 @@ def metadata(c, aid):
             'stall_minutes': STALL_MINUTES}
 
 
-def sweep(c, at=None):
+def sweep(c, at=None, listening_since=None):
     at = at or H.now()
     cutoff = H.shift(at, seconds=-STALL_MINUTES * 60)
     # Include leased attempts, which might never have reached started. Never change their lifecycle or lease.
@@ -137,7 +137,7 @@ def sweep(c, at=None):
               "(SELECT a.id FROM attempts a JOIN attempt_diagnostics d ON d.attempt_id=a.id "
               "WHERE a.state IN ('leased','running') AND max(coalesce(d.heartbeat_at,a.created),"
               "coalesce(d.last_event_at,a.created))<=?)", (at, cutoff))
-    cap(c, at)
+    cap(c, at, listening_since)
     c.execute('UPDATE attempt_diagnostics SET stderr_tail=NULL,stderr_at=NULL WHERE stderr_at<?',
               (H.shift(at, days=-7),))
 
@@ -151,13 +151,14 @@ def max_run_minutes(c, bot):
         return MAX_RUN_MINUTES
 
 
-def cap(c, at):
+def cap(c, at, listening_since=None):
     """End a run the computer has gone silent on, once it is past its limit plus the grace.
 
     Silent means no heartbeat or event for STALL_MINUTES; past means started more than max_run_minutes plus
-    MAX_RUN_GRACE_MINUTES ago. The lease lapses now and execution.expire ends the run on its existing path. That path
-    never extends a capped run (execution.expire reads CAP_EVENT), and the reason names the cap. A run whose computer
-    still heartbeats is left to the runner's own limit."""
+    MAX_RUN_GRACE_MINUTES ago. Silence is counted only from listening_since, when this server began listening, so a
+    server outage is never the computer's silence. The lease lapses now and execution.expire ends the run on its
+    existing path. That path never extends a capped run (execution.expire reads CAP_EVENT), and the reason names the
+    cap. A run whose computer still heartbeats is left to the runner's own limit."""
     cutoff = H.shift(at, seconds=-STALL_MINUTES * 60)
     now = H.now()
     for row in c.execute("SELECT a.id,a.bot,a.started,max(a.started,coalesce(d.heartbeat_at,''),"
@@ -167,12 +168,13 @@ def cap(c, at):
                          "AND NOT EXISTS(SELECT 1 FROM events e WHERE e.target=a.id AND e.action=?)",
                          (CAP_EVENT,)).fetchall():
         minutes = max_run_minutes(c, row['bot'])
-        if H.shift(row['started'], seconds=(minutes + MAX_RUN_GRACE_MINUTES) * 60) > at or row['seen'] > cutoff:
+        seen = max(row['seen'], listening_since or '')
+        if H.shift(row['started'], seconds=(minutes + MAX_RUN_GRACE_MINUTES) * 60) > at or seen > cutoff:
             continue
         reason = (f'Ended by the server: no heartbeat for {STALL_MINUTES} minutes, more than '
                   f'{MAX_RUN_GRACE_MINUTES} minutes past max_run_minutes ({minutes:g} minutes)')
         H.event(c, H.KEEPER, CAP_EVENT, row['id'], {'bot': row['bot'], 'max_run_minutes': minutes,
-                                                   'silent_since': row['seen'], 'reason': reason})
+                                                   'silent_since': seen, 'reason': reason})
         c.execute('UPDATE attempts SET lease_until=? WHERE id=?', (now, row['id']))
 
 

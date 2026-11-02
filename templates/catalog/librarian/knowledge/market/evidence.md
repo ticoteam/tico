@@ -2,7 +2,8 @@
 
 Every substantive change cites an evidence row. Write that row first. The quote is what the source said. `our_read` is your sentence, kept apart from the quote.
 
-A source kind is one of: reddit, x, linkedin, news, filing, site, sales-call, meeting, peec, syften, other.
+A source kind is one of: reddit, x, linkedin, news, filing, site, sales-call, meeting, peec, syften, page-change, other.
+`page-change` is filed by the server when a watched page changes (`playbooks/curate-the-market.md` step 4).
 
 An entity or edge create needs at least one evidence id. Changing `summary`, `properties`, `since`, `until` or `tier` needs one too. Adding an alias or setting `last_verified` does not.
 

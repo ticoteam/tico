@@ -187,8 +187,11 @@
       // Send does every step itself (stop, last words, finish the live meeting); the button shows the step.
       const sending = st.sending?.id === m.id ? st.sending : null;
       if (m.can_finish && !sending) right += `<button class="btn small" data-act="finish" ${st.busy ? 'disabled' : ''}>Finish meeting</button>`;
+      if (m.can_control && !sending) right += `<button class="btn small" data-act="control-live" data-action="${m.live_state === 'paused' ? 'resume' : 'pause'}" ${st.busy ? 'disabled' : ''}>${m.live_state === 'paused' ? 'Resume sharing' : 'Pause sharing'}</button>`;
+      if (m.can_discard && !sending) right += `<button class="btn small" data-act="pop" data-pop="discard" ${st.busy ? 'disabled' : ''}>Discard…</button>`;
       right += peopleButton(m.people);
-      if (m.sent) right += badge(`${icon('check', 12)}In Tico`, 'accent');
+      if (m.discarded) right += badge(m.discard_pending ? 'Discard pending · saved locally' : 'Discarded · saved locally', m.discard_pending ? 'amber' : 'muted');
+      else if (m.sent) right += badge(`${icon('check', 12)}In Tico`, 'accent');
       else if (sending) right += `<button class="btn small sending" disabled><span class="spin"></span>${esc(sending.label)}</button>`;
       else right += `<button class="btn small" data-act="pop" data-pop="send" data-id="${esc(m.id)}" ${st.busy ? 'disabled' : ''}>${icon('send', 13)}Send</button>`;
       right += `<button class="icon-btn ${S.ui.pop?.kind === 'more' ? 'on' : ''}" data-act="pop" data-pop="more" title="More" aria-label="More">${icon('more')}</button>`;
@@ -382,7 +385,7 @@
       : `<button class="owner empty" data-act="pop" data-pop="owner" data-id="${id}">Who gets it?</button>`;
     const send = it.sending
       ? `<span class="spin" style="margin:7px 8px"></span>`
-      : `<button class="btn small primary" data-act="send-item" data-id="${id}" ${it.can_send ? '' : 'disabled'} title="${it.can_send ? 'Send as a private Tico task' : it.owner ? '' : 'Choose who gets it'}">Send</button>`;
+      : `<button class="btn small primary" data-act="send-item" data-id="${id}" ${it.can_send ? '' : 'disabled'} title="${it.can_send ? 'Send as a private Tico task' : it.send_blocked ? esc(it.send_blocked) : it.owner ? '' : 'Choose who gets it'}">Send</button>`;
     return `<li class="item ${picking ? 'picking' : ''} ${it.sending ? 'busy' : ''}">
       <span class="bullet"><i></i></span>
       <div class="content"><div class="line1"><span class="title" contenteditable="true" data-defer data-edit-item="${id}" data-key="item-${id}" spellcheck="false" role="textbox" aria-label="Action item">${esc(it.title)}</span>${owner}</div>${detail}${it.error ? `<div class="error selectable">${esc(it.error)}</div>` : ''}</div>
@@ -693,6 +696,8 @@
     let body = '';
     let cls = '';
     if (pop.kind === 'send') body = sendPop(pop);
+    else if (pop.kind === 'send-item') body = `<div class="pop-title">Review action item</div><div class="pop-text">This title or quote may include paused speech. Review or dismiss the item before sending. The surrounding transcript excludes paused words.</div><button class="menu-item" data-act="confirm-item-send" data-id="${esc(pop.id)}">Send reviewed item</button>`;
+    else if (pop.kind === 'discard') body = `<div class="pop-title">Discard shared meeting?</div><div class="pop-text">End this meeting in Tico without filing it? Your recording stays on this computer.</div><div class="pop-foot"><button class="btn small quiet" data-act="close-pop">Cancel</button><button class="btn small danger" data-act="discard-live">Discard</button></div>`;
     else if (pop.kind === 'more') body = morePop(pop);
     else if (pop.kind === 'owner') body = ownerPop(pop);
     else if (pop.kind === 'people') {
@@ -708,6 +713,7 @@
     if (!row) return '';
     const connected = fromMeeting ? row.connected : S.library.connected;
     let html = `<div class="pop-title">Send to Tico</div>`;
+    if (row.paused_warning && !pop.pausedConfirmed) return html + `<div class="pop-text">This recording includes paused speech. Kept action item titles and quotes may include it and will be sent even though paused words are left out of the shared transcript. Review or dismiss those items before sending.</div><button class="menu-item" data-act="confirm-paused-send">Continue to Send</button>`;
     if (!connected) return html + `<div class="pop-text">Sign in to a Tico first.</div><button class="menu-item" data-act="settings">${icon('gear')}<span class="grow">Settings</span></button>`;
     if (fromMeeting && row.send_blocked) return html + `<div class="pop-text">${esc(row.send_blocked)}</div>`;
     return html + row.targets.map((t) => `<button class="menu-item" data-act="send-meeting" data-id="${esc(pop.id)}" data-dest="${esc(t.id)}" ${t.already ? 'disabled' : ''}>${icon(t.already ? 'check' : 'send')}<span class="grow">${t.already ? 'Already in' : 'Send to'} ${esc(t.name)}</span></button>`).join('');
@@ -1139,7 +1145,10 @@
     'confirm-delete': () => { S.ui.pop = { ...S.ui.pop, confirm: true }; render(); },
     pop: (el) => openPop(el.dataset.pop, el, { id: el.dataset.id, anchorId: el.dataset.pop === 'send' ? el.dataset.id : undefined }),
     'close-pop': () => { S.ui.pop = null; render(); },
-    'send-meeting': (el) => { S.ui.pop = null; act('send_meeting', { id: el.dataset.id, destination: el.dataset.dest }); },
+    'confirm-paused-send': () => { S.ui.pop.pausedConfirmed = true; render(); },
+    'control-live': (el) => act('control_live', { action: el.dataset.action }),
+    'discard-live': () => { S.ui.pop = null; act('control_live', { action: 'discard' }); },
+    'send-meeting': (el) => { const pausedConfirmed = !!S.ui.pop?.pausedConfirmed; S.ui.pop = null; act('send_meeting', { id: el.dataset.id, destination: el.dataset.dest, pausedConfirmed }); },
     finish: () => act('finish_live'),
     'edit-line': (el) => {
       const seq = Number(el.dataset.seq);
@@ -1206,7 +1215,19 @@
     'toggle-private': () => act('set_chat_private', { private: !S.meeting.chat.private }),
     'send-item': (el) => {
       const it = S.meeting.actions.items.find((i) => i.id === el.dataset.id);
-      if (it) act('send_item', { id: it.id, owner: it.owner });
+      if (!it?.can_send) return;
+      if (it.paused_warning) openPop('send-item', el, { id: it.id, title: it.title, quote: it.quote });
+      else act('send_item', { id: it.id, owner: it.owner });
+    },
+    'confirm-item-send': (el) => {
+      const it = S.meeting.actions.items.find((i) => i.id === el.dataset.id);
+      const reviewed = S.ui.pop;
+      if (it?.can_send && (reviewed?.title !== it.title || reviewed?.quote !== it.quote)) {
+        openPop('send-item', el, { id: it.id, title: it.title, quote: it.quote });
+        return;
+      }
+      S.ui.pop = null;
+      if (it?.can_send) act('send_item', { id: it.id, owner: it.owner, pausedConfirmed: true });
     },
     'remove-item': (el) => act('remove_item', { id: el.dataset.id }),
     'set-owner': (el) => { S.ui.pop = null; act('set_owner', { id: el.dataset.id, owner: el.dataset.actor }); },

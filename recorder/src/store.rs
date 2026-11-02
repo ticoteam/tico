@@ -36,6 +36,7 @@ struct Shared {
     /// Bumped by writes and by `poke`; waiters sleep on `wake` until it moves.
     changes: Mutex<u64>,
     wake: Condvar,
+    live: Mutex<()>,
 }
 impl Shared {
     fn bump(&self, data: bool) {
@@ -203,6 +204,10 @@ fn read_chunk(db: &Connection, id: &str) -> Result<Chunk> {
     Ok(serde_json::from_str(&text)?)
 }
 impl Store {
+    /// Serialize network snapshots and controls, including delayed state replies.
+    pub(crate) fn live_lock(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.shared.live.lock().unwrap_or_else(|e| e.into_inner())
+    }
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
         let store = Self {
             root: root.as_ref().to_owned(),
@@ -212,6 +217,7 @@ impl Store {
                 settings: AtomicU64::new(0),
                 changes: Mutex::new(0),
                 wake: Condvar::new(),
+                live: Mutex::new(()),
             }),
         };
         private_dir(&store.root)?;

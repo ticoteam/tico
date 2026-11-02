@@ -607,16 +607,102 @@ def give(c, settings, who, body):
         if plan["running"]:
             _confirm(plan)
     if want:
-        c.execute("INSERT INTO computer_subscriptions(runner_id,runtime,subscription_id,set_by,updated) "
-                  "VALUES(?,?,?,?,?) ON CONFLICT(runner_id,runtime) DO UPDATE SET "
-                  "subscription_id=excluded.subscription_id,set_by=excluded.set_by,updated=excluded.updated",
-                  (body.runner_id, body.runtime, want, who.actor, H.now()))
+        _set(c, body.runner_id, body.runtime, want, who.actor)
     else:
         c.execute("DELETE FROM computer_subscriptions WHERE runner_id=? AND runtime=?", (body.runner_id, body.runtime))
     done = _restart(c, settings, body.runner_id, body.runtime) if takes else {"stopped": 0, "sessions_reset": 0}
     H.event(c, who.actor, "subscription.given" if want else "subscription.taken_off", want or current[0],
             {"runner": body.runner_id, "runtime": body.runtime, **done})
     return {**out, **done}
+
+
+def _set(c, runner_id, runtime, subscription_id, actor):
+    """Record that the computer signs `runtime` in with the subscription: one per runtime (`give` and `lend` write it)."""
+    c.execute("INSERT INTO computer_subscriptions(runner_id,runtime,subscription_id,set_by,updated) "
+              "VALUES(?,?,?,?,?) ON CONFLICT(runner_id,runtime) DO UPDATE SET "
+              "subscription_id=excluded.subscription_id,set_by=excluded.set_by,updated=excluded.updated",
+              (runner_id, runtime, subscription_id, actor, H.now()))
+
+
+def bot_runtimes(c, settings, bot):
+    """The subscription runtimes a bot may run on its computer: its own turns' (as `_bots` reads them) and its task
+    model's, which a task runs on when it is set (backend/task_models.py `apply`, the config a task turn runs with).
+    Each goes through `turn_runtimes`, so a Tico model and a desktop-app bot count for none."""
+    from . import providers, task_models
+    from .shared_bots import follow
+    found = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = json.loads(found["config_json"] or "{}") if found else {}
+    filled = providers.fill(providers.load(c, settings), follow(c, bot, config))
+    out = turn_runtimes(filled)
+    task = task_models.of(filled)
+    if task:
+        out += turn_runtimes(task_models.apply(filled, task))
+    return list(dict.fromkeys(out))
+
+
+def is_admin(auth, who):
+    """Whether this request would pass `_admin`."""
+    try:
+        _admin(auth, who)
+    except Problem:
+        return False
+    return True
+
+
+def may_grant(c, auth, actor):
+    """Whether `actor` would pass `_admin` today, judged from its id: a placement records who chose the machine, not a
+    request's identity. The owner, or a person on the roster whose email is a bot admin's, and not left or switched off.
+    Never Tico support, a bot, a runner or a service."""
+    from .auth import standing
+    actor = str(actor or "")
+    if not actor.startswith("human:") or H.actor_id(actor) == "tico-support":
+        return False
+    pid = H.actor_id(actor)
+    if pid == auth.owner_id(c):
+        return True
+    human = H.human(c, pid)
+    return bool(human) and not standing(c, pid) and str(human.get("email") or "").lower() in auth.bot_admins
+
+
+def lend(c, runner_id, runtime, actor, shared, others):
+    """Give a cloud machine's computer the company's plan for `runtime` when it has no plan and no sign-in of its own
+    there, so a bot placed on it is not left waiting for a sign-in nobody will make. Nothing is replaced, stopped or
+    reset: a computer with a plan, a sign-in reported (any state but missing), or a live run on that runtime, is left
+    as it is (returns None, and the next placement asks again). The plan is the first that works, preferring one already
+    given to the shared machine's computer (`shared`), then to another cloud machine's (`others`), then the lowest known
+    used percent, then the most recently added. Only subscription plans count (an API key bills per use, so it is never
+    chosen for a computer). Returns the subscription id given, or None when no plan fits."""
+    from . import login_holds
+    runner = c.execute("SELECT readiness_json FROM runners WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
+    if not runner or c.execute("SELECT 1 FROM computer_subscriptions WHERE runner_id=? AND runtime=?",
+                               (runner_id, runtime)).fetchone():
+        return None
+    own = (readiness_document(runner["readiness_json"]).get("runtimes") or {}).get(runtime) or {}
+    if own.get("authenticated") not in (None, "missing") or _live(c, runner_id, runtime):
+        return None
+    kinds = [kind for kind, spec in KINDS.items() if spec["runtime"] == runtime and spec.get("billing") == "subscription"]
+    subs = H._rows(c.execute(f"SELECT * FROM model_subscriptions WHERE kind IN ({','.join('?' * len(kinds))}) "
+                             "AND status<>'needs_reconnect' ORDER BY created DESC", kinds))
+    cloud = {r: 0 if r == shared else 1 for r in [shared, *others] if r}
+    on_cloud = {}
+    for r in c.execute("SELECT runner_id,subscription_id FROM computer_subscriptions WHERE runtime=?", (runtime,)):
+        if r["runner_id"] in cloud:
+            on_cloud[r["subscription_id"]] = min(cloud[r["runner_id"]], on_cloud.get(r["subscription_id"], 1))
+    plans = []
+    for sub in subs:
+        if login_holds.holding(c, "", login_holds.subscription_login(sub["id"]), runtime) == "held":
+            continue
+        where = on_cloud.get(sub["id"])
+        tier = 2 if where is None else where                        # shared machine's, another cloud machine's, the rest
+        used = (_usage(c, sub) or {}).get("used_pct")
+        plans.append(((tier, used is None, used or 0), sub))
+    if not plans:
+        return None
+    chosen = min(plans, key=lambda p: p[0])[1]                  # min is first-seen on a tie: the newest added
+    _set(c, runner_id, runtime, chosen["id"], actor)
+    H.event(c, actor, "subscription.given", chosen["id"], {"runner": runner_id, "runtime": runtime,
+                                                           "stopped": 0, "sessions_reset": 0})
+    return chosen["id"]
 
 
 # ------------------------------------------------------------------------------------------------ claim and run
