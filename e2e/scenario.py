@@ -125,24 +125,43 @@ def finish_turn(client, machine, attempt):
              json={"outcome": "completed", "last_seq": 0, "text": "Drafted the launch plan."})
 
 
-def populate_direct(path):
+def populate_direct(path, columns=None):
     """Rows the v2 API does not reach: runner load samples, host performance points, rate-limit readings, service
     health, watcher runs and the company's usage pool. Written straight to the database, the way the runner and the
-    hub's own timers write them."""
+    hub's own timers write them. `columns` ({"table.column": "old_column"}) names a column the database calls by an
+    older name (a rollback copy made before a rename); a name the database has is used as it is."""
+    columns = columns or {}
+    rows = [
+        ("rate_limits", {"runtime": "codex", "used_percent": 12.5, "window_minutes": 300,
+                         "resets_at": "2026-11-01T05:00:00.000000Z", "updated_at": "2026-11-01T00:00:00.000000Z"}),
+        ("service_health", {"service": "mail", "last_succeeded_at": "2026-11-01T00:00:00.000000Z", "last_error": None,
+                            "detail": '{"checked": 3}'}),
+        ("perf_points", {"runner_id": "runner-1", "span": 60, "ts": 1793500000, "n": 4, "scope": "host", "cpu": 0.25,
+                         "cpu_max": 0.5, "load1": 1.0, "mem_used": 100, "mem_max": 200, "mem_total": 400, "swap_used": 0,
+                         "swap_total": 0, "disk_free": 1000, "disk_total": 2000, "active": 1}),
+        ("runner_load_samples", {"runner_id": "runner-1", "ts": 1793500000, "sampled_at": 1793500000, "cpu_pct": 12.0,
+                                 "mem_used": 100, "mem_total": 400, "swap_used": 0, "swap_total": 0, "running_turns": 1}),
+        ("watcher_runs", {"bot": "ops", "name": "inbox-check", "runner_id": "runner-1",
+                          "started_at": "2026-11-01T00:00:00.000000Z", "finished_at": "2026-11-01T00:00:01.000000Z",
+                          "exit_code": 0, "timed_out": 0, "every": 300, "output": "ok", "events": 0}),
+    ]
     with sqlite3.connect(path) as c:
-        c.execute("INSERT INTO rate_limits(runtime,used_percent,window_minutes,resets_at,updated_at) "
-                  "VALUES('codex',12.5,300,'2026-11-01T05:00:00.000000Z','2026-11-01T00:00:00.000000Z')")
-        c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) "
-                  "VALUES('mail','2026-11-01T00:00:00.000000Z',NULL,'{\"checked\": 3}')")
-        c.execute("INSERT INTO perf_points(runner_id,span,ts,n,scope,cpu,cpu_max,load1,mem_used,mem_max,mem_total,"
-                  "swap_used,swap_total,disk_free,disk_total,active) "
-                  "VALUES('runner-1',60,1793500000,4,'host',0.25,0.5,1.0,100,200,400,0,0,1000,2000,1)")
-        c.execute("INSERT INTO runner_load_samples(runner_id,ts,sampled_at,cpu_pct,mem_used,mem_total,swap_used,"
-                  "swap_total,running_turns) VALUES('runner-1',1793500000,1793500000,12.0,100,400,0,0,1)")
-        c.execute("INSERT INTO watcher_runs(bot,name,runner_id,started_at,finished_at,exit_code,timed_out,every,output,events) "
-                  "VALUES('ops','inbox-check','runner-1','2026-11-01T00:00:00.000000Z','2026-11-01T00:00:01.000000Z',"
-                  "0,0,300,'ok',0)")
+        for table, row in rows:
+            _insert(c, table, row, columns)
         c.commit()
+
+
+def _insert(c, table, row, columns):
+    have = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
+    names = []
+    for name in row:
+        if name not in have:
+            name = columns.get(f"{table}.{name}", name)
+            if name not in have:
+                raise AssertionError(f"{table} has no column {name} for the direct rows")
+        names.append(name)
+    marks = ",".join("?" * len(names))
+    c.execute(f"INSERT INTO {table}({','.join(names)}) VALUES({marks})", tuple(row.values()))
 
 
 # Each capture: (golden name, request path, query). Reads as the owner unless stated.

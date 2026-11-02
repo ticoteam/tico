@@ -1,0 +1,13 @@
+{
+  "_source": "Xero Accounting API Contact (the fields backend/finance/core/xero.py contact_record() reads: ContactID, Name, ContactStatus, EmailAddress, IsCustomer, IsSupplier, UpdatedDateUTC in Xero's /Date(ms+0000)/ form). Shaped from Xero's public API reference, not a live capture.",
+  "contact": {
+    "ContactID": "5c1f8a0e-7d4b-4c3e-9b1e-2a6f0c9d8e71",
+    "ContactStatus": "ACTIVE",
+    "Name": "Acme Supplies",
+    "EmailAddress": "billing@acme.example",
+    "IsCustomer": false,
+    "IsSupplier": true,
+    "ContactNumber": "",
+    "UpdatedDateUTC": "/Date(1730419200000+0000)/"
+  }
+}

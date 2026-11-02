@@ -17,6 +17,7 @@ KINDS = {
     "contract": ["e2e/tests/test_contract.py"],
     "upgrade": ["e2e/tests/test_upgrade.py"],
     "rollback": ["e2e/tests/test_rollback.py"],
+    "roles": ["e2e/tests/test_roles.py"],
 }
 
 
@@ -42,7 +43,9 @@ def main(argv=None):
     parser.add_argument("--kind", action="append", choices=sorted(KINDS), help="a kind to run (repeatable; default all)")
     parser.add_argument("--rename-map", metavar="PATH", help="a YAML rename map the goldens and before-states are read through")
     parser.add_argument("--record", action="store_true", help="re-record the contract goldens from this code (review the diff)")
-    parser.add_argument("--old-server-ref", metavar="REF", help="boot the rollback copy with the server at this git ref (TODO)")
+    parser.add_argument("--old-server-ref", metavar="REF",
+                        help="the rollback's old server is the checkout at this git ref (a commit in this checkout); "
+                             "without it the rollback kind checks this checkout's server on a copy only")
     parser.add_argument("-v", "--verbose", action="store_true", help="print each kind's full pytest output")
     args = parser.parse_args(argv)
 

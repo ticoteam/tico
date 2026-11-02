@@ -1,0 +1,50 @@
+{
+  "_source": "Tico HQ's company billing answer, field names from the HQ sender (tico-services billing/company.py standing() and the detail answer that adds month, credits, usage, statement and booking_url; credit rows from _credit()). Derived from that sender, not a live capture. HQ main does not send a cloud key (the cloud route lives on unmerged branches), so none is sent here.",
+  "answer": {
+    "balance_micros": 4200000,
+    "min_balance_micros": 5000000,
+    "unbilled_micros": 300000,
+    "last_day_micros": 150000,
+    "enforcement": "enforce",
+    "record_only": false,
+    "state": "low",
+    "grace_until": null,
+    "months": ["2026-10", "2026-09"],
+    "month": "2026-10",
+    "credits": [
+      {
+        "credit_id": "cr_contract_1",
+        "source": "purchase",
+        "label": "Purchased credit",
+        "amount_micros": 10000000,
+        "left_micros": 4200000,
+        "expires": "2027-10-01",
+        "created": "2026-10-01",
+        "expired": false,
+        "used_up": false,
+        "expired_micros": 0,
+        "current": true
+      }
+    ],
+    "usage": [
+      {
+        "period": "2026-10-03",
+        "total_micros": 5800000,
+        "lines": [
+          {"product": "Gateway", "sku": "gateway.model.input", "amount_micros": 5800000}
+        ]
+      }
+    ],
+    "statement": {
+      "month": "2026-10",
+      "opening_micros": 0,
+      "credits_micros": 10000000,
+      "credits_by_source": {"purchase": 10000000},
+      "debits_micros": 5800000,
+      "debits_by_product": {"Gateway": 5800000},
+      "expired_micros": 0,
+      "closing_micros": 4200000
+    },
+    "booking_url": "https://book.acme.example/credit"
+  }
+}

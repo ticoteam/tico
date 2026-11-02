@@ -1,0 +1,22 @@
+{
+  "_source": "Stripe's Account and Balance objects, the fields backend/finance/stripe_sync.py probe() reads (account id; balance available and pending lists with currency and amount in minor units). Shaped from Stripe's public API reference, not a live capture.",
+  "account": {
+    "object": "account",
+    "id": "acct_1ContractTest0001",
+    "country": "US",
+    "default_currency": "usd",
+    "charges_enabled": true,
+    "payouts_enabled": true
+  },
+  "balance": {
+    "object": "balance",
+    "livemode": false,
+    "available": [
+      {"amount": 12345, "currency": "usd", "source_types": {"card": 12345}}
+    ],
+    "pending": [
+      {"amount": 678, "currency": "usd", "source_types": {"card": 678}},
+      {"amount": 900, "currency": "eur", "source_types": {"card": 900}}
+    ]
+  }
+}

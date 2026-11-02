@@ -261,7 +261,8 @@ def parse(answer, now=None):
     token = str(given.get("session_token") or "")
     if not ACCESS_KEY.match(key) or not secret or len(secret) > 128 or not token or len(token) > 4096:
         raise ValueError("credentials")
-    expires = _when(given.get("expires_at"), "credentials")
+    # HQ's wire name (tico-services billing/files_aws.py credentials()); the stored column is expires_at.
+    expires = _when(given.get("expires"), "credentials")
     if expires <= (now or datetime.now(timezone.utc)):
         raise ValueError("credentials")
     signing = answer.get("signing")

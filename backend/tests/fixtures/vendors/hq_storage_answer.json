@@ -1,0 +1,24 @@
+{
+  "_source": "Tico HQ's file-hosting answer, field names from the HQ sender (tico-services billing/files_aws.py credentials(): the wire key for the credentials' expiry is \"expires\"; gateway/files.py passes it through). Derived from that sender, not a live capture. The expiry is far in the future so the reader accepts it.",
+  "answer": {
+    "state": "on",
+    "writes": true,
+    "reason": null,
+    "access": "read_write",
+    "address": "acme-files.ticofiles.com",
+    "bucket": "tico-files-us",
+    "region": "us-east-1",
+    "prefix": "c/acme/",
+    "credentials": {
+      "access_key_id": "AKIATICOHOSTING0001",
+      "secret_access_key": "contract-secret-access-key",
+      "session_token": "contract-session-token",
+      "expires": "2099-01-01T00:00:00Z"
+    },
+    "signing": {
+      "key_id": "k1",
+      "secret": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    "keep_until": null
+  }
+}
