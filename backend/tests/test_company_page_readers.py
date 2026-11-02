@@ -149,8 +149,6 @@ def site(configured, api, fake, tmp_path, monkeypatch):  # noqa: F811
     monkeypatch.setattr(package, "editions", SimpleNamespace(stream=stream, anchor_of=anchor_of), raising=False)
     monkeypatch.setattr(package, "render", SimpleNamespace(
         page=lambda view: "PAGE " + json.dumps(view), signed_out=lambda view: "SIGNED OUT " + json.dumps(view)), raising=False)
-    monkeypatch.setattr(package, "settings", SimpleNamespace(
-        get=lambda c: dict(c.execute("SELECT * FROM company_page_settings").fetchone() or {})), raising=False)
     monkeypatch.setattr(release, "current_dir", lambda settings: release_dir)
     made.transparency("private")
     return made
