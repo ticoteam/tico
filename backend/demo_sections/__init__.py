@@ -8,7 +8,8 @@ address stays fictional (acme.example).
 
 import importlib
 
-SECTIONS = ("strategy", "threads_rules", "recruit", "automations_learnings", "finance", "growth", "services", )
+SECTIONS = ("strategy", "threads_rules", "recruit", "automations_learnings", "finance", "growth", "services",
+            "schedules")
 
 
 def seed_all(builder):
