@@ -463,10 +463,13 @@ class _Check:
                                      f"is {kept['mode']}.")
 
     def _sum(self, total, accounts, name):
-        """A total and its parts, by account. A line stat covers everything under it in the chart."""
+        """A total and its parts, by account. A line stat covers everything under it in the chart. A total shown with no
+        line beside it is the sum of its active accounts: when that is one private account, the total is its figure."""
         from ..finance.core.ledger import descendants
         lines = ["line:" + a for a in accounts if "line:" + a in self.shown and "line:" + a != total]
         if not lines:
+            if total in self.shown and len(accounts) == 1 and self.books.is_private(next(iter(accounts))):
+                self.hold((total,), f"{self._label(total)} is the only active line under {name}, which is private.")
             return
         covered = set().union(*(descendants(self.books.accounts, q[5:]) for q in lines))
         uncovered = [a for a in accounts if a not in covered and "line:" + a != total]
@@ -483,16 +486,18 @@ class _Check:
 
     def totals(self):
         """Exact total minus exact parts recovers what is left, even when several lines are left: their sum is news
-        too. Parts come from what has been posted, so an unused account doesn't count as hidden."""
+        too. Parts come from what has been posted, so an unused account doesn't count as hidden. A total shown alone
+        is checked too, against the accounts under it."""
         lines = [q for q in self.shown if q.startswith("line:")]
-        if not self.books.ready or not lines:
+        totals = [q for q in ("revenue", "spend", "cost_of_revenue") if q in self.shown]
+        if not self.books.ready or not (lines or totals):
             return
         from ..finance.core.ledger import descendants, pnl_section
         accounts = self.books.accounts
         try:
             active = self.books.active_accounts()
         except self.books._errors():
-            self.hold(lines, "The books couldn't be read to check what these lines reveal.")
+            self.hold(lines + totals, "The books couldn't be read to check what these lines reveal.")
             return
         income = {a for a in active if accounts[a].type == "income"}
         expense = {a for a in active if accounts[a].type == "expense"}
