@@ -1815,6 +1815,9 @@ def _closable(c: sqlite3.Connection, ctx: Ctx) -> list[str]:
     return out
 
 
+SUSPENSE_ALL = 10**12       # a limit past any month's rows: suspense is counted whole, never a page of it
+
+
 def _checklist(s: _Seen, month: str, top_n: int = 20) -> Row:
     """What stands between a month and its close, for whoever does the books. The money accounts still behind are
     listed up to `top_n`, and the rest fold into one "Other · n" row; `count` is always the whole number."""
@@ -1834,9 +1837,10 @@ def _checklist(s: _Seen, month: str, top_n: int = 20) -> Row:
     listed = behind[:top] + ([{"key": OTHER, "label": f"Other · {len(folded)}", "count": len(folded),
                                "money_account_id": None, "name": f"Other · {len(folded)}", "locked_through": None}]
                              if folded else [])
-    rows, more = _uncategorized(s, first, last, INBOX_EACH)
-    # Suspense (spec §11): a settled row still waiting for a category blocks the close; lines on Other expenses are
-    # shown with their count and do not.
+    # Suspense (spec §11): every settled row of the month still waiting for a category blocks the close, so the count and
+    # the close decision read the whole month, not a page of it. Lines on Other expenses are shown with their count and
+    # do not.
+    rows, more = _uncategorized(s, first, last, SUSPENSE_ALL)
     waiting = [r for r in rows if str(r["status"]) == "new"]
     accrual = ctx.book.basis == "accrual"
     checks: list[Row] = [

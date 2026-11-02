@@ -6,6 +6,7 @@ from pathlib import Path
 
 from backend import hubdb as H
 from backend.finance import actions as FA
+from backend.finance import reads as FR
 from backend.finance.core.errors import CONFLICT
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
@@ -69,6 +70,32 @@ def test_a_settled_row_waiting_for_a_category_blocks_the_close_until_it_is_categ
         assert "waiting for a category" in refused.reason, refused.reason
         assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "4000")}).status == "committed"
         assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+
+
+def test_a_suspense_row_past_the_first_page_still_blocks_the_close(books, monkeypatch):
+    """§11: suspense is every settled row of the month still waiting for a category, not the first page the checklist
+    lists. With a page of three, the three newest rows fill it on Other expenses (shown, not blocking) and the oldest row
+    still waits: the close is refused, and the checklist counts it."""
+    monkeypatch.setattr(FR, "INBOX_EACH", 3)
+    fake = FakeMercury()
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        _reconciled_through_september(c)
+    for raw_id, day in (("txn-oldest", "2026-09-05"), ("txn-a", "2026-09-10"), ("txn-b", "2026-09-15"),
+                        ("txn-c", "2026-09-20")):
+        _arrives(fake, raw_id, 40.0, day)
+    sync_once(books, fake, LATER)
+    with books.transaction() as c:
+        for raw_id in ("txn-a", "txn-b", "txn-c"):
+            fid = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id=?", (raw_id,)).fetchone()[0])
+            assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6900")}).status == "committed"
+        refused = act(c, OWNER, "close_period", {"month": "2026-09"})
+        assert refused.status != "committed" and refused.code == CONFLICT, refused
+        assert "waiting for a category" in refused.reason, refused.reason
+        row = FR.close_checklist(c, OWNER, "2026-09", LATER)
+        suspense = next(check for check in row["checks"] if check["key"] == "suspense")
+        assert (suspense["count"], suspense["other"], row["closable"]) == (1, 3, False), suspense
 
 
 def test_an_approved_close_is_checked_again_when_it_commits(books):

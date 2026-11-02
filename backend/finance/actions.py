@@ -796,6 +796,7 @@ DEV_COPY_KEPT = (
     "fin_credit_refunds", "fin_vendor_aliases", "fin_vendor_labels", "fin_vendor_legacy", "fin_view_defaults",
     "fin_view_grants", "fin_view_versions", "fin_raw_imports", "fin_close_snapshots", "fin_tax_jurisdictions",
     "fin_tax_seeds", "fin_purchase_orders", "fin_po_lines", "fin_estimates", "fin_estimate_lines",
+    "fin_prepaid_postings",
 )
 # Emptied: what moves money or calls a provider (connections and their tokens, cursors and id maps, the outbox and
 # inbox, cards and their authorizations, payees and payments) and spend holds. In the order they are deleted: a row
