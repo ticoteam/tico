@@ -1698,8 +1698,8 @@ def kpi_log(api, args):
       "from the Strategy Bot at level 2 or 3, a red or "
       "stalled goal's recovery (recovery: payload evidence, options [{label, actions}], pick; actions create, "
       "reorder or settle), or, from any bot at any level, a change to the strategy draft (strategy_draft: payload "
-      "summary, vision, sections {serve, sell, know, how, not, extra: {key: {title, body}}}, bets [{id?, statement, why, "
-      "rules_out, wrong_if, cites, status}], each optional; a bet with an id changes only the fields sent, one "
+      "summary, vision, sections {serve, sell, proof, now, know, how, not, extra: {key: {title, body}}}, bets [{id?, "
+      "statement, why, rules_out, wrong_if, cites, status}], each optional; a bet with an id changes only the fields sent, one "
       "without is new; source bet_tripped when a tripped bet prompted it; confirmed, the owner's draft and bets "
       "change, nothing is published), or a change to the brand draft (brand_draft: payload "
       "{sections: {name: value or null}}; confirmed by an admin, merged into the draft, never published). "
@@ -1766,6 +1766,9 @@ def _draft_revision(api, args):
     return draft["revision"]
 
 
+# The fixed sections, in the page's order (backend/strategy.py FIXED_KEYS); any other key is an extra section.
+STRATEGY_SECTIONS = ("serve", "sell", "proof", "now", "know", "how", "not")
+
 BET_PROPS = {
     "why": _s("The reasoning, one or two sentences"),
     "rules_out": _s("What the bet refuses; an active bet needs one"),
@@ -1791,8 +1794,9 @@ def _bet_body(args):
     return body
 
 
-@tool("hub_strategy_show", "The team's published strategy: summary, vision, the five sections, the bets with their "
-      "wrong-ifs, each bet's goals and colour, and the team's website. The owner also gets the draft.", {})
+@tool("hub_strategy_show", "The team's published strategy: summary, vision, the seven sections, the bets with their "
+      "wrong-ifs, each bet's goals and colour, the team's website, and proof_since (when How we know they want it "
+      "last changed). The owner also gets the draft.", {})
 def strategy_show(api, args):
     return _as_person(api).get("strategy")
 
@@ -1806,7 +1810,7 @@ def strategy_summary(api, args):
 @tool("hub_strategy_draft", "Owner only: change the strategy draft, only the fields sent (\"\" clears one). A bot "
       "proposes instead: hub_proposal_create, kind strategy_draft.",
       {"summary": _s("At most 400 characters: what every bot reads"), "vision": _s("One or two sentences"),
-       "sections": {"type": "object", "description": "{serve, sell, know, how, not, extra: {key: {title, body}}}, any of them"},
+       "sections": {"type": "object", "description": "{serve, sell, proof, now, know, how, not, extra: {key: {title, body}}}, any of them"},
        "section": {"type": "array", "items": {"type": "string"}, "description": "KEY=TEXT, instead of sections"},
        "revision": {"type": "integer", "description": "The draft's revision you read; default the current one"}},
       writes=True)
@@ -1814,7 +1818,7 @@ def strategy_draft(api, args):
     sections = dict(args.get("sections") or {})
     for item in args.get("section") or []:
         key, _, text = str(item).partition("=")
-        if key.strip() in ("serve", "sell", "know", "how", "not"):
+        if key.strip() in STRATEGY_SECTIONS:
             sections[key.strip()] = text
         else:
             sections.setdefault("extra", {})[key.strip()] = {"title": key.strip().replace("-", " ").capitalize(),

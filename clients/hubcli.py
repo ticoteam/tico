@@ -2099,8 +2099,9 @@ def parser():
     s.set_defaults(fn="rules withdraw")
     strategy = sub.add_parser("strategy", help="the team's strategy: its bets, its sections, the versions").add_subparsers(dest="sub")
     s = strategy.add_parser("show", help="the published strategy, its bets and their goals; the owner also gets the draft")
-    s.add_argument("--section", choices=["serve", "sell", "know", "how", "not"],
-                   help="only this section of the published strategy, as text (how: How we sell)")
+    s.add_argument("--section", choices=["serve", "sell", "proof", "now", "know", "how", "not"],
+                   help="only this section of the published strategy, as text (proof: How we know they want it; "
+                        "now: Why now; how: How we sell)")
     s.add_argument("--json", action="store_true", help="print the API response as JSON")
     s.set_defaults(fn="strategy show")
     s = strategy.add_parser("summary", help="the text every run's context carries")
@@ -2109,7 +2110,7 @@ def parser():
     s.add_argument("--summary")
     s.add_argument("--vision")
     s.add_argument("--section", action="append", default=[], metavar="KEY=TEXT",
-                   help="serve, sell, know, how, not, or an extra section's key; KEY= clears it; repeatable")
+                   help="serve, sell, proof, now, know, how, not, or an extra section's key; KEY= clears it; repeatable")
     s.add_argument("--revision", type=int, help="the draft's revision you read; default the current one")
     s.set_defaults(fn="strategy draft")
     s = strategy.add_parser("publish", help="owner only: the draft becomes the next version")

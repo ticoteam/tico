@@ -92,7 +92,7 @@ function ssJobHTML(state) {
   if (job.state === 'gave_up') return ssFoundHTML(state);
   return (job.written?.bets || []).length ? `<p class="ss-job muted" role="status">Drafted from ${from}. Keep, edit or strike each.</p>` : '';
 }
-// What a run drafts besides bets (backend/strategy_prompt.py): the summary and vision, then the four sections.
+// What a run drafts besides bets (backend/strategy_prompt.py): the summary and vision, then the sections.
 const SS_LINES = {summary: 'Summary', vision: 'Vision'};
 const ssFoundKeys = () => [...Object.keys(SS_LINES), ...STRAT_SECTIONS.map(sec => sec.key)];
 const ssFoundTitle = k => SS_LINES[k] || STRAT_SECTIONS.find(sec => sec.key === k).title;
