@@ -174,7 +174,7 @@ Paste this into its Setup DM (or replace it with your own facts):
 - **Sign-in rejected**: Health names the credential source when the computer reports it. Replace a shared model key in
   **Tools > Credentials**; for a computer-local key or login, update it or use **Sign in** in **Settings > Computers**.
   Older computers show both paths. See [Harnesses](harnesses.md).
-- **Needs setup**: open the bot's DM and press **Set up**; tasks and routines wait until that DM is finished.
+- **Needs setup**: open the bot's page and press **Start onboarding**; tasks and routines wait until its onboarding is finished.
 - **A missing Tool or Credential**: use the bot's card or [Connect tools](connect-tools.md) and grant the credential to that bot.
 
 [Set up your first bots](onboarding-guide.md) covers how to review and improve the result.
