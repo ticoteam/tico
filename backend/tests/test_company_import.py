@@ -241,10 +241,16 @@ def invited_from_setup(api, finance):
         # Removed since: a repeat of a bound key still answers from its binding, and the person is not added again.
         # The binding keeps neither the address (its hash) nor the refusal text that named it.
         assert api.post("/api/v2/people/%s" % ana["id"], json={"left": True}, headers=signed_in()).status_code == 200
-        # The route would refuse her (the setup file's link to her counts as history), so the removal runs as its work does.
-        with api.app.state.store.transaction() as c:
+        # The seats her invite moved under her are not her history: Remove is offered, and they go back to the owner.
+        with api.app.state.store.read() as c:
             gone = next(p for p in views.roster(c)["people"] if p["id"] == ana["id"])
-            people_remove.remove(c, "test-owner", views.roster(c), gone)
+            assert people_remove.removable(c, gone) and people_remove.history(c, ana["id"]) == ""
+            under = [r[0] for r in c.execute("SELECT id FROM seats WHERE reports_to=?", ("human:" + ana["id"],))]
+        assert api.delete("/api/v2/people/%s" % ana["id"], headers=signed_in()).status_code == 200
+        with api.app.state.store.read() as c:
+            assert not c.execute("SELECT 1 FROM seats WHERE reports_to=?", ("human:" + ana["id"],)).fetchone()
+            assert all(c.execute("SELECT reports_to FROM seats WHERE id=?", (s,)).fetchone()[0].startswith("human:")
+                       for s in under)
         bound = rows(api, "SELECT key,state,request_hash,error_detail FROM idempotency WHERE subject=?", (ana["id"],))
         assert {row["state"] for row in bound} == {"completed", "refused"}
         assert all(row["request_hash"] == "" for row in bound)
