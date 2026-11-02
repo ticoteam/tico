@@ -584,7 +584,36 @@ def _build(c, audience_id, at):
                       "stale": bank_stale or _stale(points[-1].end, period, lag, at)})
     for stat_id, reason in _Check(c, rules, books, entries).run().items():
         held.setdefault(stat_id, reason)
+    if audience_id != "public":
+        for stat_id, reason in _with_public(c, at, books, rules, entries).items():
+            held.setdefault(stat_id, reason)
     return built, held, absent
+
+
+def _with_public(c, at, books, rules, entries):
+    """A private board's readers also read the Public page, so what that page shows is known to them too. The two are
+    checked together: each stat takes the more revealing of its two rules, and a stat the Public page already shows is
+    not held here. Held results apply to this board only; the Public page's own check is unchanged."""
+    row = c.execute("SELECT enabled FROM audiences WHERE kind='public'").fetchone()
+    if not row or not row[0] or not board_approved(c, "public"):
+        return {}
+    pub_built, pub_held, _ = _build(c, "public", at)
+    shown = {b["row"]["id"]: b for b in pub_built if b["row"]["id"] not in pub_held}
+    if not shown:
+        return {}
+    merged = {stat_id: [label, rule, quantities] for stat_id, label, rule, quantities in entries}
+    for stat_id, b in shown.items():
+        if stat_id in merged:
+            label, rule, quantities = merged[stat_id]
+            if (D.RANK[b["rule"]["mode"]], -b["rule"]["lag_days"]) > (D.RANK[rule["mode"]], -rule["lag_days"]):
+                rule = b["rule"]
+            merged[stat_id] = [label, rule, quantities]
+        else:
+            merged[stat_id] = [b["row"].get("label") or "", b["rule"], _quantities(b["row"])]
+    union = [(stat_id, label, rule, quantities) for stat_id, (label, rule, quantities) in merged.items()]
+    private = {stat_id for stat_id, *_ in entries}
+    return {stat_id: reason for stat_id, reason in _Check(c, rules, books, union).run().items()
+            if stat_id in private and stat_id not in shown}
 
 
 def _stat(row, shaped, stale):

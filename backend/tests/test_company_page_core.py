@@ -399,6 +399,30 @@ def test_parts_that_add_up_to_a_hidden_total_are_held(books):
     assert held_labels(result) == {"Subscriptions"} and "add up to revenue" in result["held"][0]["reason"]
 
 
+def test_a_private_stat_is_held_when_the_public_page_and_it_give_away_a_figure_both_keep_back(store):
+    """Revenue on Investors next to Gross margin on the Public page gives away cost of revenue, which both keep back. The
+    Public page's own check sees only its one stat; the Investors readers see both. The pair the other way round holds
+    the Investors margin: the Public revenue is already public, so it holds nothing here."""
+    setup(store)
+    with store.transaction() as c:
+        numbers(c, ("Revenue", "revenue", "$"), ("Margin", "gross_margin", "%"))
+        S.set_transparency(c, OWNER, "open")
+        # Growth is shown on both, so two exact periods of revenue don't hold it on their own: only the pair is checked.
+        for audience in ("investors", "public"):
+            D.set_rule(c, OWNER, audience, "growth", mode="show")
+        D.set_rule(c, OWNER, "investors", "revenue", mode="show")
+        D.set_rule(c, OWNER, "public", "gross_margin", mode="show")
+        approve(c, "public")
+        assert held_labels(ST.project(c, "investors", "2026-10-15")) == {"Revenue"}
+        assert [s["label"] for s in ST.project(c, "public", "2026-10-15")["stats"]] == ["Margin"]
+        D.set_rule(c, OWNER, "investors", "revenue", mode="hidden")
+        D.set_rule(c, OWNER, "investors", "gross_margin", mode="show")
+        D.set_rule(c, OWNER, "public", "gross_margin", mode="hidden")
+        D.set_rule(c, OWNER, "public", "revenue", mode="show")
+        approve(c, "public")
+        assert held_labels(ST.project(c, "investors", "2026-10-15")) == {"Margin"}
+
+
 def _private_payroll(c, amount):
     """Payroll, a private line, the only expense posted: total spend is Payroll and nothing else."""
     made = act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
