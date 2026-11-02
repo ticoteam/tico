@@ -64,6 +64,8 @@
   let pending = null;
   const PERF_WINDOWS = [[0, 'None'], [24, '1 day'], [168, '7 days'], [336, '14 days']];
   const ICON = {
+    // The composers' paperclip (app/pill.js ICON_CLIP), drawn here because this file loads first.
+    clip: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 11.5l-8 8a5 5 0 0 1-7-7l8.2-8.2a3.3 3.3 0 0 1 4.7 4.7l-8.2 8.2a1.7 1.7 0 0 1-2.4-2.4l7.6-7.6"/></svg>',
     send: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 12h15M13 6l6 6-6 6"/></svg>',
   };
   const AVATAR = '<span class="support-av" aria-hidden="true"><span class="nav-icon">headset_mic</span></span>';
@@ -370,7 +372,7 @@
     form.innerHTML = `${d.diag ? `<p class="support-report" data-report><span class="nav-icon" aria-hidden="true">description</span><span>Diagnostics${d.report ? ': ' + escape(REPORTED[d.report.kind]) : ''}</span>
         <button class="linkish" type="button" data-preview>Review</button><button class="support-x" type="button" data-unreport aria-label="Remove diagnostics" title="Remove diagnostics"><span class="nav-icon" aria-hidden="true">close</span></button></p>` : ''}
       <div class="support-input">
-        <button class="support-clip" type="button" data-attach aria-label="Attach diagnostics" title="Attach diagnostics"><span class="nav-icon" aria-hidden="true">attach_file</span></button>
+        <button class="support-clip" type="button" data-attach aria-label="Attach diagnostics" title="Attach diagnostics">${ICON.clip}</button>
         <label class="sr-only" for="support-message">Message the ${NAME}</label>
         <textarea id="support-message" name="message" maxlength="4000" rows="1" placeholder="Message the ${NAME}" aria-describedby="support-keys">${escape(d.message)}</textarea>
         <button class="support-send" type="submit" aria-label="Send" title="Send (Enter)">${ICON.send}</button></div>
