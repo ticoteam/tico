@@ -7,6 +7,7 @@ every place that shows people the same question.
 
 import pytest
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import teammate_access as TA
 from backend.auth import Identity
 from backend.store import H, encode

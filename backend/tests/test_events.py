@@ -208,7 +208,7 @@ def test_a_consumer_that_leaves_a_frame_unread_is_reset_rather_than_replayed(api
     """A slow consumer is sent `reset` and the newest change number, not the rest of the backlog it fell behind on."""
     with api.app.state.store.read() as c:
         cursor = E.latest(c)
-    made = [post(api, "tasks", {"owner_id": "ben", "title": f"Stall item {n}", "body": "Please."})["id"] for n in range(3)]
+    made = [post(api, "tasks", {"owner": "ben", "title": f"Stall item {n}", "body": "Please."})["id"] for n in range(3)]
     with api.app.state.store.read() as c:
         newest = E.latest(c)
     monkeypatch.setattr(E, "STALL_SECONDS", -1.0)     # every read's frames count as ones the client was slow to take
@@ -454,7 +454,7 @@ def test_one_read_sends_its_byte_budget_and_the_rest_comes_on_the_next_read(api,
     auth, store = api.app.state.auth, api.app.state.store
     with store.read() as c:
         cursor = E.latest(c)
-    made = [post(api, "tasks", {"owner_id": "ben", "title": f"Count item {n}", "body": "Please."})["id"] for n in range(3)]
+    made = [post(api, "tasks", {"owner": "ben", "title": f"Count item {n}", "body": "Please."})["id"] for n in range(3)]
     monkeypatch.setattr(E, "READ_BYTES", 1)          # every event is over budget, so each read sends exactly one
     who = Identity("human:ben", "human", "ben@acme.example")
     sent, more = [], True
@@ -472,7 +472,7 @@ def test_a_consumer_more_changes_behind_than_the_backlog_limit_is_reset(api, mon
     with store.read() as c:
         cursor = E.latest(c)
     for n in range(3):
-        post(api, "tasks", {"owner_id": "ben", "title": f"Backlog item {n}", "body": "Please."})
+        post(api, "tasks", {"owner": "ben", "title": f"Backlog item {n}", "body": "Please."})
     monkeypatch.setattr(E, "BACKLOG_MAX", 2)
     who = Identity("human:ben", "human", "ben@acme.example")
     with store.read() as c:

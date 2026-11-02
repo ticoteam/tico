@@ -3,6 +3,7 @@ backend/events.py): a message says which thread it is in, a `?thread=` follow se
 `threads` topic stays whole for the sidebar and says what changed in a thread for the people who may read it, a read mark goes only to its reader, and
 an agent token gets only the topics it may read. In-process through events.read, so every answer is that viewer's."""
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import events as E
 from backend import task_privacy
 from backend.auth import Identity

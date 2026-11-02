@@ -3,6 +3,7 @@ thread. The watcher is plain code: it never queues a model run, a quiet run writ
 
 from datetime import datetime, timedelta, timezone
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import hubdb as H
 from backend import scheduler, threads, thread_followups
 from backend.tests.test_api import api, headers, setup_attempt  # noqa: F401

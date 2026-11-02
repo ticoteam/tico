@@ -7,6 +7,7 @@ ben (requester), ana (company), the bot ops. The run's task is private, so its r
 
 import pytest
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import threads
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, headers, ready, runner  # noqa: F401

@@ -3833,6 +3833,7 @@ class Execution:
         runner_wire.message(c, msg)
         runner_wire.messages(c, history)
         runner_wire.conversation(c, conv)
+        runner_wire.conversation(c, conversation)     # the claim's copy (thread_payload) was made before
         wire_task = runner_wire.task(task)
         return {"attempt": {"chat_goal": chat_goal, "routine": routine, "id": aid, "deferred": deferred,
                             # Which waiting turn takes a shared one-turn login first (runner-rs/src/login_turns.rs).

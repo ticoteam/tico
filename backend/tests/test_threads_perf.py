@@ -5,6 +5,7 @@ reads for each what that stream's own read would."""
 
 import asyncio
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import events as E
 from backend import read_cache, threads
 from backend.store import H, Problem, encode

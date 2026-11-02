@@ -8,6 +8,7 @@ import json
 
 import pytest
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import file_library, thread_bot_digest, thread_retention, thread_routing, thread_webhooks, threads
 from backend.store import H
 from backend.tests.test_api import api, headers, post  # noqa: F401  (the fixture and its helpers)

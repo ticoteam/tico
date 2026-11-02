@@ -5,6 +5,7 @@ what the viewer may read. Python, the hub SQL and the live stream answer alike w
 
 from types import SimpleNamespace
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import events as E
 from backend import task_privacy, thread_attention, threads, updates, views
 from backend.auth import Identity

@@ -2,6 +2,7 @@
 read state (unread is human or addressed only, a sibling is not cleared, max wins, joining reads up to now), and search
 that follows edits and deletes. Fictional people only: ana (owner), ben and cara (humans)."""
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the fixture and its helpers)
 from backend.tests.test_org_rule_check import COLOR, bodies, hold_row, ruled  # noqa: F401  (the Judge fixture)
 from backend.tests.test_org_rules import rule

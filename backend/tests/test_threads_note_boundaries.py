@@ -5,6 +5,7 @@ Fictional people only: ana (owner), ben (admin), cara (human); the bots come fro
 """
 import json
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import threads
 from backend.auth import Identity
 from backend.store import H

@@ -8,6 +8,7 @@ The migration's reader sets are pinned by test_threads_migration_e2e.py (goldens
 
 import pytest
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import org_rule_check, threads
 from backend.store import H, Problem
 from backend.tests.test_threads_migration_e2e import build, close, identities, open_store

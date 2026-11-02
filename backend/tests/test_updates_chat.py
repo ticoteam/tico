@@ -126,7 +126,7 @@ def test_private_references_in_links_and_prose_never_reach_an_updates_chat_turn(
                 for slug, ref in rows]
         for slug, body in rows:
             source = "source-" + slug.replace("_", "-")
-            updates.post(c, source, "- Reviewed " + body, day="2026-09-29")
+            updates.post(c, bot_id(c, source), "- Reviewed " + body, day="2026-09-29")
         updates.post(c, bot_id(c, "source-public"), "- Published the public launch note", day="2026-09-29")
         updates.post(c, bot_id(c, "privatebot"), "- Private Bot report visible only to Cara", day="2026-09-29")
         updates.post(c, bot_id(c, "secretbot"), "- Secret Bot report visible only to Ana", day="2026-09-29")

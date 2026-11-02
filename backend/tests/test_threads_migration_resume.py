@@ -9,6 +9,7 @@ import sqlite3
 
 import pytest
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import hubdb, threads
 
 

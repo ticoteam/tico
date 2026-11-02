@@ -2,6 +2,7 @@
 a release), a message outside the thread's audience never reaches its person, and a paused thread is listed only to
 the people who can manage it."""
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import threads
 from backend.auth import Identity
 from backend import hubdb as H

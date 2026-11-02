@@ -8,6 +8,7 @@ from the claim, and the reply stays in that sub-thread. A runner claims and comp
 
 import pytest
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import execution, org_rule_check, threads
 from backend.auth import Identity
 from backend.store import H

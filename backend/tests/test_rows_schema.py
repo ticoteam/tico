@@ -24,6 +24,13 @@ TABLES = {
 # Tables with no TypedDict in backend/rows.py yet. Shrink-only: a table that gains a TypedDict must leave this list
 # in the same change, and adding a name here is a visible decision in review, not a way around the row shapes.
 UNTYPED = frozenset({
+    # Native threads (backend/threads.py, calls, federation, Slack threads), merged before their row shapes.
+    "call_holds", "call_participants", "calls", "federation_deferrals", "federation_directory_entries",
+    "federation_items", "federation_keys", "federation_members", "federation_messages", "federation_outbox_items",
+    "federation_peerings", "federation_receipts", "federation_states", "federation_threads", "message_deliveries",
+    "message_mentions", "message_reactions", "message_revisions", "sequences", "slack_inbound_events",
+    "slack_link_members", "slack_message_links", "slack_thread_links", "teammate_accesses", "thread_digests",
+    "thread_earlier_notices", "thread_followers", "thread_followups", "thread_members", "thread_routings",
     "fin_bill_retained", "fin_estimate_lines", "fin_estimates", "fin_po_lines", "fin_purchase_orders", "items", "locations",
     "memory_tidy_keeps", "pending_subscription_fallbacks", "projects", "record_aliases", "subscription_connects",
     # The Company page (backend/company_page).

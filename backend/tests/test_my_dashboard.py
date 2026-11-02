@@ -4,6 +4,7 @@ already read.
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture)."""
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.store import H
 from backend.tests.test_api import api, get, post, put  # noqa: F401  (fixture)
 from backend.tests.test_botops_parity import act

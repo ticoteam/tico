@@ -2,6 +2,7 @@
 body. The card is written as the author, so a bot never wakes on its own card, and the Home's audience decides who
 reads it. An edit the same day keeps the one card."""
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import hubdb as H
 from backend import threads, updates
 from backend.auth import Identity

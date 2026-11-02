@@ -467,7 +467,8 @@ async function notifyThreadNeedsOnce(items) {
   const id = S.me?.id;
   if (!id) return;                  // the identity has not loaded: there is no person to keep a memory for yet
   if (S.notifyBrowser === undefined) {
-    try { S.notifyBrowser = (await v2Get('/v2/humans/' + encodeURIComponent(id)))?.notify_browser === true; }
+    // The person's own row in the people list carries the setting (there is no one-person read).
+    try { S.notifyBrowser = ((await v2Get('/humans'))?.people || []).find(p => p.id === id)?.notify_browser === true; }
     catch { S.notifyBrowser = false; }
   }
   const key = 'tico.notified.' + id;
