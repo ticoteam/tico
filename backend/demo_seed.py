@@ -75,7 +75,7 @@ def write_registry(settings):
     employees = []
     for slug, template, reports_to in D.BOTS:
         card = onboarding.render(cards[template], names, cards[template]["name"]) if template in cards else {}
-        employees.append({"name": slug, "display_name": settings.assistant_name if slug == "coo" else card.get("name", slug),
+        employees.append({"name": slug, "display_name": settings.assistant_name if slug == "coo" else D.BOT_NAMES.get(slug) or card.get("name", slug),
                           "reports_to": reports_to, "status": "active", "repo": "bot-" + slug, "template": template,
                           "description": card.get("summary", "")})
     (registry / "employees.yaml").write_text(yaml.safe_dump(
@@ -164,7 +164,7 @@ class Builder:
                      "assistant_name": self.settings.assistant_name}
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({
                 "names": names, "answers": D.ANSWERS, "completed": self.ago(days=6.9).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "selected": {slug: {"template": template, "display_name": card_names.get(template, slug.title()),
+                "selected": {slug: {"template": template, "display_name": D.BOT_NAMES.get(slug) or card_names.get(template, slug.title()),
                                     "instructions": ""}
                              for slug, template, _ in D.BOTS if slug not in ("coo", "botops")}}),))
             # The tour is over; the checklist stays because GitHub, its one optional step, is not connected.
