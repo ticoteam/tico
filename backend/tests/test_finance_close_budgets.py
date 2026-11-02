@@ -6,6 +6,7 @@ from datetime import date
 import pytest
 
 from backend.finance import reads as FR
+from backend import usage_limits
 from backend.finance import actions as FA
 from backend.finance import mirror as M
 from backend.finance.context import load
@@ -164,3 +165,18 @@ def test_an_edit_that_lands_in_a_closed_month_is_flagged_on_its_snapshot(books):
         flagged = FR.pnl(c, OWNER, "2026-09-01", "2026-09-30", at=AT)
         assert flagged["snapshot"] == {"month": "2026-09", "restatements": 1}
         assert flagged["expense"] == sep["expense"]
+
+
+def test_a_team_budget_at_its_cutoff_pauses_that_teams_bot(books):
+    """§9 check: a team's decline budget at its limit holds that team's bot (usage limits read every budget on the bot's
+    path). The Gateway key cap is company-wide, so the team budget does not set it (a spec question, see the report)."""
+    from datetime import datetime, timezone
+    with books.transaction() as c:
+        ai = budget(c, "AI services")
+        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 100})
+        act(c, OWNER, "budget_create", {"name": "AI web", "account_id": account(c, "5100"), "team": "web",
+                                        "parent_id": ai, "amount": 50, "at_limit": "decline"})
+        spend(c, "5100", 51, team="web")
+        cut = usage_limits.budget_cutoff(c, "coder", at=datetime(2026, 10, 15, 12, tzinfo=timezone.utc))
+        assert cut is not None and cut["name"] == "AI web"
+        assert usage_limits.budget_cutoff(c, "seller", at=datetime(2026, 10, 15, 12, tzinfo=timezone.utc)) is None
