@@ -3,7 +3,7 @@ chat-first-goals.md, criterion 7): no read-back and no second yes. Tico stores i
 the goal, with the owner's words as its reason, and changes nothing else."""
 from backend import goals as G
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.test_api import api, get, headers, post  # noqa: F401
 from backend.tests.test_assistant import asked, turn_message
 from backend.tests.test_goal_read_back import goal
 from backend.tests.test_strategy_bot_chat import strategy_bot, turn
@@ -107,4 +107,30 @@ def test_a_kind_that_is_not_a_goal_suggestion_is_refused(api):
     r, attempt = turn(api, "coo", "ana-test", "No.")
     refused = turn_down(api, attempt, {**suggestion(g["id"]), "kind": "strategy_draft"}, expected=403)["error"]
     assert refused["code"] == "forbidden"
+    assert proposals(api) == []
+
+
+def autonomous_actions(api, on):
+    """The team's "Assistant acts without asking" setting."""
+    assert api.put("/api/v2/access/rules", json={"assistant_direct": on}, headers=headers()).status_code == 200
+
+
+def test_a_no_is_recorded_when_the_assistant_does_not_act_without_asking(api):
+    strategy_bot(api)
+    g = goal(api, "Get 100 companies to try Tico", owner="ops")
+    autonomous_actions(api, False)
+    r, attempt = turn(api, "coo", "ana-test", "No, leave it without a number.")
+    out = turn_down(api, attempt, suggestion(g["id"]))["proposal"]
+    assert (out["status"], out["decision_note"]) == ("rejected", "No, leave it without a number.")
+    assert get(api, "goals/" + g["id"])["goal"]["title"] == "Get 100 companies to try Tico"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM kpis").fetchone()[0] == 0
+
+
+def test_with_autonomous_actions_off_a_reply_that_is_not_a_no_still_records_nothing(api):
+    strategy_bot(api)
+    g = goal(api, "Get 100 companies to try Tico", owner="ops")
+    autonomous_actions(api, False)
+    r, attempt = turn(api, "coo", "ana-test", "Yes, but make it 50")
+    assert turn_down(api, attempt, suggestion(g["id"]), expected=403)["error"]["code"] == "not_a_no"
     assert proposals(api) == []

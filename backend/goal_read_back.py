@@ -67,6 +67,12 @@ def saving(method, path):
     return method == "POST" and any(p.fullmatch(str(path or "")) for p in _SAVING)
 
 
+def turns_down(method, path):
+    """Whether this write is the owner's "no" to a suggestion (goal_routes.py `turned-down`). It is admitted on the owner's
+    cited turn whatever the team's autonomous-action setting says: a rejection they asked for in words, nothing else."""
+    return method == "POST" and str(path or "") == "/api/v2/goal-proposals/turned-down"
+
+
 def strategy_turn(who):
     """The owner's Assistant's turn in their own chat (backend/auth.py assistant_principal, the only identity `via`
     assistant): the owner's rights, via their Assistant, not a click."""
