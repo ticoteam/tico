@@ -2,6 +2,7 @@
 way a real number could get out: a missing rule, a raw Finance field, a clock that starts in the wrong place, a replaced
 reading, a value worked out from what is shown, or a bot's hand on the switch."""
 import json
+import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest import mock
@@ -364,6 +365,14 @@ def test_exact_growth_next_to_rounded_revenue_exposes_its_differences(store):
     assert "12,345" not in json.dumps(result)
 
 
+def exact(result, *values):
+    """The exact values shown anywhere in `result`, as plain or comma-grouped numbers. Only whole numbers count: an id,
+    a time's microseconds or a revision can hold the same digits by chance (that made these tests flaky)."""
+    text = json.dumps(result)
+    edge = r"(?![\w,]|\.\d)"
+    return [v for v in values if re.search(rf"(?<![\w.,]){v}{edge}|(?<![\w.,]){v:,}{edge}", text)]
+
+
 def test_a_rounded_series_never_shows_exact_values_or_exact_differences(store):
     setup(store, ("kpi", "", {"mode": "rounded", "rounding": "nearest:1000"}), ("customers", "", {"mode": "rounded"}))
     with store.transaction() as c:
@@ -386,8 +395,7 @@ def test_a_rounded_series_never_shows_exact_values_or_exact_differences(store):
     assert held_labels(result) == {"Same gap", "On grid"}
     stat = by_label(result)["Rounded"]
     assert stat["display"] == "~$12,000,000" and [p["value"] for p in stat["series"]] == [1_000_000, 12_000_000]
-    text = json.dumps(result)
-    assert "234" not in text and "678" not in text
+    assert not exact(result, 1234, 2234, 1_234_567, 12_345_678)
 
 
 def test_a_range_series_has_no_numbers(store):
@@ -400,7 +408,7 @@ def test_a_range_series_has_no_numbers(store):
         result = ST.project(c, "investors", "2026-10-15")
     stat = by_label(result)["Pipeline"]
     assert stat["display"] == "$2,000,000–$5,000,000" and all(p["value"] is None for p in stat["series"])
-    assert "234" not in json.dumps(result)
+    assert not exact(result, 1_234_567, 3_456_789)
 
 
 def test_a_delayed_value_cant_be_worked_out_before_its_time(store):
