@@ -221,10 +221,10 @@ def install(app, store, auth, mutate):
             rows = c.execute("SELECT k.id,k.card_id,t.bot,t.memory_commit,t.edits_json,t.diary,t.created,b.config_json "
                              "FROM memory_tidy_keeps k JOIN memory_tidy_cards t ON t.id=k.card_id "
                              "JOIN bot_config b ON b.bot=t.bot JOIN runners r ON r.id=k.runner_id "
-                             "WHERE k.runner_id=? AND r.revoked_at IS NULL AND k.status IN ('queued','applying') ORDER BY k.created", (rid,)).fetchall()
+                             "WHERE k.runner_id=? AND r.revoked_at IS NULL AND k.status IN ('queued','applying') ORDER BY k.created LIMIT 1", (rid,)).fetchall()
             for row in rows:
                 c.execute("UPDATE memory_tidy_keeps SET status='applying' WHERE id=?", (row['id'],))
-            return {'keeps': [{**{k: r[k] for k in r.keys() if k != 'config_json'}, 'config': {key: value for key, value in json.loads(r['config_json']).items() if key in {'repo', 'repo_url', 'shared_from', 'harness', 'app_delivery', 'app_bot'}}, 'date': r['created'][:10]} for r in rows]}
+            return {'keeps': [{**{k: r[k] for k in r.keys() if k != 'config_json'}, 'config': {key: value for key, value in json.loads(r['config_json']).items() if key in {'repo', 'repo_url', 'shared_from'}}, 'date': r['created'][:10]} for r in rows]}
 
     @app.post('/api/v2/runners/me/memory-tidy-keeps/{ident}/complete')
     def complete_keep(request: Request, ident: str, body: MemoryTidyCompletion):
