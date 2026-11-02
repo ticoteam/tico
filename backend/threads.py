@@ -4044,6 +4044,13 @@ def _narrower_than_thread(c, message):
     return not task_privacy.message_readable(c, _NO_STANDING, message, current=True)
 
 
+def message_narrower(c, message):
+    """Whether some reader of a message's thread may not read it, by its row as stored. A reply is flagged `restricted`
+    for its `turn_id` alone; this asks what it draws on, so an ordinary one is not narrower."""
+    row = c.execute("SELECT * FROM messages WHERE id=?", ((message or {}).get("id"),)).fetchone()
+    return bool(row) and _narrower_than_thread(c, dict(row))
+
+
 def mark_narrower(c, history):
     """Flag the messages of a public turn's page that some reader of the thread may not read (`audience_limited`): history
     kept for its old readers, or a message tied to a private task or a meeting. A public session is read back into a

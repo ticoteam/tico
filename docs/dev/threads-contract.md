@@ -539,7 +539,9 @@ live shared-room rule as before.
 
 ## 8. Sessions (`clients/sessions.py`, `runner-rs/src/execute.rs`)
 The server adds `root_id` and `audience_class` (`public` | `private`) to the turn's `conversation`. `private` =
-audience `members|personal|participants|meeting`, a private task's thread, or a legacy-audience message as the input.
+audience `members|personal|participants|meeting`, a private task's thread, an input (or the message a carrier carries)
+narrower than its thread (`threads.message_narrower`: a legacy audience, a private task or a meeting; a reply flagged
+`restricted` for its `turn_id` alone is not), or a thread's notes wake (§4.4).
 
 | mode | task turn | non-task turn, public | non-task turn, private |
 |---|---|---|---|

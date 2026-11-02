@@ -1322,14 +1322,15 @@ def source_continuation(c, job_id):
 
 def thread_payload(c, conv, msg):
     """The claim's conversation, with what keys the turn's session: its root (`root_id`) and whether the thread is
-    private or public (`audience_class`, backend/threads.py). A private thread's session never serves a public one, and
-    a run started for a thread's private notes has a private session even when the thread is public: its notes are narrower."""
+    private or public (`audience_class`, backend/threads.py). A private thread's session never serves a public one, nor
+    does a public session take in what some reader of its thread may not read: a turn for a message narrower than its
+    thread, or for a thread's private notes, has a private session even when the thread is public."""
     if not conv:
         return conv
     from . import threads
-    # A carrier's turn is classed by the message it carries (reply_source): legacy-audience history stays private.
+    # A carrier's turn is classed by the message it carries (reply_source).
     source = (reply_source(c, msg) if msg else None) or msg
-    private = threads.private_task_thread(c, conv) or threads.note_wake(msg)
+    private = threads.private_task_thread(c, conv) or threads.note_wake(msg) or threads.message_narrower(c, source)
     return {**conv, "root_id": conv.get("root_id") or conv.get("id"),
             "audience_class": "private" if private else threads.audience_class(conv, source)}
 

@@ -322,6 +322,56 @@ def test_a_narrower_note_enters_only_a_private_session_of_its_own_thread(api):
         assert threads.note_fits_run(c, note, conv, "private")
 
 
+def session_class(api, thread_id, message_id):
+    from backend.execution import thread_payload
+    with api.app.state.store.read() as c:
+        return thread_payload(c, H.conversation(c, thread_id), H.message(c, message_id))["audience_class"]
+
+
+def test_a_carrier_for_a_message_narrower_than_its_company_thread_gets_a_private_session(api):
+    r = bot_runner(api)
+    company = new_thread(api, audience="company", title="Launch")
+    tid = task_about(api)
+    bot_says(api, company, "@cpo Zebrawire", bot="human:ben", refs={"task": tid})
+    turn_task_private(api, tid)                     # cpo asked for the task, so the claim still hands it out
+    attempt = claim(api, r, "cpo")
+    assert attempt["conversation"]["audience_class"] == "private" and attempt["conversation"]["root_id"] == company
+    assert "Zebrawire" in attempt["message"]["body"]
+
+
+def test_a_company_threads_ordinary_turns_keep_the_public_session(api):
+    r = bot_runner(api)
+    company = new_thread(api, audience="company", title="Launch")
+    say(api, company, "@cpo first")
+    first = claim(api, r, "cpo")
+    assert first["conversation"]["audience_class"] == "public"
+    finish(api, r, first, text="Our reply")
+    reply = rows(api, "SELECT * FROM messages WHERE body='Our reply'")[0]
+    assert reply["restricted"] == 1 and json.loads(reply["refs_json"])["turn_id"] == first["id"]
+    assert session_class(api, company, reply["id"]) == "public"     # flagged for its turn_id, and every reader reads it
+    bot_says(api, company, "@cpo about that", bot="human:ana", in_reply_to=reply["id"])
+    answered = claim(api, r, "cpo")
+    assert answered["conversation"]["audience_class"] == "public"
+    finish(api, r, answered)
+    bot_says(api, company, "@cpo on the plan", bot="human:ana", refs={"task": task_about(api)})   # a task all may read
+    tied = claim(api, r, "cpo")
+    assert tied["conversation"]["audience_class"] == "public"
+
+
+def test_a_private_runs_reply_is_narrower_than_its_company_thread(api):
+    r = bot_runner(api)
+    company = new_thread(api, audience="company", title="Launch")
+    say(api, company, "@cpo first")
+    first = claim(api, r, "cpo")
+    finish(api, r, first, text="Our reply")
+    reply = rows(api, "SELECT id FROM messages WHERE body='Our reply'")[0]["id"]
+    tid = task_about(api)
+    with api.app.state.store.transaction() as c:    # the run drew on a task that is private now
+        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (first["id"], tid))
+    turn_task_private(api, tid)
+    assert session_class(api, company, reply) == "private"
+
+
 def delete(api, message_id, author="bot:ops"):
     with api.app.state.store.transaction() as c:
         threads.delete_message(c, author, message_id)
