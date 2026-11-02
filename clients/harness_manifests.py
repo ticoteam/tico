@@ -92,6 +92,8 @@ def _row(harness, runtime, data, where, auth=None, login=None):
               "browser_sign_in": bool(relay), "paste_code": bool((login or {}).get("paste_code")),
               # Sign out and Switch account from the app (backend/model_login.py): the CLI's own logout command.
               "sign_out": bool(relay and (login or {}).get("logout")),
+              # Connect in Settings > Models: a command that signs a plan in for a company subscription.
+              "subscription_connect": bool(relay and (login or {}).get("connect")),
               # Platforms where the login is in the system keychain, so Switch account cannot sign in on the side.
               "switch_unavailable_on": list((login or {}).get("keychain") or []) if relay and (login or {}).get("logout") else [],
               "terminal_login": " ".join([executable, *caps["terminal_login"]]) if caps["terminal_login"] else "",

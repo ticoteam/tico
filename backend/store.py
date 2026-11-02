@@ -1253,6 +1253,12 @@ class Store:
                 H.add_column(c, "runners", "screen_default_pending", "INTEGER NOT NULL DEFAULT 0")
                 # Performance diagnostics: on unless a person turns them off (backend/performance.py).
                 H.add_column(c, "runners", "performance", "TEXT NOT NULL DEFAULT 'on'")
+                # Memory hold on a computer: its newest sample at 85% or more sets it, below 80% clears it
+                # (backend/performance.py ingest; backend/start_places.py computer_hold).
+                H.add_column(c, "runners", "memory_hold", "INTEGER NOT NULL DEFAULT 0")
+                # The newest sample's time, kept with the computer: sample retention drops old rows, not this mark.
+                H.add_column(c, "runners", "last_sampled_at", "INTEGER")
+                _performance.backfill_last_sampled(c)
                 # When a computer said it is restarting after a person pressed Restart, from its heartbeat; NULL once
                 # a heartbeat no longer says so (backend/health.py `restarting`).
                 H.add_column(c, "runners", "restart_since", "TEXT")
@@ -1799,6 +1805,19 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.feed_lines(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(75,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=76").fetchone():
+                    # The shared records (backend/records: locations, items, projects) and the location, class and item
+                    # tags
+                    # Finance lines take. Project dimensions move to projects keeping each tag's value (schema.catalog).
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.catalog(c, H.now())
+                    c.execute("INSERT INTO cloud_migrations VALUES(76,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=77").fetchone():
+                    # Purchase orders and estimates (backend/finance/store/purchasing.py), and the bill line an order line
+                    # is billed on. Idempotent like 76.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.purchasing(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(77,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the

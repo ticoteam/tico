@@ -915,6 +915,7 @@
        "private_lanes_v1",
        "model_subscriptions_v1",
        "browser_exit_v1",
+       "model_connect_v1",
        "memory_tidy_packets_v1"
       ],
       "type": "string"

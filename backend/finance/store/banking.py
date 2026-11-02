@@ -698,20 +698,82 @@ def outbox_add(c: sqlite3.Connection, *, connection_id: str | None, action_id: s
                                     "status": "pending", "created_at": at, "created_by": by, "updated_at": at})
 
 
+# A record's update waits behind an older update of the same record that is still pending (out at the provider, or to be
+# tried again): the updates of one record reach the provider in the order they were made, so a retry never sends a
+# change back over a later one.
+RECORD_UPDATE_OPS = ("item.update", "location.update")
+IN_ORDER = ("NOT (op IN ('item.update','location.update') AND EXISTS (SELECT 1 FROM fin_outbox o WHERE "
+            "o.status='pending' AND o.op=fin_outbox.op AND o.rowid<fin_outbox.rowid AND "
+            "json_extract(o.payload_json, '$.local_id')=json_extract(fin_outbox.payload_json, '$.local_id')))")
+
+
 def outbox_due(c: sqlite3.Connection, at: str, most: int, connection_id: str | None = None) -> list[Any]:
     """Unclaimed writes due now (with `connection_id`, that connection's only), oldest first."""
     scope = " AND connection_id=?" if connection_id else ""
     return c.execute("SELECT * FROM fin_outbox WHERE status='pending' AND claimed_at IS NULL AND (next_try_at IS NULL "
-                     f"OR next_try_at<=?){scope} ORDER BY created_at LIMIT ?",
+                     f"OR next_try_at<=?) AND {IN_ORDER}{scope} ORDER BY created_at LIMIT ?",
                      (at, *([connection_id] if connection_id else []), most)).fetchall()
+
+
+def record_write_open(c: sqlite3.Connection, op: str, local_id: str) -> bool:
+    """Whether a shared record's write is still to reach the provider or may have reached it: held, or unknown. The
+    write names its record by the local id in its payload."""
+    for row in c.execute("SELECT payload_json FROM fin_outbox WHERE op=? AND "
+                         "NOT (status='sent' OR (status='failed' AND unknown=0)) AND instr(payload_json, ?) > 0",
+                         (op, local_id)):
+        if loads(row[0]).get("local_id") == local_id:
+            return True
+    return False
+
+
+def record_write_pending(c: sqlite3.Connection, op: str, local_id: str) -> Any:
+    """The newest write of this op for a shared record that is still pending (waiting, claimed, or to be tried again),
+    or None. A change made to the record joins that write while it still waits to be claimed."""
+    for row in c.execute("SELECT * FROM fin_outbox WHERE op=? AND status='pending' AND instr(payload_json, ?) > 0 "
+                         "ORDER BY rowid DESC", (op, local_id)):
+        if loads(row["payload_json"]).get("local_id") == local_id:
+            return row
+    return None
+
+
+def outbox_amend(c: sqlite3.Connection, outbox_id: str, payload: Mapping[str, object], at: str) -> bool:
+    """Replace a write's payload while it has never been attempted and waits to be claimed, so a change that joins it goes
+    out with it. False (and nothing changed) once it is claimed, attempted, sent, or refused: a write the provider may
+    have received keeps its content under its idempotency key, and a later change queues a write of its own behind it."""
+    return c.execute("UPDATE fin_outbox SET payload_json=?, updated_at=? WHERE id=? AND status='pending' AND "
+                     "claimed_at IS NULL AND attempts=0", (dump(payload), at, outbox_id)).rowcount == 1
+
+
+def outbox_repoint(c: sqlite3.Connection, local_id: str, record_id: str) -> None:
+    """Name a record by the row it is an alias of in every write not yet sent, so a write queued under the alias sends
+    what a write queued under the row would."""
+    for row in c.execute("SELECT id, payload_json FROM fin_outbox WHERE status!='sent' AND instr(payload_json, ?) > 0",
+                         (local_id,)).fetchall():
+        body = loads(row[1])
+        fixed = _named(body, local_id, record_id)
+        if fixed != body:
+            c.execute("UPDATE fin_outbox SET payload_json=? WHERE id=?", (dump(fixed), row[0]))
+
+
+def _named(value: Any, old: str, new: str) -> Any:
+    """The value with each string equal to `old` replaced by `new`, in any nested object or list."""
+    if isinstance(value, str):
+        return new if value == old else value
+    if isinstance(value, dict):
+        return {k: _named(v, old, new) for k, v in cast(dict[str, Any], value).items()}
+    if isinstance(value, list):
+        return [_named(v, old, new) for v in cast(list[Any], value)]
+    return value
 
 
 def outbox_claim(c: sqlite3.Connection, outbox_id: str, at: str) -> bool:
     """Take one write for one call: only one worker wins it. A card's writes go one at a time across workers: a write
-    for a card whose other write is at Mercury right now waits until that one is recorded."""
+    for a card whose other write is at Mercury right now waits until that one is recorded. A record's update is taken
+    only once the older updates of its record are recorded (IN_ORDER)."""
     return c.execute(
         "UPDATE fin_outbox SET claimed_at=?, updated_at=? WHERE id=? AND status='pending' AND claimed_at IS NULL AND "
-        "(json_extract(payload_json, '$.card_id') IS NULL OR NOT EXISTS (SELECT 1 FROM fin_outbox o WHERE "
+        f"{IN_ORDER} AND (json_extract(payload_json, '$.card_id') IS NULL OR NOT EXISTS "
+        "(SELECT 1 FROM fin_outbox o WHERE "
         "o.status='pending' AND o.claimed_at IS NOT NULL AND o.id<>fin_outbox.id AND "
         "json_extract(o.payload_json, '$.card_id')=json_extract(fin_outbox.payload_json, '$.card_id')))",
         (at, at, outbox_id)).rowcount == 1

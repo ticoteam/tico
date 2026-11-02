@@ -249,16 +249,30 @@ def _reported(c, prefix, limit=200):
 def harness_denies(c, settings):
     """(bot, command, repositories) for each GitHub write a bot's access allows on a repository other than its own
     but its Claude Code settings deny. Its own repository is left out, so a bot that only reads keeps its denies."""
-    from .bot_tools import listing
+    from .bot_tools import listing, prime_state
     from .github_app import repo_of
+    from .repositories import Reads
+    reported = _reported(c, DENIES_WARNING, limit=500)
+    bots = sorted({bot for bot, _ in reported})
+    # Every bot's configuration, computer, pending requests and tool access, read once for all of them. A failure
+    # here falls back to the per-bot path, where each bot's own failure is skipped as it was before.
+    try:
+        prime_state(c, bots)
+        reads = Reads(c, bots)
+    except Exception:
+        reads = None
+    configs = {}
+    for part in H.chunks(bots):
+        configs.update((r["bot"], r) for r in c.execute(
+            f"SELECT bot,repo,config_json FROM bot_config WHERE bot IN ({','.join('?' * len(part))})", part))
     out = []
-    for bot, rest in _reported(c, DENIES_WARNING, limit=500):
+    for bot, rest in reported:
         prefixes = [p.strip() for p in rest.split(",") if p.strip()]
         try:
-            tools = listing(c, settings, bot)["tools"]
+            tools = listing(c, settings, bot, reads=reads)["tools"]
         except Exception:
             continue
-        row = c.execute("SELECT repo,config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        row = configs.get(bot)
         own = str(repo_of((row["repo"] if row else "") or "bot-" + bot, "owner") or "").split("/")[-1].lower()
         mode = H._json(row["config_json"] if row else None, {}).get("repo_access_mode", "own")
         github = [t for t in tools if str(t.get("service") or "").lower() in ("github", "github-app")
@@ -1912,15 +1926,19 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check("computers", "Computers", "ok", f"{_plural(len(online), 'computer')} online."))
 
     from .performance import load_statuses, recent_overloads
+    from .start_places import NOT_REPORTING, computer_hold
     loads = load_statuses(c, [computer["id"] for computer in computers])     # one read for every computer
     for computer in computers:
         if full or kind == "bot":
             checks.append(_check("turns:" + computer["id"], "Turns", "ok", computer["label"] + ": " + computer["turn_summary"],
                                  [_fix("Open Computers", "#/settings", "devices")] if full else []))
-        load = loads[computer["id"]]
-        if load["overloaded"]:
+        hold = computer_hold(c, computer["id"], status=loads[computer["id"]])
+        if hold:
+            words = ("overloaded now (CPU or memory above 90% for five minutes)." if hold[0] == "computer busy"
+                     else "not reporting: its last sample is over two minutes old." if hold[0] == NOT_REPORTING
+                     else f"{hold[1]}: new starts wait until it is below 80%.")
             checks.append(_check("runner_load:" + computer["id"], "Load", "warn",
-                                 f"{computer['label']}: overloaded now (CPU or memory above 90% for five minutes).",
+                                 f"{computer['label']}: {words}",
                                  [_fix("Open Computers", "#/settings", "devices")]))
 
     if full:

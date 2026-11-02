@@ -70,7 +70,7 @@ EMPTY = (
     "credentials", "credential_keys", "credential_grants", "credential_uses", "credential_requests", "credential_imports",
     "directory_credentials", "company_storage", "tico_storage",
     # company model subscriptions: the sealed logins (vault values) and which computer or attempt holds which one
-    "model_subscriptions", "computer_subscriptions", "attempt_subscriptions",
+    "model_subscriptions", "computer_subscriptions", "attempt_subscriptions", "subscription_connects",
     # mail, Slack, GitHub, Granola, meeting bots, support
     "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
@@ -140,7 +140,8 @@ KEEP = frozenset((
     "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
     "usage_limits", "usage_pools", "task_caps",
     # Finance history and definitions (EMPTY has what acts; prune drops pending actions and settles undrained events)
-    "fin_accounts", "fin_actions", "fin_allocations", "fin_attachments", "fin_bill_lines", "fin_bills", "fin_books",
+    "fin_accounts", "fin_actions", "fin_allocations", "fin_attachments", "fin_bill_lines", "fin_bill_retained",
+    "fin_bills", "fin_books",
     "fin_budget_versions", "fin_budgets", "fin_contacts", "fin_dimensions", "fin_entries", "fin_events",
     "fin_feed_txns", "fin_invoice_lines", "fin_invoices", "fin_line_tags", "fin_lines", "fin_money_accounts",
     "fin_periods", "fin_private_lines", "fin_projections", "fin_reconciliations", "fin_restatements", "fin_rights",
@@ -150,6 +151,9 @@ KEEP = frozenset((
     "fin_vendor_legacy",
     "fin_view_defaults", "fin_view_grants", "fin_view_versions",
     "fin_raw_imports", "fin_close_snapshots", "fin_tax_jurisdictions", "fin_tax_seeds",
+    "fin_purchase_orders", "fin_po_lines", "fin_estimates", "fin_estimate_lines",
+    # Shared records (backend/records): locations, items and projects
+    "items", "locations", "projects", "record_aliases",
     # Growth, brand and go-to-market (backend/growth.py, backend/brand_gtm.py)
     "brand_drafts", "brand_versions", "gtm_drafts", "gtm_versions", "gtm_sources", "growth_channels", "growth_ideas",
     "growth_idea_channels", "growth_cohorts", "growth_settings", "growth_segments", "growth_channel_segments",

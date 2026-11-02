@@ -14,7 +14,7 @@ use crate::util::text_of;
 pub const CAPABILITIES: &[&str] = &[
     "task_lanes_v2", "session_roots_v1", "task_goals_v1", "capacity_continue_v1", "source_continue_v1",
     crate::login::SIGN_OUT_CAPABILITY, crate::login::KEYS_CAPABILITY, crate::login::SWITCH_TYPE_CAPABILITY,
-    crate::login::REMOVE_CAPABILITY, crate::login::SWITCH_TO_KEY_CAPABILITY, "turns_at_once_v1",
+    crate::login::REMOVE_CAPABILITY, crate::login::SWITCH_TO_KEY_CAPABILITY, crate::login::CONNECT_CAPABILITY, "turns_at_once_v1",
     // Private live meetings run in their own lane and checkout (sessions.rs); the server hands them to no other runner.
     "private_lanes_v1",
     "model_subscriptions_v1",
@@ -121,7 +121,7 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
             }
         }
         for name in ["memory_tidy_packets_v1", "browser_exit_v1", "private_lanes_v1", "turns_at_once_v1", "capacity_continue_v1", "source_continue_v1",
-                     crate::login::SWITCH_TO_KEY_CAPABILITY, crate::login::REMOVE_CAPABILITY,
+                     crate::login::CONNECT_CAPABILITY, crate::login::SWITCH_TO_KEY_CAPABILITY, crate::login::REMOVE_CAPABILITY,
                      crate::login::SWITCH_TYPE_CAPABILITY, crate::login::KEYS_CAPABILITY,
                      crate::login::SIGN_OUT_CAPABILITY, crate::screen::CAPABILITY, "task_goals_v1",
                      "session_roots_v1", "task_lanes_v2"] {

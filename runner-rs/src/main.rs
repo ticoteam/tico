@@ -344,6 +344,8 @@ fn main() {
         std::process::exit(0);
     }
     let mut config = config::Config::load(&path).unwrap_or_else(|e| fail(&e));
+    // Before any thread starts, and before `profile login` looks for its harness.
+    harness_tools::expose_if_owned(&config);
     if let Command::Profile { action } = cli.command {
         std::process::exit(profile_main(action, &mut config));
     }
