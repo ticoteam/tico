@@ -67,6 +67,19 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     assert.equal(rule.with.groups.length, 1);
     assert.ok(rule.can_edit);
 
+    // Outside editions travels with the rule: shown in its Who, and still set after a save that doesn't touch Who.
+    let outside = await ok(page, 'POST', '/v2/rules', {kind: 'internal', text: 'Never name a customer outside the company', who: {outside_editions: true}});
+    assert.equal(outside.who.outside_editions, true);
+    outside = await ok(page, 'POST', '/v2/rules/' + outside.id, {version: outside.version, text: 'Never name a customer outside Acme'});
+    assert.equal(outside.who.outside_editions, true);
+    await go(page, '#/rules?rule=' + outside.id);
+    await page.waitForFunction(() => document.querySelector('#ru-side [data-unchip="outside_editions"]'), null, {timeout: t(10000)});
+    await page.locator('#ru-side form:not([data-old]) textarea[name=description]').fill('Editions go through this.');
+    await page.locator('#ru-side button[type=submit]').click();
+    await page.waitForFunction(() => document.querySelector('#ru-side textarea[name=description]')?.value === 'Editions go through this.', null, {timeout: t(10000)});
+    assert.equal((await ok(page, 'GET', '/v2/rules/' + outside.id)).who.outside_editions, true, 'a panel save keeps it');
+    await go(page, '#/rules?rule=' + ruleId);
+
     // Edit it in the side panel.
     const side = page.locator('#ru-side');
     await page.waitForFunction(id => document.querySelector(`#ru-side form[data-rule="${id}"]`), ruleId, {timeout: t(10000)});
