@@ -1929,3 +1929,74 @@ def test_a_runner_reply_on_a_replica_reaches_the_home_and_a_private_one_does_not
     answer(b, there, question, "Private detail.", {"turn_id": "turn_8", "task": secret})
     drive(a, b)
     assert texts(a, tid) == ["Who owns the plan?", "Ana owns it."]
+
+
+def test_a_staged_home_item_whose_task_turned_private_is_skipped_at_send_time(make_side, hq):
+    """A home reply that names a task is staged while the task is public. If the task turns private before the item is
+    sent, the item must go out as a skip (its sequence number kept), never with its text."""
+    import base64 as _b64
+    import json as _json
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    with a.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Public launch notes", "", "human:ana", lint=False, private=False)["id"]
+    question = say(a, tid, "What is the status?")
+    reply = answer(a, tid, question, "See the launch notes.", {"turn_id": "turn_9", "task": task})
+    relay = a.app.state.federation_relay
+    with a.app.state.store.transaction() as c:
+        S.stage(c, relay.vault(), R.now())
+        H.task_update(c, "human:ana", task, private=True)
+    with a.app.state.store.read() as c:
+        due = [dict(r) for r in c.execute("SELECT * FROM federation_outbox_items WHERE kind='item'").fetchall()]
+    sent = []
+    for row in due:
+        with a.app.state.store.transaction() as c:
+            outbound = S.envelope(c, relay.vault(), row, R.now())
+        if outbound is not None:
+            sent.append(_json.loads(outbound["body"].decode()))
+    carried = [_b64.b64decode(item["payload_b64"]).decode() for item in sent if item.get("payload_b64")]
+    assert not any("See the launch notes." in text for text in carried), "a private task's reply went out with its text"
+    assert any(item.get("skip") for item in sent), "the refused item is sent as a skip so the receiver's sequence has no gap"
+
+
+def test_a_delete_of_an_exported_runner_reply_reaches_the_other_install(make_side, hq):
+    """A runner reply is exported (it is restricted only by its flag). Deleting it afterwards must still send the tombstone,
+    or the other install keeps the text forever."""
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    question = say(a, tid, "When is the launch?")
+    with a.app.state.store.transaction() as c:
+        reply = CORE.post(c, "bot:ops", tid, "The launch is on Friday.", kind="say", refs={"turn_id": "turn_4"},
+                          in_reply_to=question)["id"]
+    drive(a, b)
+    there = local_thread(b, tid, a)
+    assert texts(b, there) == ["When is the launch?", "The launch is on Friday."]
+    with a.app.state.store.transaction() as c:
+        CORE.delete_message(c, "bot:ops", reply)
+    drive(a, b)
+    assert texts(b, there) == ["When is the launch?"], "the peer's copy of the deleted reply is gone"
+
+
+def test_a_reply_deleted_before_its_first_export_is_never_sent(make_side, hq):
+    """Nothing is sent for a message that never went out: the peer must not see a tombstone for it either."""
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    question = say(a, tid, "When is the launch?")
+    with a.app.state.store.transaction() as c:
+        reply = CORE.post(c, "bot:ops", tid, "Never mind.", kind="say", refs={"turn_id": "turn_5"}, in_reply_to=question)["id"]
+    with a.app.state.store.transaction() as c:
+        CORE.delete_message(c, "bot:ops", reply)
+    drive(a, b)
+    assert texts(b, local_thread(b, tid, a)) == ["When is the launch?"]
+    with a.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM federation_items WHERE kind='message' AND origin_id="
+                         "(SELECT origin_id FROM messages WHERE id=?)", (reply,)).fetchone()[0] == 0
