@@ -1878,7 +1878,7 @@ def transactions(c: sqlite3.Connection, viewer: str, *, teams: Iterable[str] = (
 
 
 # ------------------------------------------------------------------------------------------------ watch
-WATCH_HISTORY_DAYS = 120       # posted debits read for duplicate charges and price increases
+WATCH_HISTORY_DAYS = 120       # posted debits read for duplicate charges, price increases and unused subscriptions
 WATCH_PAGES = 10              # pages of 200 read per check of the debits
 
 
@@ -1913,7 +1913,8 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
                     or not payee:
                 continue
             out.append(W.Charge(id=str(row["id"]), payee=payee, amount=-amount,
-                                day=date.fromisoformat(str(row["date"])[:10]), shown=str(row.get("counterparty") or "").strip()))
+                                day=date.fromisoformat(str(row["date"])[:10]),
+                                shown=str(row.get("counterparty") or "").strip(), card=str(row.get("card_id") or "")))
         cursor = cast(str | None, page.get("next"))
         if not cursor:
             break
@@ -1922,7 +1923,8 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
 
 def watch_findings(c: sqlite3.Connection, viewer: str, at: str) -> list[dict[str, Any]]:
     """Every Watch check's findings now: runway, unusual spend per payee over the last four months, and the posted
-    debits read for duplicate charges and price increases. Every read goes through the viewer's view."""
+    debits read for duplicate charges, price increases and unused subscriptions (the cards an archived or idle bot holds
+    come from the hub's bot facts). Every read goes through the viewer's view."""
     today = date.fromisoformat(at[:10])
     found: list[dict[str, Any]] = []
     figures: Row = {}
@@ -1949,6 +1951,7 @@ def watch_findings(c: sqlite3.Connection, viewer: str, at: str) -> list[dict[str
     found += W.unusual_spend(series, months[-1][0])
     charges = _charges(c, viewer, at)
     found += W.duplicate_charges(charges) + W.price_increases(charges)
+    found += W.unused_subscriptions(charges, ST.idle_bot_cards(c, at, W.UNUSED_IDLE_DAYS), today)
     return found
 
 

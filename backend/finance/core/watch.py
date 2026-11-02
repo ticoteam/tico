@@ -3,7 +3,8 @@ metric. No I/O: the caller reads the books through the viewer's slice and passes
 
 Each check returns findings: {"kind", "key" (stable across runs), "label" (what a person reads), "stamp" (its facts;
 a change in them is news)}. A check that cannot tell (no burn, too little history) finds nothing. Unused subscriptions
-are not here: posted data holds no usage signal to judge one by."""
+also take the facts of each card's bot (spec 11): the caller reads which cards an idle or archived bot holds and passes
+them in, so this stays pure."""
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -17,6 +18,8 @@ HISTORY = 3                # months before the month judged; a series is HISTORY
 DUPLICATE_DAYS = 3         # two charges of one amount to one payee this close together may be a duplicate
 PRICE_RISE_PERCENT = 10     # a recurring charge that rises by this many percent ...
 PRICE_MIN = 1_000          # ... and by at least this much ($10) is a price increase
+UNUSED_MONTHS = 3          # an unused subscription: a monthly charge seen this many months running ...
+UNUSED_IDLE_DAYS = 30      # ... on a card whose bot is archived or ran no turn in this many days
 
 
 @dataclass(frozen=True)
@@ -26,6 +29,7 @@ class Charge:
     amount: int             # cents, a positive charge
     day: date
     shown: str = ""         # the counterparty as the bank names it: what a label says
+    card: str = ""          # the card it was charged to ("" when it was not a card charge)
 
 
 def _money(cents: int) -> str:
@@ -90,3 +94,37 @@ def price_increases(charges: Sequence[Charge]) -> list[dict[str, Any]]:
                           "stamp": {"amount": last.amount},
                           "label": f"{last.shown or payee}: {_money(last.amount)} now, {_money(before.amount)} before"})
     return found
+
+
+def unused_subscriptions(charges: Sequence[Charge], idle_cards: Mapping[str, str], today: date) -> list[dict[str, Any]]:
+    """A monthly charge: one to the same payee on the same card in each of UNUSED_MONTHS calendar months, counted from
+    the months before today's (so an open month is not judged). Only a card in idle_cards is judged: card id -> the slug
+    of its bot, which is archived or has run no turn in UNUSED_IDLE_DAYS (the caller reads those facts). Amounts may
+    differ month to month."""
+    months = _months_before(today, UNUSED_MONTHS)
+    seen: dict[tuple[str, str], dict[str, Charge]] = {}
+    for ch in charges:
+        if ch.card in idle_cards:
+            seen.setdefault((ch.card, ch.payee), {}).setdefault(ch.day.strftime("%Y-%m"), ch)
+    found: list[dict[str, Any]] = []
+    for (card, payee), by_month in sorted(seen.items()):
+        if all(month in by_month for month in months):
+            last = by_month[months[-1]]
+            found.append({"kind": "unused_subscription", "key": f"unused_subscription:{card}:{payee}",
+                          "stamp": {"months": UNUSED_MONTHS},
+                          "label": f"{last.shown or payee}: {_money(last.amount)} a month on the card of "
+                                   f"{idle_cards[card]}, a bot that is archived or ran no turns in "
+                                   f"{UNUSED_IDLE_DAYS} days"})
+    return found
+
+
+def _months_before(today: date, n: int) -> list[str]:
+    """The n calendar months before today's, as YYYY-MM, oldest first."""
+    year, month = today.year, today.month
+    out: list[str] = []
+    for _ in range(n):
+        month -= 1
+        if month == 0:
+            month, year = 12, year - 1
+        out.append(f"{year:04d}-{month:02d}")
+    return list(reversed(out))

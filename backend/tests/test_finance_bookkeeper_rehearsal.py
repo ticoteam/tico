@@ -181,11 +181,18 @@ def test_c3_a_reminder_action_exists(environment):
     assert "invoice_remind" in _kinds(api, _token(api))
 
 
-@pytest.mark.xfail(strict=True, reason="GAP: spec 11 Watch lists unused subscriptions; docs/bookkeeper.md says they "
-                   "are not watched")
 def test_c3_watch_covers_unused_subscriptions(environment):
-    text = (Path(BK.__file__).read_text() + (TEMPLATE / "playbooks" / "books-watch.md").read_text()).lower()
-    assert "unused" in text
+    """Spec 11: a monthly charge seen three months running on an idle bot's card is an unused subscription. The Books
+    watch lists it as its own kind (with a hint), and the Watch playbook names it."""
+    from datetime import date
+
+    from backend.finance.core import watch as W
+    monthly = [W.Charge(id=f"m{m}", payee="acme cloud", amount=4_900, day=date(2026, m, 5), card="card_a")
+               for m in (8, 9, 10)]
+    assert [f["kind"] for f in W.unused_subscriptions(monthly, {"card_a": "archived-bot"}, date(2026, 11, 1))] == [
+        "unused_subscription"]
+    assert "unused_subscription" in BK.WATCH_ORDER and "unused_subscription" in BK.WATCH_HINTS
+    assert "unused subscriptions" in (TEMPLATE / "playbooks" / "books-watch.md").read_text()
 
 
 # ----------------------------------------------------------------------------- check 4: instructions match the code

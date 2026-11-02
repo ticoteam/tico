@@ -1,9 +1,11 @@
-"""Watch checks (spec §11) as pure functions in finance core: runway, unusual spend, duplicate charges and price
-increases, each silent when there is nothing to say. Plain values only, no fixtures."""
+"""Watch checks (spec §11) as pure functions in finance core: runway, unusual spend, duplicate charges, price increases
+and unused subscriptions, each silent when there is nothing to say. Plain values only, except the one test that reads a
+card's bot facts from the hub store."""
 from datetime import date
 
 from backend.finance import reads as FR
 from backend.finance.core import watch as W
+from backend.finance.store import tico as ST
 from backend.tests.test_finance_fixtures import OWNER, act, books, finance_template, store  # noqa: F401
 
 
@@ -60,3 +62,32 @@ def test_a_rise_of_exactly_ten_percent_is_a_price_increase_and_a_cent_less_is_no
     short = [charge("1", "cloudco", 100_000, "2026-08-01"), charge("2", "cloudco", 100_000, "2026-09-01"),
              charge("3", "cloudco", 109_999, "2026-10-01")]
     assert W.price_increases(short) == []
+
+
+def test_a_monthly_charge_on_an_idle_bots_card_for_three_months_is_an_unused_subscription():
+    def on(i: str, day: str) -> W.Charge:
+        return W.Charge(id=i, payee="acme cloud", amount=4_900, day=date.fromisoformat(day), shown="ACME CLOUD",
+                        card="card_a")
+    months = [on("8", "2026-08-05"), on("9", "2026-09-05"), on("10", "2026-10-05")]
+    idle = {"card_a": "archived-bot"}
+    found = W.unused_subscriptions(months, idle, date(2026, 11, 1))
+    assert [f["key"] for f in found] == ["unused_subscription:card_a:acme cloud"]
+    assert found[0]["label"].startswith("ACME CLOUD: 49.00 a month on the card of archived-bot")
+    assert W.unused_subscriptions(months[:2], idle, date(2026, 11, 1)) == []           # two months is not three
+    assert W.unused_subscriptions([months[0], months[2]], idle, date(2026, 11, 1)) == []  # a gap month
+    assert W.unused_subscriptions(months, {}, date(2026, 11, 1)) == []                 # the bot is not idle
+    assert W.unused_subscriptions(months, idle, date(2026, 10, 15)) == []              # October is still open
+
+
+def test_a_card_held_by_an_archived_bot_or_one_with_no_turn_in_thirty_days_is_idle(books):  # noqa: F811
+    at = "2026-11-01T00:00:00.000000Z"
+    with books.transaction() as c:
+        c.execute("INSERT INTO bots(slug, state, last_turn_at) VALUES('idle', 'active', '2026-09-20T09:00:00.000000Z')")
+        c.execute("INSERT INTO bots(slug, state) VALUES('never', 'active')")
+        c.execute("UPDATE bots SET state='archived' WHERE slug='coder'")
+        c.execute("UPDATE bots SET last_turn_at='2026-10-30T09:00:00.000000Z' WHERE slug='seller'")
+        for card, bot in (("card_coder", "coder"), ("card_seller", "seller"), ("card_idle", "idle"),
+                          ("card_never", "never")):
+            c.execute("INSERT INTO fin_cards(id, provider, holder, kind, currency, created_at, created_by) "
+                      "VALUES(?, 'mercury', ?, 'standing', 'USD', ?, ?)", (card, "bot:" + bot, at, OWNER))
+        assert ST.idle_bot_cards(c, at, 30) == {"card_coder": "coder", "card_idle": "idle", "card_never": "never"}
