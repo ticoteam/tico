@@ -158,12 +158,20 @@ def _clean(c, actor, value, limit, what, one_line=False):
 
 
 def _sections(raw):
-    """The stored shape, whatever was stored: every fixed key (a string) and `extra` ({key: {title, body}})."""
+    """The stored shape, whatever was stored: every fixed key (a string) and `extra` ({key: {title, body}}). An extra
+    section stored under a key that later became a fixed one (`proof`, `now`) reads as `<key>-2` (or the next unused
+    number), its title and body kept, so the owner can still edit or remove it."""
     raw = raw if isinstance(raw, dict) else {}
     out = {k: str(raw.get(k) or "") for k in FIXED_KEYS}
     extra = raw.get("extra") if isinstance(raw.get("extra"), dict) else {}
-    out["extra"] = {k: {"title": str((v or {}).get("title") or k), "body": str((v or {}).get("body") or "")}
-                    for k, v in extra.items() if isinstance(v, dict)}
+    out["extra"] = {}
+    for k, v in extra.items():
+        if not isinstance(v, dict):
+            continue
+        key, n = k, 2
+        while key in FIXED_KEYS or key in out["extra"] or (key != k and key in extra):
+            key, n = f"{k}-{n}", n + 1
+        out["extra"][key] = {"title": str(v.get("title") or k), "body": str(v.get("body") or "")}
     return out
 
 
@@ -228,18 +236,21 @@ def versions(c, limit=VERSIONS_PAGE):
 def proof_since(c):
     """When the published "How we know they want it" last changed: the publish time of the oldest version in the newest
     run of versions with the same text. None before the first publish, or while the published one is empty."""
-    since, text = None, None
-    for sections, at in c.execute("SELECT sections, published_at FROM strategy_versions WHERE status='published' "
-                                  "ORDER BY n DESC LIMIT ?", (VERSIONS_PAGE,)):
-        proof = _sections(loads(sections, {}))["proof"].strip()
-        if text is None:
-            if not proof:
-                return None
-            text = proof
-        elif proof != text:
-            break
-        since = at
-    return since
+    since, text, below = None, None, None
+    while True:                                  # newest first, a page at a time, until the text differs
+        rows = c.execute("SELECT n, sections, published_at FROM strategy_versions WHERE status='published' "
+                         "AND (? IS NULL OR n < ?) ORDER BY n DESC LIMIT ?", (below, below, VERSIONS_PAGE)).fetchall()
+        for n, sections, at in rows:
+            proof = _sections(loads(sections, {}))["proof"].strip()
+            if text is None:
+                if not proof:
+                    return None
+                text = proof
+            elif proof != text:
+                return since
+            since, below = at, n
+        if len(rows) < VERSIONS_PAGE:
+            return since
 
 
 def _bet(row):

@@ -425,17 +425,18 @@ function strategySectionList(version) {
 function strategySectionsHtml(view) {
   const owner = view.owner;
   const rows = strategySectionList(view.version).map(sec => {
-    const editing = owner && STRAT?.editSection === sec.key;
+    // Which editor is open: a fixed section and an extra one may share a key, so the two are told apart.
+    const ed = (sec.extra ? 'x:' : 'f:') + sec.key, editing = owner && STRAT?.editSection === ed;
     if (!owner && !stratText(sec.text)) return '';
     const id = 'x-' + sec.key;
     const body = editing
-      ? `<form class="strat-sec-form" data-section-form="${esc(sec.key)}"${sec.extra ? ' data-extra' : ''} novalidate>
+      ? `<form class="strat-sec-form" data-section-form="${esc(sec.key)}" data-section-ed="${esc(ed)}"${sec.extra ? ' data-extra' : ''} novalidate>
           ${sec.extra ? `<input type="text" name="title" maxlength="80" autocomplete="off" value="${esc(sec.title)}" aria-label="Title" placeholder="Title">` : ''}
           <textarea name="text" rows="8" aria-label="${esc(sec.title)}" placeholder="${esc(sec.prompt)}">${esc(sec.text)}</textarea>
           <div class="goal-actions"><button class="primary" type="submit">Save</button><button class="ghost" type="button" data-section-cancel>Cancel</button>
             ${sec.extra ? '<span class="spacer"></span><button class="ghost danger" type="button" data-section-remove>Remove</button>' : ''}</div></form>`
       : stratText(sec.text) ? `<div class="md strat-md">${safeMd(sec.text)}</div>` : '<p class="muted strat-empty">Not written</p>';
-    return `<section class="card strat-card strat-sec" id="strat-sec-${esc(sec.extra ? id : sec.key)}" data-section="${esc(sec.key)}"${sec.extra ? ' data-extra' : ''}>
+    return `<section class="card strat-card strat-sec" id="strat-sec-${esc(sec.extra ? id : sec.key)}" data-section="${esc(sec.key)}" data-section-ed="${esc(ed)}"${sec.extra ? ' data-extra' : ''}>
         <div class="strat-sec-head"><h2 class="strat-k">${esc(sec.title)}</h2>${owner && !editing ? `<button class="ghost strat-mini" type="button" data-section-edit>${stratText(sec.text) ? 'Edit' : 'Write'}</button>` : ''}</div>
         ${body}</section>`;
   }).join('');
@@ -585,7 +586,7 @@ function strategyBind() {
   // The sections, one at a time: Save, or Cmd/Ctrl+Enter; Escape leaves it as it was.
   for (const sec of body.querySelectorAll('[data-section]')) {
     const b = sec.querySelector('[data-section-edit]');
-    if (b) b.onclick = () => { state.editSection = sec.dataset.section; state.addSection = false; strategyRender(); const t = $(`[data-section-form="${CSS.escape(sec.dataset.section)}"] textarea`); if (t) { stratAutosize(t); t.focus(); } };
+    if (b) b.onclick = () => { state.editSection = sec.dataset.sectionEd; state.addSection = false; strategyRender(); const t = $(`form[data-section-ed="${CSS.escape(sec.dataset.sectionEd)}"] textarea`); if (t) { stratAutosize(t); t.focus(); } };
   }
   const addSec = body.querySelector('[data-section-add]');
   if (addSec) addSec.onclick = () => { state.addSection = true; state.editSection = ''; strategyRender(); $('[data-section-new] input')?.focus(); };

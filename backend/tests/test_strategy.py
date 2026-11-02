@@ -166,6 +166,44 @@ def test_proof_since_is_when_the_published_proof_last_changed_and_every_reader_s
     assert get(api, "strategy", token="cara-test")["proof_since"] == fourth["published_at"] != second["published_at"]
 
 
+def test_an_extra_section_stored_as_proof_or_now_before_they_were_fixed_reads_under_a_new_key_and_stays_editable(api):
+    old = {"not": "No enterprise deals.", "extra": {"proof": {"title": "Proof", "body": "Ten pilots."},
+                                                    "now": {"title": "Now", "body": "Rates fell."},
+                                                    "now-2": {"title": "Later", "body": "A second office."}}}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE strategy_versions SET sections=? WHERE status='draft'", (json.dumps(old),))
+    sections = draft(api)["sections"]
+    assert sections["proof"] == sections["now"] == ""
+    assert sections["extra"] == {"proof-2": {"title": "Proof", "body": "Ten pilots."},
+                                 "now-3": {"title": "Now", "body": "Rates fell."},
+                                 "now-2": {"title": "Later", "body": "A second office."}}
+    # The owner edits one and removes another; the fixed sections are untouched.
+    write(api, sections={"extra": {"proof-2": {"title": "Pilots", "body": "Twelve pilots."}, "now-3": ""}})
+    write(api, sections={"proof": "Forty landlords book weekly."})
+    sections = draft(api)["sections"]
+    assert sections["proof"] == "Forty landlords book weekly." and sections["now"] == ""
+    assert sections["extra"] == {"proof-2": {"title": "Pilots", "body": "Twelve pilots."},
+                                 "now-2": {"title": "Later", "body": "A second office."}}
+    add_bet(api)
+    assert set(publish(api)["sections"]["extra"]) == {"proof-2", "now-2"}
+
+
+def test_proof_since_reaches_past_a_hundred_versions_with_the_same_proof(api):
+    ready(api)
+    write(api, sections={"proof": "Thirty landlords book weekly."})
+    publish(api)
+    write(api, sections={"proof": "Forty landlords book weekly."})
+    changed = publish(api, "New proof")
+    with api.app.state.store.transaction() as c:
+        cols = [r[1] for r in c.execute("PRAGMA table_info(strategy_versions)")]
+        row = dict(zip(cols, c.execute("SELECT * FROM strategy_versions WHERE n=2").fetchone()))
+        for n in range(3, S.VERSIONS_PAGE + 30):       # more unchanged versions than one page holds
+            copy = {**row, "id": f"v-copy-{n}", "n": n, "published_at": f"2099-01-01T00:{n // 60:02d}:{n % 60:02d}Z"}
+            c.execute(f"INSERT INTO strategy_versions ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
+                      [copy[k] for k in cols])
+        assert S.proof_since(c) == changed["published_at"]
+
+
 def test_the_default_guide_asks_in_the_style_of_yc_and_every_answer_lands_in_a_section(api):
     questions = S.guide("default")["questions"]
     keys = [q["key"] for q in questions]
