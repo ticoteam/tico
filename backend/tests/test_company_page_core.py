@@ -477,13 +477,13 @@ def test_a_private_stat_the_public_page_shows_only_coarsely_is_still_held(store)
         assert held_labels(ST.project(c, "investors", "2026-10-15")) == {"Revenue"}
 
 
-def _private_payroll(c, amount):
+def _private_payroll(c, amount, day="2026-09-10"):
     """Payroll, a private line, the only expense posted: total spend is Payroll and nothing else."""
     made = act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
                                             "parent_id": account(c, "6000")})
     pay = str(made.result["account_id"])
     assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"}).status == "committed"
-    spend(c, "6200", amount, day="2026-09-10")
+    spend(c, "6200", amount, day=day)
     return pay
 
 
@@ -522,6 +522,19 @@ def test_a_total_is_held_when_one_month_is_only_a_private_account_though_the_win
         result = ST.project(c, "investors", "2026-10-15")
     assert held_labels(result) == {"Spend"} and "only active line under total spend" in result["held"][0]["reason"]
     assert "10,000" not in json.dumps(result)
+
+
+def test_a_quarterly_total_is_held_when_its_only_active_account_is_private_in_an_older_quarter(books):
+    """Payroll is the only spend in Q4 2024 and nothing is posted in the last year. A quarterly total shows that quarter,
+    so the check reads the two years the quarters read: over the last year alone Payroll looks inactive, and its exact
+    quarter would be shown."""
+    setup(books, ("pnl_line", "", {"mode": "show", "rounding": "quarterly"}))
+    with books.transaction() as c:
+        _private_payroll(c, 10_400_00, day="2024-11-10")
+        ST.create_stat(c, OWNER, "finance_metric", "spend")
+        result = ST.project(c, "investors", "2026-10-15")
+    assert held_labels(result) == {"Spend"} and "only active line under total spend" in result["held"][0]["reason"]
+    assert "10400" not in json.dumps(result) and "10,400" not in json.dumps(result)
 
 
 def test_a_shown_total_is_held_when_the_books_cannot_be_read(books):

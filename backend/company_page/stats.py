@@ -261,9 +261,10 @@ class _Books:
                                        for r in found["rows"]}}
         return self._pnl[key]
 
-    def active_accounts(self):
-        """P&L accounts with anything posted in the window: a part with nothing in it hides nothing."""
-        read = self._read_pnl("accrual", FINANCE_MONTHS)
+    def active_accounts(self, quarterly=False):
+        """P&L accounts with anything posted in the window a total is shown over: the year for months, two years for
+        quarters. A part with nothing in it hides nothing."""
+        read = self._read_pnl("accrual", QUARTERLY_MONTHS if quarterly else FINANCE_MONTHS)
         return {a for a, (actual, _) in read["rows"].items() if any(actual)}
 
     def active_by_period(self, quarterly):
@@ -517,19 +518,27 @@ class _Check:
         from ..finance import reads as FR
         accounts = self.books.accounts
         try:
-            active = self.books.active_accounts()
+            active = {quarterly: self.books.active_accounts(quarterly) for quarterly in (False, True)}
         except self.books._errors():
             self.hold(lines + totals, "The books couldn't be read to check what these lines reveal.")
             return
-        income = {a for a in active if accounts[a].type == "income"}
-        expense = {a for a in active if accounts[a].type == "expense"}
+
+        def pool(total, members):
+            """The members posted in the window the shown stats for the total and its lines disclose: two years when any of
+            them is quarterly, else the year. An account outside that window isn't one the figures can be built from."""
+            members = set(members)
+            keys = [total] + ["line:" + a for a in members]
+            quarterly = any(D.parse_rounding(r["rounding"]).quarterly for k in keys for _, _, r in self.shown.get(k, []))
+            return members & active[quarterly]
+
+        income = {a for a in accounts if accounts[a].type == "income"}
+        expense = {a for a in accounts if accounts[a].type == "expense"}
         cost = {a for a in expense if FR.pnl_section_of(accounts, a) == "cost_of_revenue"}
-        self._sum("revenue", income, "revenue")
-        self._sum("spend", expense, "total spend")
-        self._sum("cost_of_revenue", cost, "cost of revenue")
+        self._sum("revenue", pool("revenue", income), "revenue")
+        self._sum("spend", pool("spend", expense), "total spend")
+        self._sum("cost_of_revenue", pool("cost_of_revenue", cost), "cost of revenue")
         for q in lines:
-            under = FR.descendant_ids(accounts, q[5:]) & active
-            self._sum(q, under, "that line")
+            self._sum(q, pool(q, FR.descendant_ids(accounts, q[5:])), "that line")
 
     def run(self):
         self.same_number()
