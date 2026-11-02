@@ -160,7 +160,7 @@ def _claimed(books: Any, vault: object) -> str:
 def test_a_consent_for_a_company_already_connected_repairs_that_connection(books, monkeypatch):
     vault = T._VAULT[0]
     other = {**tokens("acc-4", "ref-4"), "realm_id": "456"}
-    hq = HQ(claim=[tokens("acc-1", "ref-1"), tokens("acc-3", "ref-3"), other, other])
+    hq = HQ(claim=[tokens("acc-1", "ref-1"), tokens("acc-3", "ref-3"), other, other], disconnect=[{"ok": True}])
     monkeypatch.setattr(books_link, "_call", hq)
     first = _claimed(books, vault)
     assert _claimed(books, vault) == first                                  # the same realm: the same connection
@@ -776,3 +776,43 @@ def test_disconnecting_takes_the_connections_trigger_with_it(books, monkeypatch)
     books_link.drop(books, vault, LINK, cid, by=OWNER)
     with books.read() as c:
         assert c.execute("SELECT deleted_at IS NOT NULL FROM triggers WHERE id=?", (cid,)).fetchone()[0] == 1
+
+
+def test_a_xero_consent_for_a_company_on_quickbooks_is_refused_and_HQ_takes_its_grant_off(books, monkeypatch):
+    vault = T._VAULT[0]
+    monkeypatch.setattr(books_link, "_call", HQ(claim=[tokens("acc-1", "ref-1")]))
+    _claimed(books, vault)
+    hq = HQ(claim=[xero_tokens("acc-x", "ref-x")], disconnect=[{"ok": True, "disconnected": True}])
+    monkeypatch.setattr(books_link, "_call", hq)
+    with pytest.raises(books_link.AlreadyConnected):
+        _claimed_xero(books, vault)
+    assert hq.calls[-1] == ("oauth/xero/disconnect", {"company_id": COMPANY, "refresh_token": "ref-x",
+                                                     "access_token": "acc-x"})
+    with books.read() as c:
+        assert [tuple(r) for r in c.execute("SELECT provider, purpose FROM fin_connections")] == [("quickbooks", "books")]
+
+
+def test_a_refused_second_connection_is_still_refused_when_HQ_cannot_take_its_grant_off(books, monkeypatch):
+    vault = T._VAULT[0]
+    monkeypatch.setattr(books_link, "_call", HQ(claim=[tokens("acc-1", "ref-1")]))
+    _claimed(books, vault)
+    monkeypatch.setattr(books_link, "_call", HQ(claim=[xero_tokens("acc-x", "ref-x")],
+                                                disconnect=[books_link.BrokerFailed("revoke_failed")]))
+    with pytest.raises(books_link.AlreadyConnected):
+        _claimed_xero(books, vault)
+    with books.read() as c:
+        assert [tuple(r) for r in c.execute("SELECT provider, purpose FROM fin_connections")] == [("quickbooks", "books")]
+
+
+def test_a_disconnected_quickbooks_connection_does_not_stop_xero_connecting_the_same_company(books, monkeypatch):
+    vault = T._VAULT[0]
+    monkeypatch.setattr(books_link, "_call", HQ(claim=[tokens("acc-1", "ref-1")], disconnect=[{"ok": True}]))
+    qb = _claimed(books, vault)
+    with books.transaction() as c:
+        SX.disconnect(c, qb, AT)
+    monkeypatch.setattr(books_link, "_call", HQ(claim=[xero_tokens("acc-x", "ref-x")]))
+    made = _claimed_xero(books, vault)
+    with books.read() as c:
+        assert made != qb
+        assert tuple(c.execute("SELECT provider, status FROM fin_connections WHERE id=?", (made,)).fetchone()) == (
+            "xero", "active")

@@ -347,18 +347,29 @@ def _same_account(c: Any, provider: str, tokens: Tokens) -> str | None:
 
 
 def _other_book(c: Any, provider: str, *, company_id: str, tokens: Tokens) -> bool:
-    """Whether the company already has a books connection of this provider for another QuickBooks company or Xero
-    organisation. A company connects one (spec 3.4), so a consent for a second one makes no connection."""
+    """Whether the company already has a books connection, not disconnected, that is not this one: another QuickBooks
+    company or Xero organisation of this provider, or a connection of the other provider. A company connects one books
+    connection across both providers (spec 3.4), so a consent for a second one makes no connection."""
     quickbooks = provider == "quickbooks"
     key = tokens.realm_id if quickbooks else tokens.tenant_id
-    if not key:
-        return False
-    for cid, _, _ in SX.books_connections(c, provider):
-        books = SX.books_settings(c, cid)
-        held = str(books.get("realm_id" if quickbooks else "tenant_id") or "")
-        if str(books.get("company_id") or "") == company_id and held and held != key:
+    for cid, held_provider, company in SX.books_connections(c):
+        if company != company_id:
+            continue
+        if held_provider != provider:
+            return True
+        held = str(SX.books_settings(c, cid).get("realm_id" if quickbooks else "tenant_id") or "")
+        if key and held and held != key:
             return True
     return False
+
+
+def _revoke_refused(link: Link, provider: str, company_id: str, tokens: Tokens) -> None:
+    """HQ holds the grant for a consent this install refuses, so it is taken off again, best effort. Nothing of the pair is
+    stored here, and a failure leaves nothing to keep: the refusal stands either way."""
+    try:
+        revoke(link, provider, company_id, tokens.refresh_token, tokens.access_token if provider == "xero" else "")
+    except BrokerFailed:
+        log.warning("Books: HQ did not take off a refused %s grant", provider)
 
 
 def connect_claim(store: Any, vault: object, link: Link, *, provider: str, company_id: str, claim_id: str,
@@ -375,7 +386,8 @@ def connect_claim(store: Any, vault: object, link: Link, *, provider: str, compa
     HQ may refuse the claim `already_connected`, because this install holds another organisation for the provider. Then
     nothing is made here, and a `replacement` for the held organisation is first kept for its connection
     (_replace_held). The connect ends as AlreadyConnected either way. So does a pair for a second QuickBooks company or
-    Xero organisation of a company that already has one (_other_book): nothing is made."""
+    Xero organisation of a company that already has one, or for a company whose connection is of the other provider
+    (_other_book): nothing is made, and HQ is asked to take the refused grant off (_revoke_refused)."""
     try:
         tokens = claim(link, provider, company_id, claim_id)
     except AlreadyConnected as refused:
@@ -383,16 +395,18 @@ def connect_claim(store: Any, vault: object, link: Link, *, provider: str, compa
             _replace_held(store, provider=provider, replacement=refused.replacement, by=by, now=now)
         raise
     with store.transaction() as c:
-        cid = _same_account(c, provider, tokens)
-        if cid is None and _other_book(c, provider, company_id=company_id, tokens=tokens):
-            raise AlreadyConnected(None)
-        if cid is None:
+        cid: str | None = _same_account(c, provider, tokens)
+        if cid is None and not _other_book(c, provider, company_id=company_id, tokens=tokens):
             cid = tico.new_id()
             SX.books_connection_insert(c, cid=cid, provider=provider, name=name, by=by, at=now)
             SX.set_books_settings(c, cid, {"provider": provider, "company_id": company_id,
                                           "realm_id": tokens.realm_id, "tenant_id": tokens.tenant_id})
-        _keep_trigger(c, cid, provider=provider, by=by, now=now)
-        SX.set_connection_status(c, cid, "reconnect", "vault_pending", now)
+        if cid is not None:
+            _keep_trigger(c, cid, provider=provider, by=by, now=now)
+            SX.set_connection_status(c, cid, "reconnect", "vault_pending", now)
+    if cid is None:
+        _revoke_refused(link, provider, company_id, tokens)      # outside the write: HQ is asked, nothing is stored
+        raise AlreadyConnected(None)
     with _lock(cid):
         _keep_claimed(store, cid, tokens, provider=provider, by=by, now=now)
     return cid
