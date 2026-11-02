@@ -342,6 +342,15 @@ def _pay_body(doc: str, amount: int) -> dict[str, Any]:
             "bank": "Account:acct-1000", "total": amount, "links": [[doc, amount]], "feed_id": "", "card": False}
 
 
+class _Gateway:
+    """HQ's answer to the books connection's relay request (`POST relays`). The pass is about Xero, so the relay is simply
+    granted here; the books-link tests cover asking for it."""
+
+    def call(self, method: str, path: str, body: Any = None, idempotency: Any = None, **_: Any) -> dict[str, Any]:
+        relay = "hr_0123456789abcdef"
+        return {"relay_id": relay, "address": f"https://hooks.tico.dev/{relay}"}
+
+
 def _pass_setup(books: Any, xbooks: XeroBooks, monkeypatch: Any, transport: Any = None) -> str:
     """A mirrored Xero connection whose books pass (books_sync.pass_once) runs the real adapter against the fake."""
     cid = _connection(books)
@@ -350,7 +359,7 @@ def _pass_setup(books: Any, xbooks: XeroBooks, monkeypatch: Any, transport: Any 
         SX.set_connection_status(c, cid, "active", "", AT)
     _mirror(books, cid)
     real = xero.Xero
-    monkeypatch.setattr("backend.hook_relay.link_of", lambda c, vault, settings: object())
+    monkeypatch.setattr("backend.hook_relay.link_of", lambda c, vault, settings: _Gateway())
     monkeypatch.setattr(books_link, "access_token", lambda *a, **k: "token-1")
     monkeypatch.setattr(xero, "Xero", lambda tenant, tokens, **kw: real(
         tenant, tokens, base=BASE, transport=transport or xbooks, sleep=lambda s: None, **kw))
