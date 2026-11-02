@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import urllib.parse
 import uuid
 
@@ -332,6 +333,63 @@ def test_relayed_quickbooks_events_are_kept_for_the_realm_the_connection_holds(b
         assert books_sync.delivery(c, "intuit", _envelope(
             external_id="evt-legacy", payload={"eventNotifications": [{"realmId": "123"}]})) == "kept"
         assert books_sync.delivery(c, "intuit", _envelope(external_id="evt-junk", payload={"events": []})) == "refused"
+
+
+CLOUD = {"specversion": "1.0", "id": "e-1", "source": "//intuit.com/qbo", "type": "qbo.bill.created.v1",
+         "time": "2026-10-15T12:30:00Z", "intuitentityid": "9", "intuitaccountid": "123", "data": {}}
+LEGACY = {"eventNotifications": [{"realmId": "123", "dataChangeEvent": {"entities": []}}]}
+
+
+def _realm_123(books) -> None:
+    _books_connection(books)
+    with books.transaction() as c:
+        SX.set_books_settings(c, "conn-qb", {"realm_id": "123"})
+
+
+def test_a_relayed_quickbooks_event_in_any_known_shape_is_kept_and_wakes_the_worker_once_each(books, monkeypatch):
+    _realm_123(books)
+    rung: list[int] = []
+    monkeypatch.setattr(books_sync, "ring", lambda: rung.append(1))
+    for name, payload in (("legacy", LEGACY), ("cloudevent", CLOUD), ("batch", [CLOUD, {**CLOUD, "id": "e-2"}])):
+        with books.transaction() as c:
+            assert books_sync.delivery(c, "intuit", _envelope(external_id=f"evt-{name}", payload=payload)) == "kept"
+    assert len(rung) == 3
+
+
+def test_a_relayed_quickbooks_event_naming_another_realm_is_refused_in_either_shape(books, monkeypatch):
+    _realm_123(books)
+    rung: list[int] = []
+    monkeypatch.setattr(books_sync, "ring", lambda: rung.append(1))
+    other = {**CLOUD, "intuitaccountid": "999"}
+    with books.transaction() as c:
+        assert books_sync.delivery(c, "intuit", _envelope(external_id="evt-o1", payload=other)) == "refused"
+        assert books_sync.delivery(c, "intuit", _envelope(external_id="evt-o2", payload=[CLOUD, other])) == "refused"
+        assert books_sync.delivery(c, "intuit", _envelope(external_id="evt-o3", payload=LEGACY)) == "kept"   # its own realm
+    assert rung == [1]
+
+
+@pytest.mark.parametrize("payload", [{"events": []}, [], [{"id": "no-specversion"}], "text", {"eventNotifications": "x"},
+                                     {"specversion": 1}, {"unrelated": {"specversion": "1.0"}}])
+def test_a_relayed_quickbooks_payload_in_no_known_shape_is_refused_logged_and_wakes_nothing(books, monkeypatch, caplog,
+                                                                                            payload):
+    _realm_123(books)
+    rung: list[int] = []
+    monkeypatch.setattr(books_sync, "ring", lambda: rung.append(1))
+    with caplog.at_level(logging.WARNING, logger="backend.finance.books_sync"):
+        with books.transaction() as c:
+            assert books_sync.delivery(c, "intuit", _envelope(external_id="evt-x", payload=payload)) == "refused"
+    assert rung == []
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_inbox").fetchone()[0] == 0
+    assert any("in no shape this reads" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize("payload", [LEGACY, CLOUD, [CLOUD]])
+def test_the_intuit_signature_of_either_shape_is_checked_over_the_raw_body(payload):
+    body = json.dumps(payload).encode()
+    assert P.verify("intuit", {"intuit-signature": _sign("verifier", body)}, body, "verifier", 0) == (True, "")
+    assert P.verify("intuit", {"intuit-signature": _sign("other", body)}, body, "verifier", 0)[0] is False
+    assert P.verify("intuit", {"intuit-signature": _sign("verifier", body)}, body + b" ", "verifier", 0)[0] is False
 
 
 def test_documents_and_settlements_map_to_mirror_records_with_their_accounts_and_links():

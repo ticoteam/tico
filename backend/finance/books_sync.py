@@ -4,12 +4,11 @@ The worker runs the mirror's pass for this install's books connection, outside a
 no provider: the writes it would send are withheld and stay visible in the outbox (a rehearsal copy never pays)."""
 import logging
 import threading
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .gateway_sync import Bell
 from .core import mirror as M
-from .core import qbo as Q
 from .store import banking as SK
 from .store import ledger as SL
 from .store import mirror as SX
@@ -31,48 +30,75 @@ def ring() -> None:
     BELL.ring()
 
 
-def _shaped(provider: str, payload: object) -> bool:
-    """Whether a relayed payload is one HQ sends for the provider: QuickBooks sends eventNotifications (legacy) or
-    cloudEvents, Xero sends events."""
-    found = Q.as_map(payload)
-    if found is None:
-        return False
-    if provider == "quickbooks":
-        return isinstance(found.get("eventNotifications"), list) or isinstance(found.get("cloudEvents"), list)
-    return isinstance(found.get("events"), list)
+def _maps(values: list[Any]) -> list[dict[str, Any]]:
+    return [v for v in values if isinstance(v, dict)]
 
 
-def _realms(payload: Mapping[str, Any]) -> set[str]:
-    """The QuickBooks companies (realms) a payload's events name: a legacy notification's realmId, a CloudEvent's
-    intuitaccountid."""
+def _cloud(event: Mapping[str, Any]) -> bool:
+    """A CloudEvents event: the spec makes its specversion a string."""
+    return isinstance(event.get("specversion"), str)
+
+
+def _events(provider: str, payload: object) -> list[dict[str, Any]] | None:
+    """The events a relayed payload holds, in a shape HQ relays for the provider; None when it is in none this reads (the
+    delivery is refused and nothing is woken). QuickBooks sends a legacy notification object (eventNotifications), one
+    CloudEvents event (an object with a specversion), a CloudEvents batch (a JSON array of them), or a cloudEvents list.
+    Xero sends an events list."""
+    if provider != "quickbooks":
+        found: dict[str, Any] = payload if isinstance(payload, dict) else {}
+        return _maps(found["events"]) if isinstance(found.get("events"), list) else None
+    if isinstance(payload, list):
+        events = _maps(payload)
+        return events if events and len(events) == len(payload) and all(_cloud(e) for e in events) else None
+    if not isinstance(payload, dict):
+        return None
+    if isinstance(payload.get("eventNotifications"), list):
+        return _maps(payload["eventNotifications"])
+    if isinstance(payload.get("cloudEvents"), list):
+        return _maps(payload["cloudEvents"])
+    return [payload] if _cloud(payload) else None
+
+
+def _realms(events: Sequence[Mapping[str, Any]]) -> set[str]:
+    """The QuickBooks companies (realms) the events name: a legacy notification's realmId, a CloudEvent's intuitaccountid."""
     out: set[str] = set()
-    for note in Q.as_list(payload.get("eventNotifications")):
-        found = Q.as_map(note)
-        if found is not None and found.get("realmId"):
-            out.add(str(found["realmId"]))
-    for event in Q.as_list(payload.get("cloudEvents")):
-        found = Q.as_map(event)
-        if found is not None and found.get("intuitaccountid"):
-            out.add(str(found["intuitaccountid"]))
+    for event in events:
+        realm = event.get("realmId") or event.get("intuitaccountid")
+        if realm:
+            out.add(str(realm))
     return out
+
+
+def _shape_of(payload: object) -> str:
+    """A payload's shape for a log line: its keys or length, never its contents."""
+    if isinstance(payload, dict):
+        return "an object with keys " + ", ".join(sorted(str(k) for k in payload)[:8])
+    if isinstance(payload, list):
+        return f"a list of {len(payload)}"
+    return type(payload).__name__
 
 
 def delivery(c: Any, preset: str, body: Mapping[str, object]) -> str:
     """A relayed accounting webhook (backend/triggers.py routes it here): kept once by event id, and the worker rung.
-    Refused when the envelope is not one HQ sends for this provider, the payload has no event list it knows, or it names
-    a company no books connection holds (or, for QuickBooks, a realm other than the connection's)."""
+    Refused when the envelope is not one HQ sends for this provider, the payload is in no shape this reads (logged, and
+    nothing is woken), or it names a company no books connection holds (or, for QuickBooks, a realm other than the
+    connection's). The worker reads the change feed, not the events, so the payload's detail is not kept here."""
     provider = PROVIDERS.get(preset, "")
     eid = str(body.get("external_id") or "")
     company = str(body.get("company_id") or "")
     payload = body.get("payload")
-    if (not provider or body.get("type") != ENVELOPE or body.get("provider") != provider or not eid or not company
-            or not _shaped(provider, payload)):
+    if not provider or body.get("type") != ENVELOPE or body.get("provider") != provider or not eid or not company:
+        return REFUSED
+    events = _events(provider, payload)
+    if events is None:
+        log.warning("A relayed %s delivery (%s) has a payload in no shape this reads (%s): refused, nothing woken",
+                    provider, eid[:80], _shape_of(payload))
         return REFUSED
     held = [cid for cid, _, co in SX.books_connections(c, provider) if co == company]
     if len(held) != 1:
         return REFUSED
     realm = str(SX.books_settings(c, held[0]).get("realm_id") or "")
-    if provider == "quickbooks" and realm and _realms(Q.as_map(payload) or {}) - {realm}:
+    if provider == "quickbooks" and realm and _realms(events) - {realm}:
         return REFUSED
     kept = SK.inbox_add(c, connection_id=held[0], provider=provider, event_id=eid, payload=body, at=tico.now())
     if kept:

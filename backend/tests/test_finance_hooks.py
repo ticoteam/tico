@@ -4,6 +4,8 @@ sources, and moving it off Mercury takes its bank payloads with it."""
 import json
 import time
 
+import pytest
+
 from backend.finance import actions as FA
 from backend.finance.core import feeds as F
 from backend.tests.test_api import api, headers, post  # noqa: F401
@@ -149,6 +151,23 @@ def test_a_quickbooks_call_relayed_over_the_gateway_is_kept_without_a_signature_
         # vault=None: the relayed call needs no signing secret here, so none is read.
         got = triggers.receive(c, "books-qb", _envelope(), {"content-type": "application/json"}, secret=None,
                                via="gateway", delivery_id="relay-1", vault=None)
+    assert got.outcome == "accepted"
+    assert _kept(api) == 1
+
+
+@pytest.mark.parametrize("shape", ["legacy", "cloudevent", "batch"])
+def test_a_relayed_quickbooks_call_in_either_shape_is_kept_over_the_gateway(api, shape):
+    """HQ relays a QuickBooks call as a legacy notification, as one CloudEvent, or as a batch of them: each is kept."""
+    from backend import triggers
+    event = {"specversion": "1.0", "id": "e-1", "type": "qbo.bill.created.v1", "intuitaccountid": "123", "data": {}}
+    payload = {"legacy": {"eventNotifications": [{"realmId": "123"}]}, "cloudevent": event, "batch": [event]}[shape]
+    _books_trigger(api)
+    body = json.dumps({"type": "tico.finance.webhook", "provider": "quickbooks", "company_id": "co_acme",
+                       "external_id": f"relay-{shape}", "payload": payload}).encode()
+    store = api.app.state.store
+    with store.transaction() as c:
+        got = triggers.receive(c, "books-qb", body, {"content-type": "application/json"}, secret=None, via="gateway",
+                               delivery_id=f"relay-{shape}", vault=None)
     assert got.outcome == "accepted"
     assert _kept(api) == 1
 
