@@ -16,7 +16,7 @@ evidence row: the owner's say-so on this page. Only the owner and the Librarian 
 (`market.require_writer`).
 """
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, timedelta
 from typing import Literal
 
 from fastapi import Request
@@ -41,7 +41,7 @@ def _evidence(c, actor):
 
 
 def _days():
-    today = datetime.now(timezone.utc).date()            # the market's days are UTC (market_spend._today)
+    today = date.fromisoformat(H.now()[:10])             # the hub clock (UTC): a demo build dates its rows by its own now
     return today.isoformat(), (today - timedelta(days=1)).isoformat()
 
 
