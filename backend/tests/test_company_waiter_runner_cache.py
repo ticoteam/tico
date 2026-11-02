@@ -27,4 +27,4 @@ def test_company_waiter_reads_a_computer_with_two_waits_once(api):
             assert api.app.state.execution.company_waiter(c, who, Claim(), row) is None
         finally:
             c.set_trace_callback(None)
-    assert sum("FROM runners WHERE id=" in s for s in statements) == 1, statements
+    assert sum("FROM runners_with_state WHERE id=" in s for s in statements) == 1, statements

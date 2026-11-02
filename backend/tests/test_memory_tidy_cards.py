@@ -19,7 +19,8 @@ def db():
     c.executescript(C.SCHEMA)
     c.execute("CREATE TABLE bots(id TEXT PRIMARY KEY, slug TEXT)")
     c.execute("INSERT INTO bots VALUES('ops','ops')")
-    c.executescript("CREATE TABLE assignments(bot TEXT,runner_id TEXT); CREATE TABLE runners(id TEXT,capabilities TEXT,revoked_at TEXT);")
+    c.executescript("CREATE TABLE assignments(bot TEXT,runner_id TEXT); CREATE TABLE runners(id TEXT,capabilities TEXT,revoked_at TEXT); "
+                    "CREATE VIEW runners_with_state AS SELECT * FROM runners;")
     yield c
     c.close()
 

@@ -63,7 +63,7 @@ def test_the_every_computer_key_is_a_shared_connection_on_every_computer(environ
     with api.app.state.store.transaction() as c:
         row = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (account["runner_id"],)).fetchone()
         assert '"authenticated": "missing"' in row[0] or '"authenticated":"missing"' in row[0]
-        c.execute("UPDATE runner_states SET readiness=replace(readiness, 'missing', 'ready') WHERE id=?",
+        c.execute("UPDATE runner_states SET readiness=replace(readiness, 'missing', 'ready') WHERE runner_id=?",
                   (account["runner_id"],))
     for machine in (ready, fresh):
         row = listed(api, machine)["shared_with"]["codex"]

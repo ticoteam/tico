@@ -197,7 +197,7 @@ def test_only_a_heartbeat_moves_readiness_at_so_the_page_can_tell_a_report_from_
     first = machine()["readiness_at"]
     assert first
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runner_states SET readiness_at='2000-01-01T00:00:00+00:00' WHERE id=?", (rid,))
+        c.execute("UPDATE runner_states SET readiness_at='2000-01-01T00:00:00+00:00' WHERE runner_id=?", (rid,))
     pending(api, r)  # other contact moves last_seen, never readiness_at
     assert machine()["readiness_at"] == "2000-01-01T00:00:00+00:00"
     beat(api, r["token"])
