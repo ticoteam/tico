@@ -1820,6 +1820,27 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.covered_history(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(78,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=79").fetchone():
+                    # Prepaid bill lines and the months they were expensed (backend/finance/prepaids.py). Idempotent like 77.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.prepaids(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(79,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=80").fetchone():
+                    # The money-out row a refund reverses (backend/finance/refunds.py). Idempotent like 79.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.refunds(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(80,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=81").fetchone():
+                    # Invoice reminders, one per invoice and stage (backend/finance/documents.py invoice_remind). Idempotent like 80.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.reminders(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(81,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=82").fetchone():
+                    # Invoice emails: the send approval and the Bookkeeper's delivery report (backend/finance/delivery.py).
+                    # Idempotent like 81.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.delivery(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(82,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the

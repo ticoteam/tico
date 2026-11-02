@@ -289,7 +289,7 @@ def test_a_feed_row_pays_bills_in_parts_and_together_and_never_posts_expense_twi
     with books.transaction() as c:
         vendor = _vendor(c)
         one = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 30_000}], number="B-1")
-        two = _bill(c, vendor, [{"account_id": account(c, "6000"), "amount": 20_000}], number="B-2")
+        two = _bill(c, vendor, [{"account_id": account(c, "6900"), "amount": 20_000}], number="B-2")
         three = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 12_345}], number="B-3")
         for b in (one, two, three):
             assert act(c, OWNER, "bill_approve", {"bill_id": b}).status == "committed"
@@ -305,9 +305,9 @@ def test_a_feed_row_pays_bills_in_parts_and_together_and_never_posts_expense_twi
         assert act(c, OWNER, "bill_mark_paid", {"bill_id": two, "feed_id": fid}).code == "invalid"   # used up
         assert act(c, OWNER, "bill_mark_paid", {"bill_id": two, "account_id": account(c, "1000"),
                                                 "amount": 10_001}).code == "invalid"                # overpaid
-        assert (_balance(c, "6100"), _balance(c, "6000"), _balance(c, "6900")) == (42_345, 20_000, 0)
+        assert (_balance(c, "6100"), _balance(c, "6900")) == (42_345, 20_000)
         assert _balance(c, "2000") == -10_000                                    # bill two's unpaid half
-        assert _pnl(c, "cash") == {"6100": 42_345, "6000": 10_000}
+        assert _pnl(c, "cash") == {"6100": 42_345, "6900": 10_000}
         # The bank cancels the combined row: what it paid is owed again, in the books and the cash view.
         _ingest(c, {**_txn("txn-both", -400.0, who="Acme Supplies Ltd"), "status": "cancelled"}, LATER)
         assert FR.bill(c, OWNER, one)["status"] == "open" and FR.bill(c, OWNER, two)["remaining"] == 20_000
@@ -315,11 +315,37 @@ def test_a_feed_row_pays_bills_in_parts_and_together_and_never_posts_expense_twi
         assert _balance(c, "2000") == -50_000
 
 
+def test_a_feed_row_that_could_pay_two_open_bills_never_posts_and_names_both_for_review(books):  # noqa: F811
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        one = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 12_345}], number="B-1")
+        two = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 12_345}], number="B-2")
+        for b in (one, two):
+            assert act(c, OWNER, "bill_approve", {"bill_id": b}).status == "committed"
+        fid = _ingest(c, _txn("txn-twin", -123.45))
+        # Either bill may be the one this row pays: nothing posts, so no second expense, and both bills stay open.
+        assert _balance(c, "6900") == 0
+        assert _balance(c, "6100") == 24_690
+        assert FR.bill(c, OWNER, one)["status"] == "open" and FR.bill(c, OWNER, two)["status"] == "open"
+        assert tuple(c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE id=?", (fid,)).fetchone()) == ("new", None)
+        [(raw,)] = c.execute("SELECT payload_json FROM fin_events WHERE name='finance.feed.needs_category' "
+                             "AND subject=?", (fid,)).fetchall()
+        assert sorted(json.loads(raw)["candidates"]) == sorted([one, two])
+        [listed] = [x for x in FR.inbox(c, OWNER, kind="uncategorized")["items"] if x["feed_id"] == fid]
+        assert sorted(x["id"] for x in listed["candidates"]) == sorted([one, two])
+        # Categorizing it by hand would expense it a second time, so it is refused until a bill takes it.
+        refused = act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100")})
+        assert refused.code == "conflict", refused
+        assert _balance(c, "6900") == 0
+
+
 def test_cash_and_accrual_agree_exactly_once_documents_are_paid_and_partials_recognize_what_was_paid(books):
     rng = random.Random(7)
     with books.transaction() as c:
         vendor = _vendor(c)
-        lines = [account(c, code) for code in ("6000", "6100", "5000")]
+        lines = [account(c, code) for code in ("6900", "6100")]
         paid_total = 0
         for n in range(12):
             parts = [{"account_id": rng.choice(lines), "amount": rng.randint(1, 99_999)} for _ in range(rng.randint(1, 4))]
@@ -1066,3 +1092,122 @@ def test_a_voided_document_reverses_on_its_own_date_and_a_closed_date_rolls_to_t
         assert act(c, OWNER, "bill_void", {"bill_id": august}).status == "committed"
         assert [r[0] for r in c.execute("SELECT entry_date FROM fin_entries WHERE memo LIKE 'Void bill %' AND "
                                         "entry_date>'2026-09-30' ORDER BY entry_date").fetchall()] == ["2026-10-15"]
+
+
+DEC_15 = "2026-12-15T12:00:00.000000Z"      # November and December have come
+YEAR_END = "2027-10-15T12:00:00.000000Z"    # a twelve-month prepaid starting in November 2026 has all come
+
+
+def test_a_prepaid_line_expenses_a_month_at_a_time_and_each_month_posts_once(books):
+    """A $1,800 prepaid over twelve months from November counts $150 of expense a month. It sits in prepaid expenses
+    until its months come due; each month posts once in its own month; cash waits for the bill's payment."""
+    with books.transaction() as c:
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 180_000,
+                                     "prepaid": {"start": "2026-11", "months": 12}}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        assert (_balance(c, "1150"), _balance(c, "6100"), _balance(c, "2000")) == (180_000, 0, -180_000)
+        assert FA.amortize_prepaids(c, DEC_15) == 2
+        assert FA.amortize_prepaids(c, DEC_15) == 0
+        assert _pnl(c, "accrual", "2026-11-01", "2026-11-30") == {"6100": 15_000}
+        assert _pnl(c, "cash", "2026-11-01", "2026-11-30") == {}
+        assert (_balance(c, "1150"), _balance(c, "6100")) == (150_000, 30_000)
+        assert FA.amortize_prepaids(c, YEAR_END) == 10
+        assert (_balance(c, "1150"), _balance(c, "6100")) == (0, 180_000)
+        assert act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "account_id": account(c, "1000")}).status == "committed"
+        assert _pnl(c, "cash", "2026-10-01", "2026-10-31") == {"6100": 180_000}     # the whole bill, as paid
+
+
+def test_a_month_not_run_is_expensed_later_in_its_own_month(books):
+    with books.transaction() as c:
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 30_000,
+                                     "prepaid": {"start": "2026-10", "months": 3}}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        assert FA.amortize_prepaids(c, AT) == 1
+        assert FA.amortize_prepaids(c, DEC_15) == 2
+        assert _pnl(c, "accrual", "2026-11-01", "2026-11-30") == {"6100": 10_000}
+        assert _pnl(c, "accrual", "2026-12-01", "2026-12-31") == {"6100": 10_000}
+        assert _balance(c, "1150") == 0
+
+
+def test_voiding_a_prepaid_bill_reverses_the_months_it_expensed(books):
+    with books.transaction() as c:
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 180_000,
+                                     "prepaid": {"start": "2026-10", "months": 12}}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        assert FA.amortize_prepaids(c, DEC_15) == 3
+        assert act(c, OWNER, "bill_void", {"bill_id": bid, "reason": "entered twice"}).status == "committed"
+        assert (_balance(c, "6100"), _balance(c, "1150"), _balance(c, "2000")) == (0, 0, 0)
+        assert FA.amortize_prepaids(c, YEAR_END) == 0
+
+
+def test_a_prepaid_line_is_an_expense_with_a_cent_a_month(books):
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 1_200,
+                           "prepaid": {"start": "2026-10", "months": 12}}])
+        for line in ({"account_id": account(c, "1000"), "amount": 1_200, "prepaid": {"start": "2026-10", "months": 12}},
+                     {"account_id": account(c, "6100"), "amount": 5, "prepaid": {"start": "2026-10", "months": 12}}):
+            got = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-10", "lines": [line]})
+            assert (got.status, got.code) == ("failed", "invalid"), got
+
+
+def test_a_bill_or_invoice_dated_in_a_closed_month_names_its_own_date_in_the_memo(books):
+    """Spec §4.1: a late document posts in the open period, and its entry names the document's own date, as a late
+    bank row does."""
+    with books.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+    with books.transaction() as c:
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 5_000}], day="2026-09-20")
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        customer = str(act(c, OWNER, "contact_create", {"name": "Globex", "kind": "customer"}).result["contact_id"])
+        made = act(c, OWNER, "invoice_create", {"customer_id": customer, "invoice_date": "2026-09-21",
+                                                 "lines": [{"account_id": account(c, "4000"), "amount": 7_000}]})
+        assert made.status == "committed", made
+        iid = str(made.result["invoice_id"])
+        assert act(c, OWNER, "invoice_send", {"invoice_id": iid}).status == "committed"
+        rows = {str(r[0]): (str(r[1]), str(r[2])) for r in c.execute(
+            "SELECT source_id, entry_date, memo FROM fin_entries WHERE source_id IN (?, ?)", (bid, iid))}
+        assert rows[bid][0] == AT[:10] and rows[bid][1].endswith("(dated 2026-09-20)"), rows
+        assert rows[iid][0] == AT[:10] and rows[iid][1].endswith("(dated 2026-09-21)"), rows
+
+
+def test_a_bill_line_cannot_post_to_a_bank_a_receivable_a_prepaid_balance_or_a_group_account(books):
+    """A bill's lines are expenses: a bank, receivable, prepaid or group account is refused, with the reason."""
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        for code in ("1000", "1100", "1200", "6000"):
+            got = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-10",
+                                                 "lines": [{"account_id": account(c, code), "amount": 5_000}]})
+            assert (got.status, got.code) == ("failed", "invalid"), (code, got)
+        _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 5_000}])
+
+
+def test_marked_paid_from_a_disconnected_checking_account_goes_through_clearing_and_waits_for_no_bank_row(books):
+    """Spec §4.2: marked paid with no connected account, a document goes through the clearing account the feed never
+    touches. A disconnected account keeps its connection id, so it must not wait for a bank row that will not come."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        cid = str(c.execute("SELECT id FROM fin_connections").fetchone()[0])
+        assert act(c, OWNER, "connection_disconnect", {"connection_id": cid}).status == "committed"
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 5_000}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        done = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "money_account_id": _checking(c)})
+        assert done.status == "committed" and done.result["from"] == "account", done
+        assert _balance(c, "1050") == -5_000
+
+
+def test_marked_paid_from_a_checking_account_never_connected_goes_through_clearing(books):
+    """Spec §4.3: marked paid with no connected account, a payment goes through clearing, as it does for a disconnected
+    one. A never-connected account has no bank row coming either, so its own line is not credited."""
+    with books.transaction() as c:
+        money = SL.new_id()
+        c.execute("INSERT INTO fin_money_accounts(id, book_id, kind, name, provider, account_id, created_at, created_by) "
+                  "VALUES(?,?,?,?,?,?,?,?)", (money, SL.book(c).id, "bank", "Checking", "mercury",  # type: ignore[union-attr]
+                                             account(c, "1000"), AT, OWNER))
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 5_000}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        cash = _balance(c, "1000")
+        done = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "money_account_id": money})
+        assert done.status == "committed" and done.result["from"] == "account", done
+        assert (_balance(c, "1050"), _balance(c, "1000") - cash) == (-5_000, 0)

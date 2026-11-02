@@ -10,7 +10,7 @@ from ..core.ledger import name_key
 from .ledger import new_id, tagset
 
 TABLES = frozenset({"fin_contacts", "fin_vendor_aliases", "fin_bills", "fin_bill_lines", "fin_invoices", "fin_invoice_lines",
-                    "fin_attachments", "fin_settlements"})
+                    "fin_attachments", "fin_settlements", "fin_invoice_reminders"})
 DOCS = {"bill": ("fin_bills", "fin_bill_lines", "bill_id", "bill_date", "vendor_id"),
         "invoice": ("fin_invoices", "fin_invoice_lines", "invoice_id", "invoice_date", "customer_id")}
 
@@ -461,6 +461,13 @@ def settled_from(c: sqlite3.Connection, from_kind: str, from_id: str) -> int:
     row = c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_settlements WHERE from_kind=? AND from_id=? AND "
                     "voided_at IS NULL", (from_kind, from_id)).fetchone()
     return int(row[0])
+
+
+def settled_to(c: sqlite3.Connection, from_kind: str, from_id: str) -> list[tuple[str, str]]:
+    """The (kind, id) of each bill or invoice a payment or feed row is applied to, not voided, oldest first."""
+    return [(str(r[0]), str(r[1])) for r in c.execute(
+        "SELECT to_kind, to_id FROM fin_settlements WHERE from_kind=? AND from_id=? AND voided_at IS NULL "
+        "ORDER BY settled_on, id", (from_kind, from_id)).fetchall()]
 
 
 def repoint_credit(c: sqlite3.Connection, old: str, new: str) -> None:

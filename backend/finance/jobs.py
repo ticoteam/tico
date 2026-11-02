@@ -107,6 +107,32 @@ def open_next_period(c: sqlite3.Connection, at: str | None = None) -> str | None
     return ensure_period(ctx, dates.add_months(dates.day(ctx.today).replace(day=1), 1).isoformat())
 
 
+def amortize(c: sqlite3.Connection, at: str | None = None) -> int:
+    """Expense the prepaid bill months that have come due (spec §4.4, backend/finance/prepaids.py), as system work
+    through the one write path. A dry run first: a month that would be refused writes nothing. A month that does not
+    post is asked for (one Needs-you per line and month) and tried again on the next look. How many months posted."""
+    from . import actions, prepaids
+    if not is_set_up(c):
+        return 0
+    ctx = load(c, at)
+    if ctx.book.mode == "mirror":
+        return 0
+    posted = 0
+    for line_id, month in prepaids.due_months(c, ctx):
+        body = {"bill_line_id": line_id, "month": month}
+        key = f"prepaid:{line_id}:{month}"
+        check = actions.act(c, SYSTEM, prepaids.KIND, body, key, dry_run=True, at=at)
+        if check.status != "committed":
+            prepaids.ask_not_posted(ctx, line_id, month, check.reason)
+            continue
+        done = actions.act(c, SYSTEM, prepaids.KIND, body, key, at=at)
+        if done.status == "committed":
+            posted += 1
+        else:
+            prepaids.ask_not_posted(ctx, line_id, month, done.reason)
+    return posted
+
+
 CASH_EVENT, READY_EVENT = "finance.cash.below", "finance.period.ready"
 CASH_STATE = "finance_cash_below_state"  # whether cash was under the floor at the last look, and how many crossings
 
@@ -118,12 +144,13 @@ def watch(c: sqlite3.Connection, at: str | None = None) -> int:
     froze lift once their budgets have room again. How many it raised, paid or lifted."""
     if not is_set_up(c):
         return 0
-    from . import documents, reads
+    from . import delivery, documents, reads
     from .banking import event
     from .payments import CASH_BELOW_KEY
     n = documents.pay_due(load(c, at))
     ctx = load(c, at)
     n += documents.watch(ctx)
+    n += delivery.watch(ctx)
     floor = SL.setting(c, CASH_BELOW_KEY)
     cash = reads.company_cash(c, at) if isinstance(floor, int) and floor > 0 else None
     was = cast(dict[str, object], SL.setting(c, CASH_STATE) or {})

@@ -34,8 +34,12 @@ Done when: every item is in one of its three states (Quality standards), every w
    attach to. Read the file (`hub file read <file id>`). A bill: check for a duplicate, find or `contact_create` the
    vendor, then `bill_create` with `origin: "email"` and the file in `attachments`, and approve it as in 2 once it ties
    out (`skills/enter-a-bill-from-a-file/SKILL.md`). A receipt: `attach` it to its row.
+3a. **invoice_email**: an invoice email waiting to send, named by the item. Follow step 6 of
+   playbooks/invoice-overdue.md for the `emails` entry it names. A failed one is retried the same way: same text,
+   same approval.
 4. **uncategorized**: posting rules run first. For the rest, `categorize` each row
-   (`skills/categorize-a-feed-row/SKILL.md`).
+   (`skills/categorize-a-feed-row/SKILL.md`). When the same counterparty lands in the same account three times, propose
+   a posting rule in words with `rule_create` (a person approves it).
 5. **missing_receipt**: a card charge with no receipt after a week: ask the card holder once.
 6. **unreconciled**: match feed rows to entries and `reconcile` statements you have.
 7. **budget_near_limit**: tell the budget's owner once, with the number.
@@ -44,8 +48,8 @@ Done when: every item is in one of its three states (Quality standards), every w
 - **Bill due soon** (playbooks/bill-due.md): `bill_schedule` it per its terms, or `payment_create` with
   `obligation: "bill:<id>"`. Approvals follow the company's rules.
 - **Invoice overdue** (playbooks/invoice-overdue.md): record a payment you find in the feed with
-  `invoice_record_payment`. Otherwise draft one reminder for the stage and leave it on the task for a person to send.
-  Finance has no reminder action, and this bot sends nothing outside the team.
+  `invoice_record_payment`. Otherwise record one reminder through Finance for the stage, then its email under the send
+  approval Finance issues with it. Finance refuses a stage already reminded, and the email goes only as Finance's text.
 - **Month ready to close** (playbooks/close-month.md): read the close checklist, finish what it lists, write the budget
   vs actual note as a comment on the task, then ask for `close_period` with the month only. The owner approves the close.
 - **Monthly report** (playbooks/monthly-report.md): on the 3rd of each month, last month's report into Docs.

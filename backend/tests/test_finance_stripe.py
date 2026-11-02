@@ -20,7 +20,7 @@ from backend.finance.core.errors import FinanceError
 from backend.finance.mercury import Answer
 from backend.tests.test_api import api, get, headers  # noqa: F401
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, OWNER, FakeMercury, account, act, books, connect, finance_template, store)
+    AT, OWNER, FakeMercury, account, act, books, close_month, connect, finance_template, reopen_rows, store)
 
 DAY = int(datetime(2026, 10, 10, 12, tzinfo=timezone.utc).timestamp())
 WEBHOOK_SECRET = "whsec_test_secret_0123456789abcdef"
@@ -940,7 +940,8 @@ def test_a_summarized_sale_recategorized_after_its_month_closed_still_reconciles
     stripe_pass(books, stripe)
     money = _stripe_money(books)
     with books.transaction() as c:
-        assert act(c, OWNER, "close_period", {"month": "2026-10"}, at="2026-11-05T12:00:00.000000Z").status == "committed"
+        assert close_month(c, "2026-10", at="2026-11-05T12:00:00.000000Z").status == "committed"
+        reopen_rows(c)
         row = str(_feed(c, "txn_0001")["id"])
         moved = act(c, OWNER, "categorize", {"feed_id": row, "account_id": account(c, "4000")},
                     at="2026-11-05T12:00:00.000000Z")

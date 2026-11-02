@@ -113,7 +113,8 @@ CREATE TABLE IF NOT EXISTS fin_invoices (
   number TEXT NOT NULL DEFAULT '', invoice_date TEXT NOT NULL, due_date TEXT,
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','partial','paid','void')),
   currency TEXT NOT NULL, total BIGINT NOT NULL DEFAULT 0, amount_paid BIGINT NOT NULL DEFAULT 0, payment_link TEXT,
-  entry_id TEXT REFERENCES fin_entries(id), created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
+  entry_id TEXT REFERENCES fin_entries(id), created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT,
+  send_approval_id TEXT, send_to TEXT, send_text TEXT, delivered_at TEXT, delivery_reason TEXT);
 
 CREATE TABLE IF NOT EXISTS fin_invoice_lines (
   id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL REFERENCES fin_invoices(id), account_id TEXT REFERENCES fin_accounts(id),
@@ -419,6 +420,7 @@ CREATE INDEX IF NOT EXISTS fin_feed_txns_card ON fin_feed_txns(card_id, txn_date
 CREATE INDEX IF NOT EXISTS fin_feed_txns_request ON fin_feed_txns(request_id);
 CREATE INDEX IF NOT EXISTS fin_feed_txns_entry ON fin_feed_txns(entry_id);
 CREATE INDEX IF NOT EXISTS fin_feed_txns_entry_line ON fin_feed_txns(entry_line_id);
+CREATE INDEX IF NOT EXISTS fin_feed_txns_refund ON fin_feed_txns(refund_of);
 CREATE INDEX IF NOT EXISTS fin_money_accounts_provider ON fin_money_accounts(connection_id, provider_account_id);
 CREATE INDEX IF NOT EXISTS fin_cards_provider ON fin_cards(provider, provider_card_id);
 CREATE INDEX IF NOT EXISTS fin_card_saves_vendor ON fin_card_saves(book_id, vendor_key, active);
@@ -543,6 +545,11 @@ ADDED = (
     # the shared item a bill or invoice line names (migration 76, backend/records)
     ("fin_bill_lines", "item_id", "TEXT"), ("fin_invoice_lines", "item_id", "TEXT"),
     ("fin_bill_lines", "po_line_id", "TEXT"),
+    # a prepaid bill line: the month its expense starts and the months it is spread over (migration 79)
+    ("fin_bill_lines", "prepaid_start", "TEXT"), ("fin_bill_lines", "prepaid_months", "INTEGER"),
+    # the money-out row a money-in row refunds (migration 80, backend/finance/refunds.py). A column, not raw_json: a
+    # provider's update rewrites raw_json, and the link must survive it.
+    ("fin_feed_txns", "refund_of", "TEXT"),
 )
 
 
@@ -599,9 +606,28 @@ CREATE TABLE IF NOT EXISTS fin_bill_retained (
   amount BIGINT NOT NULL CHECK (amount > 0), PRIMARY KEY (bill_id, po_line_id));
 """
 
+# Prepaid expenses (backend/finance/prepaids.py): one row per month of a prepaid bill line that was expensed. The
+# month is the key, so a month posts once; the entry is that month's expense, reversed when the bill is voided.
+PREPAIDS = """
+CREATE TABLE IF NOT EXISTS fin_prepaid_postings (
+  bill_line_id TEXT NOT NULL REFERENCES fin_bill_lines(id), month TEXT NOT NULL,
+  amount BIGINT NOT NULL CHECK (amount > 0), entry_id TEXT NOT NULL REFERENCES fin_entries(id),
+  action_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL, PRIMARY KEY (bill_line_id, month));
+"""
+
+# Invoice reminders (backend/finance/documents.py invoice_remind): one row per invoice and stage (1, 7, 30, 60 or 90 days
+# late), so a stage is reminded once. The text and the address it went to are kept as the reminder was made.
+REMINDERS = """
+CREATE TABLE IF NOT EXISTS fin_invoice_reminders (
+  id TEXT PRIMARY KEY, invoice_id TEXT NOT NULL REFERENCES fin_invoices(id), stage INTEGER NOT NULL CHECK (stage > 0),
+  text TEXT NOT NULL, sent_to TEXT NOT NULL, action_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+  send_approval_id TEXT, delivered_at TEXT, delivery_reason TEXT,
+  UNIQUE (invoice_id, stage));
+"""
+
 def table_names() -> list[str]:
     """Every fin_* table the migration makes."""
-    return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES + TAX + PURCHASING)
+    return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES + TAX + PURCHASING + PREPAIDS + REMINDERS)
 
 
 def statements(script: str) -> list[str]:
@@ -631,7 +657,7 @@ def _add_columns(c: sqlite3.Connection) -> None:
 def create(c: sqlite3.Connection) -> None:
     """Every table, index and trigger, statement by statement inside the caller's transaction (executescript would
     commit it). Idempotent: on an install made before a later phase it adds the new tables and columns too."""
-    for script in (TABLES, TAX, PURCHASING):
+    for script in (TABLES, TAX, PURCHASING, PREPAIDS, REMINDERS):
         for statement in statements(script):
             c.execute(statement)
     _add_columns(c)
@@ -775,6 +801,44 @@ def tax(c: sqlite3.Connection) -> None:
 def purchasing(c: sqlite3.Connection) -> None:
     """Cloud migration 77: purchase orders and estimates, and the bill line an order line is billed on. Idempotent:
     `create` makes whatever is missing."""
+    create(c)
+
+
+def prepaids(c: sqlite3.Connection) -> None:
+    """Cloud migration 79: prepaid bill lines (their schedule) and the months they were expensed. Idempotent: `create`
+    makes whatever is missing."""
+    create(c)
+
+
+def refunds(c: sqlite3.Connection) -> None:
+    """Cloud migration 80: the money-out row a refund reverses (fin_feed_txns.refund_of). Idempotent: `create` adds
+    whatever is missing."""
+    create(c)
+
+
+def reminders(c: sqlite3.Connection) -> None:
+    """Cloud migration 81: the invoice reminders a stage is sent once by (fin_invoice_reminders). Idempotent: `create`
+    adds whatever is missing."""
+    create(c)
+
+
+# The columns invoice emails added (cloud migration 82), by table: the send approval, what it names, and the Bookkeeper's
+# delivery report (backend/finance/delivery.py). The CREATE statements carry them for a new install.
+DELIVERY_COLUMNS = {
+    "fin_invoices": (("send_approval_id", "TEXT"), ("send_to", "TEXT"), ("send_text", "TEXT"),
+                     ("delivered_at", "TEXT"), ("delivery_reason", "TEXT")),
+    "fin_invoice_reminders": (("send_approval_id", "TEXT"), ("delivered_at", "TEXT"), ("delivery_reason", "TEXT")),
+}
+
+
+def delivery(c: sqlite3.Connection) -> None:
+    """Cloud migration 82: an invoice email's send approval and delivery report (DELIVERY_COLUMNS). Idempotent: a column
+    that is already there is left as it is."""
+    for table, columns in DELIVERY_COLUMNS.items():
+        have = {str(r[1]) for r in c.execute(f"PRAGMA table_info({table})")}
+        for name, kind in columns:
+            if name not in have:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
     create(c)
 
 

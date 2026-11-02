@@ -9,6 +9,7 @@ from collections.abc import Iterable, Sequence
 from datetime import date
 from typing import Any, cast
 
+from . import delivery
 from .context import Ctx, load
 from .core import ap as AP
 from .core import dates
@@ -19,7 +20,6 @@ from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .store import ap as SAP
 from .store import banking as SK
 from .store import ledger as SL
-from .usage import CREDIT
 from .tab import BILLS_EMAIL_KEY, decode_cursor, encode_cursor, page_size, private_cut
 
 Row = dict[str, object]
@@ -30,7 +30,6 @@ NESTED_MOST = 50            # settlements and attachments one document response 
 SIDES = {"bill": ("payables", R.AP), "invoice": ("receivables", R.AR)}
 CONTACT_OF = {"bill": "vendor", "invoice": "customer"}
 CHART_MOST = 2000
-NOT_DOCUMENT_SUBTYPES = ("payable", "receivable", "bank", "clearing")
 CHART_FOR = {"bill": ("expense", "asset"), "invoice": ("income",)}
 
 
@@ -228,6 +227,8 @@ def documents(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | No
             if aging is not None and row["aging"] != aging or late and row["aging"] in (None, "current"):
                 continue
             row.update(doc_lines(ctx, found[str(r["id"])]))
+            if kind == "invoice":                       # the emails still waiting on a delivery report, with their text
+                row["emails"] = delivery.pending(c, str(r["id"]))
             if row["status"] == "paid":
                 row.update(paid_of_doc(c, kind, str(r["id"])))
             out.append(row)
@@ -367,20 +368,15 @@ def bills_email(c: sqlite3.Connection) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _document_line(a: L.Account, parents: set[str], money: set[str]) -> bool:
-    """Whether a bill or invoice line can post to `a`: not accounts payable or receivable, not a group of lines, not a
-    bank, clearing or other money account, and not Gateway credit, which usage draws down."""
-    return a.subtype not in NOT_DOCUMENT_SUBTYPES and a.id not in parents and a.id not in money and a.code != CREDIT
-
-
 def chart(c: sqlite3.Connection, viewer: str, *, for_: str | None = None, at: str | None = None) -> Row:
     """The active lines the viewer may post to, for the bill, invoice and journal forms: every line in their view,
     for teammates who write to the books (finance.book, ap or ar). `for_` bill keeps expense and asset lines, invoice
-    income lines; both leave out what a document's line can't post to (_document_line): accounts payable or receivable,
-    which only documents move, a line with lines under it, and money the bank feed or usage moves. Journal keeps every
-    line.
+    income lines; both leave out what a document's line can't post to (documents.document_line_refused): accounts payable
+    or receivable, which only documents move, a line with lines under it, and money the bank feed or usage moves. Journal
+    keeps every line.
     `company_wide` says whether a line takes untagged amounts from this viewer; when it does not, `attributable` lists
     the team and teammate tags they may use on it (the same rule a write checks)."""
+    from .documents import document_line_refused     # local: documents imports this module's helpers
     from .handlers import may_write
     ctx = load(c, at)
     view = ctx.view(viewer)
@@ -396,7 +392,7 @@ def chart(c: sqlite3.Connection, viewer: str, *, for_: str | None = None, at: st
     for a in sorted(ctx.accounts.values(), key=lambda x: (x.code, x.id)):
         if not a.active or not (view.everything or view.sees_account(a)):
             continue
-        if types is not None and (a.type not in types or not _document_line(a, parents, money)):
+        if types is not None and (a.type not in types or document_line_refused(a, parents, money)):
             continue
         wide = may_write(ctx, viewer, a.id, {})
         row: Row = {"id": a.id, "number": a.code, "name": a.name, "type": a.type, "subtype": a.subtype,

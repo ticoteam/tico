@@ -1677,9 +1677,11 @@ def _inbox_kind(s: _Seen, kind: str, n: int, skip: int = 0) -> tuple[list[Row], 
     held = ctx.rights(s.view.viewer)
     cut = set(tab.private_cut(ctx, view))
     if kind == "uncategorized":
+        from .documents import review_candidates     # lazy: keeps the module import order as it was
         rows, over = _uncategorized(s, today - timedelta(days=RECEIPT_DAYS), today, n, skip)
         return [{"id": str(r["id"]), "feed_id": str(r["id"]), "date": str(r["txn_date"]),
                  "amount": int(r["amount"]), "entry_id": r["entry_id"], "status": str(r["status"]),
+                 "candidates": review_candidates(ctx, view.viewer, r),
                  "label": f"{r['counterparty'] or r['description'] or 'Row'} · {_money(int(r['amount']))}"}
                 for r in rows], over
     if kind == "bill_to_enter":
@@ -1774,12 +1776,15 @@ def _checklist(s: _Seen, month: str, top_n: int = 20) -> Row:
                                "money_account_id": None, "name": f"Other · {len(folded)}", "locked_through": None}]
                              if folded else [])
     rows, more = _uncategorized(s, first, last, INBOX_EACH)
+    # Suspense (spec §11): a settled row still waiting for a category blocks the close; lines on Other expenses are
+    # shown with their count and do not.
+    waiting = [r for r in rows if str(r["status"]) == "new"]
     accrual = ctx.book.basis == "accrual"
     checks: list[Row] = [
         {"key": "reconciled", "ok": not behind, "count": len(behind), "accounts": listed,
          "label": "Every money account reconciled through month end"},
-        {"key": "uncategorized", "ok": not rows, "count": len(rows), "more": more,
-         "label": "Nothing left in Other expenses or uncategorized"}]
+        {"key": "suspense", "ok": not waiting, "count": len(waiting), "more": more, "other": len(rows) - len(waiting),
+         "label": "Review suspense"}]
     # Company-wide counts only for whoever sees them: unmatched receipts with the whole books, draft bills with
     # payables (and only the drafts the viewer sees whole).
     if s.view.everything:
@@ -1796,10 +1801,13 @@ def _checklist(s: _Seen, month: str, top_n: int = 20) -> Row:
          "Cash basis: no accruals to review", "note": True},
         {"key": "budget_vs_actual", "ok": True, "label": "Write the budget vs actual note", "note": True}]
     checks += notes
-    # A month no money account had a feed for has nothing to reconcile, so it is never "ready" on its own.
-    ready = status == "open" and last < dates.day(ctx.today) and bool(live) and not behind and not rows
-    return {"month": month, "start": first.isoformat(), "end": last.isoformat(), "status": status, "ready": ready,
-            "checks": checks}
+    # `closable` is what close_period needs: an ended open month, reconciled through its end, nothing waiting for a
+    # category. `ready` (what finance.period.ready fires on) also needs a money account with a feed: a month no money
+    # account had a feed for has nothing to reconcile, so it is never "ready" on its own.
+    ended = last < dates.day(ctx.today)
+    closable = status == "open" and ended and not behind and not waiting
+    return {"month": month, "start": first.isoformat(), "end": last.isoformat(), "status": status,
+            "ready": closable and bool(live), "closable": closable, "ended": ended, "checks": checks}
 
 
 def close_checklist(c: sqlite3.Connection, viewer: str, period: str, at: str | None = None, *,
@@ -1821,6 +1829,24 @@ def ready_months(c: sqlite3.Connection, at: str | None = None) -> list[str]:
         return []
     s = _Seen(ctx=ctx, view=ctx.view(ctx.org.owner), private=SA.private_lines(c))
     return [p for p in _closable(c, ctx) if _checklist(s, p)["ready"]]
+
+
+def close_blockers(ctx: Ctx, month: str, who: str) -> list[str]:
+    """What still keeps an open month from closing (spec §11), for everyone: the checklist's blocking items, read with the
+    owner's view so every actor gets the same answer. Empty when the month can close."""
+    s = _Seen(ctx=ctx, view=ctx.view(ctx.org.owner or who), private=SA.private_lines(ctx.c))
+    row = _checklist(s, month)
+    if row["closable"]:
+        return []
+    why = [] if row["ended"] else [f"{month} has not ended"]
+    for check in cast(list[dict[str, Any]], row["checks"]):
+        if check["ok"]:
+            continue
+        if check["key"] == "reconciled":
+            why.append(f"{check['count']} money account(s) not reconciled through {row['end']}")
+        elif check["key"] == "suspense":
+            why.append(f"{check['count']}{'+' if check['more'] else ''} settled row(s) still waiting for a category")
+    return why or [f"{month} is not ready to close"]
 
 
 def company_cash(c: sqlite3.Connection, at: str | None = None) -> int | None:
