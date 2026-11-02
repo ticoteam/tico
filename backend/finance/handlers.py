@@ -41,6 +41,9 @@ class Plan:
     resolved: Result = field(default_factory=lambda: Result())
     # What gate rules match on beyond kind and actor (amount, recipient, accounts, tags...), see finance/gating.py.
     facts: Result = field(default_factory=lambda: Result())
+    # Every rule that needs approval, with its reason (the planner's and the gate rules'): an approval names and covers
+    # all of them, so the approver sees each reason and the send is judged on what was approved.
+    asks: tuple[tuple[str, str], ...] = ()
 
 
 Planner = Callable[[Ctx, str, V.Payload], Plan]

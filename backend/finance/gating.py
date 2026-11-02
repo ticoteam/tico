@@ -103,6 +103,7 @@ def judge(ctx: Ctx, p: Principal, kind: str, gate: K.Gate, plan: Plan, action_id
     if verdict.outcome == "deny":
         raise Denied(verdict, found, p.actor)
     log(ctx, verdict, found, action_id, p.actor)
+    plan = replace(plan, asks=_asks(gate, verdict, plan))
     if not verdict.counts:
         return Judged(stricter(gate, verdict), plan)
     amount = found.get("amount")
@@ -115,6 +116,18 @@ def judge(ctx: Ctx, p: Principal, kind: str, gate: K.Gate, plan: Plan, action_id
             SK.count(ctx.c, hit.rule, hit.period_key, hit.subject, spend, ctx.at)
         return out
     return Judged(stricter(gate, verdict), replace(plan, apply=apply))
+
+
+def _asks(gate: K.Gate, verdict: G.Verdict, plan: Plan) -> tuple[tuple[str, str], ...]:
+    """Every rule that needs approval: the planned gate, the planner's own asks (a budget past its limit) and the gate
+    rules' verdict, each with its reason. stricter() keeps only one of the gates for the approver, so the others are
+    named here too."""
+    out: dict[str, str] = dict(plan.asks)
+    if gate.outcome == "needs_approval":
+        out.setdefault(gate.rule, "")
+    if verdict.outcome == "needs_approval":
+        out.setdefault(verdict.rule, verdict.reason)
+    return tuple(out.items())
 
 
 # ------------------------------------------------------------------------------------------------ writing rules

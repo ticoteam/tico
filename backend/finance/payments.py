@@ -36,6 +36,8 @@ DIRECT_KEY = "finance_direct_send"     # the owner's company switch (§9 mode 2)
 NO_DIRECT_RULE = "direct send needs a finance rule that allows it up to an amount (§9), and none does for this payment"
 METHODS = ("ach", "wire", "check")
 INTERNAL = "internal"                   # payment_create's method for a move between our own bank accounts (§5)
+RECIPIENT_RULE = "rule:recipient-details-changed"       # the rule a re-ask for changed payee details names (actions.py)
+NEW_RECIPIENT_RULE = "rule:new-recipient"               # the first payment to a recipient (gates.DEFAULTS)
 MERCURY_METHOD = {"ach": "ach", "wire": "domesticWire", "check": "check"}
 SENT, FAILED = "finance.payment.sent", "finance.payment.failed"
 RETRY = (60, 300, 1800, 3600)
@@ -306,11 +308,15 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     scope = {"account_id": line.id, **tags, "vendor": vendor_of(rec)}
     over = None if bill else budgeting.would_place(ctx, budget_scope=scope, amount=amount)
     past = over is not None and not over.allowed
+    asks: tuple[tuple[str, str], ...] = ()
     if over is not None and not over.allowed:
+        limit = ctx.budgets()[over.limit_budget]
         if over.action == "decline":
-            raise denied(f"it does not fit: over the {ctx.budgets()[over.limit_budget].name} budget")
+            raise denied(f"it does not fit: over the {limit.name} budget")
+        # The budget is named with the gate rules' reasons, so one approval covers all of them (actions._rule_rows).
+        asks = ((f"budget:{limit.id}", f"over the {limit.name} budget"),)
         if gate.outcome == "allow":
-            gate = K.Gate("needs_approval", "finance_admin", f"budget:{over.limit_budget}")
+            gate = K.Gate("needs_approval", "finance_admin", asks[0][0])
 
     def apply(aid: str) -> Result:
         hold = budgeting.place(ctx, budget_scope=scope, amount=amount, currency=ctx.book.base_currency,
@@ -335,7 +341,8 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 facts={**_facts(ctx, rec, amount, line.code, obligation, tags, bank), "mode": mode},
                 # The recipient version the approval is for (§5): a changed one voids it (actions.approval_decided).
                 resolved={"recipient_version": int(rec["version"]),
-                          **({"recipient_id": str(rec["id"])} if followed is not None else {})})
+                          **({"recipient_id": str(rec["id"])} if followed is not None else {})},
+                asks=asks)
 
 
 def _current_version(ctx: Ctx, rec: Any) -> Any:
@@ -606,14 +613,23 @@ def decided_by(ctx: Ctx, action: Any) -> str:
     return str(appr.get("decided_by") or "") if appr is not None and appr.get("decision") == "approved" else ""
 
 
+def asked_rules(action: Any) -> set[str]:
+    """The rules this action's approval names and covers: every rule that needed approval when it was asked (its rule
+    results, actions._rule_rows). An approval covers what it named, and nothing else."""
+    if action is None:
+        return set()
+    raw = json.loads(str(action["rule_results_json"] or "[]"))
+    return {str(r["rule"]) for r in raw if isinstance(r, dict) and r.get("outcome") == "needs_approval"}
+
+
 def approved_for(ctx: Ctx, action: Any, who: str, who_needed: str, rule: str) -> bool:
     """Whether what a gate asks for now was already given: the payer may approve it themselves now (as at the action),
-    or the payment's action was approved for this very gate (its rule: an approval for one rule or budget never covers
-    another) by someone who may approve it."""
+    or the payment's action was approved with this rule among those it named (an approval never covers a rule it did
+    not name) by someone who may approve it."""
     if O.approver(ctx.org, who_needed, who, ctx.approver_setting()) == who:
         return True
     by = decided_by(ctx, action)
-    if not by or not rule or str(action["rule_id"] or "") != rule:
+    if not by or not rule or rule not in asked_rules(action):
         return False
     if ctx.org.owner and by == ctx.org.owner:
         return True
@@ -623,15 +639,29 @@ def approved_for(ctx: Ctx, action: Any, who: str, who_needed: str, rule: str) ->
 
 
 def _passed_over(ctx: Ctx, action: Any, who: str, chain_ids: Sequence[str]) -> bool:
-    """Whether a payment holds past a budget's ask or hold_payment limit by its own decision: its action was approved
-    for a budget on its chain (the approval that placed it past the limit), or it needed no approval because its payer
-    decides it (the install owner)."""
-    rule = str(action["rule_id"] or "") if action is not None else ""
-    if not rule.startswith("budget:") or rule.removeprefix("budget:") not in chain_ids:
+    """Whether a payment holds past a budget's ask or hold_payment limit by its own decision: its action named a budget
+    on its chain and was approved (the approval that placed it past the limit), or it needed no approval because its
+    payer decides it (the install owner)."""
+    budgets = sorted(r for r in asked_rules(action)
+                     if r.startswith("budget:") and r.removeprefix("budget:") in chain_ids)
+    if not budgets:
         return False
     if decided_by(ctx, action):
-        return approved_for(ctx, action, who, "finance_admin", rule)
+        return any(approved_for(ctx, action, who, "finance_admin", rule) for rule in budgets)
     return who == ctx.org.owner
+
+
+def _covers_now(ctx: Ctx, action: Any, who: str, who_needed: str, rule: str, recipient_id: str) -> bool:
+    """Whether the approval covers a rule the send needs now: it named the rule (approved_for), or it is the
+    new-recipient rule of a re-ask for changed payee details, which named the new details the approver saw. That covers
+    the new-recipient rule for that same recipient only."""
+    if approved_for(ctx, action, who, who_needed, rule):
+        return True
+    if rule != NEW_RECIPIENT_RULE or action is None:
+        return False
+    payload = json.loads(str(action["payload_json"]))
+    return str(payload.get("recipient_id") or "") == recipient_id and \
+        approved_for(ctx, action, who, who_needed, RECIPIENT_RULE)
 
 
 def _asked_again(ctx: Ctx, pay: Any, action: Any, successor: Any) -> str:
@@ -710,8 +740,8 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         # §9: the rule that allowed this direct send is gone or no longer reaches it. It is held: never sent direct,
         # and never moved to the approval queue quietly either; a finance admin is told.
         return _hold(ctx, pay, "no finance rule allows a direct send of it now")
-    if verdict.outcome == "needs_approval" and (verdict.stale or
-                                                not approved_for(ctx, action, who, verdict.who, verdict.rule)):
+    if verdict.outcome == "needs_approval" and (verdict.stale or not _covers_now(
+            ctx, action, who, verdict.who, verdict.rule, str(pay["recipient_id"]))):
         return _hold(ctx, pay, f"{verdict.reason or 'a finance rule asks for approval'}"
                                f"{' (its data is stale)' if verdict.stale else ''}")
     hold = SB.hold(ctx.c, str(pay["hold_id"])) if pay["hold_id"] else None

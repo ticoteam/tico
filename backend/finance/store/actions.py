@@ -41,12 +41,16 @@ def finish(c: sqlite3.Connection, action_id: str, *, status: str, result: Mappin
 
 
 def asked(c: sqlite3.Connection, action_id: str, *, approval_id: str, approval_hash: str, requester: str, to: str,
-          rule_id: str, payload: Mapping[str, object], at: str) -> None:
+          rule_id: str, payload: Mapping[str, object], at: str,
+          rules: Sequence[Mapping[str, object]] | None = None) -> None:
     """The approval an action waits on: its id, the hash of the payload it was asked for, who asked and who decides. The
-    stored payload becomes that one, so the decision checks the payload that was asked."""
+    stored payload becomes that one, so the decision checks the payload that was asked. `rules`, when given, replaces
+    the rules the action records: every rule its approval names (a re-ask after the rules changed)."""
     c.execute("UPDATE fin_actions SET status='needs_approval', approval_id=?, approval_hash=?, approval_by=?, "
               "approval_to=?, rule_id=?, payload_json=?, updated_at=? WHERE id=?",
               (approval_id, approval_hash, requester, to, rule_id, _dump(payload), at, action_id))
+    if rules is not None:
+        c.execute("UPDATE fin_actions SET rule_results_json=? WHERE id=?", (_dump(list(rules)), action_id))
 
 
 def settled_waits(c: sqlite3.Connection, most: int) -> list[str]:

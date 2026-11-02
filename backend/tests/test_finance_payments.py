@@ -830,10 +830,11 @@ def test_a_denied_or_declined_payee_leaves_no_bank_numbers_and_no_vault_row(api)
     assert fake.sent("create_recipient") == []
 
 
-def _over_budget(c, at_limit):
-    """A 50.00 Software budget on 6100 that a 150.00 payment goes past; the new-recipient rule is off, so only the
-    budget is judged."""
-    assert act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"}).status == "committed"
+def _over_budget(c, at_limit, *, new_recipient=False):
+    """A 50.00 Software budget on 6100 that a 150.00 payment goes past; unless `new_recipient`, the new-recipient
+    rule is off, so only the budget is judged."""
+    if not new_recipient:
+        assert act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"}).status == "committed"
     budget = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 5_000,
                                              "at_limit": at_limit})
     assert budget.status == "committed", budget
@@ -940,6 +941,116 @@ def test_the_owner_pays_past_an_ask_limit_without_an_approval_and_it_is_sent_onc
         assert paid.status == "committed", paid
         assert _hold_of(c, paid.result["payment_id"]) == (15_000, "held")
     sync_once(books, fake, HOURS[1])
+    assert [b["amount"] for b in fake.sent("request_send_money")] == [150]
+
+
+def test_an_approval_of_changed_payee_details_covers_the_new_recipient_rule_for_that_payee_by_a_non_owner_admin(books):
+    """Item 1: the re-ask for a payee whose details changed is decided by a finance admin who is not the owner. Its
+    approval covers the new-recipient rule for that same payee at send, so the payment goes (it is not held as a new
+    recipient again). Nothing covers another payee."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        queued = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 50_000, "tags": {"team": "eng"},
+                                                  "account_id": account(c, "6100"), "money_account_id": _checking(c)})
+        assert queued.status == "committed" and queued.result["status"] == "queued", queued
+        assert act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.admin"}).status == "committed"
+        SL.set_setting(c, FC.APPROVER_KEY, "human:ben", by=OWNER, at=AT)
+        _replace_payee(c, rid)
+    sync_once(books, fake, HOURS[1])
+    assert fake.sent("request_send_money") == []
+    with books.transaction() as c:
+        approval = str(c.execute("SELECT approval_id FROM fin_actions WHERE status='needs_approval'").fetchone()[0])
+        H.approval_decide(c, "human:ben", approval, "approved")
+        decided = FA.approval_decided(c, approval, AT)
+        assert decided.status == "committed", decided
+    sync_once(books, fake, HOURS[3])
+    assert [b["amount"] for b in fake.sent("request_send_money")] == [500]
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE amount=50000 AND status!='cancelled'").fetchone()[0] \
+            .startswith("awaiting_bank_approval")
+
+
+def test_a_payment_past_a_budget_that_also_asks_for_its_new_recipient_names_both_and_is_sent_once_approved(books):
+    """Item 4 (a, b): a payment over an ask budget whose new recipient also needs a finance admin. The approval names
+    both reasons, and covers both: the approved payment is placed past the limit and sent, not held for either."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        _over_budget(c, "ask", new_recipient=True)
+        assert act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"}).status == "committed"
+        body = {"recipient_id": rid, "account_id": account(c, "6100"), "tags": {"team": "eng"},
+                "money_account_id": _checking(c), "amount": 15_000}
+        asked = act(c, "human:ben", "payment_create", body)
+        assert asked.status == "needs_approval", asked
+        what = json.loads(c.execute("SELECT result_json FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0])
+        assert "over the Software budget" in what["what"] and "New recipient" in what["what"], what
+        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done.status == "committed", done
+        assert _hold_of(c, done.result["payment_id"]) == (15_000, "held")
+    sync_once(books, fake, HOURS[1])
+    assert [b["amount"] for b in fake.sent("request_send_money")] == [150]
+
+
+def test_a_payment_that_fits_when_asked_but_not_when_approved_is_asked_again_for_the_budget(books):
+    """Item 4 (c): a payment asked for its new recipient alone, whose budget goes over before the approval. The approval
+    does not run it on the rule it named: the decision asks again for the budget too, and only that approval pays."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"}).status == "committed"
+        body = {"recipient_id": rid, "account_id": account(c, "6100"), "tags": {"team": "eng"},
+                "money_account_id": _checking(c), "amount": 15_000}
+        asked = act(c, "human:ben", "payment_create", body)
+        assert (asked.status, asked.rule) == ("needs_approval", "rule:new-recipient"), asked
+        bid = _over_budget(c, "ask", new_recipient=True)
+        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        again = FA.approval_decided(c, asked.approval_id, AT)
+        assert again.status == "needs_approval" and again.approval_id != asked.approval_id, again
+        rule = c.execute("SELECT rule_id FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0]
+        assert rule == f"budget:{bid}"
+        assert c.execute("SELECT count(*) FROM fin_payments").fetchone()[0] == 0
+        H.approval_decide(c, OWNER, again.approval_id, "approved")
+        done = FA.approval_decided(c, again.approval_id, AT)
+        assert done.status == "committed", done
+        assert _hold_of(c, done.result["payment_id"]) == (15_000, "held")
+    sync_once(books, fake, HOURS[1])
+    assert [b["amount"] for b in fake.sent("request_send_money")] == [150]
+
+
+def test_a_payment_approved_for_its_recipient_whose_budget_goes_over_before_the_send_is_held_then_sent(books):
+    """Item 4 (b): a payment approved for its new recipient, which fits its budget when it is approved. The budget goes
+    over before the send: the send holds it (a person is told) and does not send it past the limit. A finance admin
+    releases it by making room (here, raising the budget): the next send goes, with no re-ask and no dead end."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        budget_id = str(act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"),
+                                                        "amount": 20_000, "at_limit": "ask"}).result["budget_id"])
+        assert act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"}).status == "committed"
+        body = {"recipient_id": rid, "account_id": account(c, "6100"), "tags": {"team": "eng"},
+                "money_account_id": _checking(c), "amount": 15_000}
+        asked = act(c, "human:ben", "payment_create", body)
+        assert (asked.status, asked.rule) == ("needs_approval", "rule:new-recipient"), asked
+        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done.status == "committed", done
+        pid = str(done.result["payment_id"])
+        spend(c, "6100", 10_000, team="eng")
+    sync_once(books, fake, HOURS[1])
+    assert fake.sent("request_send_money") == []
+    with books.read() as c:
+        assert c.execute("SELECT status, last_error FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "queued"
+        assert "the Software budget is over" in c.execute("SELECT last_error FROM fin_payments WHERE id=?",
+                                                          (pid,)).fetchone()[0]
+    with books.transaction() as c:
+        assert act(c, OWNER, "budget_update", {"budget_id": budget_id, "amount": 40_000}).status == "committed"
+    sync_once(books, fake, HOURS[3])
     assert [b["amount"] for b in fake.sent("request_send_money")] == [150]
 
 
