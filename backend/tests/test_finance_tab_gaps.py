@@ -1,15 +1,16 @@
 """The Finance tab's later asks, cut to the viewer: the owner edits the view defaults; the expenses view filters by
 several teams and teammates, bots or people, and Unattributed (company-wide viewers only); a line opens per vendor with
 how it was paid and next month's projection; budgets read at a date; Sources' sync / disconnect / map are a finance
-admin's; Mercury's users are for teammates who may issue cards, emails masked and only for a finance admin; view_as
-reaches lines, expenses and budgets."""
+admin's; Mercury's users are for teammates who may issue cards, emails masked and only for whoever sees everything;
+view_as reaches lines, expenses and budgets."""
 import pytest
 
 from backend.finance import actions as FA
 from backend.finance import reads as FR
+from backend.finance import tab as FT
 from backend.finance.actions import FinanceError
 from backend.finance.store import banking as SK
-from backend.tests.test_api import api, get  # noqa: F401
+from backend.tests.test_api import api, get, headers  # noqa: F401
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, spend, store  # noqa: F401
 from backend.tests.test_finance_tab import _bank
 
@@ -182,6 +183,66 @@ def test_sources_actions_are_a_finance_admins_and_mercury_users_are_cut_to_the_v
         assert sheet["closed_through"] is None
         act(c, OWNER, "close_period", {"month": "2026-09"})
         assert FR.balance_sheet(c, OWNER, at=AT)["closed_through"] == "2026-09-30"
+
+
+def test_a_finance_admin_adds_no_view_of_its_own_so_emails_tax_ids_and_sync_errors_stay_with_the_owner(books):
+    """finance.admin is rights (§7.4), not view (§7.5): Fay, an admin with payables, reads the vendor's tax id last 4,
+    the Mercury emails and the failed-sync inbox only as the owner would, which is not at all here."""
+    with books.transaction() as c:
+        ids = _bank(c)
+        cid = SK.insert(c, "fin_connections", {"provider": "mercury", "purpose": "bank", "status": "error",
+                                               "name": "Mercury", "last_error": "token expired", "created_at": AT,
+                                               "created_by": OWNER})
+        SK.update(c, "fin_money_accounts", ids["bank"], {"connection_id": cid})
+        SK.set_provider_users(c, cid, [{"id": "user-eve", "name": "Eve Acme", "email": "eve@acme.example"}], AT)
+        made = act(c, OWNER, "contact_create", {"name": "Acme Supplies", "kind": "vendor", "tax_id": "98-7654321"})
+        assert made.status == "committed", made
+        assert act(c, OWNER, "right_grant", {"teammate": "human:fay", "right": "finance.admin"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": "human:fay", "what": "payables"}).status == "committed"
+    with books.read() as c:
+        assert FR.provider_users(c, OWNER, at=AT)["users"][0]["email"] == "e•••@acme.example"
+        assert FR.provider_users(c, "human:fay", at=AT)["users"][0]["email"] is None
+        assert [x["id"] for x in FR.inbox(c, OWNER, kind="sync_failed", at=AT)["items"]] == [cid]
+        assert FR.inbox(c, "human:fay", kind="sync_failed", at=AT)["items"] == []
+        for who, last4 in ((OWNER, "4321"), ("human:fay", None)):
+            row = next(x for x in FR.contacts(c, who, at=AT)["contacts"] if x["name"] == "Acme Supplies")
+            assert row["tax_id_last4"] == last4, who
+        assert [m["teammate"] for m in FR.access(c, "human:fay", at=AT)["teammates"]] == ["human:fay"]
+
+
+
+def test_only_the_owner_reads_who_the_finance_approver_is(books):
+    with books.transaction() as c:
+        assert FT.access(c, OWNER)["finance_approver"] is None
+        assert act(c, OWNER, "finance_approver_set", {"approver": "human:dan"}).status == "committed"
+        assert FT.access(c, OWNER)["finance_approver"] == "human:dan"
+        assert FT.access(c, "human:dan")["finance_approver"] is None
+
+
+def test_the_bills_address_and_a_books_disconnect_are_actions_only_a_finance_admin_may_ask_for(books):
+    """Spec §5: the bills address and a books connection's local part change only through actions. A teammate without
+    finance.admin is refused; a bad address is refused with its reason."""
+    with books.transaction() as c:
+        assert act(c, "human:dan", "bills_address_set", {"address": "bills@acme.example"}).code == "denied"
+        assert act(c, OWNER, "bills_address_set", {"address": "not-an-address"}).code == "invalid"
+        assert act(c, OWNER, "bills_address_set", {"address": "Bills@Acme.example"}).status == "committed"
+        assert act(c, "human:dan", "books_disconnect", {"connection_id": "nope"}).code == "denied"
+        assert act(c, OWNER, "books_disconnect", {"connection_id": "nope"}).code == "not_found"
+    with books.read() as c:
+        assert FR.bills_email(c) == "bills@acme.example"
+
+def test_the_finance_approver_is_the_owner_until_the_owner_names_a_person(books):
+    """Spec §16: the finance approver is the owner by default, with a setting to name one person. Only the owner sets it,
+    and a bot can't be named."""
+    from backend.finance.context import load
+    with books.transaction() as c:
+        assert load(c, AT).approver_setting() == ""
+        assert act(c, "human:dan", "finance_approver_set", {"approver": "human:dan"}).code == "denied"
+        assert act(c, OWNER, "finance_approver_set", {"approver": "bot:coder"}).code == "invalid"
+        assert act(c, OWNER, "finance_approver_set", {"approver": "human:dan"}).status == "committed"
+        assert load(c, AT).approver_setting() == "human:dan"
+        assert act(c, OWNER, "finance_approver_set", {"approver": ""}).status == "committed"
+        assert load(c, AT).approver_setting() == ""
 
 
 def test_budgets_read_at_a_date_show_the_version_in_effect_then(books):
@@ -457,3 +518,135 @@ def test_a_vendor_named_unattributed_is_its_own_row_apart_from_no_vendor(books):
         assert got["next_by"]["team"] == {"eng": 1_000, FR.NONE: 300}
         alone = FR.line_detail(c, OWNER, line, *OCT, at=AT, vendor="unattributed")
         assert alone["total"] == 1_000                                     # the vendor, not the lines with none
+
+
+def test_a_full_read_of_a_private_line_by_someone_else_is_written_to_events(api):
+    """Spec 7.5: a full read of a private line is written to events. Eve holds full detail of account 6900 (private), so
+    her requests leave a row naming it; the owner's own requests leave none."""
+    from backend.finance import actions as FA
+    from backend.tests.test_finance_fixtures import _seed
+    store = api.app.state.store
+    with store.transaction() as c:
+        _seed(c)
+        assert FA.ensure_setup(c, store.settings.owner_email)
+        private = account(c, "6900")
+        assert act(c, OWNER, "private_lines_set", {"account_id": private, "private": True,
+                                                   "full_detail": ["human:eve"]}).status == "committed"
+    get(api, "finance/pnl", token="eve-test")
+    get(api, "finance/pnl")
+    with store.read() as c:
+        rows = c.execute("SELECT actor, target FROM events WHERE action='finance.private_read'").fetchall()
+    assert [tuple(r) for r in rows] == [("human:eve", private)]
+
+
+def test_each_request_by_someone_else_with_private_detail_leaves_one_row_for_the_read(api):
+    """Spec 7.5: one path serves the tools, search and exports, and each request leaves one row. Eve holds full detail of
+    account 6900, so each of her requests (search, the tax CSV, the close, the webhook bodies, an action's status, and a
+    dry run) adds exactly one 'finance.private_read' row, whatever the route answers. The owner's requests add none."""
+    from backend.finance import actions as FA
+    from backend.tests.test_finance_fixtures import _seed
+    store = api.app.state.store
+    with store.transaction() as c:
+        _seed(c)
+        assert FA.ensure_setup(c, store.settings.owner_email)
+        private = account(c, "6900")
+        payload = {"account_id": private, "private": True, "full_detail": ["human:eve"]}
+        done = act(c, OWNER, "private_lines_set", payload)
+        assert done.status == "committed"
+
+    def rows(actor):
+        with store.read() as c:
+            return c.execute("SELECT COUNT(*) FROM events WHERE action='finance.private_read' AND actor=?",
+                             (actor,)).fetchone()[0]
+
+    reads = [("GET", "/api/v2/finance/search?kind=entry"), ("GET", "/api/v2/finance/tax/sales-tax.csv?year=2026"),
+             ("GET", "/api/v2/finance/close/2026-10"), ("GET", "/api/v2/finance/webhook-deliveries"),
+             ("GET", f"/api/v2/finance/actions/{done.action_id}"),
+             ("POST", "/api/v2/finance/actions")]
+    for method, path in reads:
+        before = rows("human:eve")
+        if method == "GET":
+            r = api.get(path, headers=headers("eve-test"))
+        else:
+            r = api.post(path, json={"kind": "private_lines_set", "payload": payload, "dry_run": True},
+                         headers=headers("eve-test"))
+        assert r.status_code < 500, (path, r.text)
+        assert rows("human:eve") == before + 1, path
+    before = rows(OWNER)
+    api.get("/api/v2/finance/close/2026-10", headers=headers("ana-test"))
+    assert rows(OWNER) == before == 0
+
+
+def test_a_csv_export_is_recorded_for_whoever_it_was_made_for(api):
+    """Spec 7.5: exports record who they were made for. The sales tax CSV the owner downloads leaves a row naming the
+    owner and the export; nothing is stored, so there is no copy to expire."""
+    from backend.finance import actions as FA
+    from backend.tests.test_finance_fixtures import _seed
+    store = api.app.state.store
+    with store.transaction() as c:
+        _seed(c)
+        assert FA.ensure_setup(c, store.settings.owner_email)
+    r = api.get("/api/v2/finance/tax/sales-tax.csv?year=2026", headers=headers("ana-test"))
+    assert r.status_code == 200, r.text
+    with store.read() as c:
+        rows = c.execute("SELECT actor, target FROM events WHERE action='finance.export'").fetchall()
+    assert [tuple(x) for x in rows] == [("human:ana", "sales-tax")]
+
+
+def test_a_person_who_leaves_on_the_people_route_leaves_their_team_grant_at_once(api):
+    """Spec 7.5: grants follow the org chart and membership. The people route writes the roster itself, not through the
+    roster save, so it runs Finance's revalidation too: the team grant forgets the leaver at once."""
+    from backend.finance import actions as FA
+    from backend.finance.store import access as SA
+    from backend.tests.test_finance_fixtures import _seed
+    store = api.app.state.store
+    with store.transaction() as c:
+        _seed(c)
+        assert FA.ensure_setup(c, store.settings.owner_email)
+        grant = act(c, OWNER, "view_grant", {"subject_kind": "team", "subject": "web", "what": "expenses",
+                                             "whose": "company"})
+        assert grant.status == "committed", grant
+        gid = str(grant.result["grant_id"])
+        assert "human:eve" in SA.grant(c, gid).members
+    r = api.post("/api/v2/people/eve", json={"left": True}, headers=headers("ana-test"))
+    assert r.status_code == 200, r.text
+    with store.read() as c:
+        assert "human:eve" not in SA.grant(c, gid).members
+
+
+def test_a_fault_in_the_org_revalidation_leaves_the_person_update_and_no_partial_grant_change(api, monkeypatch):
+    """A Finance fault must not stop Tico's own writes (spec: a Finance fault doesn't stop bots). The revalidation a
+    roster save runs fails here after a partial change (eve leaves the grant's members and the grant is suspended). The
+    person update still commits; the partial change is rolled back, so the grant is as it was until Finance's next
+    action runs the revalidation again."""
+    import json
+
+    from backend.finance import actions as FA
+    from backend.finance import handlers
+    from backend.finance.store import access as SA
+    from backend.tests.test_finance_fixtures import _seed
+    store = api.app.state.store
+    with store.transaction() as c:
+        _seed(c)
+        assert FA.ensure_setup(c, store.settings.owner_email)
+        grant = act(c, OWNER, "view_grant", {"subject_kind": "team", "subject": "web", "what": "expenses",
+                                             "whose": "company"})
+        assert grant.status == "committed", grant
+        gid = str(grant.result["grant_id"])
+    calls = []
+
+    def half_done(ctx):
+        calls.append(gid)
+        SA.set_members(ctx.c, gid, SA.grant(ctx.c, gid).members - {"human:eve"})
+        SA.set_grant_status(ctx.c, gid, "suspended", FA.SYSTEM, ctx.at)
+        raise RuntimeError("forced: the revalidation fails after a partial change")
+
+    monkeypatch.setattr(handlers, "suspend_unstanding", half_done)
+    r = api.post("/api/v2/people/eve", json={"left": True}, headers=headers("ana-test"))
+    assert r.status_code == 200, r.text
+    assert calls == [gid]
+    with store.read() as c:
+        g = SA.grant(c, gid)
+        assert g.status == "active" and "human:eve" in g.members
+        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+    assert next(p for p in people["people"] if p["id"] == "eve")["hidden"]

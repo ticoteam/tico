@@ -93,9 +93,8 @@ function finDecideDialog(title, body, label, build, done) {
       return false;
     }
     if (r.status === 'committed') toast(done);
-    // A new bill or invoice opens in the rail when its tab is the one showing it.
-    const made = r.result?.bill_id ? ['bill', r.result.bill_id] : r.result?.invoice_id ? ['invoice', r.result.invoice_id] : null;
-    if (made && FIN?.doc?.kind === made[0]) FIN.doc.sel = String(made[1]);
+    if (r.result?.bill_id) finDocShow('bill', r.result.bill_id);
+    else if (r.result?.invoice_id) finDocShow('invoice', r.result.invoice_id);
     finDocsReload();
   });
   const form = dlg.querySelector('form');
@@ -106,15 +105,28 @@ function finDecideDialog(title, body, label, build, done) {
   });
   return dlg;
 }
+// A new bill or invoice is a draft: its list turns to Draft (All stays All) with no search, and it opens in the rail.
+function finDocShow(kind, id) {
+  const f = FIN_DOC_F[kind];
+  if (f.status) f.status = 'draft';
+  f.q = '';
+  if (FIN?.doc?.kind !== kind) return;
+  FIN.doc.sel = String(id);
+  const body = $('#fin-body'), search = body?.querySelector('[data-fin-q]'), seg = body?.querySelector(`[data-fin-seg="status"] button[data-v="${f.status}"]`);
+  if (search) search.value = '';
+  if (seg) finSegSet(seg);
+}
 // After a write: the list (and the open document) read again, wherever the person is.
 function finDocsReload() {
   if (FIN?.doc) void finDocLoad(false);
   if (FIN?.bs) void finBsLoad();
   if (FIN?.tx) void finTxLoad(false);
+  if (FIN?.line) void finLineLoad();
 }
 
 // ----------------------------------------------------------------- the bills address
-// The owner or an admin sets it (PUT /finance/bills-address), and outside view-as; everyone else copies it.
+// The owner or an admin sets it (PUT /finance/bills-address), and outside view-as, if they hold finance.admin (the
+// server's check, so the dialog says so); everyone else copies it.
 const finEmailSetter = () => !finCaps()?.viewing && (S.me?.role === 'owner' || !!S.me?.bot_admin);
 function finDocEmailDraw() {
   const box = $('#fin-doc-email'), email = FIN?.doc?.email || '';
@@ -128,7 +140,9 @@ function finDocEmailSet() {
   const state = FIN.doc;
   finDialog('Bills address', `<label>Address<input type="email" name="address" maxlength="254" autocomplete="off" value="${esc(state.email || '')}"></label>`, 'Save', async form => {
     const address = form.elements.address.value.trim();
-    const r = await put('/v2/finance/bills-address', {address: address || null});
+    const r = await put('/v2/finance/bills-address', {address: address || null}).catch(e => {
+      throw e.status === 403 ? new Error('Only a finance admin sets the bills address') : e;
+    });
     if (FIN?.doc === state) { state.email = r?.bills_email || ''; finDocEmailDraw(); }
     if (r?.bills_email && !r.inbox_id) throw new Error('Not an inbox address');
   });

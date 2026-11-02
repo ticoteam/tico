@@ -6005,6 +6005,7 @@ export type GetFinanceChartResponse = FinanceChart;
 /** GET /api/v2/finance/close/{month} */
 export type GetFinanceCloseChecklistParams = {
   month: string;
+  top_n?: number;
 };
 export type GetFinanceCloseChecklistBody = never;
 export type GetFinanceCloseChecklistResponse = FinanceCloseChecklist;

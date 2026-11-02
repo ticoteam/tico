@@ -11,7 +11,6 @@ from .context import Ctx
 from .core import dates
 from .core import gates as G
 from .core import kinds as K
-from .core import rights as R
 from .core import validate as V
 from .core.errors import CONFLICT, DENIED, NOT_FOUND, FinanceError
 from .core.org import SYSTEM, Principal
@@ -118,10 +117,6 @@ def judge(ctx: Ctx, p: Principal, kind: str, gate: K.Gate, plan: Plan, action_id
 
 
 # ------------------------------------------------------------------------------------------------ writing rules
-def _is_admin(ctx: Ctx, who: str) -> bool:
-    return R.is_admin(ctx.org, who, ctx.rights(who))
-
-
 def _gate(ctx: Ctx, who: str, kind: str) -> K.Gate:
     """A rule a bot writes or changes always needs a finance admin (§6.2); a person with finance.rules commits."""
     if who in ctx.org.bots:
@@ -253,7 +248,7 @@ def rule_test(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         rule = rule_from(row)
     else:
         rule = G.rule_of("draft", "draft", G.parse_when(p.get("when")), G.parse_outcome(p.get("outcome")))
-    everything = _is_admin(ctx, who)
+    everything = ctx.view(who).everything  # whoever sees everything tests every actor's actions, not only their own
     day = dates.day(ctx.today)
     changed: list[Result] = []
     checked = 0

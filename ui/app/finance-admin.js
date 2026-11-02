@@ -359,7 +359,7 @@ function finAccRows(acc) {
 }
 function finAccessPage() {
   const acc = FIN.acc;
-  $('#fin-body').innerHTML = `<div class="fin-bar"><span class="spacer"></span>${acc.can_edit_defaults ? '<button type="button" class="ghost" data-fin-defaults>Edit defaults</button>' : ''}
+  $('#fin-body').innerHTML = `<div class="fin-bar">${finApproverHtml(acc)}<span class="spacer"></span>${acc.can_edit_defaults ? '<button type="button" class="ghost" data-fin-defaults>Edit defaults</button>' : ''}
       ${acc.can_view_as ? '<button type="button" class="ghost" data-fin-viewas>View as…</button>' : ''}</div>`
     + finSplit(`<h2 class="fin-h2">Org chart</h2><div class="fin-scroll" id="fin-acc"></div><div id="fin-private"></div>`, '', 'Selected teammate');
   if (!acc.teammates.some(t => t.teammate === FIN_ACC.sel)) FIN_ACC.sel = finAccRows(acc).find(r => r.t)?.t.teammate || '';
@@ -371,7 +371,26 @@ function finAccessPage() {
     const tr = ev.target.closest('tr[data-fin-mate]');
     if (tr) { FIN_ACC.sel = tr.dataset.finMate; finAccDraw(); finAccRail(); }
   };
+  const pick = $('#fin-body [data-fin-approver]');
+  if (pick) pick.onchange = () => void finApproverSet(pick);
   finAccDraw(); finAccRail();
+}
+// The one person finance-admin approvals go to (§16): the owner's to name, the owner by default.
+function finApproverHtml(acc) {
+  if (!acc.can_edit_defaults) return '';
+  const people = (acc.teammates || []).filter(t => t.kind === 'person'), owner = people.find(t => t.default === 'everything');
+  const opt = (v, l) => `<option value="${esc(v)}"${v === (acc.finance_approver || '') ? ' selected' : ''}>${esc(l)}</option>`;
+  return `<label class="fin-inline">Finance approver<select data-fin-approver>${opt('', owner ? finWho(owner.teammate) : 'Owner')}${people.filter(t => t !== owner).map(t => opt(t.teammate, finWho(t.teammate))).join('')}</select></label>`;
+}
+async function finApproverSet(pick) {
+  pick.disabled = true;
+  try {
+    const r = await finAct('finance_approver_set', {approver: pick.value});
+    if (r.status === 'committed') toast('Saved');
+  } catch (e) { toast(e.message, true); }
+  await finAccReload();
+  pick.value = FIN.acc.finance_approver || '';
+  pick.disabled = false;
 }
 function finAccDraw() {
   const acc = FIN.acc, box = $('#fin-acc'); if (!box) return;
@@ -387,7 +406,8 @@ function finAccDraw() {
   // even before there is one: its totals follow the managers' payroll default.
   const priv = acc.private_lines || [], d = acc.defaults || {};
   const chip = (name, hidden, full) => `<span class="fin-chip">${esc(name)} <span class="muted">· ${hidden ? 'Hidden' : 'Totals only'}${full.length ? ' · Full detail: ' + esc(full.map(finWho).join(', ')) : ''}</span></span>`;
-  $('#fin-private').innerHTML = finCaps().may('finance.admin') ? `<h2 class="fin-h2">Private lines</h2><div class="fin-private">${chip('Payroll by person', d.manager_payroll === 'hidden', [])}${priv.map(p =>
+  // Only whoever sees everything reads them (backend/finance/tab.py access); finance.admin adds no view (§7.5).
+  $('#fin-private').innerHTML = finCaps().all ? `<h2 class="fin-h2">Private lines</h2><div class="fin-private">${chip('Payroll by person', d.manager_payroll === 'hidden', [])}${priv.map(p =>
     chip(p.name, p.others_see === 'hidden', Array.isArray(p.full_detail) ? p.full_detail : [])).join('')}</div>` : '';
 }
 function finAccRail() {

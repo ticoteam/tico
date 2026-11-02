@@ -97,18 +97,41 @@ def install(app, store, auth, mutate):
         except finance.FinanceError as e:
             raise problem(e) from None
 
-    def as_viewer(request, view_as):
-        """The caller, or for the owner the teammate they view Finance as (audited)."""
-        who = viewer(request)
-        if not view_as or view_as == who.actor:
-            return who.actor
+    def record_export(actor, kind, year):
+        """A CSV export is recorded in events for whoever it was made for (spec §7.5)."""
         try:
             with store.transaction() as c:
-                target = finance_reads.view_as(c, who.actor, view_as)
-                finance.note_view_as(c, who.actor, target)
+                finance.note_export(c, actor, kind, year)
         except finance.FinanceError as e:
             raise problem(e) from None
-        return target
+
+    def audit_private_read(actor):
+        """A request by someone other than the owner who reads private lines in full is written to events (spec §7.5),
+        once per request, whatever the route answers. The owner's own reads are not logged."""
+        try:
+            with store.read() as c:
+                lines = finance.full_read_lines(c, actor)
+            if lines:
+                with store.transaction() as c:
+                    finance.note_full_read(c, actor, lines)
+        except finance.FinanceError as e:
+            raise problem(e) from None
+
+    def as_viewer(request, view_as):
+        """The caller, or for the owner the teammate they view Finance as (audited). A request by someone other than
+        the owner who reads private lines in full is written to events (spec §7.5), once per request."""
+        who = viewer(request)
+        if not view_as or view_as == who.actor:
+            actor = who.actor
+        else:
+            try:
+                with store.transaction() as c:
+                    actor = finance_reads.view_as(c, who.actor, view_as)
+                    finance.note_view_as(c, who.actor, actor)
+            except finance.FinanceError as e:
+                raise problem(e) from None
+        audit_private_read(actor)
+        return actor
 
     @app.get("/api/v2/finance/budgets")
     def finance_budgets(request: Request, include_inactive: bool = False, limit: int = Query(200, ge=1, le=500),
@@ -183,6 +206,7 @@ def install(app, store, auth, mutate):
         """Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies: for a finance admin who
         sees sources. The ordinary trigger routes never show these bodies."""
         who = viewer(request)
+        audit_private_read(who.actor)
         return read(lambda c: finance_reads.webhook_deliveries(c, who.actor, limit=limit))
 
     @app.get("/api/v2/finance/access")
@@ -436,6 +460,7 @@ def install(app, store, auth, mutate):
         """The sales tax workpaper as CSV, the same lines as on screen."""
         actor = as_viewer(request, view_as)
         body = read(lambda c: finance_reads.sales_tax_csv(c, actor, year))
+        record_export(actor, "sales-tax", year)
         return Response(body, media_type="text/csv; charset=utf-8", headers={
             "X-Content-Type-Options": "nosniff",
             "Content-Disposition": 'attachment; filename="sales-tax-%s.csv"' % (year or "this-year")})
@@ -455,6 +480,7 @@ def install(app, store, auth, mutate):
         """The 1099 workpaper as CSV, the same lines as on screen."""
         actor = as_viewer(request, view_as)
         body = read(lambda c: finance_reads.form_1099_csv(c, actor, year))
+        record_export(actor, "1099", year)
         return Response(body, media_type="text/csv; charset=utf-8", headers={
             "X-Content-Type-Options": "nosniff",
             "Content-Disposition": 'attachment; filename="1099-%s.csv"' % (year or "this-year")})
@@ -499,10 +525,12 @@ def install(app, store, auth, mutate):
                                                    account_id=account_id, team=team, teammate=teammate, days=days))
 
     @app.get("/api/v2/finance/close/{month}")
-    def finance_close(request: Request, month: str):
-        """A month's close checklist, for teammates who do the books."""
+    def finance_close(request: Request, month: str, top_n: int = Query(20, ge=1, le=200)):
+        """A month's close checklist, for teammates who do the books. The money accounts still behind are listed up to
+        `top_n`; the rest fold into "Other · n"."""
         who = viewer(request)
-        return read(lambda c: finance_reads.close_checklist(c, who.actor, month))
+        audit_private_read(who.actor)
+        return read(lambda c: finance_reads.close_checklist(c, who.actor, month, top_n=top_n))
 
     @app.get("/api/v2/finance/action-kinds")
     def finance_action_kinds(request: Request, kind: str | None = Query(None, max_length=80)):
@@ -638,6 +666,7 @@ def install(app, store, auth, mutate):
         """Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key
         is the action's key, so a retry never acts twice. `dry_run` writes nothing and says what would happen."""
         who = viewer(request)
+        audit_private_read(who.actor)      # the receipt and a dry run both carry the action's impact (spec 7.5)
         key = (request.headers.get("idempotency-key") or "").strip()
         if body.dry_run:
             try:
@@ -676,6 +705,7 @@ def install(app, store, auth, mutate):
         """An action's status, for whoever asked for it, the person named to decide its approval, or whoever's current
         view covers what it is about. Its reason shows to the approver, and to others only while their view covers it."""
         who = viewer(request)
+        audit_private_read(who.actor)
         with store.read() as c:
             found = finance_reads.action_for(c, who.actor, action_id)
         if found is None:

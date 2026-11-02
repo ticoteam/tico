@@ -498,21 +498,14 @@ def _revoked(store: Any, vault: object, link: Link, cid: str, provider: str, *, 
             raise
 
 
-def disconnect_books(store: Any, vault: object, link: Link, cid: str, provider: str, *, now: str) -> None:
-    """HQ drops the grant, then the vault rows and the connection's ids go. A failed HQ call keeps everything, so it can
-    be run again. HQ answering reconnect_required means its grant is already gone, so only the local rows go."""
+def revoke_grant(store: Any, vault: object, link: Link, cid: str, provider: str, *, now: str) -> None:
+    """HQ drops the grant, outside any transaction, so a failed call can be run again. HQ answering reconnect_required
+    means its grant is already gone, so there is nothing to take off."""
     try:
         if _current(store, vault, cid).refresh_token:
             _revoked(store, vault, link, cid, provider, now=now)
     except ReconnectRequired:
-        pass    # HQ holds no grant to take off (reconnect_required, not_connected, no_refresh_token): the local rows go
-    with store.transaction() as c:
-        books = SX.books_settings(c, cid)
-        for key in ("access", "refresh"):
-            if books.get(key):
-                tico.drop_credential(c, str(books[key]))
-        SX.set_books_settings(c, cid, {"access": "", "refresh": "", "expires_at": ""})
-        SX.disconnect(c, cid, now)
+        pass    # HQ holds no grant to take off (reconnect_required, not_connected, no_refresh_token)
 
 
 # ------------------------------------------------------------------------------------------------ the routes' calls
@@ -590,14 +583,19 @@ def finish(store: Any, vault: object, link: Link, *, flow: str, user: str, outco
 
 
 def drop(store: Any, vault: object, link: Link, cid: str, *, by: str) -> None:
-    """Disconnect a books connection: HQ's grant, then its vault rows (disconnect_books). Raises UnknownConnection when
-    no books connection that is not disconnected has the id."""
+    """Disconnect a books connection: HQ's grant first, then the local part through the action path (books_disconnect:
+    its vault rows and ids go, and the connection is disconnected; spec §5). Raises UnknownConnection when no books
+    connection that is not disconnected has the id."""
+    from . import actions as FA
     with store.read() as c:
         held = [row for row in SX.books_connections(c) if row[0] == cid]
     if not held:
         raise UnknownConnection()
     provider = held[0][1]
-    disconnect_books(store, vault, link, cid, provider, now=tico.now())
+    revoke_grant(store, vault, link, cid, provider, now=tico.now())
     with store.transaction() as c:
+        done = FA.act(c, by, "books_disconnect", {"connection_id": cid}, f"books-disconnect:{cid}")
+        if done.status != "committed":
+            raise FA.FinanceError(done.code or "denied", done.reason or "the books connection was not disconnected")
         tico.audit(c, by, "finance.books.disconnected", cid, {"provider": provider})
 

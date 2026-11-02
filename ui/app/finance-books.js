@@ -79,7 +79,7 @@ function finBsDraw() {
         ? `<td class="fin-n">${finNum(was)}</td><td class="fin-n ${ch?.cls || ''}">${ch?.text || ''}</td>` : ''}<td><div class="fin-from">${from}</div></td></tr>`);
     }
     const t = totals[key], tp = prev?.totals?.[key], ch = prev && t != null && tp != null ? finDiff(t - tp) : null;
-    out.push(`<tr class="fin-subt"><td>Total ${label.toLowerCase()}</td><td class="fin-n">${finNum(t)}</td>${prev ? `<td class="fin-n">${finNum(tp)}</td><td class="fin-n ${ch?.cls || ''}">${ch?.text || ''}</td>` : ''}<td></td></tr>`);
+    out.push(`<tr class="fin-subt"><td>${esc(`Total ${label.toLowerCase()}${d.scoped ? finOwnSlice(finCaps()) : ''}`)}</td><td class="fin-n">${finNum(t)}</td>${prev ? `<td class="fin-n">${finNum(tp)}</td><td class="fin-n ${ch?.cls || ''}">${ch?.text || ''}</td>` : ''}<td></td></tr>`);
   }
   if (totals.liability != null || totals.equity != null) {
     const le = (totals.liability || 0) + (totals.equity || 0), lp = prev ? (prev.totals?.liability || 0) + (prev.totals?.equity || 0) : null;
@@ -179,7 +179,7 @@ function finCardRail() {
   const app = c.holder === finMe() && c.status !== 'cancelled' && FIN_CARD_APP[c.provider || 'mercury'];
   const saved = c.saved_on || [], bot = String(c.holder || '').startsWith('bot:');
   finRail(`<div class="fin-rail-title"><h2>${esc(finCardName(c))}</h2><span class="pill ${cls}">${esc(label)}</span></div>
-    ${finKv('Holder', esc(finWho(c.holder)))}${finKv('Budget', c.budget ? esc(c.budget.name) : '—')}
+    ${finKv('Holder', esc(finWho(c.holder)))}${finKv('Budget', c.budget ? esc(c.budget.name) + (c.status === 'cancelled' ? '' : finCardLimitsTag({card_limits: true})) : '—')}
     ${finKv('Limit', c.limit == null ? '—' : `${finUsd(c.limit)}${c.limit_interval ? ` <span class="muted">/ ${esc(c.limit_interval.replace(/ly$/, '').replace('dai', 'day'))}</span>` : ''}`)}
     ${finKv('Spent', finUsd(c.spent))}${c.expires_at ? finKv('Expires', esc(finDayLabel(c.expires_at))) : ''}
     ${app ? finKv('Number', `<a href="${esc(app)}" target="_blank" rel="noopener noreferrer">Show in ${esc(c.provider === 'mercury' || !c.provider ? 'Mercury' : c.provider)}</a>`) : ''}
@@ -408,9 +408,18 @@ async function finTxLineSave(sel) {
     }
     if (res.status === 'committed') toast('Saved');
     if (state.cat?.key === key) state.cat = null;
+    finTxRailHold();
     void finTxLoad(false);
-  } catch (e) { state.busy = false; toast(e.message, true); if (FIN?.tx === state) finTxDraw(); }
+  } catch (e) {
+    state.busy = false; toast(e.message, true);
+    if (FIN?.tx !== state) return;
+    finTxDraw();
+    // A rail drawn while this was out has its Save off.
+    finTxCatRedraw(); $('#fin-rail [data-fin-tag] [type=submit]')?.removeAttribute('disabled');
+  }
 }
+// The reload after a save redraws the rail from the fresh read: no picks until then, they would be dropped.
+const finTxRailHold = () => { const form = $('#fin-rail form'); if (form) form.inert = true; };
 function finTxRail() {
   if (FIN_TX.source === 'transfer') { finXferRail(); return; }
   const state = FIN.tx, r = state.rows.find(x => finTxKey(x) === state.sel);
@@ -442,6 +451,7 @@ function finTxRail() {
   void finTxExpected(r);
   const form = $('#fin-rail [data-fin-tag]');
   form?.elements.project.addEventListener('input', ev => { ev.target.dataset.finTyped = '1'; });
+  if (form) form.onchange = () => { if (!state.busy) form.querySelector('[type=submit]').disabled = false; };
   if (form) form.onsubmit = async ev => {
     ev.preventDefault();
     // Only the fields the person changed are set (or cleared) on each line; every other tag a line has stays.
@@ -461,6 +471,7 @@ function finTxRail() {
       const res = await finAct('categorize', {lines: lines.map(l => ({line_id: l.line_id, tags: pick(l)})), mode: 'replace'});
       if (res.status === 'committed') toast('Saved');
       state.busy = false;
+      finTxRailHold();
       void finTxLoad(false);
     } catch (e) { toast(e.message, true); btn.disabled = false; }
     finally { state.busy = false; }
@@ -622,6 +633,7 @@ function finTxCatDraw(r) {
       // row's stay); otherwise the rail redraws now, with its Save back on.
       if (saved) {
         if (FIN?.tx === state && state.cat?.key === c.key) state.cat = null;
+        finTxRailHold();
         void finTxLoad(false);
       } else finTxCatRedraw();
     }

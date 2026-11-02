@@ -212,6 +212,8 @@ def _save_roster(c, roster):
     roster_saved(c, roster)                        # a person who joins a manager goes last among its reports
     c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO UPDATE SET "
               "value_json=excluded.value_json", (json.dumps(roster, sort_keys=True),))
+    from .finance import actions as FA
+    FA.revalidate_org(c)                           # Finance's view grants follow the org chart at once (spec 7.5)
     from . import people_mirror
     people_mirror.changed()                        # the Tico account gets the sign-in list again (backend/people_mirror.py)
 

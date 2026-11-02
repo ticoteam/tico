@@ -98,6 +98,9 @@ def _set_bot(c, slug, gid):
     was, declared["team"] = declared.get("team") or "", gid
     c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(declared), slug))
     _follow(c, "bot:" + slug, was, gid)
+    if was != gid:
+        from .finance import actions as FA
+        FA.revalidate_org(c)                 # a bot's team is part of the org chart Finance's grants follow (spec 7.5)
 
 
 def _follow(c, owner, was, gid):

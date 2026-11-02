@@ -491,6 +491,8 @@ class SettingsAdmin:
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (body.slug, encode(config), team, operator, encode(owners), body.description,
              body.reports_to, repo, body.thread_mode, now, who.actor, encode([pid]), who.actor))
+        from .finance import actions as FA
+        FA.revalidate_org(c)                 # a new bot joins the org chart Finance's grants follow (spec 7.5)
         if not body.model and config.get("gateway"):
             self._template_gateway_model(c, body.slug, config)
         from .report_order import arrive
@@ -816,6 +818,8 @@ class SettingsAdmin:
         roster = self._roster(c)
         for slug in entries:
             c.execute("UPDATE bot_config SET team=? WHERE bot=?", (P.team_of(slug, entries, roster), slug))
+        from .finance import actions as FA
+        FA.revalidate_org(c)                 # a bot's manager and team are part of the org chart (spec 7.5)
         from . import groups
         groups.leads_follow(c, "bot:" + bot)          # a new manager can take a bot out of the group it leads
         after = self.definition(c, bot)
@@ -1698,6 +1702,8 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
     loaded = P.load(roster or {"people": H.humans(c)})
     for slug in entries:
         c.execute("UPDATE bot_config SET team=? WHERE bot=?", (P.team_of(slug, entries, loaded), slug))
+    from .finance import actions as FA
+    FA.revalidate_org(c)                     # an archived bot leaves the org chart and its reports move (spec 7.5)
     H.event(c, actor, "bot.archived", bot, {"successor": successor or None, "heir": heir, "previous": previous})
     H.setup_finished(c, bot, archived=True)
     result = {"bot": bot, "status": "archived", "successor": successor or None}
@@ -1729,3 +1735,5 @@ def _set_parent(c, actor, bot, parent, ts):
     c.execute("UPDATE bot_config SET reports_to=?,config_json=?,revision=revision+1,"
               "definition_updated=?,definition_updated_by=? WHERE bot=?",
               (parent, encode(declared), ts, actor, bot))
+    from .finance import actions as FA
+    FA.revalidate_org(c)                     # a bot's manager is part of the org chart Finance's grants follow (spec 7.5)

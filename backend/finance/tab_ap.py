@@ -19,6 +19,7 @@ from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .store import ap as SAP
 from .store import banking as SK
 from .store import ledger as SL
+from .usage import CREDIT
 from .tab import BILLS_EMAIL_KEY, decode_cursor, encode_cursor, page_size, private_cut
 
 Row = dict[str, object]
@@ -29,7 +30,7 @@ NESTED_MOST = 50            # settlements and attachments one document response 
 SIDES = {"bill": ("payables", R.AP), "invoice": ("receivables", R.AR)}
 CONTACT_OF = {"bill": "vendor", "invoice": "customer"}
 CHART_MOST = 2000
-CONTROL_SUBTYPES = ("payable", "receivable")
+NOT_DOCUMENT_SUBTYPES = ("payable", "receivable", "bank", "clearing")
 CHART_FOR = {"bill": ("expense", "asset"), "invoice": ("income",)}
 
 
@@ -342,7 +343,7 @@ def contacts(c: sqlite3.Connection, viewer: str, *, kind: str | None = None, q: 
     if not kinds:
         raise denied("contacts are not in your view")
     vendors, customers = sees_side(ctx, view, "bill"), sees_side(ctx, view, "invoice")
-    admin = R.is_admin(ctx.org, viewer, ctx.rights(viewer))
+    admin = view.everything  # the tax id's last 4 go to whoever sees everything, not to finance admins
     most = page_size(limit)
     marks = decode_cursor(cursor)
     after = (marks[0], marks[1]) if len(marks) == 2 else None
@@ -366,10 +367,18 @@ def bills_email(c: sqlite3.Connection) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _document_line(a: L.Account, parents: set[str], money: set[str]) -> bool:
+    """Whether a bill or invoice line can post to `a`: not accounts payable or receivable, not a group of lines, not a
+    bank, clearing or other money account, and not Gateway credit, which usage draws down."""
+    return a.subtype not in NOT_DOCUMENT_SUBTYPES and a.id not in parents and a.id not in money and a.code != CREDIT
+
+
 def chart(c: sqlite3.Connection, viewer: str, *, for_: str | None = None, at: str | None = None) -> Row:
     """The active lines the viewer may post to, for the bill, invoice and journal forms: every line in their view,
     for teammates who write to the books (finance.book, ap or ar). `for_` bill keeps expense and asset lines, invoice
-    income lines (never accounts payable or receivable, which only documents move); journal keeps every line.
+    income lines; both leave out what a document's line can't post to (_document_line): accounts payable or receivable,
+    which only documents move, a line with lines under it, and money the bank feed or usage moves. Journal keeps every
+    line.
     `company_wide` says whether a line takes untagged amounts from this viewer; when it does not, `attributable` lists
     the team and teammate tags they may use on it (the same rule a write checks)."""
     from .handlers import may_write
@@ -381,11 +390,13 @@ def chart(c: sqlite3.Connection, viewer: str, *, for_: str | None = None, at: st
     if for_ is not None and for_ not in (*CHART_FOR, "journal"):
         raise invalid("for is bill|invoice|journal")
     types = CHART_FOR.get(for_ or "journal")
+    parents = {a.parent_id for a in ctx.accounts.values() if a.active and a.parent_id}
+    money = {str(m["account_id"]) for m in SK.money_accounts(c, ctx.book.id)}
     out: list[Row] = []
     for a in sorted(ctx.accounts.values(), key=lambda x: (x.code, x.id)):
         if not a.active or not (view.everything or view.sees_account(a)):
             continue
-        if types is not None and (a.type not in types or a.subtype in CONTROL_SUBTYPES):
+        if types is not None and (a.type not in types or not _document_line(a, parents, money)):
             continue
         wide = may_write(ctx, viewer, a.id, {})
         row: Row = {"id": a.id, "number": a.code, "name": a.name, "type": a.type, "subtype": a.subtype,

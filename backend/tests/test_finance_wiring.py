@@ -452,7 +452,8 @@ def test_no_settled_hold_outlives_its_months_final_posting(books):
         assert _hold(c, late)[1] is not None
     with books.transaction() as c:
         # Settled in September, but September's meter billed nothing: the final posting frees it.
-        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 1_000, "effective_from": "2026-09-01"})
+        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 1_000, "effective_from": "2026-09-01"},
+            at="2026-08-15T12:00:00.000000Z")
         lone = FA.run_hold(c, "coder", "jsep", at="2026-09-20T10:00:00.000000Z").hold_id
         run = _turn(c, "coder", "2026-09-20T11:00:00.000000Z", 0.20)
         FA.run_ended(c, "jsep", run, "2026-09-20T11:00:01.000000Z")

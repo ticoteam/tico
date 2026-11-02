@@ -7,8 +7,9 @@ Approvals are Tico approvals with no task, kind `finance` (`spend` is kept for m
 When a decision arrives, `approval_decided` verifies the approval is the one Finance asked for, re-checks rights, view
 and budgets, consumes it, and commits, all in one transaction."""
 import json
+import logging
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
@@ -18,7 +19,7 @@ from . import posting
 from . import raw_totals, runs
 from . import setup as setup_mod
 from . import rights, sync, tax, usage
-from .context import Ctx, load
+from .context import APPROVER_KEY, Ctx, is_set_up, load
 from .core import kinds as K
 from .core import org as O
 from .core import validate as V
@@ -41,13 +42,65 @@ budget_state = budgeting.budget_state
 budget_for = budgeting.budget_for
 SYSTEM = O.SYSTEM
 Principal = O.Principal
+log = logging.getLogger(__name__)
+
+def bills_address_set(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
+    """The bills address vendors send bills to (spec §5), set or cleared (""): the settings route asks through here."""
+    V.only(p, ("address",))
+    if "address" not in p:
+        raise FinanceError(INVALID, "address is the bills address, or empty to clear it")
+    value = str(p["address"] or "").strip().lower()
+
+    def apply(aid: str) -> handlers.Result:
+        set_bills_email(ctx.c, value, by=who, at=ctx.at)
+        return {"address": value or None}
+    return handlers.Plan(K.ALLOW, "Set the bills address" if value else "Clear the bills address", apply)
+
+
+def books_disconnect(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
+    """A books connection's local part (spec §5): its credentials leave Tico's vault and its ids are cleared, and the
+    connection is disconnected. Its HQ grant is revoked first, outside any transaction, by books_link.drop."""
+    from .store import mirror as SM
+    V.only(p, ("connection_id",))
+    cid = V.text(p, "connection_id", 80)
+    if cid not in {str(row[0]) for row in SM.books_connections(ctx.c)}:
+        raise FinanceError(NOT_FOUND, "no such books connection")
+
+    def apply(aid: str) -> handlers.Result:
+        books = SM.books_settings(ctx.c, cid)
+        for key in ("access", "refresh"):
+            if books.get(key):
+                tico.drop_credential(ctx.c, str(books[key]))
+        SM.set_books_settings(ctx.c, cid, {"access": "", "refresh": "", "expires_at": ""})
+        SM.disconnect(ctx.c, cid, ctx.at)
+        return {"connection_id": cid, "status": "disconnected"}
+    return handlers.Plan(K.ALLOW, "Disconnect the books connection", apply)
+
+
+def finance_approver_set(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
+    """The one person finance-admin approvals go to (spec §16): named by the owner, or "" to send them back to the owner.
+    Only a person on the org chart can be named, never a bot."""
+    from .store import ledger as SL
+    V.only(p, ("approver",))
+    if "approver" not in p:
+        raise FinanceError(INVALID, "approver is a person, or empty for the owner")
+    value = str(p["approver"] or "").strip()
+    if value and not ctx.org.is_person(value):
+        raise FinanceError(INVALID, "the finance approver is a person on the org chart")
+
+    def apply(aid: str) -> handlers.Result:
+        SL.set_setting(ctx.c, APPROVER_KEY, value or None, who, ctx.at)
+        return {"approver": value or None}
+    return handlers.Plan(K.ALLOW, "Name the finance approver" if value else "Send finance approvals to the owner", apply)
+
 
 # Every live kind's planner: phase 0's in handlers, then banking, cards, payments, rules, and payables/receivables.
 PLANNERS: dict[str, handlers.Planner] = {
     **handlers.PLANNERS, "connection_create": banking.connection_create, "reconcile": banking.reconcile,
     "reconcile_undo": banking.reconcile_undo,
     "connection_sync": banking.connection_sync, "connection_disconnect": banking.connection_disconnect,
-    "connection_map": banking.connection_map, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
+    "connection_map": banking.connection_map, "bills_address_set": bills_address_set,
+    "books_disconnect": books_disconnect, "finance_approver_set": finance_approver_set, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
     **documents.PLANNERS, **mirror.PLANNERS, **tax.PLANNERS, **raw_totals.PLANNERS, **catalog.PLANNERS,
     **purchasing.PLANNERS}
 assert set(PLANNERS) == set(K.LIVE)
@@ -409,6 +462,24 @@ def withdraw_bill_asks(ctx: Ctx, bill_id: str, keep: str, why: str) -> list[str]
     return out
 
 
+def revalidate_org(c: sqlite3.Connection, at: str | None = None) -> None:
+    """Tico's org chart, membership or a grantor's view changed outside an action: write down what that did to the view
+    grants now (spec §7.5), the same revalidation an action runs. Called inside Tico's own writes (a roster save, a bot
+    edit, an archive, a recruit), so a Finance fault must not fail them: the revalidation runs in a savepoint, and a
+    fault rolls back its partial writes, logs the traceback and returns, leaving the caller's change intact. The next
+    Finance action runs the same revalidation again. A no-op until Finance is set up."""
+    if not is_set_up(c):
+        return
+    mark = _savepoint(c, "fin_revalidate")
+    try:
+        handlers.suspend_unstanding(load(c, at))
+    except Exception:
+        _rollback(c, "fin_revalidate", mark)
+        log.exception("Finance could not revalidate its view grants after an org change; the change stands")
+    else:
+        _release(c, "fin_revalidate")
+
+
 def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = None) -> ActionResult | None:
     """Act on a decision about a Finance approval, in the caller's transaction: approve commits once (re-checked),
     decline denies, a withdrawal or expiry ends the action. None when the approval is not Finance's. Safe to call
@@ -554,6 +625,7 @@ def set_bills_email(c: sqlite3.Connection, address: str | None, by: str = O.SYST
     if value and ("@" not in value or len(value) > 200):
         raise FinanceError(INVALID, "a bills address is an email address")
     SL.set_setting(c, BILLS_EMAIL_KEY, value or None, by, at or tico.now())
+
 RunHold = runs.RunHold
 run_hold = runs.hold
 run_ended = runs.ended
@@ -608,6 +680,28 @@ def watch(c: sqlite3.Connection, rule_id: str, by: str, action: str, params: Map
 def note_view_as(c: sqlite3.Connection, owner: str, target: str) -> None:
     """"View as" is audited (spec §7.5): the owner reads Finance exactly as `target` sees it."""
     tico.audit(c, owner, "finance.view_as", target, {})
+
+
+def note_export(c: sqlite3.Connection, viewer: str, kind: str, year: int | None) -> None:
+    """An export is made for whoever downloads it and recorded in events with that viewer (spec §7.5). Exports are not
+    stored, so there is no copy to expire; a stored export would expire after 7 days."""
+    tico.audit(c, viewer, "finance.export", kind, {"year": year})
+
+
+def full_read_lines(c: sqlite3.Connection, viewer: str, at: str | None = None) -> list[str]:
+    """The private accounts whose detail a viewer other than the owner reads in full (spec §7.5). The owner's own reads
+    are not logged; nothing is logged before Finance is set up."""
+    if not is_set_up(c):
+        return []
+    ctx = load(c, at)
+    if viewer == ctx.org.owner:
+        return []
+    return sorted(ctx.view(viewer).full_detail)
+
+
+def note_full_read(c: sqlite3.Connection, viewer: str, accounts: Sequence[str]) -> None:
+    """A full read of private lines is written to events (spec §7.5)."""
+    tico.audit(c, viewer, "finance.private_read", ",".join(accounts), {"accounts": list(accounts)})
 
 
 # ------------------------------------------------------------------------------------------------ dev copies
