@@ -195,8 +195,8 @@ def _day_of(at):
 
 
 def _refresh_due(c, at):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (REFRESH_KEY,)).fetchone()
-    return not row or row["value_json"] != json.dumps(_day_of(at))
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (REFRESH_KEY,)).fetchone()
+    return not row or row["value"] != json.dumps(_day_of(at))
 
 
 def _refresh_stats(store, at):

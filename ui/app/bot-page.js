@@ -25,7 +25,7 @@ const BOT_TAB_LABELS = {home: 'Home', dm: 'DM', tasks: 'Tasks', info: 'Info'};
 // from it: neither has a DM, and the assistant has no Home.
 const botTabs = slug => {
   const tabs = BOT_TABS.filter(t => !(t === 'dm' && (slug === assistantBot() || isAssistantHelper(slug))) && !(t === 'home' && slug === assistantBot()));
-  const e = S.emps.find(x => x.name === slug), mine = e?.my_access;
+  const e = botRow(slug), mine = e?.my_access;
   const noDm = e && e.can_chat === false ? tabs.filter(t => t !== 'dm') : tabs;
   // Seen but not read: no Home, updates or docs, and DM and Tasks only for someone who may write to it (the
   // page then holds their own DM and tasks with the bot). Every teammate reads its Rules.
@@ -44,7 +44,7 @@ function botStopped() {
 function botPauseHTML(slug, state, error = '') {
   const retry = '<button type="button" class="ghost small" data-bot-pause-retry>Retry</button>';
   if (!state) return error ? `<p class="err" role="alert">${esc(error)} ${retry}</p>` : '<p class="muted" role="status">Loading…</p>';
-  const e = S.emps.find(x => x.name === slug), name = e?.display_name || slug;
+  const e = botRow(slug), name = botDisplayName(slug);
   const paused = state.state === 'paused', record = state.paused_by;
   const stamp = record && Number.isFinite(Date.parse(record.at))
     ? `${new Date(record.at).toISOString().slice(0, 16).replace('T', ' ')} UTC` : '';
@@ -52,7 +52,7 @@ function botPauseHTML(slug, state, error = '') {
   const tasks = paused && state.open_tasks ? ` <a href="#/bot/${encodeURIComponent(slug)}/tasks">${state.open_tasks} open task${state.open_tasks === 1 ? ' is' : 's are'} waiting on it</a>` : '';
   return `<div class="bot-pause-row">
     <div class="bot-pause-copy"><div class="bot-pause-title${paused ? ' bot-pause-record' : ''}" role="status" aria-live="polite" aria-atomic="true">${paused ? (stamp ? `Paused by ${esc(record.name)} on ${esc(stamp)}` : 'Paused') : 'Pause this bot'}</div>
-      <p class="muted">${paused ? `${esc(name)} is paused: no tasks, messages or routines until it is unpaused.${tasks}${!state.can_control ? ` Ask ${esc(state.operator || 'its operator')} to unpause.` : ''}`
+      <p class="muted">${paused ? `${esc(name)} is paused: no tasks, messages or routines until it is unpaused.${tasks}${!state.can_control ? ` Ask ${esc(state.owner_id || 'its operator')} to unpause.` : ''}`
         : 'Stops new tasks, messages and routines; a turn in progress is interrupted.'}</p>
       ${state.company_paused ? '<p class="muted">Company is paused for billing. <a href="#/settings/billing">Add credit</a></p>' : ''}
       ${error ? `<p class="err" role="alert">${esc(error)} ${retry}</p>` : ''}</div>
@@ -72,7 +72,7 @@ function botPauseDraw() {
 // The header's and the tree's Paused badges read the roster, which only catches up at its next poll. The pause state
 // (a fresh read or a finished control) is the authority, so the roster entry follows it as soon as it is known.
 function botPauseFollow(view) {
-  const emp = S.emps.find(x => x.name === view.slug), paused = view.pauseState?.state === 'paused', badge = $('#bot-paused');
+  const emp = botRow(view.slug), paused = view.pauseState?.state === 'paused', badge = $('#bot-paused');
   if (emp && paused !== (emp.status === 'paused')) { emp.status = paused ? 'paused' : 'active'; renderTree(); }
   if (badge) patchLiveHTML(badge, botPausedBadge(view.slug));
 }
@@ -110,7 +110,7 @@ async function botPauseChange(view, action) {
     view.pauseState = {...view.pauseState, state: action === 'pause' ? 'paused' : 'active', revision: result.revision,
       paused_by: null};
     botPauseFollow(view);
-    const name = S.emps.find(x => x.name === view.slug)?.display_name || view.slug;
+    const name = botDisplayName(view.slug);
     toast(`${name} is ${action === 'pause' ? 'paused.' : 'unpaused'}`, false,
       action === 'pause' ? {label: 'Unpause', run: () => botPauseChange(view, 'resume')} : null);
   } catch (error) {
@@ -128,8 +128,8 @@ function botStatePill(slug) {
   if (st === 'needs') return '<span class="pill needs">Needs you</span>';
   if (st === 'paused') return '<span class="pill">Paused</span>';
   if (st === 'planned') return '<span class="pill">Setting up</span>';
-  if (st === 'failed') return `<span class="pill fail">Last run failed${last?.finished ? ` ${ago(last.finished)}` : ''}</span>`;
-  return `<span class="pill">Idle${last?.finished ? `, last active ${ago(last.finished)}` : ''}</span>`;
+  if (st === 'failed') return `<span class="pill fail">Last run failed${last?.finished_at ? ` ${ago(last.finished_at)}` : ''}</span>`;
+  return `<span class="pill">Idle${last?.finished_at ? `, last active ${ago(last.finished_at)}` : ''}</span>`;
 }
 // The server cuts the Role section at 600 characters, so the lead can stop mid-sentence: end at the
 // last full sentence instead, and put whatever is left behind "more".
@@ -221,7 +221,7 @@ function botGoalRender(slug, g, count) {
 // line, grey when nothing is needed and red when a person must act, and only an action that exists (`review`: the
 // Stopped runs dialog, which retries or dismisses the run). A click opens what happened.
 const lastStopOf = slug => { const s = v2StatusOf(slug); return ['crashed', 'idle'].includes(s?.state) ? s.last_stop || null : null; };
-const stopReviewable = (slug, stop) => stop.action === 'review' && settingsCanManageBot(S.emps.find(x => x.name === slug));
+const stopReviewable = (slug, stop) => stop.action === 'review' && settingsCanManageBot(botRow(slug));
 function lastStopHTML(slug) {
   const stop = lastStopOf(slug); if (!stop) return '';
   const soft = stop.tone === 'soft';
@@ -252,7 +252,7 @@ function lastStopOpen(slug) {
 // Beside the bot's name only when something is wrong (#514): crashed, quarantined, rate limited,
 // blocked, a failed last run, or an agent that is offline while work waits for it. Idle says nothing.
 function botAlertHTML(slug) {
-  const e = S.emps.find(x => x.name === slug) || {}, s = v2StatusOf(slug);
+  const e = botRow(slug) || {}, s = v2StatusOf(slug);
   let word = '', why = '';
   if (s?.state === 'crashed' && s.last_stop) return lastStopHTML(slug);
   // Tico stopped it (failed runs, or over its run budget): the words are the server's, Release lifts it.
@@ -271,7 +271,7 @@ function botAlertHTML(slug) {
 }
 // Under More for a person who manages a quarantined bot: why, the refused words and the task they were on.
 function botQuarantineCard(slug) {
-  const s = v2StatusOf(slug), e = S.emps.find(x => x.name === slug);
+  const s = v2StatusOf(slug), e = botRow(slug);
   if (s?.bot_state !== 'quarantined' || !e || botLimited(e) || !settingsCanManageBot(e)) return '';
   const r = s.quarantine?.review || {};
   return `
@@ -346,11 +346,11 @@ function bindChatSwipe(thread) {
   thread.addEventListener('touchcancel', settle);
 }
 async function pageBot(slug, tab) {
-  const e = S.emps.find(x => x.name === slug);
+  const e = botRow(slug);
   if (!e) { BOT = null; $('#main').innerHTML = `<div class="empty">Unknown bot "${esc(slug)}".</div>`; return; }
   if (BOT?.slug === slug && $('#btabs')) { showBotTab(tab); return; }   // same bot, another tab
   const keeper = isKeeper(slug);        // hosted by the keeper: hub.db is its record (docs/history/hub-v2.md)
-  const boss = S.emps.find(x => x.name === e.reports_to);
+  const boss = botRow(e.reports_to);
   const role = String(e.role || e.description || '').trim();
   const limited = botLimited(e);       // seen, not read: no activity anywhere on the page
   const work = botTabs(slug).filter(t => BOT_WORK_TABS.includes(t));
@@ -365,11 +365,11 @@ async function pageBot(slug, tab) {
   $('#main').innerHTML = `
   <div class="bot-top" id="bot-top">
     <button class="bot-back-arrow" id="bot-back-arrow" type="button" aria-label="Back" title="Back">‹</button>
-    <div class="bot-ident"><span data-tip-bot="${esc(slug)}" tabindex="0" role="img" aria-label="${esc(e.display_name || slug)} status">${avatar(slug, 36, stateOf(slug))}</span>
+    <div class="bot-ident"><span data-tip-bot="${esc(slug)}" tabindex="0" role="img" aria-label="${esc(e.display_name || e.slug)} status">${avatar(slug, 36, stateOf(slug))}</span>
       <div class="botid"><div class="bot-nameline"><h1${role ? ` title="${esc(role)}"` : ''}>${shownName(e)}${runtimeTag(e)}${botBetaPill(e)}</h1><span id="bot-paused">${botPausedBadge(slug)}</span><button type="button" class="bot-learn" id="bot-learn" aria-label="Learnings" title="Learnings" hidden><span class="nav-icon" aria-hidden="true">psychology</span><span class="bl-label">Learnings</span><span class="bl-n" hidden></span></button>${limited ? '' : botScreenLinkHTML(slug)}<span id="bot-tool-strip" hidden></span></div>
         <div class="meta" id="bot-branches"></div>
         <div class="meta" id="bot-alert">${limited ? '' : botAlertHTML(slug)}</div></div></div>
-    <div class="bot-switch" id="btabs" role="tablist" aria-label="${esc(e.display_name || slug)}">
+    <div class="bot-switch" id="btabs" role="tablist" aria-label="${esc(e.display_name || e.slug)}">
       ${tabsShown.map(t => { const label = BOT_TAB_LABELS[t];
         return `<button type="button" data-bt="${t}" role="tab">${label}</button>`; }).join('')}
     </div>
@@ -422,9 +422,9 @@ async function pageBot(slug, tab) {
     ${limited ? `    <section class="card"><header><h2>About</h2></header>
       <dl class="bot-setup">
         ${role ? `<dt>Role</dt><dd>${botRoleHTML(role)}</dd>` : ''}
-        <dt>Owner</dt><dd>${esc(botPersonName(e.operator))}</dd>
+        <dt>Owner</dt><dd>${esc(botPersonName(e.owner_id))}</dd>
         <dt>Works for</dt><dd>${userChips(e) || '<span class="muted">Nobody assigned</span>'}</dd>
-        ${boss ? `<dt>Reports to</dt><dd><a href="#/bot/${boss.name}">${esc(boss.display_name)}</a></dd>`
+        ${boss ? `<dt>Reports to</dt><dd><a href="#/bot/${encodeURIComponent(boss.id)}">${esc(boss.display_name)}</a></dd>`
           : String(e.reports_to || '').startsWith('human:') ? `<dt>Reports to</dt><dd>${esc(botPersonName(e.reports_to.slice(6)))}</dd>` : ''}
         <dt>Your access</dt><dd>${e.my_access.write ? 'See it and send requests' : 'See it only'}</dd>
         ${botScreenRowHTML(slug)}
@@ -436,10 +436,10 @@ async function pageBot(slug, tab) {
         <dt>Humans</dt><dd>${userChips(e) || '<span class="muted">Nobody assigned</span>'}</dd>
         ${!e.agent ? `<dt>Computer</dt><dd>${cloudMachineOn(e) ? cloudMachineComputerHTML(e) : e.machine ? `${esc(e.machine.label || e.machine.runner_id)} <span class="muted">· ${e.online ? 'Online' : 'Offline'}</span>` : '<span class="muted">Not assigned</span>'}</dd>
         <dt>Harness</dt><dd>${esc(harnessWords(e.harness || e.runtime || e.resolved_runtime) || 'Team default')}</dd>` : ''}
-        ${e.agent ? `<dt>Run by</dt><dd>${esc(agentKind(e.agent))}${e.agent.profile ? ` · profile <code>${esc(e.agent.profile)}</code>` : ''}${e.agent.version ? ` · ${esc(e.agent.version)}` : ''}${e.agent.platform ? ` · ${esc(e.agent.platform)}` : ''}<span class="muted"> · ${esc(agentPresenceLabel(e.agent, e.online).toLowerCase())}${e.agent.last_seen ? `, last ${e.agent.synced ? 'sync' : 'seen'} ${esc(ago(e.agent.last_seen))}` : ''}</span></dd>
+        ${e.agent ? `<dt>Run by</dt><dd>${esc(agentKind(e.agent))}${e.agent.profile ? ` · profile <code>${esc(e.agent.profile)}</code>` : ''}${e.agent.version ? ` · ${esc(e.agent.version)}` : ''}${e.agent.platform ? ` · ${esc(e.agent.platform)}` : ''}<span class="muted"> · ${esc(agentPresenceLabel(e.agent, e.online).toLowerCase())}${e.agent.last_seen_at ? `, last ${e.agent.synced ? 'sync' : 'seen'} ${esc(ago(e.agent.last_seen_at))}` : ''}</span></dd>
         <dt>Model</dt><dd>${e.agent.model ? `${esc(e.agent.model)}${e.agent.provider ? `<span class="muted"> · ${esc(e.agent.provider)}</span>` : ''}` : "<span class=\"muted\">the profile's own</span>"}</dd>`
         : `<dt>Model</dt><dd>${esc(e.model ? settingsChoiceLabel(e.harness || e.runtime, e.model, e.reasoning_effort || e.effort) : settingsDefaultLabel(e))}${e.fallback ? `<span class="muted"> · fallback ${esc(settingsChoiceLabel(e.fallback.harness, e.fallback.model, e.fallback.reasoning_effort || e.fallback.effort))}</span>` : ''}</dd>`}
-        ${boss ? `<dt>Reports to</dt><dd><a href="#/bot/${boss.name}">${esc(boss.display_name)}</a></dd>` : ''}
+        ${boss ? `<dt>Reports to</dt><dd><a href="#/bot/${encodeURIComponent(boss.id)}">${esc(boss.display_name)}</a></dd>` : ''}
         ${botRepoHTML(e) ? `<dt>Repository</dt><dd>${botRepoHTML(e).replace(/^Repository /, '')}</dd>` : ''}
         ${botScreenRowHTML(slug)}
         <dt>Automations</dt><dd><a href="${AUTOMATIONS}?q=${encodeURIComponent(botDisplayName(slug))}" data-bot-automations>Open</a></dd>
@@ -497,13 +497,13 @@ async function pageBot(slug, tab) {
   if (!limited) void botGoalLoad(slug);
   $('#btabs').onclick = ev => {
     const b = ev.target.closest('[data-bt]'); if (!b) return;
-    location.hash = b.dataset.bt === work[0] ? `#/bot/${slug}` : `#/bot/${slug}/${b.dataset.bt}`;
+    location.hash = b.dataset.bt === work[0] ? base : `${base}/${b.dataset.bt}`;
   };
   // Wide, the top tabs give way to Home and DM beside Tasks; this switch picks which one the left side shows.
   const talk = $('#pane-chat .bot-talk-switch');
   if (talk) talk.onclick = ev => {
     const b = ev.target.closest('[data-talk]'); if (!b) return;
-    location.hash = b.dataset.talk === work[0] ? `#/bot/${slug}` : `#/bot/${slug}/${b.dataset.talk}`;
+    location.hash = b.dataset.talk === work[0] ? base : `${base}/${b.dataset.talk}`;
   };
   // "The back arrow in a bot should always go back to home. Not previous page."
   $('#bot-back-arrow').onclick = () => { location.hash = UPDATES; };   // home
@@ -741,7 +741,7 @@ function runCommand(text, out, slug) {
     out.querySelector('[data-cmd="yes"]').onclick = async ev => {
       const msg = out.querySelector('#cmd-msg'); ev.target.disabled = true; msg.textContent = 'Clearing…';
       try {
-        await post(`/employees/${slug}/session/clear`);
+        await post(`/employees/${encodeURIComponent(slug)}/session/clear`);
         out.hidden = true; out.innerHTML = '';
         toast('Session cleared: the next run starts fresh');
         if (CONV?.slug === slug) { CONV.cleared = new Date().toISOString(); convRender(CONV); }

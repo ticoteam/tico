@@ -50,9 +50,9 @@ def authors_of(c, settings, task_id):
         return set()
     turns = [row["id"] for row in c.execute("SELECT id FROM turns WHERE task_id=?", (task_id,))]
     makers = {s["family"] for made in ran_on(c, turns).values() for s in made["segments"] if s["family"]}
-    if H.is_bot(task["owner"]):
-        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (H.actor_id(task["owner"]),)).fetchone()
-        config = follow(c, H.actor_id(task["owner"]), H._json(row["config_json"], {}) or {}) if row else {}
+    if H.is_bot(task["owner_id"]):
+        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (H.actor_id(task["owner_id"]),)).fetchone()
+        config = follow(c, H.actor_id(task["owner_id"]), H._json(row["config"], {}) or {}) if row else {}
         makers.add(providers.author_provider(providers.bot_choice(c, settings, config)[1]))
     return makers - {""}
 
@@ -121,7 +121,7 @@ def choose(c, settings, bot, spec, role, authors=(), memory_pass=False):
 
 
 def record(c, actor, task_id, check):
-    c.execute("INSERT INTO task_check_models(task_id,runtime,model,harness,effort,role,created_by,created) "
+    c.execute("INSERT INTO task_check_models(task_id,runtime,model,harness,effort,role,created_by,created_at) "
               "VALUES(?,?,?,?,?,?,?,?)", (task_id, check["runtime"], check["model"], check["harness"],
                                           check["effort"], check["role"], actor, H.now()))
     H._task_event(c, task_id, actor, "check_model", None, f"{check['runtime']}:{check['model']}",
@@ -134,7 +134,7 @@ def record(c, actor, task_id, check):
 def file_pass(c, settings, task_id, spec):
     """Name the model of a nightly memory tidy pass on its check subtask, the owner bot's own (the pilot's call).
     Only the model and the low effort are set; the subtask stays the bot's own."""
-    owner = H.task(c, task_id)["owner"]
+    owner = H.task(c, task_id)["owner_id"]
     if not H.is_bot(owner):
         raise CheckModelError("check_model", "A memory pass runs on a bot's own subtask")
     bot = H.actor_id(owner)
@@ -159,7 +159,7 @@ def prime(c, pairs):
     for part in H.chunks(sorted({tid for tid, _ in pairs})):
         have.update((row[0], row[1]) for row in c.execute(
             "SELECT m.task_id,m.created_by FROM task_check_models m JOIN tasks t ON t.id=m.task_id "
-            f"WHERE m.task_id IN ({','.join('?' * len(part))}) AND t.owner=m.created_by", part))
+            f"WHERE m.task_id IN ({','.join('?' * len(part))}) AND t.owner_id=m.created_by", part))
     seed(c, H.CHECK_MODEL_SQL, {(tid, "bot:" + bot, "bot:" + bot): None
                                 for tid, bot in pairs if (tid, "bot:" + bot) not in have})
 
@@ -312,10 +312,10 @@ def review_default(c, settings, owner, parent_id):
     the bot works on its own model, as before, rather than the review being refused."""
     from .shared_bots import follow
     parent = H.task(c, parent_id) if parent_id else None
-    if not parent or not H.is_bot(owner) or parent["owner"] == owner:
+    if not parent or not H.is_bot(owner) or parent["owner_id"] == owner:
         return None, None
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (H.actor_id(owner),)).fetchone()
-    config = follow(c, H.actor_id(owner), H._json(row["config_json"], {}) or {}) if row else {}
+    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (H.actor_id(owner),)).fetchone()
+    config = follow(c, H.actor_id(owner), H._json(row["config"], {}) or {}) if row else {}
     if config.get("review_model") != "check":
         return None, None
     authors = authors_of(c, settings, parent_id)

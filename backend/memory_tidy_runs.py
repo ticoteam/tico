@@ -14,11 +14,11 @@ from .updates import ZONE
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory_tidy_passes(
  id TEXT PRIMARY KEY, night TEXT NOT NULL, bot TEXT NOT NULL, model TEXT NOT NULL,
- started TEXT NOT NULL, deadline TEXT NOT NULL, status TEXT NOT NULL,
+ started_at TEXT NOT NULL, deadline TEXT NOT NULL, status TEXT NOT NULL,
  reason TEXT NOT NULL DEFAULT '', parent_task_id TEXT, check_task_id TEXT,
  baseline TEXT NOT NULL DEFAULT '', cost_usd REAL NOT NULL DEFAULT 0,
  UNIQUE(night,bot));
-CREATE INDEX IF NOT EXISTS memory_tidy_passes_bot ON memory_tidy_passes(bot,started);
+CREATE INDEX IF NOT EXISTS memory_tidy_passes_bot ON memory_tidy_passes(bot,started_at);
 """
 STOP = 50.0
 
@@ -32,11 +32,11 @@ def changed(c, bot, since):
     excluded = {r[0] for r in c.execute(
         "SELECT t.id FROM turns t JOIN memory_tidy_passes p "
         "ON t.task_id=p.parent_task_id OR t.task_id=p.check_task_id WHERE p.bot=?", (bot,))}
-    for row in c.execute("SELECT subject,files_json,attempt_id FROM bot_memory_updates "
-                         "WHERE bot=? AND shared=1 AND committed>?", (bot, since)):
+    for row in c.execute("SELECT subject,files,attempt_id FROM bot_memory_updates "
+                         "WHERE bot=? AND shared=1 AND committed_at>?", (bot, since)):
         if row['subject'].startswith('Dreamed ') or row['attempt_id'] in excluded:
             continue
-        if any(p.startswith('memory/') for p in json.loads(row['files_json'])):
+        if any(p.startswith('memory/') for p in json.loads(row['files'])):
             return True
     return False
 
@@ -112,15 +112,15 @@ def unsettled(c):
         return True
     return c.execute(
         "SELECT 1 FROM memory_tidy_passes p JOIN turns t ON t.task_id=p.check_task_id "
-        "WHERE t.finished IS NULL OR (t.usage_reason IS NOT NULL AND "
+        "WHERE t.finished_at IS NULL OR (t.usage_reason IS NOT NULL AND "
         "NOT EXISTS(SELECT 1 FROM turn_usage_segments s WHERE s.turn_id=t.id) "
         "AND coalesce(t.input_tokens,0)+coalesce(t.output_tokens,0)=0 "
         "AND (NOT EXISTS(SELECT 1 FROM attempts a WHERE a.id=t.id) OR "
-        "EXISTS(SELECT 1 FROM attempts a WHERE a.id=t.id AND a.started IS NOT NULL))) LIMIT 1").fetchone() is not None
+        "EXISTS(SELECT 1 FROM attempts a WHERE a.id=t.id AND a.started_at IS NOT NULL))) LIMIT 1").fetchone() is not None
 
 
 def packet_runner(c, bot):
-    row = c.execute('SELECT r.capabilities_json FROM assignments a JOIN runners r ON r.id=a.runner_id '
+    row = c.execute('SELECT r.capabilities FROM assignments a JOIN runners r ON r.id=a.runner_id '
                     'WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
     return bool(row and 'memory_tidy_packets_v1' in json.loads(row[0] or '[]'))
 
@@ -170,7 +170,7 @@ def admit(c, settings, at):
         if c.execute("SELECT 1 FROM memory_tidy_passes WHERE night=? AND bot=?", (night, bot)).fetchone():
             continue
         prior = c.execute("SELECT baseline FROM memory_tidy_passes WHERE bot=? AND status IN ('kept','discarded') "
-                           "ORDER BY started DESC LIMIT 1", (bot,)).fetchone()
+                           "ORDER BY started_at DESC LIMIT 1", (bot,)).fetchone()
         since = prior['baseline'] if prior else ''
         reason = ('skipped: spend stop' if stopped else
                   'skipped: no change' if not changed(c, bot, since) else
@@ -191,7 +191,7 @@ def admit(c, settings, at):
             except check_models.CheckModelError:
                 reason = 'skipped: model unavailable'
         ident = H.new_id()
-        c.execute("INSERT INTO memory_tidy_passes(id,night,bot,model,started,deadline,status,reason,baseline) "
+        c.execute("INSERT INTO memory_tidy_passes(id,night,bot,model,started_at,deadline,status,reason,baseline) "
                   "VALUES(?,?,?,?,?,?,?,?,?)", (ident, night, bot, model, stamp(at), stamp(deadline),
                                                'skipped' if reason else 'filed', reason, stamp(at)))
         if reason:
@@ -247,7 +247,7 @@ def deliver(c, pass_id, *, snapshot, raw, checkout_before, checkout_after,
                                   previous_learnings=previous_learnings)
     card = memory_tidy_cards.file_card(c, bot=row['bot'], reviewer=reviewer, pass_id=pass_id,
         memory_commit=memory_commit, model=row['model'], cost_usd=row['cost_usd'], result=result,
-        started_at=row['started'], parent_task_id=row['parent_task_id'], check_task_id=row['check_task_id'])
+        started_at=row['started_at'], parent_task_id=row['parent_task_id'], check_task_id=row['check_task_id'])
     close_tasks(c, row, result.status)
     c.execute('UPDATE memory_tidy_passes SET status=?,reason=? WHERE id=?',
               ('offered' if card else result.status, '; '.join(result.flags), pass_id))

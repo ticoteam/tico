@@ -2133,7 +2133,7 @@ def test_a_revised_invoice_naming_a_tracking_option_the_books_do_not_hold_keeps_
     with books.read() as c:
         invoice = _local(c, "Invoice:inv-1", "fin_invoices")
         before = tuple(c.execute("SELECT status, total FROM fin_invoices WHERE id=?", (invoice,)).fetchone())
-        tags = c.execute("SELECT tags_json FROM fin_invoice_lines WHERE invoice_id=?", (invoice,)).fetchone()[0]
+        tags = c.execute("SELECT tags FROM fin_invoice_lines WHERE invoice_id=?", (invoice,)).fetchone()[0]
         revision = c.execute("SELECT revision FROM fin_external_refs WHERE external_id='Invoice:inv-1'").fetchone()[0]
     assert sorted(json.loads(tags)) == ["class", "location"]
     gone = [{"Name": "Location", "Option": "Austin"}, {"Name": "Team", "Option": "Gone"}]
@@ -2142,7 +2142,7 @@ def test_a_revised_invoice_naming_a_tracking_option_the_books_do_not_hold_keeps_
     _drain(books, client, cid, now=LATER, passes=2)
     with books.read() as c:
         assert tuple(c.execute("SELECT status, total FROM fin_invoices WHERE id=?", (invoice,)).fetchone()) == before
-        assert c.execute("SELECT tags_json FROM fin_invoice_lines WHERE invoice_id=?", (invoice,)).fetchone()[0] == tags
+        assert c.execute("SELECT tags FROM fin_invoice_lines WHERE invoice_id=?", (invoice,)).fetchone()[0] == tags
         assert c.execute("SELECT revision FROM fin_external_refs WHERE external_id='Invoice:inv-1'").fetchone()[0] \
             == revision
 

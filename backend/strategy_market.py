@@ -48,16 +48,16 @@ def _days():
 def _current(c, where, args):
     today, _ = _days()
     return H._rows(c.execute(
-        "SELECT * FROM market_edges WHERE (since IS NULL OR substr(since,1,10)<=?) AND (until IS NULL OR "
-        f"substr(until,1,10)>=?) AND ({where})", (today, today, *args)))
+        "SELECT * FROM market_edges WHERE (valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?) AND (valid_until_on IS NULL OR "
+        f"substr(valid_until_on,1,10)>=?) AND ({where})", (today, today, *args)))
 
 
 def _end(c, actor, edge, ev):
     """The edge holds no longer: its last day was yesterday. One that started today starts yesterday too."""
     _, yesterday = _days()
-    since = edge["since"] if edge["since"] and str(edge["since"])[:10] <= yesterday else None
+    since = edge["valid_from_on"] if edge["valid_from_on"] and str(edge["valid_from_on"])[:10] <= yesterday else None
     MK.update_edge(c, actor, edge["id"], until=yesterday, evidence_ids=ev,
-                   **({"since": yesterday} if edge["since"] and not since else {}))
+                   **({"since": yesterday} if edge["valid_from_on"] and not since else {}))
 
 
 def _own(c, actor, name, ev):

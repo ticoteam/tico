@@ -33,8 +33,8 @@ const until = async (what, fn, ms = t(10000)) => {
   }
 };
 
-const task = id => ({id, title: id === 't-a' ? 'Renew the staging certificate' : 'Archive old builds', owner: 'bot:ops',
-  requester: 'human:ana', status: 'doing', lane: 'company', version: 1, created: now, updated: now, conversation_id: 'r-' + id});
+const task = id => ({id, title: id === 't-a' ? 'Renew the staging certificate' : 'Archive old builds', owner_id: 'bot:ops',
+  requester_id: 'human:ana', status: 'doing', lane: 'company', version: 1, created_at: now, updated_at: now, conversation_id: 'r-' + id});
 
 async function scenario(browser, name, down, check, viewport = {width: 1300, height: 820}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
@@ -67,8 +67,8 @@ async function scenario(browser, name, down, check, viewport = {width: 1300, hei
     if (p === '/api/issues') return json([]);
     if (p === '/api/v2/events') return;          // held open, as the server does between changes
     const room = {
-      messages: [{id: 'm1', from_actor: 'human:ana', body: 'Draft the release notes', created: now}],
-      execution: {id: 'x1', state: 'running', bot: 'coo', conversation_id: 'c-coo', text: 'Working on it', started: now}};
+      messages: [{id: 'm1', sender_id: 'human:ana', body: 'Draft the release notes', created_at: now}],
+      execution: {id: 'x1', state: 'running', bot: 'coo', conversation_id: 'c-coo', text: 'Working on it', started_at: now}};
     if (p === '/api/v2/assistant') return json(assistantView('c-coo', room));
     if (p === '/api/v2/conversations/c-coo/snapshot') return json(room);
     if (p === '/api/v2/tasks') return json({tasks: [], next_offset: null, cursor: '1.a'});

@@ -9,6 +9,7 @@ import sqlite3
 
 import pytest
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import hubdb, threads
 
 
@@ -26,7 +27,7 @@ def pre_threads_hub(path):
         conn.execute(f"DROP TRIGGER {name}")
     conn.execute("DELETE FROM registry_metadata WHERE key IN ('threads-migration','threads-migration-progress')")
     conn.execute("DELETE FROM message_deliveries")
-    conn.execute("UPDATE conversations SET root_id=NULL, path=NULL, audience=NULL, owner_actor=NULL")
+    conn.execute("UPDATE conversations SET root_id=NULL, path=NULL, audience=NULL, owner_id=NULL")
     conn.execute("DELETE FROM messages")
     conn.execute("DELETE FROM conversations")
     rng = random.Random(5)
@@ -37,8 +38,8 @@ def pre_threads_hub(path):
                      ("c-task", "task", None), ("c-direct", "direct", None)]
     for cid, scope, room in conversations:
         closed = "2025-02-01" if cid == "c-shared-old" else None
-        conn.execute("INSERT INTO conversations(id,kind,subject,task_id,participants_json,created,last_message_at,"
-                     "closed_at,scope,owner_actor,room_key) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        conn.execute("INSERT INTO conversations(id,kind,subject,task_id,participants,created_at,last_message_at,"
+                     "closed_at,scope,owner_id,room_key) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                      (cid, "task" if scope == "task" else "direct", "", "t-1" if scope == "task" else None,
                       '["human:h0","bot:b0"]', "2025-01-01", None, closed, scope,
                       humans[0] if scope == "personal" else None, room))
@@ -46,8 +47,8 @@ def pre_threads_hub(path):
         cid = conversations[n % len(conversations)][0]
         refs = rng.choice([None, '{"quiet": true}', '{"task": "t-1", "comment": true}', '{"via": "x"}',
                            '{"task": "t-1"}'])
-        conn.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,in_reply_to,"
-                     "created,delivered_at,read_at,deleted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        conn.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,"
+                     "created_at,delivered_at,read_at,deleted_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                      (f"m{n:04d}", cid, rng.choice(humans + bots), rng.choice([None, None, *humans, *bots]),
                       "say", f"body {n}", refs, f"m{n - 1:04d}" if n and rng.random() < 0.2 else None,
                       f"2025-01-02T00:{n // 60:02d}:{n % 60:02d}Z",
@@ -61,7 +62,7 @@ def pre_threads_hub(path):
 def reader_rows(conn):
     """What the migration writes, without the random ids and the migration-time stamps (which differ run to run)."""
     queries = {
-        "conversations": "SELECT id,audience,owner_actor,root_id,path,last_seq,last_unread_seq,"
+        "conversations": "SELECT id,audience,owner_id,root_id,path,last_seq,last_unread_seq,"
                          "archived_at IS NOT NULL FROM conversations ORDER BY id",
         "messages": "SELECT id,conversation_id,seq,restricted,legacy_audience,deleted_at FROM messages ORDER BY id",
         "deliveries": "SELECT message_id,recipient,mode,reason,cause,state,revision,delivered_at,read_at "

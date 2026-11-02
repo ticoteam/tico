@@ -7,7 +7,7 @@ description: Put a customer with no recent progress into one named stall state (
 When to use: on the weekly board, for every customer with no progress past the stuck rule, or when a person asks why a customer is behind.
 
 Steps:
-1. Check the status fields and any change after the last note first. A customer marked lost, paused or cancelling is not a stall; it goes to the account owner.
+1. Check the status fields and any change after the last note first. A customer marked lost, paused or canceling is not a stall; it goes to the account owner.
 2. Find the last progress with its date and source. If there is none, say so: "no progress recorded since signing".
 3. Check for a booked step: a call or visit with its date. A booked step is not an abandoned one. Mark it booked until it is completed or missed.
 4. Check for a waiting state: a step the customer owes, with a date. Mark it waiting on customer until that date, then overdue on customer, with the last touch.

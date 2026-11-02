@@ -13,9 +13,9 @@ const THV_ACK = '✅';
 let THV_N = 0;
 const thvPath = id => '/v2/threads/' + encodeURIComponent(id);
 const thvHuman = a => String(a || '').startsWith('human:');
-const thvMine = m => !!m && m.from_actor === myActor();
+const thvMine = m => !!m && m.sender_id === myActor();
 // Addressed to the viewer: written by a person, sent to them, or naming them. Other bot posts are activity.
-const thvAddressed = m => thvHuman(m?.from_actor) || m?.to_actor === myActor() || (m?.mentions || []).includes(myActor());
+const thvAddressed = m => thvHuman(m?.sender_id) || m?.recipient_id === myActor() || (m?.mentions || []).includes(myActor());
 
 // Unsent words and files per thread, Home or DM, kept while the view is off screen (another tab, page or bot).
 const THV_DRAFTS = new Map();
@@ -296,7 +296,7 @@ function thvIsNew(view, m) {
 function thvWhoHTML(a) {
   if (connectIsGuest(a)) return `<span class="th-who">${connectGuestHTML(a)}</span>`;   // another company's (ui/app/thread-connect.js)
   const slug = actorSlug(a), pid = actorPerson(a);
-  if (slug && S.emps.some(e => e.name === slug)) return `<a class="th-who" href="#/bot/${esc(slug)}">${esc(actorName(a))}</a>`;
+  if (slug && S.emps.some(e => e.id === slug)) return `<a class="th-who" href="#/bot/${esc(slug)}">${esc(actorName(a))}</a>`;
   if (pid) return `<a class="th-who" href="#/person/${esc(encodeURIComponent(pid))}">${esc(actorName(a))}</a>`;
   return `<span class="th-who">${esc(actorName(a) || 'Someone')}</span>`;
 }
@@ -328,7 +328,7 @@ function thvMsgHTML(view, m) {
   const fresh = thvIsNew(view, m), quiet = fresh && !thvAddressed(m);
   const cls = ['th-msg', view.focus === m.id && 'th-focus', sub && 'th-sub', m.refs?.follow_up && 'th-followup', thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted']
     .filter(Boolean).join(' ');
-  const head = `<div class="th-head">${thvWhoHTML(connectAuthor(m))}<time title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time>${
+  const head = `<div class="th-head">${thvWhoHTML(connectAuthor(m))}<time title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>${
     m.edited_at && !m.deleted ? '<span class="th-edited muted">edited</span>' : ''}</div>`;
   let body;
   if (m.deleted) body = '<div class="th-body muted">Deleted</div>';
@@ -344,7 +344,7 @@ function thvMsgHTML(view, m) {
     // The notice a bot's manager gets about its Home's closed history (backend/thread_followups.py).
     m.refs?.earlier_messages?.thread_id && !m.deleted ? `<button type="button" class="ghost small th-earlier-open" data-th-earlier="${esc(m.refs.earlier_messages.thread_id)}">Open earlier messages to Read</button>` : ''}`;
   // What a bot's turn did, in the same muted rows a chat shows (ui/app/chat.js), and the runner's warnings.
-  if (!m.deleted && view.editing !== m.id && String(m.from_actor || '').startsWith('bot:'))
+  if (!m.deleted && view.editing !== m.id && String(m.sender_id || '').startsWith('bot:'))
     body += (m.refs?.warnings || []).map(w => `<div class="chat-warn">${esc(String(w).charAt(0).toUpperCase() + String(w).slice(1))}</div>`).join('')
       + v2RunHTML(m, view.run) + v2MessageCards(m);
   // A sub-thread opens with one quiet header row (its own title if it was given one, replies and what is new) that opens
@@ -615,7 +615,7 @@ async function thvLibOpen(view) {
 // ----------------------------------------------------------------- mentions
 // "@" then letters: the teammates whose name or handle starts so. A bot goes in as @slug, a person as their handle.
 function thvMentionPeople() {
-  const bots = shownEmps().filter(e => !e.hidden).map(e => ({key: 'bot:' + e.name, label: e.display_name || e.name, handle: e.name, kind: 'bot'}));
+  const bots = shownEmps().filter(e => !e.hidden).map(e => ({key: 'bot:' + e.id, label: e.display_name || e.name, handle: e.name, kind: 'bot'}));
   const people = (S.people || []).filter(p => p.id && !p.hidden && p.id !== S.me?.id)
     .map(p => ({key: 'human:' + p.id, label: p.name || p.id, handle: personHandle(p.email || p.id), kind: 'person'}));
   return [...people, ...bots];

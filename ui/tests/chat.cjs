@@ -26,7 +26,7 @@ async function touchCopy(browser) {
   const errors=[];
   page.on('pageerror',e=>errors.push(e.message));
   const bots=[{name:'coo',display_name:'Assistant',host:'keeper',status:'active',can_chat:true,schedules:[]}];
-  const snapshot={messages:[{id:'m1',from_actor:'human:ana',body:'Hello there',created:new Date().toISOString()}],execution:null};
+  const snapshot={messages:[{id:'m1',sender_id:'human:ana',body:'Hello there',created_at:new Date().toISOString()}],execution:null};
   await page.route('**/*',route=>{
     const p=new URL(route.request().url()).pathname;
     const json=body=>route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
@@ -97,11 +97,11 @@ async function liveReply(browser) {
   const errors=[],stops=[];
   page.on('pageerror',e=>errors.push(e.message));
   const now=new Date().toISOString();
-  const snapshot={messages:[{id:'m1',from_actor:'human:ana',body:'Plan the build',created:now,
-                             run:{job_id:'j1',attempt_id:'a1',state:'started_run'}},
-                            {id:'m2',from_actor:'human:ana',to_actor:'bot:coo',body:'Do April instead',created:now,
-                             delivery:{attempt_id:'a1',mode:'next_turn'}}],
-    execution:{job_id:'j1',message_id:'m1',bot:'coo',attempt_id:'a1',state:'running',label:'Working',
+  const snapshot={messages:[{id:'m1',sender_id:'human:ana',body:'Plan the build',created_at:now,
+                             run:{job_id:'j1',run_id:'a1',state:'started_run'}},
+                            {id:'m2',sender_id:'human:ana',recipient_id:'bot:coo',body:'Do April instead',created_at:now,
+                             delivery:{run_id:'a1',mode:'next_turn'}}],
+    execution:{job_id:'j1',message_id:'m1',bot:'coo',run_id:'a1',state:'running',label:'Working',
       text:'Keep the bot planned.\n\nI filed the build.',
       parts:[{kind:'progress',text:'Keep the bot planned.',at:now},{kind:'tool',text:'Ran hub task create',at:now},
              {kind:'reply',text:'I filed the build.',at:now}]}};
@@ -119,7 +119,7 @@ async function liveReply(browser) {
     if(p.endsWith('/watch'))return route.fulfill({contentType:'text/event-stream',body:'event: snapshot\ndata: '+JSON.stringify(snapshot)+'\n\n'});
     if(p==='/api/v2/assistant')return json(assistantView('c-coo',snapshot));
     if(p.startsWith('/api/v2/conversations/c-')&&p.endsWith('/snapshot'))return json(snapshot);
-    if(p==='/api/v2/bots/coo/stop'){stops.push(route.request().postDataJSON());return json({attempt_id:'a1',stopping:true});}
+    if(p==='/api/v2/bots/coo/stop'){stops.push(route.request().postDataJSON());return json({run_id:'a1',stopping:true});}
     // Support off: its load 3 s in would otherwise add Report this to the copy-error toasts matched below.
     if(p==='/api/v2/support/tickets')return json({enabled:false});
     return json(unrouted(p));
@@ -131,7 +131,7 @@ async function liveReply(browser) {
   assert.match(await held.innerText(),/Queued for the next turn/);
   await held.getByRole('button',{name:'Stop and redirect'}).click();
   await page.waitForFunction(()=>document.querySelector('[data-message="m2"] .chat-delivery')?.textContent.startsWith('Stopping'));
-  assert.deepEqual(stops,[{attempt_id:'a1',redirect:'m2'}],'stops that run and names the message to start with');
+  assert.deepEqual(stops,[{run_id:'a1',redirect:'m2'}],'stops that run and names the message to start with');
   const paragraphs=await page.locator('#v2-live p').allInnerTexts();
   assert.deepEqual(paragraphs,['Keep the bot planned.','I filed the build.'],'each message is its own paragraph');
   // Avatars: a bot is an SVG blob that breathes while it answers; a person stays a circle; motion stops under reduced motion.
@@ -153,7 +153,7 @@ async function liveReply(browser) {
   assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector('#bot-top .av-shape')).animationName==='none'),true,'reduced motion: no breath');
   assert.deepEqual(errors,[]);
   const pending = await page.evaluate(() => {
-    const state = {slug:'coo', messages:[{id:'queued',created:new Date(Date.now()-30*60000).toISOString()}],
+    const state = {slug:'coo', messages:[{id:'queued',created_at:new Date(Date.now()-30*60000).toISOString()}],
       execution:{message_id:'queued',state:'queued',label:'Saved — no AI provider is chosen',readiness_reason:'missing_provider'}};
     const el = document.createElement('div');
     el.innerHTML = v2PendingHTML(state);
@@ -171,7 +171,7 @@ async function liveReply(browser) {
   assert.match(pending.legacy,/No reply after 20 minutes/);
   // A provider is chosen but the bot's computer is not signed in to its model: the same place says so, with Sign in and Health.
   const signIn = await page.evaluate(() => {
-    const state = {slug:'coo', messages:[{id:'queued',created:new Date(Date.now()-30*60000).toISOString()}],
+    const state = {slug:'coo', messages:[{id:'queued',created_at:new Date(Date.now()-30*60000).toISOString()}],
       execution:{message_id:'queued',state:'queued',label:'Saved — Claude login required',readiness_reason:'model_sign_in'}};
     const el = document.createElement('div');
     el.innerHTML = v2PendingHTML(state);
@@ -224,11 +224,11 @@ async function outlineJump(browser) {
   const errors=[];
   page.on('pageerror',e=>errors.push(e.message));
   const at=n=>new Date(Date.UTC(2026,9,5,9,n)).toISOString();
-  const pair=(n,text)=>[{id:'h'+n,from_actor:'human:ana',body:text,created:at(n*2)},{id:'b'+n,from_actor:'bot:coo',body:'Done: '+text,created:at(n*2+1)}];
+  const pair=(n,text)=>[{id:'h'+n,sender_id:'human:ana',body:text,created_at:at(n*2)},{id:'b'+n,sender_id:'bot:coo',body:'Done: '+text,created_at:at(n*2+1)}];
   const older=[...pair(0,'Check the release notes'),...pair(1,'Draft the launch email')];
   const latest=[2,3,4,5,6,7,8].flatMap(n=>pair(n,'Prompt number '+n));
   const snapshot={messages:latest,next_before:'h2',execution:null};
-  const prompts=[...older,...latest].filter(m=>m.from_actor.startsWith('human:')).map(m=>({id:m.id,created:m.created,text:m.body,task:m.id==='h0'?{id:'t1',title:'Release v1'}:null}));
+  const prompts=[...older,...latest].filter(m=>m.sender_id.startsWith('human:')).map(m=>({id:m.id,created_at:m.created_at,text:m.body,task:m.id==='h0'?{id:'t1',title:'Release v1'}:null}));
   const pages=[];
   await page.context().route('**/*',route=>{
     const url=new URL(route.request().url()),p=url.pathname;
@@ -296,20 +296,20 @@ async function activityFold(browser) {
   page.on('pageerror', e => errors.push(e.message));
   const at = n => new Date(Date.UTC(2026, 9, 6, 9, n)).toISOString();
   const activity = [
-    {id:'task-created',kind:'notice',from_actor:'keeper',body:'New task from Head of Engineering: Review the next release',created:at(1),refs:{task:'task-1'}},
-    {id:'note-one',kind:'say',from_actor:'bot:coo',body:'Cloud transcript shows performance goal. https://example.test/audit',created:at(2),refs:{task:'task-1',note:true}},
-    {id:'task-status',kind:'notice',from_actor:'keeper',body:'Open: Review the next release',created:at(3),refs:{task:'task-1'}},
-    {id:'note-two',kind:'say',from_actor:'bot:coo',body:'Reviewed the status note.',created:at(4),refs:{task:'task-1',note:true}},
+    {id:'task-created',kind:'notice',sender_id:'keeper',body:'New task from Head of Engineering: Review the next release',created_at:at(1),refs:{task:'task-1'}},
+    {id:'note-one',kind:'say',sender_id:'bot:coo',body:'Cloud transcript shows performance goal. https://example.test/audit',created_at:at(2),refs:{task:'task-1',note:true}},
+    {id:'task-status',kind:'notice',sender_id:'keeper',body:'Open: Review the next release',created_at:at(3),refs:{task:'task-1'}},
+    {id:'note-two',kind:'say',sender_id:'bot:coo',body:'Reviewed the status note.',created_at:at(4),refs:{task:'task-1',note:true}},
   ];
   // Similar words and even a note ref do not turn human-authored prose into generated activity.
   const latest = [
     ...activity,
-    {id:'human-quote',kind:'say',from_actor:'human:ana',body:'New task from Head of Engineering is only a quote here.',created:at(5),refs:{}},
-    {id:'human-note',kind:'say',from_actor:'human:ana',body:'Note Cloud transcript shows performance goal.',created:at(6),refs:{task:'task-1',note:true}},
-    {id:'bot-prose',kind:'say',from_actor:'bot:coo',body:'Note: I checked the release page.',created:at(7),refs:{task:'task-1'}},
-    ...Array.from({length:12}, (_, i) => ({id:`chat-${i}`,kind:'say',from_actor:i % 2 ? 'bot:coo' : 'human:ana',body:`Regular conversation ${i}`,created:at(8+i),refs:{}})),
-    {id:'task-done',kind:'notice',from_actor:'keeper',body:'Done: Review the next release',created:at(20),refs:{task:'task-1'}},
-    {id:'chat-last',kind:'say',from_actor:'human:ana',body:'Thanks',created:at(21),refs:{}},
+    {id:'human-quote',kind:'say',sender_id:'human:ana',body:'New task from Head of Engineering is only a quote here.',created_at:at(5),refs:{}},
+    {id:'human-note',kind:'say',sender_id:'human:ana',body:'Note Cloud transcript shows performance goal.',created_at:at(6),refs:{task:'task-1',note:true}},
+    {id:'bot-prose',kind:'say',sender_id:'bot:coo',body:'Note: I checked the release page.',created_at:at(7),refs:{task:'task-1'}},
+    ...Array.from({length:12}, (_, i) => ({id:`chat-${i}`,kind:'say',sender_id:i % 2 ? 'bot:coo' : 'human:ana',body:`Regular conversation ${i}`,created_at:at(8+i),refs:{}})),
+    {id:'task-done',kind:'notice',sender_id:'keeper',body:'Done: Review the next release',created_at:at(20),refs:{task:'task-1'}},
+    {id:'chat-last',kind:'say',sender_id:'human:ana',body:'Thanks',created_at:at(21),refs:{}},
   ];
   const endedGoal = {id:'goal-ended',conversation_id:'c-ops',bot:'coo',objective:'Ship the finished update',status:'met',note:'Reviewed',ended_at:at(4.5),updated_at:at(4.5)};
   const snapshot = {messages: latest, next_before: 'cursor-1', execution: null, goal: endedGoal};
@@ -329,8 +329,8 @@ async function activityFold(browser) {
     if (p === '/api/v2/conversations/c-ops/messages') {
       const cursor = url.searchParams.get('before'); pages.push(cursor);
       return json(cursor === 'cursor-1'
-        ? {messages:[{id:'older-a',kind:'say',from_actor:'human:ana',body:'Earlier question',created:at(0),refs:{}}],next_before:'cursor-2'}
-        : {messages:[{id:'older-b',kind:'say',from_actor:'bot:coo',body:'Earlier answer',created:at(-1),refs:{}}],next_before:null});
+        ? {messages:[{id:'older-a',kind:'say',sender_id:'human:ana',body:'Earlier question',created_at:at(0),refs:{}}],next_before:'cursor-2'}
+        : {messages:[{id:'older-b',kind:'say',sender_id:'bot:coo',body:'Earlier answer',created_at:at(-1),refs:{}}],next_before:null});
     }
     if (p === '/api/v2/conversations/c-ops/goal') return json({goal:endedGoal,supported:true,commands:[]});
     return json(unrouted(p));
@@ -410,7 +410,7 @@ async function sideThreads(browser) {
   const page = await browser.newPage({viewport: {width: 390, height: 844}, hasTouch: true, serviceWorkers: 'block'}), errors = [];
   page.on('pageerror', e => errors.push(e.message));
   const at = n => new Date(Date.UTC(2026, 9, 6, 9, n)).toISOString();
-  const say = (id, from, to, body, n, extra = {}) => ({id, conversation_id: 'c-cmo', kind: 'say', from_actor: from, to_actor: to, body, created: at(n), refs: {}, ...extra});
+  const say = (id, from, to, body, n, extra = {}) => ({id, conversation_id: 'c-cmo', kind: 'say', sender_id: from, recipient_id: to, body, created_at: at(n), refs: {}, ...extra});
   const long = 'From dot (Dots): the national continuation is delivered. ' + 'It adds reviewed records with samples in every provisional destination. '.repeat(6);
   const side = Array.from({length: 20}, (_, i) => i === 7
     ? say('relay', 'bot:coo', 'human:ana', long, 10 + i, {prompted_by: 'bot'})
@@ -428,9 +428,9 @@ async function sideThreads(browser) {
     say('late-2', 'keeper', 'bot:coo', 'Done: census', 44, {kind: 'notice', refs: {task: 't1'}}),
   ];
   const snapshot = {messages, next_before: null, execution: null, goal: null};
-  const talk = [{id: 'b0', conversation_id: 'c-ask', kind: 'ask', from_actor: 'bot:coo', to_actor: 'bot:seo', body: 'Who has Respona?', created: at(29), refs: {}},
-                {id: 'b1', conversation_id: 'c-ask', kind: 'ask', from_actor: 'bot:coo', to_actor: 'bot:seo', body: 'Can SEO read Respona?', created: at(30), refs: {}},
-                {id: 'b2', conversation_id: 'c-ask', kind: 'answer', from_actor: 'bot:seo', to_actor: 'bot:coo', body: 'Yes, read-only.', created: at(31), refs: {}}];
+  const talk = [{id: 'b0', conversation_id: 'c-ask', kind: 'ask', sender_id: 'bot:coo', recipient_id: 'bot:seo', body: 'Who has Respona?', created_at: at(29), refs: {}},
+                {id: 'b1', conversation_id: 'c-ask', kind: 'ask', sender_id: 'bot:coo', recipient_id: 'bot:seo', body: 'Can SEO read Respona?', created_at: at(30), refs: {}},
+                {id: 'b2', conversation_id: 'c-ask', kind: 'answer', sender_id: 'bot:seo', recipient_id: 'bot:coo', body: 'Yes, read-only.', created_at: at(31), refs: {}}];
   const bots = ['coo', 'dots', 'botops', 'seo'].map(name => ({name, display_name: name === 'coo' ? 'Assistant' : name[0].toUpperCase() + name.slice(1), host: 'keeper', status: 'active', can_chat: true, schedules: []}));
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
@@ -462,7 +462,7 @@ async function sideThreads(browser) {
   const kinds = await page.evaluate(() => Object.fromEntries(V2C.messages.map(m => [m.id, chatSideKind(m, 'coo')])));
   assert.deepEqual([kinds['ask-1'], kinds['reply-1'], kinds.quote, kinds.approval], ['', '', '', ''], 'the person, the bot\'s replies and an approval are the conversation');
   assert.deepEqual([kinds.relay, kinds.note, kinds['side-1'], kinds['side-2'], kinds['side-3'], kinds['late-2']], ['relay', 'note', 'bots', 'bots', 'notice', 'notice']);
-  assert.equal(await page.evaluate(() => chatSideKind({id: 'q', kind: 'ask', from_actor: 'bot:dots', to_actor: 'human:ana', body: 'Which ranking?'}, 'coo')), '', 'a question to the person waits on them');
+  assert.equal(await page.evaluate(() => chatSideKind({id: 'q', kind: 'ask', sender_id: 'bot:dots', recipient_id: 'human:ana', body: 'Which ranking?'}, 'coo')), '', 'a question to the person waits on them');
 
   const thread = page.locator('#conv-thread'), runs = thread.locator('details.chat-side');
   assert.equal(await page.locator('#conv-bots').count(), 0, 'no second strip for bot-to-bot talk');
@@ -503,9 +503,9 @@ async function sideThreads(browser) {
   assert.deepEqual(asked, ['1', '50', '50 before b1'], 'a preview reads one message; opening reads one page, then the page before it');
   // Above a chat with older pages, an opened conversation still shows everything it loaded; an unopened one waits.
   assert.deepEqual(await page.evaluate(() => v2WithBotTalk({nextBefore: 'x', botTalk: [
-    {id: 'opened', created: '2026-10-06T08:00:00Z', elsewhere: {id: 'c1', open: true}},
-    {id: 'waits', created: '2026-10-06T08:00:00Z', elsewhere: {id: 'c2', preview: true}}]},
-    [{id: 'own', created: '2026-10-06T09:00:00Z'}]).map(m => m.id)), ['opened', 'own']);
+    {id: 'opened', created_at: '2026-10-06T08:00:00Z', elsewhere: {id: 'c1', open: true}},
+    {id: 'waits', created_at: '2026-10-06T08:00:00Z', elsewhere: {id: 'c2', preview: true}}]},
+    [{id: 'own', created_at: '2026-10-06T09:00:00Z'}]).map(m => m.id)), ['opened', 'own']);
   if (process.env.TICO_SHOTS) {
     await big.locator('.cs-item[data-message="b2"]').scrollIntoViewIfNeeded();
     await page.screenshot({path: process.env.TICO_SHOTS + '/bot-talk-opened.png'});
@@ -539,7 +539,7 @@ async function stickToBottom(browser) {
   const page = await browser.newPage({viewport: {width: 1100, height: 760}, serviceWorkers: 'block'}), errors = [];
   page.on('pageerror', e => errors.push(e.message));
   const at = n => new Date(Date.UTC(2026, 9, 6, 9, n)).toISOString();
-  const say = (id, from, to, body, n, extra = {}) => ({id, conversation_id: 'c-ops', kind: 'say', from_actor: from, to_actor: to, body, created: at(n), refs: {}, ...extra});
+  const say = (id, from, to, body, n, extra = {}) => ({id, conversation_id: 'c-ops', kind: 'say', sender_id: from, recipient_id: to, body, created_at: at(n), refs: {}, ...extra});
   const messages = Array.from({length: 30}, (_, i) => i % 2
     ? say('r' + i, 'bot:coo', 'human:ana', `Reply ${i}. ` + 'Here is what I found. '.repeat(12), i, {in_reply_to: 'q' + (i - 1)})
     : say('q' + i, 'human:ana', 'bot:coo', `Question ${i}`, i));
@@ -621,7 +621,7 @@ async function settingsLinks(browser) {
   page.on('pageerror',e=>errors.push(e.message));
   const now=new Date().toISOString();
   let reason='missing_provider';
-  const snapshot=()=>({messages:[{id:'q1',from_actor:'human:ana',to_actor:'bot:coo',body:'Plan the build',created:now}],
+  const snapshot=()=>({messages:[{id:'q1',sender_id:'human:ana',recipient_id:'bot:coo',body:'Plan the build',created_at:now}],
     execution:{message_id:'q1',bot:'coo',state:'queued',label:'Saved',readiness_reason:reason}});
   await page.context().route('**/*',route=>{
     const url=new URL(route.request().url()),p=url.pathname;

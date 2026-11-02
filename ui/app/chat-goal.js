@@ -27,7 +27,7 @@ const goalEnded = g => !!g && (g.status === 'met' || g.status === 'stopped');
 // runtime's, then a harness on that runtime), or when it said nothing; the server, asked once the first goal makes
 // the conversation, has the final word (chatGoalRoom).
 function chatGoalGuess(slug) {
-  const bot = (S.emps || []).find(e => e.name === slug);
+  const bot = botRow(slug);
   if (!bot || slug === assistantBot() || !isKeeper(slug) || bot.agent || !bot.machine) return false;
   const runtime = String(bot.resolved_runtime || bot.runtime || '');
   if (typeof bot.readiness?.goals === 'boolean') return bot.readiness.goals;
@@ -70,7 +70,7 @@ function chatGoalApply(state, goal, {quiet = false} = {}) {
   if (!goalPinned(state.goal)) state.goalOpen = false;
   // The row's mark covers every chat the viewer can read, so a quiet load only ever adds it; a change made or
   // streamed here sets it either way.
-  const bot = (S.emps || []).find(e => e.name === state.slug), active = state.goal?.status === 'active';
+  const bot = botRow(state.slug), active = state.goal?.status === 'active';
   if (bot && !!bot.goal_active !== active && (active || !quiet)) { bot.goal_active = active; renderTree(); }
   chatGoalRender(state);
   if (!quiet || goalEnded(state.goal) !== goalEnded(was)) v2ChatRender(state);
@@ -282,7 +282,7 @@ function chatGoalNoticeHTML(m) {
   const [first = '', ...rest] = String(m.body || '').split('\n');
   const objective = m.refs.goal_objective || g?.objective || first.replace(/^Goal (met|stopped):\s*/i, '');
   const note = m.refs.goal_note ?? (g && g.status === status ? g.note || '' : rest.join(' ').trim());
-  return chatGoalLineHTML(status, objective, note, m.created);
+  return chatGoalLineHTML(status, objective, note, m.created_at);
 }
 // A met or stopped goal leaves one line in the thread, where it ended; nothing else announces it. The notice the server
 // wrote for that ending (refs.chat_goal) stands instead; a goal control never does.
@@ -291,6 +291,6 @@ function chatGoalLine(state, messages) {
   if (!goalEnded(g)) return null;
   if (messages.some(m => m.refs?.chat_goal === g.id && (m.refs.goal_status || g.status) === g.status)) return null;
   const end = String(g.ended_at || g.updated_at || '');
-  const at = end ? messages.filter(m => String(m.created || '') <= end).length : messages.length;
+  const at = end ? messages.filter(m => String(m.created_at || '') <= end).length : messages.length;
   return {at, html: chatGoalLineHTML(g.status, g.objective, g.note)};
 }

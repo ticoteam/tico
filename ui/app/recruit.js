@@ -82,7 +82,7 @@ async function settingsRecruitFlow(seed = {}) {
       creating=true;results.querySelectorAll('[data-recruit-create]').forEach(x=>x.disabled=true);status.textContent='Creating a bot that waits for setup…';
       const title=draft.title.trim()||card.name;
       const slugBase=title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,55)||card.slug;
-      let slug=slugBase;for(let n=2;S.emps.some(x=>x.name===slug);n++)slug=slugBase+'-'+n;
+      let slug=slugBase;for(let n=2;S.emps.some(x=>x.slug===slug);n++)slug=slugBase+'-'+n;
       const brief='\n\n## Role brief\n'+(draft.brief.trim()||'Not set')+'\nTools and sources: '+String(data.get('tools')||'Not set')+'\nReviewer: '+String(data.get('reviewer')||'Ask the owner during setup');
       try{await post('/v2/bots',{slug,display_name:title,description:draft.brief,template:card.template,
         instructions:(card.instructions||'')+brief,reports_to:null,status:'planned',repo:'bot-'+slug,thread_mode:'personal',
@@ -107,11 +107,11 @@ function recruitPlaces() {
   const owner = S.me?.role === 'owner', me = recruitMe();
   const people = owner ? (S.people || []).filter(p => !p.hidden).map(p => ['human:' + p.id, p.name || p.id]) : [];
   const bots = (S.emps || []).filter(e => e.status !== 'archived' && !isHelperBot(e) && (owner || e.can_manage))
-    .map(e => [e.name, e.display_name || e.name]);
+    .map(e => [e.id, e.display_name || e.slug]);
   return [[me, 'You'], ...people.filter(([id]) => id !== me), ...bots];
 }
 const recruitPlaceName = value => recruitPlaces().find(([id]) => id === value)?.[1]
-  || (S.emps || []).find(e => e.name === value)?.display_name
+  || botRow(value)?.display_name
   || (S.people || []).find(p => 'human:' + p.id === value)?.name || value;
 const recruitGroupName = id => (S.orgGroups || []).find(g => g.id === id)?.name || '';
 const recruitOptions = (rows, value) => rows.map(([id, name]) => `<option value="${esc(id)}"${id === value ? ' selected' : ''}>${esc(name)}</option>`).join('');
@@ -485,7 +485,7 @@ async function recruitHire(found, c, card, choice, errorEl = null) {
     await refresh(true);
     const where = recruitGroupName(seat.team);
     toast(`${hired.name || choice.name || seat.title} joined ${where || 'the team'}.`);
-    location.hash = '#/bot/' + encodeURIComponent(hired.slug);
+    location.hash = '#/bot/' + encodeURIComponent(hired.bot);
   } catch (e) { fail(e.message); }
 }
 function recruitStamp(card) {

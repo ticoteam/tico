@@ -107,9 +107,9 @@ def _kpis(c, hidden):
 def _markers(c, auth, who, since):
     visible = auth.task_sql(c, who)
     rows = H._rows(c.execute(
-        "SELECT e.task_id, e.ts, e.new, t.title, t.goal_id FROM task_events e JOIN tasks t ON t.id=e.task_id "
-        f"WHERE e.field='step' AND e.new IN ({','.join('?' * len(MOVES))}) AND t.type_id=? AND e.ts>=? "
-        f"AND t.id IN (SELECT id FROM tasks WHERE type_id=? AND {visible}) ORDER BY e.ts DESC, e.id DESC LIMIT ?",
+        "SELECT e.task_id, e.created_at, e.new, t.title, t.goal_id FROM task_events e JOIN tasks t ON t.id=e.task_id "
+        f"WHERE e.field='step' AND e.new IN ({','.join('?' * len(MOVES))}) AND t.type_id=? AND e.created_at>=? "
+        f"AND t.id IN (SELECT id FROM tasks WHERE type_id=? AND {visible}) ORDER BY e.created_at DESC, e.id DESC LIMIT ?",
         [*MOVES, MT.TYPE_ID, since, MT.TYPE_ID, MARKERS_MAX]))
     tags = {}
     ids = list(dict.fromkeys(r["task_id"] for r in rows))
@@ -121,7 +121,7 @@ def _markers(c, auth, who, since):
     out = []
     for r in rows:
         kind, outcome = MOVES[r["new"]]
-        out.append({"task_id": r["task_id"], "title": r["title"], "kind": kind, "outcome": outcome, "at": r["ts"],
+        out.append({"task_id": r["task_id"], "title": r["title"], "kind": kind, "outcome": outcome, "at": r["created_at"],
                     "channels": tags.get(r["task_id"], []), "goal_id": r["goal_id"]})
     return out
 

@@ -198,7 +198,7 @@ def _due(c, channel_id, limit=SEND_BATCH):
     """The pending deliveries to one channel, oldest first. The limit applies after the filter, to this channel alone:
     core's outside_due reads every Slack destination at once, so a busy channel would hold the others back."""
     return [dict(r) for r in c.execute(
-        "SELECT d.*, m.body, m.from_actor, m.origin_id, m.deleted_at, m.conversation_id FROM message_deliveries d "
+        "SELECT d.*, m.body, m.sender_id, m.origin_id, m.deleted_at, m.conversation_id FROM message_deliveries d "
         "JOIN messages m ON m.id=d.message_id WHERE d.recipient=? AND d.state='pending' "
         "AND (d.next_attempt_at IS NULL OR d.next_attempt_at<=?) ORDER BY d.created_at LIMIT ?",
         (outside_recipient(channel_id), H.now(), max(1, min(int(limit), 500))))]
@@ -1053,9 +1053,9 @@ class Bridge:
         msg = _one(c, "SELECT * FROM messages WHERE id=?", (d["message_id"],))
         if not msg:
             return {"do": "settle", "state": "moot", "error": "message gone"}
-        if self.core().remote_guest(c, msg.get("from_actor")):      # another company's words never reach a channel
+        if self.core().remote_guest(c, msg.get("sender_id")):      # another company's words never reach a channel
             return {"do": "settle", "state": "moot", "error": "from another company"}
-        refs = _refs(msg.get("refs_json"))
+        refs = _refs(msg.get("refs"))
         if (refs.get("slack") or {}).get("channel") == link["channel_id"]:
             return {"do": "settle", "state": "delivered"}           # it came from this channel: no echo
         row = _one(c, "SELECT * FROM slack_message_links WHERE link_id=? AND message_id=? AND direction='out'",
@@ -1085,7 +1085,7 @@ class Bridge:
             return {"do": "settle", "state": "delivered"}
         # Not in Slack yet. A message written before this link row was first active never goes out (the fence): a
         # relink does not export what was posted while the channel was unlinked.
-        if link.get("activated_at") and (msg.get("created") or "") < link["activated_at"]:
+        if link.get("activated_at") and (msg.get("created_at") or "") < link["activated_at"]:
             return {"do": "settle", "state": "moot", "error": "written before the link was active"}
         if int(d.get("revision") or 0) < int(msg.get("revision") or 0):
             return {"do": "settle", "state": "moot", "error": "a newer revision follows"}
@@ -1129,12 +1129,12 @@ class Bridge:
         if kind == "human":
             return H.person_name(c, ident)
         if kind == "bot":
-            row = _one(c, "SELECT display_name FROM bots WHERE slug=?", (ident,))
+            row = _one(c, "SELECT display_name FROM bots WHERE id=?", (ident,))
             return (row or {}).get("display_name") or ident
         return "Tico"
 
     def text_for(self, c, msg, prefix):
-        lines = [f"*{G.slack_escape(self.author_name(c, msg.get('from_actor')))}* · via Tico"]
+        lines = [f"*{G.slack_escape(self.author_name(c, msg.get('sender_id')))}* · via Tico"]
         if prefix:
             lines.append(G.slack_escape(prefix))
         lines.append(G.slack_escape(msg.get("body") or ""))
@@ -1209,7 +1209,7 @@ class Bridge:
                           "delivery_id,revision,attempts,actor,state,created_at,updated_at) "
                           "VALUES (?,?,?,'out','',?,?,?,?,1,?,'sending',?,?)",
                           (row_id, link["id"], link["channel_id"], thread_ts, msg["id"], d["id"], revision,
-                           msg.get("from_actor") or "", now, now))
+                           msg.get("sender_id") or "", now, now))
         try:
             reply = self.slack.post_thread_message(link["channel_id"], thread_ts, text, d["id"])
         except G.SlackUnreachable:

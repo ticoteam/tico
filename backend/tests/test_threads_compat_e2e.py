@@ -14,6 +14,7 @@ import json
 
 import pytest
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.store import H
 from backend.tests.test_api import api, headers, post, setup_attempt  # noqa: F401  (the api fixture)
 from backend.tests.test_mcp import call
@@ -137,7 +138,7 @@ def test_the_chat_page_read_is_a_snapshot_and_the_outline_lists_the_prompts(api)
     assert snap["messages"][-1]["body"] == "Check the release notes"
     outline = api.get(f"/api/v2/conversations/{cid}/outline", headers=headers()).json()
     row = outline["prompts"][0]
-    assert {"id", "created", "text", "task"} <= set(row)
+    assert {"id", "created_at", "text", "task"} <= set(row)
     assert row["text"] == "Check the release notes" and row["task"] is None
 
 
@@ -149,8 +150,8 @@ def test_an_older_chat_stays_in_the_list_behind_many_newer_conversations(api):
         row = dict(c.execute("SELECT * FROM conversations WHERE id=?", (cid,)).fetchone())
         later = H.shift(H.now(), seconds=3600)
         # Ben's chats, newer than Ana's: no room key, so they do not collide with her room's unique key.
-        rows = [dict(row, id=H.new_id(), subject=f"Newer {n}", created=later, last_message_at=later,
-                     participants_json='["human:ben"]', owner_actor="human:ben", room_key=None) for n in range(520)]
+        rows = [dict(row, id=H.new_id(), subject=f"Newer {n}", created_at=later, last_message_at=later,
+                     participants='["human:ben"]', owner_id="human:ben", room_key=None) for n in range(520)]
         cols = list(row)
         c.executemany(f"INSERT INTO conversations({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
                       [[r[k] for k in cols] for r in rows])
@@ -226,7 +227,7 @@ def test_the_runner_claim_carries_the_conversation_and_epochs_its_session_is_key
     _, msg, attempt = setup_attempt(api)
     conversation = attempt["conversation"]
     assert conversation["id"] == msg["conversation_id"] == attempt["message"]["conversation_id"]
-    assert (conversation["kind"], conversation["scope"], conversation["owner_actor"]) == ("chat", "personal", "human:ana")
+    assert (conversation["kind"], conversation["scope"], conversation["owner_id"]) == ("chat", "personal", "human:ana")
     assert isinstance(attempt["session_epoch"], int) and isinstance(attempt["bot_session_epoch"], int)
     assert msg["id"] in [m["id"] for m in attempt["history"]]
 
@@ -250,6 +251,6 @@ def test_a_legacy_reply_and_a_to_send_reach_ben_in_a_native_dm_ana_started(api):
     assert stranger.status_code == 403, stranger.text             # a non-member is still refused
 
     with api.app.state.store.read() as c:
-        texts = {r[0] for r in c.execute("SELECT body FROM messages WHERE conversation_id=? AND to_actor='human:ben'",
+        texts = {r[0] for r in c.execute("SELECT body FROM messages WHERE conversation_id=? AND recipient_id='human:ben'",
                                          (cid,))}
     assert {"Legacy reply", "Legacy send"} <= texts

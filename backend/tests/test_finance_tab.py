@@ -41,7 +41,7 @@ def _bank(c, at=AT):
             {"account_id": cards_gl, "amount": -amount}]}, at=at)
         SK.insert(c, "fin_feed_txns", {**feed, "money_account_id": program, "provider_id": pid, "txn_date": day,
                                        "amount": -amount, "counterparty": "Acme Supplies", "card_id": cid,
-                                       "entry_id": entry["entry_id"], "raw_json": '{"secret": "raw"}'})
+                                       "entry_id": entry["entry_id"], "raw": '{"secret": "raw"}'})
     SK.insert(c, "fin_feed_txns", {**feed, "status": "new", "money_account_id": bank, "provider_id": "t3",
                                    "txn_date": "2026-10-11", "amount": -500, "counterparty": "Bank fee"})
     return {"bank": bank, "program": program, "eve": eve, "gus": gus, "cards_gl": cards_gl}
@@ -224,7 +224,7 @@ def test_a_manager_with_reports_only_in_a_team_names_no_team_for_anyone(books):
     reports = {"dan": "eve", "eve": ""}             # both lines in one roster write, as test_finance_view does
     people = [{**p, "reports_to": reports.get(p["id"], p.get("reports_to", ""))} for p in PEOPLE]
     with books.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'",
                   (json.dumps({"people": people, "org_groups": GROUPS, "default_user": "ana"}),))
         ben = FR.access(c, "human:ben", at=AT)
         owner = FR.access(c, OWNER, at=AT)

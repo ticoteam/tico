@@ -75,7 +75,7 @@ async function renderSettingsStorage() {
       <p class="settings-cell-note" data-storage-status role="status"></p>
     </form>
     ${v.earlier.length ? `<details><summary>Still read from (${v.earlier.length})</summary><ul class="storage-earlier">${v.earlier.map(p =>
-      `<li>${storageWhere(p)} <span class="muted">· replaced ${esc(ago(p.retired))}</span></li>`).join('')}</ul></details>` : ''}`;
+      `<li>${storageWhere(p)} <span class="muted">· replaced ${esc(ago(p.retired_at))}</span></li>`).join('')}</ul></details>` : ''}`;
   const form = host.querySelector('[data-storage-form]'), status = host.querySelector('[data-storage-status]');
   form.onsubmit = async ev => {
     ev.preventDefault();

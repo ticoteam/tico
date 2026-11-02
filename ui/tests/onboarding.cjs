@@ -132,7 +132,8 @@ async function pastStrategy(page) {
 }
 
 // What Create leaves: the two starters are parked, one with its repository, one still being set up; the Content
-// Marketer is not a starter, so BotOps builds it.
+// Marketer is not a starter, so BotOps builds it. A new bot's id is not its slug (the Content Marketer's here).
+const CONTENT_ID = '01990000-0000-7000-8000-00000000c0de';
 const BOTS_AFTER = [
   {slug: 'coo', display_name: 'Ace', status: 'active', template: 'assistant', onboarding_state: '',
    setup_task_id: null, repository_present: false},
@@ -144,7 +145,7 @@ const BOTS_AFTER = [
    setup_task_id: null, repository_present: false},
   {slug: 'content', display_name: 'Content Marketer', status: 'planned', template: 'content', onboarding_state: '',
    setup_task_id: 'task-content', repository_present: false},
-];
+].map(bot => ({id: bot.slug === 'content' ? CONTENT_ID : bot.slug, ...bot}));
 // The chart Create leaves: Operations before Customer Support, not the order the bots were created in.
 const CHART_GROUPS = [{id: 'support', name: 'Customer Support', parent: '', order: 2}, {id: 'operations', name: 'Operations', parent: '', order: 1}];
 const CHART_TEAMS = {support: 'support', 'meeting-notes': 'operations'};
@@ -202,8 +203,8 @@ function recruitFor({department, briefing, share}) {
     let enrollCode = 'enroll-code';
     const me = {id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true,
                 email: 'ana@acme.example', credential_access: false, config: CONFIG};
-    const v2bots = () => BOTS_AFTER.map((bot, i) => ({slug: bot.slug, display_name: bot.display_name, state: bot.status,
-      status: bot.status, revision: i + 1, team: null, operator: 'ana', repo: 'emp-' + bot.slug, onboarding_state: bot.onboarding_state}));
+    const v2bots = () => BOTS_AFTER.map((bot, i) => ({id: bot.id, slug: bot.slug, display_name: bot.display_name, state: bot.status,
+      status: bot.status, revision: i + 1, team: null, owner_id: 'ana', repo: 'emp-' + bot.slug, onboarding_state: bot.onboarding_state}));
 
     await context.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url()), p = url.pathname;
@@ -233,7 +234,7 @@ function recruitFor({department, briefing, share}) {
       if (p === '/api/employees') return json([{name: 'coo', display_name: 'Tico', status: 'active',
         reports_to: '', description: 'the point of contact', revision: 1, users: [{id: 'ana', name: 'Ana Rivera', email: 'ana@acme.example'}]},
         // After Create the two starters are on the chart, parked, each in its group (the Content Marketer is not on it yet).
-        ...(record.completed ? BOTS_AFTER.filter(bot => bot.onboarding_state).map(bot => ({name: bot.slug, display_name: bot.display_name,
+        ...(record.completed ? BOTS_AFTER.filter(bot => bot.onboarding_state).map(bot => ({id: bot.id, slug: bot.slug, name: bot.slug, display_name: bot.display_name,
           status: bot.status, reports_to: '', description: '', revision: 5, can_chat: true, can_manage: true, onboarding_state: bot.onboarding_state,
           host: 'keeper', thread_mode: 'personal', users: [], team: CHART_TEAMS[bot.slug]})) : [])]);
       if (p === '/api/issues') return json([]);
@@ -270,7 +271,7 @@ function recruitFor({department, briefing, share}) {
         return json({...record, home: 'human:ana'});
       }
       if (p === '/api/v2/setup/getting-started/state') { tourPosts.push(request.postDataJSON()); return json({tour: true, checklist: false, cards: [], skipped: []}); }
-      if (p === '/api/v2/enrollments') { enrollments.push(request.postDataJSON()); return json({code: enrollCode, expires: '2026-09-16T10:15:00Z'}); }
+      if (p === '/api/v2/enrollments') { enrollments.push(request.postDataJSON()); return json({code: enrollCode, expires_at: '2026-09-16T10:15:00Z'}); }
       if (p === '/api/v2/bots' && request.method() === 'POST') { created.push(request.postDataJSON()); return json({bot: {slug: request.postDataJSON().slug}}); }
       if (p === '/api/v2/bots') return json(v2bots());
       // A person's chat with a bot: the first message opens it, and the bot page's DM tab shows it from then on.
@@ -279,8 +280,8 @@ function recruitFor({department, briefing, share}) {
         chats.push([bot, request.postDataJSON()]);
         const conversation = {id: 'chat-' + bot, kind: 'chat', scope: 'personal', task_id: null, closed_at: null,
                               participants: ['human:ana', 'bot:' + bot]};
-        const message = {id: 'msg-' + bot, conversation_id: conversation.id, from_actor: 'human:ana', to_actor: 'bot:' + bot,
-                         kind: 'say', body: text, refs: {}, created: '2026-09-16T10:05:00Z'};
+        const message = {id: 'msg-' + bot, conversation_id: conversation.id, sender_id: 'human:ana', recipient_id: 'bot:' + bot,
+                         kind: 'say', body: text, refs: {}, created_at: '2026-09-16T10:05:00Z'};
         opened[bot] = {conversation, messages: [message]};
         return json({message, conversation});
       }
@@ -297,8 +298,8 @@ function recruitFor({department, briefing, share}) {
       if (/^\/api\/v2\/tasks\/[^/]+\/chat$/.test(p)) return json({recipient: {slug: 'botops', name: 'BotOps', can_chat: true}, messages: [], conversation: null});
       if (p === '/api/v2/tasks' || p === '/api/v2/tasks/task-content') {
         const task = {id: 'task-content', title: 'Set up Content Marketer',
-          owner: 'bot:botops', status: 'doing', version: 1, updated: '2026-09-16T10:01:00Z',
-          created: '2026-09-16T10:00:30Z', requester: 'human:ana',
+          owner_id: 'bot:botops', status: 'doing', version: 1, updated_at: '2026-09-16T10:01:00Z',
+          created_at: '2026-09-16T10:00:30Z', requester_id: 'human:ana',
           body: 'Create the repository and the first routine.'};
         return json(p === '/api/v2/tasks' ? {tasks: [task]} : {task, events: [], children: []});
       }
@@ -873,18 +874,18 @@ function recruitFor({department, briefing, share}) {
     // bot the chart does not list yet first, the built-ins last.
     const groups = () => page.locator('#onb-bots .onb-group').evaluateAll(els => els.map(el =>
       [el.dataset.onbGroup || '', el.querySelector('h2')?.textContent || (el.dataset.onbGroup === 'built-in' ? 'Built-in' : ''), [...el.querySelectorAll('[data-onb-bot]')].map(row => row.dataset.onbBot)]));
-    assert.deepEqual(await groups(), [['', '', ['content']], ['operations', 'Operations', ['meeting-notes']],
+    assert.deepEqual(await groups(), [['', '', [CONTENT_ID]], ['operations', 'Operations', ['meeting-notes']],
       ['support', 'Customer Support', ['support']], ['built-in', 'Built-in', ['coo', 'botops']]]);
     assert.deepEqual(await page.locator('#tree .org-group > .noderow').evaluateAll(els => els.map(el => el.dataset.org)), ['g:operations', 'g:support']);
     // One status per row: a word, or the one thing to do there.
-    const status = slug => page.locator(`[data-onb-bot=${slug}] .onb-bot-actions`).evaluate(el => [el.children.length, el.textContent.trim()]);
+    const status = id => page.locator(`[data-onb-bot="${id}"] .onb-bot-actions`).evaluate(el => [el.children.length, el.textContent.trim()]);
     assert.deepEqual(await status('coo'), [1, 'Active']);                                                  // the built-ins work at once
     assert.deepEqual(await status('botops'), [1, 'Active']);
     assert.deepEqual(await status('support'), [1, 'Set up']);                                              // its repository exists
     assert.deepEqual(await status('meeting-notes'), [1, 'Setting up']);                                    // not yet: no Set up
     assert.equal(await page.locator('[data-fr-start=meeting-notes]').count(), 0);
-    assert.deepEqual(await status('content'), [1, 'Setting it up']);                                         // not a starter: BotOps builds it
-    assert.equal(await page.locator('[data-onb-bot=content] a').getAttribute('href'), '#/task/task-content');
+    assert.deepEqual(await status(CONTENT_ID), [1, 'Setting it up']);                                         // not a starter: BotOps builds it
+    assert.equal(await page.locator(`[data-onb-bot="${CONTENT_ID}"] a`).getAttribute('href'), '#/task/task-content');
     assert.equal(await page.locator('#onb-bots .pill.needs, #onb-bots p').count(), 0);
     // Show me around: the tour, once asked for; Skip is remembered.
     await page.locator('#onb-tour').click();
@@ -973,7 +974,7 @@ function recruitFor({department, briefing, share}) {
     await page.locator('#onb-tasks').waitFor();
 
     // The setup task link opens the Tasks page with that task already in full.
-    await page.locator('[data-onb-bot=content] a').click();
+    await page.locator(`[data-onb-bot="${CONTENT_ID}"] a`).click();
     await page.waitForFunction(() => location.hash === '#/task/task-content');
     await page.locator('#task-modal[open] .tmodal-title').waitFor();
     assert.equal(await page.locator('#task-modal .tmodal-title').textContent(), 'Set up Content Marketer');
@@ -1183,8 +1184,8 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await waiting.locator('#onb', {hasText: 'Waiting for a computer'}).count(), 1);
     assert.equal(await waiting.locator('#onb-bots').textContent().then(text => /computer/i.test(text)), false);
     assert.deepEqual(await waiting.locator('#onb button.primary').evaluateAll(els => els.map(el => el.textContent)), ['Add a computer']);
-    for (const slug of ['coo', 'support', 'meeting-notes', 'content'])
-      assert.equal(await waiting.locator(`[data-onb-bot=${slug}] .onb-bot-actions`).textContent().then(text => text.trim()), 'Waiting');
+    for (const id of ['coo', 'support', 'meeting-notes', CONTENT_ID])
+      assert.equal(await waiting.locator(`[data-onb-bot="${id}"] .onb-bot-actions`).textContent().then(text => text.trim()), 'Waiting');
     // Read the actual wizard pills' computed colours, including System following a light OS.
     const contrast = [];
     for (const theme of ['light', 'system', 'dark']) {

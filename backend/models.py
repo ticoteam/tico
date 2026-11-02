@@ -848,7 +848,7 @@ class MarketEntityCreate(Contract):
     tier: Literal["core", "lookalike", "phrase-stealer", "secondary"] | None = None
     summary: str = Field(default="", max_length=20_000)
     properties: dict = Field(default_factory=dict)
-    last_verified: str | None = None
+    last_verified_at: str | None = None
     evidence_ids: list[str] = Field(default_factory=list, max_length=20)
     force: bool = False
     insight_id: str | None = Field(default=None, max_length=80)
@@ -862,7 +862,7 @@ class MarketEntityWrite(Contract):
     clear_tier: bool = False
     summary: str | None = Field(default=None, max_length=20_000)
     properties: dict | None = None
-    last_verified: str | None = None
+    last_verified_at: str | None = None
     status: Literal["active", "retired", "merged"] | None = None
     evidence_ids: list[str] | None = None
     insight_id: str | None = Field(default=None, max_length=80)
@@ -916,7 +916,7 @@ class MarketApply(Contract):
     properties: dict | None = None
     tier: Literal["core", "lookalike", "phrase-stealer", "secondary"] | None = None
     aliases: list[str] | None = None
-    last_verified: str | None = None
+    last_verified_at: str | None = None
 
 
 class MarketImport(Contract):
@@ -1399,7 +1399,7 @@ class WorktreeStatus(Contract):
     last_commit: str | None = Field(default=None, max_length=100)
     size_mb: float = Field(default=0, ge=0)
     error: str | None = Field(default=None, max_length=300)
-    # The record's `updated` stamp this report was built from; a report older than the record is stale.
+    # The record's `updated_at` stamp this report was built from; a report older than the record is stale.
     record_updated: str | None = Field(default=None, max_length=40)
 
 
@@ -1771,6 +1771,8 @@ class AppDeliveryReport(Contract):
 
 class BotDefinitionUpdate(Contract):
     private_tasks_default: StrictBool | None = None
+    # A new slug: the label people type (@slug) and read. The bot's id, its history and every reference keep as they are.
+    slug: Slug | None = None
     template: str | None = Field(default=None, max_length=80)
     display_name: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
@@ -2468,7 +2470,7 @@ class Retry(Contract):
 
 
 class ReconcileJob(Contract):
-    attempt_id: ID
+    run_id: ID
     decision: Literal["resume", "dismiss"]
     note: str = Field(min_length=20, max_length=4000)
     acknowledge_uncertain_effects: bool
@@ -2569,7 +2571,7 @@ class LimitRetry(Contract):
 
 
 class StopTurn(Contract):
-    attempt_id: ID | None = None   # the run the person saw; a newer one is not stopped by mistake
+    run_id: ID | None = None       # the run the person saw; a newer one is not stopped by mistake
     redirect: ID | None = None     # the caller's queued message the next turn starts with (Stop and redirect)
 
 

@@ -522,7 +522,7 @@ def _map(value: object) -> dict[str, Any]:
 
 
 def _flows(c: Any) -> dict[str, Any]:
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (FLOWS,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (FLOWS,)).fetchone()
     try:
         return _map(json.loads(row[0]) if row else {})
     except ValueError:
@@ -530,8 +530,8 @@ def _flows(c: Any) -> dict[str, Any]:
 
 
 def _keep_flows(c: Any, flows: Mapping[str, Any]) -> None:
-    c.execute("INSERT INTO registry_metadata(key, value_json) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
-              "value_json=excluded.value_json", (FLOWS, json.dumps(flows, sort_keys=True)))
+    c.execute("INSERT INTO registry_metadata(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
+              "value=excluded.value", (FLOWS, json.dumps(flows, sort_keys=True)))
 
 
 def _fresh(started: object, now: str) -> bool:

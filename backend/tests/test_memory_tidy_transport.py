@@ -77,16 +77,24 @@ def test_runner_completion_retains_attachment_and_closes_without_waking_parent(a
     from backend.tests.test_check_models import finish
     machine, parent, child = pass_filed(api)
     check = claim(api, machine)
-    store = api.app.state.store
+    store = setup(api)
+    monkeypatch.setattr(transport.runs, 'packet_runner', lambda *args: True)
     monkeypatch.setattr(H, 'now', lambda: '2026-11-01T11:45:00.000000Z')
     with store.transaction() as c:
         last(c, status='filed')
         c.execute('UPDATE memory_tidy_passes SET parent_task_id=?,check_task_id=?', (parent['id'], child['id']))
         row = c.execute('SELECT * FROM memory_tidy_passes').fetchone()
         snap = {k: v for k, v in snapshot().items() if k == 'AGENT.md' or k.startswith(('memory/', 'knowledge/')) and k.endswith('.md')}
-        transport.prepare(c, row, check['id'], transport.Prepare(memory_commit='a' * 40, snapshot=snap, manifest='b' * 64))
-        transport.proposal(c, check['id'], json.dumps(proposal(snap)))
-        transport.verification(c, check['id'], transport.Verification(text='{"conflicts":[]}', manifest=('c' if mutated else 'b') * 64))
+    # Exercise runner ownership through the actual routes, including the attempt row's bot_id.
+    path = f"attempts/{check['id']}/memory-tidy/"
+    prepared = post(api, path + 'prepare', {'memory_commit': 'a' * 40, 'snapshot': snap,
+                                          'manifest': 'b' * 64}, machine['token'])
+    assert prepared['packet']['entries']
+    verified = post(api, path + 'proposal', {'text': json.dumps(proposal(snap))}, machine['token'])
+    assert verified['verification']['rules']
+    post(api, path + 'verification', {'text': '{"conflicts":[]}',
+                                     'manifest': ('c' if mutated else 'b') * 64}, machine['token'])
+    with store.read() as c:
         before = c.execute("SELECT count(*) FROM jobs WHERE state='queued'").fetchone()[0]
     finish(api, machine, check, {'runtime': 'codex', 'model': 'gpt-6.1-sol'})
     with store.read() as c:

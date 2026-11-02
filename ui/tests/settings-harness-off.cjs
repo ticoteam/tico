@@ -36,7 +36,7 @@ const {unrouted} = require('./support/routes.cjs');
       default: {runtime: 'codex', model: 'gpt-6-luna'},
     };
     let enabled = ['openai', 'anthropic'];
-    const bots = [{name: 'helper', display_name: 'Helper', status: 'active', operator: 'ana',
+    const bots = [{name: 'helper', display_name: 'Helper', status: 'active', owner_id: 'ana',
       can_manage: true, users: [], bot_owners: [], revision: 1, model: 'muse-spark-1.3', harness: 'musecode',
       reasoning_effort: 'high'}];
     await page.route('**/*', route => {

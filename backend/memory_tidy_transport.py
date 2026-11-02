@@ -16,7 +16,7 @@ from .store import H, Problem
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory_tidy_packets(
  attempt_id TEXT PRIMARY KEY, pass_id TEXT NOT NULL UNIQUE, memory_commit TEXT NOT NULL,
- snapshot_json TEXT NOT NULL, before_digest TEXT NOT NULL, after_digest TEXT,
+ snapshot TEXT NOT NULL, before_digest TEXT NOT NULL, after_digest TEXT,
  since TEXT, previous_learnings TEXT, proposal TEXT, conflicts INTEGER,
  flags_json TEXT NOT NULL DEFAULT '[]', stage TEXT NOT NULL DEFAULT 'prepared');
 """
@@ -46,20 +46,20 @@ def prepare(c, row, aid, body):
         p = PurePosixPath(path)
         if path != 'AGENT.md' and (not tidy._allowed(path) or p.suffix != '.md'):
             raise Problem('validation', 'Nightly memory tidy snapshot has an out-of-scope path', 422)
-    previous = c.execute("SELECT p.baseline,q.snapshot_json FROM memory_tidy_passes p "
+    previous = c.execute("SELECT p.baseline,q.snapshot FROM memory_tidy_passes p "
                          "LEFT JOIN memory_tidy_packets q ON q.pass_id=p.id "
                          "WHERE p.bot=? AND p.status IN ('kept','discarded') "
-                         "ORDER BY p.started DESC LIMIT 1", (row['bot'],)).fetchone()
+                         "ORDER BY p.started_at DESC LIMIT 1", (row['bot'],)).fetchone()
     since = previous['baseline'] if previous else None
-    old = json.loads(previous['snapshot_json']).get(tidy.LEARNINGS) if previous and previous['snapshot_json'] else None
+    old = json.loads(previous['snapshot']).get(tidy.LEARNINGS) if previous and previous['snapshot'] else None
     encoded = json.dumps(body.snapshot, ensure_ascii=False)
     existing = c.execute('SELECT * FROM memory_tidy_packets WHERE pass_id=?', (row['id'],)).fetchone()
     if existing:
-        if (existing['attempt_id'] != aid or existing['snapshot_json'] != encoded
+        if (existing['attempt_id'] != aid or existing['snapshot'] != encoded
                 or existing['memory_commit'] != body.memory_commit or existing['before_digest'] != body.manifest):
             raise Problem('conflict', 'Nightly memory tidy packet already pinned', 409)
     else:
-        c.execute('INSERT INTO memory_tidy_packets(attempt_id,pass_id,memory_commit,snapshot_json,before_digest,'
+        c.execute('INSERT INTO memory_tidy_packets(attempt_id,pass_id,memory_commit,snapshot,before_digest,'
                   'since,previous_learnings) VALUES(?,?,?,?,?,?,?)',
                   (aid, row['id'], body.memory_commit, encoded, body.manifest, since, old))
     return tidy.build_packet(body.snapshot, since=H.parse_ts(since) if since else None,
@@ -70,7 +70,7 @@ def proposal(c, aid, text):
     packet = c.execute('SELECT * FROM memory_tidy_packets WHERE attempt_id=?', (aid,)).fetchone()
     if not packet or packet['stage'] != 'prepared':
         raise Problem('conflict', 'Nightly memory tidy packet is not prepared', 409)
-    snapshot = json.loads(packet['snapshot_json'])
+    snapshot = json.loads(packet['snapshot'])
     rules = []
     def collect(agent, before_and_after):
         rules.extend(before_and_after)
@@ -128,7 +128,7 @@ def complete(c, aid, body, who, files, blobs):
         return ['instruction conflict'] * packet['conflicts']
     # Preserve the checked attachment before closing. Only code receives it; raw
     # malformed or secret-shaped model output is never published as a file.
-    snapshot = json.loads(packet['snapshot_json'])
+    snapshot = json.loads(packet['snapshot'])
     result = tidy.evaluate(snapshot, packet['proposal'] or '',
         since=H.parse_ts(packet['since']) if packet['since'] else None,
         today=H.parse_ts(H.now()).astimezone(runs.ZONE).date(),
@@ -152,7 +152,7 @@ def install(app, store, execution, mutate):
     def owned(c, who, aid):
         attempt = execution.attempt(c, who, aid)
         row = c.execute('SELECT p.* FROM memory_tidy_passes p JOIN turns t ON t.task_id=p.check_task_id '
-                        'WHERE t.id=? AND p.bot=?', (aid, attempt['bot'])).fetchone()
+                        'WHERE t.id=? AND p.bot=?', (aid, attempt['bot_id'])).fetchone()
         if not row or row['status'] != 'filed' or row['deadline'] <= H.now():
             raise Problem('conflict', 'Nightly memory tidy pass is no longer active', 409)
         return row

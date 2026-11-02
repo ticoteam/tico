@@ -1,6 +1,7 @@
 """A row in a thread list: a root speaks for its sub-threads and opens what is new in them; a DM says who it is with."""
 from types import SimpleNamespace
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import cards, threads
 from backend.auth import Identity
 from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helpers)

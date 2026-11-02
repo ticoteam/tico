@@ -199,8 +199,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            them, and your reports' goals; --all is every goal
     hub goal show <id>                     the goal, its KPIs (target, colour), tasks, check-ins, history
     hub goal read-back '[{"kind":"goal_create","owner":"company","title":"..."}]'
-    hub goal save POST /api/v2/goals '<body_json>' --on-behalf-of turn
-    hub goal save POST /api/v2/goal-proposals/turned-down '<body_json>' --on-behalf-of turn
+    hub goal save POST /api/v2/goals '<body>' --on-behalf-of turn
+    hub goal save POST /api/v2/goal-proposals/turned-down '<body>' --on-behalf-of turn
                                            the owner's "no" to a suggestion you made in chat: stored at once as turned down
     hub goal create --owner me|X --title "..." [--parent ID] [--body "..."|--body-file f] [--top] [--bet ID]
                                            set a goal; a parent is optional. With one, it supports that goal
@@ -492,7 +492,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub bot create --record-only --name N [<slug>] [--description D] [--reports-to R] [--template T]
                                            only register a new bot with Tico (planned), as the requester (BotOps)
     hub bot check <slug>                   what preflight would still refuse about that repository
-    hub bot update <slug> [--reports-to R] [--display-name N] [--description D] [--status S]
+    hub bot check-names <slug|folder> [--fix]
+                                           old column, field and command names left in a bot's files; --fix rewrites
+                                           the ones with one new spelling (runs here: no server)
+    hub bot update <slug> [--new-slug S] [--reports-to R] [--display-name N] [--description D] [--status S]
                                            apply a person's bot-settings request as them (BotOps)
     hub bot access <slug> [--see V] [--read V] [--write V]
                                            show or set who sees, reads, writes (V: everyone, or ben,group:legal,bot:x)
@@ -1763,7 +1766,7 @@ def parser():
                                       "cite that yes with --on-behalf-of turn (or its message id) on each save.").add_subparsers(dest="sub")
     s = goal.add_parser("read-back", help="Tico writes the draft; saves nothing without a plain yes",
                         description="Post 1 to 20 changes as Tico's read-back. Saves nothing without a plain yes. "
-                                    "Returns message_id, text and exact method/path/body_json steps. After yes, use goal save "
+                                    "Returns message_id, text and exact method/path/body steps. After yes, use goal save "
                                     "for each agreed step; replace {new} with the first save's goal id using --created-goal. "
                                     "On not_agreed read back again; never retry the save.")
     s.add_argument("changes", help="JSON array: kind goal_create, goal_update, measure_add, target_set, measure_remove or suggestion, "
@@ -1773,7 +1776,7 @@ def parser():
                                      "\"no\" to a suggestion (goal-proposals/turned-down)")
     s.add_argument("method", choices=["POST"])
     s.add_argument("path", help="the step's /api/v2 path")
-    s.add_argument("body_json", help="the step's exact body_json string, unchanged")
+    s.add_argument("body", help="the step's exact body string, unchanged")
     s.add_argument("--created-goal", dest="created_goal", help="first save's goal id, to replace {new} in later paths")
     s.add_argument("--on-behalf-of", required=True, help="turn or the message id of the owner's plain yes")
     s.set_defaults(fn="goal save")
@@ -2885,11 +2888,11 @@ def parser():
     s = webhook.add_parser("sends", help="an endpoint's send log; --send ID shows one send with its attempts")
     s.add_argument("id")
     s.add_argument("--send")
-    s.add_argument("--state", choices=["ready", "sending", "delivered", "failed", "cancelled", "withheld"])
+    s.add_argument("--state", choices=["ready", "sending", "delivered", "failed", "canceled", "withheld"])
     s.add_argument("--limit", type=int)
     s.add_argument("--offset", type=int)
     s.set_defaults(fn="webhook sends")
-    s = webhook.add_parser("retry", help="send a failed, cancelled or delivered send again now")
+    s = webhook.add_parser("retry", help="send a failed, canceled or delivered send again now")
     s.add_argument("id")
     s.add_argument("send")
     s.set_defaults(fn="webhook retry")
@@ -2959,7 +2962,7 @@ def parser():
     s.add_argument("--since")
     s.set_defaults(fn="run list")
     s = runs.add_parser("export", help="a run's captured provider stream (owners and engineering bots)")
-    s.add_argument("attempt", help="the attempt id, from hub run list")
+    s.add_argument("run", help="the run id, from hub run list")
     s.add_argument("--fixture", action="store_true",
                    help="write input.json, <provider>_transcript.ndjson and output.json to a folder")
     s.add_argument("--out", help="with --fixture: the parent folder (default: the current one)")
@@ -3199,6 +3202,7 @@ def parser():
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID",
                    help="the person's message to BotOps asking for this change; by default the one that started this run")
     s.add_argument("--reports-to", help="a bot slug, or human:<id>")
+    s.add_argument("--new-slug", help="rename its slug (a label: its id, history and folder stay)")
     s.add_argument("--display-name")
     s.add_argument("--description")
     s.add_argument("--repo", help="its GitHub repository: <org>/bot-<slug>")
@@ -3220,6 +3224,10 @@ def parser():
     s = bot.add_parser("check", help="what preflight would still refuse about that repository")
     s.add_argument("slug")
     s.set_defaults(fn="bot check")
+    s = bot.add_parser("check-names", help="old column, field and command names left in a bot's files")
+    s.add_argument("target", help="the bot's slug, or its checkout folder")
+    s.add_argument("--fix", action="store_true", help="rewrite the names that have one new spelling")
+    s.set_defaults(fn="bot check-names")
     s = bot.add_parser("access", help="show or set who may see, read and write to a bot")
     s.add_argument("slug")
     for level in ("see", "read", "write"):
@@ -3895,6 +3903,9 @@ def run(argv, who):
             from clients import judge
             print(json.dumps(judge.list_sets(), indent=2))
             return 0
+        if args.fn == "bot check-names":           # reads the bot's own files here: no hub, no credential
+            from clients import bot_names
+            return bot_names.command(args.target, args.fix, os.environ.get("HUB_WORKSPACE"))
         if args.fn == "doc fetch":                 # runs here, beside the bot: no hub, no credential
             from clients import doc_fetch
             try:
