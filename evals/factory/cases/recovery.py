@@ -131,11 +131,11 @@ def stale_bot_starts(run):
         return False, "the runner's claims named no bot busy after the restart, so nothing was tested"
     since = stamp(stale["corrected_at"] - START)
     first = run.w.sql("SELECT started_at FROM attempts WHERE bot_id=? AND started_at>=? ORDER BY started_at LIMIT 1",
-                      (stale["bot_id"], since))
+                      (stale["bot"], since))
     if not first:
-        return False, (f"{stale['bot_id']} was named busy for {stale['sent']} rounds after the restart and did not start "
+        return False, (f"{stale['bot']} was named busy for {stale['sent']} rounds after the restart and did not start "
                        f"once its list was right, from {since}")
-    return True, (f"{stale['bot_id']} was named busy for {stale['sent']} rounds after the restart; its list was right from "
+    return True, (f"{stale['bot']} was named busy for {stale['sent']} rounds after the restart; its list was right from "
                   f"{since}, and it started at {first[0]['started_at']}")
 
 
