@@ -529,6 +529,66 @@ def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_
     assert again.status_code == 409 and "Support Desk" in again.text
 
 
+def bot_line(api, hired):
+    """What the bot reports to in its definition: a person or a bot, never a seat."""
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (hired["bot"],)).fetchone()[0]
+
+
+def fill(api, seat):
+    pick = post(api, f"seats/{seat['id']}/recruit", {})["candidates"][0]["template"]
+    return post(api, f"seats/{seat['id']}/hire", {"template": pick})
+
+
+def test_a_bot_hired_under_an_open_manager_seat_reports_above_it_until_that_seat_is_hired(api):
+    providers(api, "anthropic", "openai")
+    head = post(api, "seats", {"title": "Head of Marketing", "reports_to": "coo",
+                               "description": "Leads marketing and sets the content plan."})
+    writer = post(api, "seats", {"title": "Content Marketer", "reports_to": "seat:" + head["id"],
+                                 "description": "Writes the blog and the newsletter."})
+    # The Hire page says who the bot reports to until the manager seat is hired, and that seat's title.
+    assert get(api, f"seats/{writer['id']}")["reports_now"]["until"] == "Head of Marketing"
+    assert "reports_now" not in get(api, f"seats/{head['id']}")
+
+    hired = fill(api, writer)
+    assert hired["reports_to"] == "coo" and bot_line(api, hired) == "coo"
+    assert get(api, f"bots/{hired['slug']}")["stage"] == "onboarding"
+
+    manager = fill(api, head)
+    assert bot_line(api, hired) == manager["bot"]              # the writer moves under the Head of Marketing bot
+    assert bot_line(api, manager) == "coo"
+    assert get(api, "seats")["seats"] == []
+
+
+def test_a_chain_of_open_seats_hired_bottom_up_ends_with_each_bot_under_the_one_above(api):
+    providers(api, "anthropic", "openai")
+    top = post(api, "seats", {"title": "Head of Marketing", "reports_to": "coo", "description": "Leads marketing."})
+    middle = post(api, "seats", {"title": "Content Lead", "reports_to": "seat:" + top["id"],
+                                 "description": "Leads the content team."})
+    bottom = post(api, "seats", {"title": "Content Marketer", "reports_to": "seat:" + middle["id"],
+                                 "description": "Writes the content."})
+    lowest = fill(api, bottom)
+    assert bot_line(api, lowest) == "coo"
+    highest = fill(api, top)
+    middling = fill(api, middle)
+    assert bot_line(api, middling) == highest["bot"]
+    assert bot_line(api, lowest) == middling["bot"]          # moved when the seat above it filled
+    assert bot_line(api, highest) == "coo"
+
+
+def test_a_bot_moved_by_hand_under_an_open_manager_keeps_that_manager_when_the_seat_fills(api):
+    providers(api, "anthropic", "openai")
+    head = post(api, "seats", {"title": "Head of Marketing", "reports_to": "coo", "description": "Leads marketing."})
+    writer = post(api, "seats", {"title": "Content Marketer", "reports_to": "seat:" + head["id"],
+                                 "description": "Writes the content."})
+    hired = fill(api, writer)
+    # Someone moves the writer by hand before the manager is hired: the line they chose stays.
+    revision = get(api, f"bots/{hired['slug']}")["revision"]
+    post(api, f"bots/{hired['slug']}/definition", {"reports_to": "human:ben", "expected_revision": revision})
+    fill(api, head)
+    assert bot_line(api, hired) == "human:ben"
+
+
 def test_a_bot_or_an_unconfirmed_assistant_never_picks_and_a_refused_pick_leaves_nothing(api, monkeypatch):
     providers(api, "anthropic", "openai")
     strategy_token = strategy_bot(api)
