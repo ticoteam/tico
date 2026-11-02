@@ -462,10 +462,11 @@ def _owns_dev_tickets(c, slug):
     return False
 
 
-def migrate(c):
+def migrate(c, tell=True):
     """Give every bot with no profile one, by its name (`default_for`), and tell each owner once, in one notice that
     names every bot of theirs and its profile. Runs at each start and touches only bots with no profile, so a bot is
-    migrated once, whatever its owner changes afterwards."""
+    migrated once, whatever its owner changes afterwards. `tell=False` skips the notice, for an install that is made
+    with its bots (the demo), where there is no earlier state to explain."""
     from . import rules
     from .store import encode
     told = {}
@@ -489,7 +490,7 @@ def migrate(c):
         owner = row["owner_id"] or next(iter(_owner_ids(row["bot_owners"])), "") or H.default_human(c)
         if owner and H.human(c, owner):
             told.setdefault(owner, []).append((row["display_name"] or slug, slug, name))
-    for owner, bots in told.items():
+    for owner, bots in (told.items() if tell else ()):
         lines = [f"- {label} ({slug}): {SPEC[name]['label']}" for label, slug, name in bots[:40]]
         more = f"\n...and {len(bots) - 40} more." if len(bots) > 40 else ""
         H.notice(c, H.KEEPER, H.human_actor(owner),

@@ -1,6 +1,6 @@
 // The Strategy section (ui/strategy-page.js) against a stand-in for GET /api/v2/strategy, the market cards' reads and
 // all their writes (fixtures only, the Acme example): the owner reads the draft as cards (the summary on top, no vision;
-// Where we play beside the bets; Competitors beside Related news; the four fixed sections and an extra one), edits the
+// Where we play beside the bets; Competitors beside Related news; the seven fixed sections and an extra one), edits the
 // summary and each bet's statement in place with the draft's revision, adds a bet with + Bet (active), removes one with
 // × and restores it, moves one by its number (arrow keys or a drag), and is told when the draft changed elsewhere (409);
 // a click on a segment makes it Us, then Next, then neither, × removes one and one can be added by name; competitors are
@@ -193,7 +193,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     // The owner reads the draft as cards: the summary on top (no vision), the bets as statements with their goals and
-    // health, the four sections in their order and the extra one.
+    // health, the seven sections in their order and the extra one.
     {
       const {page, errors, sent, st} = await open(browser);
       const summary = page.locator('[data-strat-field="summary"]');
@@ -216,7 +216,8 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.equal(await page.locator('li[data-bet="b-offices"] [data-bet-health]').getAttribute('data-bet-health'), 'red');
       assert.equal(await page.locator('li[data-bet="b-weekly"] .strat-pill').innerText(), 'Proposed');
       assert.equal(await page.locator('.strat-retired li[data-bet="b-old"]').count(), 1, 'retired bets sit apart');
-      assert.deepEqual(await sectionTitles(page), ['WHO WE SERVE', 'WHAT WE SELL, AND FOR HOW MUCH', "WHAT WE KNOW THAT OTHERS DON'T", 'HOW WE SELL', "WHAT WE WON'T DO", 'BRAND']);
+      assert.deepEqual(await sectionTitles(page), ['WHO WE SERVE', 'WHAT WE SELL, AND FOR HOW MUCH', 'HOW WE KNOW THEY WANT IT', 'WHY NOW',
+        "WHAT WE KNOW THAT OTHERS DON'T", 'HOW WE SELL', "WHAT WE WON'T DO", 'BRAND']);
       assert.equal(await page.locator('[data-section="serve"] .strat-md strong').innerText(), 'small offices', 'sections are markdown');
       assert.equal(await page.locator('[data-bet-add]').getAttribute('aria-label'), 'Add Bet');
       assert.equal(await page.locator('[data-bet-add]').innerText(), '+ Bet');
@@ -243,7 +244,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       await page.locator('[data-section-new] button[type="submit"]').click();
       await page.locator('[data-section="sales-channels"]').waitFor();
       assert.deepEqual(sent.filter(x => x[1] === '/draft').at(-1)[2], {sections: {extra: {'sales-channels': {title: 'Sales channels', body: 'Property managers, then word of mouth.'}}}, revision: 9});
-      assert.deepEqual((await sectionTitles(page)).slice(4), ["WHAT WE WON'T DO", 'BRAND', 'SALES CHANNELS']);
+      assert.deepEqual((await sectionTitles(page)).slice(6), ["WHAT WE WON'T DO", 'BRAND', 'SALES CHANNELS']);
       await page.locator('[data-section="sales-channels"] [data-section-edit]').click();
       await page.locator('[data-section-form] input[name="title"]').fill('Channels we use');
       await page.locator('[data-section-form] button[type="submit"]').click();

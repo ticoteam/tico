@@ -247,6 +247,28 @@ def test_record_timings_writes_each_files_seconds_from_junit_reports(tmp_path, m
     assert json.loads(release_checks.TIMINGS.read_text())['browser'] == {'a': 2.5, 'c': 0.4}
 
 
+def test_record_shard_timings_refreshes_release_from_shard_junit_and_keeps_unrun_files_that_exist(tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(release_checks, 'ROOT', tmp_path)
+    for name in ('a.py', 'b.py', 'kept.py'):
+        (tmp_path / name).write_text('')
+    monkeypatch.setattr(release_checks, 'TIMINGS', tmp_path / 'test-timings.json')
+    release_checks.TIMINGS.write_text(json.dumps({
+        'default': {'a.py': 1, 'gone.py': 5}, 'release': {'a.py': 9, 'kept.py': 3, 'gone.py': 7}, 'browser': {'x': 1.0}}))
+    reports = tmp_path / 'junit'
+    for shard, cases in ((1, [('a.py', 1.5), ('a.py', 2)]), (2, [('b.py', 4)])):
+        (reports / f'release-junit-1-python-{shard}').mkdir(parents=True)
+        (reports / f'release-junit-1-python-{shard}' / f'python-{shard}-of-2.xml').write_text(
+            '<testsuites><testsuite>' + ''.join(f'<testcase file="{file}" name="t" time="{seconds}"/>'
+                                                for file, seconds in cases) + '</testsuite></testsuites>')
+    assert release_checks.main(['--record-shard-timings', str(reports)]) == 0
+    # a.py's fresh seconds replace its record; kept.py did not run but exists, so it keeps its 3 s; gone.py is dropped.
+    assert json.loads(release_checks.TIMINGS.read_text()) == {
+        'default': {'a.py': 1}, 'release': {'a.py': 3.5, 'b.py': 4.0, 'kept.py': 3}, 'browser': {'x': 1.0}}
+    with pytest.raises(RuntimeError, match='no junit reports'):
+        release_checks.record_shard_timings(str(tmp_path / 'empty'))
+
+
 def test_shard_alone_runs_a_file_group_of_the_default_suite_pr_checks_run(monkeypatch, capsys):
     listing = '\n'.join(['a.py::t%d' % i for i in range(4)] + ['b.py::t0', 'b.py::t1', 'c.py::t', 'd.py::t',
                                                                  '', '8/9 tests collected (1 deselected) in 0.1s'])

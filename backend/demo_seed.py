@@ -9,7 +9,9 @@ same `now` gives the same database.
 import contextlib
 import dataclasses
 import hashlib
+import io
 import itertools
+import json
 import secrets
 import uuid
 import warnings
@@ -23,15 +25,14 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from . import demo_content as D
 from . import demo_sections
-from . import docs, goals as G, hubdb, market, onboarding, providers, routines, updates
+from . import docs, goals as G, hubdb, market, onboarding, providers, routines, slack_app, updates
 from .auth import Identity
 from .scheduler import next_due, stamp
 from .store import H, encode
 
 NAMESPACE = uuid.UUID("7d1c2f3e-5a4b-4c6d-8e9f-0a1b2c3d4e5f")
 OWNER = "demo-owner"
-TOKENS = {"human:ana": OWNER, "human:cara": "demo-cara", "human:ben": "demo-ben"}
-RUNNERS = (("Ana's MacBook", "darwin", ("claude", "codex")), ("acme-runner-1", "linux", ("claude",)))
+TOKENS = {"human:ana": OWNER, "human:cara": "demo-cara", "human:ben": "demo-ben", "human:eli": "demo-eli"}
 RUNNER_VERSION = "0.6.2"
 SEED_SHA = "9f2c4e1ab7d3085c6e1f4a2b9d8c7e6f5a4b3c2d"
 
@@ -55,15 +56,19 @@ def fixed(clock):
     def digest():
         return hashlib.sha256(f"{NAMESPACE}:{next(counter)}".encode()).hexdigest()
 
-    saved = (hubdb.now, hubdb.new_id, secrets.token_urlsafe, secrets.token_hex)
+    from . import threads
+    saved = (hubdb.now, hubdb.new_id, hubdb.uuid7, threads.uuid7, secrets.token_urlsafe, secrets.token_hex, uuid.uuid4)
     hubdb.now = clock
     hubdb.new_id = lambda: str(uuid.uuid5(NAMESPACE, str(next(counter))))
+    # Time-ordered ids (messages, deliveries) and the product's own random ids for threads and calls.
+    hubdb.uuid7 = threads.uuid7 = lambda: str(uuid.UUID(hex=digest()[:32]))
+    uuid.uuid4 = lambda: uuid.UUID(hex=digest()[:32])
     secrets.token_urlsafe = lambda nbytes=32: (digest() * 3)[: (nbytes * 4 + 2) // 3]
     secrets.token_hex = lambda nbytes=32: (digest() * 3)[: nbytes * 2]
     try:
         yield
     finally:
-        hubdb.now, hubdb.new_id, secrets.token_urlsafe, secrets.token_hex = saved
+        hubdb.now, hubdb.new_id, hubdb.uuid7, threads.uuid7, secrets.token_urlsafe, secrets.token_hex, uuid.uuid4 = saved
 
 
 def write_registry(settings):
@@ -123,7 +128,8 @@ class Builder:
             test_identities={
                 OWNER: Identity("human:ana", "owner", D.PEOPLE[0]["email"]),
                 "demo-cara": Identity("human:cara", "human", D.PEOPLE[2]["email"]),
-                "demo-ben": Identity("human:ben", "human", D.PEOPLE[1]["email"])})
+                "demo-ben": Identity("human:ben", "human", D.PEOPLE[1]["email"]),
+                "demo-eli": Identity("human:eli", "human", D.PEOPLE[3]["email"])})
         app = create_app(seeding)
         self.app, self.store = app, app.state.store
         self.at(days=7)
@@ -137,11 +143,15 @@ class Builder:
             self.routines()
             self.tasks_and_chats()
             self.meetings()
+            self.routine_tasks()
             self.updates()
             self.history()
             self.messaging()
             self.files()
+            self.page()
+            self.icon()
             demo_sections.seed_all(self)
+            self.routine_tasks(D.BRIEFING_DONE)
             self.finish()
 
     def write(self, work):
@@ -174,7 +184,7 @@ class Builder:
 
     def computers(self):
         self.at(days=6.9)
-        for label, platform, runtimes in RUNNERS:
+        for label, platform, runtimes in D.RUNNERS:
             code = self.call("POST", "enrollments", {"operator": "ana"})["code"]
             runner = self.call("POST", "runners/enroll", {"code": code, "label": label, "platform": platform})
             if platform == "darwin":
@@ -246,38 +256,38 @@ class Builder:
                     continue
                 folder = "help" if doc["category"].startswith("External") else doc["category"].split("/")[-1].strip().lower()
                 service.insert(c, "human:ana", doc["title"], doc["content"], folder + "/" + doc["id"].split("-", 1)[-1] + ".md")
-            for url, title, note in (("https://help.acme.example", "Acme help centre", "What customers read"),
-                                     ("https://drive.google.com/drive/folders/acme-brand", "Brand assets", "Logos, colours and the tone guide")):
+            for url, title, note in D.LINKS:
                 docs.add_link(c, "human:ana", docs.LinkCreate(url=url, title=title, description=note))
         self.write(work)
 
+    @staticmethod
+    def edge(row):
+        """A company's line to Acme Lights: a competitor points at us; a partner is one we point at."""
+        competitor = row["rel"] == "competes_with"
+        src, dst = (row["id"], "company/self") if competitor else ("company/self", row["id"])
+        return {"id": "edge-" + row["rel"].replace("_", "-") + "-" + row["id"].split("/")[1], "src": src, "rel": row["rel"],
+                "dst": dst, "confidence": "medium", "evidence_id": D.WATCH_EVIDENCE["id"]}
+
     def market(self):
         self.at(days=6.2)
-        document = {"watch_evidence": {"id": "ev-watchlist", "source_kind": "other",
-                                       "our_read": "Names on the listening watchlist, each treated as competing with Acme."},
+        document = {"watch_evidence": D.WATCH_EVIDENCE,
                     "companies": [{"id": row["id"], "name": row["name"], "type": "company", "tier": row["tier"],
                                    "aliases": row["aliases"], "external_ids": row["external_ids"], "summary": row["summary"]}
                                   for row in D.COMPANIES],
                     "segments": D.SEGMENTS, "channels": D.CHANNELS,
-                    "edges": [{"id": "edge-competes-" + row["id"].split("/")[1], "src": row["id"], "rel": "competes_with",
-                               "dst": "company/self", "confidence": "medium", "evidence_id": "ev-watchlist"}
-                              for row in D.COMPANIES if row["tier"]]}
+                    "edges": [self.edge(row) for row in D.COMPANIES if row.get("rel")]}
 
         def work(c):
             market.seed(c, document=document)
             market.ensure_curator(c)
             for index, (key, kind, url, quote, read) in enumerate(D.EVIDENCE):
                 self.at(days=4 - index)
-                ev, _ = market.create_evidence(c, market.CURATOR, evidence_key="ev-" + key, source_url=url, source_kind=kind,
-                                               captured_at=H.now(), quote=quote, our_read=read)
-            self.at(days=3.8)
-            market.update_entity(c, market.CURATOR, "company/northwind",
-                                 summary="A large suite vendor with a self-serve tool. Cheapest starter plan: $29, down from $39.",
-                                 evidence_ids=["ev-northwind-pricing"], last_verified_at=self.ago(days=3.8).date().isoformat())
-            self.at(days=3.0)
-            market.update_entity(c, market.CURATOR, "company/brightline",
-                                 summary="A venture-backed competitor. Launched a mobile app for studios last month.",
-                                 evidence_ids=["ev-brightline-app"], last_verified_at=self.ago(days=3.0).date().isoformat())
+                market.create_evidence(c, market.CURATOR, evidence_key="ev-" + key, source_url=url, source_kind=kind,
+                                       captured_at=H.now(), quote=quote, our_read=read)
+            for entity, summary, evidence, days in D.ENTITY_UPDATES:
+                self.at(days=days)
+                market.update_entity(c, market.CURATOR, entity, summary=summary, evidence_ids=["ev-" + evidence],
+                                     last_verified_at=self.ago(days=days).date().isoformat())
             for index, (actor, kind, about, claim, url, quote, confidence) in enumerate(D.INSIGHTS):
                 self.at(days=1.4 - index * 0.3)
                 market.report(c, actor, kind=kind, about=about, claim=claim, source_url=url, quote=quote,
@@ -289,16 +299,15 @@ class Builder:
             market.write_page(c, market.CURATOR, "market/weekly-delta", "Weekly delta",
                               market.delta_body(c, self.now.date()), "Market / Delta", replace=True, record=False)
             c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('market-context',?)", (encode({
-                "sells": D.ANSWERS["what_we_do"], "customers": "Small studios with a few client projects",
-                "competitors": "Northwind, Brightline, Pricewise, Harborly, Fernwood, Doorlark",
-                "channels": "r/projectmanagement", "updated_at": H.now(), "updated_by": "human:ana"}),))
+                "sells": D.ANSWERS["what_we_do"], **D.MARKET_CONTEXT,
+                "updated_at": H.now(), "updated_by": "human:ana"}),))
         self.write(work)
 
     def routines(self):
         self.at(days=6.0)
 
         def work(c):
-            for bot, key, title, cron, text in D.ROUTINES:
+            for bot, key, title, cron, text, _quiet in D.ROUTINES:
                 routines.create(c, "human:ana", bot, {"title": title, "cron": cron, "text": text,
                                                        "timezone": "America/Los_Angeles"}, key=key, at=self.ago(days=6))
             # The Librarian's market routines were made with the wall clock; every routine is next due after `now`.
@@ -312,18 +321,19 @@ class Builder:
     # ------------------------------------------------------------------ work and conversation
     def tasks_and_chats(self):
         def work(c):
-            for key, title, body, owner, requester, status, created, changed, note in D.TASKS:
+            for key, title, body, owner, requester, status, created, changed, note, parent in D.TASKS:
                 self.at(days=created)
-                task = hubdb.task_create(c, requester, title, body, owner, allow_planned=True)
+                task = hubdb.task_create(c, requester, title, body, owner, parent_id=self.tasks.get(parent), allow_planned=True)
                 self.tasks[key] = task["id"]
             for key, title, owner, target, body, created, _ in D.ASKS:
                 self.at(days=created)
-                task = hubdb.task_create(c, owner, title, body, target, allow_planned=True)
+                due = stamp(self.now + timedelta(days=D.ASK_DUE[key])) if key in D.ASK_DUE else None
+                task = hubdb.task_create(c, owner, title, body, target, due=due, allow_planned=True)
                 self.tasks[key] = task["id"]
         self.write(work)
 
         def move(c):
-            for key, title, body, owner, requester, status, created, changed, note in D.TASKS:
+            for key, title, body, owner, requester, status, created, changed, note, parent in D.TASKS:
                 tid = self.tasks[key]
                 if status == "open":
                     continue
@@ -347,7 +357,10 @@ class Builder:
             last = None
             for sender, text in lines:
                 self.clock.at += timedelta(minutes=2)
-                if sender.startswith("human:"):
+                if bot == "coo":
+                    # Ana's own Assistant: the product answers it, so only her words are seeded.
+                    self.call("POST", "assistant/messages", {"text": text}, token=TOKENS[sender])
+                elif sender.startswith("human:"):
                     last = self.call("POST", f"chat/{bot}", {"text": text}, token=TOKENS[sender])["message"]
                 else:
                     last = self.write(lambda c: hubdb.say(c, sender, last["sender_id"], text,
@@ -396,25 +409,66 @@ class Builder:
         self.write(work)
 
     def updates(self):
-        """A week of daily updates and Friday's review, posted mid-morning Pacific. Older ones are read. Eight days, so
-        a Friday morning before the review is posted still has last Friday's on the Weekly tab."""
+        """A week of daily updates and Friday's review, posted from mid-morning Pacific. Every bot posts, and each bot
+        posts after the bots that report to it, so a lead's summary reads its reports' same-day updates. Older ones are
+        read. Eight days, so a Friday morning before the review is posted still has last Friday's on the Weekly tab."""
+        parent = {slug: reports_to for slug, _, reports_to in D.BOTS}
+        depth = {}
+
+        def level(slug):
+            if slug not in depth:
+                up = parent[slug]
+                depth[slug] = 0 if up is None or up.startswith("human:") else 1 + level(up)
+            return depth[slug]
+
+        roster = {slug: position for position, (slug, _, _) in enumerate(D.BOTS)}
+        order = sorted(D.BOTS, key=lambda bot: -level(bot[0]))      # stable: roster order within each level
+        # People post after every bot, leads before Ana, so her update reads her leads' same-day words.
+        people = [f"human:{person['id']}" for person in [*D.PEOPLE[1:], D.PEOPLE[0]]]
+
         def work(c):
             posted = []
             for back in range(7, -1, -1):
                 day = updates.local_now(self.ago(days=back)).date()
                 when = datetime.combine(day, datetime.min.time(), updates.ZONE).replace(hour=7, minute=10)
                 kind = updates.kind_for(day.isoformat())
-                for slot, (bot, _, _) in enumerate(b for b in D.BOTS if b[0] in D.UPDATES):
-                    if bot == "content" and back == 3:
-                        continue        # one bot that skipped a day, as real ones do
-                    at = when.astimezone(timezone.utc) + timedelta(minutes=slot * 9)
+                for slot, (bot, _, _) in enumerate(order):
+                    if (bot, back) in D.UPDATE_GAPS:
+                        continue
+                    at = when.astimezone(timezone.utc) + timedelta(minutes=slot * 2)
                     if at > self.now - timedelta(minutes=5):
                         continue
-                    bodies = D.UPDATES[bot]["weekly" if kind == "weekly" else "daily"]
-                    body = bodies[(6 - back) % len(bodies)]
+                    goal, first, second, next_week, blockers = D.UPDATES[bot]
                     self.clock.at = at
-                    slides = D.WEEKLY_SLIDES.get(bot) if kind == "weekly" else None
-                    posted.append((updates.post(c, bot, body, kind=kind, day=day.isoformat(), slides=slides), at))
+                    if kind == "weekly":
+                        done = [*first, second[0]]
+                        slides = {"goal": goal, "done": done, "focus": list(next_week), "blockers": list(blockers)}
+                        if bot in D.WEEK_KPIS:
+                            slides["kpis"] = D.WEEK_KPIS[bot]
+                        body = "\n".join("- " + line for line in done)
+                        row = updates.post(c, bot, body, kind=kind, day=day.isoformat(), slides=slides)
+                    else:
+                        lines = (first, second)[(7 - back + roster[bot]) % 2]
+                        body = "\n".join("- " + line for line in lines)
+                        row = updates.post(c, bot, body, kind=kind, day=day.isoformat())
+                    posted.append((row, at))
+                for position, person in enumerate(people):
+                    at = when.astimezone(timezone.utc) + timedelta(minutes=(len(order) + position) * 2)
+                    if at > self.now - timedelta(minutes=5):
+                        continue
+                    content = D.PEOPLE_UPDATES[person]
+                    self.clock.at = at
+                    if kind == "weekly":
+                        week = content["week"]
+                        slides = {"goal": week["goal"], "done": list(week["done"]), "focus": list(week["focus"]),
+                                  "blockers": list(week["blockers"])}
+                        body = "\n".join("- " + line for line in week["done"])
+                        row = updates.post(c, person, body, kind=kind, day=day.isoformat(), slides=slides, drafted_by="coo")
+                    else:
+                        lines = content["daily"][(7 - back + position) % 2]
+                        body = "\n".join("- " + line for line in lines)
+                        row = updates.post(c, person, body, kind=kind, day=day.isoformat(), drafted_by="coo")
+                    posted.append((row, at))
             # Everything older than yesterday is read; the last day's stays unread so the page has a badge.
             edge = self.now - timedelta(hours=30)
             for row, at in posted:
@@ -453,62 +507,60 @@ class Builder:
                               (turn["started_at"], routine["id"]))
                 hubdb.status_result(c, hubdb.KEEPER, bot, last_result=summary, last_turn_at=H.now())
             # A change's reason is written on the row it closes, so each step's why goes in with the next one.
-            why = ""
-            for hours, state, focus, next_why in D.STATUS_STEPS:
-                self.at(hours=hours)
-                hubdb.status_set(c, hubdb.KEEPER, "support", state=state, focus=focus, reason=why)
-                why = next_why
+            for bot, steps in D.STATUS_STEPS.items():
+                why = ""
+                for hours, state, focus, next_why in steps:
+                    self.at(hours=hours)
+                    hubdb.status_set(c, hubdb.KEEPER, bot, state=state, focus=focus, reason=why)
+                    why = next_why
             self.at(hours=1)
             for bot, focus in D.FOCUS.items():
-                hubdb.status_set(c, hubdb.KEEPER, bot, state="idle", focus=focus, reason=why if bot == "support" else "")
+                if bot not in D.STATUS_STEPS:
+                    hubdb.status_set(c, hubdb.KEEPER, bot, state="idle", focus=focus)
         self.write(work)
 
     def messaging(self):
         self.at(hours=2)
-        address = "ben@acme.example"
+        address = D.INBOX
         messages = []
-        for index, (subject, body, labels, sender) in enumerate([
-            ("Help with CSV exports", "Can you help us export this month's project list?", ["INBOX", "hub/needs-owner"], "sam@example.com"),
-            ("Re: Help with CSV exports", "Draft: Open Projects, choose Export, then CSV. Tell us if you need help.", ["DRAFT", "hub/drafted"], address),
-            ("Trial follow-up", "Thanks for the walkthrough. We are ready to try the Team plan.", ["INBOX"], "ana@example.com"),
-        ]):
+        for index, (subject, body, labels, sender, to) in enumerate(D.MAIL):
             at = self.ago(hours=2 - index / 4)
-            messages.append({"msg_id": f"demo-mail-{index}", "thread_id": "demo-export" if index < 2 else "demo-trial",
+            messages.append({"msg_id": f"demo-mail-{index}", "thread_id": "demo-calibration" if index < 2 else "demo-second-kit",
                              "epoch": int(at.timestamp()), "date": at.isoformat(), "from_addr": sender,
-                             "from_header": sender, "to": ["sam@example.com" if index == 1 else address],
+                             "from_header": sender, "to": [to],
                              "subject": subject, "snippet": body[:120], "body": body, "labels": labels})
         self.call("POST", "connectors/mail/messages", {"mailbox": address, "messages": messages, "synced_at": H.now()},
                   token=self.linux["token"])
-        self.call("POST", "slack/channels", {"channel": "CDEMOTEAM1", "name": "support", "readers": ["support"],
-                                              "post": False, "note": "Demo support channel"})
+        self.call("POST", "slack/channels", {"channel": "CDEMOTEAM1", "name": D.SLACK["channel"], "readers": [D.SLACK["channel"]],
+                                              "post": False, "note": D.SLACK["note"]})
+        # The app is connected as far as this machine can show: tokens sealed with a local key, the gateway's line set to
+        # connected. No gateway runs in the demo, so nothing dials Slack; the tokens are placeholders.
+        slack_app.save(self.store, self.settings, "human:ana", "xoxb-demo-placeholder", "xapp-demo-placeholder")
+        slack_app.pin(self.store, D.SLACK["team"], D.SLACK["app"])
+        slack_app.report(self.store, "connected", "Connected to the Acme Lights workspace.", team=D.SLACK["team"])
 
         def work(c):
             c.execute("INSERT INTO mail_agent_instructions VALUES(?,?,?,?)",
-                      ("inbox", "# Instructions\n\nTriage mail and draft replies for review.", self.linux["runner_id"], H.now()))
+                      ("inbox", D.INBOX_INSTRUCTIONS, self.linux["runner_id"], H.now()))
             timestamp = str(int(self.ago(hours=1).timestamp())) + ".000001"
-            for index, text in enumerate(["A customer needs the CSV export steps.", "Draft reply: Open Projects > Export > CSV."]):
+            for index, (name, kind, text) in enumerate(D.SLACK["thread"]):
                 ts = str(int(self.ago(hours=1 - index / 4).timestamp())) + ".000001"
                 c.execute("INSERT INTO slack_events(event_id,team_id,channel,channel_kind,thread_ts,ts,user_id,event_type,text,received_at,state,author,author_name,updated_at) "
                           "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                           (f"demo-slack-{index}", "TDEMOTEAM1", "CDEMOTEAM1", "channel", timestamp, ts,
-                           "UDEMOTEAM1", "message", text, H.now(), "stored", "human" if index == 0 else "bot", "Sam" if index == 0 else "Support", H.now()))
-            conv = H.open_conversation(c, H.KEEPER, [H.KEEPER, "bot:support"], kind="chat", subject="Slack support", scope="direct")
-            message = H.feed(c, "bot:support", "Review the support channel's CSV export thread.", conv)
+                           "UDEMOTEAM1", "message", text, H.now(), "stored", kind, name, H.now()))
+            conv = H.open_conversation(c, H.KEEPER, [H.KEEPER, "bot:support"], kind="chat", subject=D.SLACK["subject"], scope="direct")
+            message = H.feed(c, "bot:support", D.SLACK["feed"], conv)
             c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created_at,last_routed_at) VALUES(?,?,?,?,?,?)", ("CDEMOTEAM1", timestamp, "support", conv["id"], H.now(), H.now()))
             c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-                      (message["id"], "CDEMOTEAM1", timestamp, "support", "Draft: Open Projects > Export > CSV.", "ready", H.now(), H.now()))
+                      (message["id"], "CDEMOTEAM1", timestamp, "support", D.SLACK["draft"], "ready", H.now(), H.now()))
             c.execute("INSERT INTO slack_reads VALUES(?,?,?,?,?)", ("CDEMOTEAM1", "support", timestamp, H.now(), 1))
         self.write(work)
 
     def files(self):
         from .blobs import register
         files, blobs = self.api.app.state.files, self.api.app.state.blobs
-        examples = [
-            ("support", "exports/ticket-summary.csv", "text/csv", "topic,tickets\nCSV exports,12\nBilling,8\n"),
-            ("content", "reports/launch.md", "text/markdown", "# Launch report\n\nFirst draft: the Team plan walkthrough is ready.\n"),
-            ("content", "reports/launch.md", "text/markdown", "# Launch report\n\nReviewed draft: added the CSV export steps and customer feedback.\n"),
-        ]
-        for index, (bot, path, mime, text) in enumerate(examples):
+        for index, (bot, path, mime, text) in enumerate(D.FILES):
             self.at(hours=6 - index)
             data = text.encode()
             digest = blobs.put(data, mime)
@@ -518,13 +570,86 @@ class Builder:
                                   identity="repo:" + path, title=path, name=item["name"], mime=mime, blob_id=item["id"],
                                   digest=digest, size=len(data), repo_path=path)
             self.write(work)
-        self.call("POST", "files/links", {"bot": "sales", "url": "https://docs.example.com/demo-renewal-brief",
-                                         "title": "Demo renewal brief (sample link)"})
+        self.call("POST", "files/links", {"bot": D.FILE_LINK["bot"], "url": D.FILE_LINK["url"], "title": D.FILE_LINK["title"]})
+
+    def page(self):
+        """The bot's own bot-wide page, as Home's Latest pages shows it: the bytes, the file and its version, the library
+        entry and the page row, as files.publish and pages.publish write them. The seed writes them itself because a
+        runner may not publish bot-wide outside a turn, and the seed runs no turn."""
+        from . import file_library
+        from .blobs import register
+        self.at(hours=5)
+        files, blobs = self.api.app.state.files, self.api.app.state.blobs
+        bot, name, data = D.PAGE["bot"], D.PAGE["name"], D.PAGE["text"].encode()
+        digest = blobs.put(data, "text/html")
+
+        def work(c):
+            item = register(c, Identity("bot:" + bot, "bot"), digest, len(data), name, "text/html")
+            row, _, _ = files.add_version(c, bot=bot, actor="bot:" + bot, scope="bot", task=None, conversation=None, attempt="",
+                                          identity="page:" + name, title=D.PAGE["title"], name=name, mime="text/html",
+                                          blob_id=item["id"], digest=digest, size=len(data), repo_path="", explicit_title=True)
+            file_library.index(c, row["id"], row["current_version"], row["title"], file_library.extract("text/html", data))
+            c.execute("INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at) VALUES(?,?,?,?,?)",
+                      (row["id"], "none", None, H.now(), H.now()))
+        self.write(work)
+
+    def icon(self):
+        """The team icon Settings shows, drawn here so its page has one; the owner sets it like anyone would."""
+        from PIL import Image, ImageDraw
+        image = Image.new("RGBA", (256, 256), D.ICON["background"])
+        ImageDraw.Draw(image).ellipse((64, 64, 192, 192), fill=D.ICON["mark"])
+        out = io.BytesIO()
+        image.save(out, format="PNG")
+        reply = self.api.request("POST", "/api/v2/team/icon", content=out.getvalue(), headers={
+            "Authorization": "Bearer " + OWNER, "Content-Type": "image/png", "Idempotency-Key": f"demo-{next(self.serial)}"})
+        assert reply.status_code == 200, f"team icon: {reply.status_code} {reply.text[:300]}"
+
+    def read_task_threads(self):
+        """Ana's task threads are read, except the decisions and the firmware rollout she still has to settle (KEEP_UNREAD),
+        so the sidebar's unread list shows those. Read through the API as her own reads."""
+        rows = self.write(lambda c: c.execute(
+            "SELECT t.title, cv.id, cv.last_seq FROM tasks t JOIN conversations cv ON cv.id=t.conversation_id "
+            "WHERE cv.last_seq>0 AND (t.owner_id='human:ana' OR t.requester_id='human:ana') ORDER BY cv.id").fetchall())
+        for row in rows:
+            if row["title"] not in D.KEEP_UNREAD:
+                self.call("POST", f"threads/{row['id']}/read", {"seq": row["last_seq"]})
+
+    def routine_tasks(self, done=D.ROUTINE_DONE):
+        """A routine's task is read and closed a couple of hours on: the Librarian's task for each live meeting (before the
+        sections), or the goal-manager's bet review of the market briefing (after them, once the scheduler has made it)."""
+        def work(c):
+            rows = c.execute("SELECT id, created_at FROM tasks WHERE owner_id=? AND title=? AND status='open'",
+                             (done["owner"], done["title"])).fetchall()
+            for row in rows:
+                made = datetime.fromisoformat(row["created_at"].rstrip("Z")).replace(tzinfo=timezone.utc)
+                self.clock.at = made + timedelta(hours=2)
+                hubdb.task_update(c, done["owner"], row["id"], status="done", note=done["note"])
+        self.write(work)
 
     def finish(self):
-        """Nothing is left waiting for a bot: every message reads as delivered and no job is queued."""
+        """Nothing is left waiting for a bot: every message reads as delivered and no job is queued. SQLite's own clock
+        and random bytes stamp some rows (triggers, the change feed, a census), so those take this build's time and ids:
+        the same build then writes the same rows."""
+        self.read_task_threads()
+        # Every bot gets its profile, as the next start would, without the notice that explains a change to bots an
+        # owner already had (backend/profiles.py).
+        from . import profiles as Profiles
+        self.write(lambda c: Profiles.migrate(c, tell=False))
+
         def work(c):
             c.execute("UPDATE messages SET delivered_at=created_at WHERE delivered_at IS NULL AND recipient_id LIKE 'bot:%'")
             c.execute("UPDATE jobs SET state='completed' WHERE state IN ('queued','leased','running','input')")
             c.execute("DELETE FROM update_queue")
+            c.execute("DELETE FROM thread_routings")
+            when = stamp(self.now)
+            for (table,) in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall():
+                columns = {row[1] for row in c.execute(f'PRAGMA table_info("{table}")')}
+                for column in [name for name in ("created_at", "updated_at") if name in columns]:
+                    c.execute(f'UPDATE "{table}" SET "{column}"=? WHERE length("{column}")=24', (when,))
+            c.execute("UPDATE message_deliveries SET id='dlv-' || rowid WHERE id NOT LIKE 'dlv-%'")
+            usage = c.execute("SELECT value FROM registry_metadata WHERE key='usage-count'").fetchone()
+            if usage and json.loads(usage[0]).get("last_person"):
+                value = json.loads(usage[0])
+                value["last_person"] = when
+                c.execute("UPDATE registry_metadata SET value=? WHERE key='usage-count'", (encode(value),))
         self.write(work)

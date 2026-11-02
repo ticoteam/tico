@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from backend import strategy as S
 from backend import strategy_prompt as SP
 from backend import strategy_setup as SS
 from backend.store import H
@@ -29,6 +30,7 @@ PAGES = {"/": HOME, "/company/about-us": b"<html><body><p>Two founders, ex-landl
 FOUND = {"serve": "Small landlords with 1-20 units, who use spreadsheets today.",
          "sell": "Bots that run rentals, at $29 a unit a month.",
          "how": "Landlords find us through search and referrals, and start on a free trial.",
+         "proof": "The customers page names 40 landlords who run their units on Acme.",
          "bets": [{"statement": "Prices low enough to win landlords the incumbents ignore",
                    "why": "Small landlords will not pay enterprise prices.", "rules_out": "White-glove onboarding",
                    "wrong_if": "Fewer than 1 in 10 trials convert"},
@@ -103,7 +105,10 @@ def test_the_job_reads_the_site_and_writes_unconfirmed_sections_and_proposed_bet
     sections = view["draft"]["sections"]
     assert sections["serve"].startswith("_Unconfirmed: drafted from acme.example._") and FOUND["serve"] in sections["serve"]
     assert FOUND["sell"] in sections["sell"] and FOUND["how"] in sections["how"] and sections["not"] == ""
-    assert job["written"]["sections"] == ["how", "sell", "serve"] and job["written"]["revision"] == view["draft"]["revision"]
+    # The site shows who uses it, so proof is drafted, marked unconfirmed like the rest; it says nothing of why now.
+    assert sections["proof"] == SS.unconfirmed(FOUND["proof"], "acme.example") and sections["now"] == ""
+    assert job["written"]["sections"] == ["how", "proof", "sell", "serve"]
+    assert job["written"]["revision"] == view["draft"]["revision"]
     bets = {b["id"]: b for b in view["bets"]}
     assert set(job["written"]["bets"]) == set(bets) and {b["status"] for b in bets.values()} == {"proposed"}
     first = next(b for b in bets.values() if b["rules_out"])
@@ -118,30 +123,33 @@ def test_the_job_reads_the_site_and_writes_unconfirmed_sections_and_proposed_bet
 
 
 HOW = "Owners find Acme Build through search and the builders they already use, and start with a free pilot on one site."
+PROOF = "Twelve site owners schedule every crew on Acme Build each week."
+NOW = "Crews carry phones on every site now, so a schedule can reach them the moment it changes."
 
 
 def fixture_answer():
     """The model's answer for the shared fixture company (fictional Acme Build): the strategy block's summary and four
-    sections, with How we sell (the file has none), and bets, as the prompt asks for them (it asks for no vision)."""
+    sections, with How we sell, How we know they want it and Why now (the file has none of them), and bets, as the
+    prompt asks for them (it asks for no vision)."""
     block = json.loads((Path(__file__).parent / "fixtures" / "company_strategy" / "draft.json").read_text())["strategy"]
-    return {"summary": block["summary"], **block["sections"], "how": HOW,
+    return {"summary": block["summary"], **block["sections"], "how": HOW, "proof": PROOF, "now": NOW,
             "bets": [{k: b[k] for k in SP.BET_FIELDS} for b in block["bets"]]}
 
 
-def test_the_shared_prompt_drafts_summary_five_sections_and_three_bets_and_no_vision(api, research):
+def test_the_shared_prompt_drafts_summary_seven_sections_and_three_bets_and_no_vision(api, research):
     answer = fixture_answer()
     found = SS.draft(lambda s, u: {**answer, "vision": "Ignored."}, {"text": "", "url": ""}, [])
     assert set(SP.SCHEMA["required"]) == set(answer) == set(found) - {"vision"} and found["vision"] == ""
-    assert SP.FIELDS == ("summary", "serve", "sell", "know", "how", "not") and "how" in SP.INSTRUCTIONS
+    assert SP.FIELDS == ("summary", *S.FIXED_KEYS) and "how" in SP.INSTRUCTIONS
     assert "vision" not in SP.FIELDS and "vision" not in SP.INSTRUCTIONS
     assert SS.INSTRUCTIONS == SP.INSTRUCTIONS and "Never invent a number" in SP.INSTRUCTIONS
     research.state["write"] = lambda system, user: answer if system == SP.INSTRUCTIONS else pytest.fail(system)
     job = get(api, "strategy/draft-from/" + post(api, "strategy/draft-from", {"text": "Schedules for field crews"})["id"])
     assert job["state"] == "done" and job["written"]["fields"] == ["summary"], job
-    assert job["written"]["sections"] == ["how", "know", "not", "sell", "serve"] and len(job["written"]["bets"]) == 3
+    assert job["written"]["sections"] == sorted(S.FIXED_KEYS) and len(job["written"]["bets"]) == 3
     draft = get(api, "strategy")["draft"]
     assert draft["summary"] == answer["summary"] and draft["vision"] == ""
-    for key in ("serve", "sell", "know", "how", "not"):
+    for key in S.FIXED_KEYS:
         assert draft["sections"][key] == SS.unconfirmed(answer[key], "your description")
     assert {b["status"] for b in get(api, "strategy")["bets"]} == {"proposed"}
     assert get(api, "strategy/versions") == []

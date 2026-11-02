@@ -64,9 +64,13 @@ the bets, and you publish:
 - **Drafting.** A task "Draft the strategy", or you asking in your DM, runs its `draft-the-strategy` playbook. It reads
   the market pages, the setup answers, the goals and KPIs, and puts **claims** to you to keep, edit or strike ("Your
   site implies you compete on price; that rules out white-glove service"), at most eight. It proposes three to five
-  bets, each with why, what it rules out and what would prove it wrong, and the four sections, and never invents a
+  bets, each with why, what it rules out and what would prove it wrong, and the seven sections, and never invents a
   number. The result is one `strategy_draft` proposal in your **Needs you**; confirming writes it into your draft.
   This is the same at every level.
+- **Keeping proof current.** *How we know they want it* is evidence: Growth numbers and KPIs, what customers told
+  your support and sales bots, team meetings, Listening. Its `keep-proof-current` playbook gathers that, writes each
+  line with its source and period, and proposes it as one `strategy_draft`. It never invents a number. The Monday note
+  says so in one line when the section is empty or unchanged for more than 30 days.
 - **Publishing is yours.** The Strategy Bot ends a drafting run by asking you to confirm and publish from the Strategy page.
   It cannot publish, and it cannot write the draft: the server refuses every bot.
 - **When a bet may be wrong.** When a bet's wrong-if trips (a KPI crosses its threshold, a cited market entity
@@ -100,7 +104,7 @@ chose a level, since it starts here, unless a person already started or paused t
 - **Proposes a Why for each goal that has none and is not tied to a bet**, as one **Needs you** item for each person who decides them, never one
   per goal. You accept, edit or replace each on its goal.
 - **Sends a Monday note** in the owner's DM: a short weekly goals review with a line on the strategy (or that none is
-  published), how many goals still have no bet and no Why, and each active bet with no KPI-backed goal or gray health.
+  published, or that *How we know they want it* is empty or more than 30 days old), how many goals still have no bet and no Why, and each active bet with no KPI-backed goal or gray health.
   A person who pauses it stays paused.
 - **Asks a goal's owner what is happening** when a goal is red or stalled, as a **Needs you** item for that owner. The
   ask closes by itself when the cause clears.

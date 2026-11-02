@@ -1099,6 +1099,12 @@ class Store:
         c.execute(f"PRAGMA journal_size_limit={H.WAL_SIZE_LIMIT}")
         return c
 
+    def migrate(self):
+        """The preflight and the pending migrations only (hubdb.connect runs them), for create_app before its installs."""
+        from . import migrations as Migrations
+        Migrations.preflight(self.settings.db_path)
+        H.connect(self.settings.db_path).close()
+
     def initialize(self, *, seed_market=True, adopt_legacy=False):
         from . import redesign_migration    # the one-time move to Automations, at the end of this method
         self.settings.db_path.parent.mkdir(parents=True, exist_ok=True)

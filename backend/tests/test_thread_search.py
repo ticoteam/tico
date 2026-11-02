@@ -123,6 +123,24 @@ def test_ensure_fills_an_index_from_existing_messages_and_keeps_it():
     assert ids(find(c, "memo")) == ["old"]
 
 
+def test_ensure_waits_for_the_renamed_columns_on_an_upgraded_database():
+    """v0.5.54: the app installs routes before Store.initialize renames refs_json to refs; the boot must not crash."""
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.executescript("""
+        CREATE TABLE conversations(id TEXT PRIMARY KEY, subject TEXT, audience TEXT);
+        CREATE TABLE messages(id TEXT PRIMARY KEY, conversation_id TEXT, sender_id TEXT, body TEXT,
+          refs_json TEXT, created_at TEXT, deleted_at TEXT);
+        INSERT INTO conversations VALUES ('t-open', 'Budget', 'company');
+        INSERT INTO messages VALUES ('old', 't-open', 'human:ana', 'Old budget memo', NULL, '2026-10-01', NULL);
+    """)
+    assert not search.ensure(c)
+    assert not c.execute("SELECT name FROM sqlite_master WHERE name LIKE 'message_search%'").fetchall()
+    c.execute("ALTER TABLE messages RENAME COLUMN refs_json TO refs")
+    assert search.ensure(c)
+    assert ids(find(c, "memo")) == ["old"]
+
+
 def test_a_hit_the_full_check_refuses_is_not_counted_paged_or_hinted_at():
     c = database()
     for n in range(9):
