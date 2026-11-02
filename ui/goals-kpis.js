@@ -396,7 +396,7 @@ function bindProposals(root, after) {
     }
     let out;
     try { out = await post(`/v2/proposals/${encodeURIComponent(li.dataset.proposal)}/decide`, body); }
-    catch (e) { toast(e.message || 'Could not decide', true); b.disabled = false; return; }
+    catch (e) { toast(e.message || 'Could not decide', true, null, {host: li.closest('dialog[open]')}); b.disabled = false; return; }
     // Rejected already; the card stays as one line asking why, until something draws the list again.
     if (b.hasAttribute('data-prop-reason') && out?.proposal?.may_reason) {
       li.innerHTML = propLeftHtml(); bindPropLeft(li, after);
@@ -856,7 +856,7 @@ function goalsRender(state) {
   // Helpers are off the chart here (as on the Org tab); one with goals still shows below, with anyone else who has
   // goals (someone gone from the roster), at the end.
   const rest = Object.keys(owned).filter(a => !seen.has(a)).map(a => rows(a, 0)).join('');
-  body.innerHTML = goalNeedsHtml(state.needs) + `<ul class="gt" id="goal-tree" aria-label="Goals">${tree}${rest}</ul>`;
+  body.innerHTML = goalNeedsLineHtml(state.needs) + `<ul class="gt" id="goal-tree" aria-label="Goals">${tree}${rest}</ul>`;
   goalTreeLines(body.querySelector('#goal-tree'));
   // Tapping a line opens its goal on its own (goalSheetOpen), or a new one for its owner when they have none and the
   // viewer may add it; the name and avatar open the owner's panel, as does a line the viewer may only read.
@@ -880,23 +880,10 @@ function goalsRender(state) {
     plus.onclick = add;
     goalLongPress(li, add);
   }
-  const needs = body.querySelector('#goal-needs');
-  if (needs) {
-    bindKpiLines(needs); bindProposals(needs, () => goalsReload(state));
-    const vision = () => { location.hash = STRATEGY; };
-    const why = id => {
-      const goal = (state.goals || []).find(g => g.id === id);
-      if (goal) goalPanelOpen(state, goal.owner_id, {tapped: goal.id});
-    };
-    for (const li of needs.querySelectorAll('[data-need-vision], [data-need-why]')) {
-      const open = () => li.dataset.needWhy !== undefined ? why(li.dataset.needWhy) : vision();
-      li.onclick = open;
-      li.onkeydown = ev => { if (ev.target === li && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); open(); } };
-    }
-    for (const b of needs.querySelectorAll('[data-need-why-goal]')) b.onclick = ev => { ev.stopPropagation(); why(b.dataset.needWhyGoal); };
-    // The task link opens the task, not the KPI its row opens.
-    for (const a of needs.querySelectorAll('[data-need-task]')) { a.onclick = ev => ev.stopPropagation(); a.onkeydown = ev => ev.stopPropagation(); }
-  }
+  const review = body.querySelector('[data-needs-review]');
+  if (review) review.onclick = () => goalNeedsOpen(state);
+  // What waits is answered in its sheet; a redraw while it is open draws the sheet again too (or closes it, all done).
+  if (document.getElementById('goal-needs-sheet')?.open) goalNeedsOpen(state);
 }
 async function goalsReload(state) {
   await goalsRefresh();
@@ -1163,6 +1150,69 @@ function recoveryHtml(it) {
     <ol class="rec-opts">${options}</ol></div>
     <div class="kpi-prop-do"><button class="ghost" type="button" data-decide="reject">Reject</button></div>${needTaskLink(it)}</li>`;
 }
+// Needs you on the Goals tab: one quiet line ("Strategy Bot suggested a new bet · Review"); Review opens the cards in a
+// sheet, where each is answered as it would be in the Ask panel or the Needs you queue.
+function goalNeedSay(it) {
+  const p = it.proposal || {}, who = goalActorName(p.proposed_by || GOAL_MANAGER_ACTOR) || strategyBotName();
+  if (it.kind === 'recovery') return `${who} suggested a recovery for ${it.goal_title || 'a goal'}`;
+  if (it.kind === 'proposal') {
+    const bets = p.payload?.bets || [];
+    if (p.kind === 'strategy_draft') return `${who} suggested ${bets.length === 1 && !bets[0].id ? 'a new bet' : 'a change to your strategy'}`;
+    if (p.kind === 'strategy_realign') return `${who} suggested moving goals to new bets`;
+    if (p.kind === 'brand_draft') return `${who} suggested a change to your brand book`;
+    if (p.kind === 'goal_kpi') return `${who} suggested a KPI for ${it.goal_title || 'a goal'}`;
+    if (p.kind === 'kpi_target') return `${who} suggested a target for ${it.kpi_name || 'a KPI'}`;
+    if (p.kind === 'kpi_definition') return `${who} suggested a change to ${it.kpi_name || 'a KPI'}`;
+    return `${who} suggested a change`;
+  }
+  if (it.kind === 'vision') return 'Say what this company is for';
+  if (it.kind === 'why') return (it.goals || []).length === 1 ? 'A goal needs a Why line' : `${(it.goals || []).length} goals need a Why line`;
+  return it.kind === 'kpi_red' ? `${it.kpi_name} is off track` : `${it.kpi_name}: ${it.reason || 'needs a reading'}`;
+}
+function goalNeedsLineHtml(items) {
+  if (!items?.length) return '';
+  const n = items.length, asks = items.every(it => it.kind === 'proposal' || it.kind === 'recovery');
+  const say = n === 1 ? goalNeedSay(items[0]) : asks ? `${n} suggestions` : `${n} waiting on you`;
+  return `<div class="gt-needs-line" id="goal-needs-line"><span class="gt-needs-dot" aria-hidden="true"></span><span class="gt-needs-say">${esc(say)}</span>`
+    + `<span class="muted" aria-hidden="true">·</span><button class="linkish" type="button" data-needs-review aria-haspopup="dialog">Review</button></div>`;
+}
+function goalNeedsOpen(state) {
+  let dlg = document.getElementById('goal-needs-sheet');
+  if (!dlg) {
+    dlg = document.createElement('dialog');
+    dlg.id = 'goal-needs-sheet'; dlg.className = 'tmodal kpi-panel gpanel gsheet';
+    dlg.setAttribute('aria-label', 'Needs you');
+    dlg.addEventListener('click', ev => { if (ev.target === dlg) dlg.close(); });
+    dlg.addEventListener('close', () => { if (!dlg.open) dlg.replaceChildren(); });   // answered cards leave with it
+    document.body.appendChild(dlg);
+  }
+  const items = state.needs || [];
+  if (!items.length || GOALS_ST !== state) { if (dlg.open) dlg.close(); return; }
+  dlg.innerHTML = `<div class="tmodal-head"><h2 class="gs-h">Needs you</h2><span class="cnt tnum gt-needs-n">${items.length}</span><span class="spacer"></span>
+      <button class="ghost tmodal-x" type="button" data-gn-close aria-label="Close">✕</button></div>
+    <div class="tmodal-body gs-body">${goalNeedsHtml(items)}</div>`;
+  if (!dlg.open) dlg.showModal();
+  dlg.querySelector('[data-gn-close]').onclick = () => dlg.close();
+  const needs = dlg.querySelector('#goal-needs');
+  bindKpiLines(needs); bindProposals(needs, () => goalsReload(state));
+  const vision = () => { dlg.close(); location.hash = STRATEGY; };
+  const why = id => {
+    const goal = (state.goals || []).find(g => g.id === id);
+    if (goal) { dlg.close(); goalPanelOpen(state, goal.owner_id, {tapped: goal.id}); }
+  };
+  for (const li of needs.querySelectorAll('[data-need-vision], [data-need-why]')) {
+    const open = () => li.dataset.needWhy !== undefined ? why(li.dataset.needWhy) : vision();
+    li.onclick = open;
+    li.onkeydown = ev => { if (ev.target === li && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); open(); } };
+  }
+  for (const b of needs.querySelectorAll('[data-need-why-goal]')) b.onclick = ev => { ev.stopPropagation(); why(b.dataset.needWhyGoal); };
+  // The task link opens the task, not the KPI its row opens.
+  for (const a of needs.querySelectorAll('[data-need-task]')) { a.onclick = ev => { ev.stopPropagation(); dlg.close(); }; a.onkeydown = ev => ev.stopPropagation(); }
+}
+window.addEventListener('hashchange', () => {
+  const dlg = document.getElementById('goal-needs-sheet');
+  if (dlg?.open && !location.hash.startsWith(goalsBase())) dlg.close();
+});
 function goalNeedsHtml(items) {
   if (!items?.length) return '';
   const rows = items.map(it => {
@@ -1179,5 +1229,5 @@ function goalNeedsHtml(items) {
     const red = it.kind === 'kpi_red';
     return `<li class="need-row" data-kpi="${esc(it.kpi_id)}" tabindex="0" role="button">${gdot(red ? 'red' : 'gray')}<span class="need-text"><b>${esc(it.kpi_name)}</b>${red ? ` on ${esc(it.goal_title)}` : ''}<span class="muted">: ${esc(it.reason)}</span></span>${needTaskLink(it)}</li>`;
   }).join('');
-  return `<section class="gt-needs" id="goal-needs" aria-label="Needs you"><div class="gt-needs-h">Needs you<span class="cnt tnum">${items.length}</span></div><ul>${rows}</ul></section>`;
+  return `<section class="gt-needs" id="goal-needs" aria-label="Needs you"><ul>${rows}</ul></section>`;
 }

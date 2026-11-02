@@ -474,9 +474,10 @@ function strategyRender() {
   const key = f => f.dataset.stratField || f.closest('[data-bet]')?.dataset.bet || 'new';
   const typed = [...body.querySelectorAll('[data-strat-field], [data-bet-st]')].filter(f => f.value !== f.defaultValue).map(f => [key(f), f.value]);
   patchHTML($('#strat-pub'), `${STRAT.publishing ? strategyPublishHtml() : ''}${strategyMetaHtml(data, view)}`);
-  patchHTML($('#strat-top'), view.owner
+  // The summary at reading size, named like every other part of the page.
+  patchHTML($('#strat-top'), '<h3 class="strat-k">Summary</h3>' + (view.owner
     ? `<textarea class="strat-ed strat-big" data-strat-field="summary" rows="1" maxlength="400" placeholder="Your strategy in one sentence" aria-label="Summary">${esc(v.summary || '')}</textarea>`
-    : `<p class="strat-text strat-big">${esc(v.summary || '')}</p>`);
+    : `<p class="strat-text strat-big">${esc(v.summary || '')}</p>`));
   $('#strat-top').hidden = !view.owner && !stratText(v.summary);
   const bets = $('#strat-sec-bets'), live = view.bets.filter(c => c.status !== 'retired');
   bets.hidden = !view.owner && !live.length;

@@ -2,7 +2,8 @@
 
 Version 1 is the home business: two bets and the sections for homeowners. Version 2 is published a few days later and
 adds the business bet, a new summary and the business sections, so the history has a change to show. The Strategy
-Bot's one pending proposal is a bet the team has not written down yet, from this week's briefing, and this week's
+Bot's one proposal, a bet the team had not written down yet from this week's briefing, Ana has accepted into the
+draft (proposed, unpublished), and this week's
 briefing is the Librarian's. Every row goes through the API as Ana, or through the domain function a real install runs.
 """
 
@@ -110,7 +111,8 @@ CONTENT = {
          "wrong_if": "Marketplace buyers subscribe to the Scene Library at least as often as store buyers, after one season.",
          "check_days": 210},
     ],
-    # The Strategy Bot's proposal after the briefing: a bet the team has not written down yet. Waiting for Ana.
+    # The Strategy Bot's proposal after the briefing: a bet the team had not written down yet. Ana has accepted it into
+    # the draft.
     "proposal": {
         "statement": "Public bids from towns and HOAs are a motion of their own, with a survey and a fixed date.",
         "why": "A public bid has a published scope and a deadline, so our survey and crew can price it in a week. A town "
@@ -278,7 +280,7 @@ CONTENT = {
     },
     # Days ago, most first: when each step happened.
     "days": {"setup": 5.7, "version_1": 5.5, "brand": 4.2, "business": 2.4, "version_2": 2.2, "market": 2.0,
-             "news_rival": 1.9, "briefing": 1.4, "news_town": 1.2, "proposal": 1.0, "news_shortage": 0.6},
+             "news_rival": 1.9, "briefing": 1.4, "news_town": 1.2, "proposal": 1.0, "accepted": 0.8, "news_shortage": 0.6},
 }
 
 
@@ -367,8 +369,9 @@ def _briefing(b):
 
 
 def _proposal(b):
-    """The Strategy Bot's proposal: a new bet, from this week's briefing, in the proposed status. The owner confirms or
-    rejects it; nothing is published."""
+    """The Strategy Bot's proposal: a new bet, from this week's briefing, in the proposed status. Ana has already said
+    yes, through the same decide call her card makes, so the bet sits in the strategy draft as proposed and nothing
+    waits on Goals; nothing is published."""
     spec = CONTENT["proposal"]
     bet = {"statement": spec["statement"], "why": spec["why"], "rules_out": spec["rules_out"], "status": "proposed",
            "wrong_if": {"kind": "text", "text": spec["wrong_if"], "check_by": _day(b, spec["check_days"])}}
@@ -379,7 +382,10 @@ def _proposal(b):
         # The owner's card is filed now. Left to the next read, goal_asks.sync files it at that read's clock, which
         # can be an earlier build day, so the task would be dated before the proposal it asks about.
         S.file_card(c, "human:ana", proposal)
-    b.write(work)
+        return proposal["id"]
+    pid = b.write(work)
+    b.at(days=CONTENT["days"]["accepted"])
+    b.call("POST", f"goal-proposals/{pid}/decide", {"decision": "confirm"})
 
 
 def _brand(b):
