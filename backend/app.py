@@ -8071,6 +8071,8 @@ def create_app(settings=None):
     org_rule_check.REPLAY["automation"] = replay_step
     org_rule_check.AUDIENCE.update(rule_audiences())
     org_rule_check.AUDIENCE["automation"] = replay_audience
+    from .federation_routes import release_replayer
+    org_rule_check.REPLAY["federated_message"] = release_replayer(app)
     org_rule_check.install(app, store, auth, mutate)
     thread_api.install(app, store, auth, mutate, rule_check)     # thread routes (§3.4); /threads/search before /threads/{id}
     from . import thread_tasks
@@ -8295,4 +8297,5 @@ def create_app(settings=None):
         demo.install(app, auth, settings)
     from . import cors
     cors.install(app, settings)          # last, so it is outermost: a preflight is answered before sign-in
+    org_rule_check.seal(app)             # every write registered above can be sent from a hold, whatever installed when
     return app

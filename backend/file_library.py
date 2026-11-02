@@ -530,7 +530,6 @@ def still_used(c, digest):
 def purge_rows(c, actor, row):
     """In one write: the deletion record, every version row, the blob rows only this file used and their links, the
     file's search text and page row; the file row becomes a tombstone. Bytes no row needs any more are queued."""
-    from . import visuals
     fid, now = row["id"], H.now()
     versions = c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (fid,)).fetchall()
     c.execute("INSERT INTO file_deletions(file_id,actor,versions,created) VALUES(?,?,?,?)",

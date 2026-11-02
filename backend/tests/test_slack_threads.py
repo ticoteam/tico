@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend import federation_threads as FT
 from backend import hubdb as H
 from backend import screening
 from backend import slack_channels as SC
@@ -1018,3 +1019,50 @@ def test_a_terminal_slack_refusal_files_one_needs_you_item_until_it_is_resolved(
     world.bridge.outbound()
     assert len(all_rows(world, "SELECT id FROM tasks WHERE title LIKE 'A message to Slack%'")) == 2
 
+
+# ----------------------------------------------------------------------------- shared with another company
+PEER = "gi_" + "a" * 24
+GUEST = f"human:dana@{PEER}"
+
+
+def carry_in(world, thread, text, origin="o-1"):
+    """A message another company's install carried into this thread, through the door federation uses."""
+    with world.hub.transaction() as c:
+        FT.add_outside(c, thread, PEER)
+        return FT.post_inbound(c, thread, text, kind="say",
+                               origin={"origin_id": origin, "revision": 0, "install": PEER, "actor": GUEST})["id"]
+
+
+def test_another_companys_words_never_reach_a_channel_even_on_a_link_made_before_the_thread_was_shared(world):
+    link_id = request(world, "#secret", thread=MEMBERS)
+    assert gate(world, link_id) == "active"
+    carry_in(world, MEMBERS, "Another company's words")
+    with world.hub.transaction() as c:
+        TH.post(c, "human:ana", MEMBERS, "Our own words")
+    world.bridge.outbound()
+    assert [p["text"].split("\n")[-1] for p in world.slack.posts] == ["Our own words"]
+    assert all_rows(world, "SELECT state FROM message_deliveries WHERE recipient LIKE 'slack:%' AND error='from another "
+                    "company'") == [{"state": "moot"}]
+
+
+def test_a_replica_or_a_thread_shared_out_cannot_be_linked(world):
+    with world.hub.transaction() as c:
+        now = H.now()
+        c.execute("INSERT INTO federation_threads(id,thread_id,home_install,origin_id,created_at,updated_at) "
+                  "VALUES('ft-1',?,?,'home-thread',?,?)", (MEMBERS, PEER, now, now))
+    with pytest.raises(Problem) as refused:
+        request(world, "#secret", thread=MEMBERS)
+    assert refused.value.code == "shared_thread" and refused.value.status == 409
+    with world.hub.transaction() as c:
+        c.execute("UPDATE federation_threads SET origin_id=thread_id, home_install='gi_me' WHERE id='ft-1'")
+    assert request(world, "#secret", thread=MEMBERS)          # the home's own thread, shared with nobody: it can
+    ST.unlink_link(world.hub, WHO, all_rows(world, "SELECT id FROM slack_thread_links")[0]["id"], auth=Auth(world.hub))
+    with world.hub.transaction() as c:
+        c.execute("INSERT INTO federation_members(id,thread_id,install,status,joined_at_seq,created_at,updated_at) "
+                  "VALUES('fm-1',?,?,'active',1,?,?)", (MEMBERS, PEER, now, now))
+    with pytest.raises(Problem) as refused:
+        request(world, "#secret", thread=MEMBERS)
+    assert refused.value.code == "shared_thread"
+    with world.hub.transaction() as c:
+        c.execute("UPDATE federation_members SET status='removed' WHERE id='fm-1'")
+    assert request(world, "#secret", thread=MEMBERS)          # the home took it back: its own again

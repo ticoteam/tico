@@ -58,7 +58,7 @@ def build(args):
             "print('user_version', hubdb.connect(sys.argv[1]).execute('PRAGMA user_version').fetchone()[0])")
     env = dict(os.environ, PYTHONPATH=args.schema_src)
     out = subprocess.run([sys.executable, "-c", make, str(db)], cwd=args.schema_src, env=env,
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, check=False)
     if out.returncode != 0:
         raise SystemExit("schema build failed:\n" + out.stderr[-3000:])
     print("pre-threads schema:", out.stdout.strip(), flush=True)
@@ -140,7 +140,7 @@ def build(args):
         "SELECT id, :cid, from_actor, to_actor, kind, body, refs_json, in_reply_to, created, "
         "  CASE WHEN r1<90 THEN created END, CASE WHEN r1<90 AND r2<80 THEN created END, "
         "  CASE WHEN r3<10 THEN created END FROM raw")
-    for index, ((cid, row), count) in enumerate(zip(convs, counts)):
+    for index, ((cid, row), count) in enumerate(zip(convs, counts, strict=True)):
         params = {"count": count, "start": start, "cid": cid, "human": row["people"][0], "bot": row["people"][1],
                   "other": bots[rng.randrange(BOTS)], "is_task": 1 if row["kind"] == "task" else 0,
                   "task": row["task_id"] or tasks[rng.randrange(len(tasks))][0]}

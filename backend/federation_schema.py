@@ -12,6 +12,7 @@ like backend/strategy.py: an older release never reads these tables.
 - `federation_members`: which installs the home shares a thread with, and from which home number (`joined_at_seq`). A
   message is for a member only when it was created after the member joined: `joined_message_seq` is the newest core
   message when the member joined, so eligibility is fixed at creation, not by when the home numbers it.
+  `catch_up_after` is how far a catch-up the home is still paging for that member has got (NULL when none is).
 - `federation_threads.subtree_seq`: how far the sub-threads of a shared thread have been looked at for deliveries.
 - `federation_messages.sent_revision`: the newest revision of the message HQ took from this install (a tombstone is sent
   only when an earlier revision may have gone out).
@@ -95,6 +96,7 @@ COLUMNS = (("federation_peerings", "peer_company", "TEXT NOT NULL DEFAULT ''"), 
            ("federation_state", "company", "TEXT NOT NULL DEFAULT ''"),
            ("federation_threads", "subtree_seq", "INTEGER NOT NULL DEFAULT 0"),
            ("federation_members", "joined_message_seq", "INTEGER NOT NULL DEFAULT 0"),
+           ("federation_members", "catch_up_after", "INTEGER"),
            ("federation_messages", "sent_revision", "INTEGER"),
            ("federation_outbox", "thread_origin", "TEXT NOT NULL DEFAULT ''"))
 

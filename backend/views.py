@@ -1035,7 +1035,7 @@ DECISIVE_DAYS = 1
 KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "setup": 1, "declined": 2, "stale": 3, "task": 3, "report": 4,
              # Thread items (backend/thread_attention.py): an ask, a held message or a paused thread blocks a bot; a
              # mention or an unread DM is a person's to read.
-             "thread_ask": 1, "thread_held": 1, "thread_capped": 1, "thread_mention": 2, "thread_dm": 2}
+             "thread_ask": 1, "thread_held": 1, "thread_capped": 1, "thread_unsent": 1, "thread_mention": 2, "thread_dm": 2}
 # A card whose bot has not yet said plainly what it needs (`ask_missing`) waits at the very bottom: there is nothing
 # for the person to do on it until the bot restates it (backend/restate_asks.py asks it to).
 
@@ -1223,7 +1223,7 @@ def need_of(item):
         return "decide"         # a thread's question to the person, answered in the thread
     if kind == "thread_held":
         return "review"         # a message held for review (backend/org_rule_check.py)
-    if kind in ("thread_mention", "thread_dm", "thread_capped"):
+    if kind in ("thread_mention", "thread_dm", "thread_capped", "thread_unsent"):
         return "do"             # read or answer in the thread
     if item.get("reconnect"):
         return "connect"        # an account or credential a bot's task stopped on (backend/reconnects.py)

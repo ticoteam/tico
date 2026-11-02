@@ -150,11 +150,13 @@ function threadsSync() {
   THREADS.wired = true;
   // A thread created, renamed, archived, read or with new messages, the viewer's Needs attention set moved
   // (`attention`) or a loop guard paused a root (`capped`): the counts are the viewer's own, so the list is read
-  // again (once per burst), and each open view is told.
+  // again (once per burst), and each open view is told. A message another company's Tico has not taken (`unsent`) or a
+  // paused root is a Needs you row with no `needs` event of its own, so that list is read whole, as if one had come.
   liveOn('threads', d => {
     if (d.kind === 'activity') return threadsActivity(d);
     if (d.kind === 'read' && d.read) threadsMarkedRead(d.thread_id, Number(d.read.last_read_seq) || 0);
     else if (d.thread && !d.thread.parent_id) threadsPut(d.thread);
+    if (d.kind === 'unsent' || d.kind === 'capped') liveSoon('threads-needs', () => liveEmit('needs', {version: 'read'}), 400);
     liveSoon('threads-side', threadsLoad, 400);
     threadViewsLive('threads', d);
   });

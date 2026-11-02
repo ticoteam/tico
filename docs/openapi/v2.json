@@ -8958,9 +8958,77 @@
         ]
       }
     },
+    "/api/v2/federation/threads/{thread_id}/installs/{install_id}/retry": {
+      "post": {
+        "summary": "Send again now what another install has not taken from this thread; for whoever manages the thread",
+        "operationId": "retryFederationThreadInstall",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "install_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Install Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Federation"
+        ]
+      }
+    },
     "/api/v2/federation/threads/{thread_id}/readers": {
       "post": {
-        "summary": "Let a local person read a shared thread copy on this install; only the owner adds readers",
+        "summary": "Let a local person read a shared thread copy on this install; an admin who reads it adds readers",
         "operationId": "addFederationThreadReader",
         "parameters": [
           {

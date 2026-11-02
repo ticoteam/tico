@@ -7,7 +7,10 @@ does, not by a click:
 - an unread DM is open until the person reads past its last message from a person or one addressed to them;
 - a write held for review (a native thread post or edit, a chat message, a run's reply) is open until it is decided:
   its reviewer releases or keeps it, or the person it is held for withdraws it (the hold leaves `held`);
-- a capped thread (the loop guard, spec 4.5) is open until its capped deliveries resume.
+- a capped thread (the loop guard, spec 4.5) is open until its capped deliveries resume;
+- a thread with a message another company's Tico has not taken is open until the send goes through, the message is
+  edited or deleted, or that company leaves the thread. A paused or revoked peering lists nothing (it is already shown in
+  Connections, and its messages wait for it).
 A bot's mention of the person and a bot's ask are the thread's questions to the person and count; a bot's post that
 names nobody is activity, not attention.
 
@@ -17,8 +20,9 @@ may not see is named only to someone in the same thread (`teammate_access.Known`
 from . import hubdb as H
 
 ADDRESSED = ("mention", "ask", "assign", "addressed")
-# The held writes that are a message: a chat's and a run's, and a native thread's post and edit (backend/org_rule_check.py).
-HELD_OPERATIONS = ("message", "reply", "threads", "threads_edit")
+# The held writes that are a message: a chat's and a run's, a native thread's post and edit (backend/org_rule_check.py),
+# and a message carried in from another install.
+HELD_OPERATIONS = ("message", "reply", "threads", "threads_edit", "federated_message")
 
 
 def _clip(text, n=160):
@@ -65,6 +69,11 @@ def items(c, auth, who, skip=(), with_capped=True):
         if root and threads.readable(c, viewer, dict(root)) and threads.can_manage(c, viewer, dict(root)):
             out.append(_item("thread_capped", row["root_id"], row["root_id"],
                              _clip(root["subject"] or "Thread") + ": bot replies paused", row["since"]))
+    for row in _unsent(c):
+        root = c.execute("SELECT * FROM conversations WHERE id=?", (row["root_id"],)).fetchone()
+        if root and threads.readable(c, viewer, dict(root)) and threads.can_manage(c, viewer, dict(root)):
+            out.append(_item("thread_unsent", row["root_id"] + ":" + row["recipient"], row["root_id"],
+                             _clip(root["subject"] or "Thread") + ": not sent to another company", row["since"]))
     return sorted(out, key=lambda it: str(it["created"] or ""))
 
 
@@ -128,6 +137,12 @@ def _held_thread(c, viewer, hold_id):
     message = H.message(c, row["message"]) if row["message"] and not row["thread"] else None
     place = row["thread"] or (message or {}).get("conversation_id")
     return place if place and threads.readable(c, viewer, place) else None
+
+
+def _unsent(c):
+    """One row per thread and company whose peering is live and whose messages have not gone (`federation_threads.unsent`)."""
+    from . import federation_threads
+    return federation_threads.unsent(c)
 
 
 def _capped(c):

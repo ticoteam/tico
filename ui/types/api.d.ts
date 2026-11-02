@@ -8695,6 +8695,15 @@ export type RetryCallActionItemsParams = {
 export type RetryCallActionItemsBody = Empty;
 export type RetryCallActionItemsResponse = Call;
 
+/** POST /api/v2/federation/threads/{thread_id}/installs/{install_id}/retry */
+export type RetryFederationThreadInstallParams = {
+  "Idempotency-Key": string;
+  install_id: string;
+  thread_id: string;
+};
+export type RetryFederationThreadInstallBody = never;
+export type RetryFederationThreadInstallResponse = unknown;
+
 /** POST /api/v2/webhooks/{hook_id}/sends/{send_id}/retry */
 export type RetryWebhookSendParams = {
   "Idempotency-Key": string;

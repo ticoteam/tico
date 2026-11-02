@@ -79,7 +79,7 @@ def _plan(c, actor):
         return None
     listed = []
     behind = c.execute(
-        "SELECT f.thread_id, f.last_read_seq, COALESCE(td.emailed_seq, 0) AS emailed, conv.subject "
+        "SELECT f.thread_id, f.last_read_seq, COALESCE(td.emailed_seq, 0) AS emailed, conv.subject, conv.root_id "
         "FROM thread_followers f JOIN conversations conv ON conv.id=f.thread_id "
         "LEFT JOIN thread_digests td ON td.thread_id=f.thread_id AND td.actor=f.actor "
         f"WHERE {_BEHIND} ORDER BY conv.last_message_at DESC, f.thread_id", (actor,)).fetchall()
@@ -92,7 +92,8 @@ def _plan(c, actor):
         readable = [m for m in window if threads.readable(c, viewer, dict(m))]
         if not any(m["seq"] > row["emailed"] for m in readable):
             continue
-        listed.append({"thread_id": row["thread_id"], "title": title_of(row["subject"]),
+        outside = threads.title_from_outside(c, {"id": row["thread_id"], "root_id": row["root_id"]})    # another company's
+        listed.append({"thread_id": row["thread_id"], "title": title_of(None if outside else row["subject"]),
                        "unread": min(len(readable), MAX_UNREAD), "covers": window[0]["seq"]})
     listed = listed[:MAX_THREADS]
     return {"actor": actor, "email": email,

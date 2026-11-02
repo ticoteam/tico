@@ -287,6 +287,8 @@ description and an example (`--group task` narrows it). A few:
 | other | `release.published`, `meeting.ready`, `strategy.published`, `market.insight.urgent`, `market.briefing`, `inbound.received`, `health.finding` |
 | `custom` | `custom.<name>`, which only a person or a rule sends (below) |
 
+On a thread shared with another company, what that company wrote stays out: see [Federation](federation.md).
+
 `webhook.received` and `tico.notice` are for rules only: an endpoint cannot subscribe to them (use a rule with `forward`).
 An endpoint can hold up to 60 patterns, and an event goes to at most 20 endpoints.
 

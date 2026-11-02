@@ -327,6 +327,9 @@ def request_link(store, who, thread_id, channel_ref, history=False, auth=None):
         if thread.get("audience") not in ("company", "members"):
             raise Problem("audience", "Only a company thread (for a public channel) or a members thread (for a private "
                           "one) can be linked to Slack", 422)
+        if core.shared_root(c, thread_id):
+            raise Problem("shared_thread", "This thread is shared with another company, so it can't be linked to Slack: "
+                          "their words would reach your workspace's channel", 409)
         if c.execute("SELECT 1 FROM slack_thread_links WHERE thread_id=? AND state IN ('requested','active','suspended')",
                      (thread_id,)).fetchone():
             raise Problem("conflict", "This thread is already linked to a Slack channel", 409)
@@ -1046,6 +1049,8 @@ class Bridge:
         msg = _one(c, "SELECT * FROM messages WHERE id=?", (d["message_id"],))
         if not msg:
             return {"do": "settle", "state": "moot", "error": "message gone"}
+        if self.core().remote_guest(c, msg.get("from_actor")):      # another company's words never reach a channel
+            return {"do": "settle", "state": "moot", "error": "from another company"}
         refs = _refs(msg.get("refs_json"))
         if (refs.get("slack") or {}).get("channel") == link["channel_id"]:
             return {"do": "settle", "state": "delivered"}           # it came from this channel: no echo
