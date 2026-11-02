@@ -169,6 +169,20 @@ def _asks(c, title):
     return c.execute("SELECT count(*) FROM tasks WHERE title LIKE ?", (f"{title}%",)).fetchone()[0]
 
 
+def test_the_payment_help_marks_the_payee_and_the_line_required_as_the_code_does(books):
+    """Outside an internal move, a payment names its payee and the line it posts to; the help says so too."""
+    fields = {f["name"]: f["required"] for f in FA.help("payment_create")["fields"]}
+    assert fields["recipient_id"] is True and fields["account_id"] is True
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        refused = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 10_000,
+                                                   "money_account_id": _checking(c)})
+        assert (refused.status, refused.code) == ("failed", "invalid")
+        assert "account_id is required" in refused.reason
+
+
 def test_an_unknown_payment_is_never_sent_again_and_is_found_by_memo_recipient_and_amount(books):
     """B: a timed-out request is never re-POSTed. It is found in Mercury's paged list only by its key in the memo with
     the same recipient and amount; missing for 30 minutes it asks a finance admin once, who may then cancel it."""
