@@ -3,10 +3,13 @@ release checks), a week of Learnings nights, and Tico release updates delivered 
 
 Everything goes through the code a real install runs: automations are saved through the API, events and mail reach the
 automation engine through its own entry points (`hubdb.hook`, `automations.on_mail`), the engine drains the runs, and
-the Learnings and update-feed modules write their own rows. The only direct writes are the scheduler's own bookkeeping
-(the next due time of a schedule) and reads of the packet tasks a night made.
+the Learnings and update-feed modules write their own rows. Bots work their queue through the runner's own endpoints
+(claim, started, memory report, complete), and a person reads a thread through the thread API. The only direct SQL is
+the scheduler's own bookkeeping (the next due time of a schedule), and reads of the packet tasks a night made and of a
+task thread's last message.
 """
 
+import hashlib
 from datetime import datetime, time, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -15,10 +18,15 @@ from .. import automations, learnings, update_feeds
 from ..scheduler import next_due
 from ..store import H
 
+FINISH_AFTER = timedelta(minutes=12)    # how long a night's run takes after it starts
+MAX_AHEAD_JOBS = 40                     # the most queued jobs a packet's run works through before its own
+CLAIM_TRIES = 30                        # empty claims in a row a computer asks again before it gives up
+CLOSE_MARGIN = timedelta(minutes=1)     # a task closed "now" is closed this long before the build's now
+
 CONTENT = {
     "mailbox": "ben@acme.example",
     "close_after_hours": 2,
-    "created_days": 6,           # the automations are saved this many days back, before their first run
+    "created_days": 7,           # the automations are saved this many days back, before their first run
     # Automations: who owns each, what starts it, and what it does. `closer` is the bot that finishes the task a run
     # opens (with `note`), when an event or mail says it was done.
     "automations": [
@@ -57,14 +65,14 @@ CONTENT = {
              "body": "{{event.data.text}}",
              "owner": "person:ben"}}]},
         {"key": "declined", "name": "Declined cards to accounts receivable", "owner": "person:ana",
-         "closer": "ar-followup", "note": "Retry paid.",
+         "closer": "ar-followup", "note": "Retry paid.", "read_by": "human:ana",
          "trigger": {"type": "event", "name": "finance.card.declined"},
          "steps": [{"id": "chase", "type": "action", "do": "create_task", "args": {
              "title": "Card declined for {{event.data.account}}",
              "body": "Retry the charge once. If it fails again, email the account.",
              "owner": "ar-followup"}}]},
         {"key": "nightly", "name": "Nightly orders to bookkeeping", "owner": "person:ana",
-         "closer": "bookkeeper", "note": "Posted. Nothing to flag.",
+         "closer": "bookkeeper", "note": "Posted. Nothing to flag.", "read_by": "human:ana",
          "trigger": {"type": "schedule", "cron": "0 2 * * *", "tz": "America/Los_Angeles"},
          "steps": [{"id": "post", "type": "action", "do": "create_task", "args": {
              "title": "Post yesterday's orders to the ledger",
@@ -87,35 +95,35 @@ CONTENT = {
     ],
     # Events the company's systems report, oldest first within a day. `at` is [days ago, hours before that].
     "events": [
-        {"at": [1, 7.0], "name": "custom.calibration.failed", "subject": "unit/U-1042", "actor": "bot:support-qa",
+        {"at": [6, 6.0], "name": "custom.calibration.failed", "subject": "unit/U-1042", "actor": "bot:support-qa",
          "data": {"unit": "U-1042", "attempt": 1}, "close": "calibration"},
-        {"at": [1, 6.8], "name": "custom.calibration.failed", "subject": "unit/U-1057", "actor": "bot:support-qa",
+        {"at": [6, 2.0], "name": "custom.calibration.failed", "subject": "unit/U-1057", "actor": "bot:support-qa",
          "data": {"unit": "U-1057", "attempt": 1}, "close": "calibration"},
-        {"at": [1, 6.6], "name": "custom.calibration.failed", "subject": "unit/U-1061", "actor": "bot:support-qa",
+        {"at": [5, 7.0], "name": "custom.calibration.failed", "subject": "unit/U-1061", "actor": "bot:support-qa",
          "data": {"unit": "U-1061", "attempt": 1}, "close": "calibration"},
-        {"at": [1, 6.4], "name": "custom.calibration.failed", "subject": "unit/U-1073", "actor": "bot:support-qa",
+        {"at": [5, 1.0], "name": "custom.calibration.failed", "subject": "unit/U-1073", "actor": "bot:support-qa",
          "data": {"unit": "U-1073", "attempt": 1}, "close": "calibration"},
-        {"at": [1, 6.2], "name": "custom.calibration.failed", "subject": "unit/U-1088", "actor": "bot:support-qa",
+        {"at": [4, 4.0], "name": "custom.calibration.failed", "subject": "unit/U-1088", "actor": "bot:support-qa",
          "data": {"unit": "U-1088", "attempt": 1}, "close": "calibration"},
-        {"at": [1, 6.0], "name": "custom.calibration.failed", "subject": "unit/U-1093", "actor": "bot:support-qa",
+        {"at": [4, 0.7], "name": "custom.calibration.failed", "subject": "unit/U-1093", "actor": "bot:support-qa",
          "data": {"unit": "U-1093", "attempt": 2}, "close": "calibration", "note": "Could not fix. Sent to Ben."},
-        {"at": [1, 5.8], "name": "custom.calibration.failed", "subject": "unit/U-1104", "actor": "bot:support-qa",
+        {"at": [3, 6.0], "name": "custom.calibration.failed", "subject": "unit/U-1104", "actor": "bot:support-qa",
          "data": {"unit": "U-1104", "attempt": 1}, "close": "calibration"},
-        {"at": [1, 5.6], "name": "custom.calibration.failed", "subject": "unit/U-1110", "actor": "bot:support-qa",
+        {"at": [3, 3.0], "name": "custom.calibration.failed", "subject": "unit/U-1110", "actor": "bot:support-qa",
          "data": {"unit": "U-1110", "attempt": 1}, "close": "calibration"},
-        {"at": [1, 5.4], "name": "custom.calibration.failed", "subject": "unit/U-1126", "actor": "bot:support-qa",
+        {"at": [2, 5.0], "name": "custom.calibration.failed", "subject": "unit/U-1126", "actor": "bot:support-qa",
          "data": {"unit": "U-1126", "attempt": 1}, "close": "calibration"},
-        {"at": [1, 5.2], "name": "custom.calibration.failed", "subject": "unit/U-1131", "actor": "bot:support-qa",
+        {"at": [2, 0.4], "name": "custom.calibration.failed", "subject": "unit/U-1131", "actor": "bot:support-qa",
          "data": {"unit": "U-1131", "attempt": 1}, "close": "calibration"},
-        {"at": [1, 5.0], "name": "custom.calibration.failed", "subject": "unit/U-1140", "actor": "bot:support-qa",
+        {"at": [1, 8.0], "name": "custom.calibration.failed", "subject": "unit/U-1140", "actor": "bot:support-qa",
          "data": {"unit": "U-1140", "attempt": 1}, "close": "calibration"},
-        {"at": [1, 4.8], "name": "custom.calibration.failed", "subject": "unit/U-1152", "actor": "bot:support-qa",
+        {"at": [1, 4.0], "name": "custom.calibration.failed", "subject": "unit/U-1152", "actor": "bot:support-qa",
          "data": {"unit": "U-1152", "attempt": 1}, "close": "calibration"},
-        {"at": [1, 4.6], "name": "custom.calibration.failed", "subject": "unit/U-1158", "actor": "bot:support-qa",
+        {"at": [0, 0.6], "name": "custom.calibration.failed", "subject": "unit/U-1158", "actor": "bot:support-qa",
          "data": {"unit": "U-1158", "attempt": 2}, "close": "calibration", "note": "Could not fix. Sent to Ben."},
-        {"at": [1, 4.4], "name": "custom.calibration.failed", "subject": "unit/U-1163", "actor": "bot:support-qa",
+        {"at": [0, 0.2], "name": "custom.calibration.failed", "subject": "unit/U-1163", "actor": "bot:support-qa",
          "data": {"unit": "U-1163", "attempt": 1}, "close": "calibration"},
-        {"at": [4, 8.0], "name": "custom.review.posted", "subject": "review/R-2201", "actor": "bot:marketplace",
+        {"at": [6, 8.0], "name": "custom.review.posted", "subject": "review/R-2201", "actor": "bot:marketplace",
          "data": {"stars": 5, "product": "Home Pro", "text": "The show ran all night."}},
         {"at": [3, 9.0], "name": "custom.review.posted", "subject": "review/R-2214", "actor": "bot:marketplace",
          "data": {"stars": 1, "product": "Home Pro", "text": "The phone app lost the schedule twice."},
@@ -126,26 +134,26 @@ CONTENT = {
          "data": {"stars": 5, "product": "Home Pro", "text": "Easy to calibrate."}},
         {"at": [2, 16.0], "name": "custom.review.posted", "subject": "review/R-2233", "actor": "bot:marketplace",
          "data": {"stars": 1, "product": "Storefront", "text": "Unit stopped at dusk on the second night."}},
-        {"at": [1, 8.0], "name": "custom.review.posted", "subject": "review/R-2240", "actor": "bot:marketplace",
+        {"at": [0, 0.9], "name": "custom.review.posted", "subject": "review/R-2240", "actor": "bot:marketplace",
          "data": {"stars": 3, "product": "Home Pro", "text": "Fine for the price."}},
         {"at": [4, 11.0], "name": "finance.card.declined", "subject": "charge/C-7781", "actor": "bot:bookkeeper",
          "data": {"account": "Harbor Lane Storefront", "amount": "$1,200.00"}, "close": "declined"},
         {"at": [1, 9.0], "name": "finance.card.declined", "subject": "charge/C-7830", "actor": "bot:bookkeeper",
-         "data": {"account": "Pinecrest Hotel", "amount": "$449.00"}},
+         "data": {"account": "Pinecrest Hotel", "amount": "$449.00"}, "close": "declined"},
         {"at": [5, 10.0], "name": "custom.firmware.ring_done", "subject": "ring/staff", "actor": "bot:firmware",
          "data": {"ring": "staff units", "version": "2.4"}, "close": "rings"},
-        {"at": [2, 10.0], "name": "custom.firmware.ring_done", "subject": "ring/5-percent", "actor": "bot:firmware",
+        {"at": [0, 0.8], "name": "custom.firmware.ring_done", "subject": "ring/5-percent", "actor": "bot:firmware",
          "data": {"ring": "5% of units", "version": "2.4"}},
         {"at": [5, 15.0], "name": "custom.deploy.finished", "subject": "deploy/cloud-1.8.1", "actor": "bot:devops",
          "data": {"version": "cloud 1.8.1"}, "close": "deploys"},
-        {"at": [3, 15.0], "name": "custom.deploy.finished", "subject": "deploy/app-3.1.0", "actor": "bot:devops",
+        {"at": [6, 15.0], "name": "custom.deploy.finished", "subject": "deploy/app-3.1.0", "actor": "bot:devops",
          "data": {"version": "app 3.1.0"}, "close": "deploys"},
         {"at": [1, 15.0], "name": "custom.deploy.finished", "subject": "deploy/cloud-1.8.2", "actor": "bot:devops",
          "data": {"version": "cloud 1.8.2"}},
     ],
     # Mail to Ben's inbox. Orders come from the marketplace; the rest are questions the filter drops.
     "mail": [
-        {"at": [5, 9.0], "id": "order-4390", "from": "orders@bigmarket.example",
+        {"at": [6, 9.0], "id": "order-4390", "from": "orders@bigmarket.example",
          "subject": "Order 4390: Home Pro x1", "close": "orders"},
         {"at": [5, 15.0], "id": "order-4391", "from": "orders@bigmarket.example",
          "subject": "Order 4391: Storefront x1", "close": "orders"},
@@ -161,7 +169,7 @@ CONTENT = {
          "subject": "Order 4455: Home Pro x1", "close": "orders"},
         {"at": [1, 9.0], "id": "order-4470", "from": "orders@bigmarket.example",
          "subject": "Order 4470: Storefront x1"},
-        {"at": [0, 8.0], "id": "order-4478", "from": "orders@bigmarket.example",
+        {"at": [0, 0.4], "id": "order-4478", "from": "orders@bigmarket.example",
          "subject": "Order 4478: Home Pro x1"},
     ],
     # A forwarder that kept re-sending one order: 121 runs in 18 minutes, which the run guard holds.
@@ -175,6 +183,10 @@ CONTENT = {
     # from a task. `hours` is how long before the run it was said. Scores are per bot: relevance, 0 to 1.
     "learnings": {
         "read": "Read. Kept the rule for the next task.",
+        # A bot works its packet this long after the night's run starts: a message wakes it in the task, and its run
+        # claims, saves what it learned, and completes.
+        "work_after_minutes": 25,
+        "wake": "Your packet for last night is in this task. Read it and keep what applies to your work.",
         "nights": [
             {"days": 6, "items": []},
             {"days": 5, "items": [
@@ -194,25 +206,42 @@ CONTENT = {
                  "label": "Ben in Draft replies for the open support tickets",
                  "text": "Login problems: check the app version before you reply. Most are one old version.",
                  "learnable": 0.9, "scores": {"support": 0.9, "technical-support": 0.8, "support-qa": 0.7}},
-                {"task": "release-post", "author": "human:ana", "hours": 8,
-                 "label": "Ana in Draft the spring release announcement",
+                {"task": "creator-contracts", "author": "human:ana", "hours": 8,
+                 "label": "Ana in Get the twelve creator contracts signed",
                  "text": "Creators get the Storefront demo a week before the launch post.",
                  "learnable": 0.85, "scores": {"creators": 0.9, "marketing-lead": 0.8, "content": 0.6}}]},
             {"days": 2, "items": [
                 {"task": "howtos", "author": "human:ben", "hours": 5,
                  "label": "Ben in Outline three how-to posts for the help centre",
                  "text": "Calibration: hold the phone still at the wall, not panning. A moving phone is the usual cause.",
-                 "learnable": 0.9, "scores": {"technical-support": 0.9, "support": 0.8, "content": 0.7}}]},
+                 "learnable": 0.9, "scores": {"technical-support": 0.9, "support": 0.8, "content": 0.7}}],
+             # The technical-support bot works its packet and saves one line (a smaller change).
+             "learned": [{"bot": "technical-support", "subject": "Hold the phone still at the wall while calibrating",
+                          "rule": "Calibration: hold the phone still at the wall, not panning.",
+                          "source": 'task Ben in Outline three how-to posts: "Calibration: hold the phone still at the '
+                                    'wall, not panning."',
+                          "summary": "Read the packet. Saved the calibration how-to rule."}]},
             {"days": 1, "items": [
-                {"task": "brightline", "author": "human:ana", "hours": 6,
-                 "label": "Ana in Prepare the Brightline renewal brief",
-                 "text": "Renewal calls open with usage, not price.",
-                 "learnable": 0.8, "scores": {"sales-lead": 0.9, "account-manager": 0.9, "sales": 0.7}}]},
+                {"task": "cal-units", "author": "human:ben", "hours": 6,
+                 "label": "Ben in Decide whether owners get a unit swap after two failed calibrations",
+                 "text": "After two failed calibrations, offer the owner a unit swap. Do not book a third redo.",
+                 "learnable": 0.8, "scores": {"technical-support": 0.8, "support-lead": 0.6, "escalations": 0.5}}]},
             {"days": 0, "items": [
+                {"task": "howtos", "author": "human:ben", "hours": 3,
+                 "label": "Ben in Outline three how-to posts for the help centre",
+                 "text": "Correction: ask customers to set the phone on a flat surface before calibrating.",
+                 "learnable": 0.95, "scores": {"technical-support": 0.95}},
                 {"task": "ticket-replies", "author": "human:ben", "hours": 5,
                  "label": "Ben in Draft replies for the open support tickets",
                  "text": "Send login help in this order: version check, then the reset link, then the call.",
-                 "learnable": 0.85, "scores": {"support-lead": 0.8, "support": 0.9}}]},
+                 "learnable": 0.85, "scores": {"support-lead": 0.8, "support": 0.9}}],
+             # The technical-support bot works the correction in its packet and saves it as a working rule.
+             "learned": [{"bot": "technical-support",
+                          "subject": "Learned from Ben: set the phone on a flat surface before calibrating",
+                          "rule": "Before calibrating, ask the customer to set the phone on a flat surface.",
+                          "source": 'task Ben in Outline three how-to posts: "Correction: ask customers to set the phone '
+                                    'on a flat surface before calibrating."',
+                          "summary": "Read the packet. Saved the flat-surface correction as a working rule."}]},
         ],
     },
     # Tico release updates: two bots subscribe to the Tico feed, and hear about each release after its first.
@@ -284,13 +313,26 @@ def _run_task(b, aid, trigger_ref=None):
     return None
 
 
-def _close(b, aid, closer, note, trigger_ref=None):
-    """The closer bot, which owns the task the automation opened, marks it done a couple of hours on."""
+def _close(b, aid, closer, note, trigger_ref=None, read_by=None):
+    """The closer bot, which owns the task the automation opened, marks it done a couple of hours on. Never past now: a
+    close made at this moment still falls a minute before it, so nothing the demo writes is dated after the build.
+    The person `read_by`, if any, then reads the task's thread to its last message."""
     task = _run_task(b, aid, trigger_ref)
     if not task:
         return
-    b.clock.at += timedelta(hours=CONTENT["close_after_hours"])
+    b.clock.at = min(b.clock.at + timedelta(hours=CONTENT["close_after_hours"]), b.now - CLOSE_MARGIN)
     b.write(lambda c: H.task_update(c, H.bot_actor(_bot(c, closer)), task, status="done", note=note))
+    if read_by:
+        _read(b, task, read_by)
+
+
+def _read(b, task, person):
+    """The person reads the task's thread through the thread API, as their thread view does: up to its last message."""
+    from ..demo_seed import TOKENS
+    with b.store.read() as c:
+        thread = H.task(c, task)["conversation_id"]
+        last = c.execute("SELECT last_seq FROM conversations WHERE id=?", (thread,)).fetchone()[0]
+    b.call("POST", f"threads/{thread}/read", {"seq": last}, token=TOKENS[person])
 
 
 def _spec(key):
@@ -304,7 +346,8 @@ def _event(b, spec, aids):
     b.store.automations.drain()
     if spec.get("close"):
         auto = _spec(spec["close"])
-        _close(b, aids[spec["close"]], auto["closer"], spec.get("note") or auto["note"])
+        _close(b, aids[spec["close"]], auto["closer"], spec.get("note") or auto["note"],
+               read_by=auto.get("read_by"))
 
 
 def _message(item):
@@ -323,7 +366,7 @@ def _mail_item(b, item, aids):
     if item.get("close"):
         auto = _spec(item["close"])
         _close(b, aids[item["close"]], auto["closer"], auto["note"],
-               trigger_ref=f"mail:{CONTENT['mailbox']}:{item['id']}")
+               trigger_ref=f"mail:{CONTENT['mailbox']}:{item['id']}", read_by=auto.get("read_by"))
 
 
 def _mail_loop(b, aids):
@@ -361,8 +404,14 @@ def _nightly(b, aid):
     today = b.now.astimezone(tz).date()
     for back in range(CONTENT["nightly_days"], -1, -1):
         due = datetime.combine(today - timedelta(days=back), time(2), tzinfo=tz).astimezone(timezone.utc)
-        b.clock.at = due
         after = next_due(spec["trigger"]["cron"], due, zone)
+        if due > b.now:
+            # Tonight's occurrence has not happened yet: the schedule is simply due at that time, with no run.
+            def upcoming(c, due=due):
+                c.execute("UPDATE automations SET next_due_at=? WHERE id=?", (_stamp(due), aid))
+            b.write(upcoming)
+            continue
+        b.clock.at = due
 
         def work(c, due=due, after=after):
             c.execute("UPDATE automations SET next_due_at=? WHERE id=?", (_stamp(due), aid))
@@ -372,8 +421,7 @@ def _nightly(b, aid):
             c.execute("UPDATE automations SET next_due_at=? WHERE id=?", (_stamp(after), aid))
         b.write(work)
         b.store.automations.drain()
-        if back:
-            _close(b, aid, spec["closer"], spec["note"])
+        _close(b, aid, spec["closer"], spec["note"], read_by=spec.get("read_by"))
 
 
 def _learn(b):
@@ -381,14 +429,20 @@ def _learn(b):
     are finished by those bots before the next night, so none is left unread behind a newer one."""
     today = learnings.local(b.now).date()
     previous = None
+    work_after = timedelta(minutes=CONTENT["learnings"]["work_after_minutes"])
     for spec in CONTENT["learnings"]["nights"]:
         day = today - timedelta(days=spec["days"])
         run_at = datetime.combine(day, time(learnings.HOUR), tzinfo=learnings.ZONE).astimezone(timezone.utc)
+        if run_at + work_after > b.now:
+            break   # this night, and any after it, has not finished (and its bots worked their packets) yet
         if previous:
             b.clock.at = run_at - timedelta(hours=2)
             _finish_packets(b, previous)
         b.clock.at = run_at
         previous = _night(b, spec, day.isoformat(), run_at)
+        for learned in spec.get("learned", []):
+            b.clock.at = run_at + work_after
+            _run(b, learned["bot"], dict(previous["deliveries"])[learned["bot"]], learned["summary"], learned)
 
 
 def _night(b, spec, night, run_at):
@@ -414,10 +468,52 @@ def _night(b, spec, night, run_at):
                    deliveries=[(r[0], r[1]) for r in c.execute(
                        "SELECT recipient, task_id FROM learning_deliveries WHERE run_id=?", (run_id,))])
     b.write(work)
-    b.clock.at = run_at + timedelta(minutes=12)
+    b.clock.at = run_at + FINISH_AFTER
     learnings.finish(b.store, box["run"], "done" if box["routed"] else "quiet", box["detail"],
                      read=box["read"], routed=box["routed"])
+    box["run_at"] = run_at
     return box
+
+
+def _run(b, slug, task, summary, learned):
+    """A bot's run on its packet, as its computer does it: the computer claims the bot's next job, the run starts,
+    reports the memory commit it made, and completes with its answer in the packet's thread. The bot's queue is worked
+    in order, so jobs queued ahead of the packet's are run first, with nothing to report and no reply posted."""
+    for _ in range(MAX_AHEAD_JOBS):
+        claim = _claim(b, slug)
+        if claim is None:
+            raise RuntimeError(f"{slug} was handed no job for packet task {task}")
+        aid = claim["id"]
+        mine = (claim.get("task") or {}).get("id") == task
+        b.call("POST", f"attempts/{aid}/started", {"thread_id": claim["conversation"]["id"]}, token=b.mac["token"])
+        if mine:
+            b.call("POST", f"bots/{slug}/memory/report", {"commits": [_commit(slug, learned, aid, b.clock.at)]},
+                   token=b.mac["token"])
+        b.call("POST", f"attempts/{aid}/complete",
+               {"outcome": "completed", "text": summary if mine else "", "last_seq": 0}, token=b.mac["token"])
+        if mine:
+            return
+    raise RuntimeError(f"{slug} has more than {MAX_AHEAD_JOBS} jobs queued ahead of packet task {task}")
+
+
+def _claim(b, slug):
+    """The computer's next job for the bot, or None. An empty claim is a pass, as on the runner's own clock: a claim
+    that cancels a notice its task no longer needs, or meets a job it cannot hand out, answers with nothing, and the
+    next claim takes the next job."""
+    for _ in range(CLAIM_TRIES):
+        claim = b.call("POST", "jobs/claim", {"bot": slug}, token=b.mac["token"])["attempt"]
+        if claim:
+            return claim
+    return None
+
+
+def _commit(slug, learned, aid, at):
+    """The memory commit a bot's run makes: one working rule in memory/learnings.md, sourced to the item it came from."""
+    diff = ("--- a/memory/learnings.md\n+++ b/memory/learnings.md\n@@ -1 +1,2 @@\n## Working rules\n"
+            f"+- {learned['rule']} [source: {learned['source']}]\n")
+    return {"sha": hashlib.sha1(f"{slug}|{learned['subject']}|{at.isoformat()}".encode()).hexdigest(),
+            "subject": learned["subject"], "author": slug, "committed": _stamp(at),
+            "files": ["memory/learnings.md"], "diff": diff, "attempt": aid}
 
 
 def _finish_packets(b, night):
