@@ -15,13 +15,14 @@ shipped are not in the map and are not looked for.
 A column renamed on some tables only counts where its table shows: `SELECT owner FROM tasks` is a finding and names
 tasks, `SELECT owner FROM meetings` is not. As a key, a word many tables use (`owner`, `state`, `at`) counts only when
 the receiver is named after a table it moved on, in a file that talks to the hub (`task["owner"]`), or when it is a row
-(`row["owner"]`) and the file's own SQL reads such a table. A key only a few tables keep (`from_actor`) counts anywhere.
+(`row["owner"]`) and the file's own SQL reads such a table. A compound key few tables keep (`from_actor`) counts anywhere.
 
 --fix rewrites the findings marked fixable. A finding is not fixable when its new spelling needs other arguments, when
 the name is a SQL alias (`AS created`), when the key is a word other code uses too (`attempt`), when the field changed
 shape (`snoozed_until` is now part of `holds`), when the name has more than one new spelling or a table keeps it
-(`owner`), when a key was only recognised from its surroundings, when SQL is not in a `hub sql` call (it may be the bot's
-own database), or when the file is under memory/: a bot's notes are reported, never rewritten.
+(`owner`), when it is a key renamed on some tables only (the same word may be an input or a stored document's key), when
+SQL is not in a `hub sql` call (it may be the bot's own database), or when the file is under memory/: a bot's notes are
+reported, never rewritten.
 """
 import json
 import os
@@ -100,7 +101,9 @@ class Names:
         self.columns = dict(data.get("columns") or {})
         self.tables = dict(data.get("table_columns") or {})
         self.api_kept = set(data.get("api_kept") or [])
-        self.keys = {**{k: v for k, v in self.columns.items() if k.endswith("_json")}, **(data.get("api_fields") or {})}
+        # `ts`, `at` and `since` are every program's words: as keys they count only with a table in view (below).
+        fields = {k: v for k, v in (data.get("api_fields") or {}).items() if "_" in k or k in AMBIGUOUS_KEYS}
+        self.keys = {**{k: v for k, v in self.columns.items() if k.endswith("_json")}, **fields}
         self.removed_keys = dict(data.get("api_fields_removed") or {})
         # The table-specific keys that are safe to read anywhere: they are compound names few tables keep.
         self.scoped_keys = {old for old, entry in self.tables.items()
@@ -324,8 +327,14 @@ def _key_findings(s, base, names, out):
 def _key_finding(name, names, start, end, fixable):
     scoped = name in names.scoped_keys
     tables = tuple(t for moved in names.tables[name]["renames"].values() for t in moved) if scoped else ()
-    return Finding(old=name, new=names.keys[name], kind="key", fixable=fixable and (not scoped or names.one_spelling(name)),
+    return Finding(old=name, new=names.keys[name], kind="key", fixable=fixable and not scoped,
                    start=start, end=end, replacement=names.keys[name], tables=tables)
+
+
+def _not_a_read(s, m):
+    """`task.created` in quotes is an event name, and `{{task.owner}}` a template variable: neither reads a field."""
+    before, after = s[m.start() - 1:m.start()] if m.start() else "", s[m.end():m.end() + 1]
+    return (before and before in "\"'`" and after == before) or s[max(0, m.start() - 2):m.start()] == "{{"
 
 
 def _receiver_table(receiver):
@@ -341,9 +350,11 @@ def _context_key_findings(s, base, names, out, talks_to_hub, file_tables):
         if name not in names.tables or name in names.keys or name in names.removed_keys:
             continue
         receiver = m.group("recv")
+        if m.group("c") and _not_a_read(s, m):
+            continue
         if receiver in ROW_RECEIVERS:
             on = file_tables
-        elif talks_to_hub and name not in names.api_kept:
+        elif talks_to_hub and name not in names.api_kept and name not in names.columns:
             table = _receiver_table(receiver)
             on = {table, table + "s"}
         else:

@@ -53,7 +53,7 @@ The connection script installs itself when the code is approved and posts a hear
 
     hub api GET bots/<slug>
 
-`agent.last_seen` is recent and `online` is true. Then send one small message and tell the human to expect the answer
+`agent.last_seen_at` is recent and `online` is true. Then send one small message and tell the human to expect the answer
 on the profile's own schedule, not at once: `hub message send <slug> "Hello from <human>: reply with one line so we know you read this."`
 In Tico the message waits until the agent reads it. Say what you saw in one line: connected, last heard from a minute ago.
 If it is not online after five minutes, use the troubleshooting below.

@@ -165,6 +165,7 @@ def test_a_name_renamed_on_some_tables_is_found_with_its_tables_and_stays_where_
             "import requests\n"
             "task = requests.get(BASE + '/api/v2/tasks/1').json()\n"
             "print(task[\"owner\"], task.get(\"due\"), meeting[\"owner\"], task[\"state\"])\n"
+            "print(event[\"ts\"], say(\"pushed\", \"at\", 1), \"task.created\", \"{{task.owner}}\", \"src/main.ts\")\n"
         ),
         "scripts/kept.py": "rows = run(['hub', 'sql', 'SELECT owner FROM meetings'])\nprint(row['owner'])\n",
     })
@@ -179,6 +180,7 @@ def test_a_name_renamed_on_some_tables_is_found_with_its_tables_and_stays_where_
         ("scripts/read.py", 3, "owner"),    # its own SQL reads tasks
         ("scripts/api.py", 3, "owner"),     # task["owner"], not meeting["owner"]
         ("scripts/api.py", 3, "due"),
+        ("scripts/api.py", 4, "ts"),        # event["ts"]; the quoted word, event name, variable and file are not reads
     ])
     assert found[("AGENT.md", 1, "owner")].new == "owner_id"
     assert found[("AGENT.md", 1, "owner")].tables == ("tasks",)
