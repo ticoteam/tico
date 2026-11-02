@@ -141,8 +141,8 @@ def test_two_bots_hear_each_tico_release_after_the_first(built):
 
 # 00:30 Pacific on the 25th: tonight's schedule (02:00) and Learnings night (03:00) have not happened yet.
 EARLY = datetime(2026, 9, 25, 7, 30, tzinfo=timezone.utc)
-# Columns that hold a future time by design: a schedule's next run and a message's expiry.
-FUTURE_BY_DESIGN = {"next_due_at", "expires_at"}
+# Columns that hold a future time by design: a schedule's next run, a message's expiry, and a task's due date.
+FUTURE_BY_DESIGN = {"next_due_at", "expires_at", "due_at"}
 
 
 @pytest.fixture(scope="module")
