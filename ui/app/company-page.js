@@ -27,6 +27,7 @@ const CP_CADENCE = [['monthly', 'Monthly'], ['quarterly', 'Quarterly']];
 const CP_DUE = [['business_day', 'Business day of the month'], ['days_after_period_end', 'Days after period end']];
 const CP_ACCENT = '#1e4fd8';    // the page's own default (render.DEFAULT_ACCENT), shown until one is chosen
 const CP_LOGO_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+const CP_LOGO_MAX = 2 * 1024 * 1024;
 const CP_RELEASE_FAILED = 'Published, but the page failed to rebuild and is down. The daily refresh tries again.';
 const CP_CHECKS = {leak: 'Leak check', rules: 'Rules', draft: 'Draft'};
 // A check's reason from the server, in words. Anything not listed reads as held.
@@ -314,6 +315,7 @@ async function cpLogoUpload(input) {
   const state = CP, file = input.files?.[0];
   if (!file) return;
   if (!CP_LOGO_TYPES.includes(file.type)) { toast('A logo is a PNG, JPEG or WebP', true); return cpDraw('transparency'); }
+  if (file.size > CP_LOGO_MAX) { toast('A logo is 2 MB at most', true); return cpDraw('transparency'); }
   try {
     const response = await formFetch(API + '/v2/company-page/logo', file);
     const result = await response.json().catch(() => ({}));
@@ -324,7 +326,7 @@ async function cpLogoUpload(input) {
   if (CP === state) cpDraw('transparency');
 }
 function cpLogoRemove() {
-  cpConfirm('Remove the logo?', 'It comes off the page at the next rebuild.', 'Remove', async () => {
+  cpConfirm('Remove the logo?', 'It comes off the page now.', 'Remove', async () => {
     const r = await patch('/v2/company-page', {logo_file_id: null});
     CP.settings = {...CP.settings, ...r};
     cpDraw('transparency');
