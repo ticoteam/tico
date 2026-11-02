@@ -663,3 +663,9 @@ def test_a_bad_debt_item_that_is_inactive_is_found_and_not_made_a_second_time():
 
 def test_a_change_feed_read_from_scratch_starts_inside_quickbooks_thirty_days_not_on_its_edge():
     assert M.cdc_since(None, "2026-10-30T12:00:00Z") == "2026-10-01T12:00:00Z"
+
+
+def test_every_quickbooks_call_names_minor_version_75_the_current_one():
+    wire = Wire(QC.Reply(200, {"QueryResponse": {}}))
+    _client(wire).find("account.create", {"name": "Checking"}, "account:checking")
+    assert urllib.parse.parse_qs(urllib.parse.urlsplit(wire.sent[0][1]).query)["minorversion"] == ["75"]
