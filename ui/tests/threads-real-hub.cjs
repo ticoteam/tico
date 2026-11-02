@@ -288,7 +288,7 @@ async function restrictPerson(hub) {
       const twin = page.locator('#thread-task [data-status] a[href^="#/task/"]');
       await twin.waitFor({timeout: t(15000)});
       const buttons = page.locator('#thread-task .dash-form-foot');
-      const [cancel, make] = [await buttons.locator('[data-close]').boundingBox(), await buttons.locator('[type=submit]').boundingBox()];
+      const [cancel, make] = [await buttons.locator('button[data-close]').boundingBox(), await buttons.locator('[type=submit]').boundingBox()];
       assert.ok(Math.abs(cancel.height - make.height) < 2, `${tag}: Make task is one line beside Cancel`);
       await twin.click();
       await page.waitForURL(/#\/task\//, {timeout: t(15000)});
