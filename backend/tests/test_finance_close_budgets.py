@@ -6,6 +6,7 @@ from datetime import date
 import pytest
 
 from backend.finance import reads as FR
+from backend.finance import actions as FA
 from clients import hubtools
 from backend.finance.core.errors import NOT_FOUND, FinanceError
 from backend.tests.test_finance_fixtures import (  # noqa: F401
@@ -127,3 +128,23 @@ def test_a_raise_in_the_current_period_asks_the_budget_owner_and_a_future_one_do
         assert (raise_now.status, raise_now.approver) == ("needs_approval", "human:ben")
         later = act(c, OWNER, "budget_update", {"budget_id": bid, "amount": 7_000, "effective_from": "2026-11-01"})
         assert later.status == "committed", later.reason
+
+
+def _turn(c, bot, finished, cost, model="tico-medium", billing="api"):
+    tid = f"t{bot}{finished}{model}"
+    c.execute("INSERT INTO turns(id, bot, started, finished, model, est_cost_usd, billing) VALUES(?,?,?,?,?,?,?)",
+              (tid, bot, finished, finished, model, cost, billing))
+    return tid
+
+
+def test_an_own_key_bot_holds_its_recent_average_and_a_subscription_run_never_counts(books):
+    """§9: a run hold is sized from the bot's recent average per run, whichever key paid for the runs. A flat
+    subscription run never counts toward that average."""
+    with books.transaction() as c:
+        ai = budget(c, "AI services")
+        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 1_000})
+        _turn(c, "coder", "2026-10-14T10:00:00.000000Z", 0.40, model="claude-sonnet-4-5")
+        _turn(c, "coder", "2026-10-13T10:00:00.000000Z", 9.00, model="claude-sonnet-4-5", billing="subscription")
+        held = FA.run_hold(c, "coder", "job-own", at=AT)
+        assert held.hold_id and not held.refused
+        assert FA.budget_state(c, ai, AT).held == 40
