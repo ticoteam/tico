@@ -51,6 +51,7 @@ import sqlite3
 from typing import NamedTuple, Optional
 
 from . import event_catalog as CAT, hubdb as H, templating, tico_notices, task_trigger_rules as TTR
+from .migrations import renames
 
 log = logging.getLogger(__name__)
 
@@ -502,7 +503,8 @@ class _Context:
                 if task.get("status") not in wanted:
                     return False
             elif key in ("owner", "requester"):
-                if task.get(key) not in wanted:
+                # A condition saved before a column rename names the old column; the task row has the new one.
+                if task.get(renames.current_column("tasks", key)) not in wanted:
                     return False
             elif key == "type":
                 names = {str(task.get("type_id") or "").lower()}
@@ -512,8 +514,9 @@ class _Context:
                 if not names & {str(w).lower() for w in wanted}:
                     return False
             elif key == "role":
-                mine = {"owner" if task.get("owner") == self.target else
-                        "requester" if task.get("requester") == self.target else "other"}
+                owner = task.get(renames.current_column("tasks", "owner"))
+                requester = task.get(renames.current_column("tasks", "requester"))
+                mine = {"owner" if owner == self.target else "requester" if requester == self.target else "other"}
                 # QA and the Release Manager are found, never configured per ticket (release_flow): a bot holds
                 # that role here when it is the one the ticket's QA or the team's release setting names.
                 if "qa" in wanted and self.slug == _release_flow().qa_owner(self.conn, task):

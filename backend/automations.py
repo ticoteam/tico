@@ -52,6 +52,7 @@ from . import people as P
 from . import report_managers
 from . import task_models
 from . import task_run_models
+from .migrations import renames
 from .models import Contract
 from . import audit_log, cloud_access
 from .store import H, Problem
@@ -1205,11 +1206,17 @@ def on_event(c, type_, subject, data, actor):
         task = H.task(c, subject)
         if task and not H.task_private(c, task) and hub_checks(c, task):
             # task.assigned is told before the owner column is written: the new owner is the event's.
-            task = {**{k: task.get(k) for k in ("id", "title", "body", "status", "requester", "step_id", "type")},
-                    "owner": facts["owner"]}
+            task = _received_task(task, facts["owner"])
             owner = F.owner_ref(facts["owner"])
             fire(c, "task_received", {"task": task, "event": {"name": name}}, f"task:{subject}:{name}",
                  lambda t: F.owner_ref(t["to"]) == owner)
+
+
+def _received_task(task, owner):
+    """The task as a `task_received` automation hears it, keyed by the names its flow reads. The row's columns are read
+    under this code's names, so a column renamed since the row was read still fills its field."""
+    fields = ("id", "title", "body", "status", "requester", "step_id", "type")
+    return {**{k: task.get(renames.current_column("tasks", k)) for k in fields}, "owner": owner}
 
 
 def on_mail(c, mailbox, message):

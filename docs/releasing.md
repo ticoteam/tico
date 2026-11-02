@@ -94,6 +94,63 @@ foreign_key_check` for references the migration broke before it commits, and res
 migrations, per file, in `backend/migrations/ddl_allowlist.txt`. A new one fails the test; when a statement moves into a
 migration, lower its file's count in the same change.
 
+## Release 1 cutover
+
+Release 1 is the contract release: the column renames and retired spellings (`cancelled` became `canceled`,
+`needs_onboarding` became `needs_setup`) land in one tag, and the server, runner, Mac app, templates and bot repos
+come from that tag together. Each install upgrades on its own, one at a time: Acme Team first, as the canary, then
+Acme Ops. An install starts the next one only when the first is healthy and its computers have followed.
+
+Stored work carries over. Approvals keep their payloads and hashes, because the renames touch column names and no
+payload key. Queued jobs, webhook sends and automation definitions are rows the new release reads. Rule conditions and
+task-received automations that name `owner` or `requester` keep matching, because those names are read through the
+rename map. A webhook send queued before the cutover goes out with its body named as the new API names it.
+`backend/tests/test_inflight_cutover.py` pins the approval path on a database from before the renames, and the webhook,
+rule and automation cases on rows as they were saved.
+
+Per install, in this order:
+
+1. **Stop the writers.** Stop the server; nothing else writes to the database. Runners and the Mac app reach an install
+   only through its API (each keeps its own state file, not the hub database), so the server stop is the stop.
+   Work in progress is picked up afterwards: a job whose lease runs out is recovered, and a webhook send caught
+   mid-delivery returns to ready after two minutes. Docker: `docker compose stop server`. Mac: `scripts/tico -e acme server stop`.
+2. **Take the consistent backup while stopped.** The checkpoint copies every page of the database into a new private
+   file and checks that the copy is complete, without an integrity scan, so it is quick enough to run with the server down:
+
+   ```sh
+   docker compose run --rm --no-deps --entrypoint sh server -c \
+     'mkdir -p /data/snapshots && python -m backend.manage checkpoint /data/hub.sqlite /data/snapshots/pre-r1-acme-team.sqlite'
+   ```
+
+   Copy the file out of the `/data` volume to a place the next update cannot reach. The updater keeps only its own
+   last three snapshots, so this file is the one to roll back to. `python -m backend.manage inspect` on the copy runs
+   the full integrity check; run it once the server is back, since it reads every page.
+3. **Tag the release commit.** `scripts/release publish` tags the validated commit as `vX.Y.Z`. That one tag names the
+   server image, the runner binaries and the templates in the same tree; the desktop app is part of it when its shell
+   changed (see [Desktop apps follow the release](#desktop-apps-follow-the-release)). Bot repositories are not tagged by
+   the release: record each one's commit next to the freeze record (`git rev-parse --git-path
+   tico-release.json`), so a rollback knows what each bot was on.
+4. **Start the new release.** Docker: set `TICO_TAG=vX.Y.Z` in `.env`, then `docker compose pull && docker compose up -d`.
+   Mac: check out `vX.Y.Z` in the install's checkout (`git -C <checkout> checkout vX.Y.Z`) and restart it with
+   `scripts/tico -e acme server restart`. On start, preflight accepts schema 71 and newer, then the rename files run in
+   order, each in its own transaction with its `schema_migrations` row. A database that has both an old and a new name
+   of one column is refused, not guessed at (`RenameConflict`). A failed migration leaves the file at the schema it had,
+   and the server does not start on it.
+5. **Let the computers follow.** Each runner sees the new server release, stops taking work and hands its turns back
+   for up to `drain_timeout_seconds` (five minutes by default in `runner.json`), then updates. Its queued work resumes
+   afterwards. A computer that has not yet updated keeps working while it waits, as long as its release is at least the
+   minimum in [Supported versions](#supported-versions), and the runner wire covers the current and previous minor release.
+
+Acme Team's record for the cutover is the checkpoint file, the tag `vX.Y.Z`, the old tag it left and the bot repository
+commits. Acme Ops repeats steps 1 to 5 with its own checkpoint (`pre-r1-acme-ops.sqlite`); its database is its own.
+
+**Rollback boundary.** The updater rolls back by itself only when the new release fails its health check. Before the
+install has done real work on the new release, roll back by putting the checkpoint back and starting the old tag:
+follow [Rolling back](updates.md#rolling-back) for the server, with the checkpoint in place of the pre-update
+snapshot, and pin the runners and the Mac app to the old tag too. After the install has taken real writes on the
+new schema, a rollback to the checkpoint drops every write since the backup, and the old release cannot open the
+newer database at all. Fix forward with a new patch release instead, unless the owner decides to lose those writes.
+
 ## The release command
 
 The Release Manager uses the Rust `tico-release` command through `scripts/release` for each approved release.

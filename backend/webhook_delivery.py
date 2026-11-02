@@ -23,6 +23,7 @@ import time
 
 from . import egress
 from . import hubdb as H
+from . import runs
 
 log = logging.getLogger(__name__)
 
@@ -227,7 +228,8 @@ def deliver(store, vault, send_id, *, transport=None):
         with store.transaction() as c:
             c.execute("UPDATE webhook_sends SET state='ready', claimed_at=NULL WHERE id=? AND state='sending'", (send_id,))
         return
-    body = send["body"].encode()
+    # A body queued before the API v2 rename still says attempt_id: it leaves as a run, like one queued after it.
+    body = runs.public_json(send["body"]).encode()
     timestamp = int(time.time())
     started = time.monotonic()
     status, head, error, abort = None, "", "", False
