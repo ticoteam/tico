@@ -501,10 +501,11 @@ def _covered(scopes: Sequence[tuple[str, str]], team: str, teammate: str) -> boo
 
 
 def _with_spend(s: _Seen, rows: list[Row]) -> list[Row]:
-    """Rows with spend in the filter, a budget or a projection, and the lines above them."""
+    """Rows with actual spend in the filter, and the lines above them. A budget or a projection alone does not keep a
+    line (spec §12: lines with no spend in the filter are hidden); private rows stay."""
     keep: set[str] = set()
     for r in rows:
-        if r["private"] or any(r.get(k) and any(cast(list[object], r[k])) for k in ("actual", "budget", "projection")):
+        if r["private"] or (r.get("actual") and any(cast(list[object], r["actual"]))):
             at = str(r["account_id"])
             while at and at not in keep:
                 keep.add(at)
