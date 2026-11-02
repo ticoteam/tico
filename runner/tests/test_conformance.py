@@ -261,6 +261,11 @@ def test_native_packet_runs_in_private_workspace_and_delivers_without_parent_tur
     row = until(offered, "native packet's checked attachment and reviewer card", timeout=45)
     calls = computer.prompts()
     assert len(calls) == 2, calls
+    if computer.harness == 'claude':
+        sessions = [call['argv'][call['argv'].index('--session-id') + 1] for call in calls]
+    else:
+        sessions = [call['thread'] for call in calls]
+    assert len(set(sessions)) == 2, "the verifier never resumes the editor's thread"
     assert json.loads(calls[1]["prompt"])["rules"], "verification is a separately supplied rule packet"
     assert "agent" not in json.loads(calls[0]["prompt"])
     for call in calls:
@@ -272,6 +277,7 @@ def test_native_packet_runs_in_private_workspace_and_delivers_without_parent_tur
         assert "Do not send to the child." not in call["prompt"] and "Outside text must not reach the child." not in call["prompt"]
     assert row["cost_usd"] > 0
     with api.app.state.store.read() as c:
+        assert c.execute('SELECT output_tokens FROM turns WHERE task_id=?', (row['check_task_id'],)).fetchone()[0] == 4, "both provider turns count toward pilot spend"
         assert H.task(c, row["parent_task_id"])["status"] == H.task(c, row["check_task_id"])["status"] == "closed"
         assert c.execute("SELECT count(*) FROM memory_tidy_cards WHERE pass_id=?", (row["id"],)).fetchone()[0] == 1
         assets = c.execute("SELECT blob_id FROM task_assets WHERE task_id=?", (row["check_task_id"],)).fetchall()
