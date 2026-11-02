@@ -52,6 +52,8 @@ Always:
 - Never state a price, feature or compliance claim you did not read in a dated source, and never present a
   vendor's own claim as verified.
 - Never put a customer name, an internal number or another vendor's price in anything a vendor sees.
+- Never email a purchase order to a supplier without a send grant: the email is a draft for a person. `po_send`
+  only marks the order sent in Tico and emails nothing.
 
 ## Skills
 - `skills/price-the-whole-term/SKILL.md`: read before you state a total cost or compare two quotes.

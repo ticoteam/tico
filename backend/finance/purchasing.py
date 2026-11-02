@@ -13,7 +13,7 @@ from .core import kinds as K
 from .core import mirror as M
 from .core import validate as V
 from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
-from .handlers import Plan, Planner, Result, may_write, private_hidden
+from .handlers import Plan, Planner, Result, may_write, private_hidden, sees_scope
 from .store import ap as SAP
 from .store import banking as SK
 from .store import ledger as SL
@@ -237,6 +237,24 @@ def link_bill_lines(ctx: Ctx, who: str, vendor_id: str,
     return out, po_ids
 
 
+def link_bill_order(ctx: Ctx, who: str, po_id: str) -> str:
+    """The purchase order a bill is linked to, or "" for none. A bill of any vendor may link to an order in this book
+    the asker may see (no line on a private account, none out of the asker's scope). A link bills no line, holds no
+    budget and moves neither the order's status nor its billed total."""
+    if not po_id:
+        return ""
+    row = SP.get(ctx.c, "fin_purchase_orders", po_id)
+    if row is None or str(row["book_id"]) != ctx.book.id:
+        raise FinanceError(NOT_FOUND, "no such purchase order")
+    for x in SP.lines(ctx.c, "po", po_id):
+        account = str(x["account_id"] or "")
+        tags = cast(dict[str, str], SK.loads(x["tags_json"]))
+        if private_hidden(ctx, who, account) or \
+                not sees_scope(ctx, who, account, tags.get("team", ""), tags.get("teammate", "")):
+            raise FinanceError(NOT_FOUND, "no such purchase order in your view")
+    return po_id
+
+
 def po_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """A purchase order as a draft: its lines hold nothing until it is approved."""
     V.only(p, ("vendor_id", "number", "po_date", "memo", "lines"))
@@ -277,7 +295,10 @@ def po_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                      "status='draft'") != 1:
             raise FinanceError(CONFLICT, "that order moved on")
         return {"po_id": po_id, "status": "sent"}
-    return Plan(K.default_gate(ctx.org, who, "po_send"), f"Mark purchase order {po['number']} sent", apply)
+    # A bot's send asks the owner, as an estimate's send does, before the order is marked sent; a person's is unchanged.
+    gate = (K.Gate("needs_approval", "owner", "default:bot-po-send") if who in ctx.org.bots
+            else K.default_gate(ctx.org, who, "po_send"))
+    return Plan(gate, f"Mark purchase order {po['number']} sent", apply)
 
 
 def _budget_gate(ctx: Ctx, who: str, po: Any, lines: Sequence[Any]) -> K.Gate:

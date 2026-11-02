@@ -17,10 +17,12 @@ from .core import ledger as L
 from .core import rights as R
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
+from .handlers import sees_scope
 from .store import ap as SAP
 from .store import banking as SK
 from .store import catalog as SC
 from .store import ledger as SL
+from .store import purchasing as SP
 from .tab import BILLS_EMAIL_KEY, decode_cursor, encode_cursor, page_size, private_cut
 
 Row = dict[str, object]
@@ -309,8 +311,23 @@ def document(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str
     out["terms_days"] = r["terms_days"]
     if kind == "bill":
         out["schedule"] = SK.loads(r["schedule_json"]) or None
+        out["purchase_order_id"] = order_in_view(c, viewer, ctx, r["purchase_order_id"])
     out["view_version"] = view.version
     return out
+
+
+def order_in_view(c: sqlite3.Connection, viewer: str, ctx: Ctx, po_id: object) -> str | None:
+    """A bill's purchase order link, named only when the viewer may read that order: no line of it is cut or out of the
+    viewer's scope, as the order's own read leaves it out."""
+    if not po_id:
+        return None
+    cut = set(private_cut(ctx, ctx.view(viewer)))
+    for x in SP.lines(c, "po", str(po_id)):
+        account = str(x["account_id"] or "")
+        tags = cast(dict[str, str], SK.loads(x["tags_json"]))
+        if account in cut or not sees_scope(ctx, viewer, account, tags.get("team", ""), tags.get("teammate", "")):
+            return None
+    return str(po_id)
 
 
 def bills(c: sqlite3.Connection, viewer: str, *, status: str | None = None, vendor_id: str | None = None,
