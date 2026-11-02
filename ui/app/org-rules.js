@@ -393,6 +393,7 @@ function rrMapPaint() {
   svg.setAttribute('width', cv.offsetWidth); svg.setAttribute('height', cv.offsetHeight);
   const marks = ['zero', 'cap', 'rule', 'open'].map(k => `<marker id="rr-mk-${k}" class="rr-mk ${k}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>`).join('');
   let paths = '', labels = '';
+  const spans = [];   // each chip's line (from the selected party's end), for placing it below
   if (from) {
     const a = rrBox(from, cv), both = new Set(lines.filter(x => lines.some(y => y !== x && y.other === x.other)).map(x => x.other));
     for (const {l, dir, other} of lines) {
@@ -406,23 +407,27 @@ function rrMapPaint() {
       const [x1, y1, x2, y2] = dir === 'to' ? [ax + ox, ay + oy, bx + ox, by + oy] : [bx + ox, by + oy, ax + ox, ay + oy];
       paths += `<line class="rr-ln ${k}" x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" marker-end="url(#rr-mk-${k})"/>`;
       const cx = ax + (bx - ax) * 0.55 + ox * 3, cy = ay + (by - ay) * 0.55 + oy * 3;
+      spans.push([ax + ox * 3, ay + oy * 3, bx + ox * 3, by + oy * 3]);
       const words = (dir === 'to' ? rrName(p) + ' to ' + rrName(other) : rrName(other) + ' to ' + rrName(p)) + ': ' + rrChip(l);
       labels += `<button type="button" class="rr-chip ${k}" data-rr-line="${esc(l.id)}" style="left:${cx.toFixed(1)}px;top:${cy.toFixed(1)}px" aria-label="${esc(words)}" title="${esc(words)}"${l.may_edit ? '' : ' aria-disabled="true"'}>${esc(rrChip(l))}</button>`;
     }
   }
   svg.innerHTML = `<defs>${marks}</defs>${paths}`;
   chips.innerHTML = labels;
-  // Near neighbours put their chips on top of each other: each one that would cover a chip already placed moves down
-  // (or up, past the chart's foot) until it is clear.
-  const placed = [];
-  for (const c of chips.children) {
-    const w = c.offsetWidth, h = c.offsetHeight, x = parseFloat(c.style.left);
-    let y = parseFloat(c.style.top);
-    const hit = yy => placed.some(r => Math.abs(r.x - x) < (r.w + w) / 2 + 4 && Math.abs(r.y - yy) < (r.h + h) / 2 + 3);
-    for (let i = 1; hit(y) && i < 12; i++) { const k = Math.ceil(i / 2) * (h + 4) * (i % 2 ? 1 : -1); if (!hit(y + k)) { y += k; break; } }
-    c.style.top = y.toFixed(1) + 'px';
-    placed.push({x, y, w, h});
-  }
+  // A chip goes where it covers no card and no chip already placed: along its line first (the middle outward), then
+  // above, below or beside it; where nothing is clear it keeps the first spot that misses the chips.
+  const cards = nodes.filter(n => n.offsetParent).map(n => rrBox(n, cv)), placed = [];
+  const over = (r, x, y, w, h, pad) => Math.abs(r.x + r.w / 2 - x) < (r.w + w) / 2 + pad && Math.abs(r.y + r.h / 2 - y) < (r.h + h) / 2 + pad;
+  [...chips.children].forEach((c, i) => {
+    const w = c.offsetWidth, h = c.offsetHeight, [x1, y1, x2, y2] = spans[i];
+    const tries = [];
+    for (const t of [0.55, 0.45, 0.65, 0.35, 0.75, 0.5]) for (const dy of [0, h + 4, -(h + 4), 2 * (h + 4), -2 * (h + 4)])
+      for (const dx of [0, w * 0.6, -w * 0.6]) tries.push([x1 + (x2 - x1) * t + dx, y1 + (y2 - y1) * t + dy]);
+    const freeOfChips = ([x, y]) => !placed.some(r => over(r, x, y, w, h, 3));
+    const at = tries.find(q => freeOfChips(q) && !cards.some(r => over(r, q[0], q[1], w, h, 2))) || tries.find(freeOfChips) || tries[0];
+    c.style.left = at[0].toFixed(1) + 'px'; c.style.top = at[1].toFixed(1) + 'px';
+    placed.push({x: at[0] - w / 2, y: at[1] - h / 2, w, h});
+  });
 }
 // The search's matches under the header box (a computer) and the list of parties (a phone).
 function rrSearchPaint() {
