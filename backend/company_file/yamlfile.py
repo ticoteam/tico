@@ -71,6 +71,8 @@ def to_yaml(draft, created=None):
     company = draft["company"]
     L += ["company:", "  name: %s" % q(company["name"]), "  about: %s" % q(company["about"]),
           "  signals: [%s]" % ", ".join(company["signals"])]
+    if company.get("business_type"):
+        L.append("  business_type: %s" % q(company["business_type"]))
     L.append("people:")
     if not draft["people"]:
         L += ["  - id: you", '    name: "You"', '    role: "Owner"', "    owner: true"]
@@ -231,6 +233,8 @@ def from_yaml(text):
     draft["step"] = "chart"
     draft["company"] = {"name": _str(company.get("name")), "about": _str(company.get("about")),
                         "signals": company.get("signals") or []}
+    if company.get("business_type") not in (None, ""):
+        draft["company"]["business_type"] = company["business_type"]
     people = _rows(doc, "people")
     if len(people) == 1 and people[0] == {"id": "you", "name": "You", "role": "Owner", "owner": True}:
         people = []
