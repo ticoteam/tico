@@ -408,9 +408,18 @@ async function finTxLineSave(sel) {
     }
     if (res.status === 'committed') toast('Saved');
     if (state.cat?.key === key) state.cat = null;
+    finTxRailHold();
     void finTxLoad(false);
-  } catch (e) { state.busy = false; toast(e.message, true); if (FIN?.tx === state) finTxDraw(); }
+  } catch (e) {
+    state.busy = false; toast(e.message, true);
+    if (FIN?.tx !== state) return;
+    finTxDraw();
+    // A rail drawn while this was out has its Save off.
+    finTxCatRedraw(); $('#fin-rail [data-fin-tag] [type=submit]')?.removeAttribute('disabled');
+  }
 }
+// The reload after a save redraws the rail from the fresh read: no picks until then, they would be dropped.
+const finTxRailHold = () => { const form = $('#fin-rail form'); if (form) form.inert = true; };
 function finTxRail() {
   if (FIN_TX.source === 'transfer') { finXferRail(); return; }
   const state = FIN.tx, r = state.rows.find(x => finTxKey(x) === state.sel);
@@ -442,6 +451,7 @@ function finTxRail() {
   void finTxExpected(r);
   const form = $('#fin-rail [data-fin-tag]');
   form?.elements.project.addEventListener('input', ev => { ev.target.dataset.finTyped = '1'; });
+  if (form) form.onchange = () => { if (!state.busy) form.querySelector('[type=submit]').disabled = false; };
   if (form) form.onsubmit = async ev => {
     ev.preventDefault();
     // Only the fields the person changed are set (or cleared) on each line; every other tag a line has stays.
@@ -461,6 +471,7 @@ function finTxRail() {
       const res = await finAct('categorize', {lines: lines.map(l => ({line_id: l.line_id, tags: pick(l)})), mode: 'replace'});
       if (res.status === 'committed') toast('Saved');
       state.busy = false;
+      finTxRailHold();
       void finTxLoad(false);
     } catch (e) { toast(e.message, true); btn.disabled = false; }
     finally { state.busy = false; }
@@ -622,6 +633,7 @@ function finTxCatDraw(r) {
       // row's stay); otherwise the rail redraws now, with its Save back on.
       if (saved) {
         if (FIN?.tx === state && state.cat?.key === c.key) state.cat = null;
+        finTxRailHold();
         void finTxLoad(false);
       } else finTxCatRedraw();
     }

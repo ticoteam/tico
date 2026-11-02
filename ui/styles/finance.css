@@ -94,6 +94,7 @@
 .fin-sub-head th{font-size:var(--t-xs);font-weight:500;text-transform:none;letter-spacing:0;text-align:center;padding-top:0}
 .fin-pl .fin-p,#fin-line .fin-p{background:color-mix(in srgb,var(--surface2) 55%,transparent)}
 .fin-pl .fin-b{border-left:1px solid var(--line)}
+.fin-pl .fin-sub-head th span{display:inline-block;position:sticky;left:calc(var(--fin-first,0px) + 8px);right:8px}
 .fin-ln td:first-child{padding-left:calc(14px + var(--d,0) * 16px)}
 .fin-pl .fin-ln td:first-child{padding-left:calc(14px + var(--d,0) * 16px)}
 .fin-ln td:first-child a{color:var(--ink);text-decoration:none}

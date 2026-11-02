@@ -12,7 +12,7 @@
 'use strict';
 
 // The P&L's controls, kept for the visit.
-const FIN_PNL = {period: 'month', basis: 'cash', start: '', end: '', rangeOf: '', compare: '', teams: [], mates: [],
+const FIN_PNL = {period: 'month', basis: 'cash', start: '', end: '', rangeOf: '', picked: false, compare: '', teams: [], mates: [],
   who: 'both', unattributed: false, sel: null, budgetCol: -1, last: null};
 const FIN_PERIODS = [['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['quarter', 'Quarter'], ['year', 'Year']];
 const FIN_AT_LIMIT = {warn: 'Warn', ask: 'Ask', decline: 'Decline', hold_payment: 'Hold payment'};
@@ -20,15 +20,16 @@ const FIN_AT_LIMIT = {warn: 'Warn', ask: 'Ask', decline: 'Decline', hold_payment
 // ----------------------------------------------------------------- periods
 // The window a period opens on: a few periods back and a few ahead of today.
 function finPnlRange(period) {
-  const t = new Date(), y = t.getFullYear(), m = t.getMonth(), d = t.getDate();
-  const span = {day: [new Date(y, m, d - 6), new Date(y, m, d + 3)], week: [new Date(y, m, d - 35), new Date(y, m, d + 14)],
+  const t = new Date(), y = t.getFullYear(), m = t.getMonth(), d = t.getDate(), mon = d - (t.getDay() + 6) % 7;
+  const span = {day: [new Date(y, m, d - 6), new Date(y, m, d + 3)], week: [new Date(y, m, mon - 35), new Date(y, m, mon + 20)],
     month: [new Date(y, m - 3, 1), new Date(y, m + 4, 0)], quarter: [new Date(y, m - m % 3 - 9, 1), new Date(y, m - m % 3 + 6, 0)],
     year: [new Date(y - 2, 0, 1), new Date(y + 1, 11, 31)]}[period];
   return [finIso(span[0]), finIso(span[1])];
 }
-// A column's short name: Oct, Q4 2026, 2026, Oct 30 (a day, a week's first day).
+// A column's short name: Oct, Q4 2026, 2026, Oct 30 (a day, a week's first day in the range: a range can start mid-week,
+// and that column only holds the days from there).
 function finColLabel(col, many) {
-  const d = finDate(col.start), p = FIN_PNL.period;
+  const p = FIN_PNL.period, d = finDate(p === 'week' && FIN_PNL.start > col.start ? FIN_PNL.start : col.start);
   if (p === 'month') return FIN_MON[d.getMonth()] + (many && (d.getMonth() === 0) ? ' ' + d.getFullYear() : '');
   if (p === 'quarter') return String(col.label).replace(/^(\d{4})-(Q\d)$/, '$2 $1');
   if (p === 'year') return String(col.label);
@@ -36,7 +37,10 @@ function finColLabel(col, many) {
 }
 const finColLong = col => FIN_PNL.period === 'month' ? FIN_MONTH[finDate(col.start).getMonth()] : finColLabel(col, true);
 const finRangeLabel = (a, b) => {
-  const x = finDate(a), y = finDate(b);
+  const x = finDate(a), y = finDate(b), day = t => `${FIN_MON[t.getMonth()]} ${t.getDate()}`;
+  if (FIN_PNL.period === 'day' || FIN_PNL.period === 'week') {
+    return x.getFullYear() === y.getFullYear() ? `${day(x)} – ${day(y)}, ${y.getFullYear()}` : `${day(x)}, ${x.getFullYear()} – ${day(y)}, ${y.getFullYear()}`;
+  }
   return `${FIN_MON[x.getMonth()]} ${x.getFullYear()} – ${FIN_MON[y.getMonth()]} ${y.getFullYear()}`;
 };
 // The budget versions to compare with: today's, or as they stood on the first of this month, quarter or year.
@@ -51,7 +55,8 @@ function finCompareOptions() {
 function finPnlPage() {
   const caps = finCaps(), p = FIN_PNL;
   const view = FIN.q.get('view') === 'expenses' || !caps.company ? 'expenses' : 'company';
-  if (!p.start || p.rangeOf !== p.period) { [p.start, p.end] = finPnlRange(p.period); p.rangeOf = p.period; }
+  // A range the person chose stays through a change of period; until then each period opens on its own window.
+  if (!p.start || (!p.picked && p.rangeOf !== p.period)) { [p.start, p.end] = finPnlRange(p.period); p.rangeOf = p.period; }
   FIN.pnl = {view, data: null, budgets: [], load: 0}; p.view = view;
   const views = caps.company ? [['company', 'Company'], ['expenses', 'Expenses']] : [['expenses', 'Expenses']];
   const filters = view === 'expenses' ? `<div class="fin-filters" id="fin-filters"></div>` : '';
@@ -78,7 +83,7 @@ function finPnlPage() {
     ev.preventDefault();
     const f = ev.target, a = f.elements.start.value, z = f.elements.end.value;
     if (!a || !z || z < a) return;
-    p.start = a; p.end = z; p.sel = null; p.budgetCol = -1;
+    p.start = a; p.end = z; p.picked = true; p.sel = null; p.budgetCol = -1;
     finPnlPage();
   };
   body.querySelector('[data-fin-compare]')?.addEventListener('change', ev => {
@@ -166,6 +171,7 @@ async function finPnlLoad() {
   }
   finPnlDraw();
   finPnlRail();
+  finPnlOpenAt();
 }
 
 // ----------------------------------------------------------------- the statement
@@ -219,8 +225,8 @@ function finPnlDraw() {
   // The current month's budget to date, next to the full month's (§4.4).
   const showToDate = (data.rows || []).some(r => finToDateOf(bi)(r) != null);
   const toDateCell = v => showToDate ? `<td class="muted">${finNum(v)}</td>` : '';
-  const sub = `<tr class="fin-sub-head"><th></th>${past ? `<th colspan="${past}">${cur ? 'Actual · ' + esc(finColLabel(cur, years)) + ' to date' : 'Actual'}</th>` : ''}${cols.length - past
-    ? `<th class="fin-p fin-b" colspan="${cols.length - past}">Projected</th>` : ''}<th class="fin-b" colspan="${showToDate ? 3 : 2}"></th></tr>`;
+  const sub = `<tr class="fin-sub-head"><th></th>${past ? `<th colspan="${past}"><span>${cur ? 'Actual · ' + esc(finColLabel(cur, years)) + ' to date' : 'Actual'}</span></th>` : ''}${cols.length - past
+    ? `<th class="fin-p fin-b" colspan="${cols.length - past}"><span>Projected</span></th>` : ''}<th class="fin-b" colspan="${showToDate ? 3 : 2}"></th></tr>`;
   const sign = r => r.type === 'income' ? 1 : -1;
   const fq = finFilterQs(state.snap).toString(), lineQs = fq ? '?' + fq : '';
   // A narrow viewer's totals leave payroll out (§7.5): they say so.
@@ -285,7 +291,18 @@ function finPnlDraw() {
     const spent = cols.map((c, i) => c.state === 'future' ? finSum(allLines, r => r.private ? null : finVal(r, cols, i)) : data.expense?.[i] ?? null);
     out.push(`<tr class="fin-tot"><td>${esc(`Total expenses${excl}${finSliceLabel(state)}`)}</td>${nums(spent, finSum(allLines, finBudgetOf(bi)), spent[bi], -1, finSum(allLines, finToDateOf(bi)))}</tr>`);
   }
+  const left = box.scrollLeft;
   box.innerHTML = `<table class="fin-pl"><thead><tr><th class="fin-first"></th>${head}<th class="fin-b">${esc(bcol ? finColLabel(bcol, years) : '')} budget${finExcl(state.budgetsRead)}</th>${showToDate ? '<th>To date</th>' : ''}<th>vs budget</th></tr>${sub}</thead><tbody>${out.join('')}</tbody></table>`;
+  box.style.setProperty('--fin-first', `${box.querySelector('th')?.offsetWidth || 0}px`);
+  box.scrollLeft = left;   // a redraw stays where it was scrolled
+}
+// Wider than the page, the table opens on the newest actual (once the rail is drawn, which narrows it).
+function finPnlOpenAt() {
+  const state = FIN.pnl, box = $('#fin-pl'), cols = state.data?.columns || [];
+  if (state.opened || !box?.querySelector('table')) return;
+  state.opened = true;
+  const th = box.querySelectorAll('thead tr:first-child th')[cols.filter(c => c.state !== 'future').length];
+  if (th && th !== box.querySelector('th')) box.scrollLeft = th.offsetLeft + th.offsetWidth - box.clientWidth;
 }
 // The budgets a P&L cell sums, the way the route picks them (backend/finance/reads.py _top_budgets, _filter_budgets):
 // unfiltered, the top budgets the viewer sees; filtered to a team, those of that team and the teams under it; to a

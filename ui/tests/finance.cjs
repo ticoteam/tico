@@ -73,8 +73,17 @@ const LINES = [
 const pad = n => String(n).padStart(2, '0');
 const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const day = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
-function columns(start, end) {
+function columns(start, end, period = 'month') {
   const out = [], today = iso(new Date());
+  if (period === 'day' || period === 'week') {
+    const step = period === 'day' ? 1 : 7, first = day(start);
+    if (period === 'week') first.setDate(first.getDate() - (first.getDay() + 6) % 7);
+    for (let d = first; iso(d) <= end; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + step)) {
+      const s = iso(d), e = iso(new Date(d.getFullYear(), d.getMonth(), d.getDate() + step - 1));
+      out.push({start: s, end: e, label: s, state: e < today ? 'past' : s <= today ? 'current' : 'future'});
+    }
+    return out;
+  }
   for (let d = day(start); iso(d) <= end; d = new Date(d.getFullYear(), d.getMonth() + 1, 1)) {
     const a = new Date(d.getFullYear(), d.getMonth(), 1), z = new Date(d.getFullYear(), d.getMonth() + 1, 0);
     const [s, e] = [iso(a), iso(z)];
@@ -83,7 +92,7 @@ function columns(start, end) {
   return out;
 }
 function pnl(url, me, noRevenue = false, noCogsProjection = false) {
-  const q = url.searchParams, cols = columns(q.get('start'), q.get('end')), view = q.get('view') || 'company';
+  const q = url.searchParams, cols = columns(q.get('start'), q.get('end'), q.get('period')), view = q.get('view') || 'company';
   const lines = LINES.filter(l => (view === 'company' && !noRevenue) || l[3] === 'expense');
   const wave = (v, i) => v ? Math.round(v * (1 + ((i * 7) % 5 - 2) / 40) / 100) * 100 : 0;
   // A private line is hidden from all but the owner (backend/finance/reads.py pnl): renamed, no actuals or projections.
@@ -1279,6 +1288,62 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('.fin-as button').click();
       await page.waitForFunction(() => !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 9);
       assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // A chosen range stays through Day and Week: the columns are that range, the label says so, and a table wider than
+    // the page opens on the newest actual with the line names held at the left.
+    {
+      const {page, errors} = await open(browser, {viewport: PHONE});
+      await page.locator('.fin-pl').waitFor();
+      const now = new Date(), a = iso(new Date(now.getFullYear(), now.getMonth() - 1, 3)), z = iso(now);
+      const short = v => `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][day(v).getMonth()]} ${day(v).getDate()}`;
+      await page.locator('[data-fin-range]').click();
+      await page.fill('#fin-range input[name=start]', a); await page.fill('#fin-range input[name=end]', z);
+      await page.locator('#fin-range [type=submit]').click();
+      await page.waitForFunction(s => FIN.pnl.data?.start === s, a);
+      const span = () => page.evaluate(() => {
+        const box = document.querySelector('#fin-pl'), ths = [...box.querySelectorAll('thead tr:first-child th')], cols = FIN.pnl.data.columns;
+        const at = ths[cols.filter(c => c.state !== 'future').length].getBoundingClientRect(), r = box.getBoundingClientRect();
+        return {n: cols.length, first: ths[1].textContent, label: document.querySelector('[data-fin-range]').textContent.trim(), left: box.scrollLeft,
+          inView: at.left >= ths[0].getBoundingClientRect().right - 1 && at.right <= r.right + 1, names: ths[0].getBoundingClientRect().left - r.left};
+      });
+      for (const period of ['day', 'week']) {
+        await page.locator(`[data-fin-seg=period] button[data-v=${period}]`).click();
+        await page.waitForFunction(p => FIN_PNL.period === p && FIN.pnl.data && !FIN.pnl.busy && FIN.pnl.data.columns.length > 2, period);
+        const v = await span();
+        assert.ok(v.first.startsWith(short(a)), `${period}: the first column is the range's first day (${v.first})`);
+        assert.ok(v.label.startsWith(short(a) + ' – ' + short(z)), `${period}: the label says the range (${v.label})`);
+        assert.ok(v.left > 0 && v.inView, period + ': opens on the newest actual');
+        assert.ok(Math.abs(v.names) < 1, period + ': line names stay at the left');
+      }
+      await page.evaluate(() => { document.querySelector('#fin-pl').scrollLeft = 30; });
+      await page.locator('td[data-fin-cell]').nth(3).dispatchEvent('click');
+      assert.equal(await page.evaluate(() => document.querySelector('#fin-pl').scrollLeft), 30, 'a redraw keeps the scroll');
+      assert.deepEqual(errors, [], 'range: no page errors');
+      await page.close();
+    }
+    // Save on a row's tags: a rail drawn while a line save is out gets its Save back when that save fails, and a pick
+    // turns it on. Once a save is reloading, the rail takes no picks (the reload would drop them).
+    {
+      const {page, errors} = await open(browser, {hash: '#/finance/transactions'});
+      await page.locator(READY.transactions).first().waitFor();
+      await page.waitForFunction(() => Array.isArray(FIN.tx.chart) && document.querySelector('select[data-fin-tx-line="feed:f1"]'));
+      const save = '#fin-rail [data-fin-tag] [type=submit]';
+      await page.evaluate(() => { const f = window.fetch; window.__fetch = f; window.fetch = (u, o) => String(u).endsWith('/finance/actions')
+        ? new Promise(r => setTimeout(r, 300)).then(() => new Response('{"detail":"no"}', {status: 400, headers: {'content-type': 'application/json'}})) : f(u, o); });
+      await page.locator('select[data-fin-tx-line="feed:f1"]').selectOption('a-5100');
+      await page.locator('[data-fin-tx="entry:l9"] td').first().click();
+      assert.equal(await page.locator(save).isDisabled(), true, 'tags: Save is off while a line save is out');
+      await page.waitForFunction(() => !FIN.tx.busy);
+      assert.equal(await page.locator(save).isDisabled(), false, 'tags: Save comes back when the line save fails');
+      await page.evaluate(() => { window.fetch = window.__fetch; FIN.tx.busy = true; finTxRail(); FIN.tx.busy = false; });
+      assert.equal(await page.locator(save).isDisabled(), true, 'tags: a rail drawn busy has Save off');
+      await page.locator('#fin-rail [data-fin-tag] select[name="teammate"]').selectOption('human:cara');
+      assert.equal(await page.locator(save).isDisabled(), false, 'tags: picking a teammate turns Save on');
+      await page.evaluate(() => { const f = window.fetch; window.fetch = (u, o) => String(u).includes('/finance/transactions?') ? new Promise(r => setTimeout(r, 500)).then(() => f(u, o)) : f(u, o); });
+      await page.locator(save).click();
+      await page.waitForFunction(() => document.querySelector('#fin-rail form')?.inert, null, {timeout: 3000});
+      assert.deepEqual(errors, [], 'tags: no page errors');
       await page.close();
     }
     console.log('finance: ok');
