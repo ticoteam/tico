@@ -886,6 +886,7 @@ def _widen(c: sqlite3.Connection, table: str, marker: str) -> None:
     c.execute(f"ALTER TABLE {table} RENAME TO {table}_before")
     definition = next(s for s in statements(TABLES) if s.startswith(f"CREATE TABLE IF NOT EXISTS {table} "))
     c.execute(definition)
+    _add_columns(c)  # the rebuilt table needs the ADDED columns the old rows carry (e.g. refund_of), or the copy fails
     cols = ",".join(str(r[1]) for r in c.execute(f"PRAGMA table_info({table}_before)").fetchall())
     c.execute(f"INSERT INTO {table}({cols}) SELECT {cols} FROM {table}_before")
     c.execute(f"DROP TABLE {table}_before")

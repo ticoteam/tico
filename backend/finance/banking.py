@@ -1081,13 +1081,13 @@ def _book_gap(ctx: Ctx, money: Any, end: str, cleared: set[str], statement: int)
     return statement - balance
 
 
-def _raw_on_line(ctx: Ctx, money: Any) -> int:
-    """What the live raw-totals entries put on this money account's GL line, counted once against the lowest-id money
-    account on that line (as opening_figure counts it)."""
+def _raw_on_line(ctx: Ctx, money: Any, after: str | None = None, through: str | None = None) -> int:
+    """What the live raw-totals entries put on this money account's GL line between `after` (exclusive) and `through`
+    (inclusive), counted once against the lowest-id money account on that line (as opening_figure counts it)."""
     book, gl = ctx.book.id, str(money["account_id"] or "")
     if not gl or SK.money_on_line(ctx.c, book, gl) != str(money["id"]):
         return 0
-    return SR.line_movement(ctx.c, book, gl)
+    return SR.line_movement(ctx.c, book, gl, after=after, through=through)
 
 
 def reconcile(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -1126,11 +1126,12 @@ def reconcile(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if typed is not None:
             opening = _signed(money, typed)
         else:
-            opening = opening_amount(ctx, money, end) + _raw_on_line(ctx, money)
+            opening = opening_amount(ctx, money, end) + _raw_on_line(ctx, money, through=end)
     else:
         if "opening_balance" in p:
             raise invalid("the opening balance is the last reconciliation's")
-        opening = int(last["cleared_total"])
+        # The raw totals posted since the last reconciliation's end are on the books at this end, so they move it too.
+        opening = int(last["cleared_total"]) + _raw_on_line(ctx, money, after=str(last["statement_end"]), through=end)
     total = opening + sum(int(window[i]["amount"]) for i in ids if str(window[i]["status"]) != "covered")
     difference = _signed(money, shown) - total
     book_gap = _book_gap(ctx, money, end, set(ids), _signed(money, shown))

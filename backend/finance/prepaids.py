@@ -111,13 +111,15 @@ def amortize_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 def unpost(ctx: Ctx, bill_id: str, who: str, action_id: str, memo: str) -> None:
-    """Void a bill: each month it expensed is reversed on an open day, so that expense leaves and the prepaid asset is
-    back where the bill's own entry left it."""
+    """Void a bill: each month it expensed is reversed on that expense's own date, or in the current open period when
+    that date is closed (§4.1, as the bill's own entry is), so each month's expense leaves in the period it posted to and
+    the prepaid asset is back where the bill's own entry left it in every period."""
     from .banking import open_day
     for entry_id in SPP.posted_entries(ctx.c, bill_id):
         row = SL.entry_row(ctx.c, entry_id)
         if row is not None and str(row["status"]) == "posted":
-            posting.reverse(ctx, entry_id, day=open_day(ctx, ctx.today), memo=memo, by=who, action_id=action_id)
+            posting.reverse(ctx, entry_id, day=open_day(ctx, str(row["entry_date"])), memo=memo, by=who,
+                            action_id=action_id)
 
 
 def ask_not_posted(ctx: Ctx, line_id: str, month: str, reason: str) -> None:

@@ -78,6 +78,31 @@ def test_a_book_with_a_providers_books_amortizes_nothing(books):
         assert _balance_of(c, "1150") == 1_800
 
 
+NOV_15 = "2026-11-15T12:00:00.000000Z"
+
+
+def test_voiding_a_prepaid_bill_reverses_each_month_on_its_own_date_so_that_month_is_back_where_it_was(books):
+    """§4.1: a void reverses each posting on its own date, or in the current open period when that date is closed. The
+    month's expense is reversed on its own date with the bill's entry, so October's prepaid asset ends at zero in October
+    rather than dipping below zero until the void's later date."""
+    with books.transaction() as c:
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 1_800,
+                                     "prepaid": {"start": "2026-10", "months": 1}}], day="2026-10-10")
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        assert FA.amortize_prepaids(c, NOV_15) == 1
+        assert act(c, OWNER, "bill_void", {"bill_id": bid, "reason": "entered twice"}, at=NOV_15).status == "committed"
+        assert _dated_through(c, "1150", "2026-10-31") == 0
+        assert _dated_through(c, "6100", "2026-10-31") == 0
+        assert _dated_through(c, "1150", "9999-12-31") == 0 and _dated_through(c, "6100", "9999-12-31") == 0
+
+
+def _dated_through(c, code: str, day: str) -> int:
+    """Every line the account took on entries dated through `day`, reversed ones and their reversals included: what the
+    period's postings net to as they stand on that day."""
+    return int(c.execute("SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id "
+                         "JOIN fin_entries e ON e.id=l.entry_id WHERE a.code=? AND e.entry_date<=?", (code, day)).fetchone()[0])
+
+
 def _balance_of(c, code: str) -> int:
     return int(c.execute("SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id "
                          "JOIN fin_entries e ON e.id=l.entry_id WHERE a.code=? AND e.status='posted'",

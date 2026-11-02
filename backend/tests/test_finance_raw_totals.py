@@ -314,6 +314,25 @@ def test_a_posting_dated_in_a_raw_totals_month_is_refused_until_its_raw_entry_is
         assert act(c, OWNER, "bill_approve", {"bill_id": bill}).status == "committed"
 
 
+def test_a_month_with_a_journal_takes_no_raw_totals(books):
+    """§4.1: a month is raw totals or transactions, and a hand journal is one of the postings that wait on raw totals. A
+    month holding one refuses its raw totals, as a month holding a bank row does; once the journal is reversed it takes them."""
+    sheet = "month,line,amount,team\n2026-09,Software subscriptions,10000,\n2026-09,Cash at bank,-10000,\n"
+    with books.transaction() as c:
+        journal = act(c, OWNER, "journal", {"date": "2026-09-05", "memo": "hand entry", "lines": [
+            {"account_id": account(c, "6100"), "amount": 10_000}, {"account_id": account(c, "1000"), "amount": -10_000}]})
+        assert journal.status == "committed", journal.reason
+        entry = c.execute("SELECT id FROM fin_entries WHERE source='manual'").fetchone()[0]
+        before = _count(c, "fin_entries")
+        dry = act(c, OWNER, "import_raw_totals", _body(csv=sheet), dry_run=True)
+        assert dry.status == "failed" and dry.code == CONFLICT and "2026-09" in dry.reason
+        real = act(c, OWNER, "import_raw_totals", _body(csv=sheet))
+        assert real.status == "failed" and real.code == CONFLICT
+        assert _count(c, "fin_entries") == before and _count(c, "fin_raw_imports") == 0
+        assert act(c, OWNER, "journal", {"reverses": entry}).status == "committed"
+        assert act(c, OWNER, "import_raw_totals", _body(csv=sheet)).status == "committed"
+
+
 def _feed(raw_id: str, amount: int, day: str) -> dict[str, object]:
     return {**MERCURY["txn_bank_fee"], "id": raw_id, "amount": amount, "createdAt": f"{day}T10:00:00Z",
             "postedAt": f"{day}T10:00:00Z"}
@@ -456,6 +475,31 @@ def test_the_first_reconcile_to_the_latest_raw_month_end_is_done_with_no_differe
                                            "statement_balance": held + 40_000})
         assert (done.result["status"], done.result["difference"], done.result["book_difference"]) == ("done", 0, 0)
         assert line == held, (line, held)
+
+
+def test_a_reconcile_to_a_month_end_counts_no_raw_totals_from_after_it(books):
+    """§4.1: the first reconciliation to a month end counts the raw totals through that day only, so a later month's
+    entry does not move the statement at an earlier day. The next reconciliation counts the raw totals posted since the
+    last one's end, so it ties too."""
+    fake = FakeMercury()
+    fake.txns["txn-jul"] = _feed("txn-jul", -5.0, "2026-07-31")
+    fake.balances["acct-chk"] = 700.0
+    sheet = "month,line,amount,team\n2026-08,Cash at bank,-10000,\n2026-09,Cash at bank,-20000,\n"
+    with books.transaction() as c:
+        assert act(c, OWNER, "import_raw_totals", _body({"Cash at bank": "1000"}, csv=sheet)).status == "committed"
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        line, held = _bank_gl(c)
+        assert line == held, (line, held)
+        bank = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
+        # The bank's balance on 31 August: today's, plus the September sheet line (-200.00, so 20,000 in cents).
+        aug = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-08-31",
+                                          "statement_balance": held + 20_000})
+        assert (aug.result["status"], aug.result["difference"], aug.result["book_difference"]) == ("done", 0, 0), aug.result
+        sep = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-09-30",
+                                          "statement_balance": held})
+        assert (sep.result["status"], sep.result["difference"], sep.result["book_difference"]) == ("done", 0, 0), sep.result
 
 
 def test_migration_78_widens_the_feed_status_keeps_its_rows_and_runs_twice(books):
