@@ -37,7 +37,7 @@ def frozen(ctx: Ctx, month: str) -> Ctx | None:
     row = SL.snapshot(ctx.c, ctx.book.id, month)
     if row is None:
         return None
-    tree = {str(x["id"]): Account(**x) for x in json.loads(str(row["accounts_json"]))}
+    tree = {str(x["id"]): Account(**x) for x in json.loads(str(row["accounts"]))}
     return replace(ctx, accounts={**ctx.accounts, **tree}, _views={})
 
 
@@ -48,7 +48,7 @@ def marker(c: sqlite3.Connection, book_id: str, month: str) -> dict[str, Any] | 
     row = SL.snapshot(c, book_id, month)
     if row is None:
         return None
-    return {"month": month, "restatements": len(json.loads(str(row["restated_json"])))}
+    return {"month": month, "restatements": len(json.loads(str(row["restated"])))}
 
 
 def restate(c: sqlite3.Connection, book_id: str, month: str) -> int:
@@ -59,7 +59,7 @@ def restate(c: sqlite3.Connection, book_id: str, month: str) -> int:
     if row is None:
         return 0
     first, last = dates.month_bounds(dates.day(f"{month}-01"))
-    was_doc: dict[str, Any] = json.loads(str(row["pnl_json"]))
+    was_doc: dict[str, Any] = json.loads(str(row["pnl"]))
     was = {str(k): int(v) for k, v in was_doc["accrual"].items()}
     now = _sums(SL.rollup_rows(c, book_id, first.isoformat(), last.isoformat()))
     return len({k for k in set(was) | set(now) if was.get(k, 0) != now.get(k, 0)})
@@ -76,7 +76,7 @@ def flag(c: sqlite3.Connection, book_id: str, month: str, by: str, at: str, chan
 
 
 def _append(c: sqlite3.Connection, row: Any, entry: dict[str, Any]) -> int:
-    restated: list[Any] = json.loads(str(row["restated_json"]))
+    restated: list[Any] = json.loads(str(row["restated"]))
     restated.append(entry)
     SL.set_restated(c, str(row["id"]), json.dumps(restated, sort_keys=True))
     return len(restated)

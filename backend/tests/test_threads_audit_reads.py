@@ -5,6 +5,7 @@ what the viewer may read. Python, the hub SQL and the live stream answer alike w
 
 from types import SimpleNamespace
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import events as E
 from backend import task_privacy, thread_attention, threads, updates, views
 from backend.auth import Identity
@@ -183,19 +184,19 @@ def test_a_person_i_may_not_see_is_not_named_anywhere_a_public_thread_reads(acme
     ok(call(api, "PUT", f"messages/{said['id']}/reactions/thumbsup", "ben-test"))
 
     # REST: the thread, its timeline, its members and search say nothing of her; the message stays.
-    assert ok(call(api, "GET", f"threads/{thread['id']}", "eve-test"))["owner_actor"] == ""
+    assert ok(call(api, "GET", f"threads/{thread['id']}", "eve-test"))["owner_id"] == ""
     mine = next(m for m in timeline(api, "eve-test", thread["id"]) if m["id"] == said["id"])
-    assert mine["from_actor"] == "" and mine["body"] == "Zanzibar budget"
+    assert mine["sender_id"] == "" and mine["body"] == "Zanzibar budget"
     assert mine["reactions"] == [{"emoji": "thumbsup", "count": 2, "actors": ["human:ben"]}]
     rows = ok(call(api, "GET", f"threads/{thread['id']}/members", "eve-test"))["members"]
     assert [(m["actor"], m["added_by"]) for m in rows] == [("human:ben", "")]
     hits = ok(call(api, "GET", "threads/search?q=zanzibar", "eve-test"))["hits"]
-    assert [(h["message_id"], h["from_actor"]) for h in hits] == [(said["id"], "")]
+    assert [(h["message_id"], h["sender_id"]) for h in hits] == [(said["id"], "")]
 
     # The hub SQL says the same.
     where = f"'{thread['id']}'"
-    assert sql_column(api, f"SELECT owner_actor FROM conversations WHERE id={where}", "eve-test") == [""]
-    assert sql_column(api, f"SELECT DISTINCT from_actor FROM messages WHERE conversation_id={where}", "eve-test") == [""]
+    assert sql_column(api, f"SELECT owner_id FROM conversations WHERE id={where}", "eve-test") == [""]
+    assert sql_column(api, f"SELECT DISTINCT sender_id FROM messages WHERE conversation_id={where}", "eve-test") == [""]
     assert sql_column(api, f"SELECT actor FROM thread_members WHERE thread_id={where}", "eve-test") == ["", "human:ben"]
     assert "human:cara" not in sql_column(api, f"SELECT actor FROM thread_followers WHERE thread_id={where}", "eve-test")
 
@@ -203,7 +204,7 @@ def test_a_person_i_may_not_see_is_not_named_anywhere_a_public_thread_reads(acme
     eve = who(api, "eve")
     sent = stream(api, eve, after, ("messages", "threads"))
     message = next(d for _, topic, d in sent if topic == "messages" and d.get("id") == said["id"])
-    assert (message.get("message") or message)["from_actor"] != "human:cara"
+    assert (message.get("message") or message)["sender_id"] != "human:cara"
     assert "human:cara" not in str([d for _, _, d in sent])
 
 
@@ -213,12 +214,12 @@ def test_whoever_is_in_the_dm_with_a_hidden_person_is_told_who_it_is(acme):
     thread = dm(api, "cara-test", "human:eve")
     after = latest(api)
     said = say(api, "cara-test", thread["id"], "Hello Eve")
-    assert ok(call(api, "GET", f"threads/{thread['id']}", "eve-test"))["owner_actor"] == "human:cara"
-    assert next(m for m in timeline(api, "eve-test", thread["id"]) if m["id"] == said["id"])["from_actor"] == "human:cara"
+    assert ok(call(api, "GET", f"threads/{thread['id']}", "eve-test"))["owner_id"] == "human:cara"
+    assert next(m for m in timeline(api, "eve-test", thread["id"]) if m["id"] == said["id"])["sender_id"] == "human:cara"
     assert {m["actor"] for m in ok(call(api, "GET", f"threads/{thread['id']}/members", "eve-test"))["members"]} == {
         "human:cara", "human:eve"}
     where = f"'{thread['id']}'"
-    assert sql_column(api, f"SELECT DISTINCT from_actor FROM messages WHERE conversation_id={where}", "eve-test") == [
+    assert sql_column(api, f"SELECT DISTINCT sender_id FROM messages WHERE conversation_id={where}", "eve-test") == [
         "human:cara"]
     sent = [d for _, topic, d in stream(api, who(api, "eve"), after, ("messages",)) if topic == "messages"]
     assert "human:cara" in str(sent)
@@ -358,23 +359,23 @@ def test_needs_you_names_a_hidden_person_only_to_someone_in_the_thread_with_them
 
     item = next(i for i in needs(api, "eve-test", "thread_mention") if i["conversation_id"] == thread["id"])
     assert item["first_line"] == "Can you check the lease?"
-    assert (item["requester"], item["origin_actor"], item["from_person"]) == ("", "", None)
+    assert (item["requester_id"], item["origin_actor"], item["from_person"]) == ("", "", None)
     # Eve is in the DM with her, so there she is told who it is.
     item = next(i for i in needs(api, "eve-test", "thread_mention") + needs(api, "eve-test", "thread_dm")
                 if i["conversation_id"] == made["id"])
-    assert (item["requester"], item["from_person"]) == ("human:cara", "human:cara")
+    assert (item["requester_id"], item["from_person"]) == ("human:cara", "human:cara")
 
 
 def test_needs_you_names_a_held_writes_author_only_to_someone_who_may_see_them(acme, monkeypatch):
     api, _ = acme
     set_access(api, "humans/cara", token="cara-test", see=LEGAL, read=LEGAL, write=LEGAL)
-    held = {"id": "hold-1", "author": "human:cara", "role": "reviewer", "created": "2026-11-01T00:00:00"}
+    held = {"id": "hold-1", "author": "human:cara", "role": "reviewer", "created_at": "2026-11-01T00:00:00"}
     monkeypatch.setattr(thread_attention, "_holds", lambda c, person: [held])
     with api.app.state.store.read() as c:
         hidden = thread_attention.items(c, api.app.state.auth, who(api, "eve"))
         seen = thread_attention.items(c, api.app.state.auth, who(api, "fay"))
-    assert [(i["requester"], i["from_person"]) for i in hidden] == [("", None)]
-    assert [(i["requester"], i["from_person"]) for i in seen] == [("human:cara", "human:cara")]
+    assert [(i["requester_id"], i["from_person"]) for i in hidden] == [("", None)]
+    assert [(i["requester_id"], i["from_person"]) for i in seen] == [("human:cara", "human:cara")]
 
 
 def test_catch_up_never_gives_the_model_a_hidden_persons_name(acme, monkeypatch):

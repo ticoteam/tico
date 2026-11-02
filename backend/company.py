@@ -22,10 +22,10 @@ FIELDS = ("vision", "description")
 
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS company_profile (id TEXT PRIMARY KEY CHECK (id = 'company'), "
-    "vision TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', updated TEXT, updated_by TEXT)",
-    "CREATE TABLE IF NOT EXISTS company_events (id TEXT PRIMARY KEY, ts TEXT NOT NULL, actor TEXT NOT NULL, "
+    "vision TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', updated_at TEXT, updated_by TEXT)",
+    "CREATE TABLE IF NOT EXISTS company_events (id TEXT PRIMARY KEY, created_at TEXT NOT NULL, actor TEXT NOT NULL, "
     "field TEXT NOT NULL, old TEXT NOT NULL DEFAULT '', new TEXT NOT NULL DEFAULT '')",
-    "CREATE INDEX IF NOT EXISTS company_events_ts ON company_events(ts)",
+    "CREATE INDEX IF NOT EXISTS company_events_ts ON company_events(created_at)",
 )
 
 
@@ -33,7 +33,7 @@ def ensure(c):
     for statement in SCHEMA:
         c.execute(statement)
     H.add_column(c, "goals", "why", "TEXT NOT NULL DEFAULT ''")
-    H.add_column(c, "goals", "why_by", "TEXT")
+    H.add_column(c, "goals", "why_by_id", "TEXT")
     H.add_column(c, "goals", "why_at", "TEXT")
 
 
@@ -48,7 +48,7 @@ def _clean(value, limit, what, conn, actor, one_line=False):
 def profile(c):
     row = H._one(c, "SELECT * FROM company_profile WHERE id='company'")
     return {"vision": (row or {}).get("vision") or "", "description": (row or {}).get("description") or "",
-            "updated": (row or {}).get("updated"), "updated_by": (row or {}).get("updated_by")}
+            "updated_at": (row or {}).get("updated_at"), "updated_by": (row or {}).get("updated_by")}
 
 
 def update(c, actor, vision=None, description=None):
@@ -62,13 +62,13 @@ def update(c, actor, vision=None, description=None):
         return before
     ts = H.now()
     after = {**before, **changed}
-    c.execute("INSERT INTO company_profile (id, vision, description, updated, updated_by) VALUES ('company',?,?,?,?) "
+    c.execute("INSERT INTO company_profile (id, vision, description, updated_at, updated_by) VALUES ('company',?,?,?,?) "
               "ON CONFLICT(id) DO UPDATE SET vision=excluded.vision, description=excluded.description, "
-              "updated=excluded.updated, updated_by=excluded.updated_by",
+              "updated_at=excluded.updated_at, updated_by=excluded.updated_by",
               (after["vision"], after["description"], ts, actor))
     for field in FIELDS:
         if field in changed:
-            c.execute("INSERT INTO company_events (id, ts, actor, field, old, new) VALUES (?,?,?,?,?,?)",
+            c.execute("INSERT INTO company_events (id, created_at, actor, field, old, new) VALUES (?,?,?,?,?,?)",
                       (H.new_id(), ts, actor, field, before[field], changed[field]))
     H.event(c, actor, "company.update", "company", {"fields": sorted(changed)})
     return profile(c)
@@ -76,7 +76,7 @@ def update(c, actor, vision=None, description=None):
 
 def history(c, limit=200):
     """Every change to the vision and the description, newest first."""
-    return H._rows(c.execute("SELECT * FROM company_events ORDER BY ts DESC, rowid DESC LIMIT ?", (limit,)))
+    return H._rows(c.execute("SELECT * FROM company_events ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)))
 
 
 # ----------------------------------------------------------------------------- a goal's Why
@@ -101,7 +101,7 @@ def set_why(c, actor, goal_id, why, settled_by=None):
     why = _clean(why, WHY_MAX, "Why", c, actor, one_line=True)
     ts = H.now()
     if why != (row.get("why") or ""):
-        c.execute("UPDATE goals SET why=?, why_by=?, why_at=?, updated=? WHERE id=?",
+        c.execute("UPDATE goals SET why=?, why_by_id=?, why_at=?, updated_at=? WHERE id=?",
                   (why, actor if why else None, ts if why else None, ts, goal_id))
         G._event(c, goal_id, actor, "why", row.get("why") or "", why)
         H.event(c, actor, "goal.why", goal_id, {"cleared": not why})

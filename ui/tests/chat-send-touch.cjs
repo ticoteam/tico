@@ -31,7 +31,7 @@ const launch = () => process.env.TICO_UI_ENGINE === 'webkit' ? webkit.launch({he
       if (p === '/api/v2/assistant/messages') {
         const text = route.request().postDataJSON().text;
         sends.push(text);
-        const message = {id: 'm' + sends.length, from_actor: 'human:ana', body: text, created: new Date().toISOString()};
+        const message = {id: 'm' + sends.length, sender_id: 'human:ana', body: text, created_at: new Date().toISOString()};
         thread.push(message);
         return json({message, fast: true});
       }

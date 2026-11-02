@@ -114,7 +114,7 @@ function pnl(url, me, noRevenue = false, noCogsProjection = false) {
       {teammate: 'human:cara', kind: 'person', spent: 41000, budget: null}]} : {})};
 }
 const budget = (id, name, account_id, amount, extra = {}) => ({id, name, period: 'month', account_id, catch_all: false, team: null, teammate: null, vendor: null,
-  parent_id: null, owner: 'human:ana', warn_pct: 80, at_limit: 'ask', rollover: false, active: true,
+  parent_id: null, owner_id: 'human:ana', warn_pct: 80, at_limit: 'ask', rollover: false, active: true,
   state: {amount, actual: Math.round(amount * 0.8), held: 0, remaining: Math.round(amount * 0.2), pct: 80, crossed_warn: true, at_limit: false}, ...extra});
 const BUDGETS = [budget('b-software', 'Software', 'a-6100', 300000), budget('b-hosting', 'Hosting', 'a-5100', 400050),
   budget('b-figma', 'Figma', 'a-6100', 135000, {vendor: 'Figma', parent_id: 'b-software', at_limit: 'decline', period: 'quarter'}),
@@ -171,7 +171,7 @@ const CARDS = [
 const TRANSFERS = [{id: 'xf-1', status: 'queued', amount: 500000, currency: 'USD', memo: 'to savings', from: {id: 'm1', name: 'Checking', last4: '0001'},
   to: {id: 'm2', name: 'Savings', last4: '0002'}, created_by: 'human:ana', created_at: '2026-10-29T10:00:00Z', settled_at: null, last_error: null}];
 const SALES_TAX = {year: 2026, currency: 'USD', rows: [{period: '2026-Q3', code: 'CA', jurisdiction: 'California', taxable_sales: 1200000, exempt_sales: 300000,
-  tax_collected: 87000, tax_remitted: 60000, due: 27000, due_on: '2026-10-31'}]};
+  tax_collected: 87000, tax_remitted: 60000, due_at: 27000, due_on: '2026-10-31'}]};
 const F1099 = {year: 2026, currency: 'USD', threshold: 60000, due_on: '2027-01-31', rows: [{vendor_id: 'v-northwind', vendor: 'Northwind Design', tin_on_file: false,
   cash_paid: 610000, card_paid_excluded: 0, threshold: 60000, reportable: true}]};
 const TX = [
@@ -215,7 +215,7 @@ const BILLS = [
     payment: {id: 'pay-3', status: 'awaiting_bank_approval', amount: 124000, on: '2026-11-11', error: null}}),
   // Its last payment was rejected in Mercury: the bill is open again and says so.
   doc('bill', 'bill-4', 'DD-8812', {id: 'v-datadog', name: 'Datadog'}, 'open', 139000, '2026-10-15', {aging: '1_30', days_late: 16,
-    payment: {id: 'pay-4', status: 'cancelled', amount: 139000, on: '2026-10-14', error: 'rejected in Mercury'}}),
+    payment: {id: 'pay-4', status: 'canceled', amount: 139000, on: '2026-10-14', error: 'rejected in Mercury'}}),
   // Its scheduled payment's approval was declined before any payment existed: open, and says so.
   doc('bill', 'bill-5', 'GH-77', {id: 'v-github', name: 'GitHub'}, 'open', 21000, '2026-10-20', {
     payment: {id: null, status: 'denied', amount: 21000, on: '2026-10-15', error: 'declined by human:ana'}}),
@@ -910,7 +910,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
         tag + ': Recently paid asks for the last five paid, by payment date');
       const statusOf = async id => (await page.locator(`tr[data-fin-doc="${id}"] td:nth-child(7)`).innerText()).replace(/\s+/g, ' ').trim();
       assert.equal(await statusOf('bill-3'), 'Approve in Mercury pays Nov 11', tag + ': a bill paying now shows its payment\'s state and day');
-      assert.equal(await statusOf('bill-4'), 'Open Pay cancelled 1–30 late', tag + ': a rejected payment shows beside Open, with its aging');
+      assert.equal(await statusOf('bill-4'), 'Open Pay canceled 1–30 late', tag + ': a rejected payment shows beside Open, with its aging');
       assert.equal(await statusOf('bill-5'), 'Open Pay denied', tag + ': a declined approval shows beside Open');
       assert.ok(!(await page.locator('#fin-body').innerText()).includes('5,130'), tag + ': the open total is not drawn');
       assert.match(await page.locator('[data-fin-email-set]').innerText(), /bills@acme\.example$/, tag + ': the owner\'s bills address control');
@@ -964,7 +964,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.equal(actions(writes).filter(a => a.kind === 'bill_schedule' && a.dry_run).length, 1, tag + ': one dry run');
       await page.locator('tr[data-fin-doc="bill-4"]').click();
       await page.locator('#fin-rail [data-fin-do="paid"]').waitFor();
-      assert.match(await page.locator('#fin-rail').innerText(), /Payment\s+Pay cancelled rejected in Mercury/, tag + ': the rail says why it was not paid');
+      assert.match(await page.locator('#fin-rail').innerText(), /Payment\s+Pay canceled rejected in Mercury/, tag + ': the rail says why it was not paid');
       await page.locator('#fin-rail [data-fin-do="paid"]').click();
       assert.equal(await page.locator('dialog.fin-dlg input[name="amount"]').inputValue(), '1390', tag + ': Mark paid starts at what is left');
       await page.locator('dialog.fin-dlg[open] select[name="from"] option[value="m1"]').waitFor({state: 'attached'});

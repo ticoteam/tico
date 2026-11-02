@@ -139,10 +139,10 @@ def _objects(api, machine):
         found[key] = (made or {}).get("id") or (made or {}).get("key")
     now = H.now()
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?)",
+        c.execute("INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?)",
                   (H.new_id(), "Acme/product", now))
-        c.execute("INSERT INTO bot_transitions(id,bot,kind,target_json,requested_by,expected_revision,state,created,"
-                  "updated) VALUES('tr-parity','finance','model',?,'human:ana',1,'prepared',?,?)",
+        c.execute("INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created_at,"
+                  "updated_at) VALUES('tr-parity','finance','model',?,'human:ana',1,'prepared',?,?)",
                   ('{"model": "fake-model", "runtime": "fake", "effort": ""}', now, now))
         system = c.execute("SELECT id FROM system_routines LIMIT 1").fetchone() if c.execute(
             "SELECT 1 FROM sqlite_master WHERE name='system_routines'").fetchone() else None
@@ -206,7 +206,7 @@ def outcome(answer):
 def tapped(api, card, token):
     """The person's own tap on a card: what the setting's route did with it (ran, refused, or the status it gave),
     with the test database put back as it was before the tap, so the next entry starts from the same fixture. The
-    card is then cancelled, so the next one isn't over the cap on open cards."""
+    card is then canceled, so the next one isn't over the cap on open cards."""
     path = api.app.state.store.settings.db_path
     with closing(sqlite3.connect(":memory:")) as kept:
         with closing(sqlite3.connect(path)) as live:

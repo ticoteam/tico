@@ -47,7 +47,7 @@ const checklist = () => [
   item('first_update', 'Your first update arrived', false, {why: 'Each active bot posts a short update every day.', href: '#/updates'}),
 ];
 const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =>
-  ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team: '', operator: 'ana'}));
+  ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team: '', owner_id: 'ana'}));
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
@@ -63,7 +63,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
       const rows = items.map(row => ({...row, skipped: row.optional && !row.done && dismissed.skipped.includes(row.id)}));
       const done = rows.filter(row => row.done || row.skipped).length;
       return {items: rows, done, total: rows.length, complete: done === rows.length, dismissed: dismissed.checklist,
-              tour_seen: dismissed.tour, can_build: canBuild, owner: role === 'owner'};
+              tour_seen: dismissed.tour, can_build: canBuild, owner_id: role === 'owner'};
     };
     await context.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
@@ -244,7 +244,7 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     }
     // An open task restores the notice in another browser, but its thirty minutes count from when the task was
     // filed: a reload never starts them again, and the clock running out brings the questions back.
-    const filedAgo = minutes => ({id: 't-market', status: 'open', created: new Date(Date.now() - minutes * 60000).toISOString()});
+    const filedAgo = minutes => ({id: 't-market', status: 'open', created_at: new Date(Date.now() - minutes * 60000).toISOString()});
     setup = {...setup, task: filedAgo(31)};
     page = await context.newPage();
     page.on('pageerror', e => errors.push('market-open: ' + e.message));

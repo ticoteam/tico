@@ -15,6 +15,8 @@ import json
 import sys
 from pathlib import Path
 
+from . import needs_shape
+
 VERSION = "2.0.0"
 COPY = Path(__file__).resolve().parents[1] / "docs" / "openapi" / "v2.json"
 
@@ -56,8 +58,8 @@ EVENTS_DESCRIPTION = (
     "- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n"
     "- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; "
     "a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n"
-    "- `runs`: `attempt_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or "
-    "`state` (`job_id`, and the job's or attempt's state).\n"
+    "- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or "
+    "`state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n"
     "- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n"
     "- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. "
     "With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` "
@@ -173,7 +175,7 @@ STABLE = [
      "Set who may see, read and write to a group; send the revision you read (409 version_conflict otherwise)",
      "TeammateAccessView"),
     ("/api/v2/org/order/{manager}", "get", "Team chart", "getReportOrder",
-     "A manager's direct reports (a bot's slug or a human's id), humans and the bots the caller can see, in the "
+     "A manager's direct reports (a bot's id or slug, or a human's id), humans and the bots the caller can see, in the "
      "chart's order", "ReportOrderView"),
     ("/api/v2/org/order/{manager}", "put", "Team chart", "setReportOrder",
      "Put a manager's reports in this order; the ones left out keep their places (whoever may put reports under "
@@ -312,7 +314,7 @@ STABLE = [
      "Ask the bots again for a past day's update in the current shape: the owner", None),
     ("/api/v2/events", "get", "Live events", "streamEvents",
      "Server-sent events: tasks, messages, runs, bots and Needs you as they change. topics=<comma list> (default all), "
-     "after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<slugs> narrows runs and bots, "
+     "after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<bot ids or slugs> narrows runs and bots, "
      "task=<ids> and party=<actors> narrow tasks to those and to the ones those actors own or asked for, needs=changes sends Needs you as changed ids", None),
     ("/api/v2/needs-you", "get", "Needs you", "getNeedsYou",
      "What waits on the caller, with its `version` and `count`; count=true for the number alone, version=<held> "
@@ -519,7 +521,7 @@ STABLE = [
      "The Strategy Bot only, in the owner's own chat: Tico writes the read-back of up to 20 "
      "changes to goals, measures and "
      "suggestions as its reply and stores the exact saves. The owner's yes to it (a plain yes, or a yes to some by number) "
-     "within 30 minutes lets exactly those saves through (each step's method, path and body_json, sent as it is), cited "
+     "within 30 minutes lets exactly those saves through (each step's method, path and body, sent as it is), cited "
      "with X-Tico-On-Behalf-Of; anything else is 403 not_agreed. "
      "A colour, done or dropped, archiving, a reading or the Vision is refused here: it stays a click", None),
     ("/api/v2/goals/read-back/{mid}", "get", "Goals", "getGoalReadBack",
@@ -587,7 +589,7 @@ STABLE = [
     ("/api/v2/usage", "get", "Usage", "getUsage",
      "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, harness, model, effort or subscription, "
      "filterable by those run dimensions and department (__unknown__ selects missing values). The owner and bot administrators see every bot; anyone else sees the bots they run "
-     "or own. ?bot=<slug> is that bot's daily series and top routines instead", "Usage"),
+     "or own. ?bot=<bot id or slug> is that bot's daily series and top routines instead", "Usage"),
     ("/api/v2/usage/limits", "get", "Usage", "getUsageLimits",
      "The team default limit and each bot's hourly, daily, weekly and monthly limits with this period's spend, for the bots "
      "the caller may see usage for; for the owner and bot administrators also the team's and each group's combined limits (a "
@@ -674,6 +676,20 @@ ref = lambda name: {"$ref": "#/components/schemas/" + name}   # noqa: E731
 ACTORS = {"type": "object", "additionalProperties": {"type": "string"},
           "description": "On reads: display names for every actor id in the answer, {\"human:ana\": \"Ana Alvarez\"}"}
 
+# One item of a person's Needs you, whatever its kind (backend/needs_shape.py).
+NEEDS_ITEM = obj({"id": "s", "kind": {"type": "string", "description": "Needs you: task, question, waiting, "
+                                             "declined, ask, approval, stale, memory_tidy, setup. Goals: vision, kpi_red, kpi_stale, "
+                                             "recovery, proposal, why. Each kind adds the fields its card reads"},
+                         "title": "s", "body": "n",
+                         "subject": {"oneOf": [obj({"type": {"enum": ["task", "message", "approval", "proposal", "kpi",
+                                                                      "strategy"]}, "id": "s"}), {"type": "null"}],
+                                     "description": "The one thing it is about; null for a card standing for several "
+                                                    "things or a setting"},
+                         "created_at": "n",
+                         "actions": items({"enum": list(needs_shape.ACTIONS)}) | {
+                             "description": "The writes that settle it: " + "; ".join(
+                                 f"`{k}` {v}" for k, v in needs_shape.ACTIONS.items())}})
+
 SCHEMAS = {
     "SubscriptionList": obj({"profiles_by_computer": items(obj({"runner_id": "s", "label": "s", "profiles": items(
         obj({"name": "s", "id": "s", "display_name": "s", "runtimes": "o"}))}))}),
@@ -692,20 +708,20 @@ SCHEMAS = {
                           "words": "s"}, required=["thread_id", "scope", "messages", "left_out"]),
     "ChatGoalResult": obj({"goal": {"anyOf": [ref("ChatGoal"), {"type": "null"}]}}, required=["goal"],
                           supported={"type": "boolean"}, commands=items({"type": "object"})),
-    "Message": obj({"id": "s", "conversation_id": "s", "from_actor": "s", "to_actor": "s", "kind": "s", "body": "s",
-                    "created": "s", "in_reply_to": "n", "refs": "o"}, required=["id", "conversation_id", "from_actor", "to_actor", "kind", "body", "created", "in_reply_to", "refs"],
-                   from_name={"type": "string", "description": "Display name of from_actor, when it is a person or a bot"},
-                   to_name={"type": "string", "description": "Display name of to_actor"},
+    "Message": obj({"id": "s", "conversation_id": "s", "sender_id": "s", "recipient_id": "s", "kind": "s", "body": "s",
+                    "created_at": "s", "in_reply_to": "n", "refs": "o"}, required=["id", "conversation_id", "sender_id", "recipient_id", "kind", "body", "created_at", "in_reply_to", "refs"],
+                   sender_name={"type": "string", "description": "Display name of sender_id, when it is a person or a bot"},
+                   recipient_name={"type": "string", "description": "Display name of recipient_id"},
                    body_raw={"type": "string", "description": "A notice Tico wrote, as stored (with actor ids); `body` shows names to people"},
                    edited_at={"type": ["string", "null"], "description": "When the author last changed a task comment's text; "
                               "null when never edited"},
                    deleted_at={"type": ["string", "null"], "description": "When the author deleted a task comment. A delete or "
                                "retry acknowledgment can include a tombstone with an empty body; deleted comments are never listed"},
                    run={"type": "object", "description": "The run that handled this message, once one has: on a person's message "
-                        "`{job_id, attempt_id, state}` where `state` is `started_run` (it started the run) or `added_to_run` "
-                        "(it was folded into a run already working); on a bot's reply `{job_id, attempt_id}` (the run that "
+                        "`{job_id, run_id, state}` where `state` is `started_run` (it started the run) or `added_to_run` "
+                        "(it was folded into a run already working); on a bot's reply `{job_id, run_id}` (the run that "
                         "wrote it, plus a summary of what it did). Absent until a run takes the message",
-                        "properties": {"job_id": {"type": "string"}, "attempt_id": {"type": "string"},
+                        "properties": {"job_id": {"type": "string"}, "run_id": {"type": "string"},
                                        "state": {"enum": ["started_run", "added_to_run"]}}},
                    ask=ref("TaskReviewAskView"),
                    answer=ref("ReviewAnswer"),
@@ -716,32 +732,37 @@ SCHEMAS = {
                          "run, and how to wake it now (backend/bot_to_bot.py)"},
                    sent_as=ref("SentAs") | {"description": "On a send to a bot: the way it went (steer, queue or defer) "
                                             "and a defer's deadline (backend/delivery.py)"}),
-    "Execution": obj({"job_id": "s", "message_id": "s", "bot": "s", "attempt_id": "n", "state": "s", "label": "s", "text": "s"},
-                     required=["job_id", "message_id", "bot", "attempt_id", "state", "label", "text", "parts"],
+    "TaskHold": obj({"kind": {"enum": ["blocked", "snoozed"]}, "reason": "n", "since": "n", "until": "n", "by": "n"},
+                    required=["kind", "reason", "since", "until", "by"],
+                    cause={"enum": ["manual", "dependency", "stranded", "gate", "check", "worktree", None],
+                           "description": "On a blocked hold: what holds it. manual is a person's or bot's move to "
+                                          "Blocked; the others are Tico's own (docs/tasks.md, Holds)"}),
+    "Execution": obj({"job_id": "s", "message_id": "s", "bot_id": "s", "run_id": "n", "state": "s", "label": "s", "text": "s"},
+                     required=["job_id", "message_id", "bot_id", "run_id", "state", "label", "text", "parts"],
                      parts=items(obj({"kind": {"enum": ["progress", "reply", "tool"]}, "text": "s", "at": "s"})) | {
                          "description": "The run's pieces so far, in order, while it is leased or running (empty otherwise). "
                                         "`reply` and `progress` are what the bot wrote (`progress` when a tool call follows it); "
                                         "`tool` is a short label such as \"Ran hub task create\", never its arguments or output"}),
     "Conversation": obj({"id": "s", "kind": "s", "subject": "s", "participants": items({"type": "string"}),
-                         "created": "s", "last_message_at": "s", "closed_at": "n"}),
+                         "created_at": "s", "last_message_at": "s", "closed_at": "n"}),
     "TaskStep": obj({"id": "s", "type_id": "s", "name": "s", "public_name": "s", "position": "i", "status": "s",
                      "check_pool": "a", "check_limit": "i",
                      "flow": {"type": "object", "description": "What the step does with a ticket (docs/tasks.md, Step "
                               "flow). On a check step, other_company is prefer (the default) or require."}},
                     required=["id", "type_id", "name", "position", "status"]),
-    "TaskType": obj({"id": "s", "name": "s", "numbered": "b", "steps_only": "b", "created": "s", "updated": "s", "steps": items(ref("TaskStep"))},
+    "TaskType": obj({"id": "s", "name": "s", "numbered": "b", "steps_only": "b", "created_at": "s", "updated_at": "s", "steps": items(ref("TaskStep"))},
                     bots={"type": ["string", "null"], "enum": ["read", "work", None],
                           "description": "What every bot may do with the type's tasks beyond its own: read "
                                          "(read, comment, file subtasks) or work (also change them); null keeps "
                                          "each task to the bots on it"}),
     "TaskTypeList": obj({"types": items(ref("TaskType"))}),
     "TaskTypeResult": obj({"type": ref("TaskType")}),
-    "Task": obj({"private": "b", "id": "s", "title": "s", "body": "s", "requester": "s", "owner": "s", "status": "s", "created": "s",
-                 "updated": "s", "due": "n", "version": "i", "lane": "s", "labels": items({"type": "string"}),
+    "Task": obj({"private": "b", "id": "s", "title": "s", "body": "s", "requester_id": "s", "owner_id": "s", "status": "s", "created_at": "s",
+                 "updated_at": "s", "due_at": "n", "version": "i", "lane": "s", "labels": items({"type": "string"}),
                  "acceptance_criteria": items({"type": "string"}),
                  "occurrence": {"type": ["string", "null"], "description": "A due-date routine's occurrence, \"<automation_id>:<due_on>\", on the task it opened: the due is its deadline, not a wake date."}},
-                required=["id", "title", "requester", "owner", "status", "created", "updated", "due", "version", "lane", "labels"],
-                owner_name={"type": "string", "description": "Display name of owner (`owner` stays the actor id)"},
+                required=["id", "title", "requester_id", "owner_id", "status", "created_at", "updated_at", "due_at", "version", "lane", "labels", "holds"],
+                owner_name={"type": "string", "description": "Display name of owner (`owner_id` stays the actor id)"},
                 requester_name={"type": "string", "description": "Display name of requester"},
                 cover={"oneOf": [obj({"url": "s", "width": {"type": ["integer", "null"]},
                                       "height": {"type": ["integer", "null"]}}), {"type": "null"}]},
@@ -753,7 +774,7 @@ SCHEMAS = {
                            "blocks, related, duplicate_of, follow_up): each {id, title, status, owner, direction}; "
                            "direction is out when this task is the subtask, blocker, duplicate or follow-up, in for "
                            "the other end, both for related. Subtasks are in the task's children.",
-                           "additionalProperties": items(obj({"id": "s", "title": "s", "status": "s", "owner": "s",
+                           "additionalProperties": items(obj({"id": "s", "title": "s", "status": "s", "owner_id": "s",
                                                               "direction": "s"}))},
                 type={"oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}]},
                 step={"oneOf": [ref("TaskStep"), {"type": "null"}]},
@@ -767,10 +788,8 @@ SCHEMAS = {
                 guest={"type": ["string", "null"], "description": "The one person a private task with no person on "
                        "it reached: its owning bot's first subtask, question or wait for them made them its guest. "
                        "They read the task as its requester and owner do, and nothing else of its tree"},
-                snoozed_until={"type": ["string", "null"], "description": "Set aside until this moment (UTC): "
-                               "off lists and Needs you, and quiet, until then"},
-                snoozed_by={"type": ["string", "null"], "description": "Who snoozed it"},
-                snoozed_note={"type": ["string", "null"], "description": "What to check when the snooze ends (sent in the owner's wake)"},
+                holds=items(ref("TaskHold")) | {"description": "What holds the task (docs/tasks.md, Holds): at most one "
+                                                "per kind, empty when nothing does"},
                 roles={"type": "object", "description": "Who is on the task, by role: each role a short name the team "
                        "chooses (developer, reviewer, qa ...) with its actors in the order they were added; a role nobody "
                        "holds is absent, and one actor may hold several roles. Tico gives roles no meaning or rights. Task "
@@ -785,12 +804,12 @@ SCHEMAS = {
                    "onboarding_state": "s", "stage": {"enum": ["onboarding", "active"], "description": "Onboarding (learns only: no tasks, routines or sends) until a person above it marks onboarding complete, then active"}},
                   required=["id", "display_name", "org_parent", "status", "access"]),
     "Seat": obj({"id": "s", "kind": {"enum": ["seat"]}, "stage": {"enum": ["recruiting"]}, "title": "s",
-                 "description": "s", "reports_to": "s", "team": "s", "created": "s", "org_parent": "s"},
+                 "description": "s", "reports_to": "s", "team": "s", "created_at": "s", "org_parent": "s"},
                 required=["id", "kind", "stage", "title", "description", "reports_to"]),
     "SeatList": obj({"seats": items(ref("Seat"))}, required=["seats"]),
     "SeatClosed": obj({"id": "s", "closed": "b"}, required=["id", "closed"]),
     "SeatDetail": obj({"id": "s", "kind": {"enum": ["seat"]}, "stage": {"enum": ["recruiting"]}, "title": "s",
-                       "description": "s", "reports_to": "s", "team": "s", "created": "s",
+                       "description": "s", "reports_to": "s", "team": "s", "created_at": "s",
                        "description_by": {"enum": ["chart", "person"]},
                        "can_edit": "b"},
                       required=["id", "kind", "stage", "title", "description", "reports_to", "can_edit"]),
@@ -814,15 +833,16 @@ SCHEMAS = {
                       "model": "s", "setup_task_id": "n", "note": "n"},
                      required=["slug", "seat", "stage", "reports_to", "template"]),
     "TaskFlow": obj({"going": "i", "waiting": "i"}, required=["going", "waiting"]),
-    "Bot": obj({"slug": "s", "display_name": "s", "state": "s", "online": "b", "queued": "i", "description": "s",
-                "reports_to": "n", "team": "n", "operator": "n", "owners": "a", "status": {"type": ["object", "null"]},
+    "Bot": obj({"id": {"type": "string", "description": "The bot's stable id (its slug for a bot made before ids, else a UUIDv7); the slug is a renameable label"}, "slug": "s", "display_name": "s", "state": "s", "online": "b", "queued": "i", "description": "s",
+                "folder": {"type": "string", "description": "Its checkout's folder on a computer; clients find its files by this, never by its slug."},
+                "reports_to": "n", "team": "n", "owner_id": "n", "owners": "a", "status": {"type": ["object", "null"]},
                 "keep_tasks_going": {"type": ["integer", "null"]}, "turns_at_once": {"type": ["integer", "null"]},
                 "task_flow": ref("TaskFlow"),
                 "access": ref("Access"), "onboarding_state": "s", "stage": {"enum": ["onboarding", "active"], "description": "Onboarding (learns only: no tasks, routines or sends) until a person above it marks onboarding complete, then active"}, "can_complete_onboarding": {"type": "boolean", "description": "While onboarding: whether the caller may mark its onboarding complete"}, "onboarding_ready": {"type": ["object", "null"], "description": "While onboarding: the bot's \"I'm ready\" ({at, summary}), or null"}},
-               required=["slug", "display_name", "state", "owners", "access"]),
-    "BotDetail": obj({"slug": "s", "display_name": "s", "description": "s", "state": "s", "online": "b", "queued": "i",
+               required=["id", "slug", "display_name", "state", "owners", "access"]),
+    "BotDetail": obj({"id": {"type": "string", "description": "The bot's stable id (its slug for a bot made before ids, else a UUIDv7); the slug is a renameable label"}, "slug": "s", "display_name": "s", "description": "s", "state": "s", "online": "b", "queued": "i",
                       "status": {"type": ["object", "null"]}, "reports_to": "n", "reports_to_name": "s",
-                      "operator": "n", "operator_name": "s", "team": "n", "owners": "a", "goals": "s",
+                      "owner_id": "n", "owner_name": "s", "team": "n", "owners": "a", "goals": "s",
                       "keep_tasks_going": {"type": ["integer", "null"]}, "turns_at_once": {"type": ["integer", "null"]},
                       "task_flow": ref("TaskFlow"),
                       "access": ref("Access"), "onboarding_state": "s", "template": "s", "template_version": "s",
@@ -838,7 +858,7 @@ SCHEMAS = {
                                "you": obj({"see": "b", "read": "b", "write": "b", "manage": "b"}),
                                "teams": items({"type": "object"})},
                               required=["target", "see", "read", "write", "revision"]),
-    "Me": obj({"actor": "s", "role": "s", "email": "s"}),
+    "Me": obj({"actor": "s", "role": "s", "email": "s", "slug": {"type": "string", "description": "A bot caller: its slug (a label; the actor holds its id)."}}, required=["actor", "role", "email"]),
     "Config": obj({"company_name": "s", "app_name": "s", "assistant_name": "s", "assistant_bot": "s",
                    "public_url": "s", "owner_email": "s", "version": "s",
                    "visual_origin": {"type": "string", "description": "Configured non-secret visual origin, or empty "
@@ -858,7 +878,7 @@ SCHEMAS = {
                   required=["company_name", "app_name", "assistant_name", "assistant_bot", "public_url", "owner_email",
                             "version"]),
     "Group": obj({"id": "s", "name": "s", "parent": "s", "people": items({"type": "string"}),
-                  "bots": items({"type": "string"}), "order": "i"}),
+                  "bots": items({"type": "string"}), "bot_slugs": items({"type": "string"}), "order": "i"}),
     "GroupList": items(ref("Group")),
     "ReportOrderView": obj({"manager": "s", "kind": "s", "name": "s", "can_order": "b",
                             "reports": items(obj({"id": "s", "kind": "s", "name": "s", "saved": "b"},
@@ -872,7 +892,7 @@ SCHEMAS = {
     "OrgModels": obj({"models": items(ref("OrgModel"))}, required=["models"]),
     "SeatBatch": obj({"seats": items(ref("Seat"))}, required=["seats"]),
     "BotList": items(ref("Bot")),
-    "BotInstructions": obj({"bot": "s", "content": "s", "published": "b", "updated": "n", "source": "s"}),
+    "BotInstructions": obj({"bot": "s", "content": "s", "published": "b", "updated_at": "n", "source": "s"}),
     "BotOnboarded": obj({"bot": "s", "onboarding_state": "s", "stage": "s", "changed": "b", "ready": {
                             "type": ["object", "null"], "description": "The bot's own call: its \"I'm ready\" "
                             "({at, summary})"}, "routine": {
@@ -897,7 +917,7 @@ SCHEMAS = {
     "BotToolRegistered": obj({"tool": ref("BotTool"), "task_id": "s", "yaml": "s", "credentials": "s"}),
     "BotToolUpdated": obj({"task_id": "s", "yaml": "s", "credentials": "s"}, required=["task_id"], update={"type": "boolean"},
                           tool={"type": "string"}),
-    "BotToolRemoval": obj({"task_id": "s"}, required=[], cancelled={"type": "boolean"}, removal={"type": "boolean"},
+    "BotToolRemoval": obj({"task_id": "s"}, required=[], canceled={"type": "boolean"}, removal={"type": "boolean"},
                           tool={"type": "string"}, detail={"type": "string"}),
     "BotTools": obj({"bot": "s", "tools": items(ref("BotTool")), "computer": "n", "online": "b", "reported_at": "n"},
                     required=["bot", "tools", "computer", "online", "reported_at"]),
@@ -940,7 +960,7 @@ SCHEMAS = {
                   "family": {"type": ["string", "null"], "description": "The maker of the model that did the work, from "
                              "the model catalog, when every counted segment agrees; null is unknown (mixed, Cursor "
                              "auto, OpenRouter, an unlisted model, nothing counted). Never the bot's configured model."}}),
-    "TaskRun": obj({"run": "s", "bot": "s", "started": "n", "finished": "n", "outcome": "n", "ran_on": ref("RanOn")}),
+    "TaskRun": obj({"run": "s", "bot": "s", "started_at": "n", "finished_at": "n", "outcome": "n", "ran_on": ref("RanOn")}),
     # How a reader's comment reaches the task's bot (backend/delivery.py): the default way and a default defer's
     # deadline, whether they may steer or queue (wake it), whether its harness takes a steer, and whether they may set
     # the goal.
@@ -962,7 +982,7 @@ SCHEMAS = {
         obj({"by": "s", "text": "s", "at": "s"})]},
     "VersionReview": obj({"note": "n", "comment_id": "n", "ask": {"oneOf": [ref("TaskReviewAskView"), {"type": "null"}]},
                           "answers": items(ref("ReviewAnswer"))}),
-    "TaskFileVersion": obj({"n": "i", "size": "i", "mime": "s", "sha256": "s", "created": "s", "by": "s",
+    "TaskFileVersion": obj({"n": "i", "size": "i", "mime": "s", "sha256": "s", "created_at": "s", "by": "s",
                             "comment_id": "n", "note": "n", "ask": {"oneOf": [ref("TaskReviewAskView"), {"type": "null"}]},
                             "answers": items(ref("ReviewAnswer")), "url": "s", "poster_url": "n", "thumb_url": "n",
                             **{k: {"type": ["integer", "null"]} for k in ("width", "height", "duration_ms")},
@@ -992,10 +1012,8 @@ SCHEMAS = {
                           "next_offset": {"type": ["integer", "null"]}, "drafts": "a", "can_review": "b", "can_add": "b"}),
     "ChangelogReadResult": obj({"unread_count": "i"}),
     "Unread": obj({"unread": "i"}, meetings_pending={"type": "integer", "description": "Pending meetings filed for the caller; never part of Needs you"}),
-    "NeedsYou": {"oneOf": [obj({"actor": "s", "items": items({
-        "type": "object", "required": ["id", "kind", "title"], "additionalProperties": True,
-        "properties": {"id": {"type": "string"}, "kind": {"enum": ["task", "question", "declined", "approval"]},
-                       "title": {"type": "string"}}})}, required=["actor", "items"],
+    "NeedsYouItem": NEEDS_ITEM,
+    "NeedsYou": {"oneOf": [obj({"actor": "s", "items": items(ref("NeedsYouItem"))}, required=["actor", "items"],
         older={"type": "array", "items": {"type": "object", "additionalProperties": True},
                "description": "Tasks there only for a question older than three days, out of the queue and its count"},
         went_away={"type": "object", "additionalProperties": True,
@@ -1010,50 +1028,50 @@ SCHEMAS = {
         obj({"actor": "s", "count": "i"})]},
     "GranolaStatus": obj({"mode": {"type": "string", "enum": ["account", "api_key", "off"]},
                           "connected": "b", "email": "n", "plan_hint": {"type": ["string", "null"], "enum": ["free", "paid", None]},
-                          "last_sync": "n", "last_error": "n", "imported_count": "i", "needs_signin": "b", "syncing": "b", "skipped": "i"},
+                          "last_synced_at": "n", "last_error": "n", "imported_count": "i", "needs_signin": "b", "syncing": "b", "skipped": "i"},
                          skip_reasons=GRANOLA_SKIP_REASONS, last_error_detail=GRANOLA_ERROR_DETAIL),
     "GranolaSignIn": obj({"state": "s", "mode": "s", "connected": "b", "email": "n", "plan_hint": "n",
-                          "last_sync": "n", "last_error": "n", "imported_count": "i", "needs_signin": "b", "syncing": "b", "skipped": "i"},
+                          "last_synced_at": "n", "last_error": "n", "imported_count": "i", "needs_signin": "b", "syncing": "b", "skipped": "i"},
                          skip_reasons=GRANOLA_SKIP_REASONS, last_error_detail=GRANOLA_ERROR_DETAIL),
     "GranolaDevice": obj({"user_code": "s", "verification_uri": "s", "verification_uri_complete": "s",
                           "expires_in": "i", "interval": "i"}, required=["user_code", "verification_uri", "expires_in", "interval"]),
-    "GranolaSync": obj({"state": {"type": "string", "enum": ["syncing", "recent", "off", "needs_signin"]}, "last_sync": "n"}),
+    "GranolaSync": obj({"state": {"type": "string", "enum": ["syncing", "recent", "off", "needs_signin"]}, "last_synced_at": "n"}),
     "GranolaDisconnect": obj({"ok": "b"}),
     "MeetingSearch": obj({"results": "a", "next_offset": {"type": ["integer", "null"]}, "mode": "s"}),
     "ReviewedMeeting": obj({"id": "s", "title": "s", "review_state": {"type": "string", "enum": ["pending", "live", "dismissed"]}}),
     "MeetingReviewList": obj({"meetings": items(ref("ReviewedMeeting")), "count": "i", "pending_count": "i"}),
     "MeetingReviewPreferences": obj({"auto_share": {"type": ["boolean", "null"]},
                                      "review_default": {"type": "string", "enum": ["review", "auto"]}, "effective_auto_share": "b"}),
-    "InternalDocRow": obj({"id": "s", "path": "s", "title": "s", "updated": "s", "updated_by": "s", "locked": "b", "version": "i"},
+    "InternalDocRow": obj({"id": "s", "path": "s", "title": "s", "updated_at": "s", "updated_by_id": "s", "locked": "b", "version": "i"},
                           updated_by_name={"type": "string", "description": "Display name of updated_by"}),
-    "InternalDoc": obj({"id": "s", "path": "s", "title": "s", "body": "s", "locked": "b", "version": "i", "created_by": "s",
-                        "created": "s", "updated_by": "s", "updated": "s", "archived": "b"},
+    "InternalDoc": obj({"id": "s", "path": "s", "title": "s", "body": "s", "locked": "b", "version": "i", "created_by_id": "s",
+                        "created_at": "s", "updated_by_id": "s", "updated_at": "s", "archived": "b"},
                        created_by_name={"type": "string"}, updated_by_name={"type": "string", "description": "Display name of updated_by"}),
     "InternalDocList": obj({"docs": items(ref("InternalDocRow")), "next_cursor": "n"}),
     "InternalDocResult": obj({"doc": ref("InternalDoc")}),
-    "InternalDocVersion": obj({"version": "i", "title": "s", "path": "s", "actor": "s", "created": "s", "note": "s"},
+    "InternalDocVersion": obj({"version": "i", "title": "s", "path": "s", "actor": "s", "created_at": "s", "note": "s"},
                               actor_name={"type": "string"}, size={"type": "integer"}, current={"type": "boolean"}),
     "InternalDocVersions": obj({"doc": "s", "versions": items(ref("InternalDocVersion"))}),
     "InternalDocVersionResult": obj({"version": obj({"version": "i", "title": "s", "path": "s", "body": "s", "actor": "s",
-                                                      "created": "s", "note": "s"}, actor_name={"type": "string"})}),
+                                                      "created_at": "s", "note": "s"}, actor_name={"type": "string"})}),
     "LinkedDoc": obj({"id": "s", "title": "s", "url": "s", "kind": {"enum": ["website", "google_drive", "google_doc", "notion", "github", "other"]},
-                      "host": "s", "description": "s", "added_by": "s", "created": "s", "updated": "s"},
+                      "host": "s", "description": "s", "added_by": "s", "created_at": "s", "updated_at": "s"},
                      added_by_name={"type": "string"}),
     "LinkedDocList": obj({"linked": items(ref("LinkedDoc"))}),
     "LinkedDocResult": obj({"linked": ref("LinkedDoc")}),
     "DocSource": obj({"id": "s", "title": "s", "url": "s", "kind": "s", "provider": "s", "description": "s",
                       "added_by": "s", "repo": "s", "reference": "s", "reference_override": "s", "path": "s",
                       "status": {"enum": ["link_only", "queued", "preparing", "updating", "ready", "empty", "failed", "access_needed"]},
-                      "last_checked": "n", "doc_count": "i", "skipped": "i", "error_code": "s"}),
+                      "last_checked_at": "n", "doc_count": "i", "skipped": "i", "error_code": "s"}),
     "DocSourceList": obj({"sources": items(ref("DocSource")), "next_cursor": "n"}),
     "DocSourceResult": obj({"source": ref("DocSource")}),
     "SourceDocumentList": obj({"source": ref("DocSource"), "documents": items(obj({"id": "s", "title": "s", "path": "s", "commit": "s"})), "next_cursor": "n"}),
     "ExternalHit": obj({"type": {"enum": ["external"]}, "id": "s", "title": "s", "path": "s", "section": "s",
                         "excerpt": "s", "score": "f", "trust": {"enum": ["untrusted_external"]}, "source_id": "s",
-                        "source_title": "s", "source_url": "s", "commit": "s", "last_checked": "n", "citation_url": "s"}, collection={"type": "string"}),
+                        "source_title": "s", "source_url": "s", "commit": "s", "last_checked_at": "n", "citation_url": "s"}, collection={"type": "string"}),
     "ExternalDocResult": obj({"doc": obj({"id": "s", "type": {"enum": ["external"]}, "title": "s", "path": "s",
                         "content": "s", "trust": {"enum": ["untrusted_external"]}, "source_id": "s", "source_title": "s",
-                        "source_url": "s", "commit": "s", "last_checked": "n", "citation_url": "s", "reference_notice": "s"})}),
+                        "source_url": "s", "commit": "s", "last_checked_at": "n", "citation_url": "s", "reference_notice": "s"})}),
     "DocsSearchResults": obj({"results": items({"oneOf": [ref("ExternalHit"),
         obj({"type": {"enum": ["internal"]}, "id": "s", "path": "s", "title": "s", "excerpt": "s", "score": "f"}, required=["type", "id", "path", "title", "excerpt", "score"],
             section={"type": "string"}, anchor={"type": "string"}, collection={"type": "string"}),
@@ -1123,7 +1141,7 @@ SCHEMAS = {
                       "results": {"type": "array", "items": {"type": "object"},
                                   "description": "Matching internal, linked and manual docs, as GET /api/v2/docs/search?collection=all"}},
                      required=["conversation_id", "message_id", "results"]),
-    "DocsConversations": obj({"conversations": items(obj({"id": "s", "title": "s", "created": "s",
+    "DocsConversations": obj({"conversations": items(obj({"id": "s", "title": "s", "created_at": "s",
                                                          "last_message_at": "n", "closed_at": "n"})),
                               "next_offset": {"type": ["integer", "null"]}}),
     "DocsReopened": obj({"conversation_id": "s"}),
@@ -1137,56 +1155,57 @@ SCHEMAS = {
     "AssistantSent": obj({"message": ref("Message"), "reply": {"type": ["object", "null"]}, "fast": "b", "intent": "n"},
                          required=["message", "fast"]),
     "AssistantActionResult": obj({"action": {"type": "object", "description": "id, summary, method, path, body, status "
-                                            "(pending, running, done, failed, cancelled, expired), result"}, "message_id": "s",
+                                            "(pending, running, done, failed, canceled, expired), result"}, "message_id": "s",
                                   "shown_once": {"type": "object", "description": "Confirm only, on a card that makes a "
                                                  "one-time value (a new computer's code): {code, expires, operator}, "
                                                  "in this answer alone and never stored on the card"}},
                                  required=["action"]),
     # Goals and KPIs
-    "Goal": obj({"id": "s", "title": "s", "owner": "s", "parent_id": "n", "body": "s", "status": {"type": ["string", "null"], "description":
+    "Goal": obj({"id": "s", "title": "s", "owner_id": "s", "parent_id": "n", "body": "s", "status": {"type": ["string", "null"], "description":
                  "red, yellow, green, gray (no data), done, dropped; null while it has no colour yet"},
-                 "status_note": "s", "status_by": "n", "status_at": "n",
+                 "status_note": "s", "status_by_id": "n", "status_at": "n",
                  "status_source": {"type": ["string", "null"], "description": "auto: worked out by the Strategy Bot; "
                                                                               "person: "
                                                                               "set by hand and kept until handed back"},
                  "suggest_status": {"type": ["string", "null"], "description": "On a colour set by hand: "
                                                                                "the colour the Strategy "
                                                                                "Bot would choose, when it differs"},
-                 "suggest_note": "n", "suggest_at": "n", "rank": {"type": ["integer", "null"]}, "created": "s", "created_by": "s", "updated": "s"},
-                required=["id", "title", "owner", "parent_id", "body", "status", "status_note", "status_by", "status_at", "status_source",
-                          "rank", "created", "created_by", "updated"],
+                 "suggest_note": "n", "suggest_at": "n", "rank": {"type": ["integer", "null"]}, "created_at": "s", "created_by_id": "s", "updated_at": "s"},
+                required=["id", "title", "owner_id", "parent_id", "body", "status", "status_note", "status_by_id", "status_at", "status_source",
+                          "rank", "created_at", "created_by_id", "updated_at"],
                 owner_name={"type": "string"}, status_by_name={"type": "string"},
                 why={"type": "string", "description": "One line tying it to the company's vision; empty: not tied to the vision"},
-                why_by={"type": ["string", "null"]}, why_at={"type": ["string", "null"]}),
+                why_by_id={"type": ["string", "null"]}, why_at={"type": ["string", "null"]}),
     "KpiLink": obj({"id": "s", "goal_id": "s", "kind": {"enum": ["none", "improve", "maintain"]}, "baseline": NUM_N, "baseline_at": "n",
                     "target": NUM_N, "deadline": {"type": ["string", "null"], "description": "YYYY-MM-DD"}, "min": NUM_N, "max": NUM_N},
                    required=["goal_id", "kind"]),
     "KpiReadingView": obj({"id": "s", "value": "f", "period_start": "s", "period_end": "s", "collected_at": "s",
                        "quality": {"enum": ["measured", "estimate", "partial"]}, "evidence": "s", "note": "s", "source": "s",
-                       "actor": "s", "definition_version": "i", "supersedes": "n"},
+                       "actor_id": {"type": ["string", "null"], "description": "The person who recorded it; null for a bot's automatic reading"},
+                       "definition_version": "i", "supersedes": "n"},
                       required=["id", "value", "period_end", "quality", "definition_version"],
-                      kpi_id={"type": "string"}, ts={"type": "string"}, created={"type": "string"},
+                      kpi_id={"type": "string"}, measured_at={"type": "string"}, created_at={"type": "string"},
                       superseded_by={"type": ["string", "null"], "description": "The reading that corrected this one, if any"},
                       actor_name={"type": "string"}),
     "Kpi": obj({"id": {"type": "string", "description": "A UUID, or auto:<bot>:<metric> for a bot's automatic KPI"}, "slug": "n",
                 "name": "s", "definition": "s", "unit": "s", "direction": {"enum": ["up", "down", "range"]},
-                "cadence": {"enum": ["daily", "weekly", "monthly"]}, "owner": "s", "source_note": "s", "definition_version": "i",
-                "created": "n", "created_by": "n", "updated": "n",
-                "archived_at": {"type": ["string", "null"]}, "archived_by": {"type": ["string", "null"]}, "auto": "b",
+                "cadence": {"enum": ["daily", "weekly", "monthly"]}, "owner_id": "s", "source_note": "s", "definition_version": "i",
+                "created_at": "n", "created_by_id": "n", "updated_at": "n",
+                "archived_at": {"type": ["string", "null"]}, "archived_by_id": {"type": ["string", "null"]}, "auto": "b",
                 "latest": {"oneOf": [ref("KpiReadingView"), {"type": "null"}]}, "readings": "i",
                 "freshness": {"enum": ["fresh", "stale", "missing", "archived"], "description": "stale: one period missed; missing: never read or two missed. archived: a retained goal link, not counting. Never zero"},
                 "spark": {"type": "array", "items": {"type": "number"}, "description": "The last values, oldest first"},
                 "status": {"enum": ["green", "yellow", "red", "gray", "none", None], "description": "Against the target on the link (or a range); gray is stale or missing data; none is fresh with no target; null is an archived goal link with no colour"},
                 "reason": "s"},
-               required=["id", "name", "unit", "direction", "cadence", "owner", "definition_version", "auto", "latest", "readings",
+               required=["id", "name", "unit", "direction", "cadence", "owner_id", "definition_version", "auto", "latest", "readings",
                          "freshness", "spark", "status", "reason"],
                link=ref("KpiLink"), target_label={"type": "string", "description": "'→ 65% by Dec 31' or 'range 40–60'"},
                expected={"type": ["number", "null"], "description": "Where the straight line from baseline to target is now"},
                owner_name={"type": "string"}),
-    "GoalCheckinView": obj({"id": "s", "goal_id": "s", "kpi_id": "n", "ts": "s", "author": "s", "source_actor": "s", "body": "s",
+    "GoalCheckinView": obj({"id": "s", "goal_id": "s", "kpi_id": "n", "created_at": "s", "author": "s", "sender_id": "s", "body": "s",
                         "signal": {"type": ["string", "null"], "enum": ["on_track", "at_risk", "off_track", None]}},
-                       required=["id", "goal_id", "ts", "author", "source_actor", "body", "signal"],
-                       author_name={"type": "string"}, source_actor_name={"type": "string"}),
+                       required=["id", "goal_id", "created_at", "author", "sender_id", "body", "signal"],
+                       author_name={"type": "string"}, sender_name={"type": "string"}),
     "GoalProposalView": obj({"id": "s", "kind": {"enum": ["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why"]},
                          "goal_id": "n", "kpi_id": "n", "payload": "o", "reason": "s", "proposed_by": "s", "proposed_at": "s",
                          "status": {"enum": ["pending", "confirmed", "rejected"]}, "decided_by": "n", "decided_at": "n",
@@ -1204,10 +1223,10 @@ SCHEMAS = {
                     kpis=items(ref("Kpi")), children=items(ref("Goal")), chain=items(ref("Goal")), tasks=items({"type": "object"}),
                     events=items({"type": "object"}), checkins=items(ref("GoalCheckinView")), proposals=items(ref("GoalProposalView"))),
     "GoalResult": obj({"goal": {}}),
-    "CompanyResult": obj({"company": obj({"vision": "s", "description": "s", "updated": "n", "updated_by": "n",
+    "CompanyResult": obj({"company": obj({"vision": "s", "description": "s", "updated_at": "n", "updated_by": "n",
                                           "updated_by_name": "s"}),
                           "may_edit": {"type": "boolean", "description": "The owner on their own click, never an admin or a bot"}}),
-    "CompanyHistory": obj({"events": items(obj({"id": "s", "ts": "s", "actor": "s", "actor_name": "s",
+    "CompanyHistory": obj({"events": items(obj({"id": "s", "created_at": "s", "actor": "s", "actor_name": "s",
                                                 "field": {"enum": ["vision", "description"]}, "old": "s", "new": "s"}))}),
     "GoalList": obj({"goals": items(ref("Goal"))}, required=["goals"], owner={"type": "string"},
                     chain=items(ref("Goal")), reports=items(ref("Goal")), company=items(ref("Goal"))),
@@ -1234,7 +1253,7 @@ SCHEMAS = {
                                                                         "in their Needs you today (UTC)}"},
                        "level3_offer": ref("StrategyBotLevel3Offer")},
                       required=["name", "regular_checks", "level", "levels"]),
-    "StrategyBotLogEntry": obj({"id": "s", "created": "s", "kind": {"type": "string", "enum": [
+    "StrategyBotLogEntry": obj({"id": "s", "created_at": "s", "kind": {"type": "string", "enum": [
                                "decision", "cost", "publish", "send", "bots", "target", "vision", "instructions",
                                "person_task"]},
                            "reason": "s", "goal_id": "s", "state": {"type": "string", "enum": ["done", "proposed", "undone"]},
@@ -1244,7 +1263,7 @@ SCHEMAS = {
                            "undoable": "b", "undone_at": "s", "undone_by": "s",
                            "undo": {"type": "object", "additionalProperties": True,
                                     "description": "What Undo restored and what it kept: {restored, kept, text}"}},
-                          required=["id", "created", "kind", "state", "done", "left", "undoable"]),
+                          required=["id", "created_at", "kind", "state", "done", "left", "undoable"]),
     "StrategyBotLog": obj({"items": items(ref("StrategyBotLogEntry")), "next_before": "s", "can_undo": "b"},
                      required=["items", "can_undo"]),
     "StrategyBotLevel3Offer": obj({"streak": "i", "needed": "i", "due": "b", "last_offered_at": "s"},
@@ -1256,8 +1275,8 @@ SCHEMAS = {
                               "originals": items(obj({"task_id": "s", "title": "s", "asker": "s", "asker_name": "s",
                                                       "state": "s", "note": "s"}, required=["task_id", "asker", "state"]))}),
     "GoalsNeedsYou": obj({"actor": "s", "items": items({
-        "type": "object", "required": ["kind"], "additionalProperties": True,
-        "properties": {"kind": {"enum": ["vision", "kpi_red", "recovery", "why", "proposal", "kpi_stale"]},
+        "type": "object", "required": NEEDS_ITEM["required"], "additionalProperties": True,
+        "properties": {**NEEDS_ITEM["properties"], "kind": {"enum": ["vision", "kpi_red", "recovery", "why", "proposal", "kpi_stale"]},
                        "goal_id": {"type": "string"},
                        "options": {"type": "array", "description": "kind recovery: each option in plain words, "
                                    "{label, pick, actions: [{text, note}]}", "items": {"type": "object"}},
@@ -1352,7 +1371,7 @@ SCHEMAS.update({
                              "next": {"type": ["integer", "null"]}}),
     "BotBrowserExitView": obj({"browser_exit": {"type": ["object", "null"], "properties": {
                                "runner_id": {"type": "string"}, "name": {"type": "string"}}}},
-                          choices=items(obj({"runner_id": "s", "label": "s", "operator": "s"})),
+                          choices=items(obj({"runner_id": "s", "label": "s", "owner_id": "s"})),
                           may_change=_t("b"), required=["browser_exit"]),
 })
 SCHEMAS["GoalResult"]["properties"]["goal"] = _merge(SCHEMAS["Goal"], SCHEMAS["GoalView"])
@@ -1371,7 +1390,7 @@ STABLE.extend([
 ])
 SCHEMAS.update({
     "Tag": obj({"id": "s", "key": "s", "label": "s", "metadata": "o", "markdown": "s", "is_template": "b",
-                "template_id": "n", "owner": "n", "version": "i", "created": "s", "updated": "s"}),
+                "template_id": "n", "owner": "n", "version": "i", "created_at": "s", "updated_at": "s"}),
     "TagList": obj({"tags": items(ref("Tag"))}),
     "TagResult": obj({"tag": ref("Tag")}),
     "TagDetail": obj({"tag": ref("Tag"), "editable": "b", "tasks": items(ref("Task")),
@@ -1411,8 +1430,8 @@ SCHEMAS.update({
                       "revision": "i", "released": "b"}),
     "BotReleased": obj({"bot": "s", "released": {"type": "object"}}),
     "TeamBudgetState": obj({"turns_per_hour": "i", "turns_per_day": "i", "defaults": {"type": "object"}}),
-    "TaskCapRow": obj({"sender": "s", "receiver": "s", "per_day": "i", "count": "i", "closed": "i", "updated": "s", "updated_by": "s"}),
-    "TaskCapProposal": obj({"id": "s", "sender": "s", "receiver": "s", "per_day": "i", "status": "s", "proposed_by": "s", "created": "s"}),
+    "TaskCapRow": obj({"sender": "s", "receiver": "s", "per_day": "i", "count": "i", "closed": "i", "updated_at": "s", "updated_by": "s"}),
+    "TaskCapProposal": obj({"id": "s", "sender": "s", "receiver": "s", "per_day": "i", "status": "s", "proposed_by": "s", "created_at": "s"}),
     "TaskCaps": obj({"caps": items(ref("TaskCapRow")), "proposals": items(ref("TaskCapProposal"))}),
     "TaskCapWrite": obj({"cap": {"type": "object"}, "approval": "s", "status": "s"}),
 })
@@ -1440,7 +1459,7 @@ SCHEMAS.update({"AuditPage": {"type": "object", "required": ["rows", "next"], "p
 DOC_CONTACT = {"type": ["object", "null"], "properties": {"id": {"type": ["string", "null"]},
                                                           "name": {"type": ["string", "null"]}}}
 DOC_PAYMENT = {"anyOf": [obj({"id": "n", "status": {"type": "string", "enum": [
-    "queued", "sending", "awaiting_bank_approval", "submitted", "settled", "returned", "failed", "cancelled",
+    "queued", "sending", "awaiting_bank_approval", "submitted", "settled", "returned", "failed", "canceled",
     "unknown", "denied", "expired", "withdrawn"]}, "amount": "i", "on": "s", "error": "n"}), {"type": "null"}],
     "description": "A bill's latest payment: its state, the day it was asked for and why it ended, if it did. No id "
                    "when the scheduled ask ended before a payment existed (denied, expired, withdrawn or failed)"}
@@ -1674,7 +1693,7 @@ SCHEMAS.update({
     "FinancePayments": obj({
         "payments": items(obj({
             "id": "s", "status": {"type": "string", "enum": ["queued", "sending", "awaiting_bank_approval", "submitted",
-                                                             "settled", "returned", "failed", "cancelled",
+                                                             "settled", "returned", "failed", "canceled",
                                                              "unknown"]},
             "amount": {"type": ["integer", "null"]}, "currency": "s", "method": "s", "memo": "s", "obligation": "n", "mode": "s",
             "recipient": {"type": ["object", "null"], "properties": {"id": {"type": "string"},
@@ -1690,7 +1709,7 @@ SCHEMAS.update({
     "FinanceTransfers": obj({
         "transfers": items(obj({
             "id": "s", "status": {"type": "string", "enum": ["queued", "submitted", "unknown", "failed", "posted",
-                                                             "cancelled"]},
+                                                             "canceled"]},
             "amount": "i", "currency": "s", "memo": "s",
             "from": obj({"id": "s", "name": "s", "last4": "n"}), "to": obj({"id": "s", "name": "s", "last4": "n"}),
             "created_by": "s", "created_at": "s", "settled_at": "n", "last_error": "n"},
@@ -1898,19 +1917,19 @@ STABLE.extend([
     ("/api/v2/people/{person}/assistant", "get", "Automations", "getPersonAssistant",
      "The bot behind a person's Assistant, or null until it is first used", "PersonAssistant"),
 ])
-_RUN = obj({"id": "s", "automation_id": "s", "version": "i", "trigger_ref": "s", "started": "s",
-            "finished": {"type": ["string", "null"]}, "status": {"enum": ["queued", "running", "waiting", "ok", "failed", "empty", "skipped", "held"]},
+_RUN = obj({"id": "s", "automation_id": "s", "version": "i", "trigger_ref": "s", "started_at": "s",
+            "finished_at": {"type": ["string", "null"]}, "status": {"enum": ["queued", "running", "waiting", "ok", "failed", "empty", "skipped", "held"]},
             "cost": "f", "summary": "n", "steps": {"type": ["array", "null"], "items": {"type": "object"},
                                                    "description": "Each step's status, outputs and cost; null after 30 days"}},
            required=["id", "automation_id", "version", "status", "steps"])
 SCHEMAS.update({
-    "Automation": obj({"id": "s", "name": "s", "owner": "s", "enabled": "b", "trigger": {"type": "object"},
+    "Automation": obj({"id": "s", "name": "s", "owner_id": "s", "enabled": "b", "trigger": {"type": "object"},
                        "steps": items({"type": "object"}), "version": "i", "can_edit": "b", "can_pause": "b",
                        "spend_cap": {"type": ["object", "null"]}, "batch": {"type": ["object", "null"]},
                        "last_run": {"type": ["object", "null"]},
                        "counts": obj({"today": obj({"runs": "i", "dropped": "i"})}),
                        "next_run": {"type": ["string", "null"]},
-                       "next_due": {"type": ["string", "null"], "description": "A due-date trigger's next due day "
+                       "next_due_at": {"type": ["string", "null"], "description": "A due-date trigger's next due day "
                                     "(YYYY-MM-DD); next_run is when its run starts"},
                        "pending": "i", "warning": "s",
                        "kind": {"type": "string", "description": "The trigger as the overview groups it; system for "
@@ -1935,20 +1954,20 @@ SCHEMAS.update({
         "runs": items(obj({"id": "s", "automation_id": "s", "automation_name": "s",
                            "trigger": {"enum": ["message", "task_received", "schedule", "webhook", "listening", "event",
                                                 "due", "system"]},
-                           "owner": "s", "started": "s", "finished": {"type": ["string", "null"]}, "status": "s",
+                           "owner_id": "s", "started_at": "s", "finished_at": {"type": ["string", "null"]}, "status": "s",
                            "cost": "f", "started_by": "s", "outcome": "s", "step_count": {"type": ["integer", "null"]},
                            "count": {"type": "integer", "description": "Quiet system-job runs folded into this row"}},
-                          required=["id", "automation_id", "automation_name", "trigger", "started", "status"])),
+                          required=["id", "automation_id", "automation_name", "trigger", "started_at", "status"])),
         "next": {"type": ["string", "null"]}, "since": "s"}),
     "AutomationStats": obj({
         "range": "s", "since": "s", "until": "s", "bucket_seconds": "i",
         "automations": items(obj({"id": "s", "runs": "i", "failed": "i", "cost": "f",
                                   "buckets": items(obj({"ok": "i", "failed": "i"}))})),
         "totals": obj({"runs": "i", "failed": "i", "cost": "f", "buckets": items(obj({"ok": "i", "failed": "i"}))})}),
-    "AutomationVersions": obj({"versions": items(obj({"n": "i", "actor": "s", "at": "s",
+    "AutomationVersions": obj({"versions": items(obj({"n": "i", "actor": "s", "created_at": "s",
                                                       "status": {"enum": ["active", "pending"]}, "summary": "s",
                                                       "flow": {"type": "object"}},
-                                                     required=["n", "actor", "at", "status", "flow"])),
+                                                     required=["n", "actor", "created_at", "status", "flow"])),
                                "next": {"type": ["integer", "null"]}}),
     "AutomationGuide": obj({"text": "s"}),
     "QuestionSets": obj({"sets": items(obj({"id": "s", "summary": "s", "questions": {"type": "object", "description": "Keyed by question id, in judge.py's format"}}))}),
@@ -1979,7 +1998,7 @@ SCHEMAS.update({
 
 SCHEMAS.update({
     "Repository": obj({"full_name": "s", "enabled": "b", "bot_repo": "b", "default_branch": "n",
-                       "setup_command": "n", "setup_source": "n", "reachable": "b", "last_seen": "n"}),
+                       "setup_command": "n", "setup_source": "n", "reachable": "b", "last_seen_at": "n"}),
     "ProductRepositoryPreview": obj({"org": "s", "name": "s", "repository": "s", "visibility": {"enum": ["private"]},
                                       "auto_init": "b", "capability": {"enum": ["available", "missing", "unknown", "not_installed"]},
                                       "capability_detail": "s"}),
@@ -2019,7 +2038,7 @@ STABLE.extend([
 SCHEMAS.update({
     'PublicTask': obj({'id': 's', 'title': 's', 'summary': 's', 'step': 'n', 'requester_count': 'i',
                        'parts': obj({'total': 'i', 'done': 'i'})}),
-    'PublicComment': obj({'id': 's', 'text': 's', 'author': {'enum': ['Team', 'Visitor']}, 'created': 's'}),
+    'PublicComment': obj({'id': 's', 'text': 's', 'author': {'enum': ['Team', 'Visitor']}, 'created_at': 's'}),
     'PublicRoadmap': obj({'tasks': items(ref('PublicTask')), 'next_offset': {'type': ['integer', 'null']}}),
     'PublicRoadmapComments': obj({'comments': items(ref('PublicComment')), 'next_offset': {'type': ['integer', 'null']}}),
     'PublicRoadmapTask': obj({'task': ref('PublicTask'), 'comments': items(ref('PublicComment')),
@@ -2092,7 +2111,7 @@ SCHEMAS.update({
     'InboundCursor': obj({'cursor':'i'}),
     'InboundInbox': obj({'inbox_id':'s','kind':'s','name':'s','address':'s','state':'s','audience':{'enum':['company','team']},
                          'group_id':{'type':['string','null']}}),
-    'InboundInboxes': obj({'inboxes':items({'type':'object'}),'configured':'b','last_sync':NUM_N,'error':'s','gaps':items({'type':'object'})}),
+    'InboundInboxes': obj({'inboxes':items({'type':'object'}),'configured':'b','last_synced_at':NUM_N,'error':'s','gaps':items({'type':'object'})}),
     'InboundMessages': obj({'messages':items({'type':'object'}),'next':{'type':['integer','null']},'cursor':'i'}),
     'InboundPhoneRequests': obj({'phone_requests':items({'type':'object'}),'next':{'type':['string','null']}}),
 })
@@ -2211,19 +2230,19 @@ STABLE.extend([
      'subject, state, attempts, last status, next attempt', 'WebhookSends'),
     ('/api/v2/webhooks/{hook_id}/sends/{send_id}', 'get', 'Webhooks', 'getWebhookSend', 'One send with its attempts', None),
     ('/api/v2/webhooks/{hook_id}/sends/{send_id}/retry', 'post', 'Webhooks', 'retryWebhookSend', 'Send a failed, '
-     'cancelled or delivered send again now', None),
+     'canceled or delivered send again now', None),
 ])
 SCHEMAS.update({
     'Webhook': obj({'id': 's', 'name': 's', 'url': 's', 'host': 's', 'events': items({'type': 'string'}), 'enabled': 'b',
                     'paused_reason': 's', 'rate_per_hour': 'i', 'allow_http': 'b', 'created_by': 's',
-                    'requested_by': 'n', 'created': 's', 'updated': 's', 'revision': 'i', 'old_secret_until': 'n',
+                    'requested_by': 'n', 'created_at': 's', 'updated_at': 's', 'revision': 'i', 'old_secret_until': 'n',
                     'can_change': 'b', 'last_7_days': obj({'delivered': 'i', 'failed': 'i', 'pending': 'i'}),
                     'filter': {'type': 'object', 'description': 'departments, bots, task_types; an empty list means all'},
                     'headers': items({'type': 'object', 'description': 'name, secret, and value unless secret (then set: true)'}),
                     'disabled_at': 'n', 'disabled_reason': 'n'}),
     'WebhookSendRow': obj({'id': 's', 'webhook_id': 's', 'event_id': 's', 'type': 's', 'subject': 's', 'state': {
-        'enum': ['ready', 'sending', 'delivered', 'failed', 'cancelled', 'withheld']}, 'attempts': 'i',
-        'last_status': {'type': ['integer', 'null']}, 'last_error': 's', 'next_attempt': 'n', 'created': 's',
+        'enum': ['ready', 'sending', 'delivered', 'failed', 'canceled', 'withheld']}, 'attempts': 'i',
+        'last_status': {'type': ['integer', 'null']}, 'last_error': 's', 'next_attempt_at': 'n', 'created_at': 's',
         'delivered_at': 'n'}),
 })
 SCHEMAS.update({
@@ -2260,18 +2279,18 @@ STABLE.extend([
      "The owner deletes a file for good: every version's bytes leave storage; activity keeps who and when", "FileDeleted"),
 ])
 SCHEMAS.update({
-    "Page": obj({"file_id": "s", "title": "s", "bot": "s", "bot_name": "s", "version": "i", "updated": "s",
+    "Page": obj({"file_id": "s", "title": "s", "bot_id": "s", "bot_name": "s", "version": "i", "updated_at": "s",
                  "updated_by": "n", "updated_by_name": "s",
                  "cadence": {"type": "string", "enum": ["none", "daily", "weekly", "monthly"]},
                  "as_of": {"type": ["string", "null"], "description": "The date the data is from (YYYY-MM-DD)"},
                  "stale_days": {"type": ["integer", "null"], "description": "Days since the last version once past "
                                 "1.5x the cadence; null while current or without a cadence"},
-                 "replaced_by": {"type": ["string", "null"], "description": "The newer page's file id, when the reader "
+                 "replaced_by_id": {"type": ["string", "null"], "description": "The newer page's file id, when the reader "
                                  "may see it"}, "replaced_by_title": "n", "archived": "b", "task_id": "n",
                  "src": {"type": ["string", "null"], "description": "Where to frame the page; null means open it "
                          "(GET /api/v2/files/{fid}/versions/{number})"}},
-                required=["file_id", "title", "bot", "bot_name", "version", "updated", "updated_by", "cadence",
-                          "as_of", "stale_days", "replaced_by", "archived", "task_id", "src"]),
+                required=["file_id", "title", "bot_id", "bot_name", "version", "updated_at", "updated_by", "cadence",
+                          "as_of", "stale_days", "replaced_by_id", "archived", "task_id", "src"]),
     "PageShown": obj({"page": ref("Page"), "can_manage": "b", "can_delete": "b",
                       "pinned": {"type": "array", "description": "The places it is pinned that the caller may open",
                                  "items": obj({"place": "s", "label": "s"})}}, required=["page"]),
@@ -2286,7 +2305,7 @@ SCHEMAS.update({
                        required=["id", "bot", "title", "kind", "library_kind", "version", "last_activity_at"]),
     "FileLibrary": obj({"files": items(ref("LibraryFile")), "has_more": "b", "next_cursor": "n"}),
     "FileSearchHit": obj({"id": "s", "title": "s", "kind": "s", "library_kind": "s", "bot": "s", "bot_name": "s",
-                          "version": "i", "updated": "s", "url": "n", "page": "b", "excerpt": "s", "score": "f"}),
+                          "version": "i", "updated_at": "s", "url": "n", "page": "b", "excerpt": "s", "score": "f"}),
     "FileSearch": obj({"results": items(ref("FileSearchHit"))}),
     "FileDeleted": obj({"deleted": "s", "versions": "i"}),
 })
@@ -2311,7 +2330,7 @@ TAGS['Cards and pins'] = ("Tico's built-in cards and where pages and cards are p
                           "sidebars and tasks (docs/overview.md). A card shows each reader only what they may see.")
 STABLE.extend([
     ('/api/v2/places/{place}', 'get', 'Cards and pins', 'getPlace', 'A place\'s pins in order (dashboard, team:<group>, '
-     'bot:<slug>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable pages are '
+     'bot:<id>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable pages are '
      'left out', 'Place'),
     ('/api/v2/places/{place}', 'put', 'Cards and pins', 'savePlace', 'Save a Dashboard, team page or My dashboard (its '
      'default cards become pins); a team page\'s audience sets its group\'s Read', 'Place'),
@@ -2367,7 +2386,7 @@ SCHEMAS['CardList'] = obj({'cards': items(ref('Card')), 'next': 'n'})
 SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'team', 'bot', 'task', 'person']}, 'saved': 'b', 'can_edit': 'b',
                         'pins': items(obj({'id': 'n', 'item': 'n', 'position': 'i', 'size': {'enum': ['small', 'medium', 'large']},
                                            'card': ref('Card'),
-                                           'page': obj({'file_id': 's', 'title': 's', 'bot': 's', 'updated': 's', 'archived': 'b'})},
+                                           'page': obj({'file_id': 's', 'title': 's', 'bot': 's', 'updated_at': 's', 'archived': 'b'})},
                                           required=['id', 'item', 'position', 'size'])),
                         'audience': {'type': 'object', 'description': 'A team page: who sees it (docs/permissions.md)'},
                         'name': 's', 'group': 's'}, required=['place', 'kind', 'saved', 'can_edit', 'pins'])
@@ -2391,9 +2410,9 @@ SCHEMAS['ModelSubscription'] = obj({
     'usage': {'anyOf': [obj({'window': {'type': ['string', 'null'], 'enum': ['5h', 'week', None]}, 'used_pct': NUM_N,
                              'cost_usd_month': NUM_N, 'resets_at': 'n'}, required=['window', 'used_pct', 'cost_usd_month']),
                         {'type': 'null'}]},
-    'added_by': 's', 'added_by_name': 's', 'created': 's', 'updated': 's'},
+    'added_by': 's', 'added_by_name': 's', 'created_at': 's', 'updated_at': 's'},
     required=['id', 'name', 'kind', 'runtime', 'label', 'status', 'status_detail', 'status_at', 'preview', 'revision',
-              'computers', 'usage', 'added_by', 'added_by_name', 'created', 'updated'])
+              'computers', 'usage', 'added_by', 'added_by_name', 'created_at', 'updated_at'])
 SCHEMAS['ModelSubscriptionList'] = obj({
     'subscriptions': items(ref('ModelSubscription')),
     'kinds': items(obj({'kind': _SUB_KIND, 'label': 's', 'runtime': {'enum': ['claude', 'codex']}, 'secret_label': 's', 'help': 's'}))})
@@ -2435,12 +2454,12 @@ STABLE.extend([
      'Discard an open card without repository changes, or queue deterministic Keep on its capable assigned computer. Failed re-checks leave the card open.', 'MemoryTidyCardResult'),
 ])
 SCHEMAS['MemoryTidyCard'] = obj({
-    'id': 's', 'kind': {'enum': ['memory_tidy']}, 'bot': 's', 'reviewer': 's', 'requester': 's', 'title': 's',
+    'id': 's', 'kind': {'enum': ['memory_tidy']}, 'bot': 's', 'reviewer': 's', 'requester_id': 's', 'title': 's',
     'memory_commit': 's', 'model': 's', 'cost_usd': {'type': 'number', 'description': 'Filing-ledger list-price estimate, including subscription usage.'},
     'diary': 's', 'diff': {'type': 'string', 'description': 'Checked unified diff; present on detail reads and decisions, omitted from lists.'},
-    'created': 's', 'expires': 's', 'status': {'enum': ['open', 'withdrawn', 'discarded', 'kept']}, 'reason': 's', 'keep_available': 'b', 'keep_pending': 'b',
-}, required=['id', 'kind', 'bot', 'reviewer', 'requester', 'title', 'memory_commit', 'model', 'cost_usd', 'diary',
-             'created', 'expires', 'status', 'reason', 'keep_available'])
+    'created_at': 's', 'expires_at': 's', 'status': {'enum': ['open', 'withdrawn', 'discarded', 'kept']}, 'reason': 's', 'keep_available': 'b', 'keep_pending': 'b',
+}, required=['id', 'kind', 'bot', 'reviewer', 'requester_id', 'title', 'memory_commit', 'model', 'cost_usd', 'diary',
+             'created_at', 'expires_at', 'status', 'reason', 'keep_available'])
 SCHEMAS['MemoryTidyCards'] = obj({'cards': items(ref('MemoryTidyCard'))})
 SCHEMAS['MemoryTidyCardResult'] = obj({'card': ref('MemoryTidyCard')})
 
@@ -2489,7 +2508,7 @@ SCHEMAS.update({
     "ThreadView": obj({"id": "s", "title": "s",
                        "audience": {"type": "string", "enum": ["company", "team", "members", "task", "home", "personal",
                                                                "participants", "meeting"]},
-                       "audience_group_id": "n", "owner_actor": "n",
+                       "audience_group_id": "n", "owner_id": "n",
                        "parent_id": "n", "parent_message_id": "n", "root_id": "s", "path": "a", "kind": "n",
                        "task_id": "n", "created_at": "s", "last_message_at": "n", "archived_at": "n",
                        "last_seq": "i", "last_unread_seq": "i", "me": "o", "members": "o",
@@ -2504,12 +2523,12 @@ SCHEMAS.update({
     "ThreadSidebar": obj({"attention": items({"type": "object"}), "threads": items(ref("ThreadView")),
                           "dms": items({"type": "object"}), "next_cursor": "n"},
                          required=["attention", "threads", "dms"]),
-    "ThreadSearch": obj({"hits": items(obj({"message_id": "s", "thread_id": "s", "title": "s", "from_actor": "s",
-                                            "created": "s", "excerpt": "s"},
+    "ThreadSearch": obj({"hits": items(obj({"message_id": "s", "thread_id": "s", "title": "s", "sender_id": "s",
+                                            "created_at": "s", "excerpt": "s"},
                                            required=["message_id", "thread_id", "excerpt"])),
                          "next_cursor": "n"}, required=["hits", "next_cursor"]),
-    "ThreadMessage": obj({"id": "s", "conversation_id": "s", "thread_id": "s", "seq": "i", "from_actor": "s",
-                          "to_actor": "n", "kind": "s", "body": "n", "created": "s", "edited_at": "n",
+    "ThreadMessage": obj({"id": "s", "conversation_id": "s", "thread_id": "s", "seq": "i", "sender_id": "s",
+                          "recipient_id": "n", "kind": "s", "body": "n", "created_at": "s", "edited_at": "n",
                           "revision": "i", "refs": "o", "deleted": "b", "root_id": "n", "origin_id": "n",
                           "parent_message_id": "n", "depth": "i", "hidden": "b",
                           "sub_thread": {"type": ["object", "null"], "description": "The sub-thread branching from this "
@@ -2770,7 +2789,7 @@ STABLE.extend([
      "place when `seat_id` names one, which the bot then fills", "CloudAgentAdded"),
     ("/api/v2/seats/{seat_id}/cancel-request", "post", "Team chart", "cancelSeatRequest",
      "Withdraw a seat's cloud agent request: Tico hears of it, the seat closes and its first task is declined",
-     "SeatCancelled"),
+     "SeatCanceled"),
 ])
 SCHEMAS.update({
     "CloudAgent": obj({"id": "s", "name": "s", "maker": "s", "site": "s", "line": "s", "supported": "b",
@@ -2783,7 +2802,7 @@ SCHEMAS.update({
                       "steps": items({"enum": ["requested", "building", "ready"]}),
                       "tasks": items(obj({"id": "s", "title": "s", "status": "s"}, required=["id", "title", "status"]))},
                      required=["seat", "agent", "steps", "tasks"]),
-    "SeatCancelled": obj({"id": "s", "closed": "b", "request_state": "s"}, required=["id", "closed", "request_state"]),
+    "SeatCanceled": obj({"id": "s", "closed": "b", "request_state": "s"}, required=["id", "closed", "request_state"]),
 })
 SCHEMAS["Seat"]["properties"].update({name: _t("s") for name in ("agent", "agent_name", "request_state")})
 SCHEMAS["Seat"]["required"] = sorted(set(SCHEMAS["Seat"]["required"]) | {"agent", "agent_name", "request_state"})
@@ -2805,7 +2824,7 @@ SCHEMAS.update({
                       "goal_id": "n", "parent_kpi_id": "n", "growth_role": "n", "stage": "n", "loop_name": "n",
                       "loop_step": NUM_N_INT,
                       "series": items(obj({"at": "n", "value": {"type": "number"}}))}),
-    "GrowthMarker": obj({"task_id": "s", "title": "s", "kind": {"enum": ["started", "finished"]},
+    "GrowthMarker": obj({"task_id": "s", "title": "s", "kind": {"enum": "started finished".split()},
                          "outcome": {"enum": ["won", "lost", "inconclusive", "dropped", None]}, "at": "s",
                          "channels": items({"type": "string"}), "goal_id": "n"}),
     "GrowthNumbers": obj({"months": items({"type": "string"}), "series": items(ref("GrowthMonth")),

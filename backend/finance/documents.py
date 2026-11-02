@@ -170,7 +170,7 @@ def _contact_fields(ctx: Ctx, p: V.Payload, old: Any = None) -> dict[str, object
         emails = [] if p.get("emails") == [] else V.texts(p, "emails", 20)
         if any("@" not in e or len(e) > 200 for e in emails):
             raise invalid("emails are addresses")
-        out["emails_json"] = SK.dump([e.lower() for e in emails])
+        out["emails"] = SK.dump([e.lower() for e in emails])
     if "default_account_id" in p:
         account_id = V.opt_text(p, "default_account_id", 80) or ""
         account = ctx.accounts.get(account_id)
@@ -342,7 +342,7 @@ def resolve_lines(ctx: Ctx, who: str, kind: str, contact: Any,
 def _line_rows(lines: Sequence[AP.DocLine], who: str, at: str) -> list[dict[str, object]]:
     """The rows a document's lines are stored as. Only an invoice line says whether it is taxable."""
     return [{"account_id": x.account_id, "amount": x.amount, "description": x.description,
-             "tags_json": SK.dump(dict(x.tags)), "created_at": at, "created_by": who, "item_id": x.item_id or None,
+             "tags": SK.dump(dict(x.tags)), "created_at": at, "created_by": who, "item_id": x.item_id or None,
              **({"po_line_id": x.po_line_id} if x.po_line_id else {}),
              **({"prepaid_start": x.prepaid[0], "prepaid_months": x.prepaid[1]} if x.prepaid else {}),
              **({"taxable": int(x.taxable)} if x.taxable is not None else {})} for x in lines]
@@ -350,7 +350,7 @@ def _line_rows(lines: Sequence[AP.DocLine], who: str, at: str) -> list[dict[str,
 
 def doc_lines_of(ctx: Ctx, kind: str, doc_id: str) -> list[AP.DocLine]:
     return [AP.DocLine(str(r["account_id"]), int(r["amount"]), str(r["description"]),
-                       cast(dict[str, str], SK.loads(r["tags_json"])), None, str(r["item_id"] or ""),
+                       cast(dict[str, str], SK.loads(r["tags"])), None, str(r["item_id"] or ""),
                        prepaid=(str(r["prepaid_start"]), int(r["prepaid_months"]))
                        if kind == "bill" and r["prepaid_start"] else None)
             for r in SAP.lines(ctx.c, kind, [doc_id]).get(doc_id, [])]
@@ -619,7 +619,7 @@ def bill_schedule(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if not may_write(ctx, who, control(ctx, "bill").id, {}):
         raise denied("paying a bill posts to accounts payable, which is outside your view")
     pay_on = V.day(p, "pay_on")
-    old = SK.loads(bill["schedule_json"])
+    old = SK.loads(bill["schedule"])
     n = int(cast(int, old.get("n") or 0)) + 1
     sched = {"n": n, "pay_on": pay_on, "money_account_id": str(money["id"]), "recipient_id": str(rec["id"]),
              "memo": V.opt_text(p, "memo", 140) or "", "by": who}
@@ -627,7 +627,7 @@ def bill_schedule(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     def apply(aid: str) -> Result:
         from .actions import withdraw_bill_asks
         SAP.update(ctx.c, "fin_bills", str(bill["id"]), {"status": "scheduled", "pay_on": pay_on,
-                                                         "schedule_json": SK.dump(sched), "updated_at": ctx.at})
+                                                         "schedule": SK.dump(sched), "updated_at": ctx.at})
         # A rescheduled bill pays only on its new day: an earlier ask to pay it (waiting on approval) is withdrawn,
         # after the new schedule is written so its end does not reopen the bill.
         withdraw_bill_asks(ctx, str(bill["id"]), aid, "the bill was rescheduled")
@@ -723,7 +723,7 @@ def document(ctx: Ctx, kind: str, doc: Any) -> Result:
             "currency": str(doc["currency"]), "total": int(doc["total"]), "memo": str(doc["memo"]),
             "payment_link": doc["payment_link"] if kind == "invoice" else None,
             "to": {"id": str(customer["id"]), "name": str(customer["name"]),
-                   "emails": SK.loads_list(customer["emails_json"])} if customer is not None else None,
+                   "emails": SK.loads_list(customer["emails"])} if customer is not None else None,
             "lines": [{"description": str(r["description"]), "amount": int(r["amount"])} for r in lines]}
 
 
@@ -1004,7 +1004,7 @@ def unsettle(ctx: Ctx, s: Any, by: str = SYSTEM, *, cash: bool = True) -> None:
 
 
 def feed_gone(ctx: Ctx, feed_id: str, entry_ids: Sequence[str] = ()) -> None:
-    """A feed row unposted (the bank changed or cancelled it, or it was re-categorized): what it paid is owed again,
+    """A feed row unposted (the bank changed or canceled it, or it was re-categorized): what it paid is owed again,
     including what a Finance payment settled through the row's entries (a revised row settles anew, at its new
     amount)."""
     for s in SAP.settlements_from(ctx.c, "feed", feed_id):
@@ -1124,7 +1124,7 @@ def _sees_doc(ctx: Ctx, who: str, kind: str, doc: Any) -> bool:
 def _pays_vendor(ctx: Ctx, bill: Any, rec: Any) -> bool:
     vendor = SAP.get(ctx.c, "fin_contacts", str(bill["vendor_id"]))
     allowed: set[str] = {str(vendor["payment_ref"] or "")} if vendor is not None else set()
-    allowed.add(str(SK.loads(bill["schedule_json"]).get("recipient_id") or ""))
+    allowed.add(str(SK.loads(bill["schedule"]).get("recipient_id") or ""))
     return str(rec["id"]) in allowed - {""} or str(rec["contact_id"] or "") == str(bill["vendor_id"])
 
 
@@ -1192,7 +1192,7 @@ def bill_ask_waiting(ctx: Ctx, bill_id: str) -> bool:
 
 
 def payment_ended(ctx: Ctx, pay: Any) -> None:
-    """A bill's payment failed, was returned or cancelled: what it settled is owed again and the bill is open."""
+    """A bill's payment failed, was returned or canceled: what it settled is owed again and the bill is open."""
     obligation = str(pay["obligation"] or "")
     if not obligation.startswith("bill:"):
         return
@@ -1210,7 +1210,7 @@ def payment_ask_ended(ctx: Ctx, action_id: str, body: Mapping[str, object], stat
     bill = SAP.get(ctx.c, "fin_bills", obligation.removeprefix("bill:")) if obligation.startswith("bill:") else None
     if bill is None or str(bill["status"]) != "scheduled":
         return
-    sched = SK.loads(bill["schedule_json"])
+    sched = SK.loads(bill["schedule"])
     if str(sched.get("action_id") or "") == action_id:
         _unschedule(ctx, bill, sched, status, reason, int(cast(int, body.get("amount") or 0)))
 
@@ -1219,7 +1219,7 @@ def _unschedule(ctx: Ctx, bill: Any, sched: Mapping[str, object], status: str, r
     """Open the bill with no schedule. What the bill row shows of the ask stays (`ended`); its count stays, so the
     next schedule's payment gets a fresh key."""
     SAP.update(ctx.c, "fin_bills", str(bill["id"]), {"status": "open", "pay_on": None, "updated_at": ctx.at,
-                                                     "schedule_json": SK.dump({
+                                                     "schedule": SK.dump({
                                                          "n": sched.get("n") or 1,
                                                          "ended": {"status": status, "reason": reason[:300],
                                                                    "on": ctx.today, "amount": amount}})})
@@ -1864,7 +1864,7 @@ def pay_due(ctx: Ctx) -> int:
     from .payments import admin_person
     n = 0
     for bill in SAP.scheduled_due(ctx.c, ctx.book.id, ctx.today):
-        sched = SK.loads(bill["schedule_json"])
+        sched = SK.loads(bill["schedule"])
         obligation = f"bill:{bill['id']}"
         if SK.live_payment(ctx.c, obligation) is not None:
             SAP.update(ctx.c, "fin_bills", str(bill["id"]), {"pay_on": None})
@@ -1885,7 +1885,7 @@ def pay_due(ctx: Ctx) -> int:
         # again; refused, the bill is open again with no schedule.
         if done:
             SAP.update(ctx.c, "fin_bills", str(bill["id"]), {
-                "updated_at": ctx.at, "schedule_json": SK.dump({**sched, "action_id": res.action_id,
+                "updated_at": ctx.at, "schedule": SK.dump({**sched, "action_id": res.action_id,
                                                                 "result": res.status})})
         else:
             _unschedule(ctx, bill, sched, res.status, res.reason, left)

@@ -40,7 +40,7 @@ class Cutoffs:
         return self.holding("bot:" + bot)
 
     def holding(self, mate: str) -> Cutoff | None:
-        """The cutoff holding teammate `mate` (`bot:<slug>` or `human:<id>`), or None."""
+        """The cutoff holding teammate `mate` (`bot:<id>` or `human:<id>`), or None."""
         if not self.cut or self.ctx is None:
             return None
         if mate not in self._seen:

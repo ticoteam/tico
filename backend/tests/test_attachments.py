@@ -170,7 +170,7 @@ def test_a_shared_chat_file_records_what_an_upload_does(api, monkeypatch):
         blob = c.execute("SELECT blob_id FROM bot_file_versions WHERE file_id=? AND version=?",
                          (forwarded['id'], forwarded['version'])).fetchone()[0]
         lines = c.execute("SELECT actor,new FROM task_events WHERE task_id=? AND field='file'", (tid,)).fetchall()
-        audit = [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM events WHERE action='task.file' AND target=?",
+        audit = [json.loads(r[0]) for r in c.execute("SELECT detail FROM events WHERE action='task.file' AND target=?",
                                                      (tid,))]
         preview = c.execute("SELECT 1 FROM blob_media WHERE blob_id=?", (blob,)).fetchone()
     assert [tuple(r) for r in lines] == [('human:ben', forwarded['name'])]

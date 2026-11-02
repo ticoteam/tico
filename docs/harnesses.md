@@ -72,7 +72,7 @@ too; Muse's default there keeps the token in the login Keychain, outside the con
 into place and Cancel keeps. A saved login that points at the Keychain (from before this setting) shows as not
 ready, asking for a sign-in from Tico; Tico never reads or changes that Keychain item. Sign out runs `muse logout`;
 Switch account signs in to a temporary config folder and replaces the saved login only after success,
-for the computer's login. Cancelling keeps the old login. The runner retains the same protection for
+for the computer's login. Canceling keeps the old login. The runner retains the same protection for
 legacy named profiles, which Settings no longer lists.
 Version checks and sign-ins also set
 `MUSE_NO_AUTO_UPDATE=1` and `TBH_CREDENTIAL_BACKEND=file` (the manifest's `[env]`).

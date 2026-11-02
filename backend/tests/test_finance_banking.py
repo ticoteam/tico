@@ -409,7 +409,7 @@ def test_a_settled_card_charge_uses_its_allocation_at_its_actual_amount(books):
     fake.txns["txn-c1"] = _txn("txn-c1", "credit-io", -45.0, "creditCardTransaction", cardId="card-eve")
     fake.txns["txn-c2"] = _txn("txn-c2", "credit-io", 5.0, "creditCardTransaction", cardId="card-eve")
     with books.transaction() as c:
-        c.execute("UPDATE fin_connections SET settings_json='{}', cursor=NULL")             # backfill again
+        c.execute("UPDATE fin_connections SET settings='{}', cursor=NULL")             # backfill again
     sync_once(books, fake, "2026-10-15T14:00:00.000000Z")
     with books.read() as c:
         assert _card_use(c, card_id, "2026-10") == 4_000
@@ -432,7 +432,7 @@ def test_the_same_mercury_accounts_through_a_new_token_are_the_same_money_accoun
                                                     "token_creator_email": "ana@acme.example"})
         assert again.status == "committed", again
     with books.transaction() as c:
-        c.execute("UPDATE fin_connections SET settings_json='{}', cursor=NULL")
+        c.execute("UPDATE fin_connections SET settings='{}', cursor=NULL")
     sync_once(books, fake, "2026-10-15T14:00:00.000000Z")
     with books.read() as c:
         assert sorted(str(r[0]) for r in c.execute("SELECT id FROM fin_money_accounts")) == before
@@ -699,7 +699,7 @@ def test_a_re_dated_settled_card_charge_moves_its_use_to_the_new_month(books):
 
 
 def test_a_closed_month_card_correction_counts_only_the_change_in_the_open_month(books):
-    """Round 4 #1: a September card charge corrected, re-dated or cancelled after September closes leaves its use in
+    """Round 4 #1: a September card charge corrected, re-dated or canceled after September closes leaves its use in
     September's rollup and counts only the net change in October, so the card's allocation reserve never frees more
     than the books moved (remaining in October stays put)."""
     fake = FakeMercury()
@@ -740,7 +740,7 @@ def test_a_closed_month_card_correction_counts_only_the_change_in_the_open_month
     with books.read() as c:
         assert uses(c) == [15_000, -10_000]
         assert october(c) == (-10_000, 30_000, 80_000)
-    # Codex round 5 (a): a later update of the cancelled charge changes nothing the books did not.
+    # Codex round 5 (a): a later update of the canceled charge changes nothing the books did not.
     _arrives(fake, {**charge, "amount": -130.0, "status": "cancelled", "note": "x"}, 5, "evt-c10-5")
     sync_once(books, fake, "2026-10-18T12:30:00.000000Z")
     with books.read() as c:

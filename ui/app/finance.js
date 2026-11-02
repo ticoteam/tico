@@ -155,7 +155,7 @@ function finParseCents(text) {
 }
 // The group with no vendor, team or teammate (backend/finance/reads.py NONE): no real key starts with a space.
 const FIN_NONE = ' unattributed';
-// bot:<slug>, human:<id>, a team id, or FIN_NONE.
+// bot:<id>, human:<id>, a team id, or FIN_NONE.
 function finWho(ref) {
   const s = String(ref || '');
   if (!s || s === FIN_NONE) return 'Unattributed';
@@ -176,8 +176,8 @@ function finTeamKids(teams, id) {
 // isHelperBot): listed together as Helpers, after the org chart.
 function finHelper(actor) {
   if (!String(actor || '').startsWith('bot:')) return false;
-  const slug = actor.slice(4), e = (S.emps || []).find(x => x.name === slug);
-  return e ? isHelperBot(e) : isBuiltInBot(slug);
+  const id = actor.slice(4), e = (S.emps || []).find(x => x.id === id);
+  return e ? isHelperBot(e) : isBuiltInBot(id);
 }
 const finAvatar = (ref, size = 18) => String(ref || '').startsWith('bot:') ? avatar(ref.slice(4), size)
   : personAvatar((S.people || []).find(p => p.id === String(ref).slice(6)) || {name: finWho(ref)}, size);

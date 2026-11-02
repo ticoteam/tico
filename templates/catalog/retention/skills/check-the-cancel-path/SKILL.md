@@ -1,6 +1,6 @@
 ---
 name: check-the-cancel-path
-description: Check that a cancellation reply gives the exact way to finish cancelling, when billing stops and whether a refund applies, with no maze, guilt line or second offer after a no.
+description: Check that a cancellation reply gives the exact way to finish canceling, when billing stops and whether a refund applies, with no maze, guilt line or second offer after a no.
 ---
 # Check the cancel path
 
@@ -21,4 +21,4 @@ Checks before you finish:
 - No second offer, guilt line or maze step is in the text.
 - Where a rule applies to the customer's market, the owner has checked the reply before it is sent.
 
-Example (invented, for illustration): "To finish cancelling, reply 'cancel' to this email, or use Settings, then Plan, then Cancel. Billing stops at the end of the current month, 2026-09-30, and you keep access until then. No refund applies to the current month under our policy."
+Example (invented, for illustration): "To finish canceling, reply 'cancel' to this email, or use Settings, then Plan, then Cancel. Billing stops at the end of the current month, 2026-09-30, and you keep access until then. No refund applies to the current month under our policy."

@@ -1,0 +1,5 @@
+{
+  "and": "prose: `hub and ...` in templates/catalog/support/software/hq-tickets",
+  "app": "prose: `hub app` in templates/catalog/chief-of-staff/knowledge/status-practice.md",
+  "failing": "prose: `hub failing` in templates/catalog/video-producer/software/pipeline.py"
+}

@@ -16,7 +16,7 @@ const now = new Date().toISOString();
   const page = await browser.newPage({viewport: {width: 1300, height: 820}, serviceWorkers: 'block'});
   const errors = [], streams = [], legacy = [], reads = {snapshot: 0};
   page.on('pageerror', e => errors.push(e.message));
-  let snapshot = {messages: [{id: 'm1', from_actor: 'human:ana', body: 'Draft the release notes', created: now}], execution: null};
+  let snapshot = {messages: [{id: 'm1', sender_id: 'human:ana', body: 'Draft the release notes', created_at: now}], execution: null};
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -59,7 +59,7 @@ const now = new Date().toISOString();
   assert.equal(subscribed.searchParams.get('conversation'), 'c-ops', 'a non-cloud chat follows its conversation on the shared stream');
 
   // A reply from the bot: one read of the snapshot for the change, and the reply shows.
-  snapshot = {messages: [...snapshot.messages, {id: 'm2', from_actor: 'bot:coo', body: 'The notes are in the doc.', created: now}], execution: null};
+  snapshot = {messages: [...snapshot.messages, {id: 'm2', sender_id: 'bot:coo', body: 'The notes are in the doc.', created_at: now}], execution: null};
   await send(following, block(11, 'messages', {id: 'm2', conversation_id: 'c-ops', message: snapshot.messages[1]}));
   await page.getByText('The notes are in the doc.').waitFor();
   await page.waitForFunction(() => !LIVE_SOON.has('chat:c-ops') && !V2C.reading && !V2C.readAgain, null, {timeout: t(5000)});

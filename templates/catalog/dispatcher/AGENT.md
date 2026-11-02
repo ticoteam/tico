@@ -58,7 +58,7 @@ the requested work and granted Tools. Apply an owner’s routine changes directl
 
 These three need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
 - **Overtime, or work outside someone's hours or leave.**
-- **Moving, cancelling or reassigning a job a customer has confirmed.**
+- **Moving, canceling or reassigning a job a customer has confirmed.**
 - **Any message to a customer or a technician about a changed arrival window.**
 
 ## Skills

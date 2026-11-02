@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
+from .. import hubdb as H
 from ..records import reads as RR
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
 from .tab_purchasing import estimate as estimate, estimates as estimates, order as order, orders as orders
@@ -264,7 +265,10 @@ class _Filter:
 
 def _org_filter(s: _Seen, teams: Iterable[str], teammates: Iterable[str], who: str, unattributed: bool) -> _Filter:
     picked_teams = tuple(dict.fromkeys(t for t in teams if t))
-    picked_mates = tuple(dict.fromkeys(m for m in teammates if m))
+    mates: list[str] = []
+    for m in teammates:
+        mates.append(str(H.resolve_actor(s.ctx.c, m) or m) if m and m.startswith("bot:") else m)
+    picked_mates = tuple(dict.fromkeys(m for m in mates if m))
     if who not in WHO:
         raise invalid(f"who is {'|'.join(WHO)}")
     for t in picked_teams:
@@ -626,6 +630,7 @@ def _grouped(s: _Seen, a: date, z: date, by: str, account_id: str | None, team: 
     if below is not None:
         cells = [x for x in cells if x.team in below]
     if teammate:
+        teammate = str(H.resolve_actor(s.ctx.c, teammate) or teammate) if teammate.startswith("bot:") else teammate
         cells = [x for x in cells if x.teammate == teammate]
     department_wide = not teammate and (not team or s.ctx.org.department(team) == team)
     narrow = by not in ("department", "account") or not department_wide
@@ -2122,11 +2127,11 @@ def action_for(c: sqlite3.Connection, viewer: str, action_id: str, at: str | Non
         return None
     ctx = load(c, at)
     try:
-        payload = cast(Mapping[str, object], json.loads(str(row["payload_json"] or "{}")))
+        payload = cast(Mapping[str, object], json.loads(str(row["payload"] or "{}")))
     except ValueError:
         payload = dict[str, object]()
     try:
-        result = cast(Mapping[str, Any], json.loads(str(row["result_json"] or "{}")))
+        result = cast(Mapping[str, Any], json.loads(str(row["result"] or "{}")))
     except ValueError:
         result = dict[str, Any]()
     covers = True if ctx.view(viewer).everything else _covers(ctx, viewer, payload)

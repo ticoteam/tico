@@ -123,7 +123,7 @@ def test_a_card_whose_allocation_goes_to_zero_before_it_is_issued_is_not_issued_
         assert _state(c, card_id) == ("frozen", "frozen", 12_000, 12_000, 12_000)
 
 
-def test_a_card_cancelled_before_it_is_issued_is_never_created(books):
+def test_a_card_canceled_before_it_is_issued_is_never_created(books):
     fake = FakeMercury()
     connect(books, fake)
     _, card_id = _card(books)
@@ -176,7 +176,7 @@ def test_lower_limits_and_cancels_keep_the_reservation_until_mercury_confirms(bo
     sync_once(books, fake, HOURS[6])
     assert fake.sent("card_state") == [("card-eve", "cancel")]
     with books.read() as c:
-        assert _state(c, card_id) == ("cancelled", "cancelled", 11_000, 11_000, 0)
+        assert _state(c, card_id) == ("canceled", "canceled", 11_000, 11_000, 0)
 
 
 def test_an_allocation_on_a_card_must_be_on_its_own_budget(books):
@@ -309,7 +309,7 @@ def test_a_cards_writes_go_one_at_a_time_and_an_out_of_step_answer_requeues(book
 def test_a_cut_off_create_keeps_its_reservation_through_a_cancel_until_a_person_confirms(books):
     """N2, round 3 #1: a creation cut off mid-call is uncertain; a cancel keeps the reservation. Mercury's whole card
     list (every page) only gives candidates: no match, a same-nickname card or an empty list decides nothing. A
-    person confirms the Mercury card (read from Mercury, adopted, cancelled there) or that there is none (freed)."""
+    person confirms the Mercury card (read from Mercury, adopted, canceled there) or that there is none (freed)."""
     fake = FakeMercury()
     connect(books, fake)
     budget_id, card_id = _card(books)
@@ -350,15 +350,15 @@ def test_a_cut_off_create_keeps_its_reservation_through_a_cancel_until_a_person_
         assert act(c, OWNER, "card_resolve", {"card_id": card_id, "provider_card_id": "card-found"}
                    ).status == "committed"
         assert act(c, OWNER, "card_resolve", {"card_id": other_id, "none": True}).status == "committed"
-        assert _state(c, other_id)[1] == "cancelled" and _state(c, other_id)[4] == 0     # never issued: freed
+        assert _state(c, other_id)[1] == "canceled" and _state(c, other_id)[4] == 0     # never issued: freed
         assert act(c, OWNER, "card_resolve", {"card_id": other_id, "none": True}).code == "conflict"
-    sync_once(books, fake, HOURS[3])                                       # read from Mercury, adopted, cancelled
+    sync_once(books, fake, HOURS[3])                                       # read from Mercury, adopted, canceled
     sync_once(books, fake, HOURS[4])
     assert fake.sent("card") == ["card-found"]
     assert fake.sent("card_state") == [("card-found", "cancel")]
     assert fake.sent("create_card") == []
     with books.read() as c:
-        assert _state(c, card_id) == ("cancelled", "cancelled", 20_000, 20_000, 0)
+        assert _state(c, card_id) == ("canceled", "canceled", 20_000, 20_000, 0)
         assert c.execute("SELECT provider_card_id, last4 FROM fin_cards WHERE id=?", (card_id,)).fetchone()[:] == \
             ("card-found", "4242")
 

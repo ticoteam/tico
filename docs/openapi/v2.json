@@ -10601,7 +10601,7 @@
     },
     "/api/v2/events": {
       "get": {
-        "summary": "Server-sent events: tasks, messages, runs, bots and Needs you as they change. topics=<comma list> (default all), after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<slugs> narrows runs and bots, task=<ids> and party=<actors> narrow tasks to those and to the ones those actors own or asked for, needs=changes sends Needs you as changed ids",
+        "summary": "Server-sent events: tasks, messages, runs, bots and Needs you as they change. topics=<comma list> (default all), after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<bot ids or slugs> narrows runs and bots, task=<ids> and party=<actors> narrow tasks to those and to the ones those actors own or asked for, needs=changes sends Needs you as changed ids",
         "operationId": "streamEvents",
         "parameters": [
           {
@@ -10735,7 +10735,7 @@
         ],
         "responses": {
           "200": {
-            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `attempt_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's or attempt's state).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
+            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -13028,7 +13028,7 @@
                   "enum": [
                     "active",
                     "frozen",
-                    "cancelled"
+                    "canceled"
                   ],
                   "type": "string"
                 },
@@ -14655,7 +14655,7 @@
                     "settled",
                     "returned",
                     "failed",
-                    "cancelled",
+                    "canceled",
                     "unknown"
                   ],
                   "type": "string"
@@ -16968,7 +16968,7 @@
     },
     "/api/v2/goals/read-back": {
       "post": {
-        "summary": "The Strategy Bot only, in the owner's own chat: Tico writes the read-back of up to 20 changes to goals, measures and suggestions as its reply and stores the exact saves. The owner's yes to it (a plain yes, or a yes to some by number) within 30 minutes lets exactly those saves through (each step's method, path and body_json, sent as it is), cited with X-Tico-On-Behalf-Of; anything else is 403 not_agreed. A colour, done or dropped, archiving, a reading or the Vision is refused here: it stays a click",
+        "summary": "The Strategy Bot only, in the owner's own chat: Tico writes the read-back of up to 20 changes to goals, measures and suggestions as its reply and stores the exact saves. The owner's yes to it (a plain yes, or a yes to some by number) within 30 minutes lets exactly those saves through (each step's method, path and body, sent as it is), cited with X-Tico-On-Behalf-Of; anything else is 403 not_agreed. A colour, done or dropped, archiving, a reading or the Vision is refused here: it stays a click",
         "operationId": "readBackGoalChanges",
         "requestBody": {
           "content": {
@@ -24682,7 +24682,7 @@
     },
     "/api/v2/org/order/{manager}": {
       "get": {
-        "summary": "A manager's direct reports (a bot's slug or a human's id), humans and the bots the caller can see, in the chart's order",
+        "summary": "A manager's direct reports (a bot's id or slug, or a human's id), humans and the bots the caller can see, in the chart's order",
         "operationId": "getReportOrder",
         "parameters": [
           {
@@ -25372,7 +25372,7 @@
     },
     "/api/v2/places/{place}": {
       "get": {
-        "summary": "A place's pins in order (dashboard, team:<group>, bot:<slug>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable pages are left out",
+        "summary": "A place's pins in order (dashboard, team:<group>, bot:<id>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable pages are left out",
         "operationId": "getPlace",
         "parameters": [
           {
@@ -29390,7 +29390,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SeatCancelled"
+                  "$ref": "#/components/schemas/SeatCanceled"
                 }
               }
             }
@@ -38576,7 +38576,7 @@
     },
     "/api/v2/usage": {
       "get": {
-        "summary": "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, harness, model, effort or subscription, filterable by those run dimensions and department (__unknown__ selects missing values). The owner and bot administrators see every bot; anyone else sees the bots they run or own. ?bot=<slug> is that bot's daily series and top routines instead",
+        "summary": "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, harness, model, effort or subscription, filterable by those run dimensions and department (__unknown__ selects missing values). The owner and bot administrators see every bot; anyone else sees the bots they run or own. ?bot=<bot id or slug> is that bot's daily series and top routines instead",
         "operationId": "getUsage",
         "parameters": [
           {
@@ -39879,7 +39879,7 @@
     },
     "/api/v2/webhooks/{hook_id}/sends/{send_id}/retry": {
       "post": {
-        "summary": "Send a failed, cancelled or delivered send again now",
+        "summary": "Send a failed, canceled or delivered send again now",
         "operationId": "retryWebhookSend",
         "parameters": [
           {
@@ -41272,7 +41272,7 @@
         "properties": {
           "action": {
             "type": "object",
-            "description": "id, summary, method, path, body, status (pending, running, done, failed, cancelled, expired), result"
+            "description": "id, summary, method, path, body, status (pending, running, done, failed, canceled, expired), result"
           },
           "message_id": {
             "type": "string"
@@ -41631,7 +41631,7 @@
           "name": {
             "type": "string"
           },
-          "owner": {
+          "owner_id": {
             "type": "string"
           },
           "enabled": {
@@ -41704,7 +41704,7 @@
               "null"
             ]
           },
-          "next_due": {
+          "next_due_at": {
             "type": [
               "string",
               "null"
@@ -41832,7 +41832,7 @@
           "name": {
             "type": "string"
           },
-          "owner": {
+          "owner_id": {
             "type": "string"
           },
           "enabled": {
@@ -41905,7 +41905,7 @@
               "null"
             ]
           },
-          "next_due": {
+          "next_due_at": {
             "type": [
               "string",
               "null"
@@ -42131,13 +42131,13 @@
                     "system"
                   ]
                 },
-                "owner": {
+                "owner_id": {
                   "type": "string"
                 },
-                "started": {
+                "started_at": {
                   "type": "string"
                 },
-                "finished": {
+                "finished_at": {
                   "type": [
                     "string",
                     "null"
@@ -42170,7 +42170,7 @@
                 "automation_id",
                 "automation_name",
                 "id",
-                "started",
+                "started_at",
                 "status",
                 "trigger"
               ],
@@ -42325,10 +42325,10 @@
           "trigger_ref": {
             "type": "string"
           },
-          "started": {
+          "started_at": {
             "type": "string"
           },
-          "finished": {
+          "finished_at": {
             "type": [
               "string",
               "null"
@@ -42560,7 +42560,7 @@
                 "actor": {
                   "type": "string"
                 },
-                "at": {
+                "created_at": {
                   "type": "string"
                 },
                 "status": {
@@ -42578,7 +42578,7 @@
               },
               "required": [
                 "actor",
-                "at",
+                "created_at",
                 "flow",
                 "n",
                 "status"
@@ -42621,6 +42621,10 @@
       "Bot": {
         "type": "object",
         "properties": {
+          "id": {
+            "type": "string",
+            "description": "The bot's stable id (its slug for a bot made before ids, else a UUIDv7); the slug is a renameable label"
+          },
           "slug": {
             "type": "string"
           },
@@ -42639,6 +42643,10 @@
           "description": {
             "type": "string"
           },
+          "folder": {
+            "type": "string",
+            "description": "Its checkout's folder on a computer; clients find its files by this, never by its slug."
+          },
           "reports_to": {
             "type": [
               "string",
@@ -42651,7 +42659,7 @@
               "null"
             ]
           },
-          "operator": {
+          "owner_id": {
             "type": [
               "string",
               "null"
@@ -42709,6 +42717,7 @@
         "required": [
           "access",
           "display_name",
+          "id",
           "owners",
           "slug",
           "state"
@@ -42844,13 +42853,13 @@
                 "label": {
                   "type": "string"
                 },
-                "operator": {
+                "owner_id": {
                   "type": "string"
                 }
               },
               "required": [
                 "label",
-                "operator",
+                "owner_id",
                 "runner_id"
               ],
               "additionalProperties": true
@@ -42964,6 +42973,10 @@
       "BotDetail": {
         "type": "object",
         "properties": {
+          "id": {
+            "type": "string",
+            "description": "The bot's stable id (its slug for a bot made before ids, else a UUIDv7); the slug is a renameable label"
+          },
           "slug": {
             "type": "string"
           },
@@ -42997,13 +43010,13 @@
           "reports_to_name": {
             "type": "string"
           },
-          "operator": {
+          "owner_id": {
             "type": [
               "string",
               "null"
             ]
           },
-          "operator_name": {
+          "owner_name": {
             "type": "string"
           },
           "team": {
@@ -43268,7 +43281,7 @@
           "published": {
             "type": "boolean"
           },
-          "updated": {
+          "updated_at": {
             "type": [
               "string",
               "null"
@@ -43283,7 +43296,7 @@
           "content",
           "published",
           "source",
-          "updated"
+          "updated_at"
         ],
         "additionalProperties": true
       },
@@ -43818,7 +43831,7 @@
           "task_id": {
             "type": "string"
           },
-          "cancelled": {
+          "canceled": {
             "type": "boolean"
           },
           "removal": {
@@ -45120,7 +45133,7 @@
                 "id": {
                   "type": "string"
                 },
-                "ts": {
+                "created_at": {
                   "type": "string"
                 },
                 "actor": {
@@ -45145,11 +45158,11 @@
               "required": [
                 "actor",
                 "actor_name",
+                "created_at",
                 "field",
                 "id",
                 "new",
-                "old",
-                "ts"
+                "old"
               ],
               "additionalProperties": true
             }
@@ -45172,7 +45185,7 @@
               "description": {
                 "type": "string"
               },
-              "updated": {
+              "updated_at": {
                 "type": [
                   "string",
                   "null"
@@ -45190,7 +45203,7 @@
             },
             "required": [
               "description",
-              "updated",
+              "updated_at",
               "updated_by",
               "updated_by_name",
               "vision"
@@ -45547,7 +45560,7 @@
               "type": "string"
             }
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "last_message_at": {
@@ -45562,7 +45575,7 @@
         },
         "required": [
           "closed_at",
-          "created",
+          "created_at",
           "id",
           "kind",
           "last_message_at",
@@ -45876,7 +45889,7 @@
               "access_needed"
             ]
           },
-          "last_checked": {
+          "last_checked_at": {
             "type": [
               "string",
               "null"
@@ -45899,7 +45912,7 @@
           "error_code",
           "id",
           "kind",
-          "last_checked",
+          "last_checked_at",
           "path",
           "provider",
           "reference",
@@ -46017,7 +46030,7 @@
                 "title": {
                   "type": "string"
                 },
-                "created": {
+                "created_at": {
                   "type": "string"
                 },
                 "last_message_at": {
@@ -46035,7 +46048,7 @@
               },
               "required": [
                 "closed_at",
-                "created",
+                "created_at",
                 "id",
                 "last_message_at",
                 "title"
@@ -46644,10 +46657,10 @@
           "message_id": {
             "type": "string"
           },
-          "bot": {
+          "bot_id": {
             "type": "string"
           },
-          "attempt_id": {
+          "run_id": {
             "type": [
               "string",
               "null"
@@ -46692,12 +46705,12 @@
           }
         },
         "required": [
-          "attempt_id",
-          "bot",
+          "bot_id",
           "job_id",
           "label",
           "message_id",
           "parts",
+          "run_id",
           "state",
           "text"
         ],
@@ -46743,7 +46756,7 @@
               "commit": {
                 "type": "string"
               },
-              "last_checked": {
+              "last_checked_at": {
                 "type": [
                   "string",
                   "null"
@@ -46761,7 +46774,7 @@
               "commit",
               "content",
               "id",
-              "last_checked",
+              "last_checked_at",
               "path",
               "reference_notice",
               "source_id",
@@ -46822,7 +46835,7 @@
           "commit": {
             "type": "string"
           },
-          "last_checked": {
+          "last_checked_at": {
             "type": [
               "string",
               "null"
@@ -46841,7 +46854,7 @@
           "commit",
           "excerpt",
           "id",
-          "last_checked",
+          "last_checked_at",
           "path",
           "score",
           "section",
@@ -47031,7 +47044,7 @@
           "version": {
             "type": "integer"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "url": {
@@ -47060,7 +47073,7 @@
           "page",
           "score",
           "title",
-          "updated",
+          "updated_at",
           "url",
           "version"
         ],
@@ -48827,7 +48840,7 @@
                       "settled",
                       "returned",
                       "failed",
-                      "cancelled",
+                      "canceled",
                       "unknown",
                       "denied",
                       "expired",
@@ -49386,7 +49399,7 @@
                     "settled",
                     "returned",
                     "failed",
-                    "cancelled",
+                    "canceled",
                     "unknown"
                   ]
                 },
@@ -50408,7 +50421,7 @@
                     "unknown",
                     "failed",
                     "posted",
-                    "cancelled"
+                    "canceled"
                   ]
                 },
                 "amount": {
@@ -50577,7 +50590,7 @@
           "title": {
             "type": "string"
           },
-          "owner": {
+          "owner_id": {
             "type": "string"
           },
           "parent_id": {
@@ -50599,7 +50612,7 @@
           "status_note": {
             "type": "string"
           },
-          "status_by": {
+          "status_by_id": {
             "type": [
               "string",
               "null"
@@ -50643,13 +50656,13 @@
               "null"
             ]
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
-          "created_by": {
+          "created_by_id": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "owner_name": {
@@ -50662,7 +50675,7 @@
             "type": "string",
             "description": "One line tying it to the company's vision; empty: not tied to the vision"
           },
-          "why_by": {
+          "why_by_id": {
             "type": [
               "string",
               "null"
@@ -50677,19 +50690,19 @@
         },
         "required": [
           "body",
-          "created",
-          "created_by",
+          "created_at",
+          "created_by_id",
           "id",
-          "owner",
+          "owner_id",
           "parent_id",
           "rank",
           "status",
           "status_at",
-          "status_by",
+          "status_by_id",
           "status_note",
           "status_source",
           "title",
-          "updated"
+          "updated_at"
         ],
         "additionalProperties": true
       },
@@ -50810,13 +50823,13 @@
               "null"
             ]
           },
-          "ts": {
+          "created_at": {
             "type": "string"
           },
           "author": {
             "type": "string"
           },
-          "source_actor": {
+          "sender_id": {
             "type": "string"
           },
           "body": {
@@ -50837,18 +50850,18 @@
           "author_name": {
             "type": "string"
           },
-          "source_actor_name": {
+          "sender_name": {
             "type": "string"
           }
         },
         "required": [
           "author",
           "body",
+          "created_at",
           "goal_id",
           "id",
-          "signal",
-          "source_actor",
-          "ts"
+          "sender_id",
+          "signal"
         ],
         "additionalProperties": true
       },
@@ -51533,7 +51546,7 @@
               "title": {
                 "type": "string"
               },
-              "owner": {
+              "owner_id": {
                 "type": "string"
               },
               "parent_id": {
@@ -51555,7 +51568,7 @@
               "status_note": {
                 "type": "string"
               },
-              "status_by": {
+              "status_by_id": {
                 "type": [
                   "string",
                   "null"
@@ -51599,13 +51612,13 @@
                   "null"
                 ]
               },
-              "created": {
+              "created_at": {
                 "type": "string"
               },
-              "created_by": {
+              "created_by_id": {
                 "type": "string"
               },
-              "updated": {
+              "updated_at": {
                 "type": "string"
               },
               "owner_name": {
@@ -51618,7 +51631,7 @@
                 "type": "string",
                 "description": "One line tying it to the company's vision; empty: not tied to the vision"
               },
-              "why_by": {
+              "why_by_id": {
                 "type": [
                   "string",
                   "null"
@@ -51678,23 +51691,23 @@
               "chain",
               "checkins",
               "children",
-              "created",
-              "created_by",
+              "created_at",
+              "created_by_id",
               "events",
               "id",
               "kpis",
-              "owner",
+              "owner_id",
               "parent_id",
               "proposals",
               "rank",
               "status",
               "status_at",
-              "status_by",
+              "status_by_id",
               "status_note",
               "status_source",
               "tasks",
               "title",
-              "updated"
+              "updated_at"
             ],
             "additionalProperties": true
           }
@@ -51745,7 +51758,7 @@
                 "title": {
                   "type": "string"
                 },
-                "owner": {
+                "owner_id": {
                   "type": "string"
                 },
                 "parent_id": {
@@ -51767,7 +51780,7 @@
                 "status_note": {
                   "type": "string"
                 },
-                "status_by": {
+                "status_by_id": {
                   "type": [
                     "string",
                     "null"
@@ -51811,13 +51824,13 @@
                     "null"
                   ]
                 },
-                "created": {
+                "created_at": {
                   "type": "string"
                 },
-                "created_by": {
+                "created_by_id": {
                   "type": "string"
                 },
-                "updated": {
+                "updated_at": {
                   "type": "string"
                 },
                 "owner_name": {
@@ -51830,7 +51843,7 @@
                   "type": "string",
                   "description": "One line tying it to the company's vision; empty: not tied to the vision"
                 },
-                "why_by": {
+                "why_by_id": {
                   "type": [
                     "string",
                     "null"
@@ -51865,21 +51878,21 @@
               },
               "required": [
                 "body",
-                "created",
-                "created_by",
+                "created_at",
+                "created_by_id",
                 "id",
                 "kpis",
                 "open_tasks",
-                "owner",
+                "owner_id",
                 "parent_id",
                 "rank",
                 "status",
                 "status_at",
-                "status_by",
+                "status_by_id",
                 "status_note",
                 "status_source",
                 "title",
-                "updated"
+                "updated_at"
               ],
               "additionalProperties": true
             }
@@ -52023,10 +52036,19 @@
             "items": {
               "type": "object",
               "required": [
-                "kind"
+                "actions",
+                "body",
+                "created_at",
+                "id",
+                "kind",
+                "subject",
+                "title"
               ],
               "additionalProperties": true,
               "properties": {
+                "id": {
+                  "type": "string"
+                },
                 "kind": {
                   "enum": [
                     "vision",
@@ -52036,6 +52058,65 @@
                     "proposal",
                     "kpi_stale"
                   ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "subject": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "task",
+                            "message",
+                            "approval",
+                            "proposal",
+                            "kpi",
+                            "strategy"
+                          ]
+                        },
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "type"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The one thing it is about; null for a card standing for several things or a setting"
+                },
+                "created_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "actions": {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "answer",
+                      "update",
+                      "decide",
+                      "add_reading",
+                      "open"
+                    ]
+                  },
+                  "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; a tidy card, POST /api/v2/memory-tidy/cards/{id}/decide; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
                 },
                 "goal_id": {
                   "type": "string"
@@ -52168,7 +52249,7 @@
               "null"
             ]
           },
-          "last_sync": {
+          "last_synced_at": {
             "type": [
               "string",
               "null"
@@ -52258,7 +52339,7 @@
           "imported_count",
           "last_error",
           "last_error_detail",
-          "last_sync",
+          "last_synced_at",
           "mode",
           "needs_signin",
           "plan_hint",
@@ -52300,7 +52381,7 @@
               null
             ]
           },
-          "last_sync": {
+          "last_synced_at": {
             "type": [
               "string",
               "null"
@@ -52390,7 +52471,7 @@
           "imported_count",
           "last_error",
           "last_error_detail",
-          "last_sync",
+          "last_synced_at",
           "mode",
           "needs_signin",
           "plan_hint",
@@ -52412,7 +52493,7 @@
               "needs_signin"
             ]
           },
-          "last_sync": {
+          "last_synced_at": {
             "type": [
               "string",
               "null"
@@ -52420,7 +52501,7 @@
           }
         },
         "required": [
-          "last_sync",
+          "last_synced_at",
           "state"
         ],
         "additionalProperties": true
@@ -52494,11 +52575,18 @@
               "type": "string"
             }
           },
+          "bot_slugs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "order": {
             "type": "integer"
           }
         },
         "required": [
+          "bot_slugs",
           "bots",
           "id",
           "name",
@@ -53427,7 +53515,7 @@
           "configured": {
             "type": "boolean"
           },
-          "last_sync": {
+          "last_synced_at": {
             "type": [
               "number",
               "null"
@@ -53448,7 +53536,7 @@
           "error",
           "gaps",
           "inboxes",
-          "last_sync"
+          "last_synced_at"
         ],
         "additionalProperties": true
       },
@@ -53761,16 +53849,16 @@
           "version": {
             "type": "integer"
           },
-          "created_by": {
+          "created_by_id": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
-          "updated_by": {
+          "updated_by_id": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "archived": {
@@ -53787,15 +53875,15 @@
         "required": [
           "archived",
           "body",
-          "created",
-          "created_by",
+          "created_at",
+          "created_by_id",
           "created_by_name",
           "id",
           "locked",
           "path",
           "title",
-          "updated",
-          "updated_by",
+          "updated_at",
+          "updated_by_id",
           "updated_by_name",
           "version"
         ],
@@ -53847,10 +53935,10 @@
           "title": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
-          "updated_by": {
+          "updated_by_id": {
             "type": "string"
           },
           "locked": {
@@ -53869,8 +53957,8 @@
           "locked",
           "path",
           "title",
-          "updated",
-          "updated_by",
+          "updated_at",
+          "updated_by_id",
           "updated_by_name",
           "version"
         ],
@@ -53891,7 +53979,7 @@
           "actor": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "note": {
@@ -53910,7 +53998,7 @@
         "required": [
           "actor",
           "actor_name",
-          "created",
+          "created_at",
           "current",
           "note",
           "path",
@@ -53941,7 +54029,7 @@
               "actor": {
                 "type": "string"
               },
-              "created": {
+              "created_at": {
                 "type": "string"
               },
               "note": {
@@ -53955,7 +54043,7 @@
               "actor",
               "actor_name",
               "body",
-              "created",
+              "created_at",
               "note",
               "path",
               "title",
@@ -54141,7 +54229,7 @@
               "monthly"
             ]
           },
-          "owner": {
+          "owner_id": {
             "type": "string"
           },
           "source_note": {
@@ -54150,19 +54238,19 @@
           "definition_version": {
             "type": "integer"
           },
-          "created": {
+          "created_at": {
             "type": [
               "string",
               "null"
             ]
           },
-          "created_by": {
+          "created_by_id": {
             "type": [
               "string",
               "null"
             ]
           },
-          "updated": {
+          "updated_at": {
             "type": [
               "string",
               "null"
@@ -54174,7 +54262,7 @@
               "null"
             ]
           },
-          "archived_by": {
+          "archived_by_id": {
             "type": [
               "string",
               "null"
@@ -54253,7 +54341,7 @@
           "id",
           "latest",
           "name",
-          "owner",
+          "owner_id",
           "readings",
           "reason",
           "spark",
@@ -54801,8 +54889,12 @@
           "source": {
             "type": "string"
           },
-          "actor": {
-            "type": "string"
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The person who recorded it; null for a bot's automatic reading"
           },
           "definition_version": {
             "type": "integer"
@@ -54816,10 +54908,10 @@
           "kpi_id": {
             "type": "string"
           },
-          "ts": {
+          "measured_at": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "superseded_by": {
@@ -55558,10 +55650,10 @@
           "added_by": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "added_by_name": {
@@ -55571,13 +55663,13 @@
         "required": [
           "added_by",
           "added_by_name",
-          "created",
+          "created_at",
           "description",
           "host",
           "id",
           "kind",
           "title",
-          "updated",
+          "updated_at",
           "url"
         ],
         "additionalProperties": true
@@ -55774,6 +55866,10 @@
           },
           "email": {
             "type": "string"
+          },
+          "slug": {
+            "type": "string",
+            "description": "A bot caller: its slug (a label; the actor holds its id)."
           }
         },
         "required": [
@@ -55891,7 +55987,7 @@
           "reviewer": {
             "type": "string"
           },
-          "requester": {
+          "requester_id": {
             "type": "string"
           },
           "title": {
@@ -55914,10 +56010,10 @@
             "type": "string",
             "description": "Checked unified diff; present on detail reads and decisions, omitted from lists."
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
-          "expires": {
+          "expires_at": {
             "type": "string"
           },
           "status": {
@@ -55941,16 +56037,16 @@
         "required": [
           "bot",
           "cost_usd",
-          "created",
+          "created_at",
           "diary",
-          "expires",
+          "expires_at",
           "id",
           "keep_available",
           "kind",
           "memory_commit",
           "model",
           "reason",
-          "requester",
+          "requester_id",
           "reviewer",
           "status",
           "title"
@@ -56040,10 +56136,10 @@
           "conversation_id": {
             "type": "string"
           },
-          "from_actor": {
+          "sender_id": {
             "type": "string"
           },
-          "to_actor": {
+          "recipient_id": {
             "type": "string"
           },
           "kind": {
@@ -56052,7 +56148,7 @@
           "body": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "in_reply_to": {
@@ -56064,13 +56160,13 @@
           "refs": {
             "type": "object"
           },
-          "from_name": {
+          "sender_name": {
             "type": "string",
-            "description": "Display name of from_actor, when it is a person or a bot"
+            "description": "Display name of sender_id, when it is a person or a bot"
           },
-          "to_name": {
+          "recipient_name": {
             "type": "string",
-            "description": "Display name of to_actor"
+            "description": "Display name of recipient_id"
           },
           "body_raw": {
             "type": "string",
@@ -56092,12 +56188,12 @@
           },
           "run": {
             "type": "object",
-            "description": "The run that handled this message, once one has: on a person's message `{job_id, attempt_id, state}` where `state` is `started_run` (it started the run) or `added_to_run` (it was folded into a run already working); on a bot's reply `{job_id, attempt_id}` (the run that wrote it, plus a summary of what it did). Absent until a run takes the message",
+            "description": "The run that handled this message, once one has: on a person's message `{job_id, run_id, state}` where `state` is `started_run` (it started the run) or `added_to_run` (it was folded into a run already working); on a bot's reply `{job_id, run_id}` (the run that wrote it, plus a summary of what it did). Absent until a run takes the message",
             "properties": {
               "job_id": {
                 "type": "string"
               },
-              "attempt_id": {
+              "run_id": {
                 "type": "string"
               },
               "state": {
@@ -56144,13 +56240,13 @@
         "required": [
           "body",
           "conversation_id",
-          "created",
-          "from_actor",
+          "created_at",
           "id",
           "in_reply_to",
           "kind",
+          "recipient_id",
           "refs",
-          "to_actor"
+          "sender_id"
         ],
         "additionalProperties": true
       },
@@ -56477,10 +56573,10 @@
           "added_by_name": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           }
         },
@@ -56488,7 +56584,7 @@
           "added_by",
           "added_by_name",
           "computers",
-          "created",
+          "created_at",
           "id",
           "kind",
           "label",
@@ -56499,7 +56595,7 @@
           "status",
           "status_at",
           "status_detail",
-          "updated",
+          "updated_at",
           "usage"
         ],
         "additionalProperties": true
@@ -56613,29 +56709,7 @@
               "items": {
                 "type": "array",
                 "items": {
-                  "type": "object",
-                  "required": [
-                    "id",
-                    "kind",
-                    "title"
-                  ],
-                  "additionalProperties": true,
-                  "properties": {
-                    "id": {
-                      "type": "string"
-                    },
-                    "kind": {
-                      "enum": [
-                        "task",
-                        "question",
-                        "declined",
-                        "approval"
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    }
-                  }
+                  "$ref": "#/components/schemas/NeedsYouItem"
                 }
               },
               "older": {
@@ -56697,6 +56771,87 @@
             "additionalProperties": true
           }
         ]
+      },
+      "NeedsYouItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "Needs you: task, question, waiting, declined, ask, approval, stale, memory_tidy, setup. Goals: vision, kpi_red, kpi_stale, recovery, proposal, why. Each kind adds the fields its card reads"
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "task",
+                      "message",
+                      "approval",
+                      "proposal",
+                      "kpi",
+                      "strategy"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "type"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The one thing it is about; null for a card standing for several things or a setting"
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "answer",
+                "update",
+                "decide",
+                "add_reading",
+                "open"
+              ]
+            },
+            "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; a tidy card, POST /api/v2/memory-tidy/cards/{id}/decide; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
+          }
+        },
+        "required": [
+          "actions",
+          "body",
+          "created_at",
+          "id",
+          "kind",
+          "subject",
+          "title"
+        ],
+        "additionalProperties": true
       },
       "Note": {
         "properties": {
@@ -56939,7 +57094,7 @@
           "title": {
             "type": "string"
           },
-          "bot": {
+          "bot_id": {
             "type": "string"
           },
           "bot_name": {
@@ -56948,7 +57103,7 @@
           "version": {
             "type": "integer"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "updated_by": {
@@ -56983,7 +57138,7 @@
             ],
             "description": "Days since the last version once past 1.5x the cadence; null while current or without a cadence"
           },
-          "replaced_by": {
+          "replaced_by_id": {
             "type": [
               "string",
               "null"
@@ -57016,16 +57171,16 @@
         "required": [
           "archived",
           "as_of",
-          "bot",
+          "bot_id",
           "bot_name",
           "cadence",
           "file_id",
-          "replaced_by",
+          "replaced_by_id",
           "src",
           "stale_days",
           "task_id",
           "title",
-          "updated",
+          "updated_at",
           "updated_by",
           "version"
         ],
@@ -57663,7 +57818,7 @@
                     "bot": {
                       "type": "string"
                     },
-                    "updated": {
+                    "updated_at": {
                       "type": "string"
                     },
                     "archived": {
@@ -57675,7 +57830,7 @@
                     "bot",
                     "file_id",
                     "title",
-                    "updated"
+                    "updated_at"
                   ],
                   "additionalProperties": true
                 }
@@ -58106,13 +58261,13 @@
               "Visitor"
             ]
           },
-          "created": {
+          "created_at": {
             "type": "string"
           }
         },
         "required": [
           "author",
-          "created",
+          "created_at",
           "id",
           "text"
         ],
@@ -59075,7 +59230,7 @@
           "reachable": {
             "type": "boolean"
           },
-          "last_seen": {
+          "last_seen_at": {
             "type": [
               "string",
               "null"
@@ -59087,7 +59242,7 @@
           "default_branch",
           "enabled",
           "full_name",
-          "last_seen",
+          "last_seen_at",
           "reachable",
           "setup_command",
           "setup_source"
@@ -60334,7 +60489,7 @@
           "team": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "org_parent": {
@@ -60477,7 +60632,7 @@
         "title": "SeatBatchCreate",
         "description": "A single confirmed group of Recruiting seats."
       },
-      "SeatCancelled": {
+      "SeatCanceled": {
         "type": "object",
         "properties": {
           "id": {
@@ -60713,7 +60868,7 @@
           "team": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "description_by": {
@@ -62161,7 +62316,7 @@
           "id": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "kind": {
@@ -62229,7 +62384,7 @@
           }
         },
         "required": [
-          "created",
+          "created_at",
           "done",
           "id",
           "kind",
@@ -62989,15 +63144,15 @@
           "version": {
             "type": "integer"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           }
         },
         "required": [
-          "created",
+          "created_at",
           "id",
           "is_template",
           "key",
@@ -63006,7 +63161,7 @@
           "metadata",
           "owner",
           "template_id",
-          "updated",
+          "updated_at",
           "version"
         ],
         "additionalProperties": true
@@ -63250,22 +63405,22 @@
             "type": "string",
             "description": "Left out of a list asked for with brief=true, as is acceptance_criteria"
           },
-          "requester": {
+          "requester_id": {
             "type": "string"
           },
-          "owner": {
+          "owner_id": {
             "type": "string"
           },
           "status": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
-          "due": {
+          "due_at": {
             "type": [
               "string",
               "null"
@@ -63298,7 +63453,7 @@
           },
           "owner_name": {
             "type": "string",
-            "description": "Display name of owner (`owner` stays the actor id)"
+            "description": "Display name of owner (`owner_id` stays the actor id)"
           },
           "requester_name": {
             "type": "string",
@@ -63374,7 +63529,7 @@
                   "status": {
                     "type": "string"
                   },
-                  "owner": {
+                  "owner_id": {
                     "type": "string"
                   },
                   "direction": {
@@ -63384,7 +63539,7 @@
                 "required": [
                   "direction",
                   "id",
-                  "owner",
+                  "owner_id",
                   "status",
                   "title"
                 ],
@@ -63453,26 +63608,12 @@
             ],
             "description": "The one person a private task with no person on it reached: its owning bot's first subtask, question or wait for them made them its guest. They read the task as its requester and owner do, and nothing else of its tree"
           },
-          "snoozed_until": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Set aside until this moment (UTC): off lists and Needs you, and quiet, until then"
-          },
-          "snoozed_by": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Who snoozed it"
-          },
-          "snoozed_note": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "What to check when the snooze ends (sent in the owner's wake)"
+          "holds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskHold"
+            },
+            "description": "What holds the task (docs/tasks.md, Holds): at most one per kind, empty when nothing does"
           },
           "roles": {
             "type": "object",
@@ -63523,16 +63664,17 @@
           }
         },
         "required": [
-          "created",
-          "due",
+          "created_at",
+          "due_at",
+          "holds",
           "id",
           "labels",
           "lane",
-          "owner",
-          "requester",
+          "owner_id",
+          "requester_id",
           "status",
           "title",
-          "updated",
+          "updated_at",
           "version"
         ],
         "additionalProperties": true
@@ -63944,12 +64086,12 @@
           "proposed_by": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           }
         },
         "required": [
-          "created",
+          "created_at",
           "id",
           "per_day",
           "proposed_by",
@@ -63977,7 +64119,7 @@
           "closed": {
             "type": "integer"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "updated_by": {
@@ -63990,7 +64132,7 @@
           "per_day",
           "receiver",
           "sender",
-          "updated",
+          "updated_at",
           "updated_by"
         ],
         "additionalProperties": true
@@ -64644,7 +64786,7 @@
           "sha256": {
             "type": "string"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "by": {
@@ -64723,7 +64865,7 @@
           "ask",
           "by",
           "comment_id",
-          "created",
+          "created_at",
           "duration_ms",
           "height",
           "media_state",
@@ -64973,6 +65115,61 @@
         ],
         "additionalProperties": true
       },
+      "TaskHold": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "blocked",
+              "snoozed"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "since": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "until": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cause": {
+            "enum": [
+              "manual",
+              "dependency",
+              "stranded",
+              "gate",
+              "check",
+              "worktree",
+              null
+            ],
+            "description": "On a blocked hold: what holds it. manual is a person's or bot's move to Blocked; the others are Tico's own (docs/tasks.md, Holds)"
+          }
+        },
+        "required": [
+          "by",
+          "kind",
+          "reason",
+          "since",
+          "until"
+        ],
+        "additionalProperties": true
+      },
       "TaskList": {
         "type": "object",
         "properties": {
@@ -65127,13 +65324,13 @@
           "bot": {
             "type": "string"
           },
-          "started": {
+          "started_at": {
             "type": [
               "string",
               "null"
             ]
           },
-          "finished": {
+          "finished_at": {
             "type": [
               "string",
               "null"
@@ -65151,11 +65348,11 @@
         },
         "required": [
           "bot",
-          "finished",
+          "finished_at",
           "outcome",
           "ran_on",
           "run",
-          "started"
+          "started_at"
         ],
         "additionalProperties": true
       },
@@ -65473,10 +65670,10 @@
           "steps_only": {
             "type": "boolean"
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "steps": {
@@ -65524,13 +65721,13 @@
         },
         "required": [
           "bots",
-          "created",
+          "created_at",
           "id",
           "name",
           "numbered",
           "steps",
           "steps_only",
-          "updated"
+          "updated_at"
         ],
         "additionalProperties": true
       },
@@ -66422,10 +66619,10 @@
           "seq": {
             "type": "integer"
           },
-          "from_actor": {
+          "sender_id": {
             "type": "string"
           },
-          "to_actor": {
+          "recipient_id": {
             "type": [
               "string",
               "null"
@@ -66440,7 +66637,7 @@
               "null"
             ]
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "edited_at": {
@@ -66690,10 +66887,10 @@
                 "title": {
                   "type": "string"
                 },
-                "from_actor": {
+                "sender_id": {
                   "type": "string"
                 },
-                "created": {
+                "created_at": {
                   "type": "string"
                 },
                 "excerpt": {
@@ -66831,7 +67028,7 @@
               "null"
             ]
           },
-          "owner_actor": {
+          "owner_id": {
             "type": [
               "string",
               "null"
@@ -68350,10 +68547,10 @@
               "null"
             ]
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
-          "updated": {
+          "updated_at": {
             "type": "string"
           },
           "revision": {
@@ -68415,7 +68612,7 @@
         "required": [
           "allow_http",
           "can_change",
-          "created",
+          "created_at",
           "created_by",
           "disabled_at",
           "disabled_reason",
@@ -68432,7 +68629,7 @@
           "rate_per_hour",
           "requested_by",
           "revision",
-          "updated",
+          "updated_at",
           "url"
         ],
         "additionalProperties": true
@@ -68878,7 +69075,7 @@
               "sending",
               "delivered",
               "failed",
-              "cancelled",
+              "canceled",
               "withheld"
             ]
           },
@@ -68894,13 +69091,13 @@
           "last_error": {
             "type": "string"
           },
-          "next_attempt": {
+          "next_attempt_at": {
             "type": [
               "string",
               "null"
             ]
           },
-          "created": {
+          "created_at": {
             "type": "string"
           },
           "delivered_at": {
@@ -68912,13 +69109,13 @@
         },
         "required": [
           "attempts",
-          "created",
+          "created_at",
           "delivered_at",
           "event_id",
           "id",
           "last_error",
           "last_status",
-          "next_attempt",
+          "next_attempt_at",
           "state",
           "subject",
           "type",

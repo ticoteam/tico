@@ -315,7 +315,7 @@ def _reserve_detail(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str, r
     by_target: dict[str, list[tuple[str, int]]] = {}
     for bid, kind, tid, amount in allocs:
         # An ended budget's allocations still reserve against its parents: its cards keep their Mercury limits until they
-        # are lowered or cancelled (spec 4.4). Only a new set-aside on an ended budget is refused (allocation_plan).
+        # are lowered or canceled (spec 4.4). Only a new set-aside on an ended budget is refused (allocation_plan).
         if bid in budgets:
             by_target.setdefault(f"{kind}:{tid}", []).append((bid, amount))
     wanted = set(budget_ids)
@@ -366,7 +366,7 @@ def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str, read: Ne
 def retained(ctx: Ctx, budget_id: str, start: str, end: str) -> int:
     """What an ended budget still holds against its parents in the window (spec 4.4): the holds on it and its children
     with no target, and each allocation in its subtree at the larger of its amount and what its target used (holds and
-    posted spend). The allocations keep their whole amount against the parent until they are lowered or cancelled, as a
+    posted spend). The allocations keep their whole amount against the parent until they are lowered or canceled, as a
     live child's amount counts, so a parent cannot be lowered under them."""
     tree = subtree(ctx, budget_id)
     return SB.held(ctx.c, tree, start, end) + sum(reserve + spent for _, _, reserve, _, spent

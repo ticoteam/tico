@@ -28,7 +28,7 @@ const KINDS = [
 function fixtures() {
   const now = new Date().toISOString();
   const ready = {installed: true, authenticated: 'ready'}, missing = {installed: true, authenticated: 'missing'};
-  const machine = (id, label, operator, bots = [], runtimes = {codex: ready, claude: ready}, extra = {}) => ({id, label, operator, last_seen: now,
+  const machine = (id, label, operator, bots = [], runtimes = {codex: ready, claude: ready}, extra = {}) => ({id, label, owner_id: operator, last_seen_at: now,
     version: '0.5.14', platform: 'linux', bots, accepts_member_bots: true, readiness: {runtimes},
     turn_counts: {running: 0, starting: 0, waiting: 0, queued: 0, waits: []}, turn_summary: '0 running · 0 starting · 0 waiting', ...extra});
   return {
@@ -79,9 +79,9 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
   Object.assign(me, {email: me.id + '@example.com', cloud: true, registered: true});
   const policy = {see: {everyone: true}, read: {everyone: true}, write: {everyone: true}};
   const bots = [
-    {name: 'builder', display_name: 'Builder', status: 'active', state: 'active', operator: 'ana', repo: 'bot-builder', can_manage: true, revision: 3,
+    {name: 'builder', display_name: 'Builder', status: 'active', state: 'active', owner_id: 'ana', repo: 'bot-builder', can_manage: true, revision: 3,
       users: [{id: 'ana', name: 'Ana'}], bot_owners: [], resolved_runtime: 'claude', resolved_model: 'claude-sonnet-5-5', model: 'claude-sonnet-5-5', harness: 'claude',
-      machine: {runner_id: 'r1', label: 'Tico Team box', operator: 'ana', last_seen: new Date().toISOString()},
+      machine: {runner_id: 'r1', label: 'Tico Team box', owner_id: 'ana', last_seen_at: new Date().toISOString()},
       my_access: {see: true, read: true, write: true}, access_policy: policy},
   ];
   // A refusal as the server sends it (backend/app.py Problem handler: the extra facts beside code and detail).
@@ -124,7 +124,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       const kind = KINDS.find(k => k.kind === (body.kind || sub.kind));
       data.login = {id: `l${writes.length}`, runner_id: 'r1', runtime: kind.runtime, kind: 'connect', state: 'waiting', url: 'https://sign-in.example/authorize?x=1',
         code: kind.runtime === 'codex' ? 'ABCD-1234' : '', lines: [], message: '', accepts_code: kind.runtime === 'claude', code_sent: false,
-        created: new Date().toISOString(), updated: new Date().toISOString(), computer: 'Tico Team box', not_yours: Boolean(data.connectNotYours), target: body.name};
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString(), computer: 'Tico Team box', not_yours: Boolean(data.connectNotYours), target: body.name};
       return json(data.login);
     }
     const signIn = p.match(/^\/api\/v2\/computers\/r1\/logins\/([^/]+)(?:\/(code|cancel))?$/);
@@ -132,7 +132,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       if (method === 'GET') return json(data.login);
       const body = req.postDataJSON(); writes.push({p, method, body});
       if (signIn[2] === 'code') Object.assign(data.login, {code_sent: true});
-      if (signIn[2] === 'cancel') Object.assign(data.login, {state: 'cancelled', url: ''});
+      if (signIn[2] === 'cancel') Object.assign(data.login, {state: 'canceled', url: ''});
       return json(data.login);
     }
     if (p === '/api/v2/model-subscriptions' && method === 'POST') {
@@ -401,7 +401,7 @@ async function connectPlan(browser) {
   await closing.waitFor({state: 'detached'});
   release(); data.connectHeld = null;
   await until(page, () => writes.at(-1).p.endsWith('/cancel'), 'the cancel');
-  assert.equal(data.login.state, 'cancelled');
+  assert.equal(data.login.state, 'canceled');
   // The same for Try again after a failure.
   await page.locator('#subs-add').click();
   const asking = page.locator('dialog.subs-dialog[open]');
@@ -419,7 +419,7 @@ async function connectPlan(browser) {
   await retrying.waitFor({state: 'detached'});
   release(); data.connectHeld = null;
   await until(page, () => writes.at(-1).p.endsWith('/cancel') && data.login.id !== failedLogin, 'the cancel of the retry');
-  assert.equal(data.login.state, 'cancelled');
+  assert.equal(data.login.state, 'canceled');
   assert.deepEqual(errors, []);
   await page.close();
   // No computer can run it right now: the button says so and paste still works.

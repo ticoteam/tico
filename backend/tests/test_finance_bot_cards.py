@@ -932,7 +932,7 @@ def test_a_card_on_an_ended_child_budget_is_refused_and_nothing_is_queued(books)
 
 def test_ending_a_child_keeps_its_card_reserve_against_the_parent(books):
     """Eng tools (100.00) has a 50.00 card under Tools (100.00), so Tools has 50.00 left. Ending Eng tools frees nothing:
-    the card keeps its Mercury limit until it is lowered or cancelled. Tools' remaining must not rise."""
+    the card keeps its Mercury limit until it is lowered or canceled. Tools' remaining must not rise."""
     fake = FakeMercury()
     connect(books, fake)
     with books.transaction() as c:

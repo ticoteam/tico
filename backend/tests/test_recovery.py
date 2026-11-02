@@ -19,9 +19,9 @@ def test_store_replaces_legacy_queue_trigger_and_drains_queued_self_messages(tmp
         c.execute("DELETE FROM cloud_migrations WHERE version=8")
         c.execute("DROP TRIGGER queue_bot_message")
         c.execute("CREATE TRIGGER queue_bot_message AFTER INSERT ON messages "
-                  "WHEN NEW.to_actor LIKE 'bot:%' BEGIN "
-                  "INSERT INTO jobs(id,message_id,bot,created) "
-                  "VALUES(NEW.id,NEW.id,substr(NEW.to_actor,5),NEW.created); END")
+                  "WHEN NEW.recipient_id LIKE 'bot:%' BEGIN "
+                  "INSERT INTO jobs(id,message_id,bot_id,created_at) "
+                  "VALUES(NEW.id,NEW.id,substr(NEW.recipient_id,5),NEW.created_at); END")
         conversation = H.open_conversation(c, "bot:coo", ["bot:coo"], kind="chat")
         self_message = H._write_message(c, "bot:coo", "bot:coo", "legacy loop",
                                         conversation, "say", {}, None, None)
@@ -100,7 +100,7 @@ def test_a_run_the_last_process_held_is_flagged_at_start_and_resumes_if_it_lapse
     with TestClient(create_app(api.app.state.store.settings)) as restarted:
         store = restarted.app.state.store
         with store.read() as c:
-            [flag] = c.execute("SELECT detail_json FROM events WHERE action='attempt.update_cut' AND target=?",
+            [flag] = c.execute("SELECT detail FROM events WHERE action='attempt.update_cut' AND target=?",
                                (a["id"],)).fetchall()
         assert json.loads(flag[0])["cause"] == "restart"
         expire(restarted, a["id"])
@@ -112,6 +112,27 @@ def test_a_run_the_last_process_held_is_flagged_at_start_and_resumes_if_it_lapse
         again = claim(restarted, r)
         assert again["job_id"] == a["job_id"] and again["recovery"]["resume_session"] is True
         assert "by a Tico restart" in again["message"]["body"]
+
+
+def test_a_server_that_boots_again_while_a_run_is_live_flags_that_run_once(api):
+    """Each start flags the runs its last process held, but a run already flagged by a start gets no second event: after
+    the second boot it still has one restart flag. An update's flag is its own cause, so it is still written."""
+    from fastapi.testclient import TestClient
+    from backend.app import create_app
+    from backend.execution import flag_cut
+    r, _, a = setup_attempt(api)
+    post(api, f"attempts/{a['id']}/started", {"thread_id": "boot-twice"}, r["token"])
+
+    def flags():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT count(*) FROM events WHERE action='attempt.update_cut' AND target=?",
+                             (a["id"],)).fetchone()[0]
+    for _ in range(2):
+        with TestClient(create_app(api.app.state.store.settings)):
+            assert flags() == 1
+    with api.app.state.store.transaction() as c:
+        assert flag_cut(c, "update", "0.4.18") == 1
+    assert flags() == 2
 
 
 def test_every_cloud_migration_number_is_used_once_and_in_order():

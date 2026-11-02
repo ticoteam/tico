@@ -56,7 +56,7 @@ def test_assistant_fetches_only_its_own_credentials_before_start(api, person="be
     assert [value["id"] for value in get(api, "credential-runtime", token)["credentials"]] == [own["id"]]
     made = post(api, "tasks", {"owner": "human:" + person.removesuffix("-test"),
                                "title": "Draft my week", "body": "Monday first."}, token=token)
-    assert made["requester"] == "human:" + person.removesuffix("-test")
+    assert made["requester_id"] == "human:" + person.removesuffix("-test")
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, token=r["token"])
     get(api, "credential-runtime", token, expected=409)
 
@@ -98,10 +98,10 @@ def test_the_assistant_acts_as_the_person_and_never_more(api):
     post(api, "tasks/" + mine["id"], {"version": mine["version"], "status": "done"}, token=token, expected=403)
     # A low-risk write runs directly, as ben, and says so in the record.
     made = post(api, "tasks", {"owner": "human:ben", "title": "Draft the launch post", "body": "For Oct 1."}, token=token)
-    assert made["requester"] == "human:ben"
+    assert made["requester_id"] == "human:ben"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT via FROM task_events WHERE task_id=? ORDER BY ts LIMIT 1", (made["id"],)).fetchone()[0] == "assistant"
-        assert c.execute("SELECT count(*) FROM events WHERE detail_json LIKE '%\"via\": \"assistant\"%'").fetchone()[0] > 0
+        assert c.execute("SELECT via FROM task_events WHERE task_id=? ORDER BY created_at LIMIT 1", (made["id"],)).fetchone()[0] == "assistant"
+        assert c.execute("SELECT count(*) FROM events WHERE detail LIKE '%\"via\": \"assistant\"%'").fetchone()[0] > 0
     # The runner's own lease calls are still the runner's.
     post(api, f"attempts/{attempt['id']}/renew", {}, token=r["token"], expected=200)
 
@@ -135,9 +135,9 @@ def test_a_side_effect_runs_only_after_the_person_confirms(api):
     post(api, f"assistant/actions/{action['id']}/confirm", {}, token="ana-test", expected=409)   # once
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action='assistant.action.confirmed'").fetchone()[0] == 1
-        assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'bot.%' AND detail_json LIKE '%\"via\": \"assistant\"%'"
+        assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'bot.%' AND detail LIKE '%\"via\": \"assistant\"%'"
                          ).fetchone()[0] >= 1
-    # A cancelled proposal never runs.
+    # A canceled proposal never runs.
     other = post(api, "assistant/actions", {"summary": "Archive Finance", "path": "/api/v2/bots/finance/archive",
                                             "body": {"expected_revision": 1}}, token="ana-test")["action"]
     post(api, f"assistant/actions/{other['id']}/cancel", {}, token="ana-test")
@@ -172,9 +172,9 @@ def test_a_proposal_cannot_smuggle_a_route_and_never_stores_an_answer(api):
 
 def test_an_assistant_message_never_lends_the_persons_authority_to_botops(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                  "VALUES('botops','BotOps','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('botops','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
+                  "VALUES('botops','botops','BotOps','fake','','','','keeper','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('botops','{}',NULL,'ana')")
         H.VIA.set("assistant")
         via = H.say(c, "human:ana", "bot:botops", "Rename the Ops bot to Operations", kind="say")
         H.VIA.set("")
@@ -209,10 +209,10 @@ def test_direct_writes_stay_inside_the_team(api):
     post(api, "tasks", {"owner": "ben", "title": "Draft my week", "body": "Monday."}, token=token, expected=403)  # a bare name
     # Creating a task for another person runs directly too (reversible, unlike settling one).
     for_cara = post(api, "tasks", {"owner": "human:cara", "title": "Review the plan", "body": "Please."}, token=token)
-    assert for_cara["owner"] == "human:cara" and for_cara["requester"] == "human:ben"
+    assert for_cara["owner_id"] == "human:cara" and for_cara["requester_id"] == "human:ben"
     # A task for a bot, a comment on it and a message to a bot stay in the team: they run directly, as ben.
     made = post(api, "tasks", {"owner": "ops", "title": "Draft the launch post", "body": "For Oct 1."}, token=token)
-    assert made["owner"] == "bot:ops" and made["requester"] == "human:ben"
+    assert made["owner_id"] == "bot:ops" and made["requester_id"] == "human:ben"
     post(api, f"tasks/{botwork['id']}/comments", {"text": "Please hurry"}, token=token)
     post(api, "messages", {"to": "ops", "text": "Hello"}, token=token)
     post(api, "chat/ops", {"text": "Hello again"}, token=token)
@@ -222,7 +222,7 @@ def test_direct_writes_stay_inside_the_team(api):
     post(api, "updates/read", {"all": True}, token=token)
     with api.app.state.store.read() as c:
         # What it wrote is marked, so BotOps ignores it.
-        assert c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:ops' AND refs_json LIKE '%\"via\": \"assistant\"%'"
+        assert c.execute("SELECT count(*) FROM messages WHERE recipient_id='bot:ops' AND refs LIKE '%\"via\": \"assistant\"%'"
                          ).fetchone()[0] >= 2
 
 
@@ -231,10 +231,10 @@ def test_the_assistant_creates_a_task_for_another_person_without_a_card(api):
     token = attempt["token"]
     made = post(api, "tasks", {"owner": "human:cara", "title": "Review the plan", "body": "Please review the plan."},
                 token=token)
-    assert made["owner"] == "human:cara" and made["requester"] == "human:ben"
+    assert made["owner_id"] == "human:cara" and made["requester_id"] == "human:ben"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM assistant_actions WHERE status='pending'").fetchone()[0] == 0
-        assert c.execute("SELECT via FROM task_events WHERE task_id=? ORDER BY ts LIMIT 1",
+        assert c.execute("SELECT via FROM task_events WHERE task_id=? ORDER BY created_at LIMIT 1",
                          (made["id"],)).fetchone()[0] == "assistant"
     # The person is named by their full actor id, as for the person's own tasks: a bare name is not enough.
     post(api, "tasks", {"owner": "cara", "title": "Review it again", "body": "Please."}, token=token, expected=403)
@@ -321,15 +321,15 @@ def test_the_assistant_does_the_task_actions_the_person_asked_for_in_their_chat(
     assert reopened["status"] == "open"
     asked(api, f"tasks/{review['id']}/comments", {"text": "Reopened: one more pass"}, token, "turn")
     handed = asked(api, f"tasks/{old['id']}", {"version": old["version"], "owner": "human:ana"}, token, "turn")["task"]
-    assert handed["owner"] == "human:ana"
+    assert handed["owner_id"] == "human:ana"
     with api.app.state.store.read() as c:
         # Recorded as ben, via the assistant, for the message he sent.
-        row = c.execute("SELECT actor,via FROM task_events WHERE task_id=? AND field='status' ORDER BY ts DESC LIMIT 1",
+        row = c.execute("SELECT actor,via FROM task_events WHERE task_id=? AND field='status' ORDER BY created_at DESC LIMIT 1",
                         (launch["id"],)).fetchone()
         assert (row["actor"], row["via"]) == ("human:ben", "assistant")
-        close = c.execute("SELECT actor,detail_json FROM events WHERE action='task.close' AND target=?",
+        close = c.execute("SELECT actor,detail FROM events WHERE action='task.close' AND target=?",
                           (launch["id"],)).fetchone()
-        detail = H._json(close["detail_json"], {})
+        detail = H._json(close["detail"], {})
         assert close["actor"] == "human:ben" and detail["via"] == "assistant"
         assert detail["delegation"] == {"for": "human:ben", "cited": said, "run": "asked"}
 
@@ -362,7 +362,7 @@ def test_the_assistants_tools_cite_the_message_for_it(api):
     r, attempt = assistant_turn(api, "ben-test", "Close the launch task and decline the ad spend")
     turn = Turn(attempt["token"])
     declined = hubtools.BY_NAME["hub_approval_decline"]["fn"](turn, {"id": spend, "note": "Not now", "on_behalf_of": "turn"})
-    assert declined["decision"] == "declined" and declined["decided_by"] == "human:ben"
+    assert declined["decision"] == "declined" and declined["decided_by_id"] == "human:ben"
     assert {"hub_approval_decline", "hub_question_answer"} <= {t["name"] for t in hubtools.listing(kind="assistant")}
     with pytest.raises(APIError) as refused:
         hubtools.BY_NAME["hub_task_close"]["fn"](turn, {"id": launch["id"]})
@@ -379,7 +379,7 @@ def test_a_cited_message_must_be_the_persons_own_recent_words_in_their_assistant
     token, said = attempt["token"], turn_message(api, attempt)
     say(api, "Close Ben's launch task", "ana-test")
     other_person = room(api, "ana-test")["messages"][-1]
-    assert other_person["from_actor"] == "human:ana"
+    assert other_person["sender_id"] == "human:ana"
     other_person = other_person["id"]
     elsewhere = post(api, "chat/ops", {"text": "Close the launch task"}, token="ben-test")["id"]
     with api.app.state.store.transaction() as c:
@@ -404,7 +404,7 @@ def test_a_cited_message_must_be_the_persons_own_recent_words_in_their_assistant
     assert api.put("/api/v2/access/rules", json={"assistant_direct": True}, headers=headers()).status_code == 200
     # Too old: they have to ask again.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), hours=-2), said))
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), hours=-2), said))
     refused = asked(api, path, body, token, "turn", expected=403)
     assert refused["error"]["code"] == "on_behalf_of" and "minutes old" in refused["error"]["detail"]
     assert get(api, path, "ben-test")["task"]["status"] != "closed"
@@ -487,7 +487,7 @@ def needs_you_queue(api):
         mine = H.task_create(c, "human:ben", "Run the launch", "Ben decides its sends.", "human:ben")["id"]
         old = [H.approval_request(c, "bot:ops", "publish", {"url": f"https://acme.example/post-{i}",
                                                              "content_sha256": str(i) * 64}, mine)["id"] for i in range(3)]
-        c.execute("UPDATE approvals SET created=? WHERE id IN (?,?,?)", (H.shift(H.now(), days=-40), *old))
+        c.execute("UPDATE approvals SET created_at=? WHERE id IN (?,?,?)", (H.shift(H.now(), days=-40), *old))
         merge = H.approval_request(c, "bot:ops", "merge", {"repo": "acme/site", "pr": 12}, mine)["id"]
         spend = H.approval_request(c, "bot:ops", "spend", {"amount": 500, "account": "card", "what": "Ads"}, mine)["id"]
         hers = H.approval_request(c, "bot:ops", "publish", {"url": "https://acme.example/ana", "content_sha256": "f" * 64})["id"]
@@ -539,10 +539,10 @@ def test_clear_my_queue_declines_and_answers_in_bulk_and_never_approves(api):
     asked(api, "approvals/" + q["spend"], {"decision": "declined", "note": "Not this month"}, token, "turn")
     assert decision(api, q["spend"]) == "declined"
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor,detail_json FROM events WHERE action='approval.decide' AND target=?",
+        row = c.execute("SELECT actor,detail FROM events WHERE action='approval.decide' AND target=?",
                         (q["spend"],)).fetchone()
-        assert row["actor"] == "human:ben" and H._json(row["detail_json"], {})["via"] == "assistant"
-        answers = dict(c.execute("SELECT in_reply_to,from_actor FROM messages WHERE kind='answer'").fetchall())
+        assert row["actor"] == "human:ben" and H._json(row["detail"], {})["via"] == "assistant"
+        answers = dict(c.execute("SELECT in_reply_to,sender_id FROM messages WHERE kind='answer'").fetchall())
         assert answers.get(q["ask"]) == "human:ben" and q["her_ask"] not in answers
     # Others' items stay as they were, whatever is cited.
     asked(api, "approvals/" + q["hers"], decline, token, "turn", expected=403)
@@ -607,7 +607,7 @@ def test_the_assistant_decides_approvals_in_bulk_once_the_person_turns_it_on(api
     assert get(api, "assistant", "ben-test")["pending"] == []
     # Recorded as decided by the Assistant for Ben, his words and the read-back quoted, in the approval's history.
     row = get(api, "approvals/" + q["old"][0], "ben-test")
-    assert row["decided_by"] == "human:ben" and row["decided_via"] == "assistant"
+    assert row["decided_by_id"] == "human:ben" and row["decided_via"] == "assistant"
     assert row["decided_for"] == {"for": "human:ben", "cited": turn_message(api, attempt), "run": "asked",
                                   "assistant": "bot:coo", "words": "yes",
                                   "read_back": back["text"], "approves": q["old"]}
@@ -782,7 +782,7 @@ def test_a_close_card_written_as_status_closed_runs_as_a_close(api):
     stale = post(api, "assistant/actions", {"summary": "Close old task 0", "path": f"/api/v2/tasks/{tasks[0]['id']}",
                                             "body": {"version": 1}})["action"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE assistant_actions SET body_json=? WHERE id=?", (json.dumps({"status": "closed"}), stale["id"]))
+        c.execute("UPDATE assistant_actions SET body=? WHERE id=?", (json.dumps({"status": "closed"}), stale["id"]))
     done = post(api, f"assistant/actions/{stale['id']}/confirm", {})["action"]
     assert done["status"] == "done", done["result"]
     # A new one is stored as the close it is, and so is each step of a bulk card.

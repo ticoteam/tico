@@ -90,9 +90,8 @@ EMPTY = (
     # migration snapshot (restoring it would act).
     "automations", "automation_versions", "automation_runs", "automation_mail_actions", "automation_daily",
     "automation_inboxes", "automation_effects", "automation_holds", "automation_guard_holds", "automation_turn_answers",
-    "redesign_migrations",
     # Task cap counts are today's sends; the caps themselves are kept.
-    "task_cap_sends", "task_cap_log",
+    "task_cap_log",
     # A hard delete's queue of bytes still to remove from storage: the copy never deletes from the source's stores.
     "blob_purges",
     # Calls: a live call's room and recorder are on the source's LiveKit, so the copy holds no live call. Its
@@ -117,8 +116,8 @@ EMPTY = (
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",
                "automation_versions")
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
-HISTORY = {"attempts": "created", "jobs": "created", "messages": "created", "events": "ts", "deltas": "ts",
-           "bot_status_history": "since", "audit_log": "at", "browser_exit_usage": "day"}
+HISTORY = {"attempts": "created_at", "jobs": "created_at", "messages": "created_at", "events": "created_at", "deltas": "created_at",
+           "bot_status_history": "started_at", "audit_log": "created_at", "browser_exit_usage": "day"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
     "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events", "attempt_load_snapshots",
@@ -127,13 +126,12 @@ KEEP = frozenset((
     "bot_memory_documents", "bot_memory_oversized", "bot_memory_seen", "bot_memory_updates", "bot_repo_access", "bot_status",
     "bot_task_tabs", "bot_tool_requests", "cards", "deferrals", "pin_places", "pins", "bot_transition_checkpoints", "bot_transitions", "bots", "strategy_actions",
     "ask_ingest_items", "ask_ingest_settings", "strategy_merges", "changes", "chat_goals",
-    "ceo_actions", "ceo_merges",  # the names before the rename, kept, mirrored, for one release (hubdb.STRATEGY_TABLES)
-    "cloud_migrations", "company_events", "company_profile", "connector_snapshots", "conversations", "doc_sources", "doc_versions", "docs",
-    "document_versions", "documents", "external_documents", "file_deletions", "external_sections", "external_snapshot_docs",
+    "cloud_migrations", "schema_migrations", "company_events", "company_profile", "connector_snapshots", "conversations", "doc_sources", "doc_versions", "docs",
+    "external_documents", "file_deletions", "external_sections", "external_snapshot_docs",
     "external_snapshots", "external_versions", "feed_sources", "feed_updates", "flight_db", "flight_events",
     "flight_process", "flight_requests",
     "flight_slow", "flight_sql", "provenance_clock", "roster_clock", "row_clock", "goal_asks", "goal_checkins", "goal_events", "goal_kpis", "goal_proposals", "goals",
-    "health_findings", "health_reports", "humans", "import_refs", "invariant_state", "intake_items", "kpi_definitions", "kpi_readings",
+    "health_findings", "health_reports", "humans", "principals", "import_refs", "invariant_state", "intake_items", "kpi_definitions", "kpi_readings",
     "kpis", "learning_cursors",
     # Threads: the search index (its triggers follow the messages kept), and the digest and follow-up ledgers, which
     # stop the copy emailing or nudging again what the source already did.
@@ -142,10 +140,10 @@ KEEP = frozenset((
     "live_meeting_access", "live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_events", "live_meeting_humans",
     "live_meeting_turns", "live_meeting_windows", "live_meetings", "mail_agent_instructions", "mail_messages",
     "main_pushes", "market_citations", "market_edges", "market_entities", "market_entity_keys", "market_events",
-    "market_evidence", "market_figures", "market_insights", "market_sizes", "market_sources", "market_watches", "market_briefings", "market_turn_sources", "media_assets", "media_control", "meeting_brain", "meeting_comments",
+    "market_evidence", "market_figures", "market_insights", "market_sizes", "market_sources", "market_watches", "market_briefings", "market_pages", "market_turn_sources", "media_assets", "media_control", "meeting_brain", "meeting_comments",
     "meeting_items", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
     "message_links_seen", "notes", "pages", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
-    "recording_source_refs", "recording_transcripts", "org_rules", "org_rule_misses", "redesign_migrated", "redesign_migration_accepts", "refusals", "registry_metadata", "repositories", "rule_due_dates", "rule_due_status", "rule_reads", "rule_sources", "rule_suggestions", "rules", "run_backoff", "runners",
+    "recording_source_refs", "recording_transcripts", "org_rules", "org_rule_misses", "redesign_migrated", "refusals", "registry_metadata", "repositories", "rule_due_dates", "rule_due_status", "rule_reads", "rule_sources", "rule_suggestions", "rules", "run_backoff", "runners",
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
     "memory_tidy_cards", "memory_tidy_keeps", "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_events", "strategy_versions",
     "system_runs", "tags", "task_assets",
@@ -293,7 +291,7 @@ def revoke_automation_secrets(c):
     if "webhooks" in present:
         columns = {r[1] for r in c.execute("PRAGMA table_info(webhooks)")}
         c.execute("UPDATE webhooks SET secret='', secret_prev='', secret_prev_until=NULL"
-                  + (", headers_json='[]'" if "headers_json" in columns else ""))
+                  + (", headers='[]'" if "headers" in columns else ""))
 
 
 def prune(c, days, keep_automations=False):
@@ -315,15 +313,15 @@ def prune(c, days, keep_automations=False):
     # Finance's emptied tables are in this set too, though Finance deletes them (in its scrub, below).
     gone_all = set(gone) | set(finance.DEV_COPY_EMPTIED)
     if "task_trash" in present:
-        for task_id, raw in c.execute("SELECT task_id,rows_json FROM task_trash").fetchall():
+        for task_id, raw in c.execute("SELECT task_id,rows FROM task_trash").fetchall():
             snapshot = json.loads(raw or "{}")
             rows = snapshot.get("rows") if isinstance(snapshot, dict) else None
             if isinstance(rows, dict) and set(rows) & gone_all:
                 snapshot["rows"] = {t: r for t, r in rows.items() if t not in gone_all}
-                c.execute("UPDATE task_trash SET rows_json=? WHERE task_id=?", (json.dumps(snapshot), task_id))
+                c.execute("UPDATE task_trash SET rows=? WHERE task_id=?", (json.dumps(snapshot), task_id))
     # The secret that keys visitors' hashed addresses is the live install's; the copy gets its own.
     if "registry_metadata" in present:
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='roadmap_ip_secret'",
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='roadmap_ip_secret'",
                   (json.dumps(secrets.token_hex(32)),))
     # Finance makes its tables inert itself: pending actions, undrained events, links to emptied holds, and the rows that
     # move money or call a provider (DEV_COPY_EMPTIED). Any Finance table present means the scrub runs: a copy missing one
@@ -335,7 +333,7 @@ def prune(c, days, keep_automations=False):
     if "jobs" in present:
         delete("jobs", "state IN (%s)" % ",".join("?" * len(OPEN_JOBS)), OPEN_JOBS)
     if "attempts" in present:
-        delete("attempts", "finished IS NULL OR state IN (%s)" % ",".join("?" * len(OPEN_ATTEMPTS)), OPEN_ATTEMPTS)
+        delete("attempts", "finished_at IS NULL OR state IN (%s)" % ",".join("?" * len(OPEN_ATTEMPTS)), OPEN_ATTEMPTS)
     stamp = now()
     if days:
         cutoff = shift(stamp, days=-days)
@@ -357,7 +355,7 @@ def prune(c, days, keep_automations=False):
     if "runners" in present:
         c.execute("UPDATE runners SET token_hash='devcopy-revoked:'||id, revoked_at=coalesce(revoked_at,?)", (stamp,))
     if "attempts" in present:
-        c.execute("UPDATE attempts SET token_hash='devcopy-revoked:'||id, lease_until=coalesce(finished,created)")
+        c.execute("UPDATE attempts SET token_hash='devcopy-revoked:'||id, lease_until=coalesce(finished_at,created_at)")
     # A row that points at one just removed goes too (attempt_events of an attempt, oauth_grants of a token):
     # repeated until no foreign key is broken by what this run removed.
     touched, frontier = set(removed), set(removed)
@@ -421,7 +419,7 @@ def build(source, dest, days=30, force=False, keep_automations=False):
         if left:
             raise SystemExit("devcopy: tables not empty after pruning: " + ", ".join(left))
         live = c.execute("SELECT count(*) FROM attempts WHERE token_hash NOT LIKE 'devcopy-revoked:%' "
-                         "OR finished IS NULL").fetchone()[0] if "attempts" in tables(c) else 0
+                         "OR finished_at IS NULL").fetchone()[0] if "attempts" in tables(c) else 0
         if live:
             raise SystemExit("devcopy: an unfinished or unrevoked attempt survived pruning")
         present = tables(c)
@@ -437,7 +435,7 @@ def build(source, dest, days=30, force=False, keep_automations=False):
 def owner_email(path):
     import json
     with closing(sqlite3.connect(Path(path).as_uri() + "?mode=ro", uri=True)) as c:
-        row = c.execute("SELECT value_json FROM registry_metadata WHERE key='owner'").fetchone() \
+        row = c.execute("SELECT value FROM registry_metadata WHERE key='owner'").fetchone() \
             if "registry_metadata" in tables(c) else None
         if row:
             email = str((json.loads(row[0]) or {}).get("email") or "")

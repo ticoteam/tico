@@ -1,6 +1,7 @@
 """Make task from a thread message: the server reads the message (a stranger gets 404), the task keeps the message's
 privacy and carries its words and a link back. Fictional people only: ana (owner), ben and cara (humans)."""
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.store import H
 from backend.tests.test_api import api, headers, post  # noqa: F401  (the fixture and its helpers)
 from backend.tests.test_thread_api import new_thread

@@ -44,7 +44,7 @@ def _after(at: str, seconds: float) -> str:
 
 
 def _settings(row: Any) -> dict[str, Any]:
-    return SK.loads(row["settings_json"])
+    return SK.loads(row["settings"])
 
 
 def _rows(body: Mapping[str, Any], key: str) -> list[dict[str, Any]]:
@@ -129,7 +129,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     def apply(aid: str) -> Result:
         cid = SK.insert(ctx.c, "fin_connections", {
             "provider": "stripe", "purpose": "payments", "credential_ref": cred, "status": "active", "name": name,
-            "settings_json": SK.dump({"backfilled": False, "account": acct}), "next_sync_at": ctx.at,
+            "settings": SK.dump({"backfilled": False, "account": acct}), "next_sync_at": ctx.at,
             "created_at": ctx.at, "created_by": who})
         if live is None:
             gl = banking.new_account(ctx, BALANCE_CODE, BALANCE_NAME, "asset", "bank", who)
@@ -309,7 +309,7 @@ def _walk(store: Any, provider: Provider, cid: str, conf: dict[str, Any], cursor
 def _save(store: Any, cid: str, now: str, conf: Mapping[str, Any], cursor: str, head: str | None) -> None:
     state = {**conf, "head": head} if head else dict(conf)
     with store.transaction() as c:
-        SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings_json": SK.dump(state), "updated_at": now})
+        SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings": SK.dump(state), "updated_at": now})
 
 
 def _complete(store: Any, cid: str, now: str, conf: Mapping[str, Any], head: str | None, backfill: bool) -> None:
@@ -326,7 +326,7 @@ def _complete(store: Any, cid: str, now: str, conf: Mapping[str, Any], head: str
                     continue
                 banking.open_at(ctx, m, int(conf["held"]))
             done["backfilled"] = True
-        SK.update(c, "fin_connections", cid, {"settings_json": SK.dump(done), "cursor": None, "updated_at": now})
+        SK.update(c, "fin_connections", cid, {"settings": SK.dump(done), "cursor": None, "updated_at": now})
 
 
 def _take(store: Any, cid: str, acct: str, rows: list[dict[str, Any]], now: str, *, stop: str | None) -> list[str]:

@@ -148,7 +148,7 @@ start_runner() {  # image tag, then the join arguments: as docker/runner.compose
 }
 runner_online() { get getting-started | json 'sys.exit(0 if any(i["id"]=="computer" and i["done"] for i in d["items"]) else 1)'; }
 runner_id() { get operations | json 'd["machines"][0]["id"]'; }
-last_seen() { sql "SELECT coalesce(max(last_seen),'') FROM runners WHERE revoked_at IS NULL"; }
+last_seen() { sql "SELECT coalesce(max(last_seen_at),'') FROM runners WHERE revoked_at IS NULL"; }
 seen_since() { [[ "$(last_seen)" > "$1" ]]; }
 botops_ready() { get operations | json 'sys.exit(0 if d["machines"][0]["readiness"]["bots"]["botops"]["ready"] else 1)'; }
 

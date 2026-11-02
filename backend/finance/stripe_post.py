@@ -107,7 +107,7 @@ def fee_of(row: Any) -> int:
     """What a Stripe sale's fee took out of its net, in cents; 0 for any other row (a refund, a payout, a cost)."""
     if str(row["kind"]) not in F.STRIPE_CHARGES:
         return 0
-    return F.stripe_parts(SK.loads(row["raw_json"]))[1]
+    return F.stripe_parts(SK.loads(row["raw"]))[1]
 
 
 def fee_line(ctx: Ctx, row: Any) -> dict[str, object] | None:
@@ -202,10 +202,10 @@ def _post_sale(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: in
 def _to_summary(ctx: Ctx, row: Any, counter: Sequence[Share] | None = None) -> None:
     """Marks the row for its day's summary entry (see _summarize_day), which posts it with the day's other ordinary rows.
     A sale carries the counter lines it posts to; a Stripe charge of its own (a cost) carries none."""
-    raw = {**SK.loads(row["raw_json"]), SUMMARY: True}
+    raw = {**SK.loads(row["raw"]), SUMMARY: True}
     if counter is not None:
         raw[COUNTER] = [[account, amount, dict(tags), contact] for account, amount, tags, contact in counter]
-    SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"raw_json": SK.dump(raw), "updated_at": ctx.at})
+    SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"raw": SK.dump(raw), "updated_at": ctx.at})
 
 
 def _summarize(ctx: Ctx, money: Any) -> None:
@@ -250,7 +250,7 @@ def _row_keys(ctx: Ctx, r: Any) -> set[SummaryKey]:
     if str(r["kind"]) not in F.STRIPE_CHARGES:
         return set()
     return {(account, tuple(sorted(tags.items())), contact) for account, _, tags, contact
-            in _carried(ctx, SK.loads(r["raw_json"]))}
+            in _carried(ctx, SK.loads(r["raw"]))}
 
 
 def _post_summary(ctx: Ctx, money: Any, day: str, rows: list[Any]) -> None:
@@ -259,7 +259,7 @@ def _post_summary(ctx: Ctx, money: Any, day: str, rows: list[Any]) -> None:
     counter: dict[SummaryKey, int] = {}
     fees = net = 0
     for r in rows:
-        raw = SK.loads(r["raw_json"])
+        raw = SK.loads(r["raw"])
         gross, fee = F.stripe_parts(raw)
         net += int(r["amount"])
         fees += fee
@@ -347,8 +347,8 @@ def _unwind(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) 
     banking.mark_posted(ctx, [fid], entry)
     gave = _give_back(ctx, row, shares, entry)
     if gave:
-        raw = {**SK.loads(row["raw_json"]), GAVE: gave}
-        SK.update(ctx.c, "fin_feed_txns", fid, {"raw_json": SK.dump(raw), "updated_at": ctx.at})
+        raw = {**SK.loads(row["raw"]), GAVE: gave}
+        SK.update(ctx.c, "fin_feed_txns", fid, {"raw": SK.dump(raw), "updated_at": ctx.at})
 
 
 def _shares(ctx: Ctx, original: Any, gross: int, given: Mapping[str, int]) -> list[tuple[Any, int]]:
@@ -363,7 +363,7 @@ def _shares(ctx: Ctx, original: Any, gross: int, given: Mapping[str, int]) -> li
 def _restores(ctx: Ctx, original: Any, failed: Any) -> list[tuple[Any, int]]:
     """What a restore takes back from each settlement: exactly what the refund it undoes gave that settlement (kept on
     that refund as `gave`). A refund that gave nothing back restores nothing, whatever the other refunds gave."""
-    gave = cast(Mapping[str, int], cast(Mapping[str, Any], SK.loads(failed["raw_json"])).get(GAVE) or {})
+    gave = cast(Mapping[str, int], cast(Mapping[str, Any], SK.loads(failed["raw"])).get(GAVE) or {})
     live = SAP.settlements_from(ctx.c, "feed", str(original["id"]))
     return [(s, -int(gave.get(str(s["id"]), 0))) for s in live]
 
@@ -392,7 +392,7 @@ def _give_back(ctx: Ctx, row: Any, shares: Sequence[tuple[Any, int]], entry: str
 def _counter(ctx: Ctx, original: Any) -> list[Share] | None:
     """The counter lines a sale posted (negative), to be reversed. A summarized sale has no lines of its own (the day's
     entry is shared), so its carried lines are what it posted to. None while the sale is not posted yet."""
-    raw = SK.loads(original["raw_json"])
+    raw = SK.loads(original["raw"])
     if raw.get(SUMMARY):
         return _carried(ctx, raw)
     if not original["entry_id"]:
@@ -478,7 +478,7 @@ def _txn(row: Any) -> F.FeedTxn:
     return F.FeedTxn(provider_id=str(row["provider_id"]), account_id="", amount=int(row["amount"]),
                      txn_date=str(row["txn_date"]), status=F.POSTED, kind=str(row["kind"]),
                      counterparty=str(row["counterparty"] or ""), description=str(row["description"] or ""),
-                     version=int(row["version"]), raw=SK.loads(row["raw_json"]))
+                     version=int(row["version"]), raw=SK.loads(row["raw"]))
 
 
 def _ask(ctx: Ctx, fid: str, why: str, key: str = "") -> None:

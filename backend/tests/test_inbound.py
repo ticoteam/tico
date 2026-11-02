@@ -56,9 +56,9 @@ def test_connection_requires_actual_direct_human_management_before_secret_parsin
     assert svc.connection_actor(owner)['actor']=='human:ana'  # loopback owner need not have via_proxy
     assert svc.connection_actor(Identity('human:ben','human','ben@acme.example'))['actor']=='human:ben'
     with svc.store.transaction() as c:
-        roster=json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster=json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         next(p for p in roster['people'] if p['id']=='ben')['sign_in']=False
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",(json.dumps(roster),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'",(json.dumps(roster),))
     with pytest.raises(Problem):svc.connection_actor(Identity('human:ben','owner','ben@acme.example'))
     as_member(api,'ben@acme.example')
     assert api.post(path,headers=headers('ben-test'),json={'action':'connect','code':CONNECTION_CODE}).status_code==403
@@ -90,7 +90,7 @@ def test_connection_validation_and_missing_identity_never_persist_or_echo_code(a
     with svc.store.transaction() as c:c.execute("INSERT INTO registry_metadata VALUES('usage-count','{corrupt')")
     assert api.post(path,headers=headers(),json={'action':'connect','code':CONNECTION_CODE}).status_code==409
     with svc.store.read() as c:
-        assert c.execute("SELECT value_json FROM registry_metadata WHERE key='usage-count'").fetchone()[0]=='{corrupt'
+        assert c.execute("SELECT value FROM registry_metadata WHERE key='usage-count'").fetchone()[0]=='{corrupt'
     assert CONNECTION_CODE not in caplog.text and calls==[]
 
 
@@ -143,19 +143,19 @@ def test_connection_bounds_upstream_response_and_refuses_redirects_and_false_suc
     assert api.post('/api/v2/inbound/company-connection',headers=headers(),json={'action':'preview','code':CONNECTION_CODE}).status_code==503
     assert len(calls)==6
 
-    # A peer that never finishes a body is cancelled and closed by the overall deadline.
+    # A peer that never finishes a body is canceled and closed by the overall deadline.
     import asyncio
     class Slow(httpx.AsyncByteStream):
         async def __aiter__(self):
             await asyncio.Event().wait()
             yield b'{}'
-        async def aclose(self):closed.append('cancelled')
+        async def aclose(self):closed.append('canceled')
     monkeypatch.setattr(inbound,'CONNECTION_TIMEOUT',.1)
     monkeypatch.setattr(inbound,'TRANSPORT',httpx.MockTransport(lambda request:httpx.Response(200,stream=Slow())))
     svc.url='https://api.tico.dev'
     response=api.post('/api/v2/inbound/company-connection',headers=headers(),json={'action':'preview','code':CONNECTION_CODE})
     assert response.status_code==503 and response.json()['error']['retryable'] is True
-    assert 'cancelled' in closed and CONNECTION_CODE not in response.text
+    assert 'canceled' in closed and CONNECTION_CODE not in response.text
 
 
 @pytest.fixture(autouse=True)
@@ -357,7 +357,7 @@ def test_native_and_registered_agents_share_inboxes_but_lose_access_when_paused(
     assert native.status_code==200 and len(native.json()['messages'])==1
     external=Identity('bot:ops','bot',agent='hermes')
     with svc.store.transaction() as c:
-        c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('ops','hermes','synthetic',?,'human:ana')",
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('ops','hermes','synthetic',?,'human:ana')",
                   (inbound.H.now(),))
     assert len(svc.list_inboxes(external)['inboxes'])==3
     with svc.store.transaction() as c:c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
@@ -484,7 +484,7 @@ def _http_wait_probe(monkeypatch, *, deadline=False):
     from fastapi import FastAPI,Request
     from fastapi.testclient import TestClient
     from backend import mcp
-    app=FastAPI();app.state.auth=SimpleNamespace();entered=threading.Event();cancelled=threading.Event()
+    app=FastAPI();app.state.auth=SimpleNamespace();entered=threading.Event();canceled=threading.Event()
     budgets=[];futures=[];actual=mcp.asyncio.run_coroutine_threadsafe
     @app.middleware('http')
     async def identity(request,call_next):
@@ -495,7 +495,7 @@ def _http_wait_probe(monkeypatch, *, deadline=False):
         body=await request.json();entered.set()
         if deadline:
             try:await asyncio.Event().wait()
-            except asyncio.CancelledError:cancelled.set();raise
+            except asyncio.CancelledError:canceled.set();raise
         return {'messages':[],'cursor':body['after'],'next':None}
     @app.get('/api/v2/inbound/cursor')
     async def cursor():return {'cursor':0}
@@ -525,7 +525,7 @@ def _http_wait_probe(monkeypatch, *, deadline=False):
         with TestClient(app,raise_server_exceptions=False) as client:
             response=client.post('/api/v2/mcp',json={'jsonrpc':'2.0','id':1,'method':'tools/call',
                 'params':{'name':'hub_inbound_wait','arguments':{'after':0,'timeout':120}}})
-            if deadline:assert cancelled.wait(2)
+            if deadline:assert canceled.wait(2)
             else:
                 ordinary=client.post('/api/v2/mcp',json={'jsonrpc':'2.0','id':2,'method':'tools/call',
                     'params':{'name':'hub_inbound_cursor','arguments':{}}})
@@ -536,16 +536,16 @@ def _http_wait_probe(monkeypatch, *, deadline=False):
 
 
 def test_http_mcp_honors_long_wait_and_keeps_other_request_budget(monkeypatch):
-    response,budgets,cancelled=_http_wait_probe(monkeypatch)
+    response,budgets,canceled=_http_wait_probe(monkeypatch)
     assert response.status_code==200
     assert response.json()['result']['structuredContent']=={'messages':[],'cursor':0,'next':None}
     assert response.json()['result']['isError'] is False
-    assert budgets==[135,65] and cancelled==[0,0]
+    assert budgets==[135,65] and canceled==[0,0]
 
 
 def test_http_mcp_cancels_timed_out_wait_and_returns_typed_retryable_error(monkeypatch):
-    response,budgets,cancelled=_http_wait_probe(monkeypatch,deadline=True)
-    assert response.status_code==200 and budgets==[135] and cancelled==[1]
+    response,budgets,canceled=_http_wait_probe(monkeypatch,deadline=True)
+    assert response.status_code==200 and budgets==[135] and canceled==[1]
     result=response.json()['result']
     assert result['isError'] is True
     assert result['structuredContent']['error']=='unavailable' and result['structuredContent']['retryable'] is True

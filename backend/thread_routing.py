@@ -58,8 +58,8 @@ def candidates(c, thread, author):
                                       "AND notify IN ('live','digest') AND actor LIKE 'bot:%'", (root["id"], thread["id"]))}
     for place in {root["id"], thread["id"]}:
         found |= {r[0] for r in c.execute(
-            "SELECT DISTINCT from_actor FROM (SELECT from_actor FROM messages WHERE conversation_id=? AND seq IS NOT NULL "
-            "AND deleted_at IS NULL ORDER BY seq DESC LIMIT ?) WHERE from_actor LIKE 'bot:%'", (place, POSTERS_WINDOW))}
+            "SELECT DISTINCT sender_id FROM (SELECT sender_id FROM messages WHERE conversation_id=? AND seq IS NOT NULL "
+            "AND deleted_at IS NULL ORDER BY seq DESC LIMIT ?) WHERE sender_id LIKE 'bot:%'", (place, POSTERS_WINDOW))}
     muted = {r[0] for r in c.execute("SELECT actor FROM thread_followers WHERE thread_id IN (?,?) AND actor LIKE 'bot:%' "
                                      "AND (following=0 OR notify IN ('muted','mentions'))", (root["id"], thread["id"]))}
     out = []
@@ -98,13 +98,13 @@ def questions(fleet):
 
 def _state(c, thread, message, fleet):
     """What the model reads. Only what the thread's readers all read: a restricted message stays out of its context."""
-    rows = c.execute("SELECT from_actor, body FROM messages WHERE conversation_id=? AND seq<? AND seq IS NOT NULL "
+    rows = c.execute("SELECT sender_id, body FROM messages WHERE conversation_id=? AND seq<? AND seq IS NOT NULL "
                      "AND deleted_at IS NULL AND restricted=0 ORDER BY seq DESC LIMIT ?",
                      (thread["id"], message.get("seq") or 0, CONTEXT)).fetchall()
-    last = next((r["from_actor"] for r in rows if str(r["from_actor"]).startswith("bot:")), None)
-    return {"message": {"text": message.get("body") or "", "from": message.get("from_actor"),
+    last = next((r["sender_id"] for r in rows if str(r["sender_id"]).startswith("bot:")), None)
+    return {"message": {"text": message.get("body") or "", "from": message.get("sender_id"),
                         "where": thread.get("subject") or ""},
-            "thread": [{"from": r["from_actor"], "text": str(r["body"] or "")[:CONTEXT_CHARS]} for r in reversed(rows)],
+            "thread": [{"from": r["sender_id"], "text": str(r["body"] or "")[:CONTEXT_CHARS]} for r in reversed(rows)],
             "previous_routing": {"last_bot": last}, "roster": fleet}
 
 
@@ -141,11 +141,11 @@ def _plan(store, row, primary):
         if thread is None or c.execute("SELECT 1 FROM message_mentions WHERE message_id=? AND in_audience=1 LIMIT 1",
                                        (message["id"],)).fetchone():
             return None
-        actors = candidates(c, thread, message.get("from_actor"))
+        actors = candidates(c, thread, message.get("sender_id"))
         if len(actors) < 2:
             return None
         settings = store.settings
-        author = message.get("from_actor")
+        author = message.get("sender_id")
         role = "owner" if (H.human(c, H.actor_id(author)) or {}).get("email") == settings.owner_email else "human"
         if not row["attempts"] and B.used_today(c, author) >= B.daily_cap(settings, role):
             return None
@@ -164,7 +164,7 @@ def _apply(store, row, plan, result):
         c.execute("DELETE FROM thread_routings WHERE message_id=?", (row["message_id"],))
         message = H.message(c, row["message_id"])
         thread = threads.thread_row(c, row["thread_id"]) if message else None
-        H.event(c, plan["message"].get("from_actor"), "judge.call", JUDGE_LABEL,
+        H.event(c, plan["message"].get("sender_id"), "judge.call", JUDGE_LABEL,
                 {"via": "thread", "message_id": row["message_id"], "questions": len(plan["fleet"]) + len(JUDGE_SET["questions"]),
                  "calls": 1, "routed": [H.actor_id(a) for a in picked], "answers": J.summary(result.get("answers")),
                  **B.audit_detail(result)})

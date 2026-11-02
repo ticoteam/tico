@@ -5,6 +5,7 @@ reads for each what that stream's own read would."""
 
 import asyncio
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import events as E
 from backend import read_cache, threads
 from backend.store import H, Problem, encode
@@ -201,7 +202,7 @@ def test_shared_event_text_keeps_each_readers_own_actor_and_address(api):  # noq
     plain = say(api, room["id"], "No file here")["id"]
     carrying = say(api, room["id"], "A file here")["id"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET refs_json=? WHERE id=?", ('{"attachments":[{"name":"plan.txt"}]}', carrying))
+        c.execute("UPDATE messages SET refs=? WHERE id=?", ('{"attachments":[{"name":"plan.txt"}]}', carrying))
     seen = []
 
     def visuals(c, who, messages):               # what gets each reader's own address: only a message with a file
@@ -210,7 +211,7 @@ def test_shared_event_text_keeps_each_readers_own_actor_and_address(api):  # noq
     got = lone_read(api, who(api, "ben-test"), after, topics=("messages",), visuals=visuals, shared=shared)
     assert {d["id"] for _, _, d in got[0]} >= {plain, carrying}
     assert carrying in seen and plain not in seen
-    row = {"seq": 7, "at": "2026-11-01T00:00:00Z"}
+    row = {"seq": 7, "created_at": "2026-11-01T00:00:00Z"}
     event = E._SameForAll(room["id"], {"root_id": room["id"]}, {"id": plain}, {})
     shown, hidden = event.event(row, "bot:acme", shared), event.event(row, None, shared)
     assert shown["actor"] == "bot:acme" and hidden["actor"] is None and shown.encoded != hidden.encoded
@@ -223,7 +224,7 @@ def test_shared_event_text_never_names_someone_this_reader_may_not_see(api, monk
     made = api.post("/api/v2/threads", json={"title": "Launch", "audience": "company"}, headers=headers("ana-test"))
     room = made.json()
     message = say(api, room["id"], "The date moved")
-    said, author = message["id"], message["from_actor"]
+    said, author = message["id"], message["sender_id"]
     real = teammate_access.unseen
     monkeypatch.setattr(teammate_access, "unseen", lambda c, viewer, auth=None: (
         {author.split(":", 1)[1]} if viewer.actor == "human:cara" else real(c, viewer, auth)[0], set()))
@@ -232,6 +233,6 @@ def test_shared_event_text_never_names_someone_this_reader_may_not_see(api, monk
     for token in ("ben-test", "cara-test"):
         events = lone_read(api, who(api, token), after, topics=("messages",), shared=shared)[0]
         seen[token] = next(d for _, _, d in events if d.get("id") == said)
-    assert seen["ben-test"]["message"]["from_actor"] == author and seen["ben-test"]["actor"] == author
-    assert seen["cara-test"]["message"]["from_actor"] == "" and seen["cara-test"]["actor"] is None
+    assert seen["ben-test"]["message"]["sender_id"] == author and seen["ben-test"]["actor"] == author
+    assert seen["cara-test"]["message"]["sender_id"] == "" and seen["cara-test"]["actor"] is None
     assert author not in encode(seen["cara-test"]), seen["cara-test"]

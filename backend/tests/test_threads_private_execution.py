@@ -7,6 +7,7 @@ ben (requester), ana (company), the bot ops. The run's task is private, so its r
 
 import pytest
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import threads
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, headers, ready, runner  # noqa: F401
@@ -318,7 +319,7 @@ def _dm_question(api, **refs):
 
 def _lose_the_task(api, row):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET requester='human:ana' WHERE id=?", (row["id"],))
+        c.execute("UPDATE tasks SET requester_id='human:ana' WHERE id=?", (row["id"],))
 
 
 def test_a_private_runs_answer_in_a_dm_keeps_its_task_after_the_asker_loses_it(api):

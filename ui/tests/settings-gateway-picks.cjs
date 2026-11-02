@@ -24,10 +24,10 @@ const shotsDir = process.env.TICO_SHOTS || '';
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     const catalog = {models: served.models, harnesses, gateway: served.gateway, default: {runtime: 'pi', model: 'tico-general-medium-1.0'}};
-    const bot = (name, display, model, department, extra = {}) => ({name, display_name: display, description: '', status: 'active', operator: 'ana',
+    const bot = (name, display, model, department, extra = {}) => ({name, display_name: display, description: '', status: 'active', owner_id: 'ana',
       repo: 'bot-' + name, can_manage: true, users: [], bot_owners: [], revision: 1, model, harness: 'pi', reasoning_effort: 'high',
       keep_tasks_going: null, task_flow: {going: 0, waiting: 0}, task_model: null, thread_mode: 'personal', bot_contact: 'open',
-      gateway_department: department, machine: {runner_id: 'r1', label: 'Box', operator: 'ana', generation: 1}, ...extra});
+      gateway_department: department, machine: {runner_id: 'r1', label: 'Box', owner_id: 'ana', generation: 1}, ...extra});
     const bots = [bot('seller', 'Seller', 'tico-sales-medium-1.0', 'sales'), bot('old', 'Old Hand', 'tico-mid-1.0', 'general'),
       bot('writer', 'Writer', 'tico-marketing-low-fast', 'marketing'), bot('banker', 'Banker', 'tico-finance-medium-1.1', 'finance')];
     let decide = 'low', saved = null;
@@ -44,7 +44,7 @@ const shotsDir = process.env.TICO_SHOTS || '';
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: []});
       if (p === '/api/v2/status') return json({bots: []});
-      if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', operator: 'ana', bots: bots.map(b => b.name)}], services: []});
+      if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', owner_id: 'ana', bots: bots.map(b => b.name)}], services: []});
       if (p === '/api/v2/models') return json({...catalog, enabled_providers: ['tico']});
       if (p === '/api/v2/providers' && req.method() === 'PUT') { saved = req.postDataJSON(); decide = saved.decide_level || decide; return json({enabled: ['tico'], default: catalog.default, revision: 2, decide_level: decide, decide_levels: ['low', 'medium', 'high']}); }
       if (p === '/api/v2/providers') return json({enabled: ['tico'], default: catalog.default, revision: 1, auto_fallback: true,

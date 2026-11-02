@@ -32,7 +32,7 @@ def review(api):
         task = c.execute("SELECT id,body FROM tasks WHERE title=? AND status='open'", (REVIEW,)).fetchone()
         if not task:
             return None
-        said = [r[0] for r in c.execute("SELECT body FROM messages WHERE json_extract(refs_json,'$.task')=?",
+        said = [r[0] for r in c.execute("SELECT body FROM messages WHERE json_extract(refs,'$.task')=?",
                                         (task['id'],))]
         return "\n".join([task['body'] or '', *said])
 
@@ -72,7 +72,7 @@ def test_a_quarantine_stops_a_turn_that_used_a_shell_with_its_reason_and_holds_i
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0] == 'interrupted'
         assert H.bot(c, 'ops')['state'] == 'quarantined'
-    # Held, not queued and not cancelled: the quarantine's Stop is no one's choice to drop it.
+    # Held, not queued and not canceled: the quarantine's Stop is no one's choice to drop it.
     assert job_state(api, attempt['job_id']) == 'uncertain'
     notice = get(api, f"conversations/{message['conversation_id']}/messages")[-1]
     assert notice['kind'] == 'notice' and notice['body'].startswith(line)
@@ -130,7 +130,7 @@ def test_a_read_only_turn_on_a_host_that_does_not_report_its_calls_is_held(api):
 def test_a_quarantine_stopped_turn_that_used_up_an_approval_is_held(api):
     machine, message, attempt = working(api, safe=True)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by,created,consumed_at) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)",
                   ('quarantine-send', 'send', message['id'], 'bot:ops', H.now(), H.now()))
     quarantine(api)
     post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
@@ -163,7 +163,7 @@ def test_an_answer_finished_after_opening_a_pull_request_is_kept_on_the_run_and_
     assert tuple(row) == ('interrupted', 'Opened the pull request.')
     assert job_state(api, attempt['job_id']) == 'uncertain'
     assert end_reason(api, attempt).startswith('Quarantined: ')
-    assert not [m for m in get(api, f"conversations/{message['conversation_id']}/messages") if m['from_actor'] == 'bot:ops']
+    assert not [m for m in get(api, f"conversations/{message['conversation_id']}/messages") if m['sender_id'] == 'bot:ops']
     aged(api, attempt['id'])
     assert sweep(api) == [] and attempt['job_id'] in review(api)
     lift(api)
@@ -181,7 +181,7 @@ def test_an_answer_finished_by_a_read_only_turn_is_kept_on_the_run_and_its_job_r
         row = c.execute("SELECT state,final_text FROM attempts WHERE id=?", (attempt['id'],)).fetchone()
     assert tuple(row) == ('interrupted', 'Here is the summary.')
     assert job_state(api, attempt['job_id']) == 'queued'
-    assert not [m for m in get(api, f"conversations/{message['conversation_id']}/messages") if m['from_actor'] == 'bot:ops']
+    assert not [m for m in get(api, f"conversations/{message['conversation_id']}/messages") if m['sender_id'] == 'bot:ops']
 
 
 def test_a_turn_still_waiting_to_start_is_stopped_the_same_way(api):
@@ -223,7 +223,7 @@ def test_a_stopped_turn_that_used_a_shell_and_never_reported_back_is_held_for_re
     aged(api, attempt['id'])
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     assert attempt['job_id'] in review(api)
-    # Its late answer is filed on the run; the job stays held rather than cancelled by the Stop.
+    # Its late answer is filed on the run; the job stays held rather than canceled by the Stop.
     lift(api)
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'last_seq': 3,
          'text': 'Opened the pull request.'}, machine['token'])
@@ -248,17 +248,17 @@ def test_a_quarantine_after_the_lease_already_lapsed_is_still_a_lost_computer(ap
     refused = post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'], expected=409)
     assert refused['error']['code'] == 'stale_lease'
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT stop_requested FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0] is None
+        assert c.execute("SELECT stop_requested_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0] is None
 
 
 def test_a_person_stop_is_unchanged(api):
     machine, message, attempt = working(api)
-    post(api, 'bots/ops/stop', {'attempt_id': attempt['id']})
+    post(api, 'bots/ops/stop', {'run_id': attempt['id']})
     renewed = post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
     assert renewed['stop'] is True and 'stop_reason' not in renewed
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 3}, machine['token'])
-    assert job_state(api, attempt['job_id']) == 'cancelled'
-    assert end_reason(api, attempt).startswith('Cancelled by ')
+    assert job_state(api, attempt['job_id']) == 'canceled'
+    assert end_reason(api, attempt).startswith('Canceled by ')
 
 
 def test_all_running_turns_stop_each_judged_on_its_own_with_folded_inputs_following_their_turn(api):

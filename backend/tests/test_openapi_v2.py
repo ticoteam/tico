@@ -36,7 +36,7 @@ def conforms(value, schema, root, where="$"):
             if key in value and (error := conforms(value[key], sub, root, where + "." + key)):
                 return error
     if isinstance(value, list) and "items" in schema:
-        for i, item in enumerate(value[:5]):
+        for i, item in enumerate(value):
             if error := conforms(item, schema["items"], root, "%s[%d]" % (where, i)):
                 return error
     return None
@@ -74,6 +74,15 @@ def test_served_to_the_signed_in_only_and_limited_to_the_stable_resources(api):
     for path, ops in document["paths"].items():                          # every write asks for an idempotency key
         if path.startswith("/api/v2/") and "post" in ops:
             assert "Idempotency-Key" in [p["name"] for p in ops["post"]["parameters"]], path
+
+
+def test_a_schema_requires_only_what_it_declares():
+    """A required name missing from properties is a rename that reached one list and not the other; no live answer
+    can show it unless a test happens to call that route."""
+    schemas = openapi_v2.generate()["components"]["schemas"]
+    wrong = {name: missing for name, schema in schemas.items() if schema.get("properties")
+             and (missing := sorted(set(schema.get("required") or ()) - set(schema["properties"])))}
+    assert not wrong
 
 
 def test_the_declared_answers_match_the_live_ones(api):
@@ -248,7 +257,7 @@ def test_closed_status_uses_close_permissions_and_rejects_combined_edits(api):
         row = H.task(c, task["id"])
         assert (row["status"], row["title"], row["version"]) == ("doing", task["title"], task["version"])
     closed = post(api, path, {"version": task["version"], "status": "closed", "note": "Accepted."})
-    assert closed["status"] == "closed" and closed["closed_by"] == "human:ana"
+    assert closed["status"] == "closed" and closed["closed_by_id"] == "human:ana"
     assert closed["version"] == task["version"] + 1
     post(api, path, {"version": task["version"], "status": "closed"}, expected=409)
 

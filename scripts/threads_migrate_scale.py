@@ -70,9 +70,9 @@ def build(args):
     humans = [f"human:h{i:03d}" for i in range(HUMANS)]
     bots = [f"bot:b{i:03d}" for i in range(BOTS)]
     conn.execute("BEGIN")
-    conn.executemany("INSERT INTO humans(id,name,email,teams_json) VALUES(?,?,?,?)",
+    conn.executemany("INSERT INTO humans(id,name,email,teams) VALUES(?,?,?,?)",
                      [(h[6:], f"Person {i}", f"person{i}@acme.example", "[]") for i, h in enumerate(humans)])
-    conn.executemany("INSERT INTO bots(slug,display_name,runtime,host,state,created) VALUES(?,?,?,?,?,?)",
+    conn.executemany("INSERT INTO bots(slug,display_name,runtime,host,state,created_at) VALUES(?,?,?,?,?,?)",
                      [(b[4:], f"Bot {i}", "claude", "dispatcher", "active", stamp(0)) for i, b in enumerate(bots)])
 
     # Conversation mix: direct, shared rooms (one open per bot, the rest closed), personal, task. Main's unique
@@ -90,28 +90,28 @@ def build(args):
             bot = bots[rng.randrange(BOTS)]
             task_id = f"{10_000_000 + n_conv:032x}"
             if kind == "direct":
-                row = dict(scope="direct", kind="direct", room_key=None, owner=None, task_id=None,
+                row = dict(scope="direct", kind="direct", room_key=None, owner_id=None, task_id=None,
                            people=[human, bot], closed=None)
             elif kind == "shared":
                 # The first 200 are each bot's one open room (its Home once migrated); the rest are closed rooms.
-                row = dict(scope="shared", kind="shared", room_key=bots[k % BOTS][4:], owner=None, task_id=None,
+                row = dict(scope="shared", kind="shared", room_key=bots[k % BOTS][4:], owner_id=None, task_id=None,
                            people=[human, bot], closed=None if k < SHARED_OPEN_MAX else stamp(n_conv * 60))
             elif kind == "personal":
                 # One open personal room per (owner, room): the first 2,000 are open (100 people x 20 rooms).
                 owner = humans[k % HUMANS]
                 row = dict(scope="personal", kind="personal", room_key=ROOMS[(k // HUMANS) % len(ROOMS)],
-                           owner=owner, task_id=None, people=[owner, bot],
+                           owner_id=owner, task_id=None, people=[owner, bot],
                            closed=None if k < 2000 else stamp(n_conv * 60))
             else:
                 tasks.append((task_id, f"Task {n_conv}", "open", stamp(n_conv)))
-                row = dict(scope="task", kind="task", room_key=None, owner=None, task_id=task_id,
+                row = dict(scope="task", kind="task", room_key=None, owner_id=None, task_id=task_id,
                            people=[human, bot], closed=None)
             convs.append((cid, row))
-            conv_rows.append((cid, row["kind"], row["scope"], row["room_key"], row["owner"], row["task_id"],
+            conv_rows.append((cid, row["kind"], row["scope"], row["room_key"], row["owner_id"], row["task_id"],
                               json.dumps(row["people"]), stamp(n_conv), None, row["closed"]))
-    conn.executemany("INSERT INTO tasks(id,title,status,created,updated) VALUES(?,?,?,?,?)",
+    conn.executemany("INSERT INTO tasks(id,title,status,created_at,updated_at) VALUES(?,?,?,?,?)",
                      [(t[0], t[1], t[2], t[3], t[3]) for t in tasks])
-    conn.executemany("INSERT INTO conversations(id,kind,scope,room_key,owner_actor,task_id,participants_json,created,"
+    conn.executemany("INSERT INTO conversations(id,kind,scope,room_key,owner_id,task_id,participants,created_at,"
                      "last_message_at,closed_at) VALUES(?,?,?,?,?,?,?,?,?,?)", conv_rows)
     conn.execute("COMMIT")
 
@@ -125,27 +125,27 @@ def build(args):
     insert = (
         "WITH RECURSIVE j(k) AS (SELECT 1 UNION ALL SELECT k+1 FROM j WHERE k < :count), "
         "raw AS (SELECT k, printf('%032x', :start+k) AS id, "
-        "  strftime('%Y-%m-%dT%H:%M:%fZ', '2025-01-01', ((:start+k)*37)||' seconds') AS created, "
-        "  CASE WHEN abs(random())%2=0 THEN :human ELSE :bot END AS from_actor, "
-        "  CASE WHEN abs(random())%2=0 THEN CASE WHEN abs(random())%7=0 THEN :other ELSE :bot END END AS to_actor, "
+        "  strftime('%Y-%m-%dT%H:%M:%fZ', '2025-01-01', ((:start+k)*37)||' seconds') AS created_at, "
+        "  CASE WHEN abs(random())%2=0 THEN :human ELSE :bot END AS sender_id, "
+        "  CASE WHEN abs(random())%2=0 THEN CASE WHEN abs(random())%7=0 THEN :other ELSE :bot END END AS recipient_id, "
         "  CASE WHEN abs(random())%100<85 THEN 'say' WHEN abs(random())%100<90 THEN 'ask' ELSE 'notice' END AS kind, "
         "  lower(hex(randomblob(20+abs(random())%100))) AS body, "
         "  CASE WHEN :is_task=1 AND abs(random())%10<7 THEN '{\"task\":\"'||:task||'\",\"comment\":true}' "
         "       WHEN abs(random())%100<5 THEN '{\"quiet\":true}' "
-        "       WHEN abs(random())%100<2 THEN '{\"task\":\"'||:task||'\"}' END AS refs_json, "
+        "       WHEN abs(random())%100<2 THEN '{\"task\":\"'||:task||'\"}' END AS refs, "
         "  CASE WHEN k>1 AND abs(random())%10=0 THEN printf('%032x', :start+k-1) END AS in_reply_to, "
         "  abs(random())%100 AS r1, abs(random())%100 AS r2, abs(random())%1000 AS r3 FROM j) "
-        "INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,in_reply_to,created,"
+        "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,created_at,"
         "delivered_at,read_at,deleted_at) "
-        "SELECT id, :cid, from_actor, to_actor, kind, body, refs_json, in_reply_to, created, "
-        "  CASE WHEN r1<90 THEN created END, CASE WHEN r1<90 AND r2<80 THEN created END, "
-        "  CASE WHEN r3<10 THEN created END FROM raw")
+        "SELECT id, :cid, sender_id, recipient_id, kind, body, refs, in_reply_to, created_at, "
+        "  CASE WHEN r1<90 THEN created_at END, CASE WHEN r1<90 AND r2<80 THEN created_at END, "
+        "  CASE WHEN r3<10 THEN created_at END FROM raw")
     for index, ((cid, row), count) in enumerate(zip(convs, counts, strict=True)):
         params = {"count": count, "start": start, "cid": cid, "human": row["people"][0], "bot": row["people"][1],
                   "other": bots[rng.randrange(BOTS)], "is_task": 1 if row["kind"] == "task" else 0,
                   "task": row["task_id"] or tasks[rng.randrange(len(tasks))][0]}
         conn.execute(insert, params)
-        conn.execute("UPDATE conversations SET last_message_at=(SELECT created FROM messages WHERE id=?) WHERE id=?",
+        conn.execute("UPDATE conversations SET last_message_at=(SELECT created_at FROM messages WHERE id=?) WHERE id=?",
                      (f"{start + count:032x}", cid))
         start += count
         if index % 5000 == 4999:
@@ -247,7 +247,7 @@ def start_then_kill(args):
 DELIVERY_COLUMNS = ("message_id", "recipient", "mode", "reason", "cause", "state", "revision", "delivered_at",
                     "read_at")
 CHECKS = {
-    "conversations": "SELECT id,audience,owner_actor,root_id,path,last_seq,last_unread_seq,archived_at,scope,room_key "
+    "conversations": "SELECT id,audience,owner_id,root_id,path,last_seq,last_unread_seq,archived_at,scope,room_key "
                      "FROM conversations ORDER BY id",
     "messages": "SELECT id,conversation_id,seq,restricted,legacy_audience,deleted_at,revision FROM messages ORDER BY id",
     "message_deliveries": "SELECT " + ",".join(DELIVERY_COLUMNS) + " FROM message_deliveries "

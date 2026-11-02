@@ -10,7 +10,7 @@ MAX_GAP_SECONDS = 300
 
 
 def state(c, bot):
-    row = c.execute('SELECT value_json FROM registry_metadata WHERE key=?', (KEY + bot,)).fetchone()
+    row = c.execute('SELECT value FROM registry_metadata WHERE key=?', (KEY + bot,)).fetchone()
     return H._json(row[0], {}) if row else {}
 
 
@@ -20,7 +20,7 @@ def states(c, bots):
     bots = sorted(set(bots))
     for start in range(0, len(bots), 500):
         part = bots[start:start + 500]
-        for key, value in c.execute("SELECT key,value_json FROM registry_metadata WHERE key IN (%s)"
+        for key, value in c.execute("SELECT key,value FROM registry_metadata WHERE key IN (%s)"
                                     % ",".join("?" * len(part)), [KEY + bot for bot in part]):
             out[key[len(KEY):]] = H._json(value, {})
     return out
@@ -29,11 +29,11 @@ def states(c, bots):
 def targets(c):
     # Include prior observations even after pause, unassignment, holding or cancellation, to clear them.
     return sorted({r[0] for r in c.execute("SELECT bot FROM assignments WHERE bot IN "
-                                         "(SELECT bot FROM jobs WHERE state='queued')")} |
+                                         "(SELECT bot_id FROM jobs WHERE state='queued')")} |
                   {r[0][len(KEY):] for r in c.execute("SELECT key FROM registry_metadata WHERE key LIKE ?", (KEY + '%',))})
 
 
-CURRENT_SQL = ("SELECT a.bot,a.runner_id,b.display_name FROM assignments a JOIN bots b ON b.slug=a.bot "
+CURRENT_SQL = ("SELECT a.bot,a.runner_id,b.display_name FROM assignments a JOIN bots b ON b.id=a.bot "
                "WHERE a.bot=? AND b.state='active'")
 
 
@@ -84,13 +84,13 @@ def apply(c, change):
     bot, previous, value = change
     if state(c, bot) != previous:
         return                         # a newer scheduler pass already refreshed this observation
-    if value and not c.execute("SELECT 1 FROM jobs j JOIN bots b ON b.slug=j.bot "
-                               "JOIN assignments a ON a.bot=b.slug WHERE j.id=? AND j.bot=? "
+    if value and not c.execute("SELECT 1 FROM jobs j JOIN bots b ON b.id=j.bot_id "
+                               "JOIN assignments a ON a.bot=b.id WHERE j.id=? AND j.bot_id=? "
                                "AND j.state='queued' AND j.held=0 AND b.state='active' AND a.runner_id=?",
                                (value['job'], bot, value['runner_id'])).fetchone():
         value = {}
     if value:
-        c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
+        c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                   (KEY + bot, H._dump(value)))
     else:
         c.execute('DELETE FROM registry_metadata WHERE key=?', (KEY + bot,))
@@ -115,7 +115,7 @@ def _prime(c, bots):
     found = {}
     for part in H.chunks(bots):
         found.update((row['bot'], row) for row in c.execute(
-            "SELECT a.bot,a.runner_id,b.display_name FROM assignments a JOIN bots b ON b.slug=a.bot "
+            "SELECT a.bot,a.runner_id,b.display_name FROM assignments a JOIN bots b ON b.id=a.bot "
             f"WHERE a.bot IN ({','.join('?' * len(part))}) AND b.state='active'", part))
     prime(c, CURRENT_SQL, {(bot,): found.get(bot) for bot in bots})
     return E._queue_suspects(c, [job for bot in bots if bot in found for job in rows(c, E.queued_jobs_sql(), (bot,))])

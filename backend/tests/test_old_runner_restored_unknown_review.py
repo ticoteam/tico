@@ -25,8 +25,8 @@ def test_old_human_restore_recovers_unknown_without_demoting_or_inventing_proof(
     for _ in range(3):
         assert heartbeat(api, link, "present") == []
         with api.app_state.store.read() as c:
-            row = c.execute("SELECT state,detail_json FROM task_links WHERE id=?", (link["link_id"],)).fetchone()
-            detail = json.loads(row["detail_json"])
+            row = c.execute("SELECT state,detail FROM task_links WHERE id=?", (link["link_id"],)).fetchone()
+            detail = json.loads(row["detail"])
             assert row["state"] == "present"
             assert detail["setup_pending"] is True
             assert detail.get("checkout_state") is None

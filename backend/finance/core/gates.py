@@ -1,4 +1,4 @@
-"""Gate rules (spec §6.2, §6.3), with no I/O. A rule is plain words, a `when` condition in Tico's `when_json` shape
+"""Gate rules (spec §6.2, §6.3), with no I/O. A rule is plain words, a `when` condition in Tico's `condition` shape
 (every key must match, a list means any of) with gt/gte/lt/lte/not/matches for money and text, an outcome, and
 examples that must pass before it is saved. Every matching rule runs and the strictest wins:
 deny > needs_approval > limit > allow; the lowest limit binds; one approval from the highest named approver."""

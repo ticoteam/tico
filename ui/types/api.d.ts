@@ -154,9 +154,9 @@ export type Automation = {
   kind?: string;
   last_run?: Record<string, unknown> | null;
   name?: string;
-  next_due?: string | null;
+  next_due_at?: string | null;
   next_run?: string | null;
-  owner?: string;
+  owner_id?: string;
   paused?: boolean;
   pending?: number;
   problems?: Array<{
@@ -204,9 +204,9 @@ export type AutomationHeld = {
   last_run?: Record<string, unknown> | null;
   moved?: number;
   name?: string;
-  next_due?: string | null;
+  next_due_at?: string | null;
   next_run?: string | null;
-  owner?: string;
+  owner_id?: string;
   paused?: boolean;
   pending?: number;
   problems?: Array<{
@@ -246,11 +246,11 @@ export type AutomationOverviewRuns = {
   automation_name: string;
   cost?: number;
   count?: number;
-  finished?: string | null;
+  finished_at?: string | null;
   id: string;
   outcome?: string;
-  owner?: string;
-  started: string;
+  owner_id?: string;
+  started_at: string;
   started_by?: string;
   status: string;
   step_count?: number | null;
@@ -274,9 +274,9 @@ export type AutomationPatch = {
 export type AutomationRun = {
   automation_id: string;
   cost?: number;
-  finished?: string | null;
+  finished_at?: string | null;
   id: string;
-  started?: string;
+  started_at?: string;
   status: "queued" | "running" | "waiting" | "ok" | "failed" | "empty" | "skipped" | "held";
   steps: Array<Record<string, unknown>> | null;
   summary?: string | null;
@@ -328,7 +328,7 @@ export type AutomationVersions = {
   next: number | null;
   versions: Array<{
   actor: string;
-  at: string;
+  created_at: string;
   flow: Record<string, unknown>;
   n: number;
   status: "active" | "pending";
@@ -345,11 +345,13 @@ export type Bot = {
   can_complete_onboarding?: boolean;
   description?: string;
   display_name: string;
+  folder?: string;
+  id: string;
   keep_tasks_going?: number | null;
   onboarding_ready?: Record<string, unknown> | null;
   onboarding_state?: string;
   online?: boolean;
-  operator?: string | null;
+  owner_id?: string | null;
   owners: Array<unknown>;
   queued?: number;
   reports_to?: string | null;
@@ -391,7 +393,7 @@ export type BotBrowserExitView = {
 } | null;
   choices?: Array<{
   label: string;
-  operator: string;
+  owner_id: string;
   runner_id: string;
 }>;
   may_change?: boolean;
@@ -422,12 +424,13 @@ export type BotDetail = {
   description?: string;
   display_name: string;
   goals?: string;
+  id?: string;
   keep_tasks_going?: number | null;
   onboarding_ready?: Record<string, unknown> | null;
   onboarding_state?: string;
   online?: boolean;
-  operator?: string | null;
-  operator_name?: string;
+  owner_id?: string | null;
+  owner_name?: string;
   owners: Array<unknown>;
   queued?: number;
   reports_to?: string | null;
@@ -492,7 +495,7 @@ export type BotInstructions = {
   content: string;
   published: boolean;
   source: string;
-  updated: string | null;
+  updated_at: string | null;
 };
 
 export type BotKeepTasksGoing = {
@@ -599,7 +602,7 @@ export type BotToolRegistered = {
 };
 
 export type BotToolRemoval = {
-  cancelled?: boolean;
+  canceled?: boolean;
   detail?: string;
   removal?: boolean;
   task_id?: string;
@@ -901,18 +904,18 @@ export type CompanyHistory = {
   events: Array<{
   actor: string;
   actor_name: string;
+  created_at: string;
   field: "vision" | "description";
   id: string;
   new: string;
   old: string;
-  ts: string;
 }>;
 };
 
 export type CompanyResult = {
   company: {
   description: string;
-  updated: string | null;
+  updated_at: string | null;
   updated_by: string | null;
   updated_by_name: string;
   vision: string;
@@ -989,7 +992,7 @@ export type Contract = Record<string, unknown>;
 
 export type Conversation = {
   closed_at: string | null;
-  created: string;
+  created_at: string;
   id: string;
   kind: string;
   last_message_at: string;
@@ -1050,7 +1053,7 @@ export type DocSource = {
   error_code: string;
   id: string;
   kind: string;
-  last_checked: string | null;
+  last_checked_at: string | null;
   path: string;
   provider: string;
   reference: string;
@@ -1086,7 +1089,7 @@ export type DocsAsked = {
 export type DocsConversations = {
   conversations: Array<{
   closed_at: string | null;
-  created: string;
+  created_at: string;
   id: string;
   last_message_at: string | null;
   title: string;
@@ -1206,8 +1209,7 @@ export type EventTypeList = {
 };
 
 export type Execution = {
-  attempt_id: string | null;
-  bot: string;
+  bot_id: string;
   job_id: string;
   label: string;
   message_id: string;
@@ -1216,6 +1218,7 @@ export type Execution = {
   kind: "progress" | "reply" | "tool";
   text: string;
 }>;
+  run_id: string | null;
   state: string;
   text: string;
 };
@@ -1226,7 +1229,7 @@ export type ExternalDocResult = {
   commit: string;
   content: string;
   id: string;
-  last_checked: string | null;
+  last_checked_at: string | null;
   path: string;
   reference_notice: string;
   source_id: string;
@@ -1244,7 +1247,7 @@ export type ExternalHit = {
   commit: string;
   excerpt: string;
   id: string;
-  last_checked: string | null;
+  last_checked_at: string | null;
   path: string;
   score: number;
   section: string;
@@ -1298,7 +1301,7 @@ export type FileSearchHit = {
   page: boolean;
   score: number;
   title: string;
-  updated: string;
+  updated_at: string;
   url: string | null;
   version: number;
 };
@@ -1672,7 +1675,7 @@ export type FinanceDocumentRow = {
   error: string | null;
   id: string | null;
   on: string;
-  status: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "cancelled" | "unknown" | "denied" | "expired" | "withdrawn";
+  status: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "canceled" | "unknown" | "denied" | "expired" | "withdrawn";
 } | null;
   payment_link?: string | null;
   remaining: number;
@@ -1816,7 +1819,7 @@ export type FinancePayments = {
   version?: number;
 } | null;
   settled_at?: string | null;
-  status: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "cancelled" | "unknown";
+  status: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "canceled" | "unknown";
 }>;
 };
 
@@ -2026,7 +2029,7 @@ export type FinanceTransfers = {
   last_error?: string | null;
   memo?: string;
   settled_at?: string | null;
-  status: "queued" | "submitted" | "unknown" | "failed" | "posted" | "cancelled";
+  status: "queued" | "submitted" | "unknown" | "failed" | "posted" | "canceled";
   to: {
   id: string;
   last4: string | null;
@@ -2053,16 +2056,16 @@ export type Follow = {
 
 export type Goal = {
   body: string;
-  created: string;
-  created_by: string;
+  created_at: string;
+  created_by_id: string;
   id: string;
-  owner: string;
+  owner_id: string;
   owner_name?: string;
   parent_id: string | null;
   rank: number | null;
   status: string | null;
   status_at: string | null;
-  status_by: string | null;
+  status_by_id: string | null;
   status_by_name?: string;
   status_note: string;
   status_source: string | null;
@@ -2070,10 +2073,10 @@ export type Goal = {
   suggest_note?: string | null;
   suggest_status?: string | null;
   title: string;
-  updated: string;
+  updated_at: string;
   why?: string;
   why_at?: string | null;
-  why_by?: string | null;
+  why_by_id?: string | null;
 };
 
 export type GoalAction = {
@@ -2096,13 +2099,13 @@ export type GoalCheckinView = {
   author: string;
   author_name?: string;
   body: string;
+  created_at: string;
   goal_id: string;
   id: string;
   kpi_id?: string | null;
+  sender_id: string;
+  sender_name?: string;
   signal: "on_track" | "at_risk" | "off_track" | null;
-  source_actor: string;
-  source_actor_name?: string;
-  ts: string;
 };
 
 export type GoalCheckins = {
@@ -2225,19 +2228,19 @@ export type GoalResult = {
   chain: Array<Goal>;
   checkins: Array<GoalCheckinView>;
   children: Array<Goal>;
-  created: string;
-  created_by: string;
+  created_at: string;
+  created_by_id: string;
   events: Array<Record<string, unknown>>;
   id: string;
   kpis: Array<Kpi>;
-  owner: string;
+  owner_id: string;
   owner_name?: string;
   parent_id: string | null;
   proposals: Array<GoalProposalView>;
   rank: number | null;
   status: string | null;
   status_at: string | null;
-  status_by: string | null;
+  status_by_id: string | null;
   status_by_name?: string;
   status_note: string;
   status_source: string | null;
@@ -2246,10 +2249,10 @@ export type GoalResult = {
   suggest_status?: string | null;
   tasks: Array<Record<string, unknown>>;
   title: string;
-  updated: string;
+  updated_at: string;
   why?: string;
   why_at?: string | null;
-  why_by?: string | null;
+  why_by_id?: string | null;
 };
 };
 
@@ -2262,18 +2265,18 @@ export type GoalTree = {
   goals: Array<{
   body: string;
   checkin?: GoalCheckinView | null;
-  created: string;
-  created_by: string;
+  created_at: string;
+  created_by_id: string;
   id: string;
   kpis: Array<Kpi>;
   open_tasks: number;
-  owner: string;
+  owner_id: string;
   owner_name?: string;
   parent_id: string | null;
   rank: number | null;
   status: string | null;
   status_at: string | null;
-  status_by: string | null;
+  status_by_id: string | null;
   status_by_name?: string;
   status_note: string;
   status_source: string | null;
@@ -2281,10 +2284,10 @@ export type GoalTree = {
   suggest_note?: string | null;
   suggest_status?: string | null;
   title: string;
-  updated: string;
+  updated_at: string;
   why?: string;
   why_at?: string | null;
-  why_by?: string | null;
+  why_by_id?: string | null;
 }>;
   other_kpis: Array<Kpi>;
   owners: Record<string, unknown>;
@@ -2309,21 +2312,30 @@ export type GoalWhy = {
 export type GoalsNeedsYou = {
   actor: string;
   items: Array<{
+  actions: Array<"answer" | "update" | "decide" | "add_reading" | "open">;
+  body: string | null;
+  created_at: string | null;
   freshness?: string;
   goal_id?: string;
   goal_title?: string | null;
   goals?: Array<Record<string, unknown>>;
+  id: string;
   kind: "vision" | "kpi_red" | "recovery" | "why" | "proposal" | "kpi_stale";
   kpi_id?: string;
   kpi_name?: string | null;
   options?: Array<Record<string, unknown>>;
   proposal?: Record<string, unknown>;
   reason?: string;
+  subject: {
+  id: string;
+  type: "task" | "message" | "approval" | "proposal" | "kpi" | "strategy";
+} | null;
   task?: {
   id: string;
   status?: string;
   title?: string;
 };
+  title: string;
 }>;
 };
 
@@ -2353,7 +2365,7 @@ export type GranolaSignIn = {
   step?: string;
   tool_error?: boolean;
 } | null;
-  last_sync: string | null;
+  last_synced_at: string | null;
   mode: string;
   needs_signin: boolean;
   plan_hint: string | null;
@@ -2377,7 +2389,7 @@ export type GranolaStatus = {
   step?: string;
   tool_error?: boolean;
 } | null;
-  last_sync: string | null;
+  last_synced_at: string | null;
   mode: "account" | "api_key" | "off";
   needs_signin: boolean;
   plan_hint: "free" | "paid" | null;
@@ -2387,7 +2399,7 @@ export type GranolaStatus = {
 };
 
 export type GranolaSync = {
-  last_sync: string | null;
+  last_synced_at: string | null;
   state: "syncing" | "recent" | "off" | "needs_signin";
 };
 
@@ -2399,6 +2411,7 @@ export type Grant = {
 };
 
 export type Group = {
+  bot_slugs: Array<string>;
   bots: Array<string>;
   id: string;
   name: string;
@@ -2586,7 +2599,7 @@ export type InboundInboxes = {
   error: string;
   gaps: Array<Record<string, unknown>>;
   inboxes: Array<Record<string, unknown>>;
-  last_sync: number | null;
+  last_synced_at: number | null;
 };
 
 export type InboundMessages = {
@@ -2643,15 +2656,15 @@ export type InstallBody = {
 export type InternalDoc = {
   archived: boolean;
   body: string;
-  created: string;
-  created_by: string;
+  created_at: string;
+  created_by_id: string;
   created_by_name: string;
   id: string;
   locked: boolean;
   path: string;
   title: string;
-  updated: string;
-  updated_by: string;
+  updated_at: string;
+  updated_by_id: string;
   updated_by_name: string;
   version: number;
 };
@@ -2670,8 +2683,8 @@ export type InternalDocRow = {
   locked: boolean;
   path: string;
   title: string;
-  updated: string;
-  updated_by: string;
+  updated_at: string;
+  updated_by_id: string;
   updated_by_name: string;
   version: number;
 };
@@ -2679,7 +2692,7 @@ export type InternalDocRow = {
 export type InternalDocVersion = {
   actor: string;
   actor_name: string;
-  created: string;
+  created_at: string;
   current: boolean;
   note: string;
   path: string;
@@ -2693,7 +2706,7 @@ export type InternalDocVersionResult = {
   actor: string;
   actor_name: string;
   body: string;
-  created: string;
+  created_at: string;
   note: string;
   path: string;
   title: string;
@@ -2735,11 +2748,11 @@ export type Items = {
 
 export type Kpi = {
   archived_at?: string | null;
-  archived_by?: string | null;
+  archived_by_id?: string | null;
   auto: boolean;
   cadence: "daily" | "weekly" | "monthly";
-  created?: string | null;
-  created_by?: string | null;
+  created_at?: string | null;
+  created_by_id?: string | null;
   definition?: string;
   definition_version: number;
   direction: "up" | "down" | "range";
@@ -2749,7 +2762,7 @@ export type Kpi = {
   latest: KpiReadingView | null;
   link?: KpiLink;
   name: string;
-  owner: string;
+  owner_id: string;
   owner_name?: string;
   readings: number;
   reason: string;
@@ -2759,7 +2772,7 @@ export type Kpi = {
   status: "green" | "yellow" | "red" | "gray" | "none" | null;
   target_label?: string;
   unit: string;
-  updated?: string | null;
+  updated_at?: string | null;
 };
 
 export type KpiCreate = {
@@ -2843,14 +2856,15 @@ export type KpiReadingResult = {
 };
 
 export type KpiReadingView = {
-  actor?: string;
+  actor_id?: string | null;
   actor_name?: string;
   collected_at?: string;
-  created?: string;
+  created_at?: string;
   definition_version: number;
   evidence?: string;
   id: string;
   kpi_id?: string;
+  measured_at?: string;
   note?: string;
   period_end: string;
   period_start?: string;
@@ -2858,7 +2872,6 @@ export type KpiReadingView = {
   source?: string;
   superseded_by?: string | null;
   supersedes?: string | null;
-  ts?: string;
   value: number;
 };
 
@@ -2983,13 +2996,13 @@ export type LinkRequest = {
 export type LinkedDoc = {
   added_by: string;
   added_by_name: string;
-  created: string;
+  created_at: string;
   description: string;
   host: string;
   id: string;
   kind: "website" | "google_drive" | "google_doc" | "notion" | "github" | "other";
   title: string;
-  updated: string;
+  updated_at: string;
   url: string;
 };
 
@@ -3042,6 +3055,7 @@ export type Me = {
   actor: string;
   email: string;
   role: string;
+  slug?: string;
 };
 
 export type MeetingReviewList = {
@@ -3070,10 +3084,10 @@ export type MemberAdd = {
 export type MemoryTidyCard = {
   bot: string;
   cost_usd: number;
-  created: string;
+  created_at: string;
   diary: string;
   diff?: string;
-  expires: string;
+  expires_at: string;
   id: string;
   keep_available: boolean;
   keep_pending?: boolean;
@@ -3081,7 +3095,7 @@ export type MemoryTidyCard = {
   memory_commit: string;
   model: string;
   reason: string;
-  requester: string;
+  requester_id: string;
   reviewer: string;
   status: "open" | "withdrawn" | "discarded" | "kept";
   title: string;
@@ -3112,24 +3126,24 @@ export type Message = {
   body: string;
   body_raw?: string;
   conversation_id: string;
-  created: string;
+  created_at: string;
   deleted_at?: string | null;
   edited_at?: string | null;
-  from_actor: string;
-  from_name?: string;
   held?: string;
   id: string;
   in_reply_to: string | null;
   kind: string;
+  recipient_id: string;
+  recipient_name?: string;
   refs: Record<string, unknown>;
   run?: {
-  attempt_id?: string;
   job_id?: string;
+  run_id?: string;
   state?: "started_run" | "added_to_run";
 };
+  sender_id: string;
+  sender_name?: string;
   sent_as?: SentAs;
-  to_actor: string;
-  to_name?: string;
   woke?: boolean;
 };
 
@@ -3173,7 +3187,7 @@ export type ModelSubscription = {
   added_by: string;
   added_by_name: string;
   computers: Array<string>;
-  created: string;
+  created_at: string;
   id: string;
   kind: "claude_token" | "codex_login" | "anthropic_key" | "openai_key";
   label: string;
@@ -3184,7 +3198,7 @@ export type ModelSubscription = {
   status: "new" | "working" | "needs_reconnect";
   status_at: string | null;
   status_detail: string;
-  updated: string;
+  updated_at: string;
   usage: {
   cost_usd_month: number | null;
   resets_at?: string | null;
@@ -3220,11 +3234,7 @@ export type NeedsYou = {
   actor: string;
   bots?: Record<string, number>;
   count?: number;
-  items: Array<{
-  id: string;
-  kind: "task" | "question" | "declined" | "approval";
-  title: string;
-}>;
+  items: Array<NeedsYouItem>;
   next?: string | null;
   older?: Array<Record<string, unknown>>;
   restart?: boolean;
@@ -3232,6 +3242,19 @@ export type NeedsYou = {
 } | {
   actor: string;
   count: number;
+};
+
+export type NeedsYouItem = {
+  actions: Array<"answer" | "update" | "decide" | "add_reading" | "open">;
+  body: string | null;
+  created_at: string | null;
+  id: string;
+  kind: string;
+  subject: {
+  id: string;
+  type: "task" | "message" | "approval" | "proposal" | "kpi" | "strategy";
+} | null;
+  title: string;
 };
 
 export type Note = {
@@ -3296,17 +3319,17 @@ export type OrgModels = {
 export type Page = {
   archived: boolean;
   as_of: string | null;
-  bot: string;
+  bot_id: string;
   bot_name: string;
   cadence: "none" | "daily" | "weekly" | "monthly";
   file_id: string;
-  replaced_by: string | null;
+  replaced_by_id: string | null;
   replaced_by_title?: string | null;
   src: string | null;
   stale_days: number | null;
   task_id: string | null;
   title: string;
-  updated: string;
+  updated_at: string;
   updated_by: string | null;
   updated_by_name?: string;
   version: number;
@@ -3427,7 +3450,7 @@ export type Place = {
   bot: string;
   file_id: string;
   title: string;
-  updated: string;
+  updated_at: string;
 };
   position: number;
   size: "small" | "medium" | "large";
@@ -3528,7 +3551,7 @@ export type Projects = {
 
 export type PublicComment = {
   author: "Team" | "Visitor";
-  created: string;
+  created_at: string;
   id: string;
   text: string;
 };
@@ -3717,7 +3740,7 @@ export type Repository = {
   default_branch: string | null;
   enabled: boolean;
   full_name: string;
-  last_seen: string | null;
+  last_seen_at: string | null;
   reachable: boolean;
   setup_command: string | null;
   setup_source: string | null;
@@ -3917,7 +3940,7 @@ export type ScreeningTest = Record<string, unknown>;
 export type Seat = {
   agent: string;
   agent_name: string;
-  created?: string;
+  created_at?: string;
   description: string;
   id: string;
   kind: "seat";
@@ -3954,7 +3977,7 @@ export type SeatBatchCreate = {
   seats: Array<SeatCreate>;
 };
 
-export type SeatCancelled = {
+export type SeatCanceled = {
   closed: boolean;
   id: string;
   request_state: string;
@@ -4005,7 +4028,7 @@ export type SeatCreate = {
 
 export type SeatDetail = {
   can_edit: boolean;
-  created?: string;
+  created_at?: string;
   description: string;
   description_by?: "chart" | "person";
   id: string;
@@ -4274,7 +4297,7 @@ export type StrategyBotLog = {
 };
 
 export type StrategyBotLogEntry = {
-  created: string;
+  created_at: string;
   done: Array<Record<string, unknown>>;
   goal_id?: string;
   id: string;
@@ -4429,7 +4452,7 @@ export type SystemRoutineUpdate = {
 };
 
 export type Tag = {
-  created: string;
+  created_at: string;
   id: string;
   is_template: boolean;
   key: string;
@@ -4438,7 +4461,7 @@ export type Tag = {
   metadata: Record<string, unknown>;
   owner: string | null;
   template_id: string | null;
-  updated: string;
+  updated_at: string;
   version: number;
 };
 
@@ -4488,10 +4511,11 @@ export type Task = {
   url: string;
   width: number | null;
 } | null;
-  created: string;
-  due: string | null;
+  created_at: string;
+  due_at: string | null;
   external_requesters?: number;
   guest?: string | null;
+  holds: Array<TaskHold>;
   id: string;
   important_requesters?: number;
   internal_requesters?: number;
@@ -4500,7 +4524,7 @@ export type Task = {
   number?: number | null;
   occurrence?: string | null;
   open_asks?: number;
-  owner: string;
+  owner_id: string;
   owner_name?: string;
   private?: boolean;
   public_summary?: string;
@@ -4508,18 +4532,15 @@ export type Task = {
   relations?: Record<string, Array<{
   direction: string;
   id: string;
-  owner: string;
+  owner_id: string;
   status: string;
   title: string;
 }>>;
-  requester: string;
   requester_count?: number;
+  requester_id: string;
   requester_name?: string;
   roles?: Record<string, Array<string>>;
   size?: number | null;
-  snoozed_by?: string | null;
-  snoozed_note?: string | null;
-  snoozed_until?: string | null;
   status: string;
   step?: TaskStep | null;
   step_id?: string | null;
@@ -4532,7 +4553,7 @@ export type Task = {
   name: string;
 } | null;
   type_id?: string | null;
-  updated: string;
+  updated_at: string;
   version: number;
   visibility?: "public" | "private";
   waiting_on?: string | null;
@@ -4609,7 +4630,7 @@ export type TaskCap = {
 };
 
 export type TaskCapProposal = {
-  created: string;
+  created_at: string;
   id: string;
   per_day: number;
   proposed_by: string;
@@ -4624,7 +4645,7 @@ export type TaskCapRow = {
   per_day: number;
   receiver: string;
   sender: string;
-  updated: string;
+  updated_at: string;
   updated_by: string;
 };
 
@@ -4722,7 +4743,7 @@ export type TaskFileVersion = {
   ask: TaskReviewAskView | null;
   by: string;
   comment_id: string | null;
-  created: string;
+  created_at: string;
   duration_ms: number | null;
   height: number | null;
   media_state: string | null;
@@ -4767,6 +4788,15 @@ export type TaskFlow = {
   waiting: number;
 };
 
+export type TaskHold = {
+  by: string | null;
+  cause?: "manual" | "dependency" | "stranded" | "gate" | "check" | "worktree" | null;
+  kind: "blocked" | "snoozed";
+  reason: string | null;
+  since: string | null;
+  until: string | null;
+};
+
 export type TaskList = {
   actors?: Record<string, string>;
   cursor: string;
@@ -4799,11 +4829,11 @@ export type TaskReviewAskView = {
 
 export type TaskRun = {
   bot: string;
-  finished: string | null;
+  finished_at: string | null;
   outcome: string | null;
   ran_on: RanOn;
   run: string;
-  started: string | null;
+  started_at: string | null;
 };
 
 export type TaskRunChoice = {
@@ -4858,7 +4888,7 @@ export type TaskStepInput = {
 
 export type TaskType = {
   bots: "read" | "work" | null;
-  created: string;
+  created_at: string;
   default_visibility?: "public" | "private";
   id: string;
   manager?: string | null;
@@ -4867,7 +4897,7 @@ export type TaskType = {
   role?: "product-roadmap" | "engineering" | null;
   steps: Array<TaskStep>;
   steps_only: boolean;
-  updated: string;
+  updated_at: string;
 };
 
 export type TaskTypeCreate = {
@@ -5009,23 +5039,23 @@ export type ThreadMembers = {
 export type ThreadMessage = {
   body?: string | null;
   conversation_id?: string;
-  created?: string;
+  created_at?: string;
   deleted?: boolean;
   depth?: number;
   edited_at?: string | null;
-  from_actor?: string;
   hidden?: boolean;
   id: string;
   kind?: string;
   origin_id?: string | null;
   parent_message_id?: string | null;
+  recipient_id?: string | null;
   refs?: Record<string, unknown>;
   revision?: number;
   root_id?: string | null;
+  sender_id?: string;
   seq: number;
   sub_thread?: Record<string, unknown> | null;
   thread_id: string;
-  to_actor?: string | null;
 };
 
 export type ThreadMessageDeleted = {
@@ -5067,10 +5097,10 @@ export type ThreadReadAll = {
 
 export type ThreadSearch = {
   hits: Array<{
-  created?: string;
+  created_at?: string;
   excerpt: string;
-  from_actor?: string;
   message_id: string;
+  sender_id?: string;
   thread_id: string;
   title?: string;
 }>;
@@ -5109,7 +5139,7 @@ export type ThreadView = {
   last_unread_seq: number;
   me?: Record<string, unknown>;
   members?: Record<string, unknown>;
-  owner_actor?: string | null;
+  owner_id?: string | null;
   parent_id?: string | null;
   parent_message_id?: string | null;
   path?: Array<unknown>;
@@ -5376,7 +5406,7 @@ export type WakeUrl = {
 export type Webhook = {
   allow_http: boolean;
   can_change: boolean;
-  created: string;
+  created_at: string;
   created_by: string;
   disabled_at: string | null;
   disabled_reason: string | null;
@@ -5397,7 +5427,7 @@ export type Webhook = {
   rate_per_hour: number;
   requested_by: string | null;
   revision: number;
-  updated: string;
+  updated_at: string;
   url: string;
 };
 
@@ -5508,14 +5538,14 @@ export type WebhookSend = {
 
 export type WebhookSendRow = {
   attempts: number;
-  created: string;
+  created_at: string;
   delivered_at: string | null;
   event_id: string;
   id: string;
   last_error: string;
   last_status: number | null;
-  next_attempt: string | null;
-  state: "ready" | "sending" | "delivered" | "failed" | "cancelled" | "withheld";
+  next_attempt_at: string | null;
+  state: "ready" | "sending" | "delivered" | "failed" | "canceled" | "withheld";
   subject: string;
   type: string;
   webhook_id: string;
@@ -5892,7 +5922,7 @@ export type CancelSeatRequestParams = {
   seat_id: string;
 };
 export type CancelSeatRequestBody = never;
-export type CancelSeatRequestResponse = SeatCancelled;
+export type CancelSeatRequestResponse = SeatCanceled;
 
 /** POST /api/v2/threads/{thread_id}/catch-up */
 export type CatchUpThreadParams = {
@@ -7797,7 +7827,7 @@ export type ListFinanceCardsParams = {
   holder?: string | null;
   limit?: number;
   q?: string;
-  status?: "active" | "frozen" | "cancelled" | null;
+  status?: "active" | "frozen" | "canceled" | null;
   vendor?: string | null;
   view_as?: string | null;
 };
@@ -7856,7 +7886,7 @@ export type ListFinancePayFromResponse = FinancePayFrom;
 export type ListFinancePaymentsParams = {
   cursor?: string | null;
   limit?: number;
-  status?: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "cancelled" | "unknown" | null;
+  status?: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "canceled" | "unknown" | null;
   view_as?: string | null;
 };
 export type ListFinancePaymentsBody = never;

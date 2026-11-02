@@ -167,7 +167,7 @@ def message_payload(thread_origin, origin, revision, actor, message_kind, body, 
     revision past 0 is an edit, and an edit of a message the receiver does not know is never made into one."""
     return {"type": "message", "thread": thread_origin, "origin_id": origin, "revision": int(revision), "actor": actor,
             "message_kind": message_kind, "body": "" if deleted else (body or ""), "deleted": bool(deleted),
-            "created": created or "", "parent": parent or "", **({"first": True} if first else {})}
+            "created_at": created or "", "parent": parent or "", **({"first": True} if first else {})}
 
 
 def membership_payload(thread, change, install, members, title=""):
@@ -217,7 +217,7 @@ def home_message(c, vault, thread, row, now):
         return None
     payload = message_payload(thread["origin_id"], origin, revision, actor, row["message_kind"],
                               "" if row["deleted"] else row["body"],
-                              row["deleted"], row["created"], parent=row.get("parent_message") or "")
+                              row["deleted"], row["created_at"], parent=row.get("parent_message") or "")
     item = sign_item(c, vault, thread, kind="message", payload=payload, origin=origin, revision=revision, now=now)
     if known is None:
         c.execute("INSERT INTO federation_messages(id,origin_id,message_id,thread_id,author,revision,home_seq,sent_revision,"
@@ -278,14 +278,14 @@ def subtrees(c, me, limit):
         top = thread["subtree_seq"]
         for message in T.outside_subtree(c, root, thread["subtree_seq"], limit):
             top = max(top, message["seq"])
-            if withheld(c, message["id"]) or message["deleted_at"] or not _local(message["from_actor"], me):
+            if withheld(c, message["id"]) or message["deleted_at"] or not _local(message["sender_id"], me):
                 continue
             for recipient in peers:
                 T.queue_outside(c, message, recipient, message["conversation_id"], root)
         if top != thread["subtree_seq"]:
             c.execute("UPDATE federation_threads SET subtree_seq=?, updated_at=? WHERE id=?", (top, stamp(), thread["id"]))
         for message in T.outside_edited(c, root, limit):
-            if withheld(c, message["id"]) or not _local(message["from_actor"], me):
+            if withheld(c, message["id"]) or not _local(message["sender_id"], me):
                 continue
             for recipient in peers:
                 T.queue_outside(c, message, recipient, message["conversation_id"], root)
@@ -914,7 +914,7 @@ def release(c, vault, now, bot, hold, replay, gate=None):
             raise stays_held("This thread is no longer shared with that company.")
         if F.peering(c, sender)["peer_key_id"] != replay["key_id"]:
             raise stays_held("That company's key changed, so its envelope can no longer be checked.")
-    stored = json.loads(hold["payload_json"] or "{}").get("text") or ""
+    stored = json.loads(hold["payload"] or "{}").get("text") or ""
     text = OR.warned_text(gate, stored)
     text = replay["warning"] + "\n" + text if replay.get("warning") else text
     carried = {"origin_id": origin, "revision": revision, "install": author, "actor": actor}
@@ -1088,7 +1088,7 @@ def staged_payload(c, row, me):
         return None
     body = E.payload_bytes(message_payload(thread["origin_id"], origin, revision, actor, cur["message_kind"],
                                            "" if cur["deleted"] else cur["body"],
-                                           cur["deleted"], cur["created"], parent=cur["parent_message"],
+                                           cur["deleted"], cur["created_at"], parent=cur["parent_message"],
                                            first=sent_revision is None))
     if len(body) > E.MAX_BODY:
         T.settle(c, row["delivery_id"], "failed", error="too_large")

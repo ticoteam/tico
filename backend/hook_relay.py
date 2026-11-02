@@ -123,7 +123,7 @@ def save(c, **fields):
 
 def live(c):
     """The relay addresses people made, not the one HQ keeps for Tico Team's notices."""
-    return [dict(r) for r in c.execute("SELECT * FROM trigger_relays WHERE deleted_at IS NULL AND trigger_id<>? ORDER BY created",
+    return [dict(r) for r in c.execute("SELECT * FROM trigger_relays WHERE deleted_at IS NULL AND trigger_id<>? ORDER BY created_at",
                                        (tico_notices.ID,)).fetchall()]
 
 
@@ -134,7 +134,7 @@ def _row(c, trigger_id):
 def public(row):
     """The relay as a trigger shows it. `wake` is whether a delivery starts a sleeping server (HQ's switch, as last
     listed), null until HQ has said."""
-    return {"address_prefix": row["address_prefix"], "created": row["created"],
+    return {"address_prefix": row["address_prefix"], "created_at": row["created_at"],
             "wake": None if row["wake"] is None else bool(row["wake"])} if row else None
 
 
