@@ -99,7 +99,7 @@ sites:
   backend/external_sync.py: ['"created": created', 'record.get("last_sync")']   # a bot made now (flag); stored sync status
   backend/files.py: ['"created": created, "changed": changed']
   backend/model_login.py: ['"updated": _handles_keys(row)']           # whether the runner can clear its copy
-  backend/openapi_v2.py: ['"InboundTaskResult": obj(', '"UpdateArchiveResult": obj(']
+  backend/openapi_v2.py: ['"InboundTaskResult": obj(', '"UpdateArchiveResult": obj(', 'required=["updated", "archived", "unread"]']
   backend/scheduler.py: ['(found or {}).get("created")']              # goal asks made now (list)
   backend/service_keys.py: ['"created": created, "changed": changed']
   backend/slack_channels.py: ['"created": created}']
