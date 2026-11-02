@@ -887,6 +887,13 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
         "brand/draft", {"sections": {"positioning": "Acme cleans homes"}})
 
 
+def test_finance_card_fill_takes_the_arguments_its_tool_takes():
+    p = hubcli.parser()
+    args = hubcli.parse(p, ["finance", "card-fill", "crd_1", "--merchant", "example.com", "--amount", "1000"])
+    assert (args.fn, args.card_id, args.merchant, args.amount) == ("finance card-fill", "crd_1", "example.com", 1000)
+    assert hubcli.parse(p, ["finance", "card-fill"]).card_id is None
+
+
 def test_a_json_flag_no_command_takes_is_ignored(monkeypatch, capsys):
     p = hubcli.parser()
     assert hubcli.parse(p, ["task", "show", "t_1", "--json"]).id == ["t_1"]
