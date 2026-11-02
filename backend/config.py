@@ -389,6 +389,9 @@ class Settings:
         self.public_url = self.public_url.rstrip("/")
         from .visuals import check_origin
         self.visual_origin = check_origin(self)
+        if self.reader_origin:          # most installs have none, and this import brings the whole sign-in stack
+            from .company_page.reader_app import check_origin as check_reader_origin
+            self.reader_origin = check_reader_origin(self)
         self.auth_proxy = self.auth_proxy.strip().lower()
         from . import cors
         self.cors_origins = cors.parse(self.cors_origins)

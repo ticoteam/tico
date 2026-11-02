@@ -7933,6 +7933,8 @@ def create_app(settings=None):
     screening.install(app, store, auth, mutate)    # prompt-injection screening at webhooks, mail, ideas and watchers
     from . import finance_routes
     finance_routes.install(app, store, auth, mutate)    # Finance: budgets, P&L, expenses, actions (backend/finance)
+    from .company_page import api_readers
+    api_readers.register(app, store, auth, mutate)      # Company page readers, invites and messages, for owners and admins
     from . import bills_address
     bills_address.install(app, store, auth)             # the bills address: emailed bills become draft bills
     outcome_stats.install(app, store, auth)
@@ -8136,4 +8138,6 @@ def create_app(settings=None):
         demo.install(app, auth, settings)
     from . import cors
     cors.install(app, settings)          # last, so it is outermost: a preflight is answered before sign-in
+    from .company_page import reader_app
+    reader_app.install(app, store, auth, settings)      # outside even that: the reader origin never reaches anything above
     return app

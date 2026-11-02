@@ -1691,6 +1691,9 @@ RUN = contextvars.ContextVar("hub_run", default="")
 # The bulk change (backend/app.py task_bulk) a refusal came from: each task it skipped keeps its own refusal on record,
 # but one call counts once toward rule 8's quarantine, however many tasks it skipped (_escalate).
 BULK_CALL = contextvars.ContextVar("hub_bulk_call", default="")
+# A task filed from an outside reader's words (backend/company_page/readers.py) reaches a person and nothing else: no
+# webhook, automation or task rule hears the write, so no bot runs on it until a person passes it on.
+NO_TRIGGERS = contextvars.ContextVar("hub_no_triggers", default=False)
 
 
 def private_task_write(fn):
@@ -1759,6 +1762,8 @@ def hook(conn, type, subject, data, actor, revision=None):
     """Tell the outgoing webhooks (backend/webhooks.py) and the automations (backend/automations.py) that `type` happened
     to `subject`, in the caller's write. `data` is a function that makes the event's thin payload, called only when
     someone is listening. Never raises: a webhook problem must not undo or refuse the change that caused it."""
+    if NO_TRIGGERS.get():
+        return
     try:
         from . import webhooks
         if webhooks.listening(conn):

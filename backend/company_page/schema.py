@@ -68,6 +68,13 @@ CREATE TABLE IF NOT EXISTS reader_messages (
   kind TEXT NOT NULL CHECK (kind IN ('reply','can_help')), ask_id TEXT, body TEXT NOT NULL, task_id TEXT,
   created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS reader_messages_quota ON reader_messages(reader_id, created_at);
+CREATE TABLE IF NOT EXISTS reader_notices (
+  id TEXT PRIMARY KEY, edition_id TEXT NOT NULL REFERENCES editions(id) ON DELETE CASCADE,
+  reader_id TEXT NOT NULL REFERENCES readers(id) ON DELETE CASCADE, status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending','sent','failed','unavailable','cancelled')),
+  attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE(edition_id, reader_id));
+CREATE INDEX IF NOT EXISTS reader_notices_pending ON reader_notices(status, created_at);
 CREATE TABLE IF NOT EXISTS page_stats (
   id TEXT PRIMARY KEY, source_kind TEXT NOT NULL CHECK (source_kind IN ('kpi','finance_line','finance_metric')),
   ref_id TEXT NOT NULL, data_class TEXT NOT NULL, label TEXT, definition TEXT,

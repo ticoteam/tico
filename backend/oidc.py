@@ -436,6 +436,18 @@ class Oidc:
         return claims
 
     def _email(self, claims):
+        email = self._verified_email(claims)
+        domains = self.settings.oidc_allowed_domains
+        if domains:
+            if email.rsplit("@", 1)[1] not in domains:
+                raise SignInError("email domain is not allowed")
+            if _google(self.issuer) and str(claims.get("hd") or "").lower() not in domains:
+                raise SignInError("hosted domain is not allowed")
+        return email
+
+    def _verified_email(self, claims):
+        """The address the ID token vouches for, lowercased. Who may join the team is `_email`'s to add: a Company page
+        reader (backend/company_page/reader_app.py) comes from anywhere and takes only this."""
         microsoft = _microsoft(self.issuer)
         email = claims.get("email")
         if microsoft and not (isinstance(email, str) and "@" in email):
@@ -449,12 +461,6 @@ class Oidc:
         # Microsoft publishes no email_verified; its tenant check above is what vouches for the address.
         if ("email_verified" in claims or not microsoft) and verified is not True:
             raise SignInError("email is not verified")
-        domains = self.settings.oidc_allowed_domains
-        if domains:
-            if email.rsplit("@", 1)[1] not in domains:
-                raise SignInError("email domain is not allowed")
-            if _google(self.issuer) and str(claims.get("hd") or "").lower() not in domains:
-                raise SignInError("hosted domain is not allowed")
         return email
 
     # ---- sessions -----------------------------------------------------------------------
