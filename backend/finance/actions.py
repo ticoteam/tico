@@ -556,6 +556,10 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
         gate, plan = _plan(ctx, p, kind, body, str(row["id"]))
         now_to = _decider(ctx, row, gate, p.who)
         unnamed = _uncovered(row, plan)
+        if now_to == "" and gate.outcome == "needs_approval":
+            # The planned gate's only decider is the requester (the install owner's own raise): nobody else decides it,
+            # so it is not a rule the approval missed. Other rules the plan now needs still ask again.
+            unnamed.discard(gate.rule)
         if payments.moved(body, plan.resolved) or unnamed or \
                 (now_to and (now_to != row["approval_to"] or _drifted(body, plan))):
             # The person who decides this changed since it was asked (a new manager, a finance approver named), or the

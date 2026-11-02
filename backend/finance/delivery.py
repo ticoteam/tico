@@ -10,7 +10,7 @@ day raises one more. A retry sends the same text under the same approval, and a 
 import hashlib
 import json
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from clients.manifest import tools_of
 
@@ -36,7 +36,8 @@ def document_digest(document: Mapping[str, Any]) -> str:
 
 def recipients(emails: Any) -> list[str]:
     """An approval's `to`: the customer's addresses, trimmed, lower-case, sorted, each once."""
-    return sorted({str(e).strip().lower() for e in emails or [] if str(e).strip()})
+    values: list[Any] = list(emails) if emails else []
+    return sorted({str(e).strip().lower() for e in values if str(e).strip()})
 
 
 def subject_of(stage: int | None, number: str) -> str:
@@ -50,15 +51,22 @@ def mailbox(c: Any) -> str:
     if row is None:
         return ""
     try:
-        config = json.loads(row[0] or "{}")
+        parsed: Any = json.loads(row[0] or "{}")
     except ValueError:
         return ""
-    if not isinstance(config, Mapping):
+    if not isinstance(parsed, Mapping):
         return ""
-    for entry in tools_of(config) or []:
-        if not isinstance(entry, Mapping) or str(entry.get("service") or "") != GMAIL:
+    config = cast(Mapping[str, Any], parsed)
+    tools: Any = tools_of(config)
+    entries: list[Any] = cast(list[Any], tools) if isinstance(tools, list) else []
+    for raw in entries:
+        if not isinstance(raw, Mapping):
             continue
-        if SEND not in (entry.get("can") or []):
+        entry = cast(Mapping[str, Any], raw)
+        if str(entry.get("service") or "") != GMAIL:
+            continue
+        can: list[Any] = cast(list[Any], entry.get("can") or [])
+        if SEND not in can:
             continue
         box = str(entry.get("identity") or "").strip().lower()
         if "@" in box:
@@ -125,7 +133,7 @@ def report(c: Any, at: str, invoice_id: str, stage: int | None, delivered: bool,
 def queue_items(c: Any) -> list[dict[str, str]]:
     """The Bookkeeper's queue items for invoice emails waiting to send. The text itself is read through Finance's
     invoice search (its `emails` field), so the label names the search rather than carrying the text."""
-    items = []
+    items: list[dict[str, str]] = []
     for row in pending(c):
         label = (f"Invoice {row['number']}{_which(row['stage'])} email waits to send. Read it: "
                  f"hub finance search --kind invoice --q {row['number']}")

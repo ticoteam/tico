@@ -50,16 +50,16 @@ SPEC_KINDS = (
 SPEC_TOOLS = ("search", "report", "metric", "act", "action", "inbox", "card-fill")
 RIGHTS = ("finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards")
 # business tables a refused or retried action must not change (counted, read-only)
-BUSINESS = ("fin_entries", "fin_bills", "fin_payments", "fin_cards", "fin_contacts", "fin_recipients", "fin_budgets")
+BUSINESS = ("entries", "bills", "payments", "cards", "contacts", "recipients", "budgets")
 # each business list's API path, the key its rows come under and the key of its next page's cursor (None when unpaged)
 LISTS = {
-    "fin_entries": ("/api/v2/finance/transactions?source=entry", "rows", "next"),
-    "fin_bills": ("/api/v2/finance/bills", "bills", "next_cursor"),
-    "fin_payments": ("/api/v2/finance/payments", "payments", "next_cursor"),
-    "fin_cards": ("/api/v2/finance/cards", "cards", "next"),
-    "fin_contacts": ("/api/v2/finance/contacts", "contacts", "next_cursor"),
-    "fin_recipients": ("/api/v2/finance/recipients", "recipients", None),
-    "fin_budgets": ("/api/v2/finance/budgets", "budgets", None),
+    "entries": ("/api/v2/finance/transactions?source=entry", "rows", "next"),
+    "bills": ("/api/v2/finance/bills", "bills", "next_cursor"),
+    "payments": ("/api/v2/finance/payments", "payments", "next_cursor"),
+    "cards": ("/api/v2/finance/cards", "cards", "next"),
+    "contacts": ("/api/v2/finance/contacts", "contacts", "next_cursor"),
+    "recipients": ("/api/v2/finance/recipients", "recipients", None),
+    "budgets": ("/api/v2/finance/budgets", "budgets", None),
 }
 DEFAULT_RULES = ("rule:new-recipient", "rule:payment-over-1000", "rule:bot-card-standing", "rule:bot-books-over-5000",
                  "rule:bot-new-account", "rule:close-reopen-owner")
@@ -627,8 +627,8 @@ def check4_retries(d, run, fx):
     ids = (first["action_id"], again["action_id"], cli_again["action_id"], str(http_again.get("action_id", "")))
     run.check("a retried bill returns the same action on MCP, CLI and HTTP",
               first["status"] == "committed" and len(set(ids)) == 1 and ids[0] != "", ids)
-    run.check("the retried bill is recorded once", once["fin_bills"] == base["fin_bills"] + 1 and
-              d.counts()["fin_bills"] == once["fin_bills"], (base["fin_bills"], once["fin_bills"], d.counts()["fin_bills"]))
+    run.check("the retried bill is recorded once", once["bills"] == base["bills"] + 1 and
+              d.counts()["bills"] == once["bills"], (base["bills"], once["bills"], d.counts()["bills"]))
     pay = {"recipient_id": fx["payee"], "amount": 2500, "money_account_id": fx["bank"], "account_id": fx["expense"],
            "obligation": f"rh-{rid}"}
     calls0 = len(d.fake_calls())
@@ -636,37 +636,37 @@ def check4_retries(d, run, fx):
     if p1["status"] == "needs_approval" and p1["approval_id"]:
         approve(d, p1["approval_id"], note="rehearsal payment")
     time.sleep(1)
-    pays = d.counts()["fin_payments"]
+    pays = d.counts()["payments"]
     d.act(d.owner, "payment_create", pay, op=f"{rid}-pay")
     d.act(d.owner, "payment_create", pay, op=f"{rid}-pay", surface="cli")
     time.sleep(1)
-    run.check("a retried payment is recorded once", d.counts()["fin_payments"] == pays and pays > 0,
-              (pays, d.counts()["fin_payments"], p1["raw"]))
+    run.check("a retried payment is recorded once", d.counts()["payments"] == pays and pays > 0,
+              (pays, d.counts()["payments"], p1["raw"]))
     posts = [c for c in d.fake_calls()[calls0:] if str(c.get("method", "")).upper() == "POST"]
     run.check("a retried payment sends at most one POST to Mercury", len(posts) <= 1,
               [c.get("path") for c in posts])
     card = {"holder": "human:ben", "budget_id": fx["ai_budget"], "amount": 10000, "kind": "person",
             "nickname": "rh " + rid, "provider_user_id": "user-ben"}
     c1 = d.act(d.owner, "card_create", card, op=f"{rid}-card")
-    cards = d.counts()["fin_cards"]
+    cards = d.counts()["cards"]
     d.act(d.owner, "card_create", card, op=f"{rid}-card")
     d.act(d.owner, "card_create", card, op=f"{rid}-card", surface="cli")
-    run.check("a retried card is issued once", d.counts()["fin_cards"] == cards and c1["status"] == "committed",
+    run.check("a retried card is issued once", d.counts()["cards"] == cards and c1["status"] == "committed",
               (cards, c1["raw"]))
     lines = [{"account_id": fx["expense"], "amount": 900}, {"account_id": fx["asset"], "amount": -900}]
     jr = {"date": TODAY, "memo": "retry journal", "lines": lines}
     j1 = d.act(d.owner, "journal", jr, op=f"{rid}-journal")
-    entries = d.counts()["fin_entries"]
+    entries = d.counts()["entries"]
     d.act(d.owner, "journal", jr, op=f"{rid}-journal")
     d.act(d.owner, "journal", jr, op=f"{rid}-journal", surface="cli")
-    run.check("a retried journal posts once", d.counts()["fin_entries"] == entries and j1["status"] == "committed",
+    run.check("a retried journal posts once", d.counts()["entries"] == entries and j1["status"] == "committed",
               (entries, j1["raw"]))
     other = d.act(d.owner, "journal", {"date": TODAY, "memo": "different body", "lines": [
         {"account_id": fx["expense"], "amount": 1000}, {"account_id": fx["asset"], "amount": -1000}]},
                   op=f"{rid}-journal")
     run.check("the same key with a different body is refused as a conflict",
               refused(other) and "conflict" in (other["code"] + other["reason"]).lower() and
-              d.counts()["fin_entries"] == entries, other["raw"])
+              d.counts()["entries"] == entries, other["raw"])
 
 
 def check5_rights(d, run, fx):
@@ -788,11 +788,11 @@ def check6_rules(d, run, fx):
                                             "money_account_id": fx["bank"], "account_id": fx["expense"]}, dry=True)
     run.check("deny beats the owner-approval default for a payment over $5,000",
               res["status"] == "denied" and "over $5,000" in res["reason"], res["raw"])
-    before_pay = d.counts()["fin_payments"]
+    before_pay = d.counts()["payments"]
     res = d.act(d.owner, "payment_create", {"recipient_id": fx["payee"], "amount": 600000,
                                             "money_account_id": fx["bank"], "account_id": fx["expense"]}, op=f"{rid}-big")
     run.check("the denied payment writes no payment row",
-              refused(res) and d.counts()["fin_payments"] == before_pay, res["raw"])
+              refused(res) and d.counts()["payments"] == before_pay, res["raw"])
     res = d.act(d.owner, "rule_create", {"kind": "gate", "name": f"rh {rid} limit journals",
                                          "words": "journals up to $1,000 at a time",
                                          "when": {"kind": "journal"},
@@ -855,13 +855,13 @@ def check6_rules(d, run, fx):
     nxt = d.act(cara, "journal", small, op=f"{rid}-next")
     run.check("the next journal after the change is judged by the new rule (denied)", nxt["status"] == "denied",
               nxt["raw"])
-    entries = d.counts()["fin_entries"]
+    entries = d.counts()["entries"]
     st, body = approve(d, pending["approval_id"], token=fx["ben_token"], note="approved before the freeze")
     time.sleep(0.5)
     row = d.scalar("SELECT status FROM fin_actions WHERE id=?", (pending["action_id"],))
     run.check("an approval does not waive a later deny: the approved action is refused at use",
-              row is not None and row["status"] != "committed" and d.counts()["fin_entries"] == entries,
-              (st, row, d.counts()["fin_entries"] - entries))
+              row is not None and row["status"] != "committed" and d.counts()["entries"] == entries,
+              (st, row, d.counts()["entries"] - entries))
     res = d.act(d.owner, "rule_disable", {"rule_id": freeze_id}, op=f"{rid}-disable-freeze")
     run.check("owner disables the freeze rule", res["status"] == "committed", res["raw"])
     after = d.act(cara, "journal", small, dry=True)

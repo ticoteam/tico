@@ -42,7 +42,7 @@ from .store import ap as SAP
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
-from .store import mirror as SX
+from .store import mirror as SM
 from .store import purchasing as SP
 from .store import tico
 
@@ -98,7 +98,7 @@ def control(ctx: Ctx, kind: str) -> L.Account:
     cid = ctx.book.mirror_connection_id
 
     def rank(a: L.Account) -> tuple[bool, bool, str, str]:
-        ref = SX.ref_for_local(ctx.c, cid, "fin_accounts", a.id) if cid else None
+        ref = SM.ref_for_local(ctx.c, cid, "fin_accounts", a.id) if cid else None
         bound = ref is not None and str(ref["status"]) == "active"
         return (not bound, a.code != code, a.code, a.id)
 

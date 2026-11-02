@@ -12,6 +12,7 @@ Tico reads both for one release (the new name wins), and a template refresh rena
 Nothing else here: no I/O beyond checking which name exists.
 """
 from pathlib import Path
+from typing import Any
 
 MANIFEST = "bot.yaml"
 OLD_MANIFEST = "employee.yaml"
@@ -42,7 +43,7 @@ def routines_of(manifest):
     return pick(manifest, "routines", "schedules")
 
 
-def tools_of(manifest):
+def tools_of(manifest: Any) -> Any:
     """The manifest's declared tools: `tools:`, else the older `access:`."""
     return pick(manifest, "tools", "access")
 

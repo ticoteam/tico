@@ -20,7 +20,9 @@ from backend.tests.test_finance_fixtures import MERCURY, OWNER, FakeMercury, acc
 from backend.tests.test_mcp import call, rpc
 
 CONFIG = {"template": "bookkeeper", "name": "bookkeeper", "runtime": "fake", "status": "active"}
-PAYEE = {"name": "Northwind Hosting", "method": "ach", "account_number": "000099998888", "routing_number": "000000000"}
+PAYEE = {"name": "Northwind Hosting", "method": "ach", "account_number": "000099998888", "routing_number": "000000000",
+         "address": {"address1": "1 Hosting Way", "city": "Austin", "region": "TX", "postalCode": "78701",
+                     "country": "US"}}
 
 
 def hire(api):
@@ -169,7 +171,13 @@ def test_invoices_turn(api):
     assert not err and made["status"] == "committed", made
     invoice_id = made["result"]["invoice_id"]
     err, sent = ask(api, token, "invoice_send", {"invoice_id": invoice_id}, f"invoice-send:{invoice_id}")
-    assert not err and sent["status"] == "committed", sent
+    # A bot's invoice email waits on a finance admin's send approval (spec: an invoice email goes out under one).
+    assert not err and sent["status"] == "needs_approval" and sent["rule"] == "default:bot-invoice-email", sent
+    assert sent["approver"] == OWNER, sent
+    with api.app.state.store.transaction() as c:
+        H.approval_decide(c, OWNER, sent["approval_id"], "approved")
+        done = FA.approval_decided(c, sent["approval_id"])
+    assert done is not None and done.status == "committed", done
     err, found = call(api, "hub_finance_search", {"kind": "invoice", "q": "INV-1042"}, token=token)
     assert not err and found["results"][0]["id"] == invoice_id and found["results"][0]["status"] == "sent", found
     # The payment is in the feed: record it against the invoice (invoice-overdue.md, step 2).
@@ -275,10 +283,12 @@ def test_close_turn(api):
     err, variance = call(api, "hub_finance_report", {"kind": "budget_vs_actual", "start": "2026-10-01",
                                                      "end": "2026-10-31"}, token=token)
     assert not err, variance
-    err, asked = ask(api, token, "close_period", {"month": "2026-10"}, "close:2026-10")
-    assert not err and asked["status"] == "needs_approval" and asked["rule"] == "default:close", asked
-    assert asked["approver"] == OWNER, asked
-    assert get(api, f"approvals/{asked['approval_id']}")["kind"] == "finance"
+    # The checklist is not ready: a money account is not reconciled and a settled row waits for a category (spec 11), so
+    # the close is refused with what is left, and nothing is asked. The approval path is in the next test.
+    err, refused = ask(api, token, "close_period", {"month": "2026-10"}, "close:2026-10")
+    assert not err and refused["status"] == "failed" and refused["code"] == "conflict", refused
+    assert "not reconciled through 2026-10-31" in refused["reason"], refused
+    assert "waiting for a category" in refused["reason"], refused
 
 
 def test_close_period_takes_the_month_and_nothing_else(api):
@@ -286,7 +296,9 @@ def test_close_period_takes_the_month_and_nothing_else(api):
     unknown field. The variance note goes on the task (close-month.md step 3)."""
     token = hire(api)
     err, asked = ask(api, token, "close_period", {"month": "2026-10"}, "close:2026-10")
-    assert not err and asked["status"] == "needs_approval", asked
+    assert not err and asked["status"] == "needs_approval" and asked["rule"] == "default:close", asked
+    assert asked["approver"] == OWNER, asked
+    assert get(api, f"approvals/{asked['approval_id']}")["kind"] == "finance"
     err, noted = ask(api, token, "close_period", {"month": "2026-10", "note": "Software over plan by 12%"},
                      "close:2026-10:note")
     assert err or noted["status"] != "needs_approval", noted

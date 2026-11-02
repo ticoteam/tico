@@ -415,7 +415,7 @@ def _whole_budget_card(books, fake):
     """Tools (50.00, decline) with one bot card whose limit is the whole budget and nothing else on it, so the card runs
     until the money is spent (spec 4.4). The fake answers card-coder."""
     connect(books, fake)
-    fake.queue["create_card"] = [{**MERCURY["card_created"], "cardId": "card-coder", "lastFourDigits": "1111"}]
+    fake.queue["create_card"] = [{**MERCURY["card_created"], "id": "card-coder", "lastFour": "1111"}]
     with books.transaction() as c:
         budget = _budget(c)
         coder = str(_bot_card(c, budget, "bot:coder", amount=50_000).result["card_id"])

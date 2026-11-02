@@ -2375,9 +2375,11 @@ def _export(store: Any, cid: str, now: str, size: int) -> None:
         SX.set_mirror_state(c, cid, {"export": {"until": until, "after": cursor, "done": len(rows) < size}})
 
 
-# The Tico accounts Tico posts to itself: the Gateway credit, the AI and video spend, other expenses, the payments clearing.
+# The Tico accounts Tico posts to itself: the Gateway credit, the AI and video spend, other expenses, the payments
+# clearing, and the accounts bills and invoices post to (AP and AR).
 # A chart of theirs with no account for one of them gets it created when the chart is read.
-TICO_POSTED = frozenset({usage.CREDIT, setup.AI, setup.VIDEO, banking.OTHER, documents.CLEARING[0]})
+TICO_POSTED = frozenset({usage.CREDIT, setup.AI, setup.VIDEO, banking.OTHER, documents.CLEARING[0],
+                         documents.CONTROL["bill"][0], documents.CONTROL["invoice"][0]})
 
 
 def _chart(store: Any, cid: str, now: str) -> None:
