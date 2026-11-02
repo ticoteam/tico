@@ -328,7 +328,7 @@ def draft(write, job, pages):
         if len(bets) == BETS:
             break
     return {"summary": _clip(raw.get("summary"), S.SUMMARY_MAX, True), "vision": "",
-            **{k: _clip(raw.get(k), SECTION_CHARS) for k in S.FIXED_KEYS}, "bets": bets}
+            **{k: _clip(raw.get(k), SECTION_CHARS) for k in S.FIXED_KEYS if k in P.FIELDS}, "bets": bets}
 
 
 # ----------------------------------------------------------------------------- writing the draft
