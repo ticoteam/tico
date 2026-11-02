@@ -229,3 +229,27 @@ def test_the_runner_claim_carries_the_conversation_and_epochs_its_session_is_key
     assert (conversation["kind"], conversation["scope"], conversation["owner_actor"]) == ("chat", "personal", "human:ana")
     assert isinstance(attempt["session_epoch"], int) and isinstance(attempt["bot_session_epoch"], int)
     assert msg["id"] in [m["id"] for m in attempt["history"]]
+
+
+def test_a_legacy_reply_and_a_to_send_reach_ben_in_a_native_dm_ana_started(api):
+    # Ana starts a native DM with Ben: Ben is a thread member, not a participant row. Old clients and old runners send
+    # through the legacy routes, which must find Ben there, both to reply in the conversation and with `to=`.
+    started = api.post("/api/v2/threads/dm", json={"members": ["human:ben"], "body": "Hi Ben"}, headers=headers())
+    assert started.status_code == 200, started.text
+    cid = started.json()["id"]
+
+    reply = api.post(f"/api/v2/conversations/{cid}/messages", json={"text": "Legacy reply"}, headers=headers())
+    assert reply.status_code == 200, reply.text
+
+    send = api.post("/api/v2/messages", json={"to": "human:ben", "text": "Legacy send",
+                                              "conversation_id": cid}, headers=headers())
+    assert send.status_code == 200, send.text
+
+    stranger = api.post("/api/v2/messages", json={"to": "human:cara", "text": "Not for Cara",
+                                                  "conversation_id": cid}, headers=headers())
+    assert stranger.status_code == 403, stranger.text             # a non-member is still refused
+
+    with api.app.state.store.read() as c:
+        texts = {r[0] for r in c.execute("SELECT body FROM messages WHERE conversation_id=? AND to_actor='human:ben'",
+                                         (cid,))}
+    assert {"Legacy reply", "Legacy send"} <= texts

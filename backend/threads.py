@@ -1525,6 +1525,17 @@ def _dm_members(c, root, rows=None):
     return [a for a in dict.fromkeys(members) if str(a).startswith(("human:", "bot:"))]
 
 
+def legacy_participants(c, conv):
+    """Who a legacy caller (an old client or runner) may address in this conversation. A thread with a stored audience
+    also counts its native members (as _dm_members reads them): a native DM lists only its starter in
+    participants_json, and the other people are its thread members. A legacy row keeps its participant list."""
+    people = list((conv or {}).get("participants") or [])
+    root = root_of(c, conv) if conv else None
+    if not root or not root.get("audience"):
+        return people
+    return list(dict.fromkeys(people + _dm_members(c, root)))
+
+
 def _sub_thread_posters(c, thread_id, exclude):
     """The bots that posted in this sub-thread: a reply in it wakes them (rule 3)."""
     return [r[0] for r in c.execute("SELECT DISTINCT from_actor FROM messages WHERE conversation_id=? AND id<>? "
@@ -1601,6 +1612,33 @@ def _source_readable(c, thread, message, bot):
         return False
     from . import task_privacy
     return task_privacy.message_readable(c, bot, message)
+
+
+def note_readable(c, note, bot):
+    """Whether a waiting note may still reach `bot`'s run. A deferred thread message (`message_id`) goes only while the
+    bot may read its source now: a bot removed from the thread, or one whose access to the message has gone, loses it.
+    A note with no source message has nothing to lose."""
+    mid = (note or {}).get("message_id")
+    if not mid:
+        return True
+    message = H.message(c, mid)
+    if not message:
+        return False
+    return _source_readable(c, thread_row(c, message["conversation_id"]), message, bot)
+
+
+def revalidate_notes(c, bot, notes):
+    """The notes out of `notes` that `bot` may still be told: each one whose source it can no longer read is cancelled
+    and its copied words cleared, so no run carries them. Called where a run claims its notes (execution.claim)."""
+    kept = []
+    for item in notes:
+        if note_readable(c, item, bot):
+            kept.append(item)
+            continue
+        c.execute("UPDATE notes SET body='', cancelled_at=COALESCE(cancelled_at,?), cancelled_by=? WHERE id=?",
+                  (_now(), H.KEEPER, item["id"]))
+        H.event(c, H.KEEPER, "note.cancel", item["id"], {"reason": "source_unreadable"})
+    return kept
 
 
 def _carrier(c, thread, message, bot, reason, rule):
