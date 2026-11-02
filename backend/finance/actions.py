@@ -21,6 +21,7 @@ from . import rights, sync, tax, usage
 from .context import Ctx, load
 from .core import kinds as K
 from .core import org as O
+from .core import rights as R
 from .core import validate as V
 from .core.errors import CONFLICT, DENIED, INVALID, NOT_AVAILABLE, NOT_FOUND, FinanceError, Named
 from .store import actions as SX
@@ -544,6 +545,7 @@ drain_events = jobs.drain
 open_next_period = jobs.open_next_period
 watch_documents = jobs.watch
 grant_defaults = rights.grant_defaults
+RIGHT_RULES = R.RULES                    # the one right an install from before RIGHTS_VERSION 2 is granted (bookkeeper)
 
 
 def set_bills_email(c: sqlite3.Connection, address: str | None, by: str = O.SYSTEM, at: str | None = None) -> None:

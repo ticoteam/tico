@@ -103,7 +103,6 @@ def grant_defaults(c):
     A built-in Bookkeeper from before RIGHTS_VERSION 2 is granted the one right it lacks (finance.rules) and nothing
     else: a right it was given and later lost stays lost."""
     from .finance import actions as FA
-    from .finance.core import rights as R
     if not built(c):
         return []
     if not _has_event(c, "bookkeeper.rights_granted"):
@@ -112,7 +111,7 @@ def grant_defaults(c):
         H.event(c, H.KEEPER, "bookkeeper.rights_version", SLUG, {"version": RIGHTS_VERSION})
         return added
     if not _has_event(c, "bookkeeper.rights_version"):
-        added = FA.grant_defaults(c, ACTOR, [R.RULES])
+        added = FA.grant_defaults(c, ACTOR, [FA.RIGHT_RULES])
         H.event(c, H.KEEPER, "bookkeeper.rights_granted", SLUG, {"rights": added, "version": RIGHTS_VERSION})
         H.event(c, H.KEEPER, "bookkeeper.rights_version", SLUG, {"version": RIGHTS_VERSION})
         return added
