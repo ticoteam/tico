@@ -346,8 +346,9 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "invoice_send": (("invoice_id", "str", "posts accounts receivable debit, income credit; with an email on file and a "
                                            "Bookkeeper mailbox, returns the email's text under a send approval"),),
     "invoice_remind": (("invoice_id", "str", "an unpaid sent invoice"),
-                       ("stage", "int", "days late: 1, 7, 30, 60 or 90; each stage is reminded once; needs a Bookkeeper "
-                                        "mailbox and an email on file")),
+                       ("stage", "int", "days past its due date: 1, 7, 30, 60 or 90; each stage is reminded once, and only "
+                                        "once the invoice is that late; needs a Bookkeeper mailbox and an email on "
+                                        "file")),
     "invoice_delivery": (("invoice_id", "str", "the invoice whose email the Bookkeeper sent or tried to"),
                          ("stage?", "int", "a reminder's stage (1, 7, 30, 60 or 90); left out for the invoice's own email"),
                          ("delivered", "bool", "true when the email went out; false with a reason when it did not"),
