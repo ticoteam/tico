@@ -13,6 +13,7 @@ import unittest.mock
 from pathlib import Path
 
 from backend import hubdb as H
+from backend import strategy as S
 from backend import task_relations as TR
 
 EMPLOYEES = {
@@ -138,6 +139,115 @@ class Schema(HubCase):
             "EXPLAIN QUERY PLAN SELECT 1 FROM bot_file_versions "
             "WHERE blob_id='existing-blob' AND media_state='pending'"))
         self.assertIn("COVERING INDEX bot_file_versions_blob_media", plan)
+
+
+class GrowthRethink(unittest.TestCase):
+    """GROWTH_RETHINK_SCHEMA: a file from the release before it keeps what the retired pages held in their new homes,
+    and loses the tables."""
+    RETIRED = ("growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments",
+               "growth_idea_segments", "gtm_versions", "gtm_drafts")
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.path = Path(self.dir.name) / "hub.db"
+
+    def before_rethink(self):
+        """The file as the release before the rethink left it: every migration before it, and the strategy tables
+        store.py makes at startup."""
+        conn = sqlite3.connect(self.path, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        self.addCleanup(conn.close)
+        for i, script in enumerate(H.MIGRATIONS[:H.MIGRATIONS.index(H.GROWTH_RETHINK_SCHEMA)]):
+            if i == 23:
+                H.migrate_task_privacy(conn)
+            elif i == 30:
+                H.TR.migrate(conn)
+            else:
+                H._apply(conn, script)
+        for statement in S.SCHEMA:
+            conn.execute(statement)
+        conn.execute(f"PRAGMA user_version={H.MIGRATIONS.index(H.GROWTH_RETHINK_SCHEMA)}")
+        return conn
+
+    def tables(self, conn):
+        return {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+
+    def test_an_empty_file_is_made_at_the_current_version_without_the_retired_tables(self):
+        conn = H.connect(self.path)
+        self.addCleanup(conn.close)
+        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
+        self.assertFalse(set(self.RETIRED) & self.tables(conn))
+        self.assertIn("gtm_sources", self.tables(conn))
+
+    def test_the_rethink_moves_idea_notes_channels_and_the_go_to_market_page_then_drops_the_tables(self):
+        conn = self.before_rethink()
+        conn.execute("INSERT INTO task_types (id, name, created, updated) VALUES ('idea', 'Idea', 'x', 'x')")
+        conn.execute("INSERT INTO tasks (id, title, body, requester, owner, status, type_id, created, updated) "
+                     "VALUES ('t1', 'Try ads', 'Spend a small test.', 'me', 'cmo', 'open', 'idea', 'x', 'x')")
+        conn.execute("INSERT INTO growth_ideas (task_id, hypothesis, prediction, result, learning, created_at, "
+                     "updated_at) VALUES ('t1', 'Ads bring buyers', 'CPA under 40', '', 'Cheap wins', 'x', 'x')")
+        conn.execute("INSERT INTO growth_channels (id, slug, name, created_at) "
+                     "VALUES ('ch1', 'paid-search', 'Paid search', 'x')")
+        conn.execute("INSERT INTO growth_idea_channels (task_id, channel_id) VALUES ('t1', 'ch1')")
+        conn.execute("INSERT INTO gtm_versions (id, n, body_json, published_at) VALUES ('g1', 1, ?, 'x')",
+                     (json.dumps({"motion": {"primary": "self_serve"}, "buyer": {"who_buys": "Ops leads"},
+                                  "playbooks": ["Demo first"]}),))
+        conn.execute("INSERT OR REPLACE INTO strategy_versions (id, n, status, sections, updated) "
+                     "VALUES ('d1', 1, 'draft', ?, 'x')", (json.dumps({"serve": "SMBs", "how": ""}),))
+        conn.execute("INSERT INTO goal_proposals (id, kind, proposed_by, proposed_at) VALUES "
+                     "('p1', 'gtm_draft', 'cmo', 'x'), ('p2', 'kpi_add', 'cmo', 'x')")
+        conn.execute("INSERT INTO growth_cohorts (id, channel_id, month, updated_at) VALUES ('c1', 'ch1', '2026-10', 'x')")
+        conn.execute("INSERT INTO growth_cohorts (id, channel_id, month, segment_id, updated_at) "
+                     "VALUES ('c2', 'ch1', '2026-10', 'segment/homes', 'x')")
+        conn.execute("INSERT OR REPLACE INTO growth_settings (id, unit, revenue_month, margin_pct, framework, "
+                     "verdict_win_pct) VALUES (1, 'customers', 1000, 40, 'ICE', 60)")
+
+        H.migrate(conn)
+
+        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
+        self.assertFalse(set(self.RETIRED) & self.tables(conn))
+        self.assertEqual(conn.execute("SELECT name FROM task_types WHERE id='idea'").fetchone()[0], "Marketing")
+        self.assertEqual(conn.execute("SELECT body FROM tasks WHERE id='t1'").fetchone()[0],
+                         "Spend a small test.\n\nHypothesis: Ads bring buyers\nPrediction: CPA under 40\n"
+                         "Learning: Cheap wins")
+        self.assertEqual([r[0] for r in conn.execute(
+            "SELECT t.key FROM task_tags tt JOIN tags t ON t.id=tt.tag_id WHERE tt.task_id='t1'")],
+            ["channel:paid-search"])
+        sections = json.loads(conn.execute("SELECT sections FROM strategy_versions WHERE status='draft'").fetchone()[0])
+        self.assertEqual(sections["how"], "- Motion: self serve\n- Who buys: Ops leads\n- Playbook: Demo first")
+        self.assertEqual(sections["serve"], "SMBs")
+        self.assertEqual({r[0]: (r[1], r[2]) for r in conn.execute(
+            "SELECT id, status, decision_note FROM goal_proposals")},
+            {"p1": ("rejected", H.GTM_DECLINED), "p2": ("pending", "")})
+        self.assertEqual([r[0] for r in conn.execute("SELECT id FROM growth_cohorts")], ["c1"])
+        self.assertNotIn("segment_id", {r[1] for r in conn.execute("PRAGMA table_info(growth_cohorts)")})
+        with self.assertRaises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO growth_cohorts (id, channel_id, month, updated_at) "
+                         "VALUES ('c3', 'ch1', '2026-10', 'x')")
+        settings = {r[1] for r in conn.execute("PRAGMA table_info(growth_settings)")}
+        self.assertFalse({"framework", "verdict_win_pct"} & settings)
+        self.assertEqual(tuple(conn.execute("SELECT unit, revenue_month, margin_pct FROM growth_settings "
+                                            "WHERE id=1").fetchone()), ("customers", 1000, 40))
+
+    def test_a_team_that_already_has_a_marketing_type_keeps_the_idea_type_under_its_old_name(self):
+        conn = self.before_rethink()
+        conn.execute("INSERT INTO task_types (id, name, created, updated) VALUES ('idea', 'Idea', 'x', 'x'), "
+                     "('mine', 'Marketing', 'x', 'x')")
+
+        H.migrate(conn)
+
+        self.assertEqual({r[0]: r[1] for r in conn.execute("SELECT id, name FROM task_types WHERE id IN ('idea', 'mine')")},
+                         {"idea": "Idea", "mine": "Marketing"})
+
+    def test_a_file_with_none_of_the_retired_rows_takes_the_same_path(self):
+        conn = self.before_rethink()
+
+        H.migrate(conn)
+
+        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
+        self.assertFalse(set(self.RETIRED) & self.tables(conn))
+
 
 class RegistrySync(HubCase):
     def test_sync_is_idempotent_and_keeps_tokens_threads_and_quarantine(self):
