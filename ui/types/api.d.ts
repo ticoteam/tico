@@ -7960,7 +7960,7 @@ export type ListFinanceTransactionsParams = {
   q?: string | null;
   source?: "all" | "feed" | "entry";
   start?: string | null;
-  status?: "new" | "matched" | "posted" | "ignored" | "pending" | null;
+  status?: "new" | "matched" | "posted" | "ignored" | "pending" | "failed" | null;
   teammates?: Array<string> | null;
   teams?: Array<string> | null;
   unattributed?: boolean;

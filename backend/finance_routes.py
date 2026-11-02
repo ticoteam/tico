@@ -166,7 +166,7 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/finance/transactions")
     def finance_transactions(request: Request, source: Literal["all", "feed", "entry"] = "all",
                              money_account_id: str | None = None,
-                             status: Literal["new", "matched", "posted", "ignored", "pending"] | None = None,
+                             status: Literal["new", "matched", "posted", "ignored", "pending", "failed"] | None = None,
                              account_id: str | None = None, start: str | None = None, end: str | None = None,
                              q: str | None = Query(None, max_length=100), cursor: str | None = Query(None, max_length=600),
                              limit: int = Query(50, ge=1, le=200), view_as: str | None = None,

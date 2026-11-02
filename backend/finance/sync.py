@@ -72,9 +72,11 @@ def probe(provider: Provider) -> tuple[dict[str, object], str]:
     for a in listed(accounts, "accounts"):
         if str(a.get("type") or "mercury") != "mercury":
             continue
-        rows.append({"id": str(a.get("id")), "name": str(a.get("nickname") or a.get("name") or "Mercury")[:120],
+        four = F.last4(a.get("accountNumber"))
+        rows.append({"id": str(a.get("id")),
+                     "name": F.bare_name(a.get("nickname") or a.get("name") or "Mercury", four)[:120],
                      "kind": str(a.get("kind") or ""), "status": str(a.get("status") or "active"),
-                     "last4": F.last4(a.get("accountNumber")), "current": _cents(a.get("currentBalance")),
+                     "last4": four, "current": _cents(a.get("currentBalance")),
                      "available": _cents(a.get("availableBalance"))})
     found: dict[str, object] = {"accounts": rows, "credit": [
         {"id": str(a.get("id")), "status": str(a.get("status") or "active"), "current": _cents(a.get("currentBalance")),
