@@ -942,3 +942,36 @@ def test_a_linked_channel_is_left_out_of_the_readers_pass_its_backfill_its_diges
     gw.tick()
     bodies = " ".join(d["body"] for d in digests(hub))
     assert "Control message" not in bodies and "Stored before the link" not in bodies
+
+
+# ----------------------------------------------------------------------------- membership revoked after queueing
+def test_a_queued_slack_copy_to_someone_removed_from_the_thread_is_not_sent(gateway, hub):
+    """A bot message in a members thread is copied to the addressee's Slack DM. If that person is removed from the
+    thread after the copy is queued (here, while it waits out a rate limit), the copy must not go out: Slack would
+    show them a thread they can no longer open."""
+    from backend import threads
+    slack, clock = gateway.slack, gateway.clock
+
+    def queue(mid):
+        c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated) "
+                  "VALUES(?,?,'','legal',?,'ready',?,?)", (mid, "D0U2", "copy", clock(), clock()))
+
+    with hub.transaction() as c:
+        tid = threads.create(c, "human:ana", title="Pricing", audience="members", members=["human:ben"])["id"]
+        before = threads.post(c, "bot:legal", tid, "Ben, the first draft.", kind="say", to_actor="human:ben")["id"]
+        queue(before)
+    # Control: Ben is still a member, so his copy goes out.
+    gateway.deliver()
+    assert len(slack.posts) == 1
+    with hub.transaction() as c:
+        after = threads.post(c, "bot:legal", tid, "Ben, the second draft.", kind="say", to_actor="human:ben")["id"]
+        queue(after)
+    slack.failures.append(G.SlackError("chat.postMessage", "ratelimited", retry_after=1))
+    gateway.deliver()
+    assert rows(hub, "SELECT state FROM slack_posts WHERE message_id=?", after)[0]["state"] == "rate_limited"
+    with hub.transaction() as c:
+        threads.remove_member(c, "human:ana", tid, "human:ben")
+    clock.advance(5)
+    gateway.deliver()
+    assert len(slack.posts) == 1, "no copy reaches a Slack user who left the thread"
+    assert rows(hub, "SELECT state FROM slack_posts WHERE message_id=?", after)[0]["state"] == "cancelled"
