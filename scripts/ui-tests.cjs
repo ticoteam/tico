@@ -235,9 +235,11 @@ async function main() {
     else if (args[i] === '--list') list = true;
     else wanted.push(path.basename(args[i]).replace(/\.cjs$/, ''));
   }
+  // A tour that takes its own screenshots runs by name, on its own time: --all would stop it at the script timeout.
+  const WALKTHROUGHS = ['threads-walkthrough'];
   const chosen = wanted.length ? wanted : all ? null : CORE;
   const files = fs.readdirSync(dir).filter(f => f.endsWith('.cjs')).sort()
-    .filter(f => !chosen || chosen.includes(f.replace(/\.cjs$/, '')));
+    .filter(f => chosen ? chosen.includes(f.replace(/\.cjs$/, '')) : !WALKTHROUGHS.includes(f.replace(/\.cjs$/, '')));
   if (!files.length) { console.error('no UI test scripts matched'); process.exit(1); }
   if (list) { console.log(files.map(f => f.replace(/\.cjs$/, '')).join('\n')); return; }
   const {cores, idleFraction} = await sampleCpu();

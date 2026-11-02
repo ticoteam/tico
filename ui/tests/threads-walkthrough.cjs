@@ -197,7 +197,7 @@ async function messageMenu(page, text, item) {
     S.risks = await api(hub, 'dana', 'POST', `/v2/threads/${S.plan.id}/messages`,
       {text: RISKS, kind: 'say', parent_message_id: S.kickoff.id});
     S.draft = await api(hub, 'dana', 'POST', `/v2/threads/${S.plan.id}/messages`, {text: 'Price list draft v1', kind: 'say'});
-    S.secret = await api(hub, 'dana', 'POST', '/v2/threads', {title: 'Pricing war room', audience: 'members', members: [], body: SECRET});
+    S.secret = await api(hub, 'dana', 'POST', '/v2/threads', {title: 'Pricing review', audience: 'members', members: [], body: SECRET});
     const groups = await api(hub, 'dana', 'GET', '/v2/groups');
     S.eng = (groups.groups || groups).find(g => g.name === 'Engineering');
     if (S.eng) {
@@ -315,11 +315,11 @@ async function messageMenu(page, text, item) {
     await journey(browser, hub, 'sub-threads', 'dana', async (page, phone, name) => {
       await step(page, 'thread with inline sub-threads', phone, name, async () => {
         await shell(page, `#/thread/${S.plan.id}`, '.thv-composer')();
-        await page.locator('.th-subhead', {hasText: KICKOFF}).first().waitFor({timeout: WAIT});
+        await page.locator(`.th-msg:has-text("${KICKOFF}") + .th-subhead`).first().waitFor({timeout: WAIT});
         await snap(page, 'thread-with-subthreads', phone);
       });
       await step(page, 'tap into the sub-thread', phone, name, async () => {
-        await page.locator('.th-subhead', {hasText: KICKOFF}).first().click();
+        await page.locator(`.th-msg:has-text("${KICKOFF}") + .th-subhead`).first().click();
         await page.waitForURL(new RegExp('#/thread/' + S.risks.thread_id), {timeout: WAIT});
         await page.getByText(RISKS).waitFor({timeout: WAIT});
         await snap(page, 'subthread-page-breadcrumb', phone);
@@ -347,11 +347,12 @@ async function messageMenu(page, text, item) {
     await journey(browser, hub, 'bot page', 'dana', async (page, phone, name) => {
       await step(page, 'bot Home', phone, name, async () => {
         await shell(page, `#/bot/${BOT}/home`, '#bot-work')();
-        await page.locator('.bot-talk-switch [data-talk="home"]').waitFor({timeout: WAIT});
+        // A phone names them in the top line; a desktop switches above the talk.
+        await page.locator(phone ? '#btabs [data-bt="home"]' : '.bot-talk-switch [data-talk="home"]').waitFor({timeout: WAIT});
         await snap(page, 'bot-home', phone);
       });
       await step(page, 'bot DM', phone, name, async () => {
-        await page.locator('.bot-talk-switch [data-talk="dm"]').click();
+        await page.locator(phone ? '#btabs [data-bt="dm"]' : '.bot-talk-switch [data-talk="dm"]').click();
         await sleep(800);
         await snap(page, 'bot-dm', phone);
       });
@@ -360,10 +361,10 @@ async function messageMenu(page, text, item) {
         await shell(page, `#/bot/${BOT}/settings`, '#bot-access-card')();
         await page.locator('#bot-access-card').scrollIntoViewIfNeeded();
         await snap(page, 'bot-access-card', phone);
-        await page.locator('#bot-access-card button', {hasText: /^edit$/i}).first().click();
-        await page.locator('dialog[open]').first().waitFor({timeout: WAIT});
+        await page.locator('[data-edit-access]').first().click();
+        // On the bot's own page the editor opens in place, not in a sheet.
+        await page.locator('#bot-settings-panels .bot-settings-panel').waitFor({timeout: WAIT});
         await snap(page, 'bot-access-editor', phone);
-        await page.keyboard.press('Escape');
       });
     });
 

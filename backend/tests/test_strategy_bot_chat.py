@@ -257,7 +257,7 @@ def test_the_strategy_bots_other_work_stays_its_own_in_the_goals_session(api):
     r = runner(api)
     for bot in ("ops", "goal-manager"):
         assign(api, r, bot)
-    ready(api, r, ["ops", "goal-manager"])
+    ready(api, r, ["ops", "goal-manager"], capabilities=["threads_v1"])
     post(api, "chat/ops", {"text": "Check the launch goal"})
     ops = post(api, "jobs/claim", {"bot": "ops"}, token=r["token"])["attempt"]
     # A bot still messages the Strategy Bot: that is its goals session, never the owner's chat.

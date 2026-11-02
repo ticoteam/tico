@@ -724,10 +724,10 @@ def test_a_rule_hears_one_event_of_one_shape_from_the_new_route_and_the_legacy_o
     new_event, old_event = told(made["id"]), told(legacy["id"])
     assert len(new_event) == 1 and len(old_event) == 1
     assert set(new_event[0]) == set(old_event[0])
-    assert new_event[0]["audience"] == "members" and old_event[0]["audience"] == "participants"
+    assert new_event[0]["audience"] == "members" and old_event[0]["audience"] == "personal"
     assert old_event[0]["title"] == "By the old route" and old_event[0]["root_id"] == legacy["id"]
     assert sorted(e["subject"] for e in heard(api, aid)) == sorted([made["id"], legacy["id"]])
-    assert {e["data"]["audience"] for e in heard(api, aid)} == {"members", "participants"}
+    assert {e["data"]["audience"] for e in heard(api, aid)} == {"members", "personal"}
 
 
 def test_a_rule_hears_of_a_home_a_dm_a_sub_thread_and_a_task_room_once_each(api, told):

@@ -354,7 +354,9 @@ function threadMakeTask(m, view) {
       dlg.close();
       const id = r?.task?.id || r?.id;
       toast('Task made', false, id ? {label: 'Open', run: () => { location.hash = '#/task/' + id; }} : undefined);
-    } catch (e) { form.querySelector('[data-status]').textContent = e.message; }
+    } catch (e) {
+      form.querySelector('[data-status]').textContent = e.body?.error?.code === 'duplicate' ? 'A task already asks for this' : e.message;
+    }
   };
   dlg.showModal();
   form.elements.namedItem('title').select();

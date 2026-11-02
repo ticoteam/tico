@@ -4,7 +4,7 @@
 //   again, unlinks one, and reads the API's refusal inline;
 // - a person who is neither admin nor owner sees neither section, never asks for either, and gets no Slack or
 //   Shared with in a thread's Who can read sheet;
-// - an admin who is not the owner sees Slack but not Other companies;
+// - an admin who is not the owner sees Slack and Other companies, as the server allows;
 // - the owner sees this Tico's ID and key, approves a requested company, pauses another, and asks a new one;
 // - in a thread's sheet the owner links it to Slack and adds and removes a company in Shared with;
 // - a message from another company's Tico shows its author as "name · company" with a guest tag.
@@ -109,8 +109,8 @@ async function open(browser, who, {viewport = DESKTOP} = {}) {
       row.state = 'requested'; row.reason = '';
       return json(row);
     }
-    // Federation (the owner only).
-    if (p.startsWith('/api/v2/federation') && PEOPLE[who].role !== 'owner') return refuse(403, 'Only the owner may manage federation with other installs');
+    // Federation (the owner or an admin).
+    if (p.startsWith('/api/v2/federation') && !(PEOPLE[who].role === 'owner' || PEOPLE[who].bot_admin)) return refuse(403, 'Only the owner or an admin may manage federation with other installs');
     const status = () => ({federation: state.federation, peerings: state.peerings,
       threads: Object.entries(state.shared).map(([id, members]) => ({thread_id: id, home: true, home_install: ME, applied_through: 0, high_seq: 0, removed_at_seq: null, members}))});
     if (p === '/api/v2/federation') return json(status());
@@ -234,25 +234,27 @@ async function sheet(page) {
         await page.locator('#cn-root .cn-none').waitFor();
         assert.equal(await page.locator('#cn-slack').isHidden(), true, `${tag}: no Slack section`);
         assert.equal(await page.locator('#cn-peers').isHidden(), true, `${tag}: no Other companies section`);
-        // Bob started the thread, so he may open its sheet; Slack and Shared with are not his to change.
+        // Bob started the thread, so he may open its sheet; Slack and sharing are not his to change, and he would see
+        // Shared with only for a message to retry (there is none).
         const dlg = await sheet(page);
-        assert.equal(await dlg.locator('.tcn-host').isHidden(), true, `${tag}: no Slack or Shared with`);
+        assert.equal(await dlg.locator('[data-tcn="slack"]').count(), 0, `${tag}: no Slack`);
+        assert.equal(await dlg.locator('[data-tcn="shared"]').isHidden(), true, `${tag}: no Shared with`);
         assert.equal(await dlg.locator('.tcn button, .tcn input').count(), 0);
         assert.deepEqual(seen.calls, [], `${tag}: never asks for links or companies`);
         assert.deepEqual(seen.errors, []);
         await page.close();
       }
 
-      // ---- An admin who is not the owner: Slack, but not Other companies.
+      // ---- An admin who is not the owner: Slack and Other companies.
       {
         const {page, seen} = await open(browser, 'cara', {viewport});
         await page.goto('https://tico-ui.test/#/library/connections');
         await page.locator('#cn-slack [data-link="sl1"]').waitFor();
-        assert.equal(await page.locator('#cn-peers').isHidden(), true, `${tag}: Other companies is the owner's`);
+        await page.locator('#cn-peers .cn-key').waitFor({state: 'attached'});
+        assert.equal(await page.locator('#cn-peers').isHidden(), false, `${tag}: Other companies is an admin's too`);
         const dlg = await sheet(page);
         await dlg.locator('[data-tcn="slack"] [name=tcn-channel]').waitFor();
-        assert.equal(await dlg.locator('[data-tcn="shared"]').count(), 0, `${tag}: Shared with is the owner's`);
-        assert.ok(!seen.calls.some(c => c.includes('/federation')), `${tag}: never asks for companies`);
+        await dlg.locator('[data-tcn="shared"]').waitFor();
         assert.deepEqual(seen.errors, []);
         await page.close();
       }

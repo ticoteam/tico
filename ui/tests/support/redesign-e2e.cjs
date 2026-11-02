@@ -47,7 +47,7 @@ async function ok(page, method, p, body) {
   assert.ok(r.status >= 200 && r.status < 300, `${method} ${p}: ${r.status} ${JSON.stringify(r.body).slice(0, 300)}`);
   return r.body;
 }
-const automationNamed = async (page, name) => (await ok(page, 'GET', 'automations')).automations.find(a => a.name === name);
+const automationNamed = async (page, name) => (await ok(page, 'GET', 'automations?limit=500')).automations.find(a => a.name === name);
 
 // No sideways scroll on the page itself (a path strip scrolls inside its own box).
 const sideways = page => page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);

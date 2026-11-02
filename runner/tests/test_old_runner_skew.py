@@ -13,6 +13,7 @@ assertions here must pass on it too.
 
 import json
 import os
+import types
 from pathlib import Path
 
 import pytest
@@ -28,10 +29,19 @@ from runner.tests.test_conformance import (  # noqa: F401
 # where the history is), so the replay half of each test cannot pass on it. Its privacy half stays a hard failure in the
 # test it came from. An updated runner replays, which the new runner's suite checks.
 REPLAY_LIMIT = "an old runner gives a fresh thread no history; recovery needs an updated runner"
-test_the_fresh_root_thread_is_replayed_its_roots_earlier_messages = pytest.mark.xfail(
-    strict=True, reason=REPLAY_LIMIT)(test_the_fresh_root_thread_is_replayed_its_roots_earlier_messages)
-test_a_public_turn_is_replayed_its_threads_public_history = pytest.mark.xfail(
-    strict=True, reason=REPLAY_LIMIT)(test_a_public_turn_is_replayed_its_threads_public_history)
+
+
+def _replay_limited(test):
+    """A copy of the imported test, marked here: a mark on the function itself would reach the updated runner's suite."""
+    copy = types.FunctionType(test.__code__, test.__globals__, test.__name__, test.__defaults__, test.__closure__)
+    copy.__dict__.update(test.__dict__)
+    return pytest.mark.xfail(strict=True, reason=REPLAY_LIMIT)(copy)
+
+
+test_the_fresh_root_thread_is_replayed_its_roots_earlier_messages = _replay_limited(
+    test_the_fresh_root_thread_is_replayed_its_roots_earlier_messages)
+test_a_public_turn_is_replayed_its_threads_public_history = _replay_limited(
+    test_a_public_turn_is_replayed_its_threads_public_history)
 
 
 @pytest.mark.parametrize("harness", ["claude"])
