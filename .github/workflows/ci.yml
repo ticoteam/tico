@@ -382,8 +382,20 @@ jobs:
       # every VM that their build ids match the candidate's sources. Setup above overlaps their build: wait for the
       # native-linux x86_64 job to finish, and fail this part if that build did not succeed. Only product, desktop
       # and python-1 (every native test file, release_checks.py) need them; the other VMs start at once.
+      # A candidate frozen before native-first python shards may put native tests on any python VM: all of them wait.
+      - name: Does this VM need the release binaries
+        id: binaries
+        env:
+          TICO_MATRIX_BINARIES: ${{ matrix.binaries }}
+        run: |
+          needed=true
+          if [ "$TICO_MATRIX_BINARIES" = no ]; then needed=false
+            if [ "$TICO_RELEASE_PART" = python ] && ! grep -q native_first candidate/scripts/release_checks.py
+            then needed=true; fi
+          fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
       - name: Wait for the release Linux binaries
-        if: matrix.binaries != 'no'
+        if: steps.binaries.outputs.needed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -398,13 +410,13 @@ jobs:
             sleep 10
           done
           echo "::error::The release Linux binaries were not built within 25 minutes."; exit 1
-      - if: matrix.binaries != 'no'
+      - if: steps.binaries.outputs.needed == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: runner-linux-x86_64
           path: ${{ runner.temp }}/native
       - name: Place the release binaries
-        if: matrix.binaries != 'no'
+        if: steps.binaries.outputs.needed == 'true'
         working-directory: candidate
         run: |
           mkdir -p runner-rs/target/release relay-rs/target/release

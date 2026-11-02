@@ -343,3 +343,20 @@ def test_native_test_files_take_shard_one_and_the_rest_balance_over_the_other_sh
     assert sorted(sum(shards, [])) == ['a.py', 'b.py', 'c.py', 'n1.py', 'n2.py']
     # Without native_first (PR checks), the same files balance over all shards as before.
     assert sorted(sum((release_checks.shard_files(i, 3, {}) for i in (1, 2, 3)), [])) == sorted(sum(shards, []))
+
+
+def test_native_test_files_include_tests_that_borrow_a_native_test_modules_helpers(tmp_path, monkeypatch):
+    tests = tmp_path / 'backend/tests'
+    tests.mkdir(parents=True)
+    (tests / 'test_relay.py').write_text('def relay(): return os.environ["TICO_SCREEN_RELAY_BIN"]\n')
+    (tests / 'test_uses.py').write_text('from backend.tests.test_relay import relay\n')
+    (tests / 'test_uses_too.py').write_text('from backend.tests import test_uses\n')
+    (tests / 'test_plain.py').write_text('from backend.tests.test_api import client\n')
+    monkeypatch.setattr(release_checks, 'ROOT', tmp_path)
+    names = [f'backend/tests/{n}.py' for n in ('test_uses', 'test_uses_too', 'test_plain')]
+    assert release_checks.native_test_files(names) == {'backend/tests/test_uses.py', 'backend/tests/test_uses_too.py'}
+
+
+def test_the_screen_relay_borrowers_are_native():
+    names = ['backend/tests/test_screen.py', 'backend/tests/test_browser_exit_relay.py', 'backend/tests/test_api.py']
+    assert release_checks.native_test_files(names) == set(names[:2])

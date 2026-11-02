@@ -230,15 +230,37 @@ TIMINGS = ROOT / 'scripts' / 'test-timings.json'
 NATIVE_TEST = re.compile(r'rust_binary|TICO_RUNNER_BIN|TICO_SCREEN_RELAY_BIN|target/release|"target" / "release"|'
                          r'engine\.current|screen_binary|from runner import engine|runner\.engine')
 NATIVE_BINARIES = ('runner-rs/target/release/tico-runner', 'relay-rs/target/release/tico-screen-relay')
+# A test module importing another test module (test_screen borrows test_screen_relay_contract's running_service).
+TEST_IMPORT = re.compile(r'from\s+((?:backend|runner|scripts)\.tests(?:\.\w+)*)\s+import\s+([\w, ]+)|'
+                         r'import\s+((?:backend|runner|scripts)\.tests(?:\.\w+)+)')
 
 
 def native_test_files(names):
-    def native(name):
+    """The files of `names` that run the native binaries: they name them, or import a test module that does."""
+    sources = {}
+    for name in {*names, *(str(p.relative_to(ROOT)) for d in ('backend', 'runner', 'scripts')
+                           for p in (ROOT / d).rglob('tests/**/*.py'))}:
         try:
-            return bool(NATIVE_TEST.search((ROOT / name).read_text(errors='replace')))
+            sources[name] = (ROOT / name).read_text(errors='replace')
         except OSError:   # not a file here (a test's stand-in name): nothing to run natively
-            return False
-    return {name for name in names if native(name)}
+            pass
+    native = {name for name, text in sources.items() if NATIVE_TEST.search(text)}
+
+    def imports(text):
+        for package, members, module in TEST_IMPORT.findall(text):
+            if module:
+                yield module.replace('.', '/') + '.py'
+            else:
+                yield package.replace('.', '/') + '.py'
+                yield from (f"{package.replace('.', '/')}/{m.strip()}.py" for m in members.split(',') if m.strip())
+    grown = True
+    while grown:
+        grown = False
+        for name, text in sources.items():
+            if name not in native and any(path in native for path in imports(text)):
+                native.add(name)
+                grown = True
+    return {name for name in names if name in native}
 
 
 def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=False):
