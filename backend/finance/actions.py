@@ -111,7 +111,7 @@ CARD_NUMBER_REFUSED = V.CARD_NUMBER_REFUSED
 STALE_DAYS = 14                        # hubdb.APPROVAL_STALE_DAYS: a withdrawal after this long is an expiry
 # Payload fields a planner fills in when the asker leaves them out (Plan.resolved): a retry without them is the same
 # request.
-RESOLVED_KEYS = frozenset({"effective_from", "date", "raise_check", "recipient_version"})
+RESOLVED_KEYS = frozenset({"effective_from", "date", "raise_check", "recipient_version", "provider_user_id"})
 RECIPIENT_RULE = payments.RECIPIENT_RULE                 # the rule an approval asked for changed payee details names
 NEW_RECIPIENT_RULE = payments.NEW_RECIPIENT_RULE
 

@@ -778,6 +778,26 @@ def test_disconnecting_takes_the_connections_trigger_with_it(books, monkeypatch)
         assert c.execute("SELECT deleted_at IS NOT NULL FROM triggers WHERE id=?", (cid,)).fetchone()[0] == 1
 
 
+def test_a_second_disconnect_after_a_reconnect_clears_the_local_part_again(books, monkeypatch):
+    """A disconnect is keyed to the connection's current connect. After a reconnect of the same connection, its second
+    disconnect is a new request: it clears the new credentials, the status and the trigger, and does not replay the
+    first disconnect's result (which would leave the reconnected tokens and trigger in place)."""
+    vault = T._VAULT[0]
+    hq = HQ(claim=[tokens("acc-1", "ref-1"), tokens("acc-2", "ref-2")], disconnect=[{"ok": True}, {"ok": True}])
+    monkeypatch.setattr(books_link, "_call", hq)
+    cid = _claimed(books, vault)
+    books_link.drop(books, vault, LINK, cid, by=OWNER)
+    assert _claimed(books, vault) == cid
+    with books.read() as c:
+        refresh = str(SX.books_settings(c, cid)["refresh"])
+        assert T.credential_secret(c, vault, refresh) == "ref-2"
+    books_link.drop(books, vault, LINK, cid, by=OWNER)
+    with books.read() as c:
+        assert SX.books_status(c, cid) == "disconnected"
+        assert not T.credential_exists(c, refresh)
+        assert c.execute("SELECT deleted_at IS NOT NULL FROM triggers WHERE id=?", (cid,)).fetchone()[0] == 1
+
+
 def test_a_xero_consent_for_a_company_on_quickbooks_is_refused_and_HQ_takes_its_grant_off(books, monkeypatch):
     vault = T._VAULT[0]
     monkeypatch.setattr(books_link, "_call", HQ(claim=[tokens("acc-1", "ref-1")]))

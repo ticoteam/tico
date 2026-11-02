@@ -427,6 +427,8 @@ def connect_claim(store: Any, vault: object, link: Link, *, provider: str, compa
         if cid is not None:
             _keep_trigger(c, cid, provider=provider, by=by, now=now)
             SX.set_connection_status(c, cid, "reconnect", "vault_pending", now)
+            # Each connect of the connection has its own id, so a disconnect after it is a new request (see drop).
+            SX.set_books_settings(c, cid, {"connect_id": tico.new_id()})
     if cid is None:
         _revoke_refused(link, provider, company_id, tokens)      # outside the write: HQ is asked, nothing is stored
         raise AlreadyConnected(None)
@@ -728,7 +730,10 @@ def drop(store: Any, vault: object, link: Link, cid: str, *, by: str) -> None:
     provider = held[0][1]
     revoke_grant(store, vault, link, cid, provider, now=tico.now())
     with store.transaction() as c:
-        done = FA.act(c, by, "books_disconnect", {"connection_id": cid}, f"books-disconnect:{cid}")
+        # The key is per connect: a second disconnect after a reconnect must not replay the first one's result, which
+        # would leave the reconnected tokens and trigger in place.
+        connect = str(SX.books_settings(c, cid).get("connect_id") or "")
+        done = FA.act(c, by, "books_disconnect", {"connection_id": cid}, f"books-disconnect:{cid}:{connect}")
         if done.status != "committed":
             raise FA.FinanceError(done.code or "denied", done.reason or "the books connection was not disconnected")
         tico.audit(c, by, "finance.books.disconnected", cid, {"provider": provider})
