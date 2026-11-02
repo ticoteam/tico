@@ -201,11 +201,12 @@ def test_the_first_turn_after_an_update_starts_fresh_and_recovers_only_its_roots
     kind, thread = provider_turns(computer)[-1]
     assert kind == "new" and thread != "old-bot-thread-0001", "the old shared thread is never resumed by a root"
     prompt = computer.prompts()[-1]["prompt"]
-    # The fresh thread is replayed this root's earlier messages inline, oldest first (runner-rs/src/fallback.rs
-    # first_turn_pack), and nothing from another root.
-    assert "ROOM-B note: launch is Tuesday" in prompt, "the fresh thread is replayed this root's earlier messages"
+    # Privacy first: nothing from another root reaches the fresh thread's prompt.
     assert elsewhere["id"] not in prompt and "OTHER-ROOM" not in prompt, \
         "nothing from another root reaches the fresh thread's prompt"
+    # The fresh thread is replayed this root's earlier messages inline, oldest first (runner-rs/src/fallback.rs
+    # first_turn_pack).
+    assert "ROOM-B note: launch is Tuesday" in prompt, "the fresh thread is replayed this root's earlier messages"
 
 
 @pytest.mark.parametrize("harness", ["claude"])
@@ -227,9 +228,9 @@ def test_a_public_turn_is_replayed_its_threads_public_history_and_no_direct_mess
     kind, _thread = provider_turns(computer)[-1]
     assert kind == "new", "a public thread's first turn starts its own session"
     prompt = computer.prompts()[-1]["prompt"]
-    assert "PUBLIC-ROOM note: launch is Tuesday" in prompt, "a public turn is replayed its thread's public history"
     assert "DM-SECRET" not in prompt, "a direct message never reaches a public turn"
     assert "LEGACY-SECRET" not in prompt, "a legacy-audience message never reaches a public turn"
     # Nothing the provider saw during the public turn, not only its prompt, carries the direct message's text.
     leaked = [call_ for call_ in computer.calls()[seen:] if "DM-SECRET" in json.dumps(call_)]
     assert not leaked, f"the direct message reached the provider in a public turn: {leaked}"
+    assert "PUBLIC-ROOM note: launch is Tuesday" in prompt, "a public turn is replayed its thread's public history"
