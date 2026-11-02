@@ -9,7 +9,8 @@ from typing import Any, cast
 
 from . import dates
 
-BACKFILL_SIZE = 1000    # records per provider read (QuickBooks returns at most 1000 a query): one page, one transaction
+BACKFILL_SIZE = 1000    # records per provider read (QuickBooks returns at most 1000 a query)
+APPLY_CHUNK = 100       # records applied per transaction: a page is applied in chunks, and its cursor moves once all are in
 MATCH_DAYS = 3          # a bank row finds an entry this many days either side of its own date
 CDC_DAYS = 30           # how far back a change feed reaches (QuickBooks keeps 30 days of changes)
 CDC_OVERLAP = 300       # seconds read again before the last pass, so a change made during it is not missed

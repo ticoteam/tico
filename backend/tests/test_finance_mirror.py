@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from collections.abc import Mapping
 from typing import Any
 
+import pytest
+
 from backend.finance import books_sync, mirror
 from backend.finance import reads as FR
 from backend.finance.context import load
@@ -135,6 +137,30 @@ def test_a_failed_backfill_page_resumes_where_it_stopped_without_duplicates(book
     assert codes == ["9101", "9102", "9103", "9104", "9105"]
     assert refs == 5
     assert mirror.sync_once(books, fake, cid, AT, size=2) == []                  # nothing left to read
+
+
+def test_a_backfill_page_is_applied_in_chunks_so_a_failure_keeps_the_chunks_already_in(books, monkeypatch):
+    fake = FakeBooks()
+    fake.records["accounts"] = [acct(n, f"92{n:03d}", f"Account {n}") for n in range(1, 251)]
+    cid = _connection(books)
+    real, calls = mirror.apply, []
+
+    def second_chunk_fails(c, connection, records, at):
+        calls.append(len(records))
+        if len(calls) == 2:
+            raise RuntimeError("the store is locked")
+        return real(c, connection, records, at)
+    monkeypatch.setattr(mirror, "apply", second_chunk_fails)
+    with pytest.raises(RuntimeError):
+        mirror.sync_once(books, fake, cid, AT, size=250)                         # one page of 250 accounts
+    assert calls == [100, 100]                                                   # applied 100 at a time, each its own write
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_accounts WHERE code LIKE '92%'").fetchone()[0] == 100
+    monkeypatch.setattr(mirror, "apply", real)
+    assert mirror.sync_once(books, fake, cid, AT, size=250) == []                # the page is read again from 1
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_accounts WHERE code LIKE '92%'").fetchone()[0] == 250
+        assert c.execute("SELECT COUNT(*) FROM fin_external_refs WHERE connection_id=?", (cid,)).fetchone()[0] == 250
 
 
 def test_a_newer_revision_reverses_and_replaces_the_entry_and_keeps_the_books_balanced(books):

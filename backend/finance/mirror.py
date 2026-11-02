@@ -2217,6 +2217,15 @@ def reading(c: sqlite3.Connection, cid: str) -> bool:
     return not M.backfill_done(_backfill_state(SX.mirror_state(c, cid)), _entities(c, cid))
 
 
+def _apply_chunked(store: Any, cid: str, records: Sequence[Record], now: str) -> None:
+    """The records applied APPLY_CHUNK at a time, each chunk in its own transaction, so one write never holds the store for
+    a whole page. A failure keeps the chunks already in. The caller moves its cursor only once all are in, so the next pass
+    reads the same records again, and a record already in is found, not written twice."""
+    for start in range(0, len(records), M.APPLY_CHUNK):
+        with store.transaction() as c:
+            apply(c, cid, records[start:start + M.APPLY_CHUNK], now)
+
+
 def _backfill(store: Any, books: Books, cid: str, now: str, size: int) -> str:
     """One page of the first entity not yet read through (in order: accounts, parties, entries)."""
     with store.read() as c:
@@ -2229,8 +2238,8 @@ def _backfill(store: Any, books: Books, cid: str, now: str, size: int) -> str:
     if not read.ok:
         return f"backfill {entity} from {start}: {read.error}"
     counted = read.seen if read.seen >= 0 else len(read.records)     # a row no record fits still moves the cursor
+    _apply_chunked(store, cid, read.records, now)
     with store.transaction() as c:
-        apply(c, cid, read.records, now)
         done = M.backfill_after(_backfill_state(SX.mirror_state(c, cid)), entity, start, counted, size)
         SX.set_mirror_state(c, cid, {"backfill": done})
     return ""
@@ -2259,12 +2268,13 @@ def _changes(store: Any, books: Books, cid: str, now: str, waiting: bool = False
                           for feed in books.feeds})
     if not read.ok:
         return f"changes: {read.error}"
-    with store.transaction() as c:
-        fresh = {_ext_of(r).key for r in read.records}
+    fresh = {_ext_of(r).key for r in read.records}
+    with store.read() as c:
         waiting_records = [M.decode(v) for k, v in _pending(c, cid).items() if k not in fresh]
-        apply(c, cid, [*read.records, *waiting_records], now)
+    _apply_chunked(store, cid, [*read.records, *waiting_records], now)
+    with store.transaction() as c:
         # A feed the provider cut short is complete only to its `through`, so its next read starts there; the rest are
-        # complete to this read.
+        # complete to this read. The cursors move once every chunk is in.
         cut = dict(read.through)
         stamps = {feed: cut.get(feed, now) for feed in books.feeds}
         SX.set_mirror_state(c, cid, {"cursors": stamps, "changed_at": min(stamps.values(), key=M.parse),
