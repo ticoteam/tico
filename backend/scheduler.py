@@ -238,10 +238,12 @@ def run_now(store, auth, key, actor):
 class Scheduler:
     def __init__(self, store, execution):
         self.store, self.execution = store, execution
+        self.listening_since = H.now()  # when this server began listening; a computer is not silent before it
         self.swept = None
         self.stranded = None
         self.asks_checked = None
         self.stall_checked = None
+        self.stall_marks_checked = None
         self.goals_checked = None
         self.go_lives_checked = None
         self.gateway_checked = None
@@ -347,6 +349,15 @@ class Scheduler:
         def company_turns_tick(c):
             from . import org_turns
             org_turns.observe(c, self.store.settings, detailed=False)
+        # Stall marks and the server's run cap first, in their own short write, every minute: a slow step below must
+        # not keep a silent run unmarked, and a run past its limit lapses here, before plain expiry looks at it.
+        if self.stall_marks_checked is None or at - self.stall_marks_checked >= timedelta(minutes=1):
+            self.stall_marks_checked = at
+            with SR.recording(self.store, "stall_marks", failures) as run:
+                with locked("stall_marks") as c:
+                    from . import run_diagnostics
+                    run_diagnostics.sweep(c, stamp(at), listening_since=self.listening_since)
+                run.did("Checked", quiet=True)
         # The turn fixer first: a start it proves dead is freed with a note on its task before plain expiry takes it.
         # Fleet classification for the Health finding runs on a read connection between two short writes, so claim
         # renewals and events are not parked behind every queued bot's refusal check (TK / #1654 residual).
@@ -720,9 +731,6 @@ class Scheduler:
             # Every minute: bot tasks nothing is going to move (H.wake_stalled).
             self.stall_checked = at
             with SR.recording(self.store, "stall_checks") as run:
-                with self.store.transaction() as c:
-                    from . import run_diagnostics
-                    run_diagnostics.sweep(c, stamp(at))
                 # Holds include person and approval waits that deliberately
                 # never enter the stall candidate list. Reconcile them independently,
                 # with one short transaction per task so runner writes can progress.

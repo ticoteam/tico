@@ -20,6 +20,7 @@ const GR_STAGES = [['reach', 'Reach'], ['acquire', 'Acquire'], ['activate', 'Act
 const GR_STATUS = {idea: ['Idea', ''], testing: ['Testing', 'in-progress'], paused: ['Paused', 'waiting'], won: ['Won', 'ok'],
   lost: ['Lost', 'fail'], inconclusive: ['Inconclusive', 'waiting'], dropped: ['Dropped', '']};
 const GR_CH_STAGE = {idea: ['Idea', ''], testing: ['Testing', 'in-progress'], scaling: ['Scaling', 'ok'], paused: ['Paused', 'waiting']};
+const GR_GRID_ALL = 6;     // how many channels the Ideas grid shows even with no ideas in them
 const GR_RESULTS = ['won', 'lost', 'inconclusive', 'dropped'];
 
 // ----------------------------------------------------------------- shared formats and pieces
@@ -269,24 +270,34 @@ function grAxes(d) {
   const inBet = (i, id) => id ? i.bet_id === id : !i.bet_id || !d.bets.some(b => b.id === i.bet_id);
   const bets = d.bets.map(b => ({id: b.id, label: `${b.n} · ${b.statement}`}));
   if (!bets.length || d.ideas.some(i => inBet(i, ''))) bets.push({id: '', label: 'No bet'});
-  const cols = chans.map(c => ({slug: c.slug, name: c.name}));
+  // A few channels all show, an empty one included. Past that, only the ones with ideas.
+  const hasIdea = c => d.ideas.some(i => inChan(i, c.slug));
+  const cols = (chans.length > GR_GRID_ALL && chans.some(hasIdea) ? chans.filter(hasIdea) : chans).map(c => ({slug: c.slug, name: c.name}));
   if (!cols.length || d.ideas.some(i => inChan(i, ''))) cols.push({slug: '', name: 'No channel'});
   return {bets, cols, inBet, inChan};
+}
+// Open ideas, then the results folded under them.
+function grFold(list, draw) {
+  const done = list.filter(i => GR_RESULTS.includes(i.status));
+  return list.filter(i => !GR_RESULTS.includes(i.status)).map(draw).join('')
+    + (done.length ? `<details class="gr-done"><summary>${done.length === 1 ? '1 result' : `${done.length} results`}</summary>${done.map(draw).join('')}</details>` : '');
 }
 function grGrid(d) {
   const {bets, cols, inBet, inChan} = grAxes(d);
   return `<div class="card gr-scroll gr-grid-wrap"><table class="gr-grid"><thead><tr><th scope="col"><span class="sr-only">Bet</span></th>${cols.map(c =>
     `<th scope="col">${esc(c.name)}</th>`).join('')}</tr></thead>
     <tbody>${bets.map(b => `<tr><th scope="row">${esc(b.label)}</th>${cols.map(c =>
-      `<td>${grSort(d.ideas.filter(i => inBet(i, b.id) && inChan(i, c.slug))).map(i => grIdeaCard(i, d.channels, {chan: false})).join('')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+      `<td>${grFold(grSort(d.ideas.filter(i => inBet(i, b.id) && inChan(i, c.slug))), i => grIdeaCard(i, d.channels, {chan: false}))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
 // A phone: no grid. Each bet with its ideas as rows: title, channels, status.
 function grPhoneList(d) {
   const {bets, inBet} = grAxes(d);
   return `<div class="gr-plist">${bets.map(b => {
     const list = grSort(d.ideas.filter(i => inBet(i, b.id)));
-    return list.length ? `<section class="card gr-pbet"><h3 class="gr-pbet-h">${esc(b.label)}</h3>${list.map(i =>
-      `<a class="gr-prow gr-is-${esc(i.status || 'idea')}" href="${grTaskHref(i.task_id)}" data-idea="${esc(i.task_id)}"><span class="gr-prow-t">${esc(i.title)}</span>
-        <span class="gr-prow-f">${(i.channels || []).length ? `<span class="muted">${esc(i.channels.map(s => grChanName(d.channels, s)).join(', '))}</span>` : ''}${grMark(i.status)}</span></a>`).join('')}</section>` : '';
+    return list.length ? `<section class="card gr-pbet"><h3 class="gr-pbet-h">${esc(b.label)}</h3>${grFold(list, i => {
+      const names = (i.channels || []).map(s => grChanName(d.channels, s));
+      return `<a class="gr-prow gr-is-${esc(i.status || 'idea')}" href="${grTaskHref(i.task_id)}" data-idea="${esc(i.task_id)}"><span class="gr-prow-t">${esc(i.title)}</span>
+        <span class="gr-prow-f">${names.length ? `<span class="muted">${esc(names[0])}${names.length > 1 ? ` +${names.length - 1}` : ''}</span>` : ''}${grMark(i.status)}</span></a>`;
+    })}</section>` : '';
   }).join('')}</div>`;
 }

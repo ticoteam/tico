@@ -479,3 +479,159 @@ def test_held_totals_match_each_computers_held_counts(api):
         totals = start_places.held_totals(c)
         for rid in (first['runner_id'], second['runner_id']):
             assert totals.get(rid, 0) == sum(start_places.held(c, rid).values())
+
+
+def memory(api, computer, mem, at=None):
+    """One synthetic sample at this minute (or at `at`), memory at `mem` of the computer's total."""
+    import time
+    at = at or int(time.time()) // 60 * 60
+    post(api, 'runners/performance', {'samples': [point(at, cpu=20, mem=mem)]}, computer['token'])
+
+
+def waits_of(api, computer):
+    machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == computer['runner_id'])
+    return machine['turn_counts']['waits']
+
+
+def bot_waiting_for_finance(api, sender='bot:ops'):
+    computer = fleet(api, attempts=1, trees=0)
+    assign(api, computer, 'finance')
+    ready(api, computer, ['ops', 'finance'])
+    sent_by(api, post(api, 'chat/finance', {'text': 'New work'})['id'], sender)
+    return computer
+
+
+def test_memory_at_85_holds_new_starts_and_they_start_again_below_80(api):
+    """Memory at 85% or more holds a bot's new start; between 80 and 85 the hold stays while a start waits on it."""
+    computer = bot_waiting_for_finance(api)
+    memory(api, computer, .86)
+    assert claim(api, computer, 'finance') is None
+    assert any(w['reason'] == 'computer busy: memory' for w in waits_of(api, computer))
+    memory(api, computer, .82)
+    assert claim(api, computer, 'finance') is None
+    memory(api, computer, .79)
+    assert claim(api, computer, 'finance') is not None
+
+
+def test_memory_between_80_and_85_admits_a_start_when_none_waits(api):
+    computer = bot_waiting_for_finance(api)
+    memory(api, computer, .82)
+    assert claim(api, computer, 'finance') is not None
+
+
+def test_hold_words_name_the_memory_percent_and_the_stale_sample(api):
+    computer = bot_waiting_for_finance(api)
+    memory(api, computer, .86)
+    from backend.start_places import computer_hold
+    with api.app.state.store.read() as c:
+        assert computer_hold(c, computer['runner_id']) == ('computer busy: memory', 'computer busy: memory 86%')
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE runner_load_samples SET ts=ts-300,sampled_at=sampled_at-300 WHERE runner_id=?',
+                  (computer['runner_id'],))
+    with api.app.state.store.read() as c:
+        assert computer_hold(c, computer['runner_id']) == ('computer not reporting', 'computer not reporting')
+
+
+def test_a_computer_whose_sample_is_stale_refuses_bot_starts_and_admits_a_persons_message(api):
+    """A frozen computer stops sampling; with diagnostics on its last sample is old and it admits no bot's start."""
+    import time
+    computer = bot_waiting_for_finance(api)
+    memory(api, computer, .3, at=int(time.time()) // 60 * 60 - 300)
+    assert claim(api, computer, 'finance') is None
+    machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == computer['runner_id'])
+    assert any(w['reason'] == 'computer not reporting' for w in machine['turn_counts']['waits'])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET from_actor='human:chris' WHERE from_actor='bot:ops'")
+    assert claim(api, computer, 'finance') is not None
+
+
+def test_stale_sample_admits_again_once_diagnostics_are_off(api):
+    """Diagnostics off keeps the start rules as they were: a stale sample holds nothing."""
+    import time
+    computer = bot_waiting_for_finance(api)
+    memory(api, computer, .3, at=int(time.time()) // 60 * 60 - 300)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET performance='off' WHERE id=?", (computer['runner_id'],))
+    assert claim(api, computer, 'finance') is not None
+
+
+def test_a_computer_that_never_reported_is_not_held(api):
+    """Older runners never sent samples; holding them for silence would stop every start on them."""
+    computer = bot_waiting_for_finance(api)
+    assert claim(api, computer, 'finance') is not None
+
+
+def batch(api, computer, readings):
+    """One delivery of samples [(minute offset in seconds from now, memory fraction)], as the runner posts them."""
+    import time
+    now = int(time.time()) // 60 * 60
+    post(api, 'runners/performance', {'samples': [point(now + off, cpu=20, mem=mem) for off, mem in readings]},
+         computer['token'])
+
+
+def test_a_batch_that_climbs_through_85_then_82_holds_from_clear(api):
+    """A recovered delivery of readings is replayed in order: 86% then 82% holds, though the last one is in the band."""
+    computer = bot_waiting_for_finance(api)
+    batch(api, computer, [(-60, .86), (0, .82)])
+    assert claim(api, computer, 'finance') is None
+
+
+def test_a_batch_that_falls_to_79_then_rises_to_82_releases_a_held_computer(api):
+    computer = bot_waiting_for_finance(api)
+    import time
+    now = int(time.time()) // 60 * 60
+    memory(api, computer, .86, at=now - 120)
+    batch(api, computer, [(-60, .79), (0, .82)])
+    assert claim(api, computer, 'finance') is not None
+
+
+def test_an_older_delivery_cannot_move_a_hold_set_by_a_newer_reading(api):
+    """A late batch from before the newest stored reading is ignored, as the per-minute upsert already ignores it."""
+    computer = bot_waiting_for_finance(api)
+    memory(api, computer, .3)
+    batch(api, computer, [(-300, .9)])
+    assert claim(api, computer, 'finance') is not None
+
+
+def test_a_computer_that_reported_then_went_silent_past_retention_is_not_reporting_until_it_samples_again(api):
+    """Samples past the 48-hour window are pruned, but the computer still reported before: it stays held until it
+    sends a fresh sample, and a computer that never reported is not held (above)."""
+    import time
+    computer = bot_waiting_for_finance(api)
+    memory(api, computer, .3)
+    with api.app.state.store.read() as c:
+        marked = c.execute('SELECT last_sampled_at FROM runners WHERE id=?', (computer['runner_id'],)).fetchone()[0]
+    assert marked == int(time.time()) // 60 * 60
+    with api.app.state.store.transaction() as c:
+        c.execute('DELETE FROM runner_load_samples WHERE runner_id=?', (computer['runner_id'],))
+        c.execute('UPDATE runners SET last_sampled_at=last_sampled_at-200000 WHERE id=?', (computer['runner_id'],))
+    assert claim(api, computer, 'finance') is None
+    memory(api, computer, .3)
+    assert claim(api, computer, 'finance') is not None
+
+
+def test_an_upgraded_computer_stays_held_after_its_samples_are_pruned_and_startups_keep_its_mark(api):
+    """A database from before the mark: starting the server backfills it from the samples the computer kept. Retention
+    then prunes those samples with nothing new ingested, and a second start keeps the mark, so the computer is still
+    not reporting until a fresh sample arrives."""
+    import time
+    from backend import performance as P
+    store = api.app.state.store
+    computer = bot_waiting_for_finance(api)
+    rid = computer['runner_id']
+    memory(api, computer, .3)
+    now = int(time.time()) // 60 * 60
+    with store.transaction() as c:
+        c.execute('ALTER TABLE runners DROP COLUMN last_sampled_at')
+    store.initialize()
+    with store.read() as c:
+        assert c.execute('SELECT last_sampled_at FROM runners WHERE id=?', (rid,)).fetchone()[0] == now
+    P.sweep(store, now=int(time.time()) + 49 * 3600)
+    with store.read() as c:
+        assert c.execute('SELECT count(*) FROM runner_load_samples WHERE runner_id=?', (rid,)).fetchone()[0] == 0
+    store.initialize()
+    with store.read() as c:
+        assert c.execute('SELECT last_sampled_at FROM runners WHERE id=?', (rid,)).fetchone()[0] == now
+    assert claim(api, computer, 'finance') is None
+    memory(api, computer, .3)
+    assert claim(api, computer, 'finance') is not None

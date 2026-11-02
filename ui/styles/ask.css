@@ -65,11 +65,13 @@
 .ask-sav{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--sup-ink);color:var(--sup);flex:none}
 .ask-sav .nav-icon{font-size:14px;width:14px;height:14px;color:inherit;font-variation-settings:"FILL" 1,"wght" 400,"GRAD" 0,"opsz" 20}
 .ask-sav.ask-fly,.ask-sup-chip.ask-fly{position:fixed;z-index:70;margin:0;will-change:transform;pointer-events:none}
-/* "Loop in Support": a plain link at the top right while support is out of the chat (askFlip). */
-.ask-loop{flex:none;padding:4px;border:0;background:transparent;font:inherit;font-size:var(--t-sm);white-space:nowrap;color:var(--link-quiet);cursor:pointer}
-.ask-loop:not(.ask-on){display:none}
-.ask-loop:hover{color:var(--link)}
+/* "Loop in Support" (askFlip) and "Your requests" (Support's list): plain links in the header while support is on. */
+.ask-loop,.ask-requests{flex:none;padding:4px;border:0;background:transparent;font:inherit;font-size:var(--t-sm);white-space:nowrap;color:var(--link-quiet);cursor:pointer}
+.ask-loop:not(.ask-on),.ask-requests:not(.ask-on){display:none}
+.ask-loop:hover,.ask-requests:hover{color:var(--link)}
 .ask-loop:disabled{opacity:.6;cursor:default}
+/* On a phone only: the words Loop in Support shares, under the header, the first time (ask-panel.js askPeople). */
+.ask-loop-note{display:none;margin:0;padding:0 12px 6px;text-align:right;font-size:var(--t-xs);color:var(--muted);overflow-wrap:anywhere}
 .ask-ib{width:32px;height:32px;flex:0 0 32px;border:0;border-radius:8px;background:transparent;color:var(--muted);display:inline-flex;
   align-items:center;justify-content:center;cursor:pointer;font:inherit;font-size:15px;line-height:var(--lh-none)}
 .ask-ib:hover{background:var(--surface2);color:var(--ink)}
@@ -129,6 +131,14 @@ button.ask-card-q[aria-expanded="true"]{display:block;-webkit-line-clamp:none}
   /* room for Tico Support's chip: the name steps aside (the dot says who this is; the dialog keeps the name) */
   .ask-head:has(.ask-sup-chip) h2{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
   .ask-ib{width:44px;height:44px;flex-basis:44px}
-  .ask-loop{min-height:44px}
+  .ask-loop,.ask-requests{min-height:44px}
+  .ask-loop-note.ask-on{display:block}
+  /* The name and the page's pill keep their room; the two links wrap to a second row when they need it. */
+  .ask-head{flex-wrap:wrap;row-gap:2px}
+  /* On the name's row: the name, the page's pill, Your requests, and the close mark at the far end; Loop in Support
+     takes the second row when the row is full. */
+  .ask-loop{order:1}
+  .ask-people{margin-right:0}
+  .ask-ib{margin-left:auto}
 }
 /* Opening and closing move in motion.css. */

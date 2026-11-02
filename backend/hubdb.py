@@ -2766,7 +2766,12 @@ def _writer(conn, actor):
     if not _actor_exists(conn, actor):
         refuse(conn, actor, "identity", f"{actor} is not on the roster")
     if is_bot(actor) and (bot(conn, actor_id(actor)) or {}).get("state") == "quarantined":
-        refuse(conn, actor, "quarantined", f"{actor_id(actor)} is quarantined; a human clears it")
+        timing = quarantine_resumes(conn, actor_id(actor))
+        release = "a human clears it"
+        if timing["auto"]:
+            at = parse_ts(timing.get("resumes_at"))
+            release = "it resumes " + (at.strftime("%Y-%m-%d %H:%M UTC") if at else "after its cooldown")
+        refuse(conn, actor, "quarantined", f"{actor_id(actor)} is quarantined; {release}")
     return actor
 
 
