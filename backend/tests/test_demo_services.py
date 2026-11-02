@@ -2,8 +2,11 @@
 letters routed to their owners, Gateway models, a company subscription on a computer, and the connected connectors."""
 
 import hashlib
+import sqlite3
 import threading
-from datetime import datetime, timezone
+import urllib.request
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -151,3 +154,49 @@ def test_a_stored_key_that_will_not_sign_reads_as_the_stored_choice(built, monke
     service.live.clear()
     assert service.live_permissions(refresh=True) is None
     assert service.can_create_repos(refresh=True) is True
+
+
+def test_the_demo_sends_nothing_with_its_gateway_key(built, monkeypatch):
+    """The sample key is never a credential for a call out: Billing, hosted servers, a bot's pause bit and the Gateway
+    routes stay in the demo. The CLI's socket guard is not in this process, so every urllib open is recorded here."""
+    sent = []
+
+    def refused(self, request, *args, **kwargs):
+        sent.append(getattr(request, "full_url", request))
+        raise OSError("the demo sent a request")
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", refused)
+    with as_ana(built) as api:
+        assert api.get("/api/v2/billing").json()["state"] == "unreachable"
+        assert api.get("/api/v2/billing/usage", params={"day": "2026-09-24"}).json()["state"] == "unreachable"
+        assert api.get("/api/v2/billing/statements/2026-09.csv").status_code == 409
+        assert api.get("/api/v2/hosted-servers").json()["state"] == "none"
+        assert api.post("/api/v2/hosted-servers/pv-0123456789abcdef/start").status_code == 409
+        assert api.get("/api/v2/bots/coo/pause-state").json()["company_paused"] is False
+        assert api.post("/api/v2/gateway/search", json={"query": "projector"}).status_code == 409
+    assert sent == []
+
+
+def test_a_build_long_after_its_dates_keeps_every_message_body(tmp_path):
+    """Retention runs on the demo's own clock while it is built: a demo built months before today keeps its bodies."""
+    settings = demo.build(tmp_path, now=datetime.now(timezone.utc) - timedelta(days=200))
+    with closing(sqlite3.connect(settings.db_path)) as db:
+        total = db.execute("SELECT COUNT(*) FROM inbound_messages").fetchone()[0]
+        removed = db.execute("SELECT COUNT(*) FROM inbound_messages WHERE body IS NULL OR retention_removed=1").fetchone()[0]
+    assert total == 11 and removed == 0
+
+
+def settled_files(settings):
+    """Every scan's state and the rows that hold them: a build that settles its files the same way every time."""
+    with closing(sqlite3.connect(settings.db_path)) as db:
+        states = db.execute("SELECT media_state, COUNT(*) FROM blob_media GROUP BY media_state ORDER BY 1").fetchall()
+        versions = db.execute("SELECT media_state, COUNT(*) FROM bot_file_versions GROUP BY media_state ORDER BY 1").fetchall()
+        blobs = db.execute("SELECT COUNT(*) FROM blobs").fetchone()[0]
+    return states, versions, blobs
+
+
+def test_every_scan_is_settled_before_the_build_is_saved(built, tmp_path):
+    states, versions, blobs = settled_files(built)
+    assert all(state != "pending" for state, _ in states + versions)
+    assert settled_files(demo.build(tmp_path, now=NOW)) == (states, versions, blobs)
+
