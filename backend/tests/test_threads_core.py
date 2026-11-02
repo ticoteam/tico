@@ -713,16 +713,19 @@ def test_outside_members_come_off_only_by_a_manager_and_their_unsent_copies_go_m
                          (sent["id"],)).fetchone()[0] == "moot"
 
 
-def test_a_sub_thread_is_titled_by_its_parents_first_line_and_keeps_it(world):
+def test_a_sub_thread_is_titled_by_its_parents_first_line_and_derives_it_on_read(world):
     store, auth, who = world
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
         tid = threads.create(c, owner, title="Titles", audience="personal")["id"]
         parent = threads.post(c, owner, tid, "**Budget** for [Q3](http://acme.example) is ready\nmore detail")
         sub = threads.sub_thread(c, owner, parent["id"])
-        assert sub["subject"] == "Budget for Q3 is ready"
+        # Nothing is stored: the parent's first line is derived on read, for a reader of the parent.
+        assert sub["subject"] == ""
+        assert threads.view(c, owner, sub["id"])["title"] == "Budget for Q3 is ready"
         threads.edit_message(c, owner, parent["id"], "Changed")
-        assert threads.thread_row(c, sub["id"])["subject"] == "Budget for Q3 is ready"
+        assert threads.view(c, owner, sub["id"])["title"] == "Changed"
+        assert threads.thread_row(c, sub["id"])["subject"] == ""
         threads.post(c, owner, sub["id"], "A reply")
         assert [m["depth"] for m in threads.timeline(c, owner, tid)["messages"]] == [0, 1]
         assert {m["depth"] for m in threads.timeline(c, owner, sub["id"])["messages"]} == {1}
