@@ -15,6 +15,8 @@ Control endpoints under /_fake/ are not Mercury's:
                                a monthly spendLimit declines a purchase that takes the month's spend past it, unless the
                                purchase is a force post ("force": true), which posts in full (spec 8.2)
   GET  /_fake/calls            every Mercury call Tico made, in order (method, path, query, body; never the token)
+  POST /_fake/expire           from now on every Mercury call answers 401 (the token has expired), until /_fake/renew
+  POST /_fake/renew            Mercury calls answer again
 
 Its lists follow the documented behavior: GET /request-send-money takes one status (pendingApproval, approved, rejected
 or cancelled; any other is a 400) and a limit from 1 to 1000 (else a 400). A request that was approved and sent is a
@@ -62,6 +64,7 @@ class State:
         self.cards: list[dict] = []
         self.recipients: dict[str, dict] = {}
         self.calls: list[dict] = []
+        self.expired = False
 
     def new(self, prefix: str) -> str:
         self.seq += 1
@@ -144,7 +147,7 @@ class Handler(BaseHTTPRequestHandler):
         with STATE.lock:
             STATE.calls.append({"method": method, "path": path, "query": {k: v[0] for k, v in q.items()},
                                 "body": body or None})
-            if not self.headers.get("Authorization", "").startswith("Bearer "):
+            if not self.headers.get("Authorization", "").startswith("Bearer ") or STATE.expired:
                 return self.reply(401, {"message": "Unauthorized"})
             status, answer = mercury(method, path, q, body)
         self.reply(status, answer)
@@ -153,6 +156,9 @@ class Handler(BaseHTTPRequestHandler):
         with STATE.lock:
             if method == "GET" and name == "calls":
                 return self.reply(200, {"calls": STATE.calls})
+            if method == "POST" and name in ("expire", "renew"):
+                STATE.expired = name == "expire"
+                return self.reply(200, {"expired": STATE.expired})
             if method == "POST" and name == "txn":
                 status, answer = add_txn(body)
                 return self.reply(status, answer)
