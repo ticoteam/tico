@@ -2,6 +2,7 @@
 Bookkeeper (backend/bookkeeper.py) and the instructions it ships (templates/catalog/bookkeeper). A known gap is an
 xfail with strict=True that names it: the run shows it, and the script counts it as not passed. Synthetic fixtures."""
 
+import json
 import re
 import uuid
 from pathlib import Path
@@ -222,6 +223,23 @@ def test_c4_close_period_is_asked_with_the_fields_it_takes(environment):
     asks = [line for line in (TEMPLATE / "playbooks" / "close-month.md").read_text().splitlines()
             if "close_period" in line]
     assert asks and not any("note" in line for line in asks), asks
+
+
+def test_c4_the_payloads_the_playbooks_show_take_those_fields(environment):
+    """Each `hub finance act <kind> --payload '<json>'` a playbook or AGENT.md shows is a kind with a shape, its JSON names
+    only fields that kind takes and gives every required one: the example is what a bot copies. Examples wrap over lines,
+    so the text is read as one line."""
+    text = " ".join(p.read_text() for p in INSTRUCTIONS).replace("\n", " ")
+    shown = [(kind, raw) for kind, raw in re.findall(r"hub finance act ([a-z_]+)\s+--payload\s+'(\{.*?\})'", text)
+             if kind != "help"]
+    assert len(shown) >= 6, shown                 # bill_schedule, payment_create, reconcile, contact_create, ...
+    for kind, raw in shown:
+        payload = json.loads(raw)
+        assert kind in K.SHAPES, kind
+        names = {name.rstrip("?") for name, _, _ in K.SHAPES[kind]}
+        required = {name for name, _, _ in K.SHAPES[kind] if not name.endswith("?")}
+        assert set(payload) <= names, (kind, sorted(set(payload) - names))
+        assert required <= set(payload), (kind, sorted(required - set(payload)))
 
 
 # ----------------------------------------------------------------------------- check 6: failures are visible

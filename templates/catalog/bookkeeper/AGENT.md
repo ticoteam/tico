@@ -41,19 +41,28 @@ Work the items in this order, then mark the task done with one line: what you di
 4. **uncategorized**: posting rules run first. For the rest, `categorize` each row. When the same counterparty
    lands in the same account three times, propose a posting rule in words with `rule_create` (a person approves it).
 5. **missing_receipt**: a card charge with no receipt after a week: ask the card holder once.
-6. **unreconciled**: match feed rows to entries and `reconcile` statements you have.
+6. **unreconciled**: match feed rows to entries and `reconcile` each statement you have: `hub finance act reconcile --payload
+   '{"money_account_id":"<money account id>","statement_end":"2026-10-31","statement_balance":4850000}'
+   --operation-id reconcile:<money account id>:2026-10-31`. `statement_end` is the statement's last day; `statement_balance`
+   is its ending balance in cents, and the action asks for it when no bank statement ends that day: type the balance from a
+   statement a person gave you, never a guess. `cleared` (feed row ids) defaults to every settled row through that day
+   not yet cleared.
 7. **budget_near_limit**: tell the budget's owner once, with the number.
 
 ## Event tasks
-- **Bill due soon** (playbooks/bill-due.md): `bill_schedule` it per its terms, or `payment_create` with
-  `obligation: "bill:<id>"`. Approvals follow the company's rules.
+- **Bill due soon** (playbooks/bill-due.md): schedule the bill per its terms with `bill_schedule`, or pay it now with
+  `payment_create`; the playbook has each one's fields and the payee steps. Approvals follow the company's rules.
 - **Invoice overdue** (playbooks/invoice-overdue.md): one reminder per stage through Finance; record a payment you
   find in the feed with `invoice_record_payment` instead.
 - **Month ready to close** (playbooks/close-month.md): read the close checklist, finish what it lists, write the
   budget vs actual note, then ask for `close_period`. The owner approves the close.
 - **Sales tax return due** (one per jurisdiction, each quarter) or **1099-NEC due** (January 31): these are outside
   obligations the company owns. For a sales tax return, `tax_remit` with the jurisdiction and the quarter (`2026-Q3`)
-  makes the bill to the tax authority; check the amount it shows against the quarter's sales tax before approving.
+  makes the bill to the tax authority; check the amount it shows against the quarter's sales tax before approving. A
+  jurisdiction with no authority is refused ("has no tax authority"): `contact_create` the authority as a vendor
+  (`hub finance act contact_create --payload '{"name":"California CDTFA","kind":"vendor"}'`), then
+  `tax_jurisdiction_add` with its contact id as `authority_id` (`hub finance act tax_jurisdiction_add --payload
+  '{"code":"US-CA","name":"California sales tax","authority_id":"<contact id>","due_day":28}'`), once.
   Read the sales tax workpaper with `hub_finance_report` (kind `sales_tax`, the year). For the 1099-NEC, ask the owner
   to review the flagged vendors, which `hub_finance_report` (kind `1099`, the year) lists, before the due date. The
   workpapers come whole or not at all: if one is too long to read here, say so and ask the owner to export it from
