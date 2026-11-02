@@ -24,7 +24,7 @@ from . import screening
 AREA = "federation"          # HQ's routes: <root>/federation/... where the root is the Gateway's base without `/gateway`
 EVERY = 15                   # seconds between ticks
 SYNC_EVERY = 60              # seconds between reads of the peerings from HQ
-SYNC_PAGES = 50              # pages of peerings read in one sync (HQ's default page is 200); past that it is incomplete
+SYNC_PAGES = 50              # pages of the peerings, or of their history, read in one sync; past that it is incomplete
 PULL_LIMIT = 50              # envelopes asked for per pull
 PAGES = 10                   # pulls in one tick while HQ says there is more
 BACKOFF_MAX = 300
@@ -96,6 +96,16 @@ def record(c, view, pin=None):
               "paused_by=?, revoked_at=?, peer_company=?, updated_at=? WHERE id=?",
               (status, approved_at, key_id, public, paused_at, paused_by, revoked_at, company, current, row["id"]))
     return F.peering_by_id(c, row["id"])
+
+
+def apply_revoked(c, view):
+    """One view from HQ's history, on the row this install has for it. A peering this install never had a row for has
+    nothing to stop, and recording it would end a newer peering with the same install."""
+    if not isinstance(view, dict) or view.get("status") != "revoked":
+        return
+    row = c.execute("SELECT status FROM federation_peerings WHERE hq_peering_id=?", (view.get("id"),)).fetchone()
+    if row is not None and row["status"] != "revoked":
+        record(c, view)
 
 
 class Relay:
@@ -187,6 +197,51 @@ class Relay:
                         record(c, view)
                 if whole:
                     c.execute("UPDATE federation_state SET listed_at=? WHERE singleton=1", (now(),))
+        self.sync_revoked(link)
+
+    def sync_revoked(self, link):
+        """Peerings HQ has revoked: they leave its working list for its history, newest first, so a local row learns of a
+        revocation by the other company here. The read stops at the first page reaching what an earlier read finished
+        (`history_through`), so nothing new costs one page. A read cut short, by a failure or by SYNC_PAGES, resumes from
+        `history_cursor`, and `history_top` waits until it ends; a stored cursor HQ refuses (a 422) starts over next time,
+        since it would otherwise stop every sync. An HQ without this route (a 404) lists revoked peerings in its working
+        list instead."""
+        with self.store.read() as c:
+            state = dict(c.execute("SELECT history_through,history_cursor,history_top FROM federation_state").fetchone())
+        through, cursor, top = state["history_through"], state["history_cursor"], state["history_top"]
+        views, done = [], False
+        try:
+            for _ in range(SYNC_PAGES):
+                answer = self.call(link, "GET", "peerings/history" + (f"?cursor={quote(cursor, safe='')}" if cursor else ""))
+                page = answer.get("items")
+                if not isinstance(page, list):
+                    break
+                views.extend(page)
+                stamps = [v["updated"] for v in page if isinstance(v, dict) and type(v.get("updated")) in (int, float)]
+                top = max([*stamps, *([top] if top is not None else [])], default=None)
+                following = answer.get("next")
+                if following is None or (through is not None and any(stamp < through for stamp in stamps)):
+                    done = True
+                    break
+                if not isinstance(following, str) or not following or following == cursor:
+                    break
+                cursor = following
+            if not done:
+                log.warning("federation: HQ's revoked peerings were not read to the last one seen (%s read)", len(views))
+        except HR.Failed as failed:
+            if failed.status == 422:
+                cursor = top = None
+            elif failed.status != 404:
+                raise
+        finally:
+            with self.store.transaction() as c:
+                for view in views:
+                    apply_revoked(c, view)
+                if done:
+                    through = max((v for v in (through, top) if v is not None), default=None)
+                    cursor = top = None
+                c.execute("UPDATE federation_state SET history_through=?, history_cursor=?, history_top=? WHERE singleton=1",
+                          (through, cursor, top))
 
     # ------------------------------------------------------------------------- envelopes
     def send(self, link, row, outbound):

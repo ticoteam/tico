@@ -53,6 +53,10 @@ class HQ:
         self.peerings_fail_on = None      # the page of peerings answered with a 503
         self.peerings_stuck = False       # `next` never moves on
         self.peerings_asked = []          # the cursor of each read of the list
+        self.history_page = 2             # revoked peerings per page of the history
+        self.history_fail_on = None       # the read of the history answered with a 503
+        self.history_asked = []           # the cursor of each read of the history
+        self.updates = 0                  # HQ's `updated`: a number that only grows, whatever the test's clock says
 
     def __call__(self, request):
         path = request.url.path.split("/federation/", 1)[1]
@@ -64,15 +68,20 @@ class HQ:
         if path == "peerings" and request.method == "GET":
             status, answer = self.peerings_list(me, request.url.params.get("cursor", ""))
             return httpx.Response(status, json=answer)
+        if path == "peerings/history" and request.method == "GET":
+            status, answer = self.peerings_history(me, request.url.params.get("cursor", ""))
+            return httpx.Response(status, json=answer)
         status, answer = self.route(me, request.method, path, json.loads(request.content or b"{}"))
         return httpx.Response(status, json=answer)
 
     def peerings_list(self, me, cursor):
-        """HQ's list. Its cursor is `<rank>:<updated>:<id>`, so a client must send it URL-encoded and whole."""
+        """HQ's list. Its cursor is `<rank>:<updated>:<id>`, so a client must send it URL-encoded and whole. An HQ from
+        before paging lists revoked peerings too; a paged one keeps them in its history."""
         self.peerings_asked.append(cursor)
         items = [self.view(pid, me) for pid, p in self.peerings.items() if me in (p["a"], p["b"])]
         if self.peerings_page is None:
             return 200, {"items": items}
+        items = [view for view in items if view["status"] != "revoked"]
         if len(self.peerings_asked) == self.peerings_fail_on:
             return 503, {"error": "unavailable"}
         start = int(cursor.split(":")[1]) if cursor else 0
@@ -80,6 +89,26 @@ class HQ:
         more = end < len(items)
         return 200, {"items": items[start:end],
                      "next": f"0:{start if self.peerings_stuck else end}:fp_{'0' * 16}" if more else None}
+
+    def peerings_history(self, me, cursor):
+        """Revoked peerings, newest first, with `<updated>:<id>` as the cursor. An HQ from before paging has no such route."""
+        if self.peerings_page is None:
+            return 404, {"error": "not_found"}
+        self.history_asked.append(cursor)
+        if len(self.history_asked) == self.history_fail_on:
+            return 503, {"error": "unavailable"}
+        mine = sorted((p for p in self.peerings.values() if me in (p["a"], p["b"]) and p["revoked"]),
+                      key=lambda p: p["updated"], reverse=True)
+        if cursor:
+            before = int(cursor.split(":")[0])
+            mine = [p for p in mine if p["updated"] < before]
+        page, more = mine[:self.history_page], len(mine) > self.history_page
+        return 200, {"items": [self.view(p["id"], me) for p in page],
+                     "next": f"{page[-1]['updated']}:{page[-1]['id']}" if more else None}
+
+    def revoke(self, pid):
+        self.updates += 1
+        self.peerings[pid].update(revoked=True, updated=self.updates)
 
     def route(self, me, method, path, body):
         if path == "keys" and method == "POST":
@@ -112,7 +141,7 @@ class HQ:
             elif parts[2] == "pause":
                 p["paused"][me] = bool(body["paused"])
             elif parts[2] == "revoke":
-                p["revoked"] = True
+                self.revoke(p["id"])
             else:
                 return 404, {"error": "not_found"}
             return 200, self.view(p["id"], me)
@@ -133,7 +162,8 @@ class HQ:
         return {"id": pid, "peer": other, "status": status, "requested_by_you": p["requester"] == me,
                 "you_approved": me in p["approved"], "peer_approved": other in p["approved"],
                 "you_paused": p["paused"].get(me, False), "peer_paused": p["paused"].get(other, False),
-                "your_key_id": self.keys[me]["key_id"], "peer_key_id": self.keys[other]["key_id"], "peer_company": p["company"].get(other, ""), "updated": ""}
+                "your_key_id": self.keys[me]["key_id"], "peer_key_id": self.keys[other]["key_id"],
+                "peer_company": p["company"].get(other, ""), "updated": p.get("updated", 0)}
 
     def live(self, a, b):
         for p in self.peerings.values():
@@ -516,6 +546,122 @@ def test_a_list_that_does_not_end_stops_incomplete_and_the_tick_goes_on(make_sid
     tick(a)                                                 # no error, and the rest of the tick still runs
     assert rows(a, "SELECT last_pull_at FROM federation_state")[0][0] == clock["t"]
     assert set(peering_state(a)) == set(ids)
+
+
+def test_the_other_side_revoking_reaches_this_install_past_a_full_page_of_active_peerings(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tid = make_thread(a, "Launch")
+    share(a, tid, b)
+    drive(a, b)
+    for pid in many_peerings(hq, a, 5):                     # the working list's first pages are full of other companies
+        if b.id not in (hq.peerings[pid]["a"], hq.peerings[pid]["b"]):
+            hq.peerings[pid]["approved"] = {a.id: "key", hq.peerings[pid]["b"]: "key"}
+    say(a, tid, "before the revoke")
+    drive(a, b)
+    assert texts(b, local_thread(b, tid, a)) == ["before the revoke"]
+    hq.peerings_page = 2                                    # a paged HQ: revoked peerings have left its working list
+    assert b.client.post(f"/api/v2/federation/peerings/{row_for(b, a.id)}/revoke", headers=OWNER).status_code == 200
+    with a.app.state.store.read() as c:
+        assert F.active(c, b.id) is not None                # this side doesn't know yet
+    tick(a)
+    with a.app.state.store.read() as c:
+        assert F.active(c, b.id) is None
+    assert next(p for p in status(a)["peerings"] if p["peer"] == b.id)["status"] == "revoked"
+    assert next(t for t in status(a)["threads"] if t["thread_id"] == tid)["members"][0]["company"] == ""
+    sent = []
+    hq.lose = lambda frm, recipient, body: sent.append((frm, recipient)) and False
+    say(a, tid, "after the revoke")
+    drive(a, b)
+    assert (a.id, b.id) not in sent                         # nothing further leaves for that company
+    assert texts(b, local_thread(b, tid, a)) == ["before the revoke"]
+
+
+def test_an_hq_without_the_history_route_still_tells_revocations_in_its_working_list(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    assert hq.peerings_page is None                         # the route answers 404 here
+    assert b.client.post(f"/api/v2/federation/peerings/{row_for(b, a.id)}/revoke", headers=OWNER).status_code == 200
+    tick(a)                                                 # asserts the tick recorded no error
+    with a.app.state.store.read() as c:
+        assert F.active(c, b.id) is None
+    assert rows(a, "SELECT history_through,history_cursor FROM federation_state") == [(None, None)]
+
+
+def test_history_is_read_once_when_nothing_is_new_and_only_as_far_as_what_is(make_side, hq):
+    a = make_side("alpha")
+    ids = many_peerings(hq, a, 6)
+    sync_peerings(a)
+    hq.peerings_page = 100
+    for pid in ids[:5]:
+        hq.revoke(pid)
+    sync_peerings(a)
+    assert hq.history_asked == ["", "4:" + ids[3], "2:" + ids[1]]    # all of it, the first time
+    assert all(peering_state(a)[pid][0] == "revoked" for pid in ids[:5]) and peering_state(a)[ids[5]][0] == "pending"
+    written = rows(a, "SELECT hq_peering_id,updated_at FROM federation_peerings")
+    hq.history_asked.clear()
+    sync_peerings(a)
+    sync_peerings(a)
+    assert hq.history_asked == ["", ""]                     # one page a sync, and nothing written again
+    assert rows(a, "SELECT hq_peering_id,updated_at FROM federation_peerings") == written
+    hq.history_asked.clear()
+    hq.revoke(ids[5])
+    sync_peerings(a)
+    assert hq.history_asked == ["", "5:" + ids[4]]          # to the first page older than what it had, no further
+    assert peering_state(a)[ids[5]][0] == "revoked"
+
+
+def test_a_history_read_cut_short_resumes_and_a_revocation_past_the_cut_is_not_missed(make_side, hq, monkeypatch):
+    a = make_side("alpha")
+    ids = many_peerings(hq, a, 6)
+    sync_peerings(a)
+    hq.peerings_page = 100
+    for pid in ids:
+        hq.revoke(pid)                                      # newest last: ids[0] is on the history's last page
+    hq.history_fail_on = 2
+    with pytest.raises(hook_relay.Failed):
+        sync_peerings(a)
+    assert peering_state(a)[ids[5]][0] == "revoked" and peering_state(a)[ids[0]][0] == "pending"
+    hq.history_fail_on, hq.history_asked[:] = None, []
+    monkeypatch.setattr(R, "SYNC_PAGES", 1)                 # and again, stopped by the bound this time
+    sync_peerings(a)
+    assert hq.history_asked == ["5:" + ids[4]]
+    assert peering_state(a)[ids[0]][0] == "pending"
+    hq.history_asked.clear()
+    sync_peerings(a)
+    assert hq.history_asked == ["3:" + ids[2]]              # it goes on from where it stopped, not from the top
+    assert peering_state(a)[ids[0]][0] == "revoked"
+    assert rows(a, "SELECT history_through,history_cursor,history_top FROM federation_state") == [(6.0, None, None)]
+
+
+def test_a_revoked_peering_this_install_never_knew_leaves_a_live_one_with_that_install_alone(make_side, hq):
+    a, b = make_side("alpha"), make_side("beta")
+    connect(a, b, hq)
+    tick(a)
+    hq.peerings_page = 100
+    hq.peerings["fp_old"] = {"id": "fp_old", "a": a.id, "b": b.id, "requester": a.id, "approved": {}, "paused": {},
+                             "revoked": False, "company": {}}
+    hq.revoke("fp_old")
+    tick(a)
+    with a.app.state.store.read() as c:
+        assert F.active(c, b.id) is not None
+    assert rows(a, "SELECT 1 FROM federation_peerings WHERE hq_peering_id='fp_old'") == []
+
+
+def test_a_cursor_hq_no_longer_accepts_starts_the_read_over_instead_of_failing_every_sync(make_side, hq):
+    a = make_side("alpha")
+    ids = many_peerings(hq, a, 3)
+    sync_peerings(a)
+    hq.peerings_page = 100
+    hq.revoke(ids[0])
+    with a.app.state.store.transaction() as c:
+        c.execute("UPDATE federation_state SET history_cursor='not a cursor', history_top=9")
+    refused = hq.peerings_history
+    hq.peerings_history = lambda me, cursor: (422, {"error": "invalid"}) if cursor else refused(me, cursor)
+    sync_peerings(a)                                        # raises nothing
+    sync_peerings(a)
+    assert peering_state(a)[ids[0]][0] == "revoked"
+    assert rows(a, "SELECT history_through,history_cursor,history_top FROM federation_state") == [(1.0, None, None)]
 
 
 def lose_messages_to(hq, sender, to):
