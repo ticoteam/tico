@@ -395,14 +395,15 @@ step_rollback() {
   # A "release" that migrates the database and then never serves: the case the snapshot exists for. The updater
   # doing it is the candidate's own, which replaced itself after the upgrade.
   # Through the server's real entrypoint (`prepare`: seed, identity, Litestream's configuration), so Litestream follows the
-  # database and replicates the migration before the rollback puts the snapshot back. It never serves.
+  # database and replicates the migration before the rollback puts the snapshot back. It never serves: after 70 s (past
+  # the 60 s replica sync) its child exits, and Docker restarts it into a crash loop that the updater ends early.
   mkdir -p "$WORK/broken"
   cat > "$WORK/broken/tico-broken" <<'EOF'
 #!/bin/sh
 set -e
 tico-entrypoint prepare
 python -c 'import sqlite3; c = sqlite3.connect("/data/hub.sqlite"); c.execute("CREATE TABLE journey_migrated(x)"); c.commit()'
-exec litestream replicate -config /tmp/litestream.yml -exec "sleep 3600"
+exec litestream replicate -config /tmp/litestream.yml -exec "sh -c 'sleep 70; exit 1'"
 EOF
   printf 'FROM %s:%s\nCOPY --chmod=755 tico-broken /usr/local/bin/tico-broken\nENTRYPOINT ["tico-broken"]\n' "$SERVER_IMAGE" "$CAND" > "$WORK/broken/Dockerfile"
   docker build -q -t "$SERVER_IMAGE:$BROKEN" "$WORK/broken" >/dev/null || return 1
