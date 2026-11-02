@@ -579,6 +579,13 @@ function treeLimitMark(slug) {
   const word = esc(overLimitWord(limit));
   return `<span class="tree-limit" role="img" aria-label="${word}" title="${word}">!</span>`;
 }
+// The unread in the viewer's DM with this bot (threads.js THREADS.botDms): that DM is on the bot's page, not in Inbox.
+function treeDmBadge(slug) {
+  const n = Number((typeof THREADS !== 'undefined' && THREADS.botDms?.['bot:' + slug]) || 0);
+  if (!n) return '';
+  const words = `${n} unread from ${esc(empName(slug))}`;
+  return `<span class="cnt tree-dm" role="img" aria-label="${words}" title="${words}">${n > 99 ? '99+' : n}</span>`;
+}
 function treeBadge(n, st, slug) {
   const working = st === 'running';
   if (n) return `<span class="cnt needs${working ? ' working' : ''}" role="img" aria-label="${n} things ${esc(empName(slug))} needs from you" title="${n} things ${esc(empName(slug))} needs from you">${n}</span>`;
@@ -800,7 +807,7 @@ function renderTree() {
         ${avatar(e.id, depth ? 16 : 20, st)}<span class="nm">${shownName(e)}</span>${orgBranchMark(e)}${runtimeTag(e)}${frTreeMark(e)}
         ${e.goal_active ? '<span class="nav-icon tree-goal" role="img" aria-label="Goal" title="Goal">target</span>' : ''}
         ${isCol && subtreeNeeds(key) ? '<span class="dot needs" title="something inside needs attention"></span>' : ''}
-        ${botPausedBadge(e.id)}${treeLimitMark(e.id)}${treeBadge(n, st, e.id)}</a></div>${orgConfirmHTML(key)}
+        ${botPausedBadge(e.id)}${treeLimitMark(e.id)}${treeDmBadge(e.id)}${treeBadge(n, st, e.id)}</a></div>${orgConfirmHTML(key)}
       ${own ? `<ul class="inbox-list node-sources" aria-label="${esc(e.display_name || e.slug)}: mailboxes and channels">${own.map(inboxNavLink).join('')}</ul>` : ''}
       ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
   };

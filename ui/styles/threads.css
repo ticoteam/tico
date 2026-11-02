@@ -12,6 +12,10 @@
 .th-row .av,.th-row .avatar{flex:none}
 .th-all .th-row-title{color:var(--muted)}
 .th-count{margin-left:0}
+/* Inbox: its count sits by its name, and an empty Inbox says so in one muted line. */
+#inbox-count{margin-left:2px;letter-spacing:var(--track-normal)}
+.th-done{padding:5px 10px;font-size:var(--t-sm)}
+.thp-holds{margin-top:var(--s2)}
 /* Activity: a lighter dot, never a count. */
 .th-activity{flex:none;width:7px;height:7px;border-radius:50%;background:var(--g4)}
 .th-attn{flex:none;width:7px;height:7px;border-radius:50%;background:var(--wait)}

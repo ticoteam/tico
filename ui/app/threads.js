@@ -1,15 +1,16 @@
-/* ui/app/threads.js — Threads in the sidebar: Threads (Needs attention, then Important or Recent) and DMs, live from
-   the `threads` topic of GET /api/v2/events. Shared helpers for thread titles, marks and actors live here too; the
+/* ui/app/threads.js — Inbox in the sidebar: the chats that wait on the viewer (Needs attention), live from the
+   `threads` topic of GET /api/v2/events, and each bot's DM unread for the Team list. Shared helpers for thread titles, marks and actors live here too; the
    timeline is ui/app/thread-view.js and the Threads page, new thread and Make task are ui/app/threads-page.js.
    Shapes: docs/dev/threads-contract.md §9 and §10.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const THREADS_ROUTE = '#/threads', THREAD_ROUTE = '#/thread/';
-// About ten rows each, then All: the sidebar is a way in, the Threads page is the list.
+const THREADS_ROUTE = '#/threads', THREAD_ROUTE = '#/thread/', INBOX_ROUTE = '#/threads?view=inbox';
+// About ten rows, then All: the sidebar is a way in, the Threads page is the list.
 const THREADS_SIDE_MAX = 10;
 // `on`: null until the server answered GET /v2/threads once; false when it has no threads (an older server).
-const THREADS = {on: null, attention: [], threads: [], dms: [], loading: null, wired: false};
+// `botDms`: {bot actor: unread} for the viewer's DMs with one bot, which the Team list shows on that bot (sidebar.js).
+const THREADS = {on: null, attention: [], threads: [], dms: [], botDms: {}, loading: null, wired: false};
 // The list's order, the viewer's choice kept in this browser: Important (each thread's 1-10 level, then newest, noise
 // left out; the default) or Recent (newest first). GET /v2/threads?sort=.
 const THREADS_SORTS = [['important', 'Important'], ['recent', 'Recent']];
@@ -22,14 +23,20 @@ function threadsSort() {
 function threadsSortSet(v) {
   try { localStorage.setItem(THREADS_SORT_KEY, v); } catch { /* storage blocked: this page only */ }
 }
-// Important / Recent, for the Threads page header.
-const threadsSortHTML = cur => `<div class="tabs slim thp-sort" role="tablist" aria-label="Order">${THREADS_SORTS.map(([k, label]) =>
-  `<button type="button" role="tab" data-th-sort="${k}" aria-selected="${k === cur}"${k === cur ? ' class="cur"' : ''}>${label}</button>`).join('')}</div>`;
+// Inbox / Important / Recent, for the Threads page header: `cur` is a sort, or 'inbox'.
+const threadsSortHTML = cur => `<div class="tabs slim thp-sort" role="tablist" aria-label="View">${[['inbox', 'Inbox'], ...THREADS_SORTS].map(([k, label]) =>
+  `<button type="button" role="tab" ${k === 'inbox' ? 'data-th-view' : 'data-th-sort'}="${k}" aria-selected="${k === cur}"${k === cur ? ' class="cur"' : ''}>${label}</button>`).join('')}</div>`;
 
 const threadHref = t => THREAD_ROUTE + encodeURIComponent(typeof t === 'string' ? t : t?.id || '');
 // Other pages link a thread by this (a top-level const is not a window property; the dashboard's cards look for it there).
 window.threadHref = threadHref;
 const threadIsDm = t => t?.audience === 'personal' || t?.audience === 'participants';
+// A DM with one bot and no one else: its bot's page holds it, so lists leave it to the Team list's count.
+const threadIsBotDm = t => threadIsDm(t) && !t.parent_id && Number(t.dm_with_count) === 1 && String(t.dm_with?.[0]?.actor || '').startsWith('bot:');
+// A held message that would start a thread has no thread row: Needs you has it, and so does Inbox.
+const inboxHolds = () => (S.v2?.needs || []).filter(it => it.kind === 'thread_held' && !it.thread_id);
+const inboxRows = () => THREADS.attention.filter(t => t && !t.archived_at);
+const inboxCount = () => inboxRows().length + inboxHolds().length;
 const threadPrivate = t => ['members', 'personal', 'participants', 'meeting'].includes(t?.audience);
 // The other people in a DM: `dm_with` on a thread view, or a members list read for it. The viewer is left out.
 const threadOthers = t => (t?.dm_with || (Array.isArray(t?.members) ? t.members : t?.members?.members) || [])
@@ -103,7 +110,9 @@ async function threadsLoad() {
       if (sort !== threadsSort()) return;     // the order changed meanwhile: read again below, this answer is dropped
       // Only a real list turns Threads on; any other answer is a server without them.
       if (!Array.isArray(r?.threads)) { if (THREADS.on !== true) THREADS.on = false; return; }
-      Object.assign(THREADS, {on: true, attention: r.attention || [], threads: r.threads, dms: r.dms || []});
+      const botDms = r.bot_dms || {}, moved = JSON.stringify(botDms) !== JSON.stringify(THREADS.botDms);
+      Object.assign(THREADS, {on: true, attention: r.attention || [], threads: r.threads, dms: r.dms || [], botDms});
+      if (moved && typeof renderTree === 'function') renderTree();
       liveTopicAdd('threads');
     } catch (e) {
       // 404: a server without threads. Anything else keeps what was drawn and tries again on the next change.
@@ -116,29 +125,23 @@ async function threadsLoad() {
 }
 function threadsSideRender() {
   const on = THREADS.on === true;
-  for (const id of ['#nav-threads-section', '#nav-dms-section']) { const el = $(id); if (el) el.hidden = !on; }
-  // On a phone Threads takes Search's place in the bottom bar; global search is then in More (the drawer's footer).
+  const sec = $('#nav-inbox-section'); if (sec) sec.hidden = !on;
+  // On a phone Inbox takes Search's place in the bottom bar; global search is then in More (the drawer's footer).
   const tab = $('#mobile-threads'), search = $('#mobile-search');
   if (tab) tab.hidden = !on;
   if (search) search.hidden = on;
   if (!on) return;
-  const attn = THREADS.attention.filter(t => t && !t.archived_at).slice(0, THREADS_SIDE_MAX);
-  const seen = new Set(attn.map(t => t.id));
-  const rest = threadsOrder(THREADS.threads.filter(t => !threadIsDm(t)), seen).slice(0, Math.max(0, THREADS_SIDE_MAX - attn.length));
-  const total = THREADS.threads.filter(t => !threadIsDm(t)).length + attn.filter(t => !THREADS.threads.some(x => x.id === t.id)).length;
+  const rows = inboxRows(), n = inboxCount(), shown = rows.slice(0, THREADS_SIDE_MAX);
+  const link = (href, label) => `<li><a class="th-row th-all${S.route === href ? ' cur' : ''}" href="${href}"><span class="th-row-title">${label}</span></a></li>`;
   const list = $('#th-list');
-  if (list) patchLiveHTML(list, attn.map(t => threadRowHTML(t, {attention: true})).join('') + rest.map(t => threadRowHTML(t)).join('')
-    + (total > attn.length + rest.length || !(attn.length + rest.length)
-      ? `<li><a class="th-row th-all${S.route === THREADS_ROUTE ? ' cur' : ''}" href="${THREADS_ROUTE}"><span class="th-row-title">${attn.length + rest.length ? 'All' : 'No threads yet'}</span></a></li>` : ''));
-  const dms = threadsOrder(THREADS.dms).slice(0, THREADS_SIDE_MAX);
-  const dmList = $('#dm-list');
-  if (dmList) patchLiveHTML(dmList, dms.map(t => threadRowHTML(t)).join('')
-    + (THREADS.dms.length > dms.length ? `<li><a class="th-row th-all" href="${THREADS_ROUTE}?view=dms"><span class="th-row-title">All</span></a></li>` : ''));
-  // The mobile tab carries the unread total, the same count the rows show.
-  const unread = [...THREADS.attention, ...THREADS.threads, ...THREADS.dms].reduce((n, t, i, all) =>
-    all.findIndex(x => x.id === t.id) === i ? n + threadUnread(t) : n, 0);
-  const badge = $('#mobile-threads .nav-badge');
-  if (badge) { badge.hidden = !unread; badge.textContent = unread > 99 ? '99+' : String(unread); }
+  // Every row waits on the viewer, so none carries the Needs attention dot.
+  if (list) patchLiveHTML(list, shown.map(t => threadRowHTML(t)).join('')
+    + (!n ? '<li class="th-done muted">All caught up</li>' : n > shown.length ? link(INBOX_ROUTE, `All ${n}`) : '')
+    + link(THREADS_ROUTE, 'Threads'));
+  // The header and the phone tab carry the same count: what is left to burn down.
+  for (const badge of [$('#inbox-count'), $('#mobile-threads .nav-badge')]) {
+    if (badge) { badge.hidden = !n; badge.textContent = n > 99 ? '99+' : String(n); }
+  }
 }
 // The row for one thread anywhere in the sidebar lists, updated in place from a thread view the server sent.
 function threadsPut(view) {
@@ -200,6 +203,5 @@ function threadsSync() {
   liveOn('reset', () => { liveSoon('threads-side', threadsLoad, 400); threadViewsLive('reset', {}); });
 }
 document.addEventListener('click', ev => {
-  const add = ev.target.closest('#th-new, #dm-new');
-  if (add) { ev.preventDefault(); threadNewOpen({dm: add.id === 'dm-new'}); }
+  if (ev.target.closest('#th-new')) { ev.preventDefault(); threadNewOpen(); }
 });

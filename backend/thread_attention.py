@@ -4,7 +4,9 @@ Read from the inbox (`message_deliveries`), the thread counters and the writes h
 row checked against the per-message rule (`threads.readable`) before it is listed. An item clears by what the person
 does, not by a click:
 - a mention or an ask is open until the person posts in its thread after it (or it is deleted);
-- an unread DM is open until the person reads past its last message from a person or one addressed to them;
+- an unread DM with another person in it is open until the person reads past its last message from a person or one
+  addressed to them. A DM with only bots in it is not: each bot is on the Team chart, which shows its unread
+  (threads.bot_dm_unread), and a bot's question or mention there is still an item;
 - a write held for review (a native thread post or edit, a chat message, a run's reply) is open until it is decided:
   its reviewer releases or keeps it, or the person it is held for withdraws it (the hold leaves `held`);
 - a capped thread (the loop guard, spec 4.5) is open until its capped deliveries resume;
@@ -95,7 +97,7 @@ def _addressed(c, me):
 
 
 def _unread_dms(c, viewer, me):
-    """Direct messages with a message past the person's read point that they may read and that is unread for them
+    """Direct messages with another person in them and a message past the person's read point that they may read and that is unread for them
     (threads.unread_message_sql: a group DM's bot post reaches each member by a delivery, with no `to_actor`). The item
     takes that message's sender and time: a later message they cannot read sets neither."""
     from . import threads
@@ -107,6 +109,8 @@ def _unread_dms(c, viewer, me):
             "AND cv.closed_at IS NULL AND cv.archived_at IS NULL AND cv.last_unread_seq>f.last_read_seq "
             "ORDER BY cv.last_unread_seq DESC", (me,)).fetchall():
         if not threads.readable(c, viewer, cv["id"]):
+            continue
+        if not any(a.startswith("human:") and a != me for a in threads._dm_members(c, threads.thread_row(c, cv["id"]))):
             continue
         for m in c.execute(
                 f"SELECT m.* FROM messages m WHERE m.conversation_id=? AND m.seq>? AND {threads.unread_message_sql()} "
