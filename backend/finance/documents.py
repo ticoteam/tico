@@ -737,20 +737,53 @@ def _invoice_email(ctx: Ctx, inv: Any) -> str:
     """The invoice email's exact text: its number, total, dates, each line, and the payment link when there is one."""
     sid = str(inv["id"])
     cur = ctx.book.base_currency
-    out = [f"Invoice {inv['number']} for {_money(int(inv['total']))} {cur}, dated {inv['invoice_date']}, due "
-           f"{inv['due_date']}."]
+    due = f", due {inv['due_date']}" if inv["due_date"] else ""
+    out = [f"Invoice {inv['number']} for {_money(int(inv['total']))} {cur}, dated {inv['invoice_date']}{due}."]
     out += [f"- {r['description']}: {_money(int(r['amount']))} {cur}" for r in SAP.lines(ctx.c, "invoice", [sid]).get(sid, [])]
     if inv["payment_link"]:
         out.append(f"Pay here: {inv['payment_link']}")
     return "\n".join(out)
 
 
+def _mail(ctx: Ctx, inv: Any, emails: Sequence[str], box: str, subject: str, text: str) -> dict[str, Any] | None:
+    """An invoice email's intent, resolved when the action is planned (Plan.resolved): what its send approval will name,
+    and the text itself so the ask shows it. None when no email goes. actions.approval_decided asks again if it changes."""
+    if not box:
+        return None
+    return {**delivery.intent(emails, subject, text, box, document(ctx, "invoice", inv)), "text": text}
+
+
+def _mail_words(mail: Mapping[str, Any] | None) -> str:
+    """Where an invoice email goes, for the ask's words: its addresses and mailbox, or nothing when no email goes."""
+    if not mail:
+        return ""
+    return f", emailed to {', '.join(mail['to'])} from {mail['mailbox']}"
+
+
+def _late_enough(inv: Any, today: str, stage: int) -> None:
+    """A reminder is for a stage the invoice has reached, judged on the action's own day (ctx.today): the invoice has a
+    due date, that date has passed, and it is at least `stage` days past it. Refused before any stage is used, and
+    checked again when the approval for it is decided (actions.approval_decided)."""
+    number = str(inv["number"])
+    if not inv["due_date"]:
+        raise FinanceError(CONFLICT, f"invoice {number} has no due date, so it is not late and cannot be reminded")
+    due = str(inv["due_date"])
+    late = AP.days_late(due, dates.day(today))
+    if late <= 0:
+        raise FinanceError(CONFLICT, f"invoice {number} is due {due}, so it is not late yet")
+    if late < stage:
+        waits = dates.day(due) + timedelta(days=stage)
+        raise FinanceError(CONFLICT, f"invoice {number} is {late} days past due; its {stage}-day reminder waits until "
+                                     f"{waits.isoformat()}")
+
+
 def invoice_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Send a draft invoice: Dr AR / Cr its income lines, marked sent. When the customer has an email and the Bookkeeper
     has a mailbox that can send, the invoice email is approved on commit (delivery.issue) for this exact text and
     document, and the Bookkeeper sends it and reports back (`invoice_delivery`). Otherwise the result carries the document
-    for whoever delivers it (`delivery: "caller"`)."""
-    V.only(p, ("invoice_id",))
+    for whoever delivers it (`delivery: "caller"`). The email's intent is resolved here (Plan.resolved), so an ask for it
+    is void and asked again if its address, text, document or mailbox changes before it is decided."""
+    V.only(p, ("invoice_id", delivery.MAIL))
     inv = _doc(ctx, "invoice", V.text(p, "invoice_id", 80))
     _need_status("invoice", inv, ("draft",), "only a draft is sent")
     lines = doc_lines_of(ctx, "invoice", str(inv["id"]))
@@ -763,6 +796,8 @@ def invoice_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     emails = SK.loads_list(customer["emails"])
     box = delivery.mailbox(ctx.c) if emails else ""
     text = _invoice_email(ctx, inv) if box else ""
+    subject = delivery.subject_of(None, str(inv["number"]))
+    mail = _mail(ctx, inv, emails, box, subject, text)
 
     def apply(aid: str) -> Result:
         entry = _post_doc(ctx, "invoice", inv, lines, str(inv["invoice_date"]), who)
@@ -773,7 +808,6 @@ def invoice_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         out: Result = {"invoice_id": sid, "status": "sent", "entry_id": entry, "delivery": "caller",
                        "document": document(ctx, "invoice", inv)}
         if box:
-            subject = delivery.subject_of(None, str(inv["number"]))
             approval = delivery.issue(ctx.c, _decider(ctx, who), who, to=emails, subject=subject, text=text, box=box,
                                       document=cast(Mapping[str, Any], out["document"]), ref=f"invoice:{sid}")
             SAP.update(ctx.c, "fin_invoices", sid, {"send_approval_id": approval, "send_to": SK.dump(emails),
@@ -782,8 +816,9 @@ def invoice_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                         "to": delivery.recipients(emails), "mailbox": box})
         return out
     return Plan(K.default_gate(ctx.org, who, "invoice_send"),
-                f"Send invoice {inv['number']} for {_money(int(inv['total']))} to {customer['name']}", apply,
-                facts=doc_facts("invoice", customer, lines, ctx))
+                f"Send invoice {inv['number']} for {_money(int(inv['total']))} to {customer['name']}"
+                f"{_mail_words(mail)}", apply, facts=doc_facts("invoice", customer, lines, ctx),
+                resolved={delivery.MAIL: mail})
 
 
 REMIND_STAGES = (1, 7, 30, 60, 90)      # days late, as Finance raises finance.invoice.overdue
@@ -793,17 +828,20 @@ def invoice_remind(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Remind the customer that a sent invoice is unpaid, once for each stage (1, 7, 30, 60 or 90 days late). The text
     is fixed: the number, what is left, the due date and the payment link when there is one; no free text. The reminder
     is recorded on commit under a Tico send approval (delivery.issue) for that text and the customer's addresses; the
-    Bookkeeper sends it and reports back (`invoice_delivery`). A paid or draft invoice, a stage already reminded, a
-    customer with no email and no Bookkeeper mailbox are refused with the reason, before any stage is used."""
-    V.only(p, ("invoice_id", "stage"))
+    Bookkeeper sends it and reports back (`invoice_delivery`). A paid or draft invoice, an invoice with no due date, one
+    not yet past due or not yet at the stage's days late, a stage already reminded, a customer with no email and no
+    Bookkeeper mailbox are refused with the reason, before any stage is used. The days late are the action's own day's
+    (ctx.today), checked again when the approval is decided (actions.approval_decided)."""
+    V.only(p, ("invoice_id", "stage", delivery.MAIL))
     inv = _doc(ctx, "invoice", V.text(p, "invoice_id", 80))
     stage = V.integer(p, "stage", 1, 90)
     if stage not in REMIND_STAGES:
         raise invalid("a reminder is for 1, 7, 30, 60 or 90 days late")
-    _need_status("invoice", inv, ("sent",), "only an unpaid sent invoice is reminded")
+    _need_status("invoice", inv, OPEN["invoice"], "only an unpaid sent invoice is reminded")
     left = _left("invoice", inv)
     if left <= 0:
         raise FinanceError(CONFLICT, f"invoice {inv['number']} is paid: nothing is left to remind about")
+    _late_enough(inv, ctx.today, stage)
     sid = str(inv["id"])
     if _reminded(ctx, sid, stage):
         raise FinanceError(CONFLICT, f"the {stage}-day reminder for invoice {inv['number']} was already made")
@@ -818,6 +856,7 @@ def invoice_remind(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     text = (f"Invoice {inv['number']} for {_money(left)} {ctx.book.base_currency} was due {inv['due_date']} and is "
             f"still unpaid.{link}")
     subject = delivery.subject_of(stage, str(inv["number"]))
+    mail = _mail(ctx, inv, emails, box, subject, text)
 
     def apply(aid: str) -> Result:
         if _reminded(ctx, sid, stage):                  # again when an approved reminder commits
@@ -833,8 +872,8 @@ def invoice_remind(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 "mailbox": box, "document": now}
     lines = doc_lines_of(ctx, "invoice", sid)
     return Plan(K.default_gate(ctx.org, who, "invoice_remind"),
-                f"Remind {customer['name']} that invoice {inv['number']} is {stage} days late", apply,
-                facts=doc_facts("invoice", customer, lines, ctx))
+                f"Remind {customer['name']} that invoice {inv['number']} is {stage} days late{_mail_words(mail)}",
+                apply, facts=doc_facts("invoice", customer, lines, ctx), resolved={delivery.MAIL: mail})
 
 
 def invoice_delivery(ctx: Ctx, who: str, p: V.Payload) -> Plan:

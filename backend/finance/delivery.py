@@ -6,6 +6,10 @@ yes the action waited on (or the person who made it). The Bookkeeper sends the t
 (`mail send --approval-issue`) and reports the outcome through `invoice_delivery`. Finance sends no mail itself, and a
 bot cannot issue or decide one. A failed send raises one Needs-you for the finance admin; a send with no report for a
 day raises one more. A retry sends the same text under the same approval, and a stage is never made again.
+
+The ask carries the email's intent (`intent`: addresses, subject, text, document and mailbox), resolved when the action is
+planned. If any of it changes before the ask is decided, the ask is void and asked again; no send approval is issued for
+the changed email (actions.approval_decided).
 """
 import hashlib
 import json
@@ -22,6 +26,7 @@ from .store import tico
 BOOKKEEPER = "bookkeeper"     # the Bookkeeper's slug; its stored bot config names the mailbox
 SEND = "send"                 # the Tico approval kind a mail send is checked against
 GMAIL = "gmail"               # the connector the Bookkeeper sends from
+MAIL = "mail"                 # the resolved key an invoice email's intent is kept under (documents.py, actions.py)
 
 
 def digest(text: str) -> str:
@@ -32,6 +37,14 @@ def digest(text: str) -> str:
 def document_digest(document: Mapping[str, Any]) -> str:
     """The sha256 of the invoice document the email is about, as Finance showed it when the approval was made."""
     return hashlib.sha256(json.dumps(document, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def intent(to: Any, subject: str, text: str, box: str, document: Mapping[str, Any]) -> dict[str, Any]:
+    """What an invoice email sends, as its send approval names it: the normalized addresses, the subject, the sha256 of
+    the exact text, the sha256 of the invoice document, and the mailbox it goes from. Finance resolves it when the action
+    is planned (Plan.resolved) and asks with it; a change to any of these before the ask is decided asks again."""
+    return {"to": recipients(to), "cc": [], "subject": subject, "body_sha256": digest(text), "mailbox": box,
+            "document_sha256": document_digest(document)}
 
 
 def recipients(emails: list[Any] | tuple[Any, ...] | None) -> list[str]:
@@ -80,8 +93,7 @@ def issue(c: Any, decider: str, requester: str, *, to: Any, subject: str, text: 
     for the person whose decision the action waits on; a bot is refused. Returns the approval id."""
     if not tico.is_person(decider):
         raise FinanceError(DENIED, "an invoice email is approved by a person, not by a bot")
-    payload = {"to": recipients(to), "cc": [], "subject": subject, "body_sha256": digest(text), "mailbox": box,
-               "document_sha256": document_digest(document), "ref": ref}
+    payload = {**intent(to, subject, text, box, document), "ref": ref}
     approval_id = tico.approval_request(c, requester, SEND, payload, decider)
     tico.approval_decide(c, decider, approval_id, "approved")
     return approval_id
@@ -159,5 +171,5 @@ def watch(ctx: Ctx) -> int:
     return n
 
 
-__all__ = ["BOOKKEEPER", "SEND", "digest", "document_digest", "issue", "mailbox", "pending", "queue_items", "recipients",
-           "report", "subject_of", "watch"]
+__all__ = ["BOOKKEEPER", "MAIL", "SEND", "digest", "document_digest", "intent", "issue", "mailbox", "pending", "queue_items",
+           "recipients", "report", "subject_of", "watch"]

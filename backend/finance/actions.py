@@ -18,7 +18,7 @@ from . import prepaids, purchasing, topups
 from . import posting
 from . import raw_totals, runs
 from . import setup as setup_mod
-from . import books_link, books_sync, rights, sync, tax, usage
+from . import books_link, books_sync, delivery, rights, sync, tax, usage
 from .context import APPROVER_KEY, Ctx, is_set_up, load
 from .core import kinds as K
 from .core import org as O
@@ -111,7 +111,10 @@ CARD_NUMBER_REFUSED = V.CARD_NUMBER_REFUSED
 STALE_DAYS = 14                        # hubdb.APPROVAL_STALE_DAYS: a withdrawal after this long is an expiry
 # Payload fields a planner fills in when the asker leaves them out (Plan.resolved): a retry without them is the same
 # request.
-RESOLVED_KEYS = frozenset({"effective_from", "date", "raise_check", "recipient_version", "provider_user_id"})
+RESOLVED_KEYS = frozenset({"effective_from", "date", "raise_check", "recipient_version", "provider_user_id", delivery.MAIL})
+# What an invoice email's approval is for (its addresses, text, document and mailbox): a change to any of it before the
+# approval is decided voids the ask, and it is asked again (approval_decided).
+MAIL_MOVED = "the invoice email changed since it was asked: its addresses, text, subject, document or mailbox"
 RECIPIENT_RULE = payments.RECIPIENT_RULE                 # the rule an approval asked for changed payee details names
 NEW_RECIPIENT_RULE = payments.NEW_RECIPIENT_RULE
 
@@ -560,16 +563,19 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
             # The planned gate's only decider is the requester (the install owner's own raise): nobody else decides it,
             # so it is not a rule the approval missed. Other rules the plan now needs still ask again.
             unnamed.discard(gate.rule)
-        if payments.moved(body, plan.resolved) or unnamed or \
+        if payments.moved(body, plan.resolved) or unnamed or _mail_moved(body, plan) or \
                 (now_to and (now_to != row["approval_to"] or _drifted(body, plan))):
             # The person who decides this changed since it was asked (a new manager, a finance approver named), or the
             # planner would now fix a value differently from the approved one (a parent raise that moved). When nobody
             # needs to decide it any more, it runs below with the plan as it now stands. A rule the plan now needs that
             # the approval did not name (a budget that went over since) is asked again as well, never run on this one.
+            # An invoice email that changed is asked again too, whoever decides it (no send approval for the new one).
             _rollback(c, "fin_decide", mark)
             if unnamed:
                 return _reask(ctx, row, p, kind, body, "a rule now needs approval it did not name: "
                                                        f"{', '.join(sorted(unnamed))}")
+            if _mail_moved(body, plan):
+                return _reask(ctx, row, p, kind, body, MAIL_MOVED)
             return _reask(ctx, row, p, kind, body)
         tico.approval_consume(c, str(row["approval_by"]), approval_id)
         result = plan.apply(str(row["id"]))
@@ -617,6 +623,13 @@ def _drifted(body: Mapping[str, object], plan: handlers.Plan) -> bool:
     """Whether the planner would now fix a value differently from the one asked (Plan.resolved): what was approved
     is then not what would run."""
     return any(body.get(k) != v for k, v in plan.resolved.items())
+
+
+def _mail_moved(body: Mapping[str, object], plan: handlers.Plan) -> bool:
+    """Whether the invoice email an approval was asked for is no longer the one the plan would send (its addresses,
+    subject, text, invoice document or mailbox). Checked whoever decides it now: a send approval is never issued for a
+    changed email, even when nobody needs to decide the ask any more. None on both sides is the same: no email goes."""
+    return delivery.MAIL in plan.resolved and body.get(delivery.MAIL) != plan.resolved[delivery.MAIL]
 
 
 def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body: Mapping[str, object],
