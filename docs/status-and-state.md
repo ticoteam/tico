@@ -504,7 +504,12 @@ Already constrained by a CHECK in the base schema (values unchanged on this bran
   (pending, sent, failed, withheld), `fin_feed_txns.status`, `fin_periods.status`, `fin_reconciliations.status`,
   `fin_recipients.status`, `fin_view_grants.status`, `fin_money_accounts.kind`, and others in the Finance schema.
 - `strategy_bets.status`, `strategy_versions.status`, `tico_storage.state`, `storage_moves.state`,
-  `update_archive_overrides.state`, `invite_sends.state`, `blob_media.media_state`, `bot_file_versions.media_state`.
+  `update_archive_overrides.state`, `blob_media.media_state`, `bot_file_versions.media_state`.
+- `idempotency.state`: pending, completed, refused (a CHECK). A stored answer is always completed and is swept after
+  48 hours. An operation binding (`binding` set: `invites`, `github_product_repo`, `github_review`) is never swept: it is
+  pending while its outcome is unknown (a repeat is refused with no second external call), then completed or refused.
+  Invites map `sending` to pending, `sent` to completed and `refused` to refused; a product repository's `rejected` is
+  refused; a review with no response yet is pending.
 - `task_links.review_state` and others with a CHECK in the base schema.
 
 Without a CHECK (not constrained here; values are whatever the code writes):

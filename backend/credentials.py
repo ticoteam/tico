@@ -366,14 +366,14 @@ class Vault:
             if isinstance(payload.get('secret'), SecretStr):
                 payload['secret'] = payload['secret'].get_secret_value()
             fingerprint = hmac.new(self.cipher.key(c), b'tico-request:v1:' + encode(payload).encode(), hashlib.sha256).hexdigest()
-            old = c.execute('SELECT request_hash,response FROM idempotency WHERE actor=? AND operation=? AND key=?',
+            old = c.execute('SELECT request_hash,response FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?',
                             (who.actor, operation, key)).fetchone()
             if old:
                 if not hmac.compare_digest(old['request_hash'], fingerprint):
                     raise Problem('idempotency_conflict', 'This request key was already used for different content', 409)
                 return json.loads(old['response'])
             result = fn(c)
-            c.execute('INSERT INTO idempotency VALUES(?,?,?,?,?,?)',
+            c.execute('INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)',
                       (who.actor, operation, key, fingerprint, encode(result), H.now()))
             return result
 

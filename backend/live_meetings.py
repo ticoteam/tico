@@ -1249,7 +1249,7 @@ def install_live_meetings(app, store, auth, write):
                                          (who.actor, body.client_id)).fetchone()
                     if existing:
                         _require_read(c, auth, who, existing["id"])
-                cached = c.execute("SELECT response FROM idempotency WHERE actor=? AND operation=? AND key=?",
+                cached = c.execute("SELECT response FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                                    (who.actor, request.url.path, request.headers.get("idempotency-key"))).fetchone()
                 if cached:
                     _require_read(c, auth, who, (H._json(cached["response"], {}) or {}).get("id"))

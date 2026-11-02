@@ -277,7 +277,8 @@ organization/name. If GitHub's response is lost, times out, or returns a server 
 retry with the same content reports the unresolved outcome without issuing another create. Check the
 connected organization directly before taking another action. Tico does not infer that an existing
 repository belongs to the unresolved operation, adopt it, or retry that external write automatically.
-The operation binding and completed receipt outlive the generic idempotency cache.
+The binding is a row of `idempotency` (`binding` = `github_product_repo`, `subject` = org/name) that the retention
+sweep never removes, so a completed create replays from it after the 48-hour window.
 
 Creating the empty repository does not publish source. Publishing a preserved source bundle is a separate,
 Owner-authorized step: restore or use the preserved checkout, verify its expected branch and history, and
