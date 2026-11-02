@@ -363,6 +363,23 @@ def _other_book(c: Any, provider: str, *, company_id: str, tokens: Tokens) -> bo
     return False
 
 
+def _dropped(c: Any, provider: str, *, company_id: str, tokens: Tokens) -> str | None:
+    """The company's own dropped books connection for this same QuickBooks company or Xero organisation. A reconnect
+    brings that row back as the same row: its refs, change-feed cursor and queued writes are keyed to it. Another company,
+    or another realm of this provider, never takes it, since its refs are another books' records."""
+    quickbooks = provider == "quickbooks"
+    field, key = ("realm_id", tokens.realm_id) if quickbooks else ("tenant_id", tokens.tenant_id)
+    if not key:
+        return None
+    rows = c.execute("SELECT id FROM fin_connections WHERE purpose='books' AND status='disconnected' AND provider=? "
+                     "ORDER BY created_at, id", (provider,)).fetchall()
+    for row in rows:
+        books = SX.books_settings(c, str(row[0]))
+        if str(books.get("company_id") or "") == company_id and str(books.get(field) or "") == key:
+            return str(row[0])
+    return None
+
+
 def _revoke_refused(link: Link, provider: str, company_id: str, tokens: Tokens) -> None:
     """HQ holds the grant for a consent this install refuses, so it is taken off again, best effort. Nothing of the pair is
     stored here, and a failure leaves nothing to keep: the refusal stands either way."""
@@ -396,9 +413,15 @@ def connect_claim(store: Any, vault: object, link: Link, *, provider: str, compa
         raise
     with store.transaction() as c:
         cid: str | None = _same_account(c, provider, tokens)
-        if cid is None and not _other_book(c, provider, company_id=company_id, tokens=tokens):
-            cid = tico.new_id()
-            SX.books_connection_insert(c, cid=cid, provider=provider, name=name, by=by, at=now)
+        if cid is not None and str(SX.books_settings(c, cid).get("company_id") or "") != company_id:
+            cid = None      # another company's books: refused below, and never repointed to this company
+        elif cid is None and not _other_book(c, provider, company_id=company_id, tokens=tokens):
+            # The company's own dropped connection for this same QuickBooks company or Xero organisation comes back as it
+            # was; anything else is a connection of its own.
+            cid = _dropped(c, provider, company_id=company_id, tokens=tokens)
+            if cid is None:
+                cid = tico.new_id()
+                SX.books_connection_insert(c, cid=cid, provider=provider, name=name, by=by, at=now)
             SX.set_books_settings(c, cid, {"provider": provider, "company_id": company_id,
                                           "realm_id": tokens.realm_id, "tenant_id": tokens.tenant_id})
         if cid is not None:

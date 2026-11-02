@@ -816,3 +816,34 @@ def test_a_disconnected_quickbooks_connection_does_not_stop_xero_connecting_the_
         assert made != qb
         assert tuple(c.execute("SELECT provider, status FROM fin_connections WHERE id=?", (made,)).fetchone()) == (
             "xero", "active")
+
+
+def test_a_reconnect_of_the_same_quickbooks_company_brings_its_connection_back_with_its_refs_and_cursor(books,
+                                                                                                        monkeypatch):
+    """§3.4: after a drop, connecting the same QuickBooks company again brings the company's own connection row back.
+    Its refs, its change-feed cursor and its queued writes are still keyed to it, and it takes the new tokens. Another
+    company never takes this row: it gets a connection of its own."""
+    vault = T._VAULT[0]
+    hq = HQ(claim=[tokens("acc-1", "ref-1"), tokens("acc-2", "ref-2"), tokens("acc-3", "ref-3")],
+            disconnect=[{"ok": True}, {"ok": True}])
+    monkeypatch.setattr(books_link, "_call", hq)
+    cid = _claimed(books, vault)
+    with books.transaction() as c:
+        SX.ref_insert(c, cid=cid, local_table="fin_bills", local_id="bill-1", kind="Bill", external_id="Bill:9",
+                      revision="0", status="active", at=AT, by=OWNER)
+        SX.set_mirror_state(c, cid, {"cursors": {"Bill": "2026-10-14T00:00:00Z"}})
+    books_link.drop(books, vault, LINK, cid, by=OWNER)
+    assert _claimed(books, vault) == cid
+    with books.read() as c:
+        assert [row[0] for row in SX.books_connections(c, "quickbooks")] == [cid]
+        assert SX.books_status(c, cid) == "active"
+        assert T.credential_secret(c, vault, str(SX.books_settings(c, cid)["refresh"])) == "ref-2"
+        assert SX.mirror_state(c, cid)["cursors"] == {"Bill": "2026-10-14T00:00:00Z"}
+        assert SX.ref(c, cid, "fin_bills", "Bill:9")["local_id"] == "bill-1"
+    # Another company consenting to the same QuickBooks company is refused, and the connection stays this company's.
+    with pytest.raises(books_link.AlreadyConnected):
+        books_link.connect_claim(books, vault, LINK, provider="quickbooks", company_id="co-other", claim_id="clm_o",
+                                 name="Other books", by=OWNER, now=AT)
+    with books.read() as c:
+        assert [row[0] for row in SX.books_connections(c, "quickbooks")] == [cid]
+        assert SX.books_settings(c, cid)["company_id"] == COMPANY
