@@ -391,7 +391,8 @@ def doc_facts(kind: str, contact: Any, lines: Sequence[AP.DocLine], ctx: Ctx, **
 # ------------------------------------------------------------------------------------------------ bills
 def bill_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """A bill as a draft: its expense lines hold budget now; `bill_approve` enters it."""
-    V.only(p, ("vendor_id", "number", "bill_date", "due_date", "terms_days", "memo", "lines", "attachments", "origin"))
+    V.only(p, ("vendor_id", "number", "bill_date", "due_date", "terms_days", "memo", "lines", "attachments", "origin",
+               "purchase_order_id"))
     vendor = contact_for(ctx, V.text(p, "vendor_id", 80), "bill")
     number = V.opt_text(p, "number", 80) or ""
     if number and SAP.number_taken(ctx.c, "bill", str(vendor["id"]), number):
@@ -404,6 +405,7 @@ def bill_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     due = AP.due_date(day, typed_due, terms)
     from . import purchasing as PU
     linked, orders = PU.link_bill_lines(ctx, who, str(vendor["id"]), AP.doc_lines(p.get("lines")))
+    po_link = PU.link_bill_order(ctx, who, V.opt_text(p, "purchase_order_id", 80) or "")
     lines, asked = resolve_lines(ctx, who, "bill", vendor, linked)
     files = _attach_files(p)
     origin = V.choice(p, "origin", AP.ORIGINS, "manual")
@@ -415,7 +417,7 @@ def bill_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             "id": bid, "book_id": ctx.book.id, "vendor_id": str(vendor["id"]), "number": number, "bill_date": day,
             "due_date": due, "terms_days": terms, "memo": V.opt_text(p, "memo", 500) or "", "status": "draft",
             "currency": ctx.book.base_currency, "total": total, "commitment_id": bid, "origin": origin,
-            "created_at": ctx.at, "created_by": who, "updated_at": ctx.at})
+            "purchase_order_id": po_link or None, "created_at": ctx.at, "created_by": who, "updated_at": ctx.at})
         SAP.replace_lines(ctx.c, "bill", bid, _line_rows(lines, who, ctx.at))
         SAP.attach(ctx.c, ctx.book.id, "bill", bid, files, who, ctx.at)
         SAP.drop_unmatched(ctx.c, ctx.book.id, files)
@@ -441,9 +443,9 @@ def _need_status(kind: str, doc: Any, allowed: Sequence[str], what: str) -> None
 
 def bill_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Change a bill. Its vendor, date and lines change only while it is a draft (an entered bill is reversed by
-    voiding it); its number, due date, memo and attachments change until it is paid or void."""
+    voiding it); its number, due date, memo, purchase order link and attachments change until it is paid or void."""
     V.only(p, ("bill_id", "vendor_id", "number", "bill_date", "due_date", "terms_days", "memo", "lines",
-               "attachments"))
+               "attachments", "purchase_order_id"))
     bill = _doc(ctx, "bill", V.text(p, "bill_id", 80))
     draft = str(bill["status"]) == "draft"
     _need_status("bill", bill, ("draft", "open", "scheduled"), "it no longer changes")
@@ -475,6 +477,8 @@ def bill_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         f["terms_days"], f["due_date"] = terms, AP.due_date(day, due, terms)
     if "memo" in p:
         f["memo"] = V.opt_text(p, "memo", 500) or ""
+    if "purchase_order_id" in p:
+        f["purchase_order_id"] = PU.link_bill_order(ctx, who, V.opt_text(p, "purchase_order_id", 80) or "") or None
     if "lines" in p:
         f["total"] = sum(x.amount for x in lines)
     files = _attach_files(p)

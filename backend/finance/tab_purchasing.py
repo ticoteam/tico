@@ -136,6 +136,11 @@ def _one(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str | N
         out["bills"] = [{"id": str(b["id"]), "number": str(b["number"]), "vendor": str(b["contact_name"] or ""),
                          "date": str(b["bill_date"]), "status": str(b["status"]), "total": int(b["total"]),
                          "on_order": int(b["on_order"])} for b in bills]
+        # Bills linked to the order, of any vendor: a link bills no line, so the totals above do not count them.
+        linked, _ = tab_ap.keep_docs(c, "bill", SP.linked_bills(c, doc_id), cut)
+        out["linked_bills"] = [{"id": str(b["id"]), "number": str(b["number"]),
+                                "vendor": str(b["contact_name"] or ""), "total": int(b["total"]),
+                                "status": str(b["status"])} for b in linked]
     return out
 
 
