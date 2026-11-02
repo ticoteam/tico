@@ -91,6 +91,16 @@ def test_a_trigger_is_finance_s_by_its_consumer_not_its_preset(api):
     assert {t["id"]: t["consumer"] for t in _get(api, "triggers").json()["triggers"]}["mercury"] == "automations"
 
 
+def test_a_finance_trigger_is_shown_and_given_an_address_only_to_a_finance_admin(api):
+    """Ben is an admin but not a finance admin: he cannot see a Mercury trigger or give it a Tico Gateway address (spec
+    3.4). Ana, the owner, can see it."""
+    _mercury(api)
+    assert _get(api, "triggers/mercury", "ben-test").status_code == 403
+    made = api.post("/api/v2/triggers/mercury/relay", json={}, headers={**headers("ben-test"), "Idempotency-Key": "k-relay-1"})
+    assert made.status_code == 403 and "Finance" in made.text
+    assert _get(api, "triggers/mercury").status_code == 200
+
+
 # ------------------------------------------------------------------------------------------------ Intuit and Xero calls
 # Tico HQ holds Intuit's and Xero's signing keys and checks their calls (spec §3.4). The install takes one only over its
 # own Gateway relay (via="gateway"), and its public address refuses the same preset, whatever the headers say.

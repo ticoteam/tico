@@ -854,8 +854,10 @@ def install(app, settings, store, auth, mutate):
     @app.get("/api/v2/triggers/{trigger_id}")
     def trigger_show(request: Request, trigger_id: str):
         """One trigger: address without the secret, settings, 24-hour counts and its automations."""
-        readers(request)
+        who = readers(request)
         with store.read() as c:
+            if finance_owned(_row(c, trigger_id)):
+                _finance_only(c, who, "read")       # a Finance trigger is shown to finance admins only (spec 3.4)
             return {"trigger": show(c, settings, trigger_id)}
 
     @app.post("/api/v2/triggers/{trigger_id}")

@@ -512,7 +512,7 @@ class HookRelay:
             validate_identity(c, who)
             task_privacy.guard_write(c, who, request.url.path, self.auth)
             row = triggers._row(c, trigger_id)
-            triggers.may_manage(c, who, row)
+            triggers._may_change(c, who, row, "change")      # a Finance trigger's address is a finance admin's (spec 3.4)
             if triggers.builtin(trigger_id):
                 raise Problem("relay", f"{tico_notices.NAME} notices come through Tico Gateway already; there is no address to make", 422)
             relay = _row(c, trigger_id)
