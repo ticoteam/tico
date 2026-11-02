@@ -49,12 +49,17 @@ atomically.
 
 The view model every surface renders. No other field may reach a reader, and each is a plain string, number or list:
 
-  {"company": {"name", "logo_url", "mission", "badge": "open"|"public"|"private", "accent", "updated_at"},
+  {"company": {"name", "logo_url", "mission", "badge": "open"|"public"|"private", "accent", "updated_at", "url"?},
    "audience": {"kind", "name"},
    "stats": [{"id", "label", "definition", "chart": "number"|"line"|"bars", "period", "as_of", "display", "stale": bool,
-              "series": [{"period", "value": number or null, "display"}]}],
+              "group": "pnl"?, "series": [{"period", "value": number or null, "display"}]}],
    "updates": [{"anchor", "title", "author": {"name", "kind": "bot"|"person"|"company"}, "period", "published_at",
                 "version", "correction_note", "sections": [{"key": "highlights"|"lowlights"|"numbers"|"asks"|"next",
                                                             "items": [{"body", "ask_id": str or null}]}]}],
    "next_before": str or null}
+
+Optional keys: company.url is the page's own address (feed and canonical links). stat.group "pnl" puts a P&L line in the
+table instead of a tile; release.view_model sets it. For a signed-in reader only, render.py also reads top-level "actions"
+(true shows Reply and I can help), "viewer" ({"email"}, with Sign out) and "csrf" (a hidden field on every form).
+data.json never carries those three.
 """
