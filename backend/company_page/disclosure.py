@@ -190,10 +190,18 @@ def _write(c, audience_id, rule, ts):
                rule["rounding"], ts))
 
 
-def _finish(c, actor, audience, loosened, approved, ts, action, detail):
-    """One revision for the change. A pure tightening keeps an approved stats board approved; a loosening does not, so
-    a person has to look again. The public page changes in this step either way. Returns what the change was, for the
-    route to say: a tightening leaves published editions up, so the caller reports how many."""
+def _stricter(old_rule, new_rule):
+    """Whether one cell's effective rule changed to show less. A cell left as it was, or one that only widens, is not."""
+    def key(rule):
+        return rule["mode"], int(rule.get("lag_days") or 0), rule.get("rounding") or None
+    return key(old_rule) != key(new_rule) and not is_loosening(old_rule, new_rule)
+
+
+def _finish(c, actor, audience, loosened, stricter, approved, ts, action, detail):
+    """One revision for the change. A change that doesn't loosen anything keeps an approved stats board approved; one
+    that does, doesn't, so a person has to look again. The public page changes in this step either way. Returns what the
+    change was, for the route to say: a change that tightens any cell leaves published editions up, so the caller reports
+    how many, even when another cell in the same change loosened."""
     from . import stats
     revision = H.new_id()
     c.execute("INSERT INTO disclosure_revisions (id, audience_id, created_by, created_at) VALUES (?,?,?,?)",
@@ -203,7 +211,7 @@ def _finish(c, actor, audience, loosened, approved, ts, action, detail):
     H.event(c, actor, action, audience["id"], {**detail, "revision": revision, "loosened": loosened})
     if audience["kind"] == "public":
         S.rebuild_if_live(c, "disclosure changed")
-    return {"revision": revision, "loosened": loosened}
+    return {"revision": revision, "loosened": loosened, "tightened": stricter}
 
 
 def set_rules(c, actor, audience_id, changes):
@@ -220,12 +228,14 @@ def set_rules(c, actor, audience_id, changes):
     if not moved:
         return {"revision": current_revision(c, audience_id), "loosened": False, "tightened": False}
     approved = stats.board_approved(c, audience_id)
-    loosened = any(is_loosening(lookup(before, r["data_class"], r["ref_id"]), r) for r in moved)
+    olds = [(lookup(before, r["data_class"], r["ref_id"]), r) for r in moved]
+    loosened = any(is_loosening(old, new) for old, new in olds)
+    stricter = any(_stricter(old, new) for old, new in olds)
     ts = H.now()
     for rule in moved:
         _write(c, audience_id, rule, ts)
-    return _tightened(_finish(c, actor, audience, loosened, approved, ts, "company_page.disclosure",
-                              {"cells": [[r["data_class"], r["ref_id"], r["mode"]] for r in moved][:50]}))
+    return _finish(c, actor, audience, loosened, stricter, approved, ts, "company_page.disclosure",
+                   {"cells": [[r["data_class"], r["ref_id"], r["mode"]] for r in moved][:50]})
 
 
 def set_rule(c, actor, audience_id, data_class, ref_id=None, mode="hidden", lag_days=0, rounding=None):
@@ -250,13 +260,11 @@ def apply_preset(c, actor, audience_id, name):
               for cls, r in preset_column(name, audience["kind"]).items()}
     before = all_rules(c, audience_id)
     approved = stats.board_approved(c, audience_id)
-    loosened = any(is_loosening(lookup(before, cls, ref), lookup(column, cls, ref)) for cls, ref in {*before, *column})
+    olds = [(lookup(before, cls, ref), lookup(column, cls, ref)) for cls, ref in {*before, *column}]
+    loosened = any(is_loosening(old, new) for old, new in olds)
+    stricter = any(_stricter(old, new) for old, new in olds)
     ts = H.now()
     c.execute("DELETE FROM disclosure_rules WHERE audience_id=?", (audience_id,))
     for (cls, ref), rule in column.items():
         _write(c, audience_id, {"data_class": cls, "ref_id": ref, **rule}, ts)
-    return _tightened(_finish(c, actor, audience, loosened, approved, ts, "company_page.preset", {"preset": name}))
-
-
-def _tightened(change):
-    return {**change, "tightened": not change["loosened"]}
+    return _finish(c, actor, audience, loosened, stricter, approved, ts, "company_page.preset", {"preset": name})

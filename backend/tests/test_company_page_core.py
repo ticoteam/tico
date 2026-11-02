@@ -609,6 +609,32 @@ def test_every_change_writes_a_revision_and_the_same_rule_again_writes_none(stor
     assert count == 2
 
 
+def test_a_change_that_tightens_one_cell_says_so_even_when_another_loosens(store):
+    """Hiding revenue while showing customers is still a tightening: the published editions it leaves up need saying."""
+    setup(store, shown("revenue"))
+    with store.transaction() as c:
+        mixed = D.set_rules(c, OWNER, "investors", [{"data_class": "revenue", "mode": "hidden"},
+                                                    {"data_class": "customers", "mode": "show"}])
+        assert mixed["loosened"] and mixed["tightened"]
+        pure = D.set_rules(c, OWNER, "investors", [{"data_class": "revenue", "mode": "show"}])
+        assert pure["loosened"] and not pure["tightened"]
+
+
+def test_a_preset_that_narrows_says_so_and_one_that_only_widens_does_not(store):
+    setup(store)
+    with store.transaction() as c:
+        D.apply_preset(c, OWNER, "investors", "standard")
+        D.set_rule(c, OWNER, "investors", "revenue", mode="hidden")
+        # Revenue opens to rounded while the other numbers close to it: one loosening and one tightening in one preset.
+        mixed = D.apply_preset(c, OWNER, "investors", "quiet")
+        assert mixed["loosened"] and mixed["tightened"]
+        D.apply_preset(c, OWNER, "investors", "radical")
+        narrower = D.apply_preset(c, OWNER, "investors", "quiet")
+        assert narrower["tightened"] and not narrower["loosened"]
+        wider = D.apply_preset(c, OWNER, "investors", "radical")
+        assert wider["loosened"] and not wider["tightened"]
+
+
 # ------------------------------------------------------------------------------------------- the stats board's approval
 def approve(c, audience="investors"):
     c.execute("INSERT INTO stat_board_approvals (id, audience_id, config_hash, disclosure_revision_id, approval_id, "
