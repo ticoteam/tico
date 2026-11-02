@@ -404,7 +404,7 @@ class Builder:
                 day = updates.local_now(self.ago(days=back)).date()
                 when = datetime.combine(day, datetime.min.time(), updates.ZONE).replace(hour=7, minute=10)
                 kind = updates.kind_for(day.isoformat())
-                for slot, (bot, _, _) in enumerate(D.BOTS):
+                for slot, (bot, _, _) in enumerate(b for b in D.BOTS if b[0] in D.UPDATES):
                     if bot == "content" and back == 3:
                         continue        # one bot that skipped a day, as real ones do
                     at = when.astimezone(timezone.utc) + timedelta(minutes=slot * 9)

@@ -6,22 +6,68 @@ Brightline ...) and every address is acme.example or another .example domain.
 """
 
 COMPANY = "Acme"
-ANSWERS = {"what_we_do": "Acme sells project-tracking software to small studios that run a few client projects themselves.",
-           "customers": "both", "team_size": "1-5", "work_arrives": ["email", "tickets"],
-           "repetitive_work": "Support replies, trial follow-ups and the weekly ops checklist."}
+ANSWERS = {"what_we_do": "Acme runs cleanings, repairs and guest messages for 400 short-term rental hosts, on its own booking software.",
+           "customers": "both", "team_size": "11-50", "work_arrives": ["email", "tickets", "chat"],
+           "repetitive_work": "Guest replies, cleaner dispatch, listing checks, invoices and the weekly numbers."}
 
 PEOPLE = [
-    {"id": "ana", "name": "Ana Rivera", "email": "ana@acme.example", "title": "Founder and owner",
+    {"id": "ana", "name": "Ana Rivera", "email": "ana@acme.example", "title": "Founder and CEO",
      "team": "leadership", "primary_for": ["*"], "reports_to": None},
     {"id": "ben", "name": "Ben Okafor", "email": "ben@acme.example", "title": "Head of support",
-     "team": "leadership", "primary_for": ["support", "inbox"], "reports_to": "ana"},
-    {"id": "cara", "name": "Cara Mendes", "email": "cara@acme.example", "title": "Marketing lead",
-     "team": "leadership", "primary_for": ["content"], "reports_to": "ana"},
+     "team": "leadership", "primary_for": ["support-lead", "support", "support-qa", "escalations", "reputation", "inbox"],
+     "reports_to": "ana"},
+    {"id": "cara", "name": "Cara Mendes", "email": "cara@acme.example", "title": "Head of marketing",
+     "team": "leadership", "primary_for": ["marketing-lead", "content", "paid-media", "seo", "email-marketing"],
+     "reports_to": "ana"},
+    {"id": "dana", "name": "Dana Reyes", "email": "dana@acme.example", "title": "Head of operations",
+     "team": "leadership", "primary_for": ["ops-manager", "dispatcher", "scheduling", "inspections", "pricing", "vendors"],
+     "reports_to": "ana"},
+    {"id": "eli", "name": "Eli Navarro", "email": "eli@acme.example", "title": "Engineering lead",
+     "team": "leadership", "primary_for": ["product-manager", "pr-reviewer", "issue-triage", "devops", "release-notes",
+                                          "security", "health-monitor", "botops"], "reports_to": "ana"},
+    {"id": "farah", "name": "Farah Haddad", "email": "farah@acme.example", "title": "Finance lead",
+     "team": "leadership", "primary_for": ["finance-lead", "bookkeeper", "ar-followup", "spend-watcher"], "reports_to": "ana"},
+    {"id": "june", "name": "June Park", "email": "june@acme.example", "title": "Head of sales",
+     "team": "leadership", "primary_for": ["sales-lead", "sales", "sdr", "account-manager", "sales-ops"], "reports_to": "ana"},
+    {"id": "lena", "name": "Lena Brandt", "email": "lena@acme.example", "title": "People and recruiting",
+     "team": "leadership", "primary_for": ["recruiter", "legal-review"], "reports_to": "ana"},
+    {"id": "gus", "name": "Gus Adeyemi", "email": "gus@acme.example", "title": "Support specialist",
+     "team": "leadership", "primary_for": [], "reports_to": "ben"},
+    {"id": "hana", "name": "Hana Sato", "email": "hana@acme.example", "title": "Support specialist",
+     "team": "leadership", "primary_for": [], "reports_to": "ben"},
+    {"id": "ivan", "name": "Ivan Petrov", "email": "ivan@acme.example", "title": "Software engineer",
+     "team": "leadership", "primary_for": [], "reports_to": "eli"},
+    {"id": "kai", "name": "Kai Lindqvist", "email": "kai@acme.example", "title": "Operations coordinator",
+     "team": "leadership", "primary_for": [], "reports_to": "dana"},
 ]
 
-# slug, catalog template, reports to
-BOTS = [("coo", "assistant", None), ("botops", "botops", "coo"), ("support", "support", "coo"),
-        ("sales", "sales", "coo"), ("inbox", "inbox", "coo"), ("content", "content", "coo")]
+# slug, catalog template, reports to. Each department has a lead bot under the Assistant (coo).
+BOTS = [("coo", "assistant", None), ("botops", "botops", "coo"),
+        # Operations
+        ("ops-manager", "ops-manager", "coo"), ("dispatcher", "dispatcher", "ops-manager"),
+        ("scheduling", "scheduling-bookings", "ops-manager"), ("inspections", "quality-inspections", "ops-manager"),
+        ("pricing", "pricing", "ops-manager"), ("vendors", "vendor-manager", "ops-manager"),
+        # Support
+        ("support-lead", "support-lead", "coo"), ("support", "support", "support-lead"),
+        ("support-qa", "support-qa", "support-lead"), ("escalations", "escalations", "support-lead"),
+        ("reputation", "reputation", "support-lead"), ("inbox", "inbox", "support-lead"),
+        # Marketing
+        ("marketing-lead", "marketing-lead", "coo"), ("content", "content", "marketing-lead"),
+        ("paid-media", "paid-media", "marketing-lead"), ("seo", "seo-visibility", "marketing-lead"),
+        ("email-marketing", "email-marketing", "marketing-lead"),
+        # Sales
+        ("sales-lead", "sales-lead", "coo"), ("sales", "sales", "sales-lead"), ("sdr", "sdr-research", "sales-lead"),
+        ("account-manager", "account-manager", "sales-lead"), ("sales-ops", "sales-ops", "sales-lead"),
+        # Engineering and product
+        ("product-manager", "product-manager", "coo"), ("pr-reviewer", "pr-reviewer", "product-manager"),
+        ("issue-triage", "issue-triage", "product-manager"), ("devops", "devops-engineer", "product-manager"),
+        ("release-notes", "release-notes", "product-manager"), ("security", "security-engineer", "product-manager"),
+        ("health-monitor", "health-monitor", "product-manager"),
+        # Finance
+        ("finance-lead", "finance-lead", "coo"), ("bookkeeper", "bookkeeper", "finance-lead"),
+        ("ar-followup", "ar-followup", "finance-lead"), ("spend-watcher", "spend-watcher", "finance-lead"),
+        # People and legal
+        ("recruiter", "recruiting", "coo"), ("legal-review", "legal-review", "coo")]
 
 # Six daily updates per bot and one for Friday's week in review. Each bullet is one plain line.
 UPDATES = {
