@@ -9,7 +9,6 @@
 .ru-tabs a{padding:5px 10px;border-radius:var(--r-ctl);color:var(--muted);font-size:var(--t-sm);text-decoration:none;white-space:nowrap}
 .ru-tabs a:hover{color:var(--ink);background:var(--surface2)}
 .ru-tabs a.cur{color:var(--ink);background:var(--surface2);font-weight:600}
-.ru-cnt{color:var(--muted);font-weight:400;font-variant-numeric:tabular-nums}
 .ru-acts{display:flex;gap:6px}
 .ru-pad{padding:14px 6px}
 .ru-body{flex:1;min-height:0;display:grid;grid-template-columns:190px minmax(0,1fr)}
@@ -46,6 +45,10 @@ a.ru-row:hover *{text-decoration:none}
 .ru.ru-open .ru-int .ru-row,.ru.ru-open .ru-ext .ru-row{grid-template-columns:minmax(0,1fr) 120px 110px 84px}
 .ru.ru-open .ru-duet .ru-row{grid-template-columns:88px minmax(0,1fr) 64px 72px 100px 84px}
 .ru-txt{min-width:0;overflow-wrap:anywhere;font-size:var(--t-md)}
+/* a teammate a rule names (@slug): a mention chip that opens them */
+.ru-at-w{white-space:nowrap}   /* a chip keeps the punctuation after it on its line */
+.ru-at{display:inline;padding:0 3px;border-radius:4px;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--ink);font-weight:500;white-space:nowrap;text-decoration:none;box-decoration-break:clone}
+a.ru-at:hover,.ru-at[data-href]:hover{background:color-mix(in srgb,var(--accent) 26%,transparent);text-decoration:none;cursor:pointer}
 .ru-c{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
 .ru-duet .ru-c[data-l=Routine]{white-space:normal}   /* "10 days before" wraps rather than cut */
 .ru-none{color:var(--muted)}
@@ -90,8 +93,17 @@ a.ru-row:hover *{text-decoration:none}
 .ru-where-pick{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .ru-lbl{color:var(--muted);letter-spacing:var(--track-caps);text-transform:uppercase;font-size:var(--t-label);font-weight:600}
 .ru-opt{text-transform:none;letter-spacing:0;font-weight:400}
-.ru-form textarea,.ru-form select,.ru-form input:not([type=checkbox]){width:100%}
+.ru-form textarea,.ru-form select,.ru-form input:not([type=checkbox]):not([type=radio]){width:100%}
+.ru-where input[type=radio]{flex:none;margin:0}
 .ru-form textarea{resize:vertical}
+/* the rule as it reads, mentions and all; an editor clicks it to edit the words */
+.ru-read{font-size:var(--t-md);line-height:var(--lh);overflow-wrap:anywhere}
+.ru-read[tabindex]{padding:5px 9px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface);cursor:text}
+.ru-read[tabindex]:hover{border-color:color-mix(in srgb,var(--muted) 55%,var(--line))}
+.ru-read[tabindex]:focus-visible{border-color:var(--focus);outline:var(--focus-halo);outline-offset:0}
+.ru-read[hidden]{display:none}
+.ru-follow{margin:0;color:var(--muted);font-size:var(--t-sm)}
+.ru-follow:empty{display:none}
 .ru-seg{display:inline-flex;align-self:flex-start;max-width:100%;padding:2px;gap:2px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface2);overflow-x:auto}
 .ru-seg button{padding:3px 10px;border:0;border-radius:4px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);white-space:nowrap;cursor:pointer}
 .ru-seg button[aria-pressed="true"]{background:var(--raised);color:var(--ink);font-weight:600;box-shadow:0 0 0 1px var(--line)}
@@ -103,6 +115,7 @@ a.ru-row:hover *{text-decoration:none}
 .ru-chip button{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:0;border-radius:50%;background:none;color:var(--muted);font-size:10px;cursor:pointer}
 .ru-chip button:hover{background:var(--line);color:var(--ink)}
 .ru-form select.ru-addsel{width:auto;min-width:0;max-width:200px;height:26px;padding:0 6px;border-style:dashed;color:var(--muted);font-size:var(--t-sm)}
+.ru-hint{margin:0;color:var(--muted);font-size:var(--t-sm)}
 .ru-reviewer{display:flex;flex-direction:column;gap:6px;margin-top:8px}
 .ru-reviewer[hidden]{display:none}
 .ru-duebox{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-ctl);color:var(--ink);font-size:var(--t-sm);text-decoration:none}
@@ -197,6 +210,7 @@ a.ru-row:hover *{text-decoration:none}
   .ru-prop{grid-template-columns:1fr auto;grid-template-areas:"t t" "w a";padding:10px 4px}
   .ru-pt{grid-area:t}.ru-pwho{grid-area:w}.ru-pacts{grid-area:a}
   .ru-side{position:fixed;inset:0;z-index:60;border:0;padding-bottom:env(safe-area-inset-bottom)}
+  html.strip .ru-side{top:var(--demo-h)}   /* below the demo banner */
   .ru-side-h{padding:max(10px,env(safe-area-inset-top)) 12px 10px}
   .ru-x{width:40px;height:40px}
   .ru-form{padding:14px 12px 24px}

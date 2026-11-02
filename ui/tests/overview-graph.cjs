@@ -1,7 +1,7 @@
 // Overview › Graph (ui/app/overview-graph.js): the team chart top down with each teammate's rules or goals.
 //  - the Graph tab beside Campus at #/overview/graph; built-in bots stay off; groups are labelled boxes;
 //  - Rules | Goals in the address (?view=goals), kept on reload;
-//  - Rules: counts on bots and people, Block / Escalate marked; a tap opens the panel (Follows, With, Team), a rule
+//  - Rules: counts on bots and people, Stop / Ask first marked; a tap opens the panel (Follows, With, Team), a rule
 //    picked there lights up its Who and With teammates and the link between them; Edit only where the rule allows;
 //    Add rule opens the Rules dialog with Who set to the teammate, and the graph reads its rules again after;
 //  - Goals: chips coloured by status, the panel with KPI and target, a link where a goal supports another owner's;
