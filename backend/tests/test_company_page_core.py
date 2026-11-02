@@ -129,7 +129,7 @@ def test_runway_and_cash_pass_on_their_value_only(books, monkeypatch):
     for stat in result["stats"]:
         assert set(stat) == STAT_KEYS and all(set(p) == POINT_KEYS for p in stat["series"])
     assert stats["Cash"]["display"] == "$5,000" and stats["Runway"]["display"] == "12.5 months"
-    text = json.dumps(result)
+    text = json.dumps(_without_ids(result))
     for leak in ("SENTINEL", "accounts", "monthly_burn", "7777", "6666", "5555", "4444", "view_version", "987651"):
         assert leak not in text
 
@@ -386,8 +386,17 @@ def test_a_rounded_series_never_shows_exact_values_or_exact_differences(store):
     assert held_labels(result) == {"Same gap", "On grid"}
     stat = by_label(result)["Rounded"]
     assert stat["display"] == "~$12,000,000" and [p["value"] for p in stat["series"]] == [1_000_000, 12_000_000]
-    text = json.dumps(result)
+    # Random ids (uuid4) can contain any digits, so only the values a reader sees are checked.
+    text = json.dumps(_without_ids(result))
     assert "234" not in text and "678" not in text
+
+
+def _without_ids(value):
+    if isinstance(value, dict):
+        return {k: _without_ids(v) for k, v in value.items() if k != "id" and not k.endswith("_id")}
+    if isinstance(value, list):
+        return [_without_ids(v) for v in value]
+    return value
 
 
 def test_a_range_series_has_no_numbers(store):
@@ -400,7 +409,7 @@ def test_a_range_series_has_no_numbers(store):
         result = ST.project(c, "investors", "2026-10-15")
     stat = by_label(result)["Pipeline"]
     assert stat["display"] == "$2,000,000–$5,000,000" and all(p["value"] is None for p in stat["series"])
-    assert "234" not in json.dumps(result)
+    assert "234" not in json.dumps(_without_ids(result))
 
 
 def test_a_delayed_value_cant_be_worked_out_before_its_time(store):
