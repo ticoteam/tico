@@ -3281,7 +3281,8 @@ class Execution:
         is due, an obsolete notice to suppress. Any of them, or a job to hand out, sends the claim
         on to `claim`, which repeats every check under the lock."""
         # A retry of a claim that took a job is answered from the record of it, not from here.
-        if not key or c.execute("SELECT 1 FROM idempotency WHERE actor=? AND operation='/api/v2/jobs/claim' AND key=?",
+        if not key or c.execute("SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? "
+                                "AND operation='/api/v2/jobs/claim' AND key=?",
                                 (who.actor, key)).fetchone():
             return None
         answer = self._idle_claim(c, who, body, selected, failed)
@@ -4828,7 +4829,7 @@ class Execution:
             same = c.execute(
                 "SELECT m.id FROM idempotency i JOIN messages m "
                 "ON m.id=coalesce(json_extract(i.response,'$.id'),json_extract(i.response,'$.message.id')) "
-                "WHERE i.actor=? AND i.operation IN (?,?,?) "
+                "WHERE i.binding IS NULL AND i.actor=? AND i.operation IN (?,?,?) "
                 "AND m.conversation_id=? AND m.sender_id=? AND m.body=?",
                 (actor + ":" + aid, "/api/v2/messages", "/api/v2/conversations/" + conv["id"] + "/messages",
                  "/api/v2/threads/" + conv["id"] + "/messages", conv["id"], actor, text)).fetchone()

@@ -3,6 +3,7 @@ import copy
 import json
 import re
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -173,6 +174,13 @@ def invited_from_setup(api, finance):
     reports to her. This install signs in another way, so no invite email can go: the owner is told so, plainly."""
     invite = lambda key, email: api.post("/api/v2/onboarding/company/people/%s/invite" % key, json={"email": email},
                                          headers=signed_in())
+    # Without an Idempotency-Key the request is refused before anyone is put on the roster.
+    unkeyed = {k: v for k, v in signed_in().items() if k.lower() != "idempotency-key"}
+    keyless = api.post("/api/v2/onboarding/company/people/ana/invite", json={"email": "ana@acme.example"},
+                       headers=unkeyed)
+    assert keyless.status_code == 422 and keyless.json()["error"]["code"] == "idempotency_key", keyless.text
+    assert not [p for p in api.get("/api/people", headers=signed_in()).json()["people"]
+                if p["email"] == "ana@acme.example"]
     refused = invite("ana", "ana@acme.example")
     assert refused.status_code == 422 and refused.json()["error"]["code"] == "invite_unavailable"
     assert "Tell Ana to sign in at" in refused.json()["error"]["detail"]
@@ -184,20 +192,21 @@ def invited_from_setup(api, finance):
 
     # On a Tico account sign-in the issuer sends it: Invite again sends to the person already added, once. A repeat of
     # one request (same Idempotency-Key, ui/app/api.js) sends nothing more, nor does a copy overlapping it.
-    from backend import invites
+    from backend import company_import, invites, people_remove, views
     keyed = lambda key, email="someone-else@acme.example": api.post(
         "/api/v2/onboarding/company/people/ana/invite", json={"email": email},
         headers={**signed_in(), "Idempotency-Key": key})
 
     class Issuer:
         name, calls, overlap = "oidc", [], []
+        answer = (202, {"status": "sent"})
 
         def invite(self, email):
             if not self.overlap:
                 self.overlap.append(None)
                 self.overlap[0] = keyed("k-1")
             self.calls.append(email)
-            return 202, {"status": "sent"}
+            return self.answer
     api.app.state.auth.proxy = Issuer()
     try:
         sent = keyed("k-1")
@@ -208,6 +217,9 @@ def invited_from_setup(api, finance):
         again = keyed("k-1")
         assert again.status_code == 200 and Issuer.calls == ["ana@acme.example"]
         assert again.json()["company_import"]["people"] == sent.json()["company_import"]["people"]
+        # A repeat answers from its binding: the roster is not written again.
+        with mock.patch.object(company_import, "add_invitee", side_effect=AssertionError("roster written")):
+            assert keyed("k-1").status_code == 200 and Issuer.calls == ["ana@acme.example"]
         # Sent, then the server failed before answering: the repeat records it and sends nothing more.
         record = invites.record
         invites.record = lambda *a: (_ for _ in ()).throw(RuntimeError("lost"))
@@ -218,6 +230,33 @@ def invited_from_setup(api, finance):
             invites.record = record
         assert keyed("k-2").status_code == 200 and len(Issuer.calls) == 2
         assert invite("nobody", "x@acme.example").status_code == 404
+        # A send the issuer refuses is bound too, and its refusal names the address: removal must scrub that.
+        Issuer.answer = (202, {"error": "not_sent"})
+        try:
+            failed = keyed("k-3")
+        finally:
+            Issuer.answer = (202, {"status": "sent"})
+        assert failed.status_code == 422 and failed.json()["error"]["code"] == "invite_failed"
+        sends = list(Issuer.calls)
+        # Removed since: a repeat of a bound key still answers from its binding, and the person is not added again.
+        # The binding keeps neither the address (its hash) nor the refusal text that named it.
+        assert api.post("/api/v2/people/%s" % ana["id"], json={"left": True}, headers=signed_in()).status_code == 200
+        # The route would refuse her (the setup file's link to her counts as history), so the removal runs as its work does.
+        with api.app.state.store.transaction() as c:
+            gone = next(p for p in views.roster(c)["people"] if p["id"] == ana["id"])
+            people_remove.remove(c, "test-owner", views.roster(c), gone)
+        bound = rows(api, "SELECT key,state,request_hash,error_detail FROM idempotency WHERE subject=?", (ana["id"],))
+        assert {row["state"] for row in bound} == {"completed", "refused"}
+        assert all(row["request_hash"] == "" for row in bound)
+        assert not [row for row in bound if "acme.example" in (row["error_detail"] or "")]
+        refused_key, = [row["key"] for row in bound if row["state"] == "refused"]
+        with mock.patch.object(company_import, "add_invitee", side_effect=AssertionError("roster written")):
+            replayed = api.post("/api/v2/onboarding/company/people/ana/invite", json={"email": "ana@acme.example"},
+                                headers={**signed_in(), "Idempotency-Key": refused_key})
+            assert replayed.status_code == 422 and replayed.json()["error"]["code"] == "invite_failed"
+            assert replayed.json()["error"]["detail"] == invites.REMOVED
+            assert keyed("k-1").status_code == 200 and Issuer.calls == sends
+        assert ana["id"] not in [p["id"] for p in api.get("/api/people", headers=signed_in()).json()["people"]]
     finally:
         api.app.state.auth.proxy = None
 

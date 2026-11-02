@@ -653,6 +653,9 @@ def test_people_can_change_visible_task_links_but_bots_need_task_rights(api):
     session = post(api, path, {'url': 'codex resume abc123', 'kind': 'session'}, token='priya-test')['links'][-1]
     assert (session['kind'], session['url']) == ('session', 'session:codex resume abc123')
     assert json.loads(session['detail']) == {'primary': False, 'harness': 'codex', 'thread_id': 'abc123'}
+    with api.app.state.store.read() as c:      # the thread is stored once, in the url
+        assert json.loads(c.execute('SELECT detail FROM task_links WHERE id=?', (session['id'],)).fetchone()[0]) == {
+            'primary': False, 'harness': 'codex'}
     # The owning bot and an ancestor party retain their task rights.
     parent = post(api, 'tasks', {'owner': 'ops', 'title': 'Track linked work', 'body': 'x'})
     child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Build linked work', 'body': 'x', 'relations': [{'task': parent['id'], 'kind': 'parent'}]})

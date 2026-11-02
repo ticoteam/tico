@@ -23,7 +23,7 @@ KEEPS = "Has history; stays as left"
 # `human:<id>` identity that the humans trigger tombstones on delete). Events about them (person.added,
 # person.updated) name their bare id as the target, so `history` reads a target only as `human:<id>`.
 SKIP_TABLES = ("humans", "idempotency", "principals")
-OWN_COLUMNS = {("invite_sends", "person"), ("human_tokens", "human")}
+OWN_COLUMNS = {("human_tokens", "human")}
 # Settings that name them and are rewritten by `remove`.
 OWN_SETTINGS = (Access.ACCESS, "people", "invites")
 
@@ -100,9 +100,13 @@ def remove(c, actor, roster, person):
     people = [{**p, "reports_to": person.get("reports_to") or ""} if p.get("reports_to") == pid else p for p in people]
     Access.save_roster(c, {**roster, "people": people})
     c.execute("DELETE FROM human_tokens WHERE human=?", (pid,))
-    c.execute("DELETE FROM invite_sends WHERE person=?", (pid,))
-    c.execute("DELETE FROM humans WHERE id=?", (pid,))
     from . import invites
+    # The invite bindings stay, so a repeat of an invite request answers from them and never invites the person again
+    # (invites.replay). What names them goes: the hash of the address, and any refusal text that carries it.
+    c.execute("UPDATE idempotency SET request_hash='' WHERE binding=? AND subject=?", (invites.BINDING, pid))
+    c.execute("UPDATE idempotency SET error_detail=? WHERE binding=? AND subject=? AND state='refused'",
+              (invites.REMOVED, invites.BINDING, pid))
+    c.execute("DELETE FROM humans WHERE id=?", (pid,))
     sent = invites.sent(c)
     if pid in sent:
         sent.pop(pid)
