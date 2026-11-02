@@ -39,8 +39,8 @@ def put_back_held(c, row):
                  "AND field IN ('link','related','blocked_by','blocks','parent_id','subtask','follow_up_of','follow_ups') "
                  "LIMIT 1", (row['id'], move['rowid'])).fetchone():
         return False
-    if c.execute("SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.created_at>=? "
-                 "AND json_extract(m.refs,'$.task')=? "
+    if c.execute("SELECT 1 FROM message_refs m WHERE m.conversation_id=? AND m.created_at>=? "
+                 "AND m.ref_task_id=? "
                  "AND m.sender_id<>? AND m.deleted_at IS NULL AND json_extract(m.refs,'$.comment')=1 "
                  "LIMIT 1", (row['conversation_id'], move['created_at'], row['id'], H.KEEPER)).fetchone():
         return False
