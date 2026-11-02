@@ -47,6 +47,7 @@ a.ru-row:hover *{text-decoration:none}
 .ru-txt{min-width:0;overflow-wrap:anywhere;font-size:var(--t-md)}
 /* a teammate a rule names (@slug): a mention chip that opens them */
 .ru-at-w{white-space:nowrap}   /* a chip keeps the punctuation after it on its line */
+.ru-at-w .ru-at{padding-right:1px}   /* and sits close to it: "@Ana Rivera's" */
 .ru-at{display:inline;padding:0 3px;border-radius:4px;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--ink);font-weight:500;white-space:nowrap;text-decoration:none;box-decoration-break:clone}
 a.ru-at:hover,.ru-at[data-href]:hover{background:color-mix(in srgb,var(--accent) 26%,transparent);text-decoration:none;cursor:pointer}
 .ru-c{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
