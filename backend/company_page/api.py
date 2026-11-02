@@ -1,13 +1,16 @@
 """The /api/v2 routes for the switch, audiences, disclosure and the stats board. Owners and admins read and write, because
 every one of these shows what a company keeps back. A bot is refused; BotOps comes through as the person it acts for, so
 it can do what they can and no more."""
+import asyncio
+import hashlib
 import json
 from typing import Any
 
 from fastapi import Request
 from pydantic import Field
-from starlette.responses import HTMLResponse
+from starlette.responses import HTMLResponse, Response
 
+from .. import blobs
 from .. import hubdb as H
 from ..models import Contract
 from ..store import Problem
@@ -88,6 +91,26 @@ class StatPatch(Contract):
 
 class Empty(Contract):
     pass
+
+
+class LogoBody(Contract):
+    """What a logo upload is recorded as: its digest, so the same key sent with other bytes is not replayed as the first."""
+    digest: str = Field(max_length=64)
+
+
+LOGO_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+
+
+def logo_type(data):
+    """PNG, JPEG or WebP by its first bytes, never by the name or type the client sent. SVG is refused: it can run script
+    when a browser opens it."""
+    from . import release
+    if len(data) > release.MAX_LOGO_BYTES:
+        raise Problem("too_large", "The logo must be 2 MB or smaller", 413)
+    for mime, (_, magic) in release.LOGO_TYPES.items():
+        if data.startswith(magic) and (mime != "image/webp" or data[8:12] == b"WEBP"):
+            return mime
+    raise Problem("logo_type", "Use a PNG, JPEG or WebP image", 422)
 
 
 def page(items, key, limit, offset):
@@ -186,6 +209,43 @@ def register(app, store, auth, mutate, settings):
             S.update(c, actor, **fields)
             return page_view(c)
         return write(request, body, work)
+
+    # The logo is the one picture the page sends out, so it is uploaded here and kept apart from the library's files.
+    @app.get("/api/v2/company-page/logo")
+    def company_page_logo_show(request: Request):
+        gate(request)
+        with store.read() as c:
+            row = c.execute("SELECT b.digest, b.content_type FROM company_page_settings s JOIN blobs b ON b.id=s.logo_file_id "
+                            "WHERE s.id='company'").fetchone()
+        if not row:
+            raise Problem("not_found", "No logo is set", 404)
+        headers = {"ETag": '"' + row[0] + '"', "Cache-Control": "private, no-cache", "X-Content-Type-Options": "nosniff"}
+        return Response(app.state.blobs.get(row[0]), media_type=row[1], headers=headers)
+
+    @app.post("/api/v2/company-page/logo")
+    async def company_page_logo_set(request: Request):
+        data = await request.body()
+
+        def run():
+            who = gate(request)
+            mime = logo_type(data)
+            digest = hashlib.sha256(data).hexdigest()
+
+            def save(c):
+                # The bytes are stored before the row names them, so the page never points at a file that isn't there.
+                app.state.blobs.put(data, mime)
+                picture = blobs.register(c, who, digest, len(data), S.LOGO_NAME + "." + LOGO_EXT[mime], mime)
+                S.update(c, who.actor, logo_file_id=picture["id"])
+                return page_view(c)
+            return mutate(request, LogoBody(digest=digest), save)
+        return await asyncio.to_thread(run)
+
+    @app.delete("/api/v2/company-page/logo")
+    def company_page_logo_remove(request: Request):
+        def work(c, actor):
+            S.update(c, actor, logo_file_id=None)
+            return page_view(c)
+        return write(request, Empty(), work)
 
     @app.get("/api/v2/company-page/preview")
     def company_page_preview(request: Request, audience: str = ""):
