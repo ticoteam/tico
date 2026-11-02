@@ -596,9 +596,24 @@ impl Tico {
             if ["live", "legacy-live"].contains(&delivery.receipt["source"].as_str().unwrap_or(""))
                 && delivery.receipt["approved"] != true
             {
+                // Finalization carries the live meeting's visibility, including changes made
+                // in Tico. Freeze that choice before approval so a lost reply retries identically.
+                if delivery.receipt.get("approve_body").is_none() {
+                    let meeting = self.call(
+                        &format!("/api/v2/meetings/{}", delivery.meeting_id),
+                        None,
+                        "",
+                    )?;
+                    let private = meeting["private"].as_bool().context(
+                        "Tico did not return the meeting's privacy; nothing was approved",
+                    )?;
+                    delivery.receipt["approve_body"] =
+                        json!({"action":"approve","private":private});
+                    store.delivery(id, &delivery)?;
+                }
                 self.call(
                     &format!("/api/v2/meetings/{}/review", delivery.meeting_id),
-                    Some(&json!({"action":"approve","private":true})),
+                    Some(&delivery.receipt["approve_body"]),
                     &format!("recorder:{id}:approve"),
                 )?;
                 delivery.receipt["approved"] = json!(true);

@@ -2154,3 +2154,93 @@ fn title_only_item_needs_confirmation_after_each_edit_before_any_task_post() {
         "synthetic-title-task"
     );
 }
+
+#[test]
+fn live_send_preserves_filed_visibility_and_retries_frozen_approval_after_restart() {
+    for source in ["live", "legacy-live"] {
+        for private in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(dir.path()).unwrap();
+            let record = transcript(&store, "Synthetic visibility choice");
+            store
+                .delivery(
+                    &record.id,
+                    &Delivery {
+                        destination_id: "synthetic".into(),
+                        meeting_id: "filed-fixture".into(),
+                        status: "partial".into(),
+                        error: String::new(),
+                        receipt: json!({"source":source}),
+                    },
+                )
+                .unwrap();
+            let who = json!({"actor":"human:test"});
+            let (tico, seen, worker) = server(vec![
+                Some(who.clone()),
+                Some(json!({"id":"filed-fixture","private":private})),
+                None,
+                Some(who.clone()),
+                Some(json!({"id":"filed-fixture","private":private,"review_state":"live"})),
+                Some(who),
+            ]);
+            assert!(tico.send(&store, &record.id, false).is_err());
+            let reopened = Store::open(dir.path()).unwrap();
+            assert_eq!(
+                tico.send(&reopened, &record.id, false).unwrap(),
+                "filed-fixture"
+            );
+            // A subsequent Send neither approves again nor imports another meeting.
+            tico.send(&reopened, &record.id, false).unwrap();
+            worker.join().unwrap();
+            let calls = seen.lock().unwrap();
+            assert_eq!(calls[1].0, "GET /api/v2/meetings/filed-fixture HTTP/1.1");
+            assert!(
+                calls[2]
+                    .0
+                    .starts_with("POST /api/v2/meetings/filed-fixture/review ")
+            );
+            assert_eq!(calls[2].1, json!({"action":"approve","private":private}));
+            assert_eq!(calls[2], calls[4]);
+            assert!(!calls[2].2.is_empty());
+            let delivery = &reopened.get(&record.id).unwrap().deliveries[0];
+            assert_eq!(delivery.status, "sent");
+            assert_eq!(delivery.receipt["approved"], true);
+        }
+    }
+}
+
+#[test]
+fn live_send_refuses_unknown_privacy_before_approval() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = transcript(&store, "Synthetic unknown visibility");
+    store
+        .delivery(
+            &record.id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "filed-fixture".into(),
+                status: "partial".into(),
+                error: String::new(),
+                receipt: json!({"source":"live"}),
+            },
+        )
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
+        Some(json!({"id":"filed-fixture"})),
+    ]);
+    let error = tico.send(&store, &record.id, false).unwrap_err();
+    worker.join().unwrap();
+    assert!(error.to_string().contains("nothing was approved"));
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|call| call.0.starts_with("GET "))
+    );
+    assert_ne!(
+        store.get(&record.id).unwrap().deliveries[0].receipt["approved"],
+        true
+    );
+}
