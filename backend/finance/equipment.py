@@ -102,8 +102,10 @@ def _sync_warranty(ctx: Ctx, equipment_id: str, day: str | None, creator: str, w
         return
     if day is None:
         if row["archived_at"] is None:
+            FLOW.withdraw(ctx.c, due_id, WARRANTY_NAME)     # its open task must not keep naming the old day
             RD.update(ctx.c, due_id, {"archived_at": ctx.at, "updated_at": ctx.at, "updated_by_id": who})
     elif day != str(row["starts_on"]) or row["archived_at"] is not None:
+        FLOW.withdraw(ctx.c, due_id, WARRANTY_NAME)
         RD.update(ctx.c, due_id, {"starts_on": day, "counted_from_on": today.isoformat(), "archived_at": None,
                                   "updated_at": ctx.at, "updated_by_id": who})
 

@@ -2,6 +2,7 @@
 them, and watch raises each renewal stage once per renewal date."""
 from datetime import date
 
+from backend import hubdb as H
 from backend.finance import actions as FA
 from backend.finance import context as FC
 from backend.finance import reads as FR
@@ -101,6 +102,9 @@ def test_a_renewal_whose_owner_cannot_take_it_tells_the_install_owner_once_and_o
     with books.transaction() as c:
         rows = c.execute("SELECT id FROM tasks WHERE title='Vendor renewal needs a teammate: Orphan Co'").fetchall()
         assert len(rows) == 1
+        # The notice names a vendor, so the install owner reads it and an unrelated teammate does not.
+        notice = H.task(c, rows[0][0])
+        assert H.task_private_readable(c, FC.owner(c), notice) and not H.task_private_readable(c, "human:ben", notice)
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (rows[0][0],))
         FA.watch_documents(c, "2026-10-15T14:00:00.000000Z")
     with books.transaction() as c:
@@ -121,6 +125,10 @@ def test_a_renewal_task_goes_to_the_vendors_owner_when_it_has_one(books):  # noq
     with books.read() as c:
         tasks = [tuple(r) for r in c.execute("SELECT owner, title FROM tasks WHERE title LIKE 'Vendor renewal:%'")]
         assert tasks == [("bot:coder", "Vendor renewal: Laser Service Co")]
+        task = H.task(c, c.execute("SELECT id FROM tasks WHERE title LIKE 'Vendor renewal:%'").fetchone()[0])
+        # gus is outside the bot's reporting line (cara, then ben), which reads a bot's private task by design.
+        readers = {actor: H.task_private_readable(c, actor, task) for actor in ("bot:coder", "human:gus")}
+    assert readers == {"bot:coder": True, "human:gus": False}, "a vendor's renewal is private to its owner"
 
 
 def test_a_viewer_without_the_vendors_cells_or_the_payables_view_gets_no_seats_or_renewal(books):  # noqa: F811
