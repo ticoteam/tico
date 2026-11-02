@@ -66,6 +66,9 @@ FAILING_FOR = 15 * 60            # Health speaks after pulls have failed this lo
 OLD_PENDING = 3600               # ... or when the oldest waiting delivery is this old
 POISON = 5                       # a delivery whose handling raised this many times is skipped, so one cannot block the rest
 RELAY = re.compile(r"hr_[0-9a-f]{16}")
+# The system relays HQ makes per install, one for each trigger (hooks/store.py SYSTEM_RELAYS). Each is listed with
+# `system: true`, recorded from that list only, and fed only from the relay recorded for its own trigger.
+SYSTEM_TRIGGERS = (tico_notices.ID, postal_mail.TRIGGER)
 
 
 def _prefix(address, relay_id):
@@ -163,6 +166,29 @@ def keep_answer(c: Any, answer: dict[str, Any], *, trigger_id: str, by: str) -> 
         return False
     keep(c, relay_id=relay_id, trigger_id=trigger_id, prefix=prefix, by=by)
     return True
+
+
+def record_system(c, trigger_id: str, relay_id: str) -> bool:
+    """Remember `relay_id` as this install's system relay for `trigger_id`, replacing an older one. False, and nothing
+    kept, for an id that is not a relay id. The caller has HQ's list (`system: true`) in hand; a delivery never records."""
+    if not RELAY.fullmatch(str(relay_id or "")):
+        return False
+    if relay_recorded(c, trigger_id, relay_id):
+        return True
+    c.execute("DELETE FROM trigger_relays WHERE trigger_id=? AND deleted_at IS NULL", (trigger_id,))
+    c.execute("INSERT OR REPLACE INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created,deleted_at,hq_gone) "
+              "VALUES(?,?,?,?,?,NULL,0)", (relay_id, trigger_id, "", H.KEEPER, H.now()))
+    return True
+
+
+def relay_recorded(c, trigger_id: str, relay_id: str) -> bool:
+    return c.execute("SELECT 1 FROM trigger_relays WHERE trigger_id=? AND relay_id=? AND deleted_at IS NULL",
+                     (trigger_id, relay_id)).fetchone() is not None
+
+
+def system_accepts(c, trigger_id: str, relay_id: str) -> bool:
+    """Whether a delivery for a system trigger from `relay_id` may be fed: only the relay recorded for that trigger."""
+    return bool(relay_id) and relay_recorded(c, trigger_id, relay_id)
 
 
 def clean_wake_url(value):
@@ -399,7 +425,7 @@ class HookRelay:
             # A letter (backend/postal_mail.py) rides the system relay too and is only kept here: the download and the
             # model calls run in the mail drain, never inside this transaction.
             with self.store.transaction() as c:
-                if tico_notices.accepts(c, relay_id):
+                if system_accepts(c, postal_mail.TRIGGER, relay_id):
                     kick = postal_mail.arrived(c, body, str(item.get("delivery_id") or ""))
                 save(c, cursor=seq)
             mail = getattr(self.app.state, "postal_mail", None)
@@ -435,13 +461,13 @@ class HookRelay:
         return H.human_actor(pid) if pid else None
 
     def unknown_system_relay(self, items):
-        """Whether a delivery in this page names `_tico` or `_mail` through a relay not recorded here."""
-        wanted = {str(i.get("relay_id") or "") for i in items
-                  if isinstance(i, dict) and i.get("trigger_id") in (tico_notices.ID, postal_mail.TRIGGER)}
+        """Whether a delivery in this page names a system trigger (SYSTEM_TRIGGERS) through a relay not recorded for it."""
+        wanted = {(str(i.get("trigger_id")), str(i.get("relay_id") or "")) for i in items
+                  if isinstance(i, dict) and i.get("trigger_id") in SYSTEM_TRIGGERS}
         if not wanted:
             return False
         with self.store.read() as c:
-            return wanted != {tico_notices.relay(c)}
+            return any(not relay_recorded(c, trigger_id, relay_id) for trigger_id, relay_id in wanted)
 
     def learn_notice_relay(self, link, force=False):
         """The relay HQ lists with `system: true` for `_tico` is the one that may feed it. Asked at most hourly, or at
@@ -458,14 +484,23 @@ class HookRelay:
             return
         self.listed = now()
         items = answer.get("items")
-        found = [i.get("relay_id") for i in items if isinstance(i, dict) and i.get("system") is True
-                 and i.get("trigger_id") == tico_notices.ID] if isinstance(items, list) else []
+        listed = items if isinstance(items, list) else []
+        found: dict[str, list] = {}
+        for item in listed:
+            if isinstance(item, dict) and item.get("system") is True and item.get("trigger_id") in SYSTEM_TRIGGERS:
+                found.setdefault(str(item["trigger_id"]), []).append(item.get("relay_id"))
         with self.store.transaction() as c:
-            for item in items if isinstance(items, list) else []:
+            for item in listed:
                 if isinstance(item, dict) and isinstance(item.get("wake"), bool):
                     c.execute("UPDATE trigger_relays SET wake=? WHERE relay_id=?", (int(item["wake"]), str(item.get("relay_id"))))
-            if len(found) == 1 and tico_notices.record_relay(c, found[0]):
-                tico_notices.ensure(c, self.owner(c))
+            for trigger_id, relays in found.items():
+                if len(relays) != 1:
+                    continue                            # two system relays listed for one trigger: neither is trusted
+                if trigger_id == tico_notices.ID:
+                    if tico_notices.record_relay(c, relays[0]):
+                        tico_notices.ensure(c, self.owner(c))
+                else:
+                    record_system(c, trigger_id, relays[0])
 
     def sweep_deleted(self, link):
         """Tell HQ about relays deleted here, a few at a time; HQ having no such relay is as good as deleted."""

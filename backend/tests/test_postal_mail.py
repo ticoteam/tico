@@ -16,7 +16,8 @@ from backend.tests.test_api import headers
 from backend.tests.test_hook_relay import hq, service  # noqa: F401
 from backend.tests.test_mcp import call
 
-SYSTEM = "hr_00000000000000a1"
+SYSTEM = "hr_00000000000000a1"        # the install's `_tico` system relay
+MAIL = "hr_00000000000000a2"          # the install's `_mail` system relay: HQ makes one per trigger, not one shared relay
 
 
 class Mail:
@@ -77,6 +78,7 @@ def mail(api, hq, monkeypatch):
     monkeypatch.setattr(svc, "drain", lambda: 0)       # the app's own loop stays out; tests drain by hand
     svc.reader, svc.engine = Reader(), Decide()
     hq.relays[SYSTEM] = {"id": SYSTEM, "trigger_id": "_tico", "key": "hq", "system": True}
+    hq.relays[MAIL] = {"id": MAIL, "trigger_id": "_mail", "key": "hq", "system": True}
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','finance-lead') WHERE bot='finance'")
     return fake
@@ -97,7 +99,7 @@ def letter(api, ident, kind, decided=None, deadline=None, summary=None):
     svc.engine.answers[summary] = decided or (kind, 0.95)
 
 
-def deliver(hq, ident, relay=SYSTEM, seq=None, checks=False):
+def deliver(hq, ident, relay=MAIL, seq=None, checks=False):
     body = json.dumps({"item_id": ident, "box": "DE-1", "state": "DE", "num_pages": 2,
                        "received_at": "2026-10-30T09:00:00Z", "flags": {"containsChecks": checks}}).encode()
     hq.queue.append({"hq_seq": seq or len(hq.queue) + 1, "relay_id": relay, "trigger_id": "_mail",
