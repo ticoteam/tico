@@ -34,7 +34,7 @@ def document_digest(document: Mapping[str, Any]) -> str:
     return hashlib.sha256(json.dumps(document, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
-def recipients(emails: Any) -> list[str]:
+def recipients(emails: list[Any] | tuple[Any, ...] | None) -> list[str]:
     """An approval's `to`: the customer's addresses, trimmed, lower-case, sorted, each once."""
     values: list[Any] = list(emails) if emails else []
     return sorted({str(e).strip().lower() for e in values if str(e).strip()})
@@ -68,7 +68,7 @@ def mailbox(c: Any) -> str:
         can: list[Any] = cast(list[Any], entry.get("can") or [])
         if SEND not in can:
             continue
-        box = str(entry.get("identity") or "").strip().lower()
+        box = str(tool.get("identity") or "").strip().lower()
         if "@" in box:
             return box
     return ""
