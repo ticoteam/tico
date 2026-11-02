@@ -139,6 +139,54 @@ def test_chats_and_slack_are_connected(ana):
     assert any(any(p.startswith("bot:") for p in conv["participants"]) for conv in conversations)
 
 
+LEADS = {"ops-manager": "human:ben", "support-lead": "human:ben", "marketing-lead": "human:cara",
+         "sales-lead": "human:cara", "product-manager": "human:eli", "finance-lead": "human:ana"}
+PEOPLE = ("human:ana", "human:ben", "human:cara", "human:eli")
+
+
+def test_each_department_lead_reports_to_the_person_who_runs_it(ana):
+    bots = {bot["slug"]: bot for bot in ana.get("/api/v2/bots").json()}
+    assert {slug: bots[slug]["reports_to"] for slug in LEADS} == LEADS
+
+
+def test_each_person_has_a_draft_update_for_every_day_and_the_friday_review(ana):
+    daily = {"2026-10-31", "2026-11-01", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05"}
+    fridays = {"2026-10-30", "2026-11-06"}
+    for person in PEOPLE:
+        rows = ana.get("/api/v2/updates", params={"bot": person, "limit": 100, "include_archive": True}).json()["updates"]
+        assert {row["day"] for row in rows if row["kind"] == "daily"} == daily, person
+        assert {row["day"] for row in rows if row["kind"] == "weekly"} == fridays, person
+        assert {row["drafted_by"] for row in rows} == {"coo"}, person
+
+
+def test_ana_sidebar_leaves_unread_only_the_decisions_she_still_owes(ana):
+    listing = ana.get("/api/v2/threads?limit=200").json()
+    rows = listing["threads"] + listing["dms"] + listing["attention"]
+    unread = {row["title"] for row in rows if row.get("kind") == "task" and (row.get("me") or {}).get("unread")}
+    assert unread <= set(D.KEEP_UNREAD), sorted(unread - set(D.KEEP_UNREAD))
+    assert {"Raise Home Pro from $449 to $479 for December?", "Sign the FCC filing for Home Pro 2"} <= unread
+
+
+def test_the_price_decision_leads_needs_you_with_a_short_reason(ana):
+    [first, *_] = ana.get("/api/v2/needs-you").json()["items"]
+    assert first["title"] == "Raise Home Pro from $449 to $479 for December?"
+    assert 1 <= len([part for part in first["body"].split("\n\n") if part.strip()]) <= 3
+
+
+def test_the_assistant_answers_whats_waiting_with_the_open_decisions(ana):
+    answers = [message["body"] for message in ana.get("/api/v2/assistant").json()["messages"]
+               if message["sender_id"] == "bot:coo"]
+    waiting = [text for text in answers if "waiting on you" in text]
+    assert waiting and all(name in waiting[0] for name in (
+        "Raise Home Pro from $449 to $479 for December?", "Sign the FCC filing for Home Pro 2", "Choose the Larkford bid price"))
+
+
+def test_home_has_a_bot_page_settings_has_a_team_icon_and_granola_syncs(ana):
+    assert [page["title"] for page in ana.get("/api/v2/pages").json()["pages"]] == [D.PAGE["title"]]
+    assert ana.get("/api/v2/team/icon").status_code == 200
+    assert ana.post("/api/v2/meetings/granola/sync").status_code == 200
+
+
 def test_the_same_date_builds_the_same_company(built):
     _first, rows, again = built
     assert again == rows
