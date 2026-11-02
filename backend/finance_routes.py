@@ -105,6 +105,18 @@ def install(app, store, auth, mutate):
         except finance.FinanceError as e:
             raise problem(e) from None
 
+    def audit_private_read(actor):
+        """A request by someone other than the owner who reads private lines in full is written to events (spec §7.5),
+        once per request, whatever the route answers. The owner's own reads are not logged."""
+        try:
+            with store.read() as c:
+                lines = finance.full_read_lines(c, actor)
+            if lines:
+                with store.transaction() as c:
+                    finance.note_full_read(c, actor, lines)
+        except finance.FinanceError as e:
+            raise problem(e) from None
+
     def as_viewer(request, view_as):
         """The caller, or for the owner the teammate they view Finance as (audited). A request by someone other than
         the owner who reads private lines in full is written to events (spec §7.5), once per request."""
@@ -118,14 +130,7 @@ def install(app, store, auth, mutate):
                     finance.note_view_as(c, who.actor, actor)
             except finance.FinanceError as e:
                 raise problem(e) from None
-        try:
-            with store.read() as c:
-                lines = finance.full_read_lines(c, actor)
-            if lines:
-                with store.transaction() as c:
-                    finance.note_full_read(c, actor, lines)
-        except finance.FinanceError as e:
-            raise problem(e) from None
+        audit_private_read(actor)
         return actor
 
     @app.get("/api/v2/finance/budgets")
@@ -201,6 +206,7 @@ def install(app, store, auth, mutate):
         """Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies: for a finance admin who
         sees sources. The ordinary trigger routes never show these bodies."""
         who = viewer(request)
+        audit_private_read(who.actor)
         return read(lambda c: finance_reads.webhook_deliveries(c, who.actor, limit=limit))
 
     @app.get("/api/v2/finance/access")
@@ -522,6 +528,7 @@ def install(app, store, auth, mutate):
     def finance_close(request: Request, month: str):
         """A month's close checklist, for teammates who do the books."""
         who = viewer(request)
+        audit_private_read(who.actor)
         return read(lambda c: finance_reads.close_checklist(c, who.actor, month))
 
     @app.get("/api/v2/finance/action-kinds")
@@ -658,6 +665,7 @@ def install(app, store, auth, mutate):
         """Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key
         is the action's key, so a retry never acts twice. `dry_run` writes nothing and says what would happen."""
         who = viewer(request)
+        audit_private_read(who.actor)      # the receipt and a dry run both carry the action's impact (spec 7.5)
         key = (request.headers.get("idempotency-key") or "").strip()
         if body.dry_run:
             try:
@@ -696,6 +704,7 @@ def install(app, store, auth, mutate):
         """An action's status, for whoever asked for it, the person named to decide its approval, or whoever's current
         view covers what it is about. Its reason shows to the approver, and to others only while their view covers it."""
         who = viewer(request)
+        audit_private_read(who.actor)
         with store.read() as c:
             found = finance_reads.action_for(c, who.actor, action_id)
         if found is None:

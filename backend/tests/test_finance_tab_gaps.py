@@ -530,6 +530,44 @@ def test_a_full_read_of_a_private_line_by_someone_else_is_written_to_events(api)
     assert [tuple(r) for r in rows] == [("human:eve", private)]
 
 
+def test_each_request_by_someone_else_with_private_detail_leaves_one_row_for_the_read(api):
+    """Spec 7.5: one path serves the tools, search and exports, and each request leaves one row. Eve holds full detail of
+    account 6900, so each of her requests (search, the tax CSV, the close, the webhook bodies, an action's status, and a
+    dry run) adds exactly one 'finance.private_read' row, whatever the route answers. The owner's requests add none."""
+    from backend.finance import actions as FA
+    from backend.tests.test_finance_fixtures import _seed
+    store = api.app.state.store
+    with store.transaction() as c:
+        _seed(c)
+        assert FA.ensure_setup(c, store.settings.owner_email)
+        private = account(c, "6900")
+        payload = {"account_id": private, "private": True, "full_detail": ["human:eve"]}
+        done = act(c, OWNER, "private_lines_set", payload)
+        assert done.status == "committed"
+
+    def rows(actor):
+        with store.read() as c:
+            return c.execute("SELECT COUNT(*) FROM events WHERE action='finance.private_read' AND actor=?",
+                             (actor,)).fetchone()[0]
+
+    reads = [("GET", "/api/v2/finance/search?kind=entry"), ("GET", "/api/v2/finance/tax/sales-tax.csv?year=2026"),
+             ("GET", "/api/v2/finance/close/2026-10"), ("GET", "/api/v2/finance/webhook-deliveries"),
+             ("GET", f"/api/v2/finance/actions/{done.action_id}"),
+             ("POST", "/api/v2/finance/actions")]
+    for method, path in reads:
+        before = rows("human:eve")
+        if method == "GET":
+            r = api.get(path, headers=headers("eve-test"))
+        else:
+            r = api.post(path, json={"kind": "private_lines_set", "payload": payload, "dry_run": True},
+                         headers=headers("eve-test"))
+        assert r.status_code < 500, (path, r.text)
+        assert rows("human:eve") == before + 1, path
+    before = rows(OWNER)
+    api.get("/api/v2/finance/close/2026-10", headers=headers("ana-test"))
+    assert rows(OWNER) == before == 0
+
+
 def test_a_csv_export_is_recorded_for_whoever_it_was_made_for(api):
     """Spec 7.5: exports record who they were made for. The sales tax CSV the owner downloads leaves a row naming the
     owner and the export; nothing is stored, so there is no copy to expire."""
