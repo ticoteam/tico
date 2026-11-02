@@ -1147,6 +1147,11 @@ async fn untouched_conflict(path: &Path, gitdir: &Path, name: &str, env: &Env) -
         }
     }
     let (Some(ours), Some(theirs)) = (stages.get("2"), stages.get("3")) else { return Ok(false) };
+    // The git wrapper decodes output lossily, so a stage that is not UTF-8 arrives with replacement characters and
+    // cannot be compared with the file exactly: keep it rather than let an edit to those characters pass as untouched.
+    if stages.values().any(|stage| stage.contains('\u{FFFD}')) {
+        return Ok(false);
+    }
     let base = stages.get("1").cloned().unwrap_or_default();
     let scratch = Scratch(gitdir.join(format!("tico-merge-check-{}", uuid::Uuid::new_v4().simple())));
     std::fs::create_dir_all(&scratch.0)?;
@@ -1964,6 +1969,14 @@ mod tests {
 
     /// As `merge_in_progress`, and main also adds each `copies` name with the content of the task's `other` file.
     fn merge_in_progress_with(folder: &Path, conflicts: &[&str], deleted: &[&str], copies: &[&str], adds: &[&str]) -> Merge {
+        merge_in_progress_bytes(folder, conflicts, deleted, copies, adds, |name| format!("task {name}\n").into_bytes(), |name| format!("main {name}\n").into_bytes())
+    }
+
+    /// As `merge_in_progress_with`, with each conflicted name's task and main content given as raw bytes.
+    fn merge_in_progress_bytes(
+        folder: &Path, conflicts: &[&str], deleted: &[&str], copies: &[&str], adds: &[&str],
+        task: impl Fn(&str) -> Vec<u8>, main: impl Fn(&str) -> Vec<u8>,
+    ) -> Merge {
         let (workspace, remote, clone) = (folder.join("workspace"), folder.join("remote.git"), folder.join("clone"));
         let base = workspace.join("repos/org__product");
         let path = workspace.join("tasks/12345678/org__product");
@@ -1981,14 +1994,14 @@ mod tests {
         sh(folder, &["clone", "-q", remote.to_str().unwrap(), base.to_str().unwrap()]);
         sh(&base, &["worktree", "add", "-q", "-b", "tico/12345678-build", path.to_str().unwrap(), "origin/main"]);
         for name in &names {
-            std::fs::write(path.join(name), format!("task {name}\n")).unwrap();
+            std::fs::write(path.join(name), task(name)).unwrap();
         }
         std::fs::write(path.join("other"), "other\n").unwrap();
         sh(&path, &["add", "-A"]);
         sh(&path, &["commit", "-qm", "Task"]);
         sh(&path, &["push", "-q", "origin", "tico/12345678-build"]);
         for name in conflicts {
-            std::fs::write(clone.join(name), format!("main {name}\n")).unwrap();
+            std::fs::write(clone.join(name), main(name)).unwrap();
         }
         for name in deleted {
             std::fs::remove_file(clone.join(name)).unwrap();
@@ -2221,6 +2234,35 @@ mod tests {
         assert_eq!(sh(&m.path, &["show", ":x[1].txt"]), "two");
     }
 
+
+    #[tokio::test]
+    async fn a_conflict_edited_to_replacement_characters_over_invalid_stage_bytes_is_kept() {
+        let folder = temp_folder("lossy-stage");
+        let mut m = merge_in_progress_bytes(&folder.0, &["file"], &[], &[], &[], |_| b"task \xff\n".to_vec(), |_| b"main \xfe\n".to_vec());
+        let working = std::fs::read(m.path.join("file")).unwrap();
+        // The same conflict with each invalid byte replaced by U+FFFD: valid UTF-8, so the working file reads as text.
+        let edited = String::from_utf8_lossy(&working).into_owned().into_bytes();
+        assert_ne!(edited, working);
+        std::fs::write(m.path.join("file"), &edited).unwrap();
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        assert_eq!(std::fs::read(m.path.join("file")).unwrap(), edited);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert_eq!(sh(&m.path, &["symbolic-ref", "--short", "HEAD"]), "tico/12345678-build");
+        assert!(!sh(&m.remote, &["show-ref", "--heads"]).contains("wip/"));
+    }
+
+    #[tokio::test]
+    async fn a_conflicted_file_that_is_not_utf8_is_kept() {
+        let folder = temp_folder("not-utf8-file");
+        let mut m = merge_in_progress_bytes(&folder.0, &["file"], &[], &[], &[], |_| b"task \xff\n".to_vec(), |_| b"main \xfe\n".to_vec());
+        let working = std::fs::read(m.path.join("file")).unwrap();
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        assert_eq!(std::fs::read(m.path.join("file")).unwrap(), working);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
+        assert!(!sh(&m.remote, &["show-ref", "--heads"]).contains("wip/"));
+    }
 
     #[tokio::test]
     async fn a_merged_path_name_that_is_not_text_is_kept() {

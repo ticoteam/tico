@@ -1626,6 +1626,21 @@ def test_a_conflicted_file_that_is_not_utf8_is_kept(trees, tmp_path):
     git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
 
 
+def test_invalid_stage_bytes_edited_to_replacement_characters_are_kept(trees, tmp_path):
+    """Both sides hold invalid UTF-8 and the working file has each byte replaced by U+FFFD. The stage bytes are kept
+    exact, so the edit is seen and the file is kept (the Rust port pins the same case)."""
+    workspace, base, remote, row, client = trees
+    path = _merge_in_progress(trees, tmp_path, raw=True)
+    working = (path / 'file').read_bytes()
+    edited = working.decode('utf-8', 'replace').encode('utf-8')
+    assert edited != working
+    (path / 'file').write_bytes(edited)
+    with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
+        W.act(workspace, row, 'remove', os.environ.copy())
+    assert (path / 'file').read_bytes() == edited
+    git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
+
+
 def test_a_merged_path_name_that_is_not_utf8_is_kept(trees, tmp_path):
     workspace, base, remote, row, client = trees
     path = _merge_in_progress(trees, tmp_path, adds=('caf\udce9.txt',))
