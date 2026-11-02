@@ -1231,6 +1231,61 @@ def test_without_a_tunnel_the_routes_are_written_but_nothing_restarts(ready):
     assert restarts(ready, 0) == 0
 
 
+# routes: a service on the host that is not a company (the public demo)
+
+DEMO = ["route", "set", "--name", "demo", "--host", "demo.tico.team", "--host", "demo.tico.dev",
+        "--port", "19081", "--port", "19082", "--noindex", "--json"]
+
+
+def test_a_route_goes_to_its_first_healthy_port_and_is_never_indexed():
+    route = {"name": "demo", "hosts": ["demo.tico.team", "demo.tico.dev"], "ports": [19081, 19082], "noindex": True}
+    plain = cell.router_config([{"domain": "a.tico.team", "port": 20000}])
+    text = cell.router_config([{"domain": "a.tico.team", "port": 20000}], [route])
+    block = text[text.index("http://demo.tico.team:8080, http://demo.tico.dev:8080 {"):text.index("http://:8080 {")]
+    assert text.replace(block, "") == plain                       # the companies' blocks are untouched
+    assert "reverse_proxy 127.0.0.1:19081 127.0.0.1:19082 {" in block and "lb_policy first" in block
+    assert "health_uri /healthz" in block and "lb_try_duration 30s" in block
+    assert block.count('header X-Robots-Tag "noindex, nofollow"') == 2          # answers and the hold's 503
+    assert 'respond "User-agent: *\nDisallow: /\n" 200' in block
+    one = cell.router_config([], [{**route, "ports": [19081], "noindex": False}])
+    assert "lb_policy" not in one and "X-Robots-Tag" not in one and "robots.txt" not in one
+
+
+def test_route_set_is_kept_by_every_later_router_write_and_remove_drops_it(tunneled):
+    routes = tunneled.root / "tunnel" / "cloudflared.yml"
+    plain = routes.read_text()
+    n = len(tunneled.system.calls)
+    answer = tunneled(*DEMO[:-1], "--router-only", "--json")
+    assert answer == {"ok": True, "route": "demo", "changed": True, "router": True, "tunnel": False,
+                      "tunnel_pending": True}
+    assert routes.read_text() == plain and restarts(tunneled, n) == 0     # --router-only: no tunnel restart
+    caddy = tunneled.root / "router" / "Caddyfile"
+    assert "http://demo.tico.team:8080, http://demo.tico.dev:8080" in caddy.read_text()
+    tunneled(*add_args(tunneled, "alpha"))                                 # a company's add keeps the route
+    assert "demo.tico.dev" in caddy.read_text() and '"demo.tico.dev"' in routes.read_text()
+    assert tunneled("route", "list", "--json")["routes"][0]["ports"] == [19081, 19082]
+    n = len(tunneled.system.calls)
+    assert tunneled(*DEMO)["changed"] is False and restarts(tunneled, n) == 0
+    answer = tunneled("route", "remove", "--name", "demo", "--json")
+    assert answer["changed"] and answer["tunnel"] and restarts(tunneled, n) == 1
+    assert "demo.tico" not in caddy.read_text() and routes.read_text() == plain
+
+
+def test_route_and_company_hosts_never_overlap(ready):
+    ready(*add_args(ready, "alpha"))
+    assert ready("route", "set", "--name", "demo", "--host", "alpha.tico.team", "--port", "19081",
+                 "--json")["error"] == "domain_taken"
+    assert ready(*DEMO)["ok"]
+    args = add_args(ready, "demo")
+    assert ready(*args)["error"] == "domain_taken"                         # demo.tico.team is the route's
+
+
+@pytest.mark.parametrize("extra", [["--port", "8080"], ["--port", "20001"], ["--port", "80"], []])
+def test_route_ports_stay_clear_of_the_cells_own(ready, extra):
+    answer = ready("route", "set", "--name", "demo", "--host", "demo.tico.team", *extra, "--json")
+    assert answer["error"] == "bad_args"
+
+
 # carried settings
 
 CARRIED = ("# from hub.tico.team's .env\n"

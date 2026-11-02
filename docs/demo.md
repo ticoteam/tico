@@ -44,6 +44,30 @@ published port. Ordinary local installs still check their configured port.
 
 Poking around is safe: changes go to a temporary database.
 
+## Tico's public demo
+
+Tico runs one public, read-only copy for people who want to look without Docker, unlisted: every answer carries
+`X-Robots-Tag: noindex, nofollow` and `robots.txt` disallows everything. It lives on the cell host
+([cell mode](cell.md)) beside the companies and apart from them, set up by `deploy/demo/`:
+
+```sh
+deploy/demo/deploy-demo <sha> [--url https://demo.tico.dev] [--image vX.Y.Z] [--tunnel]
+```
+
+- The commit (pushed to GitHub) runs as `python -m backend.demo --public-demo`, in the systemd unit
+  `tico-demo@blue` or `tico-demo@green`: its own user, the release image's files as its root (the same Python,
+  SQLite and screen relay; the deploy refuses an image whose `backend/requirements.txt` or `relay-rs` differ), the
+  source read-only, a private `/tmp` for the company, 2 GB, and loopback only (`IPAddressDeny=any`), so it cannot
+  reach the network or see the host's companies.
+- A deploy builds the idle copy while the other one serves, then stops the old one. The router's `demo` route
+  ([Routes](cell.md#routes)) sends visitors to the first copy that answers, so there is no gap.
+- The seed is dated from when the copy starts, so `tico-demo-rotate.timer` builds it again every day at 10:00 UTC.
+  `tico-demo-route.timer` puts the route back within 5 minutes if a core without routes rewrote the router.
+- On the host: `/srv/tico-demo/tools/current/deploy/demo/tico-demo status`. Sources are in
+  `/srv/tico-demo/releases/<sha>`, image roots in `/srv/tico-demo/runtime/<tag>`, settings in `/etc/tico-demo`.
+- `--tunnel` puts `demo.tico.dev` (outside the tunnel's `*.tico.team`) into the tunnel's routes; that restarts the
+  shared tunnel, so every company drops for a few seconds. Its DNS record is a proxied CNAME to the tunnel.
+
 ## Keeping the demo current
 
 Each area of the app has a module in `backend/demo_sections/` with a `seed(builder)` function. The module owns its

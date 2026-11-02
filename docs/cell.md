@@ -308,6 +308,31 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   second check, owned by user 10001, and renamed to `data/` in one step before the server first starts, so a failed
   import leaves nothing. Once imported, run `add` again without `--import-data`.
 
+## Routes
+
+A route is something on the host that is not a company, such as Tico's public demo (docs/demo.md): its hosts go to
+its own loopback ports.
+
+```sh
+python3 -m setup cell route set --name demo --host demo.tico.team --host demo.tico.dev \
+  --port 19081 --port 19082 --noindex [--router-only] --json
+python3 -m setup cell route remove --name demo [--router-only] --json
+python3 -m setup cell route list --json
+```
+
+- The record is `routes/<name>.json` (hosts, ports, noindex). Every later router or tunnel write (`add`, `remove`,
+  `sleep`, `wake`, ...) keeps it. A route's hosts and a company's never overlap (`domain_taken` either way).
+- Up to 5 hosts and 2 ports, from 1024 to 19999 and not the cell's own (2019, 8080, 8081, 8082, 8090). With two ports
+  the router sends each request to the first one whose `/healthz` answers (checked every 2 s), so a second copy can
+  start beside the first and take over when the first stops, with no reload. The hold and the 503 are a company's.
+- `--noindex` adds `X-Robots-Tag: noindex, nofollow` to every answer and serves a `robots.txt` that disallows
+  everything.
+- A host the tunnel's wildcard misses (`demo.tico.dev`) goes into the tunnel's routes as an alias does, and restarts
+  the tunnel when the list changes. `--router-only` leaves the tunnel alone; the answer's `tunnel_pending` says a
+  restart is still due.
+- A core older than routes drops them when it rewrites the router. The demo's own timer puts its route back
+  (`deploy/demo/tico-demo route`).
+
 ## Updates
 
 A company updates through the same contract as a hosted install's updater sidecar (`docker/updater.py`): its server
@@ -365,6 +390,7 @@ takes no snapshot, and it restarts the server only when a file changed, so a sec
 | Path | What it is |
 |---|---|
 | `/srv/tico-cell/cell.json` | The cell's domain and the router's address |
+| `/srv/tico-cell/routes/<name>.json` | A route ([Routes](#routes)): its hosts, ports and noindex |
 | `/srv/tico-cell/edge.yaml`, `router/Caddyfile` | The router and tunnel. The Caddyfile is regenerated and swapped in one step on every change, then reloaded. A config the router refuses is replaced by the previous one |
 | `/etc/systemd/system/tico-cell-updater.service` | The cell updater, run from the checkout `init` last ran from |
 | `/etc/systemd/system/tico-cell-wake.service` | The wake service, run from the same checkout, on `127.0.0.1:8082` |

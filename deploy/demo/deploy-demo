@@ -1,0 +1,53 @@
+#!/bin/bash
+# Deploy Tico's public demo (demo.tico.dev / demo.tico.team) at a commit: deploy/demo/deploy-demo <sha> [options]
+#
+#   <sha>             any commit pushed to github.com/ticoteam/tico (a branch name works too; it is resolved here)
+#   --url URL         the address people open (kept for later deploys and the daily rebuild; first default
+#                     https://demo.tico.team)
+#   --image vX.Y.Z    the release image whose Python packages and screen relay it runs on (default: the newest on the
+#                     host; the deploy refuses one whose backend/requirements.txt or relay-rs differ from the commit's)
+#   --tunnel          also put the demo's hosts in the cell tunnel's routes; this RESTARTS the shared tunnel, so every
+#                     company on the host drops for a few seconds. Needed once for demo.tico.dev.
+#
+# It runs deploy/demo/tico-demo on the cell host over AWS SSM, from this checkout's commit (also pushed), so the host
+# needs nothing installed first. Environment: TICO_DEMO_INSTANCE (default cell-1), AWS_PROFILE (default tidy),
+# AWS_REGION (default us-west-2).
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+instance=${TICO_DEMO_INSTANCE:-i-027126437a47a24f4}
+export AWS_PROFILE=${AWS_PROFILE:-tidy} AWS_REGION=${AWS_REGION:-us-west-2}
+
+[ $# -ge 1 ] || { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+ref=$1; shift
+for a in "$@"; do
+  [[ $a =~ ^(--url|--image|--tunnel|https://[a-z0-9.-]+|v[0-9]+\.[0-9]+\.[0-9]+)$ ]] || { echo "deploy-demo: unknown option $a" >&2; exit 2; }
+done
+git -C "$here" fetch -q origin
+sha=$(git -C "$here" rev-parse --verify "$ref^{commit}" 2>/dev/null || git -C "$here" rev-parse --verify "origin/$ref^{commit}")
+tools=$(git -C "$here" rev-parse HEAD)
+for c in "$sha" "$tools"; do
+  git -C "$here" branch -r --contains "$c" | grep -q . || { echo "deploy-demo: $c is not pushed to origin" >&2; exit 1; }
+done
+
+script=$(cat <<EOF
+set -euo pipefail
+dir=/srv/tico-demo/tools/$tools
+if [ ! -x "\$dir/deploy/demo/tico-demo" ]; then
+  install -d -m 755 /srv/tico-demo /srv/tico-demo/tools "\$dir"
+  curl -fsSL --retry 3 --max-time 300 https://codeload.github.com/ticoteam/tico/tar.gz/$tools | tar -xz -C "\$dir" --strip-components=1 --no-same-owner
+  chmod -R go-w,go+rX "\$dir"
+fi
+"\$dir/deploy/demo/tico-demo" deploy $sha $*
+EOF
+)
+params=$(python3 -c 'import json, sys; print(json.dumps({"commands": [sys.argv[1]], "executionTimeout": ["1200"]}))' "$script")
+id=$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript --comment "tico demo $sha" \
+       --parameters "$params" --query Command.CommandId --output text)
+echo "deploy-demo: $sha on $instance (tools $tools), command $id" >&2
+while :; do
+  status=$(aws ssm get-command-invocation --command-id "$id" --instance-id "$instance" --query Status --output text 2>/dev/null || echo Pending)
+  case $status in Pending | InProgress | Delayed) sleep 5 ;; *) break ;; esac
+done
+aws ssm get-command-invocation --command-id "$id" --instance-id "$instance" \
+  --query '[StandardOutputContent, StandardErrorContent]' --output text
+[ "$status" = Success ] || { echo "deploy-demo: $status" >&2; exit 1; }

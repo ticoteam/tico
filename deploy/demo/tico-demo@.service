@@ -1,0 +1,60 @@
+# Tico's public demo, one of two copies (blue, green): deploy/demo/tico-demo, docs/demo.md.
+# Its root is a release image's files, its code the commit's source read-only, its data a private /tmp that goes when
+# it stops. It reaches nothing but loopback.
+[Unit]
+Description=Tico public demo (%i copy)
+Documentation=https://github.com/ticoteam/tico/blob/main/docs/demo.md
+After=network.target
+
+[Service]
+Type=simple
+User=tico-demo
+Group=tico-demo
+EnvironmentFile=/etc/tico-demo/%i.env
+RootDirectory=/srv/tico-demo/%i/root
+BindReadOnlyPaths=/srv/tico-demo/%i/src:/opt/demo
+WorkingDirectory=/opt/demo
+Environment=HOME=/tmp PATH=/opt/tico/.venv/bin:/usr/local/bin:/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2 TICO_UPDATE_CHECK=off
+ExecStart=/opt/tico/.venv/bin/python -m backend.demo --public-demo --url ${TICO_DEMO_URL} --host 127.0.0.1 --port ${TICO_DEMO_PORT}
+Restart=on-failure
+RestartSec=10
+KillMode=mixed
+TimeoutStopSec=20
+
+# Loopback only: the router reaches it, it reaches nothing.
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# Its own small share of the host.
+MemoryMax=2G
+MemorySwapMax=0
+TasksMax=512
+CPUQuota=200%
+CPUWeight=50
+IOWeight=50
+
+MountAPIVFS=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
