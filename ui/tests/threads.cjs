@@ -195,8 +195,10 @@ async function shot(page, name) {
   await page.screenshot({path: path.join(shots, `threads-${name}.png`)});
 }
 
+// Closed on failure too: a browser left open keeps this process alive until the runner's time limit stops it.
+let browser = null;
 (async () => {
-  const browser = await chromium.launch();
+  browser = await chromium.launch();
 
   // ---- Ana at desktop width
   {
@@ -624,7 +626,12 @@ async function shot(page, name) {
     // The name has room on a phone, next to Start call and Members.
     await page.locator('.threads-page [data-thread="t-zed"]').tap();
     await page.locator('.thv-title', {hasText: 'Zed Stone'}).waitFor();
-    assert.ok((await page.locator('.thv-title').boundingBox()).width >= 100, 'the title is not squeezed');
+    // Measured by the page, once it has a box: a re-render can leave the title without one for a moment, and boundingBox()
+    // then returns null (the CI failure, Nov 2). The poll waits for the box; the assert reports the width it got.
+    const titleBox = () => page.evaluate(() => [...document.querySelectorAll('.thv-title')].find(e => e.textContent.includes('Zed Stone'))?.getBoundingClientRect().width || 0);
+    await page.waitForFunction(() => [...document.querySelectorAll('.thv-title')].some(e => e.textContent.includes('Zed Stone') && e.getBoundingClientRect().width > 0));
+    const width = await titleBox();
+    assert.ok(width >= 100, `the title is not squeezed: ${width}px wide`);
     await shot(page, 'dm-head-phone');
 
     // A root whose new reply is in a sub-thread opens that reply.
@@ -690,4 +697,8 @@ async function shot(page, name) {
 
   await browser.close();
   console.log('threads: ok');
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(async error => {
+  console.error(error);
+  process.exitCode = 1;
+  await browser?.close().catch(() => {});
+});
