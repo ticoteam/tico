@@ -3,6 +3,9 @@
 # names: {glob: [old names]} where a name only looks like a renamed column.
 # keys: {glob: [old names]} kept as Python keys and values (another system's field); SQL in the file is renamed.
 files:
+  - clients/bot_names.py              # hub bot check-names names the old spellings on purpose
+  - clients/tests/test_bot_names.py
+  - docs/upgrading-to-contract-release.md   # the upgrade guide lists old and new names
   - connectors/mail/*            # the mail connector's own mail.db (connectors/mail/db.py), not hub tables
   - connectors/mail/**
   - backend/migrations/renames.py     # the rename machinery itself names the old columns

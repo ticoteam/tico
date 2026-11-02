@@ -1,7 +1,13 @@
 {
   "api_fields": {
+    "at": "created_at",
     "attempt": "run",
-    "attempt_id": "run_id"
+    "attempt_id": "run_id",
+    "from_actor_name": "sender_name",
+    "operator_name": "owner_name",
+    "since": "changed_at",
+    "to_actor_name": "recipient_name",
+    "ts": "created_at"
   },
   "api_fields_removed": {
     "blocked_from_status": "holds",
@@ -15,8 +21,11 @@
     "snoozed_until": "holds"
   },
   "applied_waves": [
-    1,
-    2
+    "1",
+    "2",
+    "2s",
+    "2b",
+    "3"
   ],
   "columns": {
     "acceptance_json": "acceptance",
@@ -139,6 +148,7 @@
     "sent_json": "sent",
     "settings_json": "settings",
     "slides_json": "slides",
+    "snapshot_json": "snapshot",
     "source_json": "source",
     "sources_json": "sources",
     "start_json": "at_start",

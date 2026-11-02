@@ -59,7 +59,7 @@ def build():
     data = yaml.safe_load((HERE / "renames.yaml").read_text())
     return {
         "source": "scripts/cleanup/renames.yaml",
-        "applied_waves": [int(w) for w in data["applied_waves"]],
+        "applied_waves": [str(w) for w in data["applied_waves"]],
         "columns": applied_columns(data),
         "api_fields": dict(sorted((data.get("api_fields") or {}).items())),
         "api_fields_removed": dict(sorted(API_FIELDS_REMOVED.items())),
