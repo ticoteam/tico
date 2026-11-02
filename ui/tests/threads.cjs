@@ -19,10 +19,12 @@ const thread = (id, title, seq, extra = {}) => ({id, title, audience: 'team', au
 // Fourteen threads: one needs attention, two are unread, the rest are older. The sidebar shows ten and then All.
 const listed = Array.from({length: 13}, (_, i) => thread('t' + i, `Thread ${i}`, i + 1));
 listed[11].me = me(3); listed[4].me = me(1);
+// Their levels (GET /v2/threads?sort=important): the two unread ones rank highest; the rest read as the middle (5).
+listed[11].importance = 8; listed[4].importance = 7;
 listed[9].me = {...me(), activity: true};
 const plan = thread('t-plan', 'Launch plan', 40, {me: me(0, {can_manage: true})});
 const attention = [plan];
-const dm = {id: 't-dm', title: '', audience: 'personal', last_seq: 5, last_unread_seq: 5, last_message_at: at(3), me: me(1),
+const dm = {id: 't-dm', title: 'Chat with Bea', audience: 'personal', last_seq: 5, last_unread_seq: 5, last_message_at: at(3), me: me(1),
   members: [{actor: 'human:ana'}, {actor: 'human:bea'}]};
 
 const msg = (id, seq, from, body, extra = {}) => ({id, seq, thread_id: 't-plan', sender_id: from, body, created_at: at(60 - seq), depth: 0, ...extra});
@@ -89,7 +91,7 @@ let dmRows = null, callsOff = false;
 async function open(browser, who, {phone = false} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
-  const seen = {errors: [], posts: [], reads: [], readSeqs: [], homes: [], steps: [], tasks: [], calls: [], catchUps: [], follows: [], earlier: [], withdrawn: [], patches: []};
+  const seen = {sorts: [], errors: [], posts: [], reads: [], readSeqs: [], homes: [], steps: [], tasks: [], calls: [], catchUps: [], follows: [], earlier: [], withdrawn: [], patches: []};
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('dialog', d => d.accept());
   // A stand-in media client: rooms connect after a moment and remember whether their microphone is on.
@@ -126,6 +128,7 @@ async function open(browser, who, {phone = false} = {}) {
       org_groups: [{id: 'ops', name: 'Ops team', my_access: {see: true, read: true, write: true}}, {id: 'legal', name: 'Legal', my_access: {see: true, read: true, write: false}}]});
     if (p === '/api/issues') return json([]);
     if (p === '/api/v2/events') return route.abort();
+    if (p === '/api/v2/threads' && method === 'GET') seen.sorts.push(url.searchParams.get('sort'));
     if (p === '/api/v2/threads' && method === 'GET') return json({attention: bob ? [] : attention, threads: bob ? [] : listed, dms: bob ? [] : dmRows || [dm], next_cursor: null});
     const home = p.match(/^\/api\/v2\/threads\/home\/(.+)$/);
     if (home) {
@@ -208,12 +211,13 @@ let browser = null;
     const rows = await page.locator('#th-list .th-row').evaluateAll(els => els.map(a => ({title: a.querySelector('.th-row-title').textContent, attn: a.classList.contains('attn'), unread: a.classList.contains('unread')})));
     assert.equal(rows[0].title, 'Launch plan', 'Needs attention comes first');
     assert.ok(rows[0].attn);
-    assert.deepEqual(rows.slice(1, 3).map(r => r.unread), [true, true], 'then the unread threads');
+    assert.deepEqual(rows.slice(1, 3).map(r => r.title), ['Thread 11', 'Thread 4'], 'then the most important');
+    assert.equal(seen.sorts[0], 'important', 'Important is the default');
     assert.equal(rows.length, 11, 'ten rows, then All');
     assert.equal(rows.at(-1).title, 'All');
     assert.equal(await page.locator('#th-list .th-activity').count(), 1, 'activity is a dot, not a count');
     assert.equal(await page.locator('#dm-list .th-row').count(), 1);
-    assert.match(await page.locator('#dm-list .th-row-title').textContent(), /Bea/);
+    assert.equal(await page.locator('#dm-list .th-row-title').textContent(), 'Bea', 'a DM is named by who is in it, not "Chat with"');
     await shot(page, 'sidebar-desktop');
 
     // A message below an old thread, with another thread on screen: the list is read again and its row moves up with
@@ -480,6 +484,21 @@ let browser = null;
     assert.equal(await page.locator('#thread-new input[value="group:legal"]').count(), 0, 'no Write, not offered');
     await page.keyboard.press('Escape');
 
+    // Important / Recent on the Threads page: Recent asks for the newest first, and the choice is kept.
+    await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('.thp-sort [data-th-sort="important"].cur').waitFor();
+    seen.sorts.length = 0;
+    await page.locator('.thp-sort [data-th-sort="recent"]').click();
+    await page.locator('.thp-sort [data-th-sort="recent"].cur').waitFor();
+    await page.waitForFunction(() => document.querySelector('#threads-all .thp-list'));
+    assert.ok(seen.sorts.length && seen.sorts.every(v => v === 'recent'), 'Recent: ' + seen.sorts);
+    const recentRows = await page.locator('#threads-all .thp-sec').nth(1).locator('.th-row-title').allTextContents();
+    assert.deepEqual(recentRows.slice(0, 2), ['Thread 12', 'Thread 11'], 'newest first: ' + recentRows.slice(0, 3));
+    await page.reload();
+    await page.locator('.thp-sort [data-th-sort="recent"].cur').waitFor();
+    await page.locator('.thp-sort [data-th-sort="important"]').click();
+    await page.locator('.thp-sort [data-th-sort="important"].cur').waitFor();
+
     // Search in Threads: hits from the threads search, each opening its thread at the message.
     await page.goto('https://tico-ui.test/#/threads');
     await page.locator('#th-search').click();
@@ -636,6 +655,10 @@ let browser = null;
 
     // A root whose new reply is in a sub-thread opens that reply.
     await page.goto('https://tico-ui.test/#/threads');
+    await page.locator('.threads-page [data-thread="t11"]').first().waitFor();
+    const head = await page.evaluate(() => { const h = document.querySelector('.threads-head'); return [h.scrollWidth, h.clientWidth]; });
+    assert.ok(head[0] <= head[1], `the header fits a phone: ${head}`);
+    await shot(page, 'list-phone');
     await page.locator('.threads-page [data-thread="t11"]').first().tap();
     await page.waitForFunction(() => location.hash === '#/thread/t-sub?m=s2');
     await page.locator('.th-msg.th-focus[data-mid="s2"]').waitFor();

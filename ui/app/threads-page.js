@@ -25,7 +25,8 @@ async function pageThreads() {
   const withActor = q.get('with') || '', dms = q.get('view') === 'dms';
   const title = dms ? 'DMs' : withActor ? `Threads with ${actorName(withActor)}` : 'Threads';
   const main = $('#main');
-  main.innerHTML = `<div class="threads-page"><header class="threads-head"><h1>${esc(title)}</h1><span class="spacer"></span>
+  let sort = threadsSort();
+  main.innerHTML = `<div class="threads-page"><header class="threads-head"><h1>${esc(title)}</h1>${withActor ? '' : threadsSortHTML(sort)}<span class="spacer"></span>
       <button type="button" class="ghost thp-search" id="th-search" aria-label="Search" title="Search"><span class="nav-icon" aria-hidden="true">search</span></button>
       <button type="button" class="primary" data-thp-new>${dms ? 'New DM' : 'New thread'}</button></header>
     ${withActor ? `<p class="thp-filter"><a class="linkish" href="${THREADS_ROUTE}">All threads</a></p>` : ''}
@@ -36,13 +37,13 @@ async function pageThreads() {
   threadSearchWire(main);
   main.querySelector('[data-thp-new]').onclick = () => threadNewOpen({dm: dms, members: withActor ? [withActor] : []});
   const route = S.route;
-  const st = {attention: [], threads: [], dms: [], next: null};
+  let st = {attention: [], threads: [], dms: [], next: null};
   const load = async cursor => {
-    const p = new URLSearchParams({limit: '50'});
+    const p = new URLSearchParams({limit: '50', sort});
     if (cursor) p.set('cursor', cursor);
     if (withActor) p.set('with', withActor);
-    const r = await get('/v2/threads?' + p, {fresh: true});
-    if (S.route !== route) return;
+    const asked = sort, r = await get('/v2/threads?' + p, {fresh: true});
+    if (S.route !== route || asked !== sort) return;
     for (const key of ['attention', 'threads', 'dms']) {
       const have = new Set(st[key].map(t => t.id));
       st[key].push(...(r[key] || []).filter(t => !have.has(t.id)));
@@ -54,12 +55,25 @@ async function pageThreads() {
     list.map(t => threadRowHTML(t, opts).replace('</a></li>', `<time class="muted thp-at">${esc(ago(t.last_message_at))}</time></a></li>`)).join('')}</ul></section>` : '';
   const draw = () => {
     const seen = new Set(st.attention.map(t => t.id));
-    const html = dms ? section('', threadsOrder(st.dms))
-      : section('Needs attention', st.attention, {attention: true}) + section(st.attention.length ? 'Threads' : '', threadsOrder(st.threads, seen))
-        + section('DMs', threadsOrder(st.dms, seen));
+    const html = dms ? section('', threadsOrder(st.dms, new Set(), sort))
+      : section('Needs attention', st.attention, {attention: true}) + section(st.attention.length ? 'Threads' : '', threadsOrder(st.threads, seen, sort))
+        + section('DMs', threadsOrder(st.dms, seen, sort));
     $('#threads-all').innerHTML = html || `<p class="empty">${dms ? 'No DMs yet' : 'No threads yet'}</p>`;
     $('#threads-more').hidden = !st.next;
   };
+  main.querySelector('.thp-sort')?.addEventListener('click', ev => {
+    const k = ev.target.closest('[data-th-sort]')?.dataset.thSort;
+    if (!k || k === sort) return;
+    sort = k;
+    threadsSortSet(k);
+    main.querySelectorAll('[data-th-sort]').forEach(b => { const on = b.dataset.thSort === k; b.classList.toggle('cur', on); b.setAttribute('aria-selected', String(on)); });
+    st = {attention: [], threads: [], dms: [], next: null};
+    $('#threads-all').innerHTML = '<div class="muted">Loading…</div>';
+    $('#threads-more').hidden = true;
+    // The sidebar follows the same choice.
+    void threadsLoad();
+    load('').catch(e => { if (S.route === route) $('#threads-all').innerHTML = `<p class="empty">${esc(e.message)}</p>`; });
+  });
   $('#threads-more').onclick = ev => { ev.currentTarget.disabled = true; load(st.next).finally(() => { ev.currentTarget.disabled = false; }); };
   try { await load(''); }
   catch (e) { if (S.route === route) $('#threads-all').innerHTML = `<p class="empty">${esc(e.status === 404 ? 'Threads are not on this server yet' : e.message)}</p>`; }

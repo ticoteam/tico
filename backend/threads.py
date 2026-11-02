@@ -3595,7 +3595,7 @@ _SIDEBAR_DONE = "-"
 
 
 def _sidebar_positions(cursor):
-    """(threads, DMs), each None to start, _SIDEBAR_DONE when finished or (place, seq, id). A cursor from before the lists
+    """(threads, DMs), each None to start, _SIDEBAR_DONE when finished or (rank, seq, id). A cursor from before the lists
     were paged apart holds one position, and both lists rank by the same order, so it stands for each."""
     if not cursor:
         return None, None
@@ -3617,7 +3617,10 @@ def _sidebar_positions(cursor):
     return tuple(out)
 
 
-def sidebar(c, v, *, cursor=None, limit=50):
+SIDEBAR_SORTS = ("important", "recent")
+
+
+def sidebar(c, v, *, cursor=None, limit=50, sort=None):
     """The roots the viewer follows or belongs to, and the public ones, ranked before they are paged (spec §1): what
     needs their attention first, then what is unread for them, then the rest, each newest activity first. Following a
     sub-thread lists its root. A root row speaks for its whole subtree, for this viewer (`subtree_summaries`), and a
@@ -3625,7 +3628,13 @@ def sidebar(c, v, *, cursor=None, limit=50):
     someone with many threads still gets their DMs: one query each, whatever the page holds. A task's thread is listed
     only while it has unread for the viewer (its parties and posters are no reason), so task threads never crowd out
     the rest. `attention` is the page's rows with an open Needs attention item. `cursor` is the `next_cursor` of the
-    page before."""
+    page before, read with the same `sort`.
+
+    `sort` picks the order after Needs attention: "recent" is newest activity first; "important" is each root's level
+    (backend/thread_rank.py) highest first, then newest first, and leaves out noise (level 1 or lower, or a task's thread
+    noise by rule); without it, unread first, then the rest. Every row has its `importance`."""
+    if sort is not None and sort not in SIDEBAR_SORTS:
+        raise Problem("sort", "sort is important or recent", 422)
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     limit = max(1, min(int(limit or 50), MAX_PAGE))
     readable = readable_sql(c, v, "r")
@@ -3652,6 +3661,11 @@ def sidebar(c, v, *, cursor=None, limit=50):
                  "AND f.actor=d.recipient WHERE d.recipient=:me AND d.state IN ('pending','delivered','capped','held') "
                  f"AND {_SUBTREE_OPEN} AND m.seq>{mark} AND m.sender_id<>:me AND m.deleted_at IS NULL)")
     place = f"CASE WHEN {is_needing} THEN 0 WHEN NOT {is_history} AND ({by_person} OR {to_viewer}) THEN 1 ELSE 2 END"
+    from . import thread_rank
+    importance = thread_rank.importance_sql("r")
+    # The order a page is ranked and paged by, ascending: Needs attention (0) first, then by `sort`.
+    rank = {None: "place", "recent": f"CASE WHEN {is_needing} THEN 0 ELSE 1 END",
+            "important": f"CASE WHEN {is_needing} THEN 0 ELSE {thread_rank.LEVELS + 1}-importance END"}[sort]
     # A task's thread lists only while it has unread for the viewer: its parties (maker, requester, owner) and anyone who
     # posted in it are no reason on their own. The full Threads page, the Tasks page and search still show it.
     is_task = f"COALESCE(r.audience,{_derived_audience('r')})='task'"
@@ -3662,6 +3676,8 @@ def sidebar(c, v, *, cursor=None, limit=50):
              f"thread_followers f JOIN conversations s ON s.id=f.thread_id WHERE f.actor=:me AND f.following=1 "
              f"AND {_SUBTREE_OPEN} AND s.root_id IS NOT NULL) OR EXISTS (SELECT 1 FROM "
              f"{_PARTICIPANTS.format(r='r')} WHERE value=:me))", readable]
+    if sort == "important":
+        where.append(f"({is_needing} OR {importance}>{thread_rank.NOISE})")
     positions = _sidebar_positions(cursor)
     is_dm = f"COALESCE(r.audience,{_derived_audience('r')}) IN ('personal','participants')"
 
@@ -3673,10 +3689,11 @@ def sidebar(c, v, *, cursor=None, limit=50):
         if position:
             at_place, at_seq, at_id = position
             at = {"at_place": at_place, "at_seq": at_seq, "at_id": at_id}
-            after = ("WHERE place>:at_place OR (place=:at_place AND (activity<:at_seq OR "
+            after = ("WHERE rank>:at_place OR (rank=:at_place AND (activity<:at_seq OR "
                      "(activity=:at_seq AND id<:at_id))) ")
-        sql = (f"SELECT * FROM (SELECT r.*, {activity} AS activity, {place} AS place FROM conversations r WHERE "
-               + " AND ".join([*where, test]) + f") {after}ORDER BY place, activity DESC, id DESC LIMIT :fetch")
+        sql = (f"SELECT * FROM (SELECT r.*, {rank} AS rank FROM (SELECT r.*, {activity} AS activity, {place} AS place, "
+               f"{importance} AS importance FROM conversations r WHERE " + " AND ".join([*where, test])
+               + f") r) {after}ORDER BY rank, activity DESC, id DESC LIMIT :fetch")
         rows = []
         for r in c.execute(sql, {**args, **at}):
             r = dict(r)
@@ -3700,6 +3717,7 @@ def sidebar(c, v, *, cursor=None, limit=50):
             summary = summaries.get(r["id"]) or {"unread": 0, "activity": False}
             item = view(c, v, r, summary=summary, dm=dms.get(r["id"]))
             item["activity_seq"] = r["activity"]
+            item["importance"] = r["importance"]
             if needing.get(r["id"], {}).get("new_at"):
                 item["new_at"] = needing[r["id"]]["new_at"]
             if r["id"] not in history and summary.get("last_message_at"):
@@ -3710,7 +3728,7 @@ def sidebar(c, v, *, cursor=None, limit=50):
                 break
             found.append((r, item))
         tail = found[-1] if found else None
-        return found, f"{tail[0]['place']}:{tail[1]['activity_seq']}:{tail[1]['id']}" if more and tail else _SIDEBAR_DONE
+        return found, f"{tail[0]['rank']}:{tail[1]['activity_seq']}:{tail[1]['id']}" if more and tail else _SIDEBAR_DONE
 
     (threads_found, threads_next), (dms_found, dms_next) = items_of(*listed[0]), items_of(*listed[1])
     attention = sorted(((r, item) for r, item in threads_found + dms_found if r["place"] == 0),
