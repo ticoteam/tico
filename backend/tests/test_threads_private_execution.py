@@ -108,9 +108,11 @@ def hidden_sub_thread(api, text="Secret launch plan for the board"):
 
 
 def test_the_reader_of_a_hidden_parent_still_sees_the_sub_thread_title(api):
+    """The title is derived on read: the parent's reader sees its first line, and nothing is stored for anyone to find."""
     _, _, sub_id = hidden_sub_thread(api)
-    assert api.get(f"/api/v2/threads/{sub_id}", headers=headers("cara-test")).json()["title"] == ""
-    # A new sub-thread's title is neutral for everyone, the parent's author included: the stored title is the rule.
+    assert api.get(f"/api/v2/threads/{sub_id}", headers=headers("cara-test")).json()["title"] == \
+        "Secret launch plan for the board"
+    assert api.get(f"/api/v2/threads/{sub_id}", headers=headers("ben-test")).json()["title"] == ""
     with api.app.state.store.read() as c:
         assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] == ""
 
@@ -140,7 +142,7 @@ def test_the_cleanup_keeps_a_title_a_person_gave_and_a_visible_parent_keeps_its_
         c.execute("UPDATE conversations SET subject=? WHERE id=?", ("Plain topic line", keeper))
         threads._neutral_titles(c)
         assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] == "Budget notes"
-        assert c.execute("SELECT subject FROM conversations WHERE id=?", (keeper,)).fetchone()[0] == "Plain topic line"
+        assert c.execute("SELECT subject FROM conversations WHERE id=?", (keeper,)).fetchone()[0] == ""
     assert api.get(f"/api/v2/threads/{keeper}", headers=headers("ben-test")).json()["title"] == "Plain topic line"
 
 
@@ -157,9 +159,10 @@ def test_a_sub_thread_on_an_ordinary_bot_reply_keeps_its_title(api):
         reply = runner_reply(c, thread["id"], question["id"], "The launch is on Friday.", {"turn_id": "turn_1"})
         assert H.message(c, reply["id"])["restricted"] == 1
         sub_id = threads.sub_thread(c, "human:ana", reply["id"])["id"]
-        assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] == "The launch is on Friday."
+        # Nothing derived is stored: the title is the parent's first line, shown on read to readers of the parent.
+        assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] == ""
         threads._neutral_titles(c)
-        assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] == "The launch is on Friday."
+        assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] == ""
     for reader in ("ana-test", "ben-test"):
         seen = api.get(f"/api/v2/threads/{sub_id}", headers=headers(reader)).json()
         assert seen["title"] == "The launch is on Friday."
@@ -210,3 +213,56 @@ def test_a_private_run_posts_to_no_other_private_task_thread_and_edits_its_own_m
     edit = api.patch(f"/api/v2/messages/{own.json()['id']}", json={"text": "Progress, revised"},
                      headers=headers(attempt["token"]))
     assert edit.status_code == 200, edit.text
+
+
+def company_thread_with_bot_and_ben(api):
+    """A company thread Ben made, with the bot ops in it, as a native thread (audience company)."""
+    thread = api.post("/api/v2/threads", json={"title": "Company", "audience": "company"},
+                      headers=headers("ben-test")).json()
+    with api.app.state.store.transaction() as c:
+        threads.post(c, "bot:ops", thread["id"], "Hello from ops")
+    return thread
+
+
+def test_a_private_run_cannot_send_legacy_messages_into_a_company_thread(api):
+    """`/messages` and `/conversations/{cid}/messages` with a private run's token: the company thread's readers would
+    read the run's confidential text, whatever its participants list says."""
+    row, attempt = private_run(api)
+    thread = company_thread_with_bot_and_ben(api)
+    sent = api.post("/api/v2/messages", json={"to": "human:ben", "text": "Confidential from ops",
+                                              "conversation_id": thread["id"]}, headers=headers(attempt["token"]))
+    assert sent.status_code == 403, sent.text
+    reply = api.post(f"/api/v2/conversations/{thread['id']}/messages", json={"text": "Confidential reply"},
+                     headers=headers(attempt["token"]))
+    assert reply.status_code in (403, 404), reply.text
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM messages WHERE body LIKE 'Confidential%'").fetchone()[0] == 0
+
+
+def test_a_private_run_can_still_reply_in_its_own_private_task_thread_by_legacy_send(api):
+    row, attempt = private_run(api)
+    reply = api.post(f"/api/v2/conversations/{row['conversation_id']}/messages", json={"text": "Progress reply"},
+                     headers=headers(attempt["token"]))
+    assert reply.status_code == 200, reply.text
+
+
+def test_a_stored_derived_title_is_cleared_when_its_parent_task_turns_private(api):
+    """A company message that cites a public task gets a sub-thread titled with its first line. When the task turns
+    private, the stored title must not still carry that line for every reader of the company thread."""
+    public = task(api, private=False, requester="human:cara", owner="human:cara", title="Public item")
+    thread = api.post("/api/v2/threads", json={"title": "Company", "audience": "company"},
+                      headers=headers("cara-test")).json()
+    with api.app.state.store.transaction() as c:
+        parent = threads.post(c, "human:cara", thread["id"], "Quarterly launch figures for the board",
+                              refs={"task": public["id"]})
+    sub = api.post("/api/v2/threads", json={"title": "", "audience": "company", "parent_message_id": parent["id"]},
+                   headers=headers("cara-test")).json()["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1, visibility='private' WHERE id=?", (public["id"],))
+    with api.app.state.store.read() as c:
+        stored = c.execute("SELECT subject FROM conversations WHERE id=?", (sub,)).fetchone()[0]
+    assert "Quarterly launch" not in stored, stored
+    # A search hit's title is its thread's stored title: none of them carries the parent's first line.
+    for token in ("ben-test", "cara-test"):
+        found = api.get("/api/v2/threads/search", params={"q": "quarterly"}, headers=headers(token)).json()
+        assert all("Quarterly launch" not in (hit.get("title") or "") for hit in found["hits"]), token

@@ -1157,6 +1157,11 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, guest=Non
     `sealed` are the private tasks a sealed subtask for `to` keeps from it (sealed_for): `to` need not read those.
     A private subtask's words may go to its parent's readers when every party of the subtask reads the parent
     (hubdb.subtask_flows_up): a guest's answer comes back to the task it was asked for."""
+    conv = H.conversation(c, conversation_id) if conversation_id else None
+    if conv and conv.get("audience") and private_execution(c, who):
+        # A native thread's readers are its audience, not its participants list: a private run writes into it only as
+        # private_thread_destination allows (its own private task's thread). Both legacy send routes come through here.
+        private_thread_destination(c, who, conv)
     ids = references(c, refs)
     ids.update(message_tasks(c, reply) if reply else ())
     if who.attempt_id:
@@ -1171,7 +1176,6 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, guest=Non
     private = [_task(c, tid) for tid in ids if H.task_private(c, _task(c, tid))]
     if not private and not restricted_meetings:
         return
-    conv = H.conversation(c, conversation_id) if conversation_id else None
     audience = set((conv or {}).get("participants") or []) | {who.actor, to}
     if getattr(who, "task_actor", ""):
         audience.add(who.task_actor)
