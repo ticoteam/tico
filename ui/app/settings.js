@@ -669,7 +669,7 @@ async function executionReview(bot, after = () => $('#settings-tabs') && loadSet
       const button = (decision, label) => `<button type="submit" name="decision" value="${decision}"${(decision === 'resume') === retry ? '' : ' class="ghost"'}>${label}</button>`;
       return `<form data-job="${esc(job.id)}" class="stopped-run">
       <h3>${esc(job.task?.title || 'Interrupted conversation')}</h3>
-      <p data-stopped>Stopped ${esc(fmt(job.attempt?.started || job.attempt?.created))} ${esc(pick.what(tools))}.</p>
+      <p data-stopped>Stopped ${esc(fmt(job.attempt?.started_at || job.attempt?.created_at))} ${esc(pick.what(tools))}.</p>
       <p data-pick><strong>${esc(pick.say(tools))}</strong></p>
       <details data-details><summary>Details</summary>
         ${job.task ? `<p class="muted">Task ${esc(job.task.status)}${job.task.owner_name ? `, owner ${esc(job.task.owner_name)}` : ''}</p>` : ''}
@@ -720,5 +720,5 @@ async function executionReview(bot, after = () => $('#settings-tabs') && loadSet
 function renderSettingsServices() {
   const el = $('#set-services'); if (!el) return;
   const rows = SETTINGS_DATA.services;
-  el.innerHTML = `<div class="settings-services-list">${rows.map(service => `<div><strong>${esc(service.name || service.service)}</strong> · ${service.last_error ? `<span class="err">${esc(service.last_error)}</span>` : '<span class="ok">healthy</span>'}${service.last_success ? `<span class="settings-cell-note">${esc(ago(service.last_success))}</span>` : ''}</div>`).join('') || '<span class="muted">No health reports yet.</span>'}</div>`;
+  el.innerHTML = `<div class="settings-services-list">${rows.map(service => `<div><strong>${esc(service.name || service.service)}</strong> · ${service.last_error ? `<span class="err">${esc(service.last_error)}</span>` : '<span class="ok">healthy</span>'}${service.last_succeeded_at ? `<span class="settings-cell-note">${esc(ago(service.last_succeeded_at))}</span>` : ''}</div>`).join('') || '<span class="muted">No health reports yet.</span>'}</div>`;
 }

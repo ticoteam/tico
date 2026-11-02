@@ -158,7 +158,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
       assert.equal(said, CAP_409.message, tag + ': the 409 reads as its message');
       const chat = await page.evaluate(m => {
         const div = document.createElement('div');
-        div.innerHTML = v2MessageHTML({id: 'm1', from_actor: 'bot:eng-lead', body: 'Sending the review to Ana.', created: new Date().toISOString(),
+        div.innerHTML = v2MessageHTML({id: 'm1', from_actor: 'bot:eng-lead', body: 'Sending the review to Ana.', created_at: new Date().toISOString(),
           run: {id: 'r1', status: 'done', did: [{kind: 'refused', rule: 'task_cap', text: m}]}});
         return div.textContent.replace(/\s+/g, ' ');
       }, CAP_409.message);

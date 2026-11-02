@@ -78,20 +78,20 @@ def screen(api, text, **kw):
 
 def calls(api):
     with api.app.state.store.read() as c:
-        return [(r["actor"], r["target"], r["detail_json"]) for r in c.execute(
-            "SELECT actor,target,detail_json FROM events WHERE action='judge.call' AND target LIKE 'injection-screen@%' "
+        return [(r["actor"], r["target"], r["detail"]) for r in c.execute(
+            "SELECT actor,target,detail FROM events WHERE action='judge.call' AND target LIKE 'injection-screen@%' "
             "ORDER BY rowid")]
 
 
 def notes(api, action="screening.held"):
     with api.app.state.store.read() as c:
-        return [(r["target"], json.loads(r["detail_json"])) for r in c.execute(
-            "SELECT target,detail_json FROM events WHERE action=? ORDER BY rowid", (action,))]
+        return [(r["target"], json.loads(r["detail"])) for r in c.execute(
+            "SELECT target,detail FROM events WHERE action=? ORDER BY rowid", (action,))]
 
 
 def owned(api, owner):
     with api.app.state.store.read() as c:
-        return [dict(t) for t in c.execute("SELECT id,title,body,owner,next_run FROM tasks WHERE owner=? ORDER BY created",
+        return [dict(t) for t in c.execute("SELECT id,title,body,owner,next_run FROM tasks WHERE owner=? ORDER BY created_at",
                                            (owner,))]
 
 
@@ -279,7 +279,7 @@ def test_a_watchers_new_task_is_held_notes_stay_quiet_and_handing_it_over_releas
     report(api, r, {"op": "comment", "key": "gh:7", "ref": "c2", "text": "Hello?"}, name="gh-issues")
     assert wakes(api) == before                                                  # a note for the person, not a wake
     with api.app.state.store.read() as c:
-        said = [m[0] for m in c.execute("SELECT body FROM messages WHERE json_extract(refs_json,'$.task')=?", (held["id"],))]
+        said = [m[0] for m in c.execute("SELECT body FROM messages WHERE json_extract(refs,'$.task')=?", (held["id"],))]
     assert any("Any news?" in m for m in said) and any("Hello?" in m for m in said)
     with api.app.state.store.transaction() as c:
         H.task_update(c, "human:ana", held["id"], owner="bot:ops")
@@ -339,7 +339,7 @@ def idea(api, title, summary):
 def test_an_idea_at_the_hold_line_is_a_persons_task_and_one_under_it_reaches_product_warned(api):
     public_setup(api, limit=100)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','product-lead') WHERE bot='cpo'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','product-lead') WHERE bot='cpo'")
     engine = model(api, score=0.97)
     held = idea(api, "Better exports", ATTACK)
     assert held["owner"].startswith("human:") and held["title"] == "Held: Better exports"

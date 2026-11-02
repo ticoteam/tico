@@ -18,11 +18,11 @@ def seed_turns(c, start, end, parent=None, tag="t"):
         key = f"{tag}-{n}"
         reply = H.task_comment(c, "human:ana", parent["id"], "Request " + key, wake=False)
         aid = "run-" + key
-        c.execute("INSERT INTO jobs(id,message_id,bot,state,created,attempt_id) VALUES(?,?,'ops','done',?,?)",
+        c.execute("INSERT INTO jobs(id,message_id,bot,state,created_at,attempt_id) VALUES(?,?,'ops','done',?,?)",
                   ("job-" + key, reply["id"], H.now(), aid))
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES(?,?,'ops','rn',0,?,'done',?,?)", (aid, "job-" + key, aid, H.now(), H.now()))
-        c.execute("INSERT INTO turns(id,bot,started,message_id,task_id,exit) VALUES(?,'ops',?,?,?,'ok')",
+        c.execute("INSERT INTO turns(id,bot,started_at,message_id,task_id,exit) VALUES(?,'ops',?,?,?,'ok')",
                   (aid, H.now(), reply["id"], parent["id"]))
     return parent
 
@@ -52,7 +52,7 @@ def test_deleted_message_with_a_list_run_ref_does_not_abort_the_page(api):
         parent = H.task_create(c, "human:ana", "Bad run ref", "Checklist", "bot:ops", lint=False)
         kept = H.task_comment(c, "human:ana", parent["id"], "Keep", wake=False)
         dropped = H.task_comment(c, "human:ana", parent["id"], "Drop", wake=False)
-        c.execute("UPDATE messages SET deleted_at=?, refs_json=? WHERE id=?",
+        c.execute("UPDATE messages SET deleted_at=?, refs=? WHERE id=?",
                   (H.now(), json.dumps({"turn_id": ["not-a-run"], "task": parent["id"]}), dropped["id"]))
         cid = parent["conversation_id"]
     ids = [row["id"] for row in get(api, "conversations/" + cid + "/messages")]
@@ -80,7 +80,7 @@ def test_message_page_stays_bounded_as_messages_grow(api, monkeypatch):
 def test_operations_does_not_query_each_computer(api):
     with api.app.state.store.transaction() as c:
         for n in range(6):
-            c.execute("INSERT INTO runners(id,label,operator,token_hash,created) VALUES(?,?, 'ana',?,?)",
+            c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at) VALUES(?,?, 'ana',?,?)",
                       (f"rn{n}", f"Mac {n}", f"th{n}", H.now()))
     from backend.tests.test_task_privacy_reads import traced
     _, text = traced(api, lambda: get(api, "operations"))

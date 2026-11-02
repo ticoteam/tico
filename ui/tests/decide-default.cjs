@@ -6,8 +6,8 @@ const assert = require('node:assert/strict');
 const {open} = require('./tasks-page.cjs');
 const NOW = Date.now(), at = minutes => new Date(NOW - minutes * 60000).toISOString();
 const question = (id, title, ifNoAnswer, goesAheadAt) => ({id, kind: 'question', title, body: '', owner: 'bot:writer',
-  requester: 'bot:writer', status: 'waiting', waiting_on: 'human:ana', version: 2, created: at(400), updated: at(360), open_asks: 1,
-  ask: {id: 'q-' + id, from_actor: 'bot:writer', to_actor: 'human:ana', body: title, created: at(300), goes_ahead_at: goesAheadAt,
+  requester: 'bot:writer', status: 'waiting', waiting_on: 'human:ana', version: 2, created_at: at(400), updated_at: at(360), open_asks: 1,
+  ask: {id: 'q-' + id, from_actor: 'bot:writer', to_actor: 'human:ana', body: title, created_at: at(300), goes_ahead_at: goesAheadAt,
     refs: {task: id, questions: [{id: 'decision', header: '', question: title, multi: false, other: true,
       options: [{label: 'Yes'}, {label: 'No'}]}], if_no_answer: ifNoAnswer}}});
 const items = [

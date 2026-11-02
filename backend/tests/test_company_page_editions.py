@@ -92,7 +92,7 @@ class Page:
     def note(self, bot, kind, day, body, meetings=0):
         ident = H.new_id()
         with self.store.transaction() as c:
-            c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created,updated,meetings) VALUES(?,?,?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at,meetings) VALUES(?,?,?,?,?,?,?,?,?)",
                       (ident, bot, kind, day, "Headline", body, H.now(), H.now(), meetings))
         return ident
 
@@ -226,7 +226,7 @@ def test_the_leak_check_flags_numbers_names_and_links_not_in_the_facts():
 def test_times_and_ids_in_the_facts_do_not_make_figures_allowed():
     """A clock reading or an id in the facts would allow its digits, so a figure would pass only at some hours."""
     facts = {"stats": [{"as_of": "2026-11-02T01:23:45.000Z", "id": "4b5cb1b2-fe2c-4de8-bdb2-d086f4c6d008",
-                        "updated": "00:01:30", "display": "$120,000"}]}
+                        "updated_at": "00:01:30", "display": "$120,000"}]}
     assert E.leak_findings("t", plain_sections("Revenue hit $1m."), facts, START, END)["numbers"] == ["1m"]
 
 
@@ -503,7 +503,7 @@ def test_an_approval_spends_once_and_a_lapsed_one_shows_and_can_be_asked_again(p
     from backend import approval_expiry
     edition = page.ask(page.draft())
     with page.store.transaction() as c:
-        c.execute("UPDATE approvals SET created=?, ready_since=? WHERE id=?",
+        c.execute("UPDATE approvals SET created_at=?, ready_since=? WHERE id=?",
                   (H.shift(H.now(), days=-40), H.shift(H.now(), days=-40), edition["approval"]["id"]))
         approval_expiry.sweep(c)
     lapsed = get(page.api, f"editions/{edition['id']}")

@@ -70,7 +70,7 @@ class World:
     def __enter__(self):
         self.travel = time_machine.travel(START, tick=False)
         self.clock = self.travel.start()
-        # Ids break ties in the server's ordering (`ORDER BY created, id`): drawn from the run's own generator, the
+        # Ids break ties in the server's ordering (`ORDER BY created_at, id`): drawn from the run's own generator, the
         # same seed runs the same way.
         ids = random.Random(self.rng.random())
         self._uuid4, uuid.uuid4 = uuid.uuid4, lambda: uuid.UUID(int=ids.getrandbits(128), version=4)
@@ -101,10 +101,10 @@ class World:
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": [
                 {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]}]}),))
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
+                c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)",
                           (slug, encode(config), "engineering", "ana"))
             if "release-manager" in bots:   # signed in as an agent, as an external Release Manager is
-                c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) "
+                c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) "
                           "VALUES('release-manager','hermes','x-release',?,'human:ana')", (H.now(),))
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)",
                       (encode({"completed": "2026-01-01T00:00:00Z"}),))
@@ -303,9 +303,9 @@ class World:
         """An org group in the roster, which a group limit names; the bots of the team of that name are in it."""
         from backend.store import encode
         with self.store.transaction() as c:
-            doc = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+            doc = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
             doc.setdefault("org_groups", {})[gid] = {"name": name}
-            c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(doc),))
+            c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(doc),))
 
     def enable_providers(self, enabled):
         """The company's AI providers, in the order their runtimes fall back to, as the owner saves them."""
@@ -511,11 +511,11 @@ class World:
     # ------------------------------------------------------------------ board reads (no turn, no side effects)
     def tickets(self):
         """The Dev tickets: tasks of the Dev type, with their step names."""
-        rows = self.sql("SELECT t.id,t.title,t.owner,t.status,t.step_id,s.name step,t.blocked_since,t.updated,"
-                        "t.labels_json,t.created FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id WHERE t.type_id=?",
+        rows = self.sql("SELECT t.id,t.title,t.owner,t.status,t.step_id,s.name step,t.blocked_since,t.updated_at,"
+                        "t.labels,t.created_at FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id WHERE t.type_id=?",
                         (self.dev["id"],))
         for r in rows:
-            r["labels"] = json.loads(r.pop("labels_json") or "[]")
+            r["labels"] = json.loads(r.pop("labels") or "[]")
         return rows
 
     def title(self, task_id):
@@ -569,7 +569,7 @@ class World:
         parent = self.parent_of(child["id"])
         found = self.sql("SELECT s.name FROM task_events e JOIN task_steps s ON s.id=e.new WHERE e.task_id=? "
                          "AND e.field='step' AND e.ts<=? ORDER BY e.ts DESC, e.rowid DESC LIMIT 1",
-                         (parent, child["created"]))
+                         (parent, child["created_at"]))
         return found[0]["name"] if found else None
 
     def judged(self, task_id, step=None):
@@ -581,12 +581,12 @@ class World:
         """The round the ticket is waiting on at `step`: its newest check there filed since the ticket entered the
         step, whether or not that check has a verdict yet. A check from before a return to the step is a past round."""
         entered = self.step_entered_at(task_id) or ""
-        found = [c for c in self.checks(task_id) if self.check_step(c) == step and c["created"] >= entered]
+        found = [c for c in self.checks(task_id) if self.check_step(c) == step and c["created_at"] >= entered]
         return found[-1] if found else None
 
     def checks(self, task_id):
         return self.sql("SELECT t.* FROM tasks t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
-                        "WHERE r.to_task=? ORDER BY t.created, t.rowid", (task_id,))
+                        "WHERE r.to_task=? ORDER BY t.created_at, t.rowid", (task_id,))
 
     def latest_check(self, task_id, kind):
         found = [c for c in self.checks(task_id) if c["title"].lower().startswith(kind.lower() + ":")]
@@ -644,8 +644,8 @@ class World:
 
     def idle_hours(self, task_id, until=None):
         """Hours since the task last changed, as of `until` (default now)."""
-        row = self.sql("SELECT updated FROM tasks WHERE id=?", (task_id,))[0]
-        return ((until or self.now()) - self.H.parse_ts(row["updated"])).total_seconds() / 3600
+        row = self.sql("SELECT updated_at FROM tasks WHERE id=?", (task_id,))[0]
+        return ((until or self.now()) - self.H.parse_ts(row["updated_at"])).total_seconds() / 3600
 
     def queued(self, slug=None):
         """Queued jobs per bot, and how many are held."""

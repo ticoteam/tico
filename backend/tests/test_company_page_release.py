@@ -286,7 +286,7 @@ def world(tmp_path, monkeypatch):
                          "ORDER BY published_at DESC LIMIT ?", (audience_ids[0], before, before, limit)).fetchall()
         return [{"anchor": r["id"], "title": r["title"], "author": {"name": r["author"], "kind": "bot"}, "period": r["period_start"],
                  "published_at": r["published_at"], "version": r["version"], "correction_note": r["correction_note"],
-                 "edition_source": "SECRETSOURCE", "sections": json.loads(r["body_json"])} for r in rows]
+                 "edition_source": "SECRETSOURCE", "sections": json.loads(r["body"])} for r in rows]
 
     monkeypatch.setattr(package, "editions", SimpleNamespace(stream=stream), raising=False)
     monkeypatch.setattr(package, "stats", SimpleNamespace(
@@ -307,7 +307,7 @@ def open_page(state, transparency="open", enabled=1):
 def publish(state, edition_id, title, published_at="2026-10-30T00:00:00Z"):
     body = json.dumps([{"key": "highlights", "items": [{"body": f"Body of {title}", "ask_id": None}]}])
     with state.store.transaction() as c:
-        c.execute("INSERT INTO editions (id, audience_id, author, period_start, period_end, status, title, body_json, published_at, "
+        c.execute("INSERT INTO editions (id, audience_id, author, period_start, period_end, status, title, body, published_at, "
                   "created_at, updated_at) VALUES (?,'pub','Head of Support',?,?,'published',?,?,?,?,?)",
                   (edition_id, edition_id, edition_id, title, body, published_at, H.now(), H.now()))
 
@@ -690,7 +690,7 @@ def test_a_logo_is_read_through_the_servers_file_reader_with_the_company_places_
     png = b"\x89PNG\r\n\x1a\n" + b"x" * 20
     digest = hashlib.sha256(png).hexdigest()
     with world.store.transaction() as c:
-        c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created) VALUES (?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
                   ("good", "human:o", digest, len(png), "logo", "image/png", H.now()))
         c.execute("UPDATE company_page_settings SET logo_file_id='good'")
     configured = blobs.Blobs(world.settings)
@@ -714,7 +714,7 @@ def test_logo_is_copied_when_its_bytes_are_an_image_and_dropped_otherwise(world,
     digest = hashlib.sha256(png).hexdigest()
     with world.store.transaction() as c:
         for blob, content_type in (("good", "image/png"), ("svg", "image/svg+xml")):
-            c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created) VALUES (?,?,?,?,?,?,?)",
+            c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
                       (blob, "human:o", digest, len(png), "logo", content_type, H.now()))
         c.execute("UPDATE company_page_settings SET logo_file_id='good'")
     import backend.blobs as blobs
@@ -762,7 +762,7 @@ class References(HTMLParser):
 def with_logo(world, monkeypatch):
     png = b"\x89PNG\r\n\x1a\n" + b"x" * 20
     with world.store.transaction() as c:
-        c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created) VALUES ('good','human:o',?,?,'logo','image/png',?)",
+        c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES ('good','human:o',?,?,'logo','image/png',?)",
                   (hashlib.sha256(png).hexdigest(), len(png), H.now()))
         c.execute("UPDATE company_page_settings SET logo_file_id='good'")
     import backend.blobs as blobs

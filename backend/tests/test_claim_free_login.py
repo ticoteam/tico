@@ -39,7 +39,7 @@ def test_claim_hands_out_the_real_notice_behind_an_obsolete_one_that_health_says
     the claim must then go on to the next queued job instead of answering nothing."""
     machine, task, original = task_attempt(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='completed',finished=? WHERE id=?", (H.now(), original["id"]))
+        c.execute("UPDATE attempts SET state='completed',finished_at=? WHERE id=?", (H.now(), original["id"]))
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (original["job_id"],))
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
         refs = {"task": task["id"], "trigger": "other", "wake": "update"}
@@ -48,7 +48,7 @@ def test_claim_hands_out_the_real_notice_behind_an_obsolete_one_that_health_says
         real = H.say(c, H.KEEPER, "bot:ops", "Task closed by human:ana", kind="notice",
                      conversation_id=task["conversation_id"], refs={**refs, "caused_by": "human:ana"})
         # The obsolete notice is the older of the two, so the candidate's own order reaches it first.
-        c.execute("UPDATE jobs SET created=? WHERE message_id=?", (H.shift(H.now(), minutes=-5), obsolete["id"]))
+        c.execute("UPDATE jobs SET created_at=? WHERE message_id=?", (H.shift(H.now(), minutes=-5), obsolete["id"]))
         W.tick(c, H.shift(H.now(), minutes=2))
     with api.app.state.store.read() as c:
         obsolete_job = c.execute("SELECT id FROM jobs WHERE message_id=?", (obsolete["id"],)).fetchone()[0]

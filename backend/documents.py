@@ -21,7 +21,7 @@ def document(c, auth, who, doc_id):
     row = c.execute("SELECT * FROM documents WHERE id=? AND collection='market'", (doc_id,)).fetchone()
     if not row or not visible(who, row):
         raise Problem("not_found", "Document not found or unavailable to this account", 404)
-    return json.loads(row["payload_json"])
+    return json.loads(row["payload"])
 
 
 def install_documents(app, store, auth, mutate):
@@ -36,7 +36,7 @@ def install_documents(app, store, auth, mutate):
             rows = [r for r in c.execute("SELECT * FROM documents WHERE collection='market' ORDER BY id")
                     if visible(who, r)]
             return {"collection": collection, "collection_counts": {"market": len(rows)},
-                    "documents": [{k: v for k, v in json.loads(r["payload_json"]).items() if k != "content"} for r in rows],
+                    "documents": [{k: v for k, v in json.loads(r["payload"]).items() if k != "content"} for r in rows],
                     "proposals": [], "errors": [], "sync": {"running": False, "state": None, "error": None}}
 
     @app.get("/api/company-docs/{doc_id:path}")

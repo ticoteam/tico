@@ -901,7 +901,7 @@ def container_row(i: dict, stats: dict) -> dict:
     mem = i.get("memory")
     return {"role": labels.get("com.docker.compose.service") or None, "name": i["name"], "state": st.get("Status"),
             "health": health.get("Status") or None, "restarts": i.get("restarts"), "oom_killed": bool(st.get("OOMKilled")),
-            "started": iso(parse_iso(st.get("StartedAt"))),
+            "started_at": iso(parse_iso(st.get("StartedAt"))),
             "cpu_pct": s.get("cpu_pct"), "mem_mb": s.get("mem_mb"),
             "mem_limit_mb": round(mem / 2 ** 20) if isinstance(mem, int) and mem > 0 else s.get("mem_limit_mb"),
             "pids": s.get("pids"), "net_rx_mb": s.get("net_rx_mb"), "net_tx_mb": s.get("net_tx_mb"),
@@ -1276,7 +1276,7 @@ def t_stacks(box: Box, view: View, a: dict, timeout: float) -> tuple[bool, str]:
 
 
 def tracing(root: Path, now: float) -> bool:
-    """Whether tracemalloc is on: the newest memory record since the server's last start says `started`."""
+    """Whether tracemalloc is on: the newest memory record since the server's last start says `started_at`."""
     state = False
     for r in flight_file().records(root / FLIGHT, now - 86400, flight_opener(root, FLIGHT)):
         if r.get("kind") == "start":

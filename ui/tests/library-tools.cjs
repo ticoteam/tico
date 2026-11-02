@@ -58,8 +58,8 @@ async function open(browser, {viewport = PHONE, hash = LIST, me = OWNER, tools =
     if (p === '/api/v2/credentials' && method === 'POST') {
       const body = JSON.parse(req.postData());
       seen.vault.credentials.push({id: 'c9', name: body.name, username: body.username, kind: body.kind, env: body.env, preview: 'ghp-••••3a',
-        source: body.source, revision: 1, created: '2026-10-28T09:00:00Z', updated: '2026-10-28T09:00:00Z', stored: true, can_reveal: true,
-        last_used: null, last_used_by: '', grants: []});
+        source: body.source, revision: 1, created_at: '2026-10-28T09:00:00Z', updated_at: '2026-10-28T09:00:00Z', stored: true, can_reveal: true,
+        last_used_at: null, last_used_by: '', grants: []});
       return json({id: 'c9', name: body.name});
     }
     const grant = p.match(/^\/api\/v2\/credentials\/([^/]+)\/grants$/);

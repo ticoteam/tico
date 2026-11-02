@@ -86,7 +86,7 @@ def counts(c, bot, floor="", now=None):
     out = {}
     for window, _, seconds, _ in WINDOWS:
         since = max(H.shift(now, seconds=-seconds), floor or "")
-        out[window] = c.execute("SELECT count(*) FROM attempts WHERE bot=? AND created>?", (bot, since)).fetchone()[0]
+        out[window] = c.execute("SELECT count(*) FROM attempts WHERE bot=? AND created_at>?", (bot, since)).fetchone()[0]
     return out
 
 
@@ -125,8 +125,8 @@ def enforce(c, settings, job, message, now=None):
     state = get(c, bot)
     if state.get("held_at"):
         return True
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    declared = _declared(row["config_json"] if row else None)
+    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    declared = _declared(row["config"] if row else None)
     # The team's defaults are read here: one failure there is every bot's, not this one's.
     with shared_check("team"):
         cap = limits(c, declared)
@@ -202,7 +202,7 @@ def release(c, actor, bot):
 def view(c, bot, config):
     """The bot's budget as the API and the tools show it: in force, its own, the team's, the runs so far and the holds."""
     from . import run_backoff
-    declared = _declared(config["config_json"])
+    declared = _declared(config["config"])
     state, failing = get(c, bot), run_backoff.get(c, bot)
     now = H.now()
     return {"bot": bot, **limits(c, declared), "own": own(declared), "team": team(c),
@@ -222,7 +222,7 @@ def set_bot(admin, c, who, bot, body, undo_change_id=None):
     if config["revision"] != body.expected_revision:
         raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
     from .store import encode
-    declared = _declared(config["config_json"])
+    declared = _declared(config["config"])
     before = own(declared)
     after = {key: (getattr(body, key) if key in body.model_fields_set else before[key]) for key in KEYS}
     for key in KEYS:
@@ -230,14 +230,14 @@ def set_bot(admin, c, who, bot, body, undo_change_id=None):
             declared.pop(key, None)
         else:
             declared[key] = after[key]
-    c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
+    c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
     admin.record(c, who.actor, bot, "turn_budget", before, after)
     if undo_change_id:
         c.execute("UPDATE settings_changes SET undone_by=?,undone_at=? WHERE id=? AND undone_at IS NULL",
                   (who.actor, H.now(), undo_change_id))
     H.event(c, who.actor, "bot.turn_budget_changed", bot, {"before": before, "after": after})
     freed = _release_if_room(c, who.actor, bot, declared)
-    return {**view(c, bot, {"config_json": encode(declared), "revision": config["revision"] + 1}), "released": freed}
+    return {**view(c, bot, {"config": encode(declared), "revision": config["revision"] + 1}), "released": freed}
 
 
 def _release_if_room(c, actor, bot, declared):
@@ -267,9 +267,9 @@ def set_team(c, actor, body):
     if after != before:
         H.event(c, actor, "settings.turn_budgets", "team", {"before": before, "after": after})
         # A held bot that follows the team's budget is let go when the new one leaves it room, as its own would.
-        for row in c.execute("SELECT b.bot, g.config_json FROM bot_budget b JOIN bot_config g ON g.bot=b.bot "
+        for row in c.execute("SELECT b.bot, g.config FROM bot_budget b JOIN bot_config g ON g.bot=b.bot "
                              "WHERE b.held_at IS NOT NULL").fetchall():
-            if _release_if_room(c, actor, row["bot"], _declared(row["config_json"])):
+            if _release_if_room(c, actor, row["bot"], _declared(row["config"])):
                 freed.append(row["bot"])
     return {**after, "defaults": DEFAULTS, "released": freed}
 

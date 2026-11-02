@@ -37,9 +37,9 @@ def capabilities(c, auth, conv):
     if len(bots) != 1 or bots[0] == auth.settings.assistant_bot:
         return None, False, []
     bot = bots[0]
-    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     runtime, _ = providers.bot_choice(c, auth.settings, json.loads(config[0] or "{}") if config else {})
-    row = c.execute("SELECT r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
                     "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
     report = readiness_document(row[0]) if row else {}
     detail = bot_readiness(row[0], bot) if row else {}
@@ -169,7 +169,7 @@ def clear_task_goal(c, conv):
     c.execute("UPDATE chat_goals SET status='cleared',note=?,updated_at=?,ended_at=? WHERE id=?",
               ("The task's goal was turned off", now, now, goal["id"]))
     c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND message_id IN "
-              "(SELECT id FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.goal_action') IS NOT NULL)",
+              "(SELECT id FROM messages WHERE conversation_id=? AND json_extract(refs,'$.goal_action') IS NOT NULL)",
               (conv["id"],))
     H._write_message(c, H.KEEPER, "bot:" + goal["bot"], "/goal clear", conv, "say",
                      {"task": conv["task_id"], "command": True, "goal_action": "clear", "goal_id": goal["id"],
@@ -293,12 +293,12 @@ def set_goal(c, auth, who, cid, action, objective, send):
     goal = current(c, cid)
     # Superseded controls must never reset a newer objective when the computer catches up.
     c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND message_id IN "
-              "(SELECT id FROM messages WHERE conversation_id=? AND json_extract(refs_json,'$.goal_action') IS NOT NULL)", (cid,))
+              "(SELECT id FROM messages WHERE conversation_id=? AND json_extract(refs,'$.goal_action') IS NOT NULL)", (cid,))
     text = "/goal clear" if action in ("pause", "clear") else "/goal " + goal["objective"]
     message = send(c, who, M.MessageCreate(to="bot:" + bot, text=text, conversation_id=cid, command=True))
     refs = {**(message.get("refs") or {}), "goal_action": action, "goal_id": goal["id"],
             "goal_revision": now, "goal_objective": goal["objective"]}
-    c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
+    c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), message["id"]))
     # The objective is stored after send()'s own recheck: charge the final references.
     H.held_queue_recheck(c, message["id"])
     H.event(c, who.actor, "chat.goal", cid, {"status": status})

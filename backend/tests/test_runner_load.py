@@ -119,11 +119,11 @@ def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(worl
     rid = r["runner_id"]
     set_access(api, see={"teams": ["legal"]}, read={"teams": ["legal"]}, write={"teams": ["legal"]})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET accepts_member_bots=0,readiness_json=? WHERE id=?",
+        c.execute("UPDATE runners SET accepts_member_bots=0,readiness=? WHERE id=?",
                   (json.dumps({"schema_version": 1, "recent_errors": ["private runner log"], "bots": {}}), rid))
         save_metadata(c, "computer-repositories:" + rid,
                       {"repositories": [{"full_name": "acme/private-repo", "error": "private clone error"}]})
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('counsel',?,1,?,'human:ana')", (rid, P._iso(time.time())))
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('counsel',?,1,?,'human:ana')", (rid, P._iso(time.time())))
     failed, detail = call(api, "hub_computer_list", {"computer": rid}, token=tokens["stranger"])
     assert not failed, detail
     assert "counsel" not in str(detail)

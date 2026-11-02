@@ -17,15 +17,15 @@ const {unrouted} = require('./support/routes.cjs');
   await page.addInitScript(() => { window.EventSource = undefined; });
   const bots = () => [
     {name:'history-copy',display_name:'Imported Designer',status:'active',host:'keeper',can_chat:true,operator:'ana',
-      online:fresh,agent:{harness:'grokbot',credential:true,synced:true,last_seen:last}},
+      online:fresh,agent:{harness:'grokbot',credential:true,synced:true,last_seen_at:last}},
     {name:'live-agent',display_name:'Live Agent',status:'active',host:'keeper',can_chat:true,operator:'ana',
-      online:false,agent:{harness:'hermes',credential:true,last_seen:last}},
+      online:false,agent:{harness:'hermes',credential:true,last_seen_at:last}},
     ...[['groky','Groky','Pinned'],['grok-scout','Grok Scout','Outreach'],['grok-poetry','Poetry Post','']].map(([name,display_name,section]) =>
       ({name,display_name,status:'active',host:'keeper',harness:'grokbot',reports_to:'human:ana',org_parent:'p:ana',operator:'ana',online:true,
         revision:1,...placements[name],
-        agent:{harness:'grokbot',credential:true,synced:true,label:'Grok Bot',section,last_seen:last}})),
+        agent:{harness:'grokbot',credential:true,synced:true,label:'Grok Bot',section,last_seen_at:last}})),
     {name:'dots',display_name:'Dots',status:'active',host:'keeper',harness:'dots',reports_to:'human:ana',org_parent:'p:ana',operator:'ana',online:true,
-      agent:{harness:'dots',credential:true,synced:true,label:'Dots',section:'',last_seen:last}}
+      agent:{harness:'dots',credential:true,synced:true,label:'Dots',section:'',last_seen_at:last}}
   ];
   await page.route('**/*', route => {
     const request = route.request(), p = new URL(request.url()).pathname;
@@ -80,7 +80,7 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('#bot-tip:not([hidden])').waitFor();
     assert.match(await page.locator('#bot-tip').innerText(),/Last sync/);
     assert.doesNotMatch(await page.locator('#bot-tip').innerText(),/Not reporting|Last seen/);
-    assert.equal(await page.evaluate(()=>S.emps.find(e=>e.name==='history-copy').agent.last_seen),last);
+    assert.equal(await page.evaluate(()=>S.emps.find(e=>e.name==='history-copy').agent.last_seen_at),last);
     assert.equal(await page.evaluate(()=>settingsBotProblem(S.emps.find(e=>e.name==='history-copy'))),'history not synced');
     if (process.env.TICO_SCREENSHOT_DIR) await page.screenshot({path:process.env.TICO_SCREENSHOT_DIR+'/imported-history.png'});
 

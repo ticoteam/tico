@@ -8,7 +8,7 @@ from backend.credentials import effective_grant, granted
 def test_granted_matches_effective_grant_for_every_credential_and_subject():
     c = sqlite3.connect(":memory:")
     c.row_factory = sqlite3.Row
-    c.execute("CREATE TABLE credential_grants(id TEXT PRIMARY KEY, credential_id TEXT, subject TEXT, revoked TEXT, "
+    c.execute("CREATE TABLE credential_grants(id TEXT PRIMARY KEY, credential_id TEXT, subject TEXT, revoked_at TEXT, "
               "parent_id TEXT)")
     c.execute("CREATE TABLE bot_config(bot TEXT PRIMARY KEY, operator TEXT)")
     rng = random.Random(7)

@@ -58,12 +58,12 @@ def api(tmp_path, monkeypatch):
             H.sync_registry(c, bots, {'people': people})
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({'people': people}),))
             for slug, config in bots.items():
-                c.execute('INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)',
+                c.execute('INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)',
                           (slug, encode(config), 'product', 'ana'))
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({'completed': '2026-01-01T00:00:00Z'}),))
             H.type_create(c, H.KEEPER, 'Dev tickets', STEPS)
             # The bot signs in as an agent does (bot-test), so a refusal is the waiver's and not the credential's.
-            c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('cpo','hermes','x',?,'human:ana')",
+            c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('cpo','hermes','x',?,'human:ana')",
                       (H.now(),))
         yield client
 
@@ -140,7 +140,7 @@ def test_owner_or_manager_waives_the_current_qa_step_on_the_exact_head(api, owne
         qa = H.task(c, qa['id'])
     assert qa['verdict'] is None and qa['verdict_head'] is None and qa['status'] == 'doing'
     with api.app.state.store.read() as c:
-        told = c.execute("SELECT to_actor, body FROM messages WHERE json_extract(refs_json,'$.qa_waiver')=?", (HEAD,)).fetchall()
+        told = c.execute("SELECT to_actor, body FROM messages WHERE json_extract(refs,'$.qa_waiver')=?", (HEAD,)).fetchall()
     # The owner hears once, unless the owner waived it.
     assert [(m[0], 'not a QA pass' in m[1]) for m in told] == ([] if owner == actor else [(detail['task']['owner'], True)])
 
@@ -337,7 +337,7 @@ def test_botops_in_the_owners_own_chat_cannot_waive_a_ticket_every_gate_allows(a
     from backend.tests.test_api import assign, claim, post, ready, runner
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('botops',?, 'ana')",
+        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('botops',?, 'ana')",
                   (encode({'name': 'botops', 'runtime': 'fake', 'status': 'active'}),))
     machine = runner(api)
     assign(api, machine, 'botops')
@@ -353,7 +353,7 @@ def test_botops_in_the_owners_own_chat_cannot_waive_a_ticket_every_gate_allows(a
     assert api.github.reads == reads
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='qa_waiver'", (row['id'],)).fetchall()
-        assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs_json,'$.qa_waiver') IS NOT NULL").fetchall()
+        assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs,'$.qa_waiver') IS NOT NULL").fetchall()
     assert shown(api, row)['task']['qa_waivers'] == []
     direct = waive(api, row, 'ana-test')
     assert direct.status_code == 200 and direct.json()['waiver']['actor'] == 'human:ana', direct.text

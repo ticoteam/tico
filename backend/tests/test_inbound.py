@@ -56,9 +56,9 @@ def test_connection_requires_actual_direct_human_management_before_secret_parsin
     assert svc.connection_actor(owner)['actor']=='human:ana'  # loopback owner need not have via_proxy
     assert svc.connection_actor(Identity('human:ben','human','ben@acme.example'))['actor']=='human:ben'
     with svc.store.transaction() as c:
-        roster=json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster=json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         next(p for p in roster['people'] if p['id']=='ben')['sign_in']=False
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",(json.dumps(roster),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'",(json.dumps(roster),))
     with pytest.raises(Problem):svc.connection_actor(Identity('human:ben','owner','ben@acme.example'))
     as_member(api,'ben@acme.example')
     assert api.post(path,headers=headers('ben-test'),json={'action':'connect','code':CONNECTION_CODE}).status_code==403
@@ -90,7 +90,7 @@ def test_connection_validation_and_missing_identity_never_persist_or_echo_code(a
     with svc.store.transaction() as c:c.execute("INSERT INTO registry_metadata VALUES('usage-count','{corrupt')")
     assert api.post(path,headers=headers(),json={'action':'connect','code':CONNECTION_CODE}).status_code==409
     with svc.store.read() as c:
-        assert c.execute("SELECT value_json FROM registry_metadata WHERE key='usage-count'").fetchone()[0]=='{corrupt'
+        assert c.execute("SELECT value FROM registry_metadata WHERE key='usage-count'").fetchone()[0]=='{corrupt'
     assert CONNECTION_CODE not in caplog.text and calls==[]
 
 
@@ -357,7 +357,7 @@ def test_native_and_registered_agents_share_inboxes_but_lose_access_when_paused(
     assert native.status_code==200 and len(native.json()['messages'])==1
     external=Identity('bot:ops','bot',agent='hermes')
     with svc.store.transaction() as c:
-        c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('ops','hermes','synthetic',?,'human:ana')",
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('ops','hermes','synthetic',?,'human:ana')",
                   (inbound.H.now(),))
     assert len(svc.list_inboxes(external)['inboxes'])==3
     with svc.store.transaction() as c:c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")

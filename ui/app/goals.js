@@ -265,7 +265,7 @@ function goalRemovedToast(g) {
 // keeps it.
 const GOAL_FINISHED_CAP = 20;
 const GOAL_FINISHED = {};
-const goalFinishedAt = g => g.status_at || g.updated || '';
+const goalFinishedAt = g => g.status_at || g.updated_at || '';
 const goalFinishedOf = (goals, owner) => goals.filter(g => g.owner === owner && !goalLive(g))
   .sort((a, b) => String(goalFinishedAt(b)).localeCompare(String(goalFinishedAt(a))));
 function goalFinishedDetailHtml(d) {

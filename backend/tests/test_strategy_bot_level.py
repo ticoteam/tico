@@ -413,7 +413,7 @@ def test_with_regular_checks_off_a_due_kpi_pass_is_skipped(api):
 
     def due_at(day):
         with store.transaction() as c:
-            c.execute("UPDATE automations SET next_due=? WHERE id=?", (f"2026-09-{day}T07:00:00.000000Z", aid))
+            c.execute("UPDATE automations SET next_due_at=? WHERE id=?", (f"2026-09-{day}T07:00:00.000000Z", aid))
         automations.tick(store, datetime(2026, 9, day, 8, tzinfo=timezone.utc))
         with store.read() as c:
             return (c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=?", (aid,)).fetchone()[0],
@@ -442,7 +442,7 @@ def test_at_upgrade_a_due_monday_note_the_old_level_1_started_never_fires(api):
         routines.update(c, H.KEEPER, REVIEW, {"enabled": True})
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (strategy_bot.KEY, json.dumps(
             {"on": True, "level": 1, "review_armed": H.now(), "review_settled": True})))
-        c.execute("UPDATE schedules SET next_due=NULL, last_fired='2026-09-01T00:00:00.000000Z' WHERE id=?", (REVIEW,))
+        c.execute("UPDATE schedules SET next_due_at=NULL, last_fired_at='2026-09-01T00:00:00.000000Z' WHERE id=?", (REVIEW,))
         strategy_bot.migrate(c)                                                   # as the server does at startup
     assert not review_enabled(api)
     Scheduler(store, api.app.state.execution).tick(datetime(2026, 9, 14, 17, tzinfo=timezone.utc))

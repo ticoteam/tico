@@ -17,10 +17,10 @@ class Withdrawn(HubCase):
         after = H.approval(self.conn, appr["id"])
         self.assertEqual((after["decision"], after["decided_by"]), ("withdrawn", H.KEEPER))
         self.assertEqual(self.pending(), [])
-        told = self.conn.execute("SELECT body, refs_json FROM messages WHERE to_actor=? AND body LIKE 'Withdrawn:%'",
+        told = self.conn.execute("SELECT body, refs FROM messages WHERE to_actor=? AND body LIKE 'Withdrawn:%'",
                                  (CMO,)).fetchall()
         self.assertEqual(len(told), 1)
-        self.assertIn('"quiet": true', told[0]["refs_json"])
+        self.assertIn('"quiet": true', told[0]["refs"])
         self.refused("duplicate", H.approval_decide, self.conn, ANA, appr["id"], "approved")
 
     def test_a_newer_request_for_the_same_target_or_one_naming_it_replaces_the_older(self):
@@ -47,7 +47,7 @@ class Withdrawn(HubCase):
                    "content_sha256": "a" * 64}
         appr = H.approval_request(self.conn, CMO, "publish", release, task_id=row["id"])
         stored = self.conn.execute("SELECT ready_since, decision_owner FROM approvals WHERE id=?", (appr["id"],)).fetchone()
-        self.assertEqual(tuple(stored), (appr["created"], ANA))           # recorded, not only read back
+        self.assertEqual(tuple(stored), (appr["created_at"], ANA))           # recorded, not only read back
         self.assertEqual(appr["decision_owner_name"], H.person_name(self.conn, "ana"))
         self.assertTrue(H.is_release_approval("publish", appr["payload"]))
         self.assertFalse(H.is_release_approval("publish", {**release, "commit": ""}))
@@ -66,12 +66,12 @@ class Withdrawn(HubCase):
         self.conn.execute("UPDATE approvals SET ready_since=NULL, decision_owner=NULL WHERE id=?", (old["id"],))
         (legacy,) = H.approvals(self.conn, pending=True)
         to = H.message(self.conn, old["message_id"])["to_actor"]
-        self.assertEqual((legacy["ready_since"], legacy["decision_owner"]), (old["created"], to))
+        self.assertEqual((legacy["ready_since"], legacy["decision_owner"]), (old["created_at"], to))
 
     def test_an_approval_undecided_for_fourteen_days_is_withdrawn_and_may_be_asked_again(self):
         appr = H.approval_request(self.conn, CMO, "merge", MERGE)
-        later = H.shift(appr["created"], days=H.APPROVAL_STALE_DAYS, minutes=1)
-        self.assertEqual(approval_expiry.sweep(self.conn, H.shift(appr["created"], days=13))["stale"], [])
+        later = H.shift(appr["created_at"], days=H.APPROVAL_STALE_DAYS, minutes=1)
+        self.assertEqual(approval_expiry.sweep(self.conn, H.shift(appr["created_at"], days=13))["stale"], [])
         self.assertEqual(approval_expiry.sweep(self.conn, later)["stale"], [appr["id"]])
         self.assertEqual(H.approval_request(self.conn, CMO, "merge", MERGE)["decision"], None)
 

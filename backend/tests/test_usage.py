@@ -65,8 +65,8 @@ def test_the_migration_can_run_again_and_a_file_that_has_the_columns_catches_up(
 def seed(api):
     """Runs on 20 and 21 September: ops (Ana's, no department) and cpo (Ben's, product), one routine."""
     with api.app.state.store.transaction() as c:
-        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'",
                   (json.dumps({**people, "teams": {"product": {"root": "cpo"}}}),))
     t = post_task(api, "ops")
     with api.app.state.store.transaction() as c:
@@ -82,10 +82,10 @@ def seed(api):
             ("t6", "ops", "2026-08-01", (10, 0, 1), "gpt-6-sol", 0.01, "api", None),       # outside the range
         ]
         for tid, bot, day, (i, cache, o), model, est, billing, task in rows:
-            c.execute("INSERT INTO turns(id, bot, started, finished, exit, task_id, input_tokens, cached_tokens, output_tokens, "
+            c.execute("INSERT INTO turns(id, bot, started_at, finished_at, exit, task_id, input_tokens, cached_tokens, output_tokens, "
                       "model, est_cost_usd, billing) VALUES(?,?,?,?, 'completed', ?,?,?,?,?,?,?)",
                       (tid, bot, day + "T10:00:00.000000Z", day + "T10:05:00.000000Z", task, i, cache, o, model, est, billing))
-        c.execute("INSERT INTO turns(id, bot, started) VALUES('running','ops',?)", (DAY + "T11:00:00.000000Z",))   # not finished
+        c.execute("INSERT INTO turns(id, bot, started_at) VALUES('running','ops',?)", (DAY + "T11:00:00.000000Z",))   # not finished
 
 
 def post_task(api, owner):
@@ -116,7 +116,7 @@ def test_usage_by_bot_is_sorted_by_spend_with_totals_and_subscription_kept_apart
 
 def test_usage_does_not_treat_unreported_zero_as_a_priced_run(api):
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO turns(id,bot,started,finished,input_tokens,cached_tokens,output_tokens,"
+        c.executemany("INSERT INTO turns(id,bot,started_at,finished_at,input_tokens,cached_tokens,output_tokens,"
                       "est_cost_usd,billing,usage_reason) VALUES(?,'ops',?,?,0,0,0,0,?,?)", [
             (reason, DAY + "T10:00:00Z", DAY + "T10:05:00Z", billing, reason)
             for reason, billing in (("usage_unreported", "api"), ("usage_limited", None), ("no_result", "api"))])
@@ -127,12 +127,12 @@ def test_usage_does_not_treat_unreported_zero_as_a_priced_run(api):
                 *[r for r in detail["daily"] if r["runs"]]]
     assert all(r["est_cost_usd"] is None and r["unpriced_runs"] == 3 for r in amounts())
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,finished,input_tokens,est_cost_usd,billing,usage_reason) "
+        c.execute("INSERT INTO turns(id,bot,started_at,finished_at,input_tokens,est_cost_usd,billing,usage_reason) "
                   "VALUES('unknown','ops',?,?,100,NULL,'api','cost_unpriced')",
                   (DAY + "T10:00:00Z", DAY + "T10:05:00Z"))
     assert all(r["est_cost_usd"] is None and r["input_tokens"] == 100 for r in amounts())
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started,finished,est_cost_usd,billing) "
+        c.execute("INSERT INTO turns(id,bot,started_at,finished_at,est_cost_usd,billing) "
                   "VALUES('measured','ops',?,?,2.5,'api')", (DAY + "T10:00:00Z", DAY + "T10:05:00Z"))
     assert all(r["est_cost_usd"] == 2.5 for r in amounts())
     with api.app.state.store.transaction() as c:
@@ -237,7 +237,7 @@ def test_results_with_no_counts_end_with_zero_usage_and_their_reason(api, outcom
     r, _, attempt = setup_attempt(api)
     complete(api, r, attempt, outcome=outcome, limited=limited, tokens_in=None, tokens_out=None)
     row = turn(api, attempt["id"])
-    assert row["finished"] and row["exit"] == outcome
+    assert row["finished_at"] and row["exit"] == outcome
     zero_usage(row, reason)
 
 
@@ -249,7 +249,7 @@ def test_a_run_whose_lease_runs_out_ends_with_zero_usage_and_no_result(api):
     with api.app.state.store.transaction() as c:
         api.app.state.execution.expire(c)
     row = turn(api, attempt["id"])
-    assert row["finished"] and row["exit"] in ("interrupted", "failed")
+    assert row["finished_at"] and row["exit"] in ("interrupted", "failed")
     zero_usage(row, "no_result")
 
 

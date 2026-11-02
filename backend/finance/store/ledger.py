@@ -19,7 +19,7 @@ def new_id() -> str:
 
 # ------------------------------------------------------------------------------------------------ settings
 def setting(c: sqlite3.Connection, key: str) -> Any:
-    row = c.execute("SELECT value_json FROM fin_settings WHERE key=?", (key,)).fetchone()
+    row = c.execute("SELECT value FROM fin_settings WHERE key=?", (key,)).fetchone()
     try:
         return json.loads(row[0]) if row else None
     except (TypeError, ValueError):
@@ -27,8 +27,8 @@ def setting(c: sqlite3.Connection, key: str) -> Any:
 
 
 def set_setting(c: sqlite3.Connection, key: str, value: object, by: str, at: str) -> None:
-    c.execute("INSERT INTO fin_settings(key, value_json, created_at, created_by, updated_at, updated_by) "
-              "VALUES(?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, "
+    c.execute("INSERT INTO fin_settings(key, value, created_at, created_by, updated_at, updated_by) "
+              "VALUES(?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
               "updated_at=excluded.updated_at, updated_by=excluded.updated_by",
               (key, json.dumps(value, sort_keys=True), at, by, at, by))
 
@@ -376,10 +376,10 @@ def entries_on(c: sqlite3.Connection, book_id: str, account_ids: Sequence[str], 
 def insert_snapshot(c: sqlite3.Connection, book_id: str, period_id: str, month: str, accounts_json: str,
                     pnl_json: str, balances_json: str, by: str, at: str) -> None:
     """A closed month's snapshot. Closing a month again replaces its totals and keeps the restatements it took."""
-    c.execute("INSERT INTO fin_close_snapshots(id, book_id, period_id, month, accounts_json, pnl_json, balances_json, "
-              "restated_json, created_at, created_by) VALUES(?,?,?,?,?,?,?,'[]',?,?) ON CONFLICT(period_id) DO UPDATE "
-              "SET accounts_json=excluded.accounts_json, pnl_json=excluded.pnl_json, "
-              "balances_json=excluded.balances_json, created_at=excluded.created_at, created_by=excluded.created_by",
+    c.execute("INSERT INTO fin_close_snapshots(id, book_id, period_id, month, accounts, pnl, balances, "
+              "restated, created_at, created_by) VALUES(?,?,?,?,?,?,?,'[]',?,?) ON CONFLICT(period_id) DO UPDATE "
+              "SET accounts=excluded.accounts, pnl=excluded.pnl, "
+              "balances=excluded.balances, created_at=excluded.created_at, created_by=excluded.created_by",
               (new_id(), book_id, period_id, month, accounts_json, pnl_json, balances_json, at, by))
 
 
@@ -388,4 +388,4 @@ def snapshot(c: sqlite3.Connection, book_id: str, month: str) -> Any:
 
 
 def set_restated(c: sqlite3.Connection, snapshot_id: str, restated_json: str) -> None:
-    c.execute("UPDATE fin_close_snapshots SET restated_json=? WHERE id=?", (restated_json, snapshot_id))
+    c.execute("UPDATE fin_close_snapshots SET restated=? WHERE id=?", (restated_json, snapshot_id))

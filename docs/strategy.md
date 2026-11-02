@@ -196,7 +196,7 @@ polls it:
 Every job also carries `url`, `text`, `pages` (`[{url, title}]` or `{url, error}`, never page text), `found`
 (`{summary, serve, sell, know, not, bets: [{statement, why, rules_out, wrong_if}]}` once the model answered; it
 drafts no vision, and the draft's `vision` is left as it is)
-and `started`/`finished`;
+and `started_at`/`finished_at`;
 the last five jobs are kept. The fetch is the doc-link fetch's guard: http and https only, every address the name
 resolves to must be public, each redirect re-checked, at most four pages of 8,000 characters in 45 seconds, and no
 server credentials sent. The model call is the one-shot path the update writer uses (the Tico AI Gateway, else the

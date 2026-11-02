@@ -64,16 +64,16 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     : await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined, headless: true});
   const now = new Date().toISOString();
   const MESSAGES = [
-    {id: 'm1', from_actor: 'bot:designer', body: 'Here is the chart, the logo and two pages.', created: now, refs: {attachments: [
+    {id: 'm1', from_actor: 'bot:designer', body: 'Here is the chart, the logo and two pages.', created_at: now, refs: {attachments: [
       A('f-chart', 'image', {width: 800, height: 400}), A('f-logo', 'svg'), A('f-short', 'page'), A('f-tall', 'page')]}},
-    {id: 'm2', from_actor: 'bot:designer', body: 'Six pictures.', created: now, refs: {attachments:
+    {id: 'm2', from_actor: 'bot:designer', body: 'Six pictures.', created_at: now, refs: {attachments:
       [1, 2, 3, 4, 5, 6].map(i => A('f-six' + i, 'image', {width: 400, height: 200}))}},
-    {id: 'm3', from_actor: 'bot:designer', body: 'Older ones.', created: now, refs: {attachments: [
+    {id: 'm3', from_actor: 'bot:designer', body: 'Older ones.', created_at: now, refs: {attachments: [
       A('f-moved', 'image', {width: 400, height: 200, current_version: 3}), A('f-gone', 'page', {removed: true, src: undefined, current_version: null}),
       A('f-bad', 'page'), A('f-nosrc', 'image', {src: null, width: 400, height: 200}), A('f-hostile', 'page')]}},
-    {id: 'm4', from_actor: 'human:ana', body: 'My photo', created: now, refs: {attachments: [A('f-mine', 'image', {width: 300, height: 300, title: 'Ana photo'})]}},
-    {id: 'm5', from_actor: 'bot:designer', body: 'Two full-screen pages.', created: now, refs: {attachments: [A('f-vh', 'page'), A('f-dvh', 'page'), A('f-tiny', 'page'), A('f-mid', 'page')]}},
-    {id: 'm7', from_actor: 'bot:designer', body: 'A plain page.', created: now, refs: {attachments: [A('f-clamp', 'page')]}},
+    {id: 'm4', from_actor: 'human:ana', body: 'My photo', created_at: now, refs: {attachments: [A('f-mine', 'image', {width: 300, height: 300, title: 'Ana photo'})]}},
+    {id: 'm5', from_actor: 'bot:designer', body: 'Two full-screen pages.', created_at: now, refs: {attachments: [A('f-vh', 'page'), A('f-dvh', 'page'), A('f-tiny', 'page'), A('f-mid', 'page')]}},
+    {id: 'm7', from_actor: 'bot:designer', body: 'A plain page.', created_at: now, refs: {attachments: [A('f-clamp', 'page')]}},
   ];
   const run = async ({viewport, hasTouch = false, label}) => {
     const context = await browser.newContext({viewport, hasTouch, isMobile: hasTouch, serviceWorkers: 'block'});
@@ -123,12 +123,12 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
       return json(unrouted(p));
     });
     const task = {id: 't1', title: 'Launch page', owner: 'bot:designer', requester: 'human:ana', status: 'review', lane: 'company', rank: 1, labels: [], links: [],
-      parts: {total: 0, done: 0}, version: 1, created: now, updated: now, body: 'Make the page.', attachments: []};
-    const tver = (id, mime) => ({n: 1, size: 1000, mime, sha256: 'x', created: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
+      parts: {total: 0, done: 0}, version: 1, created_at: now, updated_at: now, body: 'Make the page.', attachments: []};
+    const tver = (id, mime) => ({n: 1, size: 1000, mime, sha256: 'x', created_at: now, by: 'bot:designer', comment_id: 'c1', note: null, ask: null, answers: [],
       width: null, height: null, duration_ms: null, media_state: 'none', url: `/api/v2/files/${id}?v=1`, poster_url: null, thumb_url: null});
     const taskFiles = [{id: 'f-chart', name: 'f-chart.png', mime: 'image/png', current_version: 1, archived: false, versions: [tver('f-chart', 'image/png')]},
       {id: 'f-short', name: 'f-short.html', mime: 'text/html', current_version: 1, archived: false, versions: [tver('f-short', 'text/html')]}];
-    const taskComments = [{id: 'c1', kind: 'say', from_actor: 'bot:designer', body: 'Chart and page attached.', created: now, answers: [],
+    const taskComments = [{id: 'c1', kind: 'say', from_actor: 'bot:designer', body: 'Chart and page attached.', created_at: now, answers: [],
       refs: {task: 't1', comment: true, attachments: [A('f-chart', 'image', {width: 800, height: 400}), A('f-short', 'page')]}}];
 
     const noSideways = async where => {
@@ -450,7 +450,7 @@ const A = (id, kind, over = {}) => ({id, file_id: id, version: 1, ref: id + '@1'
     for (let i = 0; !held.length && i < 100; i++) await page.waitForTimeout(50);
     assert(held.length, `${label}: the page follows the live event stream`);
     gen = 2;
-    messages.push({id: 'm6', from_actor: 'bot:designer', body: 'Live one.', created: now, refs: {attachments: [A('f-live', 'image', {width: 400, height: 200}), A('f-live-page', 'page')]}});
+    messages.push({id: 'm6', from_actor: 'bot:designer', body: 'Live one.', created_at: now, refs: {attachments: [A('f-live', 'image', {width: 400, height: 200}), A('f-live-page', 'page')]}});
     await held.at(-1).fulfill({contentType: 'text/event-stream', body: `id: 9\nevent: messages\ndata: ${JSON.stringify({seq: 9, conversation_id: 'c-designer'})}\n\n`});
     const m6 = page.locator('[data-message="m6"]');
     await m6.locator('figure.vcard[data-kind="page"] .vcard-body.ready').waitFor();

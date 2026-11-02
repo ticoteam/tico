@@ -34,7 +34,7 @@ def test_a_bot_reader_who_may_not_read_its_limit_task_learns_only_that_a_limit_i
     for statement in (f"SELECT bot FROM bot_control WHERE claim_task='{task['id']}'",
                       f"SELECT b.slug FROM bots b JOIN bot_control ctl ON ctl.bot=b.slug AND ctl.claim_task LIKE "
                       f"'{task['id'][:8]}%'",
-                      f"SELECT action FROM events WHERE target='ops' AND detail_json LIKE '%{task['id']}%'"):
+                      f"SELECT action FROM events WHERE target='ops' AND detail LIKE '%{task['id']}%'"):
         assert sql(api, statement, "ben-test") == [], statement
     assert sql(api, f"SELECT bot FROM bot_control WHERE claim_task='{task['id']}'", "ana-test") == [["ops"]]
     control(api, action="unscope")

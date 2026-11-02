@@ -149,7 +149,7 @@ def held(c):
     """The bots with runs held for this reason, one row each: how many, and since when the oldest waits. A run whose
     wait has ended stays listed until it starts, is dropped or is released."""
     return [dict(row) for row in c.execute(
-        "SELECT bot,count(*) AS jobs,min(created) AS since FROM jobs WHERE hold_reason=? AND state='queued' "
+        "SELECT bot,count(*) AS jobs,min(created_at) AS since FROM jobs WHERE hold_reason=? AND state='queued' "
         "GROUP BY bot ORDER BY bot", (REASON,))]
 
 
@@ -158,8 +158,8 @@ def check_failed(c, bot, exc):
     traceback is logged here, and Health names the bot and the error class until a run of the bot starts."""
     error = type(exc).__name__
     log.error("claim check failed for bot %s: %s", bot, error, exc_info=exc)
-    c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,NULL,?,?) "
-              "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail_json=excluded.detail_json",
+    c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,NULL,?,?) "
+              "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail=excluded.detail",
               (CHECK + bot, error, json.dumps({"bot": bot, "error": error, "failed_at": H.now()})))
 
 
@@ -167,7 +167,7 @@ def check_failures(c):
     """The bots whose claim check is failing and that still have work it holds back, queued runs or open tasks of their
     own (the claim's backfill asks the same check), as {bot, error, failed_at}."""
     out = []
-    for row in c.execute("SELECT h.detail_json FROM service_health h WHERE h.service GLOB 'claim_check:*' "
+    for row in c.execute("SELECT h.detail FROM service_health h WHERE h.service GLOB 'claim_check:*' "
                          "AND (EXISTS (SELECT 1 FROM jobs j WHERE j.state='queued' AND ?||j.bot=h.service) "
                          "OR EXISTS (SELECT 1 FROM tasks t WHERE t.status='open' "
                          "AND t.owner='bot:'||substr(h.service,?))) "

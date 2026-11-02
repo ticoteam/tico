@@ -73,7 +73,7 @@ def seeded_version(c: sqlite3.Connection, budget_id: str) -> bool:
     if len(rows) != 1 or not rows[0][0]:
         return False
     return c.execute("SELECT 1 FROM fin_actions WHERE kind='budget_create' "
-                     "AND json_extract(result_json, '$.budget_id')=? LIMIT 1", (budget_id,)).fetchone() is None
+                     "AND json_extract(result, '$.budget_id')=? LIMIT 1", (budget_id,)).fetchone() is None
 
 
 def drop_versions(c: sqlite3.Connection, budget_id: str) -> None:
@@ -315,7 +315,7 @@ def projections(c: sqlite3.Connection, book_id: str, first: str, last: str) -> l
 def event(c: sqlite3.Connection, name: str, subject: str, period_key: str, payload: Mapping[str, object], by: str,
           at: str) -> bool:
     """A `finance.*` event for Tico's triggers, once per (name, subject, period). Whether it was new."""
-    return c.execute("INSERT INTO fin_events(id, name, subject, period_key, payload_json, created_at, created_by) "
+    return c.execute("INSERT INTO fin_events(id, name, subject, period_key, payload, created_at, created_by) "
                      "VALUES(?,?,?,?,?,?,?) ON CONFLICT(name, subject, period_key) DO NOTHING",
                      (new_id(), name, subject, period_key, json.dumps(dict(payload), sort_keys=True, default=str),
                       at, by)).rowcount > 0

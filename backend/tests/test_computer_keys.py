@@ -205,7 +205,7 @@ def test_this_computer_only_or_all_of_them_for_a_key_serving_several_computers(e
     three = computer(api, "Charlie", source="shared")
     own = computer(api, "Delta", source="terminal")
     with api.app.state.store.transaction() as c:  # Charlie went offline
-        c.execute("UPDATE runners SET last_seen='2026-01-01T00:00:00Z' WHERE id=?", (three["runner_id"],))
+        c.execute("UPDATE runners SET last_seen_at='2026-01-01T00:00:00Z' WHERE id=?", (three["runner_id"],))
     ask = call(api, "GET", f"runners/{one['runner_id']}/keys?runtime=codex")
     assert ask["source"] == "shared" and ask["preview"] == "sk-…789" and ask["can_replace_all"] is True
     assert [(c["label"], c["online"]) for c in ask["computers"]] == [("Alpha", True), ("Bravo", True),
@@ -310,7 +310,7 @@ def test_botops_never_clears_or_replaces_a_key_and_all_of_them_waits_for_every_c
     # Offline, an older runner still has nothing that clears its copy when it is back (it never reads the mark), so
     # it is not marked as if it would.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen='2026-01-01T00:00:00Z' WHERE id IN (?,?)",
+        c.execute("UPDATE runners SET last_seen_at='2026-01-01T00:00:00Z' WHERE id IN (?,?)",
                   (old["runner_id"], older["runner_id"]))
     stale = call(api, "POST", f"runners/{rid}/keys/clear", {"runtime": "codex", "scope": "all"}, expected=409)
     assert stale["error"]["detail"].startswith("Update Old box, Older box to clear")
@@ -319,7 +319,7 @@ def test_botops_never_clears_or_replaces_a_key_and_all_of_them_waits_for_every_c
         assert c.execute("SELECT count(*) FROM model_login_cleared").fetchone()[0] == 0
     # Updated, an offline computer is marked to clear its copy when it is back.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capabilities_json=? WHERE id IN (?,?)",
+        c.execute("UPDATE runners SET capabilities=? WHERE id IN (?,?)",
                   (json.dumps(CAPABLE), old["runner_id"], older["runner_id"]))
     out = call(api, "POST", f"runners/{rid}/keys/clear", {"runtime": "codex", "scope": "all"})["computers"]
     assert [(c["label"], c["waiting"]) for c in out] == [("Alpha", False), ("Old box", True), ("Older box", True)]
@@ -565,7 +565,7 @@ def test_switch_to_an_api_key_rights_and_an_old_or_offline_computer(environment)
                expected=422)
     assert "keychain" in mac["error"]["detail"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen='2026-01-01T00:00:00Z' WHERE id=?", (rid,))
+        c.execute("UPDATE runners SET last_seen_at='2026-01-01T00:00:00Z' WHERE id=?", (rid,))
     assert "offline" in call(api, "POST", f"runners/{rid}/keys", body, expected=409)["error"]["detail"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM model_logins WHERE kind='to_key'").fetchone()[0] == 0

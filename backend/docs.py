@@ -31,19 +31,19 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS docs(
  id TEXT PRIMARY KEY, path TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
  locked INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1,
- created_by TEXT NOT NULL, created TEXT NOT NULL, updated_by TEXT NOT NULL, updated TEXT NOT NULL,
+ created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_by TEXT NOT NULL, updated_at TEXT NOT NULL,
  archived INTEGER NOT NULL DEFAULT 0);
 CREATE UNIQUE INDEX IF NOT EXISTS docs_path_live ON docs(path COLLATE NOCASE) WHERE archived=0;
-CREATE INDEX IF NOT EXISTS docs_updated ON docs(updated);
+CREATE INDEX IF NOT EXISTS docs_updated ON docs(updated_at);
 CREATE TABLE IF NOT EXISTS doc_versions(
  doc_id TEXT NOT NULL REFERENCES docs(id), version INTEGER NOT NULL, title TEXT NOT NULL, path TEXT NOT NULL,
- body TEXT NOT NULL, actor TEXT NOT NULL, created TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+ body TEXT NOT NULL, actor TEXT NOT NULL, created_at TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
  PRIMARY KEY(doc_id, version));
 CREATE TABLE IF NOT EXISTS linked_docs(
  id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL, kind TEXT NOT NULL,
- description TEXT NOT NULL DEFAULT '', added_by TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL,
+ description TEXT NOT NULL DEFAULT '', added_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  archived INTEGER NOT NULL DEFAULT 0);
-CREATE INDEX IF NOT EXISTS linked_docs_live ON linked_docs(archived, created);
+CREATE INDEX IF NOT EXISTS linked_docs_live ON linked_docs(archived, created_at);
 """
 # Full-text index over title, path and body. It is created apart so a SQLite built without FTS5
 # still starts: search then falls back to LIKE.
@@ -132,7 +132,7 @@ def linked_view(row, names=None):
     names = names or {}
     return {"id": row["id"], "title": row["title"], "url": row["url"], "kind": row["kind"],
             "host": host_of(row["url"]), "description": row["description"], "added_by": row["added_by"],
-            "added_by_name": name_of(row["added_by"], names), "created": row["created"], "updated": row["updated"]}
+            "added_by_name": name_of(row["added_by"], names), "created_at": row["created_at"], "updated_at": row["updated_at"]}
 
 
 def name_of(actor, names):
@@ -207,7 +207,7 @@ def migrate(c, settings=None):
     if c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (MIGRATED,)).fetchone():
         return 0
     found = []
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='document_sources'").fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='document_sources'").fetchone()
     try:
         sources = json.loads(row[0]) if row else []
     except ValueError:
@@ -234,7 +234,7 @@ def migrate(c, settings=None):
         if c.execute("SELECT 1 FROM linked_docs WHERE archived=0 AND url=?", (url,)).fetchone():
             continue
         now = H.now()
-        c.execute("INSERT INTO linked_docs(id,title,url,kind,description,added_by,created,updated) VALUES(?,?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO linked_docs(id,title,url,kind,description,added_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
                   ("link-" + secrets.token_hex(6), title[:300], url, detect_kind(url), description, H.KEEPER, now, now))
         added += 1
     c.execute("INSERT INTO registry_metadata VALUES(?,?)", (MIGRATED, encode({"at": H.now(), "linked": added})))
@@ -256,7 +256,7 @@ def refresh_generated_wording(c):
         text = H.librarian_text(row["body"])
         if text == row["body"]:
             continue
-        c.execute("UPDATE docs SET body=?,version=version+1,updated_by='keeper',updated=? WHERE id=?",
+        c.execute("UPDATE docs SET body=?,version=version+1,updated_by='keeper',updated_at=? WHERE id=?",
                   (text, H.now(), row["id"]))
         fresh = docs.get_row(c, row["id"])
         docs.snapshot(c, fresh, H.KEEPER, "Updated generated Tico wording")
@@ -279,7 +279,7 @@ def redo_generated_wording(c):
         text = H.librarian_text(row["before"])
         if text == row["body"]:
             continue
-        c.execute("UPDATE docs SET body=?,version=version+1,updated_by='keeper',updated=? WHERE id=?",
+        c.execute("UPDATE docs SET body=?,version=version+1,updated_by='keeper',updated_at=? WHERE id=?",
                   (text, H.now(), row["id"]))
         fresh = docs.get_row(c, row["id"])
         docs.snapshot(c, fresh, H.KEEPER, "Redid generated Tico wording")
@@ -308,7 +308,7 @@ def refresh_generated_docs(c):
         text = H.librarian_text(row["body"]) if row["updated_by"] == "bot:librarian" else row["body"]
         if (title, text) == (row["title"], row["body"]):
             continue
-        c.execute("UPDATE docs SET title=?,body=?,version=version+1,updated_by='keeper',updated=? WHERE id=?",
+        c.execute("UPDATE docs SET title=?,body=?,version=version+1,updated_by='keeper',updated_at=? WHERE id=?",
                   (title, text, H.now(), row["id"]))
         fresh = docs.get_row(c, row["id"])
         docs.snapshot(c, fresh, H.KEEPER, "Updated generated Tico wording")
@@ -397,7 +397,7 @@ def add_link(c, actor, body):
     if c.execute("SELECT COUNT(*) FROM linked_docs WHERE archived=0").fetchone()[0] >= 500:
         raise Problem("limit", "At most 500 linked docs", 422)
     now, link_id = H.now(), "link-" + secrets.token_hex(6)
-    c.execute("INSERT INTO linked_docs(id,title,url,kind,description,added_by,created,updated) VALUES(?,?,?,?,?,?,?,?)",
+    c.execute("INSERT INTO linked_docs(id,title,url,kind,description,added_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
               (link_id, body.title or default_title(url), url, detect_kind(url), body.description, actor, now, now))
     H.event(c, actor, "docs.linked", link_id, {"url": url})
     from .doc_sources import sync_link
@@ -439,11 +439,11 @@ class Docs:
     def doc_view(self, c, row, body=True, names=None):
         names = names if names is not None else label_names(c, [row["created_by"], row["updated_by"]])
         out = {"id": row["id"], "path": row["path"], "title": row["title"],
-               "updated": row["updated"], "updated_by": row["updated_by"],
+               "updated_at": row["updated_at"], "updated_by": row["updated_by"],
                "updated_by_name": name_of(row["updated_by"], names),
                "locked": bool(row["locked"]), "version": row["version"]}
         if body:
-            out.update(body=row["body"], created_by=row["created_by"], created=row["created"],
+            out.update(body=row["body"], created_by=row["created_by"], created_at=row["created_at"],
                        created_by_name=name_of(row["created_by"], names), archived=bool(row["archived"]))
         return out
 
@@ -496,8 +496,8 @@ class Docs:
             path, n = f"{stem}-{n}.{ext}", n + 1
 
     def snapshot(self, c, row, actor, note):
-        c.execute("INSERT INTO doc_versions(doc_id,version,title,path,body,actor,created,note) VALUES(?,?,?,?,?,?,?,?)",
-                  (row["id"], row["version"], row["title"], row["path"], row["body"], actor, row["updated"], note))
+        c.execute("INSERT INTO doc_versions(doc_id,version,title,path,body,actor,created_at,note) VALUES(?,?,?,?,?,?,?,?)",
+                  (row["id"], row["version"], row["title"], row["path"], row["body"], actor, row["updated_at"], note))
 
     def insert(self, c, actor, title, body, path=None, note="", event="docs.created", detail=None):
         """One new doc at version 1: the row, its first version, its index entry and the audit event."""
@@ -505,7 +505,7 @@ class Docs:
         if actor == "bot:librarian":
             body = H.librarian_text(body)
         now, doc_id = H.now(), "doc-" + secrets.token_hex(6)
-        c.execute("INSERT INTO docs(id,path,title,body,version,created_by,created,updated_by,updated) "
+        c.execute("INSERT INTO docs(id,path,title,body,version,created_by,created_at,updated_by,updated_at) "
                   "VALUES(?,?,?,?,1,?,?,?,?)", (doc_id, path, title, body, actor, now, actor, now))
         row = self.get_row(c, doc_id)
         self.snapshot(c, row, actor, note or "Created")
@@ -540,7 +540,7 @@ class Docs:
                 names = label_names(c, [row["updated_by"]])
                 raise Problem("version_conflict", "Someone changed this doc after you opened it. Reload to see their "
                               "version, then apply your change to it.", 409,
-                              extra={"version": row["version"], "updated": row["updated"], "updated_by": row["updated_by"],
+                              extra={"version": row["version"], "updated_at": row["updated_at"], "updated_by": row["updated_by"],
                                      "updated_by_name": name_of(row["updated_by"], names)})
             title = body.title if body.title is not None else row["title"]
             text = body.body if body.body is not None else row["body"]
@@ -556,7 +556,7 @@ class Docs:
                 c.execute("UPDATE docs SET locked=? WHERE id=?", (int(body.locked), row["id"]))
                 H.event(c, who.actor, "docs.locked" if body.locked else "docs.unlocked", row["id"], {"path": row["path"]})
             if changed:
-                c.execute("UPDATE docs SET title=?,body=?,path=?,archived=?,version=version+1,updated_by=?,updated=? WHERE id=?",
+                c.execute("UPDATE docs SET title=?,body=?,path=?,archived=?,version=version+1,updated_by=?,updated_at=? WHERE id=?",
                           (title, text, path, archived, who.actor, now, row["id"]))
                 fresh = self.get_row(c, row["id"])
                 note = body.note or ("Archived" if archived and not row["archived"] else "Unarchived" if row["archived"] and not archived else "")
@@ -584,7 +584,7 @@ class Docs:
         text = "".join(line for line in row["body"].splitlines(keepends=True) if not refs.search(line))
         if text == row["body"]:
             return
-        c.execute("UPDATE docs SET body=?,version=version+1,updated_by=?,updated=? WHERE id=?",
+        c.execute("UPDATE docs SET body=?,version=version+1,updated_by=?,updated_at=? WHERE id=?",
                   (text, actor, H.now(), row["id"]))
         fresh = self.get_row(c, row["id"])
         self.snapshot(c, fresh, actor, "Removed archived source " + source["path"])
@@ -595,12 +595,12 @@ class Docs:
         self.reader(who)
         with self.store.read() as c:
             row = self.get_row(c, doc_id)
-            found = c.execute("SELECT version,title,path,actor,created,note,length(body) AS size FROM doc_versions "
+            found = c.execute("SELECT version,title,path,actor,created_at,note,length(body) AS size FROM doc_versions "
                               "WHERE doc_id=? ORDER BY version DESC", (doc_id,)).fetchall()
             names = label_names(c, [v["actor"] for v in found])
             return {"doc": doc_id, "versions": [
                 {"version": v["version"], "current": v["version"] == row["version"], "title": v["title"], "path": v["path"],
-                 "actor": v["actor"], "actor_name": name_of(v["actor"], names), "created": v["created"],
+                 "actor": v["actor"], "actor_name": name_of(v["actor"], names), "created_at": v["created_at"],
                  "note": v["note"], "size": v["size"]} for v in found]}
 
     def version(self, who, doc_id, number):
@@ -613,7 +613,7 @@ class Docs:
             names = label_names(c, [v["actor"]])
             return {"version": {"version": v["version"], "title": v["title"], "path": v["path"], "body": v["body"],
                                 "actor": v["actor"], "actor_name": name_of(v["actor"], names),
-                                "created": v["created"], "note": v["note"]}}
+                                "created_at": v["created_at"], "note": v["note"]}}
 
     def restore(self, request, doc_id, body):
         who = request.state.identity
@@ -633,7 +633,7 @@ class Docs:
                 path = self.free_path(c, path, own=doc_id, unique=True)
             if (old["title"], old["body"], path, 0) == (row["title"], row["body"], row["path"], row["archived"]):
                 return {"doc": self.doc_view(c, row)}
-            c.execute("UPDATE docs SET title=?,body=?,path=?,archived=0,version=version+1,updated_by=?,updated=? WHERE id=?",
+            c.execute("UPDATE docs SET title=?,body=?,path=?,archived=0,version=version+1,updated_by=?,updated_at=? WHERE id=?",
                       (old["title"], old["body"], path, who.actor, H.now(), doc_id))
             fresh = self.get_row(c, doc_id)
             self.snapshot(c, fresh, who.actor, f"Restored version {body.version}")
@@ -646,7 +646,7 @@ class Docs:
     def links(self, who):
         self.reader(who)
         with self.store.read() as c:
-            rows = c.execute("SELECT * FROM linked_docs WHERE archived=0 ORDER BY created, id").fetchall()
+            rows = c.execute("SELECT * FROM linked_docs WHERE archived=0 ORDER BY created_at, id").fetchall()
             names = label_names(c, [r["added_by"] for r in rows])
             return {"linked": [linked_view(r, names) for r in rows]}
 
@@ -671,7 +671,7 @@ class Docs:
             title = body.title if body.title is not None else row["title"]
             description = body.description if body.description is not None else row["description"]
             archived = int(body.archived) if body.archived is not None else row["archived"]
-            c.execute("UPDATE linked_docs SET title=?,description=?,url=?,kind=?,archived=?,updated=? WHERE id=?",
+            c.execute("UPDATE linked_docs SET title=?,description=?,url=?,kind=?,archived=?,updated_at=? WHERE id=?",
                       (title, description, url, detect_kind(url), archived, H.now(), link_id))
             H.event(c, who.actor, "docs.link_removed" if archived and not row["archived"] else "docs.link_updated",
                     link_id, {"url": url})

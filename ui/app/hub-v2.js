@@ -264,7 +264,7 @@ function agentNotice(slug) {
   const a = e.agent, name = agentKind(a);
   // A Grok Bot or Dots is synced in by the agent itself (docs/external-agent-sync.md): its history is copied
   // here, and what its person writes here goes to it with the next sync.
-  if (a.synced) return `${empName(slug)} syncs from ${a.label || 'its platform'}${a.last_seen ? ` · last synced ${ago(a.last_seen)}` : ''} — your messages reach it at the next sync`;
+  if (a.synced) return `${empName(slug)} syncs from ${a.label || 'its platform'}${a.last_seen_at ? ` · last synced ${ago(a.last_seen_at)}` : ''} — your messages reach it at the next sync`;
   const issue = (S.status?.health_issues || []).find(i => i.kind === 'agent' && i.bot === slug);
   if (issue ? /no agent credential/.test(issue.title) : !a.credential)
     return `${empName(slug)} is a ${name} with no credential yet — messages wait until one is created in Settings and installed on its computer`;

@@ -161,7 +161,7 @@ def _acted(c, row, receiver):
                  (row["task_id"], receiver, *window)).fetchone():
         return True
     return bool(row["conversation_id"]) and c.execute(
-        "SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created>=? AND created<=? LIMIT 1",
+        "SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created_at>=? AND created_at<=? LIMIT 1",
         (row["conversation_id"], receiver, *window)).fetchone() is not None
 
 
@@ -237,8 +237,8 @@ def apply(c, actor_, sender, receiver, per_day, via=None):
     if per_day is None:
         c.execute("DELETE FROM task_caps WHERE sender=? AND receiver=?", (sender, receiver))
     else:
-        c.execute("INSERT INTO task_caps(sender, receiver, per_day, updated, updated_by) VALUES(?,?,?,?,?) "
-                  "ON CONFLICT(sender, receiver) DO UPDATE SET per_day=excluded.per_day, updated=excluded.updated, "
+        c.execute("INSERT INTO task_caps(sender, receiver, per_day, updated_at, updated_by) VALUES(?,?,?,?,?) "
+                  "ON CONFLICT(sender, receiver) DO UPDATE SET per_day=excluded.per_day, updated_at=excluded.updated_at, "
                   "updated_by=excluded.updated_by", (sender, receiver, per_day, H.now(), actor_))
     audit_log.write(c, actor_, f"task_cap:{ref(sender)}>{ref(receiver)}",
                     None if before is None else _cap(sender, receiver, before),
@@ -272,8 +272,8 @@ def forget(c, teammate):
                          (teammate, teammate)).fetchall():
         apply(c, H.KEEPER, row["sender"], row["receiver"], None, via="group move")
     named = ref(teammate)
-    for row in c.execute("SELECT id, payload_json FROM approvals WHERE kind='task_cap' AND decision IS NULL").fetchall():
-        change = json.loads(row["payload_json"] or "{}")
+    for row in c.execute("SELECT id, payload FROM approvals WHERE kind='task_cap' AND decision IS NULL").fetchall():
+        change = json.loads(row["payload"] or "{}")
         if named in (change.get("sender"), change.get("receiver")):
             H.approval_withdraw(c, row["id"], "A teammate in it moved group.")
 
@@ -292,12 +292,12 @@ def may_set(c, auth, who, sender):
 def _proposals(c):
     """The bots' cap changes a person has yet to decide: undecided approvals of kind task_cap."""
     out = []
-    for row in c.execute("SELECT id, requested_by, created, payload_json FROM approvals "
-                         "WHERE kind='task_cap' AND decision IS NULL ORDER BY created"):
-        change = json.loads(row["payload_json"] or "{}")
+    for row in c.execute("SELECT id, requested_by, created_at, payload FROM approvals "
+                         "WHERE kind='task_cap' AND decision IS NULL ORDER BY created_at"):
+        change = json.loads(row["payload"] or "{}")
         out.append({"id": row["id"], "sender": change.get("sender"), "receiver": change.get("receiver"),
                     "per_day": change.get("per_day"), "status": "pending", "proposed_by": ref(row["requested_by"]),
-                    "created": row["created"]})
+                    "created_at": row["created_at"]})
     return out
 
 
@@ -315,7 +315,7 @@ def _listing(c, auth, who):
     for r in c.execute("SELECT * FROM task_caps ORDER BY sender, receiver"):
         count, closed = tally(c, r["sender"], r["receiver"])
         caps.append({"sender": ref(r["sender"]), "receiver": ref(r["receiver"]), "per_day": r["per_day"],
-                     "count": count, "closed": closed, "updated": r["updated"], "updated_by": ref(r["updated_by"])})
+                     "count": count, "closed": closed, "updated_at": r["updated_at"], "updated_by": ref(r["updated_by"])})
     proposals = _proposals(c) if (who.role == "owner" or auth.bot_admin(who)) else []
     return {"caps": caps, "proposals": proposals}
 

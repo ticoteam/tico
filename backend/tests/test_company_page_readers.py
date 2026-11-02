@@ -56,7 +56,7 @@ def stream(c, audience_ids, before=None, limit=10, company_name=""):
                      "AND published_at<? ORDER BY published_at DESC LIMIT ?", (*audience_ids, before or "~", limit))
     return [{"anchor": anchor_of(r), "title": r["title"], "author": {"name": "Ops", "kind": "bot", "actor": "bot:ops"},
              "period": "Oct", "published_at": r["published_at"], "version": 1, "correction_note": None,
-             "approval_id": "INTERNAL-APPROVAL", "body_json": "INTERNAL-BODY",
+             "approval_id": "INTERNAL-APPROVAL", "body": "INTERNAL-BODY",
              "sections": [{"key": "asks", "items": [{"body": "Intro?", "ask_id": "ask-1", "source": "INTERNAL-SOURCE"}]}]}
             for r in rows]
 
@@ -671,7 +671,7 @@ def test_a_reply_reaches_the_owner_as_untrusted_text_and_wakes_no_bot(site, monk
     assert "untrusted" in task["body"] and "<outside-text>" in task["body"]
     assert task["body"].count("</outside-text>") == 1          # the writer can't close the fence
     assert requester["email"] == "pat@other.example" and requester["actor"] is None
-    assert not [r for r in site.rows("SELECT detail_json FROM events") if "pat@other.example" in str(r["detail_json"])]
+    assert not [r for r in site.rows("SELECT detail FROM events") if "pat@other.example" in str(r["detail"])]
     assert not site.rows("SELECT 1 FROM tasks WHERE id=? AND owner LIKE 'bot:%'", task["id"])
 
 

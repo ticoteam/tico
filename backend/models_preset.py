@@ -149,7 +149,7 @@ def gateway_line(c, bot, ready, settings=None, config=None):
         return ""
     record = load(c, settings)
     if config is None:
-        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
         config = fill(record, json.loads(row[0] or "{}") if row else {})
     if not waiting(record, ready, config):
         return ""
@@ -172,7 +172,7 @@ def as_served(c, bot, ready, check, settings=None):
 def computer_of(c, bot):
     """The readiness document of the computer `bot` is on, or {}."""
     from .store import readiness_document
-    row = c.execute("SELECT r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
                     "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
     return readiness_document(row[0]) if row else {}
 
@@ -200,10 +200,10 @@ def card(c, settings=None):
     if of(record) != RECOMMENDED:
         return None
     documents = [readiness_document(row[0]) for row in
-                 c.execute("SELECT readiness_json FROM runners WHERE revoked_at IS NULL ORDER BY id").fetchall()]
+                 c.execute("SELECT readiness FROM runners WHERE revoked_at IS NULL ORDER BY id").fetchall()]
     if all(any(signed_in(d, runtime) for d in documents) for runtime in SUBSCRIPTION_RUNTIMES):
         return None
     lines = [SIGN_IN_LINE] + ([] if any(runs_gateway(d) for d in documents) else [NOT_ISOLATED_LINE])
     return {"kind": "setup", "id": "setup:sign-in", "title": SIGN_IN_TITLE, "first_line": " ".join(lines),
-            "created": record.get("updated") or "", "requester": None, "origin_actor": None, "from_person": None,
+            "created_at": record.get("updated_at") or "", "requester": None, "origin_actor": None, "from_person": None,
             "link": "#/settings", "link_label": "Open Settings > Computers"}

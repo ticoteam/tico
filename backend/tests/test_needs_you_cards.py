@@ -20,11 +20,11 @@ def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
     merge = approval_for_ana(api, kind="merge", payload={"repo": "acme/site", "pr": 12}, task=deal["id"],
                              token=finance["token"])
     keys = post(api, "tasks", {"title": "Add the new OpenAI keys", "body": "Rotate them", "owner": "human:ana",
-                               "due": H.shift(H.now(), days=5)}, token=finance["token"])
+                               "due_at": H.shift(H.now(), days=5)}, token=finance["token"])
     murphy = post(api, "tasks", {"title": "Call Murphy back", "body": "About the lease", "owner": "human:ana",
-                                 "due": H.shift(H.now(), days=2)}, token=finance["token"])
+                                 "due_at": H.shift(H.now(), days=2)}, token=finance["token"])
     offsite = post(api, "tasks", {"title": "Plan next year's offsite", "body": "x", "owner": "human:ana",
-                                  "due": H.shift(H.now(), days=60)}, token=finance["token"])
+                                  "due_at": H.shift(H.now(), days=60)}, token=finance["token"])
     # A bot's task waiting on Ana, its BotOps child waiting on her too (parked on her directly, as before a wait
     # became a subtask), and the subtask that asks her: one card.
     vendor = post(api, "tasks", {"title": "Switch the payroll vendor", "body": "x", "owner": "bot:finance"})
@@ -117,7 +117,7 @@ def test_do_what_you_recommend_answers_a_question_on_a_file_version(api):
     with api.app.state.store.transaction() as c:
         ask_id = c.execute("SELECT ask_message_id FROM task_file_reviews WHERE file_id=?", (made["file_id"],)).fetchone()[0]
         asked = H.message(c, ask_id)
-        c.execute("UPDATE messages SET refs_json=?, to_actor='human:ana' WHERE id=?",
+        c.execute("UPDATE messages SET refs=?, to_actor='human:ana' WHERE id=?",
                   (json.dumps({**asked["refs"], "if_no_answer": {"do": "Approve", "kind": "reversible"}}), ask_id))
     post(api, "needs-you/recommended", {"ask": ask_id})
     assert get(api, f"tasks/{plan['id']}/answers")["answers"][0]["answers"] == {"verdict": ["Approve"]}
@@ -228,7 +228,7 @@ def test_pages_cut_the_whole_list_and_a_cursor_from_an_older_version_starts_agai
     _, _, finance = setup_attempt(api, "finance")
     for n in range(4):
         post(api, "tasks", {"title": f"Sign form {n}", "body": "x", "owner": "human:ana",
-                            "due": H.shift(H.now(), days=n + 1)}, token=finance["token"])
+                            "due_at": H.shift(H.now(), days=n + 1)}, token=finance["token"])
     approval_for_ana(api, token=finance["token"])
     post(api, "tasks", {"title": "Plan the offsite", "body": "x", "owner": "human:ana"})
     whole = get(api, "needs-you")

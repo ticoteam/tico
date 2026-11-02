@@ -41,7 +41,7 @@ def readable(c, who, rid):
 
 def meeting_info(row):
     meta = row["metadata"]
-    return {"id": row["id"], "title": row["title"], "created": row["created"], "started": meta.get("started"),
+    return {"id": row["id"], "title": row["title"], "created_at": row["created_at"], "started_at": meta.get("started"),
             "url": "#/meetings?meeting=" + quote(row["id"], safe=""),
             "status": meta.get("status"), "review_state": row.get("review_state", "live"), "duration_ms": meta.get("duration_ms")}
 
@@ -82,14 +82,14 @@ def install_context_search(app, store, auth):
                 for row in c.execute("SELECT * FROM documents WHERE collection='market' ORDER BY id"):
                     if not documents.visible(who, row):
                         continue
-                    doc = json.loads(row["payload_json"])
+                    doc = json.loads(row["payload"])
                     if not privacy.content_readable(c, privacy.actor(who), doc):
                         continue
                     title, content = doc.get("title", ""), doc.get("content", "")
                     body = "\n".join((content, str(doc.get("search", ""))))
                     if all(word in (title + " " + body).casefold() for word in words):
                         found.append({"kind": "document", "id": row["id"], "title": title,
-                                      "collection": row["collection"], "updated": row["updated"],
+                                      "collection": row["collection"], "updated_at": row["updated_at"],
                                       "url": doc.get("url") or "#/strategy/market?note=" + quote(row["id"], safe=""),
                                       "excerpt": excerpt(body, words),
                                       "score": sum(10 if w in title.casefold() else 1 for w in words)})
@@ -119,7 +119,7 @@ def install_context_search(app, store, auth):
                     raise Problem("not_found", "Document not found", 404)
                 return {"id": row["id"], "title": row["title"], "content": row["body"], "path": row["path"],
                         "collection": "docs", "category": "Internal / " + (row["path"].rpartition("/")[0] or "Docs"),
-                        "url": "#/docs/" + quote(row["id"], safe=""), "version": row["version"], "updated": row["updated"]}
+                        "url": "#/docs/" + quote(row["id"], safe=""), "version": row["version"], "updated_at": row["updated_at"]}
             result = documents.document(c, auth, request.state.identity, id)
             if not privacy.content_readable(c, privacy.actor(request.state.identity), result):
                 raise Problem("not_found", "Document not found", 404)
@@ -139,14 +139,14 @@ def install_context_search(app, store, auth):
             raise Problem("dates", "since must be on or before until", 422)
         words, found = terms(q), []
         with store.read() as c:
-            for item in c.execute("SELECT id FROM meetings ORDER BY created DESC,id"):
+            for item in c.execute("SELECT id FROM meetings ORDER BY created_at DESC,id"):
                 try:
                     row = readable(c, who, item[0])
                 except Problem as exc:
                     if exc.status not in (403, 404):
                         raise
                     continue
-                recorded_date = str(row["metadata"].get("started") or row["created"])[:10]
+                recorded_date = str(row["metadata"].get("started") or row["created_at"])[:10]
                 if since and recorded_date < since.isoformat():
                     continue
                 if until and recorded_date > until.isoformat():

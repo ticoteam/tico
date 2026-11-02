@@ -10,7 +10,7 @@ MAX_GAP_SECONDS = 300
 
 
 def state(c, bot):
-    row = c.execute('SELECT value_json FROM registry_metadata WHERE key=?', (KEY + bot,)).fetchone()
+    row = c.execute('SELECT value FROM registry_metadata WHERE key=?', (KEY + bot,)).fetchone()
     return H._json(row[0], {}) if row else {}
 
 
@@ -20,7 +20,7 @@ def states(c, bots):
     bots = sorted(set(bots))
     for start in range(0, len(bots), 500):
         part = bots[start:start + 500]
-        for key, value in c.execute("SELECT key,value_json FROM registry_metadata WHERE key IN (%s)"
+        for key, value in c.execute("SELECT key,value FROM registry_metadata WHERE key IN (%s)"
                                     % ",".join("?" * len(part)), [KEY + bot for bot in part]):
             out[key[len(KEY):]] = H._json(value, {})
     return out
@@ -90,7 +90,7 @@ def apply(c, change):
                                (value['job'], bot, value['runner_id'])).fetchone():
         value = {}
     if value:
-        c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
+        c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                   (KEY + bot, H._dump(value)))
     else:
         c.execute('DELETE FROM registry_metadata WHERE key=?', (KEY + bot,))

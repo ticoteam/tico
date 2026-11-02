@@ -75,9 +75,9 @@ SCHEMA = (
     "CREATE TABLE IF NOT EXISTS lens_runs (id TEXT PRIMARY KEY, lens TEXT NOT NULL, applies_to TEXT NOT NULL, "
     "on_draft INTEGER NOT NULL DEFAULT 0, strategy_n INTEGER, status TEXT NOT NULL, "
     "answers TEXT NOT NULL DEFAULT '{}', result TEXT, applied TEXT NOT NULL DEFAULT '[]', "
-    "sharpen_tasks TEXT NOT NULL DEFAULT '{}', proposal_id TEXT, created_by TEXT NOT NULL, created TEXT NOT NULL, "
-    "finished TEXT, error TEXT, claimed INTEGER NOT NULL DEFAULT 0)",
-    "CREATE INDEX IF NOT EXISTS lens_runs_created ON lens_runs(created)",
+    "sharpen_tasks TEXT NOT NULL DEFAULT '{}', proposal_id TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL, "
+    "finished_at TEXT, error TEXT, claimed INTEGER NOT NULL DEFAULT 0)",
+    "CREATE INDEX IF NOT EXISTS lens_runs_created ON lens_runs(created_at)",
 )
 
 
@@ -233,7 +233,7 @@ def _row(c, run_id):
 
 
 def _stale(row):
-    return row["status"] == "running" and H.shift(row["created"], seconds=STALE_S) < H.now()
+    return row["status"] == "running" and H.shift(row["created_at"], seconds=STALE_S) < H.now()
 
 
 def view(row, short=False):
@@ -245,7 +245,7 @@ def view(row, short=False):
            "status": row["status"], "answers": {} if short else S.loads(row["answers"], {}),
            "result": S.loads(row["result"], {}) or None, "applied": S.loads(row["applied"], []),
            "sharpen_tasks": S.loads(row["sharpen_tasks"], {}), "proposal_id": row["proposal_id"],
-           "created_by": row["created_by"], "created": row["created"], "finished": row["finished"],
+           "created_by": row["created_by"], "created_at": row["created_at"], "finished_at": row["finished_at"],
            "error": S.loads(row["error"], {}) or None}
     if short and out["result"]:
         out["result"] = {"summary": out["result"].get("summary") or ""}
@@ -264,7 +264,7 @@ def runs(c, who, lens_id=None, limit=LIMIT):
         where.append("lens=?")
         args.append(lens_id)
     sql = "SELECT * FROM lens_runs" + (" WHERE " + " AND ".join(where) if where else "")
-    rows = H._rows(c.execute(sql + " ORDER BY created DESC, id DESC LIMIT ?",
+    rows = H._rows(c.execute(sql + " ORDER BY created_at DESC, id DESC LIMIT ?",
                              (*args, max(1, min(int(limit), LIMIT_MAX)))))
     return [view(r, short=True) for r in rows]
 
@@ -306,10 +306,10 @@ def start(c, who, settings, store, lens_id, answers, on="published"):
     now = H.now()
     row = {"id": H.new_id(), "lens": lens_id, "applies_to": the["applies_to"], "on_draft": int(on_draft),
            "strategy_n": number, "status": "running" if model else "no_model", "answers": S.dumps(answers),
-           "created_by": who.actor, "created": now, "finished": None if model else now}
-    c.execute("INSERT INTO lens_runs (id, lens, applies_to, on_draft, strategy_n, status, answers, created_by, created, "
-              "finished) VALUES (:id, :lens, :applies_to, :on_draft, :strategy_n, :status, :answers, :created_by, "
-              ":created, :finished)", row)
+           "created_by": who.actor, "created_at": now, "finished_at": None if model else now}
+    c.execute("INSERT INTO lens_runs (id, lens, applies_to, on_draft, strategy_n, status, answers, created_by, created_at, "
+              "finished_at) VALUES (:id, :lens, :applies_to, :on_draft, :strategy_n, :status, :answers, :created_by, "
+              ":created_at, :finished_at)", row)
     S._event(c, who.actor, "lens_run", {"run_id": row["id"], "lens": lens_id, "on_draft": on_draft})
     if not model:
         S._event(c, who.actor, "lens_done", {"run_id": row["id"], "lens": lens_id, "status": "no_model"})
@@ -320,7 +320,7 @@ def stop_running(c, error=INTERRUPTED):
     """Every run still `running` becomes `failed`: at start-up (backend/app.py lifespan; no thread of this process runs
     them)."""
     for row in H._rows(c.execute("SELECT id, lens FROM lens_runs WHERE status='running'")):
-        c.execute("UPDATE lens_runs SET status='failed', finished=?, error=? WHERE id=?",
+        c.execute("UPDATE lens_runs SET status='failed', finished_at=?, error=? WHERE id=?",
                   (H.now(), S.dumps(error), row["id"]))
         S._event(c, H.KEEPER, "lens_done", {"run_id": row["id"], "lens": row["lens"], "status": "failed"})
 
@@ -631,7 +631,7 @@ def clean_result(c, the, raw, bet_ids):
 
 # ----------------------------------------------------------------------------- the job
 def _finish(c, row, status, result=None, error=None, proposal_id=None):
-    c.execute("UPDATE lens_runs SET status=?, result=?, error=?, proposal_id=?, finished=? WHERE id=?",
+    c.execute("UPDATE lens_runs SET status=?, result=?, error=?, proposal_id=?, finished_at=? WHERE id=?",
               (status, S.dumps(result) if result else None, S.dumps(error) if error else None, proposal_id, H.now(),
                row["id"]))
     S._event(c, row["created_by"], "lens_done", {"run_id": row["id"], "lens": row["lens"], "status": status})

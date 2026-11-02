@@ -104,7 +104,7 @@ function perfChart(state) {
     if (!next || next[0] - p[0] > brk) strip += `V${sy(0)}Z`;
   });
   const bands = d.overloads.map(o => {
-    const a = Math.max(L, x(o.started)), b = Math.min(L + pw, x(o.ended || o.last + 60));
+    const a = Math.max(L, x(o.started_at)), b = Math.min(L + pw, x(o.ended || o.last + 60));
     return `<rect class="perf-band" x="${a.toFixed(1)}" y="${T}" width="${Math.max(4, b - a).toFixed(1)}" height="${PH}" rx="2"/>`;
   }).join('');
   const grid = [0, 50, 100].map(v => `<line class="perf-grid" x1="${L}" x2="${L + pw}" y1="${y(v)}" y2="${y(v)}"/><text class="perf-axis" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v}%</text>`).join('')
@@ -138,7 +138,7 @@ function perfChart(state) {
       dot.style.display = p[col] == null ? 'none' : '';
       dot.setAttribute('cx', px); dot.setAttribute('cy', y(Math.min(100, p[col] ?? 0)));
     });
-    const turns = d.runs.filter(r => Date.parse(r.started) / 1000 < p[0] + d.span && (!r.finished || Date.parse(r.finished) / 1000 >= p[0]));
+    const turns = d.runs.filter(r => Date.parse(r.started_at) / 1000 < p[0] + d.span && (!r.finished_at || Date.parse(r.finished_at) / 1000 >= p[0]));
     const names = [...new Set(turns.map(r => perfBot(r.bot)))];
     tip.innerHTML = `<strong>${esc(perfWhen(p[0]))}</strong>
       <span><i class="perf-key perf-cpu" aria-hidden="true"></i>CPU ${perfPct(p[1])} <span class="muted">(peak ${perfPct(p[2])})</span></span>
@@ -194,8 +194,8 @@ function perfOverloadsHTML(d) {
   if (!d.overloads.length) return '';
   const rows = [...d.overloads].reverse().map(o => {
     const end = o.ended || o.last + 60;
-    const replay = '#/replay?' + new URLSearchParams({from: new Date(o.started * 1000).toISOString(), to: new Date(end * 1000).toISOString()});
-    return `<tr><td class="tnum">${esc(perfWhen(o.started))}</td><td class="tnum">${esc(perfMinutes(o.minutes))}${o.ended ? '' : ' <span class="pill fail">now</span>'}</td>
+    const replay = '#/replay?' + new URLSearchParams({from: new Date(o.started_at * 1000).toISOString(), to: new Date(end * 1000).toISOString()});
+    return `<tr><td class="tnum">${esc(perfWhen(o.started_at))}</td><td class="tnum">${esc(perfMinutes(o.minutes))}${o.ended ? '' : ' <span class="pill fail">now</span>'}</td>
       <td>${esc(o.reasons.map(r => PERF_REASONS[r] || r).join(', '))}<span class="settings-cell-note">peak CPU ${perfPct(o.cpu_max)} · memory ${perfPct(o.mem_max)} · ${o.runs_max} turn${o.runs_max === 1 ? '' : 's'}</span></td>
       <td>${esc(o.bots.map(b => perfBot(b.bot) + (b.runs > 1 ? ` ×${b.runs}` : '')).join(', ') || '–')}</td>
       <td>${esc(o.procs.slice(0, 3).map(p => p.name).join(', ') || '–')}</td><td><a href="${esc(replay)}">Replay</a></td></tr>`;

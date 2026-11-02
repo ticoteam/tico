@@ -301,11 +301,11 @@ def streak(c):
     """How many of its recovery suggestions in a row the owner approved with the Strategy Bot's pick unchanged, newest
     first. A rejection or another option ends it; a withdrawn one is no decision and is passed over."""
     n = 0
-    for row in H._rows(c.execute("SELECT status, decided_by, decision_note, result_json FROM goal_proposals "
+    for row in H._rows(c.execute("SELECT status, decided_by, decision_note, result FROM goal_proposals "
                                  "WHERE kind=? AND status!='pending' ORDER BY decided_at DESC", (KIND,))):
         if row["decision_note"] == WITHDRAWN or not H.is_human(row["decided_by"] or ""):
             continue
-        result = H._json(row["result_json"], None) or {}
+        result = H._json(row["result"], None) or {}
         if row["status"] != "confirmed" or not result.get("unchanged"):
             break
         n += 1
@@ -329,7 +329,7 @@ def offer_view(c):
 def offer_made(c, actor):
     """The Strategy Bot records that its Monday note offered level 3. Refused unless the offer is due, so it is made
     once and never more often than every 30 days."""
-    if not offer_view(c)["due"]:
+    if not offer_view(c)["due_at"]:
         raise H.Refused("state", f"Level 3 can be offered after {STREAK_FOR_OFFER} approvals in a row at level 2, "
                                  f"at most once every {OFFER_EVERY_DAYS} days; it is not due now")
     record = strategy_bot._record(c)

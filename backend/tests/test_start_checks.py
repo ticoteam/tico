@@ -77,10 +77,10 @@ def test_batched_counts_match_each_tasks_own_checks(api, monkeypatch):
         c.execute("UPDATE tasks SET waiting_on='human:ben' WHERE id=?", (t[4],))
         c.execute("UPDATE tasks SET blocked_kind='manual', blocked_reason='Held for legal' WHERE id=?", (t[5],))
         c.execute("UPDATE tasks SET status='doing' WHERE id=?", (t[6],))
-        c.execute("INSERT INTO approvals(id,kind,task_id,decision,created) VALUES('ap-1','deploy',?,NULL,?)",
+        c.execute("INSERT INTO approvals(id,kind,task_id,decision,created_at) VALUES('ap-1','deploy',?,NULL,?)",
                   (t[7], H.now()))
         blocker = H.task_create(c, "human:ana", "Blocker", "Blocks it.", "human:ben")
-        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'blocks',?)",
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks',?)",
                   (blocker["id"], t[8], H.now()))
         H.task_ask(c, "bot:ops", t[9], "Which one?", park=False)
         H.task_create(c, "bot:ops", "Child", "Under it.", "human:ben", parent_id=t[10])

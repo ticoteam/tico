@@ -15,7 +15,7 @@ const {unrouted} = require('./support/routes.cjs');
     const at = ms => new Date(Date.now() + ms).toISOString();
     const folder = '/home/runner/.tico-host/state-box/musecode/data/muse/sessions';
     const problem = `Muse Code can't save sessions: the bot user can't write ${folder} (another user owns it or it is read-only)`;
-    const box = {id: 'box', label: 'Team box', operator: 'ana', bots: ['ops'], platform: 'linux', version: '0.3.74', last_seen: at(-3000),
+    const box = {id: 'box', label: 'Team box', operator: 'ana', bots: ['ops'], platform: 'linux', version: '0.3.74', last_seen_at: at(-3000),
       readiness: {
         runtimes: {musecode: {installed: true, authenticated: 'failed', detail: problem, data_problem: problem}},
         bots: {ops: {ready: false, runtime: 'musecode', sign_in: 'failed', data_problem: problem, problems: [problem]}},

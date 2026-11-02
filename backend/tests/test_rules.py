@@ -14,8 +14,8 @@ def rule_row(api, by="human:ben", scope_kind="team", scope_id="", event="status_
              params=None, revision=1, action_by=None):
     """A row in the rules table, as the wake engine reads it."""
     row = {"id": "rule_" + H.new_id()[:8], "scope_kind": scope_kind, "scope_id": scope_id, "event": event,
-           "when_json": json.dumps(when or {}), "then_outcome": then, "params_json": json.dumps(params or {}),
-           "created_by": by, "action_by": action_by, "created": H.now(), "updated": H.now(), "revision": revision}
+           "condition": json.dumps(when or {}), "then_outcome": then, "params": json.dumps(params or {}),
+           "created_by": by, "action_by": action_by, "created_at": H.now(), "updated_at": H.now(), "revision": revision}
     with api.app.state.store.transaction() as c:
         c.execute(f"INSERT INTO rules({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
     return {"rule": {**row, "params": params or {}}}
@@ -72,7 +72,7 @@ def test_rows_override_by_scope_task_over_bot_over_team_and_the_floor_stays(api)
     rule_row(api, event="*", then="ignore")
     post(api, "chat/cpo", {"text": "Still there?"})
     with api.app.state.store.read() as c:
-        last = c.execute("SELECT refs_json FROM messages WHERE from_actor='human:ana' ORDER BY rowid DESC").fetchone()
+        last = c.execute("SELECT refs FROM messages WHERE from_actor='human:ana' ORDER BY rowid DESC").fetchone()
         assert json.loads(last[0])["rule"] == "person_message" and "quiet" not in json.loads(last[0])
         # What the bot waits on still wakes it under a `*` row.
         found = R.judge(c, H.KEEPER, "bot:cpo", "message", {"task": task["id"], "blocker_done": True}, "Done", None)
@@ -156,10 +156,10 @@ def test_an_action_rule_runs_as_the_keeper_and_a_failed_action_wakes_the_bot(api
         msg = news(c, task)
         assert msg["refs"]["rule"] == row["id"] and msg["refs"]["quiet"] is True
         assert H.task(c, task["id"])["status"] == "closed"
-        ran = c.execute("SELECT detail_json FROM events WHERE action='rule.action' AND target=?", (task["id"],)).fetchone()
+        ran = c.execute("SELECT detail FROM events WHERE action='rule.action' AND target=?", (task["id"],)).fetchone()
         assert json.loads(ran[0]) == {"rule": row["id"], "action": "close"}
     with api.app.state.store.transaction() as c:         # edited by someone who may: a step that is not there
-        c.execute("UPDATE rules SET params_json=?, revision=2, action_by='human:ana' WHERE id=?",
+        c.execute("UPDATE rules SET params=?, revision=2, action_by='human:ana' WHERE id=?",
                   (json.dumps({"action": "move_step", "step": "No such step"}), row["id"]))
     with api.app.state.store.transaction() as c:
         other = plain_task(c, "Other work", clear=False)
@@ -180,7 +180,7 @@ def tagged(c, task, *keys):
 
 def actions(c, rule_id):
     return [json.loads(r[0]) for r in c.execute(
-        "SELECT detail_json FROM events WHERE action='rule.action' AND json_extract(detail_json,'$.rule')=? "
+        "SELECT detail FROM events WHERE action='rule.action' AND json_extract(detail,'$.rule')=? "
         "ORDER BY rowid", (rule_id,))]
 
 
@@ -263,7 +263,7 @@ def test_an_edited_rule_uses_its_action_writer_without_changing_its_creator(api)
         c.execute("DELETE FROM jobs")
         news(c, hidden)
         assert H.task_labels(H.task(c, hidden["id"])) == [] and jobs(c, "cpo") == 1
-        c.execute("UPDATE rules SET action_by='human:ana', when_json=? WHERE id=?", (json.dumps({"actor": "keeper"}), row["id"]))
+        c.execute("UPDATE rules SET action_by='human:ana', condition=? WHERE id=?", (json.dumps({"actor": "keeper"}), row["id"]))
         news(c, hidden)
         assert H.task_labels(H.task(c, hidden["id"])) == ["urgent"]
 
@@ -301,5 +301,5 @@ def test_two_assign_rules_that_hand_a_task_back_and_forth_run_once(api):
         assert H.task(c, task["id"])["owner"] == "bot:ops"
         # ops's assignment, written by cpo's rule, is news: ops's own rule does not hand the task back.
         assert len(actions(c, to_ops["id"])) == 1 and actions(c, to_cpo["id"]) == []
-        last = c.execute("SELECT refs_json FROM messages WHERE to_actor='bot:ops' ORDER BY rowid DESC LIMIT 1").fetchone()
+        last = c.execute("SELECT refs FROM messages WHERE to_actor='bot:ops' ORDER BY rowid DESC LIMIT 1").fetchone()
         assert json.loads(last[0])["rule"] == to_cpo["id"]

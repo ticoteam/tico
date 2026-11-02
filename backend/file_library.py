@@ -35,13 +35,13 @@ LOG = logging.getLogger("tico.files")
 SCHEMA = [
     # Which version of each file the index holds; `doc` is the file's row id in file_text.
     "CREATE TABLE IF NOT EXISTS file_text_state(doc INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT NOT NULL UNIQUE, "
-    "version INTEGER NOT NULL, indexed TEXT NOT NULL)",
+    "version INTEGER NOT NULL, indexed_at TEXT NOT NULL)",
     # One row per hard-deleted file: who and when, never what it held.
     "CREATE TABLE IF NOT EXISTS file_deletions(file_id TEXT PRIMARY KEY, actor TEXT NOT NULL, versions INTEGER NOT NULL, "
-    "created TEXT NOT NULL)",
+    "created_at TEXT NOT NULL)",
     # Bytes a deletion left unused, removed from storage after the write commits and retried until gone.
     "CREATE TABLE IF NOT EXISTS blob_purges(digest TEXT PRIMARY KEY, kind TEXT NOT NULL DEFAULT '', "
-    "queued TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '')",
+    "queued_at TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '')",
     # Versions are immutable, except that a hard delete (a file_deletions row, written first) removes them.
     "DROP TRIGGER IF EXISTS bot_file_versions_no_delete",
     "CREATE TRIGGER bot_file_versions_no_delete BEFORE DELETE ON bot_file_versions "
@@ -203,10 +203,10 @@ def index(c, fid, version, title, text):
     now = H.now()
     row = c.execute("SELECT doc FROM file_text_state WHERE file_id=?", (fid,)).fetchone()
     if row:
-        c.execute("UPDATE file_text_state SET version=?,indexed=? WHERE file_id=?", (version, now, fid))
+        c.execute("UPDATE file_text_state SET version=?,indexed_at=? WHERE file_id=?", (version, now, fid))
         doc = row["doc"]
     else:
-        doc = c.execute("INSERT INTO file_text_state(file_id,version,indexed) VALUES(?,?,?)", (fid, version, now)).lastrowid
+        doc = c.execute("INSERT INTO file_text_state(file_id,version,indexed_at) VALUES(?,?,?)", (fid, version, now)).lastrowid
     if has_fts(c):
         c.execute("DELETE FROM file_text WHERE rowid=?", (doc,))
         c.execute("INSERT INTO file_text(rowid,title,text) VALUES(?,?,?)", (doc, title or "", text or ""))
@@ -247,9 +247,9 @@ def adopt_attachments(c, settings, limit=BACKFILL_BATCH):
         c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,mime,locator,task_id,current_version,"
                   "first_activity_at,last_activity_at) VALUES(?,?,?,?,?,?,?,'tico_blob',?,1,?,?)",
                   (b["id"], bot, "task:" + b["task_id"], "task-file:" + b["id"], b["name"], BF.kind_of(b["name"]),
-                   b["content_type"], b["task_id"], b["created"], b["created"]))
+                   b["content_type"], b["task_id"], b["created_at"], b["created_at"]))
         Files.insert_task_version(c, b["id"], 1, b["id"], b["digest"], b["size"], b["name"], b["content_type"],
-                                  b["owner"], b["created"], pending=False)
+                                  b["owner"], b["created_at"], pending=False)
     return len(rows)
 
 
@@ -421,7 +421,7 @@ class Library:
             return {"results": [{"id": r["id"], "title": r["title"], "kind": r["kind"],
                                  "library_kind": library_kind(r["kind"], r["page_cadence"] is not None),
                                  "bot": r["bot"], "bot_name": known.get("bot:" + r["bot"], r["bot"]),
-                                 "version": r["current_version"], "updated": r["last_activity_at"],
+                                 "version": r["current_version"], "updated_at": r["last_activity_at"],
                                  "url": r["url"] if r["locator"] == "remote_link" else None,
                                  "page": r["page_cadence"] is not None,
                                  "excerpt": excerpt(r["text"] or "", tokens), "score": round(score, 3)}
@@ -501,7 +501,7 @@ def still_used(c, digest):
     team icon, which keeps a digest of its own."""
     if c.execute("SELECT 1 FROM blobs WHERE digest=? LIMIT 1", (digest,)).fetchone():
         return True
-    icon = c.execute("SELECT value_json FROM registry_metadata WHERE key='team_icon'").fetchone()
+    icon = c.execute("SELECT value FROM registry_metadata WHERE key='team_icon'").fetchone()
     if icon:
         try:
             value = json.loads(icon[0])
@@ -518,7 +518,7 @@ def purge_rows(c, actor, row):
     from . import visuals
     fid, now = row["id"], H.now()
     versions = c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (fid,)).fetchall()
-    c.execute("INSERT INTO file_deletions(file_id,actor,versions,created) VALUES(?,?,?,?)",
+    c.execute("INSERT INTO file_deletions(file_id,actor,versions,created_at) VALUES(?,?,?,?)",
               (fid, actor, len(versions), now))
     blob_ids = {b for v in versions for b in (v["blob_id"], v["poster_blob_id"], v["thumb_blob_id"]) if b}
     for bid in list(blob_ids):
@@ -545,14 +545,14 @@ def purge_rows(c, actor, row):
         digests[blob["digest"]] = visuals.kind_of(mime, blob["size"]) if mime else ""
     for digest, kind in digests.items():
         if not still_used(c, digest):
-            c.execute("INSERT INTO blob_purges(digest,kind,queued) VALUES(?,?,?) ON CONFLICT(digest) DO UPDATE SET "
+            c.execute("INSERT INTO blob_purges(digest,kind,queued_at) VALUES(?,?,?) ON CONFLICT(digest) DO UPDATE SET "
                       "attempts=0,error=''", (digest, kind if kind in ("page", "svg") else "", now))
     unindex(c, fid)
     c.execute("UPDATE pages SET replaced_by=NULL WHERE replaced_by=?", (fid,))
     c.execute("DELETE FROM pages WHERE file_id=?", (fid,))
     if has_pins(c):
         c.execute("DELETE FROM pins WHERE item=?", ("page:" + fid,))
-    c.execute("INSERT INTO bot_file_activity(file_id,actor,action,task_id,created,detail_json) VALUES(?,?,?,?,?,?)",
+    c.execute("INSERT INTO bot_file_activity(file_id,actor,action,task_id,created_at,detail) VALUES(?,?,?,?,?,?)",
               (fid, actor, "deleted", row["task_id"], now, json.dumps({"versions": len(versions)})))
     H.event(c, actor, "file.delete", fid, {"versions": len(versions)})
     return {"deleted": fid, "versions": len(versions)}
@@ -564,7 +564,7 @@ def drain(store, blobs, limit=50):
     for a later pass. A place that fails is tried again on the next pass, up to PURGE_ATTEMPTS times. How many were
     removed."""
     with store.read() as c:
-        queued = c.execute("SELECT * FROM blob_purges WHERE attempts<? ORDER BY queued LIMIT ?",
+        queued = c.execute("SELECT * FROM blob_purges WHERE attempts<? ORDER BY queued_at LIMIT ?",
                            (PURGE_ATTEMPTS, limit)).fetchall()
     removed = 0
     for q in queued:

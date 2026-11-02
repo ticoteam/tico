@@ -11,11 +11,11 @@ const makeDetail = id => ({id, title: 'Weekly sync', state: 'live', owner_actor:
   humans: [{actor: 'human:ana', name: 'Ana'}], bots: [{bot: 'ops'}],
   chunks: [{seq: 1, revision: 1, speaker: 'Ana', text: 'We should ship the new plan.'},
     {seq: 2, revision: 2, speaker: 'Ben', text: 'Ops, can you review?', start_ms: 30000}],
-  chat: [{id: 'c1', actor: 'human:ana', role: 'human', text: 'Welcome', transcript_seq: 1, created: '2026-10-30T10:00:01.000000Z'}],
+  chat: [{id: 'c1', actor: 'human:ana', role: 'human', text: 'Welcome', transcript_seq: 1, created_at: '2026-10-30T10:00:01.000000Z'}],
   notices: [
-    {event_id: 3, kind: 'waiting', bot: 'ops', reason: 'runner_update', detail: 'Test Mac needs a Tico update before it can join private meetings', created: '2026-10-30T10:00:00.000000Z'},
-    {event_id: 4, kind: 'deferred', bot: 'ops', reason: 'busy', behind: null, created: '2026-10-30T10:00:02.000000Z'},
-    {event_id: 5, kind: 'failed', bot: 'ops', reason: 'private_checkout', detail: "ops can't answer in this private meeting: Test Mac couldn't make a private copy of its repository", created: '2026-10-30T10:00:03.000000Z'}],
+    {event_id: 3, kind: 'waiting', bot: 'ops', reason: 'runner_update', detail: 'Test Mac needs a Tico update before it can join private meetings', created_at: '2026-10-30T10:00:00.000000Z'},
+    {event_id: 4, kind: 'deferred', bot: 'ops', reason: 'busy', behind: null, created_at: '2026-10-30T10:00:02.000000Z'},
+    {event_id: 5, kind: 'failed', bot: 'ops', reason: 'private_checkout', detail: "ops can't answer in this private meeting: Test Mac couldn't make a private copy of its repository", created_at: '2026-10-30T10:00:03.000000Z'}],
   router: {windows: [{window_index: 0, start_ms: 0, end_ms: 30000, outcome: 'pass', trace: {reason: 'below threshold', answers: {ops: 0.2}}}],
     turns: [{id: 't1', bot: 'ops', window_index: null, status: 'pending'}],
     bypasses: [{event_id: 6, bypass: 'named', source_key: 'chunk:2', targets: ['ops'], skipped: []}]}});

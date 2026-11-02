@@ -59,7 +59,7 @@ def default_of(name):
 
 
 def _stored(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:
@@ -88,7 +88,7 @@ def save(c, actor, changes):
     stored = _stored(c)
     kept = {name: value for name, value in after.items()
             if name not in ENV_DEFAULTS or name in stored or changes.get(name) is not None}
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, json.dumps(kept, sort_keys=True)))
     if after != before:
         H.event(c, actor, "access.rules_updated", "", {"before": before, "after": after})

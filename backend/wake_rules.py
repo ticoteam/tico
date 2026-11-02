@@ -140,14 +140,14 @@ def _awaited_reply(conn, target, in_reply_to):
     """Whether a reply answers something `target` waits on: its own ask, a message it flagged needs-action, or one
     it sent with wait_s. True when the parent cannot be read."""
     try:
-        parent = conn.execute("SELECT from_actor,kind,refs_json,wait_s FROM messages WHERE id=?",
+        parent = conn.execute("SELECT from_actor,kind,refs,wait_s FROM messages WHERE id=?",
                               (in_reply_to,)).fetchone()
     except Exception:  # noqa: BLE001 - fail open
         return True
     if not parent:
         return True
     return parent["from_actor"] == target and bool(parent["kind"] == "ask" or parent["wait_s"]
-                                                   or '"' + FLAG + '": true' in str(parent["refs_json"] or ""))
+                                                   or '"' + FLAG + '": true' in str(parent["refs"] or ""))
 
 
 def awaited(refs):
@@ -182,7 +182,7 @@ def parked(conn, task_row):
                     (task_row["id"], *UNFINISHED)).fetchone():
         return "blocked_by"
     if conn.execute("SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND state IN ('open','draft','merged') "
-                    "AND json_extract(detail_json,'$.wake_once') IS NOT NULL LIMIT 1",
+                    "AND json_extract(detail,'$.wake_once') IS NOT NULL LIMIT 1",
                     (task_row["id"],)).fetchone():
         return "wake_once"
     from .milestone_waits import pending
@@ -240,7 +240,7 @@ def _would_queue(conn, actor, target, refs):
     live = refs.get("live")
     if isinstance(live, dict) and live.get("kind") in ("transcript", "decision", "tool"):
         return False
-    row = conn.execute("SELECT json_extract(config_json,'$.harness') FROM bot_config WHERE bot=?",
+    row = conn.execute("SELECT json_extract(config,'$.harness') FROM bot_config WHERE bot=?",
                        (str(target)[4:],)).fetchone()
     return not (row and row[0] in EXTERNAL_HARNESSES)
 
@@ -266,9 +266,9 @@ def state_of(conn, task_row):
                 "SELECT id, edited_at FROM messages WHERE conversation_id=? AND from_actor<>? AND deleted_at IS NULL "
                 "ORDER BY rowid", (row["conversation_id"], H.KEEPER))],
             "links": [list(r) for r in conn.execute(
-                "SELECT kind, url, state, pr_sha, json_extract(detail_json,'$.head_sha'), "
+                "SELECT kind, url, state, pr_sha, json_extract(detail,'$.head_sha'), "
                 "checks, mergeable, review_state, pending_comments FROM task_links "
-                "WHERE task_id=? ORDER BY created, id", (tid,))],
+                "WHERE task_id=? ORDER BY created_at, id", (tid,))],
         }
         return hashlib.sha256(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:32]
     except Exception:  # noqa: BLE001 - unreadable state is a state nobody can call the same
@@ -277,14 +277,14 @@ def state_of(conn, task_row):
 
 def settled_state(conn, task_row, bot, started, attempt_id):
     """The state to store with the bot's checkpoint, or None when someone else changed the task since the turn
-    `started`, or another turn of the same bot overlapped it: the bot may not have seen that, so the next check runs."""
+    `started_at`, or another turn of the same bot overlapped it: the bot may not have seen that, so the next check runs."""
     from . import hubdb as H
     try:
         me = "bot:" + bot
         # Actor identity alone cannot attribute a write to this turn: task lanes run in parallel.
         # Include siblings that finished during this turn, not only those still running now.
         if conn.execute("SELECT 1 FROM attempts WHERE bot=? AND id<>? "
-                        "AND (state IN ('leased','running') OR finished>=?) LIMIT 1",
+                        "AND (state IN ('leased','running') OR finished_at>=?) LIMIT 1",
                         (bot, attempt_id, started)).fetchone():
             return None
         if conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND ts>? AND actor<>? LIMIT 1",
@@ -297,13 +297,13 @@ def settled_state(conn, task_row, bot, started, attempt_id):
                         "WHERE ? IN (from_task,to_task)) AND ts>? AND actor<>? LIMIT 1",
                         (task_row["id"], task_row["id"], started, me)).fetchone():
             return None
-        if conn.execute("SELECT 1 FROM messages WHERE conversation_id=? AND created>? AND from_actor NOT IN (?,?) "
+        if conn.execute("SELECT 1 FROM messages WHERE conversation_id=? AND created_at>? AND from_actor NOT IN (?,?) "
                         "LIMIT 1", (task_row["conversation_id"], started, me, H.KEEPER)).fetchone():
             return None
         # Starting a task lane records this turn's own session link after claim. That is known
         # to this turn; explicit edits by someone else are already caught by task_events above.
         if conn.execute("SELECT 1 FROM task_links WHERE task_id=? AND kind<>'session' "
-                        "AND coalesce(updated,created)>? LIMIT 1",
+                        "AND coalesce(updated_at,created_at)>? LIMIT 1",
                         (task_row["id"], started)).fetchone():
             return None
         return state_of(conn, task_row)
@@ -402,9 +402,9 @@ def hold(conn, msg, rule, rule_id=None):
     sender = "Tico" if msg["from_actor"] == H.KEEPER else H.actor_id(msg["from_actor"])
     note = {"id": H.new_id(), "from_actor": msg["from_actor"], "to_actor": msg["to_actor"],
             "body": f"From {sender} {where}, held for this run because {why} (message {msg['id']}).\n\n{text}",
-            "created": msg["created"], "message_id": msg["id"]}
-    conn.execute("INSERT INTO notes(id,from_actor,to_actor,body,created,message_id) VALUES "
-                 "(:id,:from_actor,:to_actor,:body,:created,:message_id)", note)
+            "created_at": msg["created_at"], "message_id": msg["id"]}
+    conn.execute("INSERT INTO notes(id,from_actor,to_actor,body,created_at,message_id) VALUES "
+                 "(:id,:from_actor,:to_actor,:body,:created_at,:message_id)", note)
     from . import run_triggers
     trigger, _ = run_triggers.of_message(msg)
     H.event(conn, H.KEEPER, SKIPPED, msg["id"], {"bot": H.actor_id(msg["to_actor"]), "task": task_id, "rule": rule,

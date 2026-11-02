@@ -78,7 +78,7 @@ def test_an_imported_bill_carries_its_location_class_job_and_item_and_its_books_
         bill = _local(c, "Bill:77", "fin_bills")
         location, cls = _local(c, "Department:3", "locations"), _local(c, "Class:7", "fin_dimensions")
         job, item = _local(c, "Project:12", "projects"), _local(c, "Item:5", "items")
-        row = c.execute("SELECT item_id, tags_json FROM fin_bill_lines WHERE bill_id=?", (bill,)).fetchone()
+        row = c.execute("SELECT item_id, tags FROM fin_bill_lines WHERE bill_id=?", (bill,)).fetchone()
         assert row[0] == item
         assert json.loads(row[1]) == {"location": location, "class": cls, "project": job}
         entry = str(c.execute("SELECT entry_id FROM fin_bills WHERE id=?", (bill,)).fetchone()[0])
@@ -101,7 +101,7 @@ def test_an_invoice_to_a_job_is_to_its_parent_customer_and_its_lines_are_tagged_
         invoice = _local(c, "Invoice:30", "fin_invoices")
         assert c.execute("SELECT customer_id FROM fin_invoices WHERE id=?", (invoice,)).fetchone()[0] == \
             _local(c, "Customer:4", "fin_contacts")
-        tags = json.loads(c.execute("SELECT tags_json FROM fin_invoice_lines WHERE invoice_id=?",
+        tags = json.loads(c.execute("SELECT tags FROM fin_invoice_lines WHERE invoice_id=?",
                                     (invoice,)).fetchone()[0])
         assert tags == {"project": _local(c, "Project:12", "projects")}
 
@@ -1125,7 +1125,7 @@ def test_a_line_tagged_to_a_site_kept_in_tico_keeps_the_site_when_the_provider_r
     with books.read() as c:
         bill = _local(c, "Bill:90", "fin_bills")
         assert c.execute("SELECT revision FROM fin_external_refs WHERE external_id='Bill:90'").fetchone()[0] == "1"
-        assert [json.loads(r[0]) for r in c.execute("SELECT tags_json FROM fin_bill_lines WHERE bill_id=?",
+        assert [json.loads(r[0]) for r in c.execute("SELECT tags FROM fin_bill_lines WHERE bill_id=?",
                                                     (bill,))] == [{"location": site}]
         assert c.execute("SELECT SUM(l.amount) FROM fin_lines l JOIN fin_line_tags t ON t.line_id=l.id "
                          "WHERE t.kind='location' AND t.value=?", (site,)).fetchone()[0] == 4_000
@@ -1624,7 +1624,7 @@ def test_a_recovered_bill_create_keeps_its_line_ids_when_the_next_revision_chang
     with books.read() as c:
         bill = _local(c, "Bill:112", "fin_bills")
         assert [(r[0], r[1], json.loads(r[2])) for r in c.execute(
-            "SELECT external_line, amount, tags_json FROM fin_bill_lines WHERE bill_id=?", (bill,))] == [
+            "SELECT external_line, amount, tags FROM fin_bill_lines WHERE bill_id=?", (bill,))] == [
             ("L1", 2_000, {"teammate": OWNER})]
 
 
@@ -1702,7 +1702,7 @@ def test_a_write_queued_under_an_id_is_repointed_to_the_row_kept_when_the_feed_b
     assert _drain(books, fake, cid, now=LATER2) == []
     with books.read() as c:
         assert c.execute("SELECT name FROM locations WHERE id=?", (held,)).fetchone()[0] == "Dallas Two"
-        payload = SK.loads(c.execute("SELECT payload_json FROM fin_outbox WHERE op='location.update'").fetchone()[0])
+        payload = SK.loads(c.execute("SELECT payload FROM fin_outbox WHERE op='location.update'").fetchone()[0])
         assert payload["local_id"] == held
     assert _sent(fake, "location.update")["ext"] == "Department:3"
 

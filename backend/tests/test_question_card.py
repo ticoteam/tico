@@ -113,12 +113,12 @@ def test_the_card_says_what_it_holds_up_and_decide_puts_a_building_item_first(ap
         # The archive question was asked yesterday; the Building one an hour ago.
         for tid, hours in ((old["task"]["id"], 30), (building["task"]["id"], 1)):
             at = H.shift(H.now(), seconds=-hours * 3600)
-            c.execute("UPDATE messages SET created=? WHERE kind='ask' AND json_extract(refs_json,'$.task')=?", (at, tid))
-            c.execute("UPDATE tasks SET created=? WHERE id=?", (at, tid))
+            c.execute("UPDATE messages SET created_at=? WHERE kind='ask' AND json_extract(refs,'$.task')=?", (at, tid))
+            c.execute("UPDATE tasks SET created_at=? WHERE id=?", (at, tid))
     items = {i["id"]: i for i in get(api, "needs-you")["items"]}
     card, other = items[building["task"]["id"]], items[old["task"]["id"]]
     assert card["holds_up"] == {"id": item["id"], "title": "Website sales chat build", "kind": "roadmap", "step": "Building",
-                                "due": None, "soonest": None}
+                                "due_at": None, "soonest": None}
     assert other["holds_up"]["title"] == "Tidy the drafts folder" and other["holds_up"]["kind"] == "task"
     assert (card["tier"], other["tier"]) == (1, 2)
     # The why line never carries the body's ids, paths or errors; a plain first paragraph is one.
@@ -142,12 +142,12 @@ def test_a_dated_task_under_an_undated_building_item_keeps_its_urgency(api):
     item = post(api, "tasks", {"owner": "bot:ops", "title": "Website sales chat build", "body": "Spec.",
                                "type": "Product roadmap", "step": "Building"})
     tomorrow = H.shift(H.now(), hours=24)
-    ticket = post(api, "tasks", {"owner": "bot:ops", "title": "Build the chat widget", "body": "x", "due": tomorrow,
+    ticket = post(api, "tasks", {"owner": "bot:ops", "title": "Build the chat widget", "body": "x", "due_at": tomorrow,
                                  "relations": [{"task": item["id"], "kind": "parent"}]})
     asked = _ask(api, attempt["token"], "u1", question="Website sales chat: go with these picks?", multi=True,
                  options=PICKS, parent=ticket["id"]).json()
     card = next(i for i in get(api, "needs-you")["items"] if i["id"] == asked["task"]["id"])
-    assert card["holds_up"]["kind"] == "roadmap" and card["holds_up"]["due"] is None
+    assert card["holds_up"]["kind"] == "roadmap" and card["holds_up"]["due_at"] is None
     assert card["holds_up"]["soonest"] == tomorrow and card["tier"] == 0
 
 
@@ -165,7 +165,7 @@ def test_a_card_on_the_roadmap_item_itself_does_not_say_it_holds_itself_up_but_k
     """The header never names the card's own task; Decide's order still counts its step and due date."""
     _, _, attempt = setup_attempt(api)
     tomorrow = H.shift(H.now(), hours=24)
-    dated = post(api, "tasks", {"owner": "bot:ops", "title": "Website sales chat build", "body": "Spec.", "due": tomorrow,
+    dated = post(api, "tasks", {"owner": "bot:ops", "title": "Website sales chat build", "body": "Spec.", "due_at": tomorrow,
                                 "type": "Product roadmap", "step": "Building"})
     undated = post(api, "tasks", {"owner": "bot:ops", "title": "Pricing page refresh", "body": "Spec.",
                                   "type": "Product roadmap", "step": "Building"})
@@ -180,7 +180,7 @@ def test_a_card_on_the_roadmap_item_itself_does_not_say_it_holds_itself_up_but_k
     # Under a parent, the parent is what it holds up, dated by the item's own due.
     parent = post(api, "tasks", {"owner": "bot:ops", "title": "Launch the website", "body": "x"})
     sub = post(api, "tasks", {"owner": "bot:ops", "title": "Website chat for launch", "body": "Spec.",
-                              "type": "Product roadmap", "step": "Building", "due": tomorrow,
+                              "type": "Product roadmap", "step": "Building", "due_at": tomorrow,
                               "relations": [{"task": parent["id"], "kind": "parent"}]})
     with api.app.state.store.read() as c:
         held = views.holds_up(c, H.task(c, sub["id"]), lambda tid: True)

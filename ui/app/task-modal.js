@@ -303,7 +303,7 @@ function taskModalBind(d, task, full = false) {
 const SESSION_COPY = '<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true" focusable="false"><rect x="4" y="4" width="6.5" height="6.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M8 4V2.5a1 1 0 0 0-1-1H2.5a1 1 0 0 0-1 1V7a1 1 0 0 0 1 1H4" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
 function taskSessions(t) {
   return (t.links || []).filter(l => l.kind === 'session').map(l => {
-    let d = {}; try { d = JSON.parse(l.detail_json || '{}'); } catch {}
+    let d = {}; try { d = JSON.parse(l.detail || '{}'); } catch {}
     return {...l, d, value: String(l.url || '').replace(/^session:/, '')};
   }).sort((a, b) => (b.d.primary ? 1 : 0) - (a.d.primary ? 1 : 0));
 }
@@ -586,7 +586,7 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
   const person = !!actorPerson(m.from_actor), me = m.from_actor === myActor();
   return `<div class="tcomment tmsg${person ? ' you' : ''}${me ? ' from-me' : ''}${String(m.from_actor || '').startsWith('bot:') ? ' bot' : ''}" data-message="${esc(m.id || '')}"><div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.from_actor, m.refs?.via)}</span>${kind}${roadmapCommentMark(m, taskId)}
       ${m.refs?.quiet ? '<span class="muted" title="Saved for the bot\'s next run on this task">saved</span>' : ''}
-      <span class="spacer"></span>${m.edited_at ? `<span class="muted" title="Edited ${esc(fmt(m.edited_at))}">edited</span>` : ''}<time class="muted tnum" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time></div>
+      <span class="spacer"></span>${m.edited_at ? `<span class="muted" title="Edited ${esc(fmt(m.edited_at))}">edited</span>` : ''}<time class="muted tnum" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div>
     <div class="bubble ${person ? 'you' : 'bot'}">${body ? `<div class="md">${safeMd(body)}</div>` : ''}
     ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, askTargetOf(m), m.from_actor, taskId, files, canAnswer) : ''}</div>${taskStepsHTML(m)}</div>`;
 }
@@ -594,7 +594,7 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
 // can make it, and Reconnected once it works. A missing secret's fix is its credential card (ui/credential-card.js).
 function reconnectCardHTML(m) {
   const r = m.refs.reconnect, fix = r.fix || {}, status = r.status || 'open', fixed = status === 'fixed', mine = r.person === myActor();
-  const head = `<div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.from_actor)}</span><span class="spacer"></span><time class="muted tnum" title="${esc(fmt(m.created))}">${esc(ago(m.created))}</time></div>`;
+  const head = `<div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.from_actor)}</span><span class="spacer"></span><time class="muted tnum" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div>`;
   const wrap = inner => `<div class="tcomment tmsg bot" data-message="${esc(m.id || '')}">${head}${inner}</div>`;
   // A retired card asks nothing: its request is cancelled, so it shows Not needed, never a card to save.
   if (r.service === 'secret' && mine && m.refs.credential_request && status !== 'retired') {
@@ -802,7 +802,7 @@ async function taskRunStop(state, button) {
 function taskCommentsRender(state, data, sent = '') {
   const host = state.host;
   const lines = [
-    ...(data.comments || data.messages || []).filter(m => ['say', 'ask', 'answer'].includes(m.kind)).map(m => ({kind: 'comment', ts: m.created, message: m})),
+    ...(data.comments || data.messages || []).filter(m => ['say', 'ask', 'answer'].includes(m.kind)).map(m => ({kind: 'comment', ts: m.created_at, message: m})),
     ...(data.events || []).map(e => ({kind: 'event', ts: e.ts, ...e})),
   ].sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
   if (!$('form', host)) {
@@ -1054,7 +1054,7 @@ function hubModalHTML(t, it, opts = {}) {
       ? `<button type="button" class="tl-due wake tchip-snoozed" data-task-unsnooze title="Snoozed until ${esc(fmt(t.snoozed_until))} by ${esc(actorLabel(t.snoozed_by))}${t.snoozed_note ? ` · ${esc(t.snoozed_note)}` : ''}${rights.snooze ? '. Click to bring it back now' : ''}"${rights.snooze ? '' : ' disabled'}>Snoozed to ${esc(snoozeDay(t))}${chipNoteHTML(t.snoozed_note)}</button>` : ''}
       ${finished ? '' : taskScreenLinkHTML(t.owner)}
       <span class="spacer"></span>${pos ? `<span class="peek-pos tnum" title="J / K or ↑ / ↓ move to the next or previous task">${esc(pos)}</span>` : ''}
-      <span class="muted tnum tmodal-age" title="${esc(`${taskSourceLine(t)}${t.created ? ' ' + fmt(t.created) : ''} · Updated ${fmt(it.updated)}`)}">${esc(ago(it.updated))}</span>
+      <span class="muted tnum tmodal-age" title="${esc(`${taskSourceLine(t)}${t.created_at ? ' ' + fmt(t.created_at) : ''} · Updated ${fmt(it.updated_at)}`)}">${esc(ago(it.updated_at))}</span>
       ${canDone ? `<button class="ghost tmodal-act" type="button" data-task-finish="done" title="Mark this task done">${PROP_ICON.check}<span>Done</span></button>` : ''}
       ${canClose ? `<button class="ghost tmodal-act" type="button" data-task-finish="close" title="Close this task">Close task</button>` : ''}
       <button class="ghost peek-btn" type="button" data-task-more aria-haspopup="menu" aria-label="More actions" title="More actions">${PROP_ICON.more}</button>

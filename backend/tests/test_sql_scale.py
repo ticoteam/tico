@@ -22,9 +22,9 @@ PEOPLE = ("human:ana", "human:ben", "human:cara")
 def queries():
     day = H.shift(H.now(), days=-1)
     return [("SELECT id FROM turns LIMIT 1", []),
-            ("SELECT count(*) FROM turns WHERE started>=?", [day]),
+            ("SELECT count(*) FROM turns WHERE started_at>=?", [day]),
             ("SELECT id FROM attempts LIMIT 1", []),
-            ("SELECT count(*) FROM attempts WHERE created>=?", [day]),
+            ("SELECT count(*) FROM attempts WHERE created_at>=?", [day]),
             ("SELECT count(*) FROM messages", [])]
 
 
@@ -53,7 +53,7 @@ def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=ME
                           "bot:inbox" if hidden else owner, rng.choice(("open", "done", "closed")),
                           room_ids[i] if i < tasks_n * 2 // 3 else None, stamp(rng.randrange(180 * 1440)), 1 if hidden else 0,
                           100_000 + i))
-        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,conversation_id,created,private,number) "
+        c.executemany("INSERT INTO tasks(id,title,body,requester,owner,status,conversation_id,created_at,private,number) "
                       "VALUES(?,?,?,?,?,?,?,?,?,?)", tasks)
         rooms = []
         for i, cid in enumerate(room_ids):
@@ -63,7 +63,7 @@ def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=ME
                 person, bot = rng.choice(PEOPLE), rng.choice(BOTS)
                 rooms.append((cid, "chat", None, json.dumps([person, "bot:" + bot]), "personal", person,
                               f"{bot}:{i}"))
-        c.executemany("INSERT INTO conversations(id,kind,task_id,participants_json,scope,owner_actor,room_key,created) "
+        c.executemany("INSERT INTO conversations(id,kind,task_id,participants,scope,owner_actor,room_key,created_at) "
                       "VALUES(?,?,?,?,?,?,?,'2026-01-01T00:00:00.000000Z')", rooms)
         messages, jobs, attempts, turns, inputs, events = [], [], [], [], [], []
         last, root, waiting = {}, {}, {}
@@ -102,15 +102,15 @@ def populate(store, attempt, seed=7, tasks_n=TASKS, rooms_n=ROOMS, messages_n=ME
                 waiting[cid] = (aid, mid, taken)
             if not reply:
                 root[cid] = mid
-        c.executemany("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,in_reply_to,"
-                      "created) VALUES(?,?,?,?,?,?,?,?,?)", messages)
-        c.executemany("INSERT INTO jobs(id,message_id,bot,state,created,attempt_id) VALUES(?,?,?,?,?,?)", jobs)
-        c.executemany("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,"
-                      "started,finished) VALUES(?1,?2,substr(?3,5),?4,0,'synthetic-'||?1,'done',?5,?5,?5,?5)", attempts)
-        c.executemany("INSERT INTO turns(id,bot,started,finished,message_id,task_id,trigger_kind,outcome) "
+        c.executemany("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,in_reply_to,"
+                      "created_at) VALUES(?,?,?,?,?,?,?,?,?)", messages)
+        c.executemany("INSERT INTO jobs(id,message_id,bot,state,created_at,attempt_id) VALUES(?,?,?,?,?,?)", jobs)
+        c.executemany("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at,"
+                      "started_at,finished_at) VALUES(?1,?2,substr(?3,5),?4,0,'synthetic-'||?1,'done',?5,?5,?5,?5)", attempts)
+        c.executemany("INSERT INTO turns(id,bot,started_at,finished_at,message_id,task_id,trigger_kind,outcome) "
                       "VALUES(?,?,?,?3,?,?,'message','acted')", turns)
         c.executemany("INSERT OR IGNORE INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", inputs)
-        c.executemany("INSERT INTO events(id,ts,actor,action,target,detail_json) VALUES"
+        c.executemany("INSERT INTO events(id,ts,actor,action,target,detail) VALUES"
                       "(lower(hex(randomblob(16))),'2026-01-01T00:00:00.000000Z','keeper','task.next-run.carried',?,?)",
                       events)
         for _, sql in triggers:
@@ -172,7 +172,7 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
                   refs={"task": public, "answers": [again["id"]]}, in_reply_to=again["id"])
         # Rows no stored walk decides: references of the wrong shape and a reply chain deeper than a walk follows.
         odd = H.say(c, "bot:ops", "human:ben", "Synthetic odd refs", conversation_id=room)["id"]
-        c.execute("UPDATE messages SET refs_json='[1]' WHERE id=?", (odd,))
+        c.execute("UPDATE messages SET refs='[1]' WHERE id=?", (odd,))
         deep = None
         for _ in range(105):
             deep = H.say(c, "human:ben", "bot:ops", "Synthetic chain", conversation_id=room, in_reply_to=deep)["id"]
@@ -198,10 +198,10 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
             finally:
                 conn.close()
             hidden = auth.unreadable_bots(c, who)
-            messages = {r["id"] for r in c.execute("SELECT id,conversation_id,refs_json,in_reply_to FROM messages "
+            messages = {r["id"] for r in c.execute("SELECT id,conversation_id,refs,in_reply_to FROM messages "
                                                    "WHERE deleted_at IS NULL")
                         if r["conversation_id"] in rooms and index.message(r["id"], r["conversation_id"],
-                                                                           r["refs_json"], r["in_reply_to"])}
+                                                                           r["refs"], r["in_reply_to"])}
             jobs = {r[0] for r in c.execute("SELECT id,bot,message_id FROM jobs") if r[1] not in hidden and r[2] in messages}
             attempts = {r[0] for r in c.execute("SELECT id,job_id FROM attempts") if r[1] in jobs and index.attempt(r[0])}
             turns = {r[0] for r in c.execute("SELECT id,bot,message_id,task_id FROM turns")
@@ -248,15 +248,15 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
     # Each change that moves a row's provenance drops the rows it touched back to the gate at once, with no sweep
     # between the change and the read. A task turning private moves no provenance: readers deny it from the index.
     with store.transaction() as c:
-        cited = c.execute("SELECT id,refs_json FROM messages WHERE refs_json LIKE '%\"task\"%' AND conversation_id=? "
+        cited = c.execute("SELECT id,refs FROM messages WHERE refs LIKE '%\"task\"%' AND conversation_id=? "
                           "LIMIT 1", (room,)).fetchone()
-        task = json.loads(cited["refs_json"])["task"]
+        task = json.loads(cited["refs"])["task"]
     changes = [
         ("a cited task turns private", False,
          lambda c: c.execute("UPDATE tasks SET private=1, requester='human:ana', owner='bot:inbox' WHERE id=?",
                              (task,))),
         ("a message now cites a denied task", True,
-         lambda c: c.execute("UPDATE messages SET refs_json=? WHERE id=?",
+         lambda c: c.execute("UPDATE messages SET refs=? WHERE id=?",
                              (json.dumps({"task": denied}), next(iter(sorted(bot)))))),
         ("a replied-to message is deleted", False,
          lambda c: c.execute("UPDATE messages SET deleted_at=? WHERE id=(SELECT in_reply_to FROM messages "
@@ -278,6 +278,6 @@ def test_settled_gates_read_exactly_the_rows_the_privacy_functions_allow(api):
 
 def world_attempt(c, denied):
     """A finished run that carried a denied private task."""
-    aid = c.execute("SELECT id FROM attempts ORDER BY created LIMIT 1").fetchone()[0]
+    aid = c.execute("SELECT id FROM attempts ORDER BY created_at LIMIT 1").fetchone()[0]
     c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, denied))
     return aid

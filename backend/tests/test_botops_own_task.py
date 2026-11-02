@@ -118,7 +118,7 @@ def test_a_relayed_comment_still_lends_nothing_and_gets_no_card(api, botops):
     _ready(api, botops)
     task, attempt = _commented(api, botops)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET refs_json=json_set(coalesce(refs_json,'{}'),'$.routing',1) WHERE id=("
+        c.execute("UPDATE messages SET refs=json_set(coalesce(refs,'{}'),'$.routing',1) WHERE id=("
                   "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?)",
                   (attempt.get("attempt_id") or attempt["id"],))
     tried = api.put("/api/v2/bots/ops/repositories", json={"mode": "all", "all_access": "write"},
@@ -211,6 +211,6 @@ def test_private_subtask_from_bot_requested_run_is_judged_in_default_rehearsal(a
     assert len(model.calls) == 1
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM ask_ingest_settings").fetchone()[0] == 0
-        event = c.execute("SELECT detail_json FROM events WHERE action='task.create' AND target=?",
+        event = c.execute("SELECT detail FROM events WHERE action='task.create' AND target=?",
                           (made["id"],)).fetchone()
-        assert '"via": "botops"' in event["detail_json"]
+        assert '"via": "botops"' in event["detail"]

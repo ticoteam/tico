@@ -16,7 +16,7 @@ def waiting_on_people(conn):
     out = []
     for row in H._rows(conn.execute(
             "SELECT * FROM tasks WHERE status='waiting' AND waiting_on LIKE 'human:%' AND owner LIKE 'bot:%' "
-            "ORDER BY created")):
+            "ORDER BY created_at")):
         if H.lint_person_ask(row.get("note")):
             continue
         if any(a["to_actor"] == row["waiting_on"] for a in H.open_task_asks(conn, row)):

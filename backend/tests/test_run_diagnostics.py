@@ -156,9 +156,9 @@ def test_failed_reply_text_never_becomes_list_reason(api):
 
 
 def silent_since(api, aid, started):
-    """A run started at `started`, with no heartbeat and no event since: its computer went quiet at that moment."""
+    """A run started at `started_at`, with no heartbeat and no event since: its computer went quiet at that moment."""
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE attempts SET started=?,created=?,lease_until=? WHERE id=?',
+        c.execute('UPDATE attempts SET started_at=?,created_at=?,lease_until=? WHERE id=?',
                   (started, started, H.shift(H.now(), hours=2), aid))
         c.execute('UPDATE attempt_diagnostics SET heartbeat_at=NULL,last_event_at=? WHERE attempt_id=?', (started, aid))
 

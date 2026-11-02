@@ -31,19 +31,19 @@ def snapshot(meta, transcript='', notes='', conn=None, readable=None):
     digest = hashlib.sha256((metadata + transcript + notes).encode()).hexdigest()
     ts = H.now()
     conn.execute('''INSERT INTO meetings
-        (id,title,owner,recorded_by,uploaded_by,metadata_json,transcript_original,
-         transcript_readable,notes,content_hash,created,updated,review_state)
+        (id,title,owner,recorded_by,uploaded_by,metadata,transcript_original,
+         transcript_readable,notes,content_hash,created_at,updated_at,review_state)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET title=excluded.title, owner=excluded.owner,
         recorded_by=excluded.recorded_by, uploaded_by=excluded.uploaded_by,
-        metadata_json=excluded.metadata_json, transcript_original=excluded.transcript_original,
+        metadata=excluded.metadata, transcript_original=excluded.transcript_original,
         transcript_readable=excluded.transcript_readable, notes=excluded.notes,
-        content_hash=excluded.content_hash, updated=excluded.updated, review_state=excluded.review_state''',
+        content_hash=excluded.content_hash, updated_at=excluded.updated_at, review_state=excluded.review_state''',
         (rid, meta.get('title') or 'Meeting', meta.get('owner') or '', recorded, uploaded,
-         metadata, transcript, readable, notes, digest, old['created'] if old else ts, ts, meta['review_state']))
+         metadata, transcript, readable, notes, digest, old['created_at'] if old else ts, ts, meta['review_state']))
     if transcript or notes:
         conn.execute('''INSERT OR IGNORE INTO meeting_versions
-          (meeting_id,content_hash,metadata_json,transcript_original,transcript_readable,notes,created)
+          (meeting_id,content_hash,metadata,transcript_original,transcript_readable,notes,created_at)
           VALUES (?,?,?,?,?,?,?)''', (rid,digest,metadata,transcript,readable,notes,ts))
     return rid
 
@@ -56,12 +56,12 @@ def get(rid, conn=None):
     if not row:
         return None
     result = dict(row)
-    result['metadata'] = json.loads(result.pop('metadata_json'))
+    result['metadata'] = json.loads(result.pop('metadata'))
     result['metadata']['review_state'] = result['review_state']
     delivery = conn.execute('SELECT * FROM meeting_deliveries WHERE meeting_id=?', (rid,)).fetchone()
     result['delivery'] = dict(delivery) if delivery else None
     if result['delivery']:
-        result['delivery']['attachments'] = json.loads(result['delivery'].pop('attachments_json'))
+        result['delivery']['attachments'] = json.loads(result['delivery'].pop('attachments'))
     return result
 
 
@@ -78,9 +78,9 @@ def pending_count(c, who):
 
 
 def review_settings(c, who):
-    personal = c.execute("SELECT value_json FROM preferences WHERE actor=? AND key='meetings.auto_share'",
+    personal = c.execute("SELECT value FROM preferences WHERE actor=? AND key='meetings.auto_share'",
                          (who.actor,)).fetchone()
-    team = c.execute("SELECT value_json FROM registry_metadata WHERE key='meetings.review_default'").fetchone()
+    team = c.execute("SELECT value FROM registry_metadata WHERE key='meetings.review_default'").fetchone()
     default = json.loads(team[0]) if team else 'review'
     choice = json.loads(personal[0]) if personal else None
     return {'auto_share': choice, 'review_default': default,
@@ -107,7 +107,7 @@ def announce(c, auth, rid, meta):
 def request_send(rid, email, sender, destination, instructions, attachments):
     with closing(H.connect()) as db:
         db.execute('''INSERT INTO meeting_deliveries
-          (meeting_id,requested_by,sender_name,destination,instructions,attachments_json,requested_at)
+          (meeting_id,requested_by,sender_name,destination,instructions,attachments,requested_at)
           VALUES (?,?,?,?,?,?,?) ON CONFLICT(meeting_id) DO NOTHING''',
           (rid,email,sender,destination,instructions,json.dumps(attachments),H.now()))
         # Repeated clicks retry errors without changing the original attribution or payload.
@@ -172,11 +172,11 @@ def retire_capture(c):
     finished one with what it has. Idempotent: it touches only meetings in a capture state."""
     live = ('recording', 'finishing', 'transcribing', 'notes')
     marks = ','.join('?' * len(live))
-    for row in c.execute(f"SELECT id,metadata_json,transcript_original FROM meetings "
-                         f"WHERE json_extract(metadata_json,'$.status') IN ({marks})", live).fetchall():
-        meta = json.loads(row['metadata_json'])
+    for row in c.execute(f"SELECT id,metadata,transcript_original FROM meetings "
+                         f"WHERE json_extract(metadata,'$.status') IN ({marks})", live).fetchall():
+        meta = json.loads(row['metadata'])
         meta.update(status='done', ended=meta.get('ended') or H.now(), error=None,
                     warning=None if row['transcript_original'] else 'Tico no longer records; this meeting has no transcript')
-        c.execute('UPDATE meetings SET metadata_json=? WHERE id=?', (json.dumps(meta, sort_keys=True), row['id']))
-    c.execute("UPDATE service_jobs SET state='cancelled',updated=? "
+        c.execute('UPDATE meetings SET metadata=? WHERE id=?', (json.dumps(meta, sort_keys=True), row['id']))
+    c.execute("UPDATE service_jobs SET state='cancelled',updated_at=? "
               "WHERE kind='recording.process' AND state IN ('queued','running')", (H.now(),))

@@ -153,7 +153,7 @@ def parse_body(raw, known_asks=()):
 
 def _load_sections(row):
     try:
-        found = json.loads(row["body_json"] or "{}")
+        found = json.loads(row["body"] or "{}")
     except ValueError:
         return []
     return found.get("sections") or [] if isinstance(found, dict) else []
@@ -388,7 +388,7 @@ def _checks_of(c, edition_id, kind):
     out = []
     for r in c.execute("SELECT * FROM edition_checks WHERE edition_id=? AND kind=? ORDER BY created_at DESC, rowid DESC",
                        (edition_id, kind)):
-        out.append({**dict(r), "detail": json.loads(r["detail_json"] or "{}")})
+        out.append({**dict(r), "detail": json.loads(r["detail"] or "{}")})
     return out
 
 
@@ -490,9 +490,9 @@ def _approval_state(row, expected):
 
 def _decision_note(c, approval_id):
     """What the person wrote when they decided: the approval's row doesn't hold it, its event does."""
-    row = c.execute("SELECT detail_json FROM events WHERE target=? AND action='approval.decide' ORDER BY ts DESC LIMIT 1",
+    row = c.execute("SELECT detail FROM events WHERE target=? AND action='approval.decide' ORDER BY ts DESC LIMIT 1",
                     (approval_id,)).fetchone()
-    return (json.loads(row["detail_json"] or "{}").get("note") or "") if row else ""
+    return (json.loads(row["detail"] or "{}").get("note") or "") if row else ""
 
 
 def approval_view(c, row):
@@ -503,7 +503,7 @@ def approval_view(c, row):
         return {"id": row["approval_id"], "state": "lapsed"}
     return {"id": found["id"], "state": _approval_state(found, approval_payload(c, row)),
             "to": found.get("decision_owner"), "to_name": found.get("decision_owner_name"),
-            "requested_by": found["requested_by"], "created": found["created"], "decided_by": found["decided_by"],
+            "requested_by": found["requested_by"], "created_at": found["created_at"], "decided_by": found["decided_by"],
             "decided_at": found["decided_at"], "note": _decision_note(c, found["id"])}
 
 
@@ -535,7 +535,7 @@ def full_view(c, edition_id):
                       for r in c.execute("SELECT s.*, u.bot FROM edition_sources s LEFT JOIN updates u ON u.id=s.update_id "
                                          "WHERE s.edition_id=? ORDER BY s.rowid", (edition_id,)).fetchall()]
     out["checks"] = [{"id": r["id"], "version": r["version"], "kind": r["kind"], "outcome": r["outcome"],
-                      "detail": json.loads(r["detail_json"] or "{}"), "created_at": r["created_at"]}
+                      "detail": json.loads(r["detail"] or "{}"), "created_at": r["created_at"]}
                      for r in c.execute("SELECT * FROM edition_checks WHERE edition_id=? ORDER BY created_at DESC, rowid DESC "
                                         "LIMIT 200", (edition_id,))]
     out["seen_by"] = [dict(r) for r in c.execute(
@@ -634,7 +634,7 @@ def claim(c, actor, audience_id, author, period_start, period_end):
 
 
 def _record(c, row, kind, outcome, detail=None):
-    c.execute("INSERT INTO edition_checks(id, edition_id, version, kind, outcome, detail_json, created_at) "
+    c.execute("INSERT INTO edition_checks(id, edition_id, version, kind, outcome, detail, created_at) "
               "VALUES(?,?,?,?,?,?,?)", (H.new_id(), row["id"], row["version"], kind, outcome,
                                         json.dumps(detail or {}, ensure_ascii=False), H.now()))
 
@@ -697,7 +697,7 @@ def run_draft(store, edition_id, primary=None):
             c.execute("INSERT INTO edition_sources(id, edition_id, update_id, body_sha256, body) VALUES(?,?,?,?,?)",
                       (H.new_id(), edition_id, source["id"], hashlib.sha256(text.encode()).hexdigest(), text))
         _record(c, row, "draft", "pass", {"sources": len(sources)})
-        c.execute("UPDATE editions SET status='held', title=?, body_json=?, updated_at=? WHERE id=?",
+        c.execute("UPDATE editions SET status='held', title=?, body=?, updated_at=? WHERE id=?",
                   (title, json.dumps({"sections": sections}, ensure_ascii=False), at, edition_id))
         H.event(c, H.KEEPER, "edition.drafted", edition_id, {"sources": len(sources)})
     return check(store, edition_id, primary)
@@ -846,7 +846,7 @@ def edit(c, who, edition_id, body):
                       else f"This edition is {row['status']}", 409)
     title, sections = _parsed(body, row)
     _drop_approval(c, row, "The edition changed.")
-    c.execute("UPDATE editions SET title=?, body_json=?, status='held', approval_id=NULL, payload_hash=NULL, updated_at=? "
+    c.execute("UPDATE editions SET title=?, body=?, status='held', approval_id=NULL, payload_hash=NULL, updated_at=? "
               "WHERE id=?", (title, json.dumps({"sections": sections}, ensure_ascii=False), H.now(), edition_id))
     H.event(c, who.actor, "edition.edit", edition_id, {})
     return full_view(c, edition_id)
@@ -870,7 +870,7 @@ def correct(c, who, edition_id, body, note):
                         "period_end=?", (row["audience_id"], row["author"], row["period_start"],
                                          row["period_end"])).fetchone()[0] + 1
     c.execute("INSERT INTO editions(id, audience_id, author, period_start, period_end, version, supersedes_id, status, "
-              "title, body_json, correction_note, created_at, updated_at) VALUES(?,?,?,?,?,?,?,'held',?,?,?,?,?)",
+              "title, body, correction_note, created_at, updated_at) VALUES(?,?,?,?,?,?,?,'held',?,?,?,?,?)",
               (new_id, row["audience_id"], row["author"], row["period_start"], row["period_end"], version, edition_id,
                title, json.dumps({"sections": sections}, ensure_ascii=False), note, at, at))
     c.execute("INSERT INTO edition_sources(id, edition_id, update_id, body_sha256, body) "
@@ -1058,8 +1058,8 @@ def _board_text(c, audience_id, audience, view):
 def _board_rows(c, audience_id):
     prefix = f"{BOARD_URL}{audience_id}/"
     return [r["id"] for r in c.execute(
-        "SELECT id FROM approvals WHERE kind='publish' AND substr(json_extract(payload_json,'$.url'),1,?)=? "
-        "ORDER BY created DESC, rowid DESC LIMIT 20", (len(prefix), prefix))]
+        "SELECT id FROM approvals WHERE kind='publish' AND substr(json_extract(payload,'$.url'),1,?)=? "
+        "ORDER BY created_at DESC, rowid DESC LIMIT 20", (len(prefix), prefix))]
 
 
 def board_approval(c, audience_id):
@@ -1074,7 +1074,7 @@ def board_approval(c, audience_id):
              else "declined" if found["decision"] == "declined" else "stale" if found["payload"].get("url") != current
              else "approved" if found["decision"] == "approved" else "pending")
     return {"id": found["id"], "state": state, "to": found.get("decision_owner"),
-            "to_name": found.get("decision_owner_name"), "created": found["created"], "decided_by": found["decided_by"],
+            "to_name": found.get("decision_owner_name"), "created_at": found["created_at"], "decided_by": found["decided_by"],
             "decided_at": found["decided_at"], "note": _decision_note(c, found["id"])}
 
 

@@ -45,7 +45,7 @@ const files = {
       if (p === '/api/v2/conversations') return json({conversations:url.searchParams.get('chat_with') ? [{id:'c-legal',kind:'chat',scope:'personal',participants:['human:ana','bot:legal']}] : []});
       if (p === '/api/v2/conversations/c-legal/snapshot') return json({messages:[{id:'m-legal',from_actor:'bot:legal',
         body:'The [poster](https://tico-ui.test/api/v2/files/file-big-0001) and the [lease](https://tico-ui.test/api/v2/files/file-pdf-0001).',
-        created:new Date().toISOString()}],execution:null});
+        created_at:new Date().toISOString()}],execution:null});
       return json(unrouted(p));
     });
     // In the page: whether a blob: URL still reads, and the width a picture at that URL decodes to (0 when it can't).

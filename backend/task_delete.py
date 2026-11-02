@@ -29,7 +29,7 @@ from . import task_relations as TR
 TRASH = """CREATE TABLE IF NOT EXISTS task_trash(
  task_id TEXT PRIMARY KEY, number INTEGER, title TEXT, requester TEXT, owner TEXT, status TEXT,
  private INTEGER NOT NULL DEFAULT 1, deleted_at TEXT NOT NULL, deleted_by TEXT NOT NULL,
- rows_json TEXT NOT NULL, purged_at TEXT, guest TEXT)"""
+ rows TEXT NOT NULL, purged_at TEXT, guest TEXT)"""
 # The files attached when a deleted task was made, kept past a purge: no foreign key, the task is gone.
 TRASH_ASSETS = """CREATE TABLE IF NOT EXISTS task_trash_assets(
  task_id TEXT NOT NULL, blob_id TEXT NOT NULL, PRIMARY KEY(task_id, blob_id))"""
@@ -81,8 +81,8 @@ def ensure(c):
     # rows_json grows with the trash.
     c.execute("INSERT OR IGNORE INTO task_trash_assets(task_id, blob_id) "
               "SELECT t.task_id, json_extract(a.value, '$.blob_id') FROM task_trash t, "
-              "json_each(t.rows_json, '$.rows.task_assets') a "
-              "WHERE t.purged_at IS NULL AND instr(t.rows_json, '\"task_assets\"') > 0 "
+              "json_each(t.rows, '$.rows.task_assets') a "
+              "WHERE t.purged_at IS NULL AND instr(t.rows, '\"task_assets\"') > 0 "
               "AND NOT EXISTS (SELECT 1 FROM task_trash_assets x WHERE x.task_id=t.task_id) "
               "AND json_extract(a.value, '$.blob_id') IS NOT NULL")
 
@@ -204,7 +204,7 @@ def _refusals(c, ids, conversations, messages):
     # scanned every message to read its refs_json.
     waking = _column(c, "SELECT j.id FROM jobs j CROSS JOIN messages m ON m.id=j.message_id "
                         "WHERE j.state NOT IN ('completed','cancelled','failed') "
-                        "AND json_extract(m.refs_json,'$.task') IN ({})", ids)
+                        "AND json_extract(m.refs,'$.task') IN ({})", ids)
     if waking:
         refusals["bot work queued about the task"] = len(waking)
     return refusals
@@ -239,7 +239,7 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
         # A bot not yet woken about the task would wake to a missing task.
         # Queued jobs only (jobs_queued), each checked against its own message by primary key.
         c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND EXISTS "
-                  "(SELECT 1 FROM messages m WHERE m.id=jobs.message_id AND (json_extract(m.refs_json,'$.task') IN ({}) "
+                  "(SELECT 1 FROM messages m WHERE m.id=jobs.message_id AND (json_extract(m.refs,'$.task') IN ({}) "
                   "OR m.conversation_id IN (SELECT id FROM conversations WHERE task_id IN ({}))))"
                   .format(_marks(list(kept)), _marks(list(kept))), [*kept, *kept])
     ensure(c)
@@ -255,7 +255,7 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
             convs, msgs = [], []
         task = rows["tasks"][0]
         c.execute("INSERT INTO task_trash(task_id,number,title,requester,owner,status,private,deleted_at,"
-                  "deleted_by,rows_json,guest) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                  "deleted_by,rows,guest) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                   (tid, task.get("number"), task["title"], task["requester"], task["owner"], task["status"],
                    task.get("private", 1) if task.get("private") is not None else 1, now, actor,
                    json.dumps({"rows": rows, "pointers": pointers}, default=str), task.get("guest")))
@@ -365,7 +365,7 @@ def restore_tasks(c, ids, actor=None):
         entries.append(dict(row))
     restoring = {e["task_id"] for e in entries}
     unlinked, skipped = {}, {}
-    snapshots = [(e, json.loads(e["rows_json"])) for e in entries]
+    snapshots = [(e, json.loads(e["rows"])) for e in entries]
     c.execute("SAVEPOINT trash_restore")
     try:
         for e, snap in snapshots:
@@ -411,12 +411,12 @@ def restore_tasks(c, ids, actor=None):
         for column, (kind, inward) in LEGACY_LINKS.items():
             if task.get(column):
                 ends = (task[column], tid) if inward else (tid, task[column])
-                relations.append({"from_task": ends[0], "to_task": ends[1], "kind": kind, "created": task.get("updated") or H.now()})
+                relations.append({"from_task": ends[0], "to_task": ends[1], "kind": kind, "created_at": task.get("updated_at") or H.now()})
         for row in snap["rows"].get("task_relations", []):
             if "related_id" in row:     # draft #110's related-only rows
                 a, b = sorted((row["task_id"], row["related_id"]))
                 relations.append({"from_task": a, "to_task": b, "kind": "related", "created_by": row.get("added_by"),
-                                  "created": row["created"]})
+                                  "created_at": row["created_at"]})
         for row in relations:
             if TR.restore_row(c, row) is False:
                 unlinked.setdefault(tid, []).append(row["kind"])
@@ -486,7 +486,7 @@ def purge_trash(c, older_than_days, apply=False, actor=None):
         return report
     now = H.now()
     for r in rows:
-        c.execute("UPDATE task_trash SET rows_json='{}', purged_at=? WHERE task_id=?", (now, r["task_id"]))
+        c.execute("UPDATE task_trash SET rows='{}', purged_at=? WHERE task_id=?", (now, r["task_id"]))
         H.event(c, actor or H.KEEPER, "task.purged", r["task_id"], {"title": r["title"], "deleted_at": r["deleted_at"],
                                                                     "files_left": left[r["task_id"]]["ids"],
                                                                     "attachments_left": left[r["task_id"]]["attachments"]})

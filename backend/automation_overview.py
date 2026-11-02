@@ -83,12 +83,12 @@ def system_jobs(c, settings=None):
 
 
 def _system_status(row):
-    return "running" if not row["finished"] else "ok" if row["ok"] else "failed"
+    return "running" if not row["finished_at"] else "ok" if row["ok"] else "failed"
 
 
 def _system_last(row):
-    return {"id": SYSTEM_RUN + row["id"], "status": _system_status(row), "started": row["started"],
-            "finished": row["finished"]}
+    return {"id": SYSTEM_RUN + row["id"], "status": _system_status(row), "started_at": row["started_at"],
+            "finished_at": row["finished_at"]}
 
 
 def visible(c, who):
@@ -96,7 +96,7 @@ def visible(c, who):
     from . import automations as AU
     chart = AU.Chart(c) if who.role in ("human", "bot") else None
     out = []
-    for r in c.execute("SELECT * FROM automations WHERE deleted_at IS NULL ORDER BY created DESC").fetchall():
+    for r in c.execute("SELECT * FROM automations WHERE deleted_at IS NULL ORDER BY created_at DESC").fetchall():
         flow = AU.flow_of(r)
         if AU.may_change(c, who, {**flow, "readonly": False}, chart):
             out.append((dict(r), flow))
@@ -200,13 +200,13 @@ def outcome(status, state, flow):
 def run_row(run, row, flow):
     """An automation run for the overview: no step detail, but what started it, how it ended and its step count."""
     try:
-        state = json.loads(run["state_json"]) if run["state_json"] else None
+        state = json.loads(run["state"]) if run["state"] else None
     except (TypeError, ValueError):
         state = None
     kind = kind_of(flow)
     return {"id": run["id"], "automation_id": row["id"], "automation_name": row["name"], "trigger": kind,
             "owner": row["owner"], "version": run["version"], "trigger_ref": run["trigger_ref"],
-            "started": run["started"], "finished": run["finished"], "status": run["status"], "cost": run["cost"],
+            "started_at": run["started_at"], "finished_at": run["finished_at"], "status": run["status"], "cost": run["cost"],
             "started_by": started_by((state or {}).get("payload"), run["trigger_ref"], kind),
             "outcome": outcome(run["status"], state, flow),
             "step_count": len((state or {}).get("steps") or []) if state else None, "count": 1}
@@ -216,7 +216,7 @@ def system_row(run, row):
     status = _system_status(run)
     return {"id": SYSTEM_RUN + run["id"], "automation_id": row["id"], "automation_name": row["name"],
             "trigger": "system", "owner": row["owner"], "version": row["version"], "trigger_ref": "system",
-            "started": run["started"], "finished": run["finished"], "status": status, "cost": run["cost_usd"] or 0,
+            "started_at": run["started_at"], "finished_at": run["finished_at"], "status": status, "cost": run["cost_usd"] or 0,
             "started_by": "Scheduled", "outcome": str(run["result"] or ("Done" if status == "ok" else ""))[:140],
             "step_count": None, "count": run["runs"] or 1}
 
@@ -225,22 +225,22 @@ def system_runs_of(c, key, limit, before=""):
     """One system job's runs as an automation's run log shows them (GET /{id}/runs on its mirror)."""
     at = None
     if before:
-        at = c.execute("SELECT started, id FROM system_runs WHERE id=? AND job=?",
+        at = c.execute("SELECT started_at, id FROM system_runs WHERE id=? AND job=?",
                        (before.removeprefix(SYSTEM_RUN), key)).fetchone() if H._has_table(c, "system_runs") else None
         if not at:
             raise Problem("not_found", "No such run", 404)
     if not H._has_table(c, "system_runs"):
         return [], False
-    rows = c.execute("SELECT * FROM system_runs WHERE job=?" + (" AND (started<? OR (started=? AND id<?))" if at else "")
-                     + " ORDER BY started DESC, id DESC LIMIT ?",
-                     (key, *((at["started"], at["started"], at["id"]) if at else ()), limit + 1)).fetchall()
+    rows = c.execute("SELECT * FROM system_runs WHERE job=?" + (" AND (started_at<? OR (started_at=? AND id<?))" if at else "")
+                     + " ORDER BY started_at DESC, id DESC LIMIT ?",
+                     (key, *((at["started_at"], at["started_at"], at["id"]) if at else ()), limit + 1)).fetchall()
     return rows[:limit], len(rows) > limit
 
 
 def system_run_view(run, aid):
     """A system job's run in the shape of an automation's run (no steps: the job is one block of Tico's code)."""
     return {"id": SYSTEM_RUN + run["id"], "automation_id": aid, "version": 1, "trigger_ref": "system",
-            "started": run["started"], "finished": run["finished"], "status": _system_status(run),
+            "started_at": run["started_at"], "finished_at": run["finished_at"], "status": _system_status(run),
             "cost": run["cost_usd"] or 0, "summary": str(run["result"] or "")[:140] or None, "steps": [],
             "count": run["runs"] or 1}
 
@@ -265,23 +265,23 @@ def runs(c, who, rng="1h", status="", trigger="", owner="", ids="", limit=50, be
     picked = _pick(visible(c, who), trigger, owner, ids)
     by_id = {r["id"]: (r, f) for r, f in picked}
     jobs = {key: (r, f) for r, f in picked if (key := system_key(f))}
-    page_at = " AND (started<? OR (started=? AND id<?))" if at else ""
+    page_at = " AND (started_at<? OR (started_at=? AND id<?))" if at else ""
     marks = (at[0], at[0], at[1]) if at else ()
     found = []
     if by_id:
         states = STATUSES.get(status)
         found += [("a", r) for r in c.execute(
-            "SELECT * FROM automation_runs WHERE started>=? AND automation_id IN (SELECT value FROM json_each(?))"
+            "SELECT * FROM automation_runs WHERE started_at>=? AND automation_id IN (SELECT value FROM json_each(?))"
             + (f" AND status IN ({','.join('?' * len(states))})" if states else "") + page_at
-            + " ORDER BY started DESC, id DESC LIMIT ?",
+            + " ORDER BY started_at DESC, id DESC LIMIT ?",
             (since, json.dumps(list(by_id)), *(states or ()), *marks, limit + 1)).fetchall()]
     if jobs and status not in ("waiting", "held") and H._has_table(c, "system_runs"):
-        where = {"done": " AND ok=1 AND finished IS NOT NULL", "ok": " AND ok=1 AND finished IS NOT NULL",
-                 "failed": " AND ok=0", "running": " AND finished IS NULL"}.get(status, "")
+        where = {"done": " AND ok=1 AND finished_at IS NOT NULL", "ok": " AND ok=1 AND finished_at IS NOT NULL",
+                 "failed": " AND ok=0", "running": " AND finished_at IS NULL"}.get(status, "")
         found += [("s", r) for r in c.execute(
-            "SELECT * FROM system_runs WHERE started>=? AND job IN (SELECT value FROM json_each(?))" + where + page_at
-            + " ORDER BY started DESC, id DESC LIMIT ?", (since, json.dumps(list(jobs)), *marks, limit + 1)).fetchall()]
-    found.sort(key=lambda x: (x[1]["started"], x[1]["id"]), reverse=True)
+            "SELECT * FROM system_runs WHERE started_at>=? AND job IN (SELECT value FROM json_each(?))" + where + page_at
+            + " ORDER BY started_at DESC, id DESC LIMIT ?", (since, json.dumps(list(jobs)), *marks, limit + 1)).fetchall()]
+    found.sort(key=lambda x: (x[1]["started_at"], x[1]["id"]), reverse=True)
     more = len(found) > limit
     found = found[:limit]
     out = [run_row(r, *by_id[r["automation_id"]]) if src == "a" else system_row(r, jobs[r["job"]][0])
@@ -290,7 +290,7 @@ def runs(c, who, rng="1h", status="", trigger="", owner="", ids="", limit=50, be
     nxt = None
     if (more or cut is not None) and shown:
         last = found[len(shown) - 1][1]
-        nxt = f"{last['started']}|{last['id']}"
+        nxt = f"{last['started_at']}|{last['id']}"
     return {"runs": shown, "next": nxt, "since": since}
 
 
@@ -314,23 +314,23 @@ def stats(c, who, rng="1h"):
         s["buckets"][b]["failed"] += failed
 
     if seen:
-        for r in c.execute("SELECT automation_id, CAST((julianday(substr(started,1,23)) - julianday(?)) * 86400.0 / ? "
+        for r in c.execute("SELECT automation_id, CAST((julianday(substr(started_at,1,23)) - julianday(?)) * 86400.0 / ? "
                            "AS INTEGER) AS b, COUNT(*) AS n, SUM(status='failed') AS f, SUM(cost) AS cost "
-                           "FROM automation_runs WHERE started>=? AND automation_id IN (SELECT value FROM json_each(?)) "
+                           "FROM automation_runs WHERE started_at>=? AND automation_id IN (SELECT value FROM json_each(?)) "
                            "GROUP BY automation_id, b", (since[:23], width, since, json.dumps(list(seen)))):
             add(r["automation_id"], r["b"], r["n"], r["f"] or 0, r["cost"])
     if jobs and H._has_table(c, "system_runs"):
         start, step = H.parse_ts(since), timedelta(seconds=width)
-        for r in c.execute("SELECT job, started, first_started, runs, ok, cost_usd FROM system_runs WHERE started>=? "
+        for r in c.execute("SELECT job, started_at, first_started_at, runs, ok, cost_usd FROM system_runs WHERE started_at>=? "
                            "AND job IN (SELECT value FROM json_each(?))", (since, json.dumps(list(jobs)))):
-            at = H.parse_ts(r["started"])
+            at = H.parse_ts(r["started_at"])
             if not at:
                 add(jobs[r["job"]], n - 1, 1, 0 if r["ok"] else 1, r["cost_usd"])
                 continue
             # A folded row stands for `runs` quiet repeats between first_started and started (its latest): they are
             # spread evenly over that time and only those inside the range count. A row from before first_started
             # was kept counts once, at started.
-            first, k = H.parse_ts(r["first_started"] or ""), max(int(r["runs"] or 1), 1)
+            first, k = H.parse_ts(r["first_started_at"] or ""), max(int(r["runs"] or 1), 1)
             if not first or first >= at or k == 1:
                 times = [at]
             else:

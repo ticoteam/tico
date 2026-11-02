@@ -16,7 +16,7 @@ GONE = ("paused", "planned", "archived", "quarantined")
 
 def devops(c):
     """The slug of the active DevOps bot, or None."""
-    built = [r[0] for r in c.execute("SELECT bot FROM bot_config WHERE json_extract(config_json,'$.template')=? "
+    built = [r[0] for r in c.execute("SELECT bot FROM bot_config WHERE json_extract(config,'$.template')=? "
                                      "ORDER BY bot", (TEMPLATE,))] if H._has_table(c, "bot_config") else []
     for slug in (*built, *SLUGS):
         row = H.bot(c, slug)
@@ -28,7 +28,7 @@ def devops(c):
 def ticket_of_pr(c, repository, number):
     """The open task a pull request is linked on, or None: whose type manager hears when there is no DevOps."""
     url = f"https://github.com/{repository}/pull/{int(number)}".lower()
-    for (task_id,) in c.execute("SELECT task_id FROM task_links WHERE kind='pr' AND lower(url)=? ORDER BY created DESC",
+    for (task_id,) in c.execute("SELECT task_id FROM task_links WHERE kind='pr' AND lower(url)=? ORDER BY created_at DESC",
                                 (url,)):
         row = H.task(c, task_id)
         if row and row["status"] in H.ACTIVE_STATUSES:
@@ -46,9 +46,9 @@ def route(c, key, title, body, about=None):
     hidden = bool(about) and H.task_private(c, about)
     if hidden:
         key = "private:" + hashlib.sha256(key.encode()).hexdigest()[:24]
-    previous = H._one(c, "SELECT detail_json FROM events WHERE action='blocker.routed' AND target=? "
+    previous = H._one(c, "SELECT detail FROM events WHERE action='blocker.routed' AND target=? "
                          "ORDER BY rowid DESC LIMIT 1", (key,))
-    open_task = H.task(c, (H._json(previous["detail_json"], {}) or {}).get("task")) if previous else None
+    open_task = H.task(c, (H._json(previous["detail"], {}) or {}).get("task")) if previous else None
     if open_task and open_task["status"] in H.ACTIVE_STATUSES:
         return open_task
     slug = devops(c)

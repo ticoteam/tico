@@ -12,11 +12,11 @@ from backend.tests.test_task_privacy_reads import traced_get
 def privacy_parties(api):
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
-        c.execute("INSERT INTO runners(id,label,operator,token_hash,created) VALUES('rn','Mac','ana','th',?)", (H.now(),))
+        c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at) VALUES('rn','Mac','ana','th',?)", (H.now(),))
 
 
 def blob(c, bid):
-    c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created) "
+    c.execute("INSERT INTO blobs(id,owner,digest,size,name,content_type,created_at) "
               "VALUES(?,'human:ana',?,1,'note.md','text/markdown',?)", (bid, bid, H.now()))
 
 
@@ -31,14 +31,14 @@ def seed(c, size):
         reply = H.task_comment(c, "human:ana", parent["id"], "Request " + key, wake=False,
                                extra_refs={"inputs": [input_["id"]], "answers": [input_["id"]]})
         aid = "run-" + key
-        c.execute("INSERT INTO jobs(id,message_id,bot,state,created,attempt_id) VALUES(?,?,'ops','done',?,?)",
+        c.execute("INSERT INTO jobs(id,message_id,bot,state,created_at,attempt_id) VALUES(?,?,'ops','done',?,?)",
                   ("job-" + key, reply["id"], H.now(), aid))
-        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
+        c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES(?,?,'ops','rn',0,?,'done',?,?)", (aid, "job-" + key, aid, H.now(), H.now()))
         c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (aid, input_["id"]))
         H.event(c, "human:ana", privacy.INPUT_MOVED, aid,
                 {"message_id": moved["id"], "tasks": [source["id"]], "to_attempt": "missing-" + key})
-        c.execute("INSERT INTO turns(id,bot,started,task_id,exit) VALUES(?,'ops',?,?,'ok')",
+        c.execute("INSERT INTO turns(id,bot,started_at,task_id,exit) VALUES(?,'ops',?,?,'ok')",
                   (aid, H.now(), parent["id"]))
         H.task_comment(c, "bot:ops", parent["id"], "Done " + key, wake=False,
                        extra_refs={"turn_id": aid, "related_task": source["id"]})
@@ -52,10 +52,10 @@ def seed(c, size):
         c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,locator,current_version,task_id,"
                   "first_activity_at,last_activity_at) VALUES(?,'ops',?,?,?,'document','tico_blob',1,?,?,?)",
                   (fid, "task:" + source["id"], fid, "File " + key, source["id"], H.now(), H.now()))
-        c.execute("INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,attempt_id,actor,created) "
+        c.execute("INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,attempt_id,actor,created_at) "
                   "VALUES(?,1,?,?,1,'note.md','text/markdown',?,'bot:ops',?)", (fid, bid, bid, aid, H.now()))
         c.execute("INSERT INTO message_assets(message_id,blob_id) VALUES(?,?)", (reply["id"], bid))
-        c.execute("INSERT INTO bot_file_activity(file_id,actor,action,task_id,created) VALUES(?,'human:ben','created',?,?)",
+        c.execute("INSERT INTO bot_file_activity(file_id,actor,action,task_id,created_at) VALUES(?,'human:ben','created',?,?)",
                   ("file-3-0" if size == 30 else fid, source["id"], H.now()))
     return parent["id"]
 

@@ -42,7 +42,7 @@ def rules(ctx: Ctx) -> list[G.Rule]:
 
 
 def rule_from(row: Any) -> G.Rule:
-    return G.rule_of(str(row["id"]), str(row["name"]), SK.loads(row["when_json"]), SK.loads(row["outcome_json"]),
+    return G.rule_of(str(row["id"]), str(row["name"]), SK.loads(row["condition"]), SK.loads(row["outcome"]),
                      bool(row["active"]))
 
 
@@ -166,9 +166,9 @@ def _fixed(row: Any) -> None:
 
 
 def _as_fields(row: Any) -> dict[str, object]:
-    return {"name": str(row["name"]), "words": str(row["words"]), "when": SK.loads(row["when_json"]),
-            "outcome": SK.loads(row["outcome_json"]),
-            "examples": cast(list[dict[str, object]], SK.loads_list(row["examples_json"])),
+    return {"name": str(row["name"]), "words": str(row["words"]), "when": SK.loads(row["condition"]),
+            "outcome": SK.loads(row["outcome"]),
+            "examples": cast(list[dict[str, object]], SK.loads_list(row["examples"])),
             "external_rule_id": row["external_rule_id"], "priority": int(row["priority"])}
 
 
@@ -189,8 +189,8 @@ def rule_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         rid = SK.insert(ctx.c, "fin_rules", {
-            "kind": kind, "name": f["name"], "words": f["words"], "when_json": SK.dump(f["when"]),
-            "outcome_json": SK.dump(f["outcome"]), "examples_json": SK.dump(f["examples"]),
+            "kind": kind, "name": f["name"], "words": f["words"], "condition": SK.dump(f["when"]),
+            "outcome": SK.dump(f["outcome"]), "examples": SK.dump(f["examples"]),
             "external_rule_id": f["external_rule_id"], "owner": who, "active": 1, "created_at": ctx.at,
             "created_by": who, **({"priority": f["priority"]} if kind == "posting" else {})})
         return {"rule_id": rid, "kind": kind}
@@ -207,8 +207,8 @@ def rule_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
     def apply(aid: str) -> Result:
         SK.update(ctx.c, "fin_rules", str(row["id"]), {
-            "name": f["name"], "words": f["words"], "when_json": SK.dump(f["when"]),
-            "outcome_json": SK.dump(f["outcome"]), "examples_json": SK.dump(f["examples"]),
+            "name": f["name"], "words": f["words"], "condition": SK.dump(f["when"]),
+            "outcome": SK.dump(f["outcome"]), "examples": SK.dump(f["examples"]),
             "external_rule_id": f["external_rule_id"], "updated_at": ctx.at,
             **({"priority": f["priority"]} if kind == "posting" else {})})
         return {"rule_id": str(row["id"])}
@@ -260,7 +260,7 @@ def rule_test(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     for row in SK.actions_since(ctx.c, since, TEST_MOST):
         if not everything and str(row["actor"]) != who:
             continue
-        body = {k: v for k, v in SK.loads(row["payload_json"]).items() if k not in K.SERVER_ONLY_KEYS}
+        body = {k: v for k, v in SK.loads(row["payload"]).items() if k not in K.SERVER_ONLY_KEYS}
         found: dict[str, object] = {"kind": str(row["kind"]), "actor": str(row["actor"]),
                                     "actor.kind": "bot" if str(row["actor"]) in ctx.org.bots else "human",
                                     **{k: v for k, v in body.items() if isinstance(v, (int, str, bool))}}

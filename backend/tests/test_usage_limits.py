@@ -118,9 +118,9 @@ def groups(api, ops_team):
     """Engineering with Product nested under it; ops in `ops_team`."""
     import json
     with api.app.state.store.transaction() as c:
-        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         people["org_groups"] = {"eng": {"name": "Engineering"}, "product": {"name": "Product", "parent": "eng"}}
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(people),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(people),))
         c.execute("UPDATE bot_config SET team=? WHERE bot='ops'", (ops_team,))
 
 
@@ -151,7 +151,7 @@ def test_a_group_or_team_limit_holds_every_bot_it_covers_and_an_hourly_limit_set
     with api.app.state.store.transaction() as c:                                  # an hour limit set before the half hour
         c.execute("INSERT INTO usage_limits(bot, hourly_usd) VALUES('ops', 1)")
     with api.app.state.store.read() as c:
-        started = c.execute("SELECT min(started) FROM turns WHERE bot='ops'").fetchone()[0]
+        started = c.execute("SELECT min(started_at) FROM turns WHERE bot='ops'").fetchone()[0]
         at = datetime.fromisoformat(started[:19]).replace(tzinfo=usage_limits.timezone.utc)
         assert usage_limits.blocked(c, "ops", at=at) == "hourly"                  # the run's own hour
         assert usage_limits.blocked(c, "ops", at=at + usage_limits.timedelta(hours=1)) is None

@@ -53,7 +53,7 @@ def environment(tmp_path):
                 c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO NOTHING",
                           (encode(PEOPLE),))
                 for slug, config in SEED.items():
-                    c.execute("INSERT INTO bot_config(bot,config_json,operator,repo) VALUES(?,?,?,?)",
+                    c.execute("INSERT INTO bot_config(bot,config,operator,repo) VALUES(?,?,?,?)",
                               (slug, encode(config), "owner", "bot-" + slug))
         return client
 
@@ -197,7 +197,7 @@ def test_each_role_bot_is_made_already_set_up_so_it_does_its_starter_task(enviro
 
     projects = tmp_path / "projects"
     projects.mkdir()
-    configs = {row["bot"]: json.loads(row["config_json"]) for row in rows(api, "SELECT bot,config_json FROM bot_config")}
+    configs = {row["bot"]: json.loads(row["config"]) for row in rows(api, "SELECT bot,config FROM bot_config")}
     request = {"bots": [{"bot": slug, "entry": {"bot": slug, "state": "active", "config": configs[slug]},
                          "path": str(projects / ("bot-" + slug)), "action": "bootstrap"} for slug in ROLE_BOTS]}
     out = io.StringIO()

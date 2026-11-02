@@ -56,11 +56,11 @@ def work(rows, live):
                 agents[key]["background"] = True
             elif key not in shells:
                 shells[key] = {"id": key, "tool": clip(p.get("tool") or "tool", 60), "summary": "",
-                               "parent_id": p.get("parent_id"), "status": None, "started": at, "ended": None}
+                               "parent_id": p.get("parent_id"), "status": None, "started_at": at, "ended": None}
         elif agent:
             node = agents.setdefault(key, {"id": key, "parent_id": agent.get("parent_id") or p.get("parent_id"),
                                            "type": None, "model": None, "status": None, "background": False,
-                                           "tool_uses": None, "duration_ms": None, "started": at, "ended": None})
+                                           "tool_uses": None, "duration_ms": None, "started_at": at, "ended": None})
             node["type"] = clip(agent.get("type") or node["type"] or "agent", 60)
             node["model"] = clip(agent.get("model"), 80) or node["model"]
             for field in ("tool_uses", "duration_ms"):
@@ -72,7 +72,7 @@ def work(rows, live):
         elif p.get("background"):
             if key not in shells and status in TOOL_START:
                 shells[key] = {"id": key, "tool": clip(p.get("tool") or "tool", 60), "summary": clip(p.get("summary"), SUMMARY_CHARS),
-                               "parent_id": p.get("parent_id"), "status": None, "started": at, "ended": None}
+                               "parent_id": p.get("parent_id"), "status": None, "started_at": at, "ended": None}
             elif key in shells and status not in TOOL_START:
                 shells[key]["status"], shells[key]["ended"] = status, at
     for node in (*agents.values(), *shells.values()):
@@ -80,7 +80,7 @@ def work(rows, live):
         if node["ended"] is None and not live:
             node["status"] = "no end reported"
         if node.get("duration_ms") is None and "tool_uses" in node and node["ended"]:
-            took = seconds(node["started"], node["ended"])
+            took = seconds(node["started_at"], node["ended"])
             node["duration_ms"] = took * 1000 if took is not None else None
     return capped(list(agents.values())), capped(list(shells.values()))
 
@@ -122,7 +122,7 @@ def recovery(c, job_ids):
     job's current try, and only then does `state` carry the job's state: a later try's stop is not the decision's."""
     out = {}
     for part in H.chunks(sorted(set(job_ids))):
-        for r in c.execute("SELECT r.job_id,r.attempt_id,r.decision,r.note,r.actor,r.created,j.state AS job_state,"
+        for r in c.execute("SELECT r.job_id,r.attempt_id,r.decision,r.note,r.actor,r.created_at,j.state AS job_state,"
                            "j.attempt_id AS job_attempt FROM job_recovery r JOIN jobs j ON j.id=r.job_id "
                            f"WHERE r.job_id IN ({','.join('?' * len(part))})", part):
             current = r["job_attempt"] == r["attempt_id"]
@@ -130,7 +130,7 @@ def recovery(c, job_ids):
                                 "attempt_id": r["attempt_id"], "current": current,
                                 "state": r["job_state"] if current else None,
                                 "by": r["actor"], "by_kind": decided_by(r["actor"]),
-                                "at": r["created"], "note": decision_note(r["actor"], {"note": r["note"]})}
+                                "at": r["created_at"], "note": decision_note(r["actor"], {"note": r["note"]})}
     return out
 
 
@@ -153,10 +153,10 @@ def next_step(attempt, tries, job, decisions, retries):
     decided = decisions.get(attempt["id"])
     if decided:
         return decided
-    later = [t for t in tries if t["created"] > attempt["created"]]
+    later = [t for t in tries if t["created_at"] > attempt["created_at"]]
     if later:
-        nxt = later[0]["created"]
-        by = next((r for r in retries if (attempt["finished"] or attempt["created"]) <= r["at"] <= nxt), None)
+        nxt = later[0]["created_at"]
+        by = next((r for r in retries if (attempt["finished_at"] or attempt["created_at"]) <= r["at"] <= nxt), None)
         if by:
             return {"kind": "retried", "by": by["by"], "at": by["at"], "note": "Run again by hand."}
         return {"kind": "retried", "by": H.KEEPER, "at": nxt, "note": "Run again automatically."}
@@ -166,7 +166,7 @@ def next_step(attempt, tries, job, decisions, retries):
         return {"kind": "waiting", "by": None, "at": None,
                 "note": "Stopped partway after it may have acted: waiting for a person to decide whether to run it again."}
     if job["state"] in ("queued", "leased"):
-        by = next((r for r in reversed(retries) if r["at"] >= (attempt["finished"] or attempt["created"])), None)
+        by = next((r for r in reversed(retries) if r["at"] >= (attempt["finished_at"] or attempt["created_at"])), None)
         return {"kind": "queued", "by": by and by["by"], "at": by and by["at"],
                 "note": "Queued to run again by hand." if by else "Queued to run again."}
     return None
@@ -190,9 +190,9 @@ def run_view(c, auth, who, tid):
     # The page limit counts only runs this reader can open: hidden newer runs must not push theirs off the page.
     turns = []
     for row in c.execute(
-            "SELECT t.id,t.bot,t.exit,a.job_id,a.state,a.created,a.started,a.finished,a.lease_until,a.result_json,a.wake_json,"
+            "SELECT t.id,t.bot,t.exit,a.job_id,a.state,a.created_at,a.started_at,a.finished_at,a.lease_until,a.result,a.wake,"
             "m.conversation_id FROM turns t JOIN attempts a ON a.id=t.id JOIN jobs j ON j.id=a.job_id "
-            "JOIN messages m ON m.id=j.message_id WHERE t.task_id=? ORDER BY a.created DESC LIMIT ?",
+            "JOIN messages m ON m.id=j.message_id WHERE t.task_id=? ORDER BY a.created_at DESC LIMIT ?",
             (tid, SCAN_LIMIT)):
         r = dict(row)
         if readable(r):
@@ -211,13 +211,13 @@ def run_view(c, auth, who, tid):
     job_rows = {r["id"]: r for r in H._rows(c.execute(f"SELECT id,state FROM jobs WHERE id IN ({job_marks})", jobs))}
     # Tries are counted over every attempt of the job, not only the ones this page shows.
     tries = {}
-    for r in H._rows(c.execute(f"SELECT id,job_id,created FROM attempts WHERE job_id IN ({job_marks}) ORDER BY created",
+    for r in H._rows(c.execute(f"SELECT id,job_id,created_at FROM attempts WHERE job_id IN ({job_marks}) ORDER BY created_at",
                                jobs)):
         tries.setdefault(r["job_id"], []).append(r)
     decisions, retries, lease = {}, {}, {}
-    for e in c.execute(f"SELECT ts,actor,action,target,detail_json FROM events WHERE {RECOVERY_SQL} AND target IN "
+    for e in c.execute(f"SELECT ts,actor,action,target,detail FROM events WHERE {RECOVERY_SQL} AND target IN "
                        f"({job_marks},{marks}) ORDER BY ts", (*jobs, *ids)):
-        detail = json.loads(e["detail_json"] or "{}") or {}
+        detail = json.loads(e["detail"] or "{}") or {}
         if e["action"] in DECISIONS and detail.get("attempt_id"):
             decisions[detail["attempt_id"]] = {
                 "kind": "resumed" if detail.get("decision") == "resume" else "dismissed",
@@ -227,12 +227,12 @@ def run_view(c, auth, who, tid):
         elif e["action"] in LEASE:
             lease.setdefault(e["target"], []).append({"kind": LEASE[e["action"]], "at": e["ts"]})
     events = {aid: [] for aid in ids}
-    for r in c.execute(f"SELECT attempt_id,kind,payload_json,created FROM attempt_events WHERE attempt_id IN ({marks}) "
-                       "AND kind='tool' AND (json_extract(payload_json,'$.subagent') IS NOT NULL OR "
-                       "json_extract(payload_json,'$.background') IS NOT NULL OR "
-                       "json_extract(payload_json,'$.status')=?) ORDER BY attempt_id,seq", (*ids, TOOL_BACKGROUNDED)):
+    for r in c.execute(f"SELECT attempt_id,kind,payload,created_at FROM attempt_events WHERE attempt_id IN ({marks}) "
+                       "AND kind='tool' AND (json_extract(payload,'$.subagent') IS NOT NULL OR "
+                       "json_extract(payload,'$.background') IS NOT NULL OR "
+                       "json_extract(payload,'$.status')=?) ORDER BY attempt_id,seq", (*ids, TOOL_BACKGROUNDED)):
         if privacy.content_readable(c, actor, dict(r)):
-            events[r["attempt_id"]].append((json.loads(r["payload_json"]), r["created"]))
+            events[r["attempt_id"]].append((json.loads(r["payload"]), r["created_at"]))
     from .usage_records import ran_on
     made = ran_on(c, ids)
     saved = recovery(c, jobs)
@@ -245,15 +245,15 @@ def run_view(c, auth, who, tid):
             "run": r["id"], "bot": r["bot"], "job": r["job_id"],
             **run_diagnostics.metadata(c, r["id"]),
             "try": next((n for n, t in enumerate(job_tries, 1) if t["id"] == r["id"]), 1), "tries": len(job_tries),
-            "state": r["state"], "outcome": r["exit"], "created": r["created"], "started": r["started"],
-            "finished": r["finished"], "took_s": seconds(r["started"], r["finished"]), "ran_on": made.get(r["id"]),
+            "state": r["state"], "outcome": r["exit"], "created_at": r["created_at"], "started_at": r["started_at"],
+            "finished_at": r["finished_at"], "took_s": seconds(r["started_at"], r["finished_at"]), "ran_on": made.get(r["id"]),
             "lease_until": r["lease_until"] if live else None, "lease": lease.get(r["id"], []),
-            "reason": failure_reason(r["state"], r["result_json"], run_diagnostics.metadata(c, r["id"])["end_reason"]),
+            "reason": failure_reason(r["state"], r["result"], run_diagnostics.metadata(c, r["id"])["end_reason"]),
             # Waiting for its ChatGPT login, or where it ran instead of its own harness and why (backend/login_waits.py).
             "waiting": login_waits.waiting(c, r["id"], r["bot"], who, auth) if live else None,
             "moved": login_waits.moved(c, r["id"], r["bot"], who, auth),
             # Stopped to let another turn have the shared login; its job continues next.
-            "paused": login_waits.paused(c, r["id"], r["state"], r["result_json"]),
+            "paused": login_waits.paused(c, r["id"], r["state"], r["result"]),
             "next": next_step(r, job_tries, job_rows.get(r["job_id"]) or {"state": None}, decisions,
                               retries.get(r["job_id"], [])),
             # The job's state now and its recovery decision when that decision was about this try (job_recovery); the
@@ -262,7 +262,7 @@ def run_view(c, auth, who, tid):
             "decision": decision if (decision := saved.get(r["job_id"])) and decision["attempt_id"] == r["id"] else None,
             "subagents": subagents, "background": background,
             # What woke the turn and the wake preset in force (backend/wake_presets.py record); None before presets.
-            "wake": H._json(r["wake_json"])})
+            "wake": H._json(r["wake"])})
     return {"task_id": tid, "checkpoint": checkpoint, "attempts": out}
 
 
