@@ -59,11 +59,11 @@ def test_a_branch_carries_a_title_only_when_it_was_given_one(api):
     def titles():
         return [r["sub_thread"]["title"] for r in timeline(api, t["id"])["messages"] if r.get("sub_thread")]
     assert titles() == ["", "Pricing"]
-    # The stored title keeps the first line it was made from; an edit doesn't turn that into a title of its own.
+    # An untitled branch's title is its parent's first line as it reads now: nothing is stored, so an edit shows through.
     edited = api.patch(f"/api/v2/messages/{first['id']}", json={"text": "Which supplier?"}, headers=headers("ana-test"))
     assert edited.status_code == 200, edited.text
     assert titles() == ["", "Pricing"]
-    assert timeline(api, sub)["thread"]["title"] == "Which vendor?"
+    assert timeline(api, sub)["thread"]["title"] == "Which supplier?"
 
 
 def test_pages_count_only_the_threads_own_messages(api):
