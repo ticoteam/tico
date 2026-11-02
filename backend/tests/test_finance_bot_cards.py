@@ -197,6 +197,37 @@ def test_the_hourly_look_lifts_a_cutoff_freeze_as_a_logged_system_action(books):
     assert ("card-coder", "unfreeze") in sent and ("card-seller", "unfreeze") in sent
 
 
+def test_a_cutoff_lift_that_failed_is_tried_again_the_next_hour(books, monkeypatch):
+    """Item E: the hourly look keys each lift by its card and the hour, so a lift refused in one hour (its failed result
+    is stored under that key) is tried again the next hour. Here each card's first lift names a card that is not there,
+    so it is refused; the next hour's lift goes through, and a look in that same hour lifts nothing more."""
+    from backend.finance import cards as CARDS
+    fake = FakeMercury()
+    _, coder, seller = _world(books, fake)
+    with books.transaction() as c:
+        spend(c, "6100", 50_000)
+        FA.drain_events(c, AT)
+        assert _frozen_by(c, coder) == "budget" and _frozen_by(c, seller) == "budget"
+    real = FA.act
+    tried: set[str] = set()
+
+    def refuse_each_cards_first_lift(c, who, kind, payload, key, **kw):
+        if kind == "card_unfreeze" and payload["card_id"] not in tried:
+            tried.add(payload["card_id"])
+            payload = {**payload, "card_id": "card-not-there"}
+        return real(c, who, kind, payload, key, **kw)
+    monkeypatch.setattr(FA, "act", refuse_each_cards_first_lift)
+    with books.transaction() as c:
+        assert CARDS.lift_through_actions(load(c, NEXT)) == 0                    # refused: both stay frozen
+        assert _frozen_by(c, coder) == "budget" and _frozen_by(c, seller) == "budget"
+    with books.transaction() as c:
+        assert CARDS.lift_through_actions(load(c, "2026-11-03T10:00:00.000000Z")) == 2
+        assert _status(c, coder) == "active" and _status(c, seller) == "active"
+        assert c.execute("SELECT count(*) FROM fin_actions WHERE kind='card_unfreeze' AND status='committed'"
+                         ).fetchone()[0] == 2
+        assert CARDS.lift_through_actions(load(c, "2026-11-03T10:30:00.000000Z")) == 0   # nothing left to lift
+
+
 def test_system_work_cannot_lift_a_person_freeze_through_the_action_path(books):
     fake = FakeMercury()
     _, coder, seller = _world(books, fake)

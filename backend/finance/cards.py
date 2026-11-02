@@ -504,8 +504,10 @@ def lift_through_actions(ctx: Ctx) -> int:
     lifted = 0
     for card in lift_eligible(ctx):
         cid = str(card["id"])
+        # The key carries the hour: a lift refused this hour (its failed result is stored under the key) is tried again
+        # the next hour, while a lift that committed is replayed by the same key and not sent again.
         res = actions.act(ctx.c, SYSTEM, "card_unfreeze", {"card_id": cid, "reason": "budget has room"},
-                          f"cutoff-lift-{cid}-{card['updated_at']}", at=ctx.at)
+                          f"cutoff-lift-{cid}-{card['updated_at']}-{ctx.at[:13]}", at=ctx.at)
         if res.status == "committed":
             lifted += 1
     return lifted
