@@ -139,6 +139,18 @@ CLAIM = {"next_run": True, "busy_bots": [], "busy_lanes": [], "start_places": Tr
 SNAPSHOT = {"at": 1767225600.0, "cpu_pct": 12.5, "mem_pct": 40.0, "running_turns": 1}
 
 
+def test_packet_capability_heartbeat_is_accepted_and_recorded_for_admission(api):
+    computer = runner(api)
+    assign(api, computer, "ops")
+    body = heartbeat_body("ops")
+    body["capabilities"].append("memory_tidy_packets_v1")
+    assert not W.errors(body, ref("Heartbeat"), REQUESTS)
+    post(api, "runners/heartbeat", body, token=computer["token"])
+    from backend import memory_tidy_runs
+    with api.app.state.store.read() as c:
+        assert memory_tidy_runs.packet_runner(c, "ops")
+
+
 def turn(api, bot="ops"):
     computer = runner(api)
     assign(api, computer, bot)
