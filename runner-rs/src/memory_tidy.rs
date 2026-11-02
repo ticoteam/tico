@@ -3,10 +3,14 @@
 use crate::client::Client;
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::io::Read;
+use sha2::{Digest, Sha256};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 const LIMIT: usize = 64_000_000;
+// Checkout evidence includes retained reports and assets, beyond the model snapshot.
+const MANIFEST_LIMIT: usize = 512_000_000;
 
 /// Packet providers keep their model login, but receive no team or repository authority.
 pub fn scrub_environment(env: &mut crate::env::Env) {
@@ -82,11 +86,25 @@ fn walk(root: &Path, path: &Path, entries: &mut BTreeMap<String, String>, bytes:
         *bytes = bytes
             .checked_add(metadata.len() as usize)
             .ok_or("Nightly memory tidy: manifest size overflow")?;
-        if *bytes > LIMIT {
+        if *bytes > MANIFEST_LIMIT {
             return Err("Nightly memory tidy: checkout exceeds manifest limit".into());
         }
-        let data = std::fs::read(path).map_err(|_| "Nightly memory tidy: manifest file read failed")?;
-        format!("file:{mode}:{}", crate::gitrun::sha256_hex(&data))
+        // Hash bounded chunks so retained assets never become a large allocation.
+        let file = std::fs::File::open(path).map_err(|_| "Nightly memory tidy: manifest file read failed")?;
+        let mut reader = file.take(metadata.len() + 1);
+        let mut hash = Sha256::new();
+        let mut buffer = [0u8; 65536];
+        let mut read = 0u64;
+        loop {
+            let n = reader.read(&mut buffer).map_err(|_| "Nightly memory tidy: manifest file read failed")?;
+            if n == 0 { break; }
+            read += n as u64;
+            hash.update(&buffer[..n]);
+        }
+        if read != metadata.len() {
+            return Err("Nightly memory tidy: manifest file changed while reading".into());
+        }
+        format!("file:{mode}:{:x}", hash.finalize())
     } else {
         return Err("Nightly memory tidy: unsupported checkout file".into());
     };
@@ -244,6 +262,26 @@ mod tests {
         assert_eq!(env["OPENAI_API_KEY"], "synthetic-login");
     }
 
+
+    #[test]
+    fn manifest_streams_assets_larger_than_packet_limit_and_keeps_checkout_bound() {
+        use std::io::{Seek, SeekFrom, Write};
+        let root = std::env::temp_dir().join(format!("tico-tidy-size-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("retained-asset");
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.set_len(LIMIT as u64 + 1).unwrap();
+        let mut before = BTreeMap::new();
+        walk(&root, &root, &mut before, &mut 0).unwrap();
+        file.seek(SeekFrom::End(-1)).unwrap();
+        file.write_all(b"x").unwrap();
+        let mut after = BTreeMap::new();
+        walk(&root, &root, &mut after, &mut 0).unwrap();
+        assert_ne!(before, after, "the hash includes content beyond the packet limit");
+        file.set_len(MANIFEST_LIMIT as u64 + 1).unwrap();
+        assert!(walk(&root, &root, &mut BTreeMap::new(), &mut 0).unwrap_err().contains("checkout exceeds"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn manifest_covers_untracked_files_modes_and_symlinks_without_following_them() {
