@@ -1216,12 +1216,9 @@ class Gateway:
 
     # ------------------------------------------------------------------ egress
     def im_channel(self, c, person_id):
-        """The existing Tico DM channel for this person, if anyone has already talked there."""
-        actor = "human:" + person_id
-        row = c.execute(
-            "SELECT t.channel FROM slack_threads t JOIN conversations v ON v.id=t.conversation_id "
-            "WHERE t.thread_ts='' AND v.participants_json LIKE ? LIMIT 1",
-            ('%"' + actor + '"%',)).fetchone()
+        """The existing Tico DM channel opened for this person, if any."""
+        row = c.execute("SELECT channel FROM slack_threads WHERE thread_ts='' AND recipient_actor=? LIMIT 1",
+                        ("human:" + person_id,)).fetchone()
         return row["channel"] if row else None
 
     def stays_in_tico(self, c, row, bot, people):
@@ -1258,7 +1255,8 @@ class Gateway:
                 "AND m.to_actor LIKE 'human:%' AND m.deleted_at IS NULL "
                 "AND json_extract(m.refs_json,'$.task_completion') IS NULL "
                 "AND NOT EXISTS (SELECT 1 FROM slack_posts p WHERE p.message_id=m.id) "
-                "AND NOT EXISTS (SELECT 1 FROM slack_threads t WHERE t.conversation_id=m.conversation_id) "
+                "AND NOT EXISTS (SELECT 1 FROM slack_threads t WHERE t.conversation_id=m.conversation_id "
+                "AND (t.channel NOT LIKE 'D%' OR t.recipient_actor=m.to_actor)) "
                 "ORDER BY m.created LIMIT 20")]
             people = roster(c) if rows else None
         opened = 0
@@ -1268,8 +1266,8 @@ class Gateway:
             with self.store.transaction() as c:
                 if not privacy.public_message(c, H.message(c, row["id"])):
                     continue
-                if c.execute("SELECT 1 FROM slack_threads WHERE conversation_id=?",
-                             (row["conversation_id"],)).fetchone():
+                if c.execute("SELECT 1 FROM slack_threads WHERE conversation_id=? AND (channel NOT LIKE 'D%' OR recipient_actor=?)",
+                             (row["conversation_id"], row["to_actor"])).fetchone():
                     continue
                 if self.stays_in_tico(c, row, bot, people):
                     self.keep_in_tico(c, row, bot)
@@ -1283,13 +1281,12 @@ class Gateway:
                         continue
                 else:
                     now = self.clock()
-                    c.execute("INSERT OR REPLACE INTO slack_threads"
-                              "(channel,thread_ts,bot,conversation_id,created,last_routed) "
-                              "VALUES(?,?,?,?,?,?)", (channel, "", bot, row["conversation_id"], now, now))
-                    c.execute("INSERT OR IGNORE INTO slack_posts"
-                              "(message_id,channel,thread_ts,bot,text,state,created,updated) "
-                              "VALUES(?,?,?,?,?,'ready',?,?)",
-                              (row["id"], channel, "", bot, row["body"], now, now))
+                    c.execute("INSERT OR REPLACE INTO slack_threads(channel,thread_ts,bot,conversation_id,created,last_routed,"
+                              "recipient_actor) VALUES(?,?,?,?,?,?,?)",
+                              (channel, "", bot, row["conversation_id"], now, now, row["to_actor"]))
+                    c.execute("INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated,"
+                              "recipient_actor) VALUES(?,?,?,?,?,'ready',?,?,?)",
+                              (row["id"], channel, "", bot, row["body"], now, now, row["to_actor"]))
                     opened += 1
                     continue
             try:
@@ -1303,17 +1300,16 @@ class Gateway:
             with self.store.transaction() as c:
                 if not privacy.public_message(c, H.message(c, row["id"])):
                     continue
-                if c.execute("SELECT 1 FROM slack_threads WHERE conversation_id=?",
-                             (row["conversation_id"],)).fetchone():
+                if c.execute("SELECT 1 FROM slack_threads WHERE conversation_id=? AND (channel NOT LIKE 'D%' OR recipient_actor=?)",
+                             (row["conversation_id"], row["to_actor"])).fetchone():
                     continue
                 now = self.clock()
-                c.execute("INSERT OR REPLACE INTO slack_threads"
-                          "(channel,thread_ts,bot,conversation_id,created,last_routed) "
-                          "VALUES(?,?,?,?,?,?)", (channel, "", bot, row["conversation_id"], now, now))
-                c.execute("INSERT OR IGNORE INTO slack_posts"
-                          "(message_id,channel,thread_ts,bot,text,state,created,updated) "
-                          "VALUES(?,?,?,?,?,'ready',?,?)",
-                          (row["id"], channel, "", bot, row["body"], now, now))
+                c.execute("INSERT OR REPLACE INTO slack_threads(channel,thread_ts,bot,conversation_id,created,last_routed,"
+                              "recipient_actor) VALUES(?,?,?,?,?,?,?)",
+                              (channel, "", bot, row["conversation_id"], now, now, row["to_actor"]))
+                c.execute("INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated,"
+                              "recipient_actor) VALUES(?,?,?,?,?,'ready',?,?,?)",
+                              (row["id"], channel, "", bot, row["body"], now, now, row["to_actor"]))
                 opened += 1
         return opened
 
@@ -1338,10 +1334,7 @@ class Gateway:
                 # own person. No fitting mapping: the copy is cancelled here, so it is never queued for another person's DM.
                 mapped = self.destination(c, r)
                 if mapped is None:
-                    c.execute("INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,"
-                              "updated,error) VALUES(?,?,'',?,'','cancelled',?,?,'No Slack destination fits this recipient')",
-                              (r["id"], r["channel"], r["bot"], self.clock(), self.clock()))
-                    continue
+                    continue          # no mapping is this person's: originate opens their own DM for it
                 r = {**dict(r), "channel": mapped["channel"], "thread_ts": mapped["thread_ts"]}
                 if self.stays_in_tico(c, r, r["bot"], people):
                     self.keep_in_tico(c, r, r["bot"], r["channel"], r["thread_ts"])
@@ -1357,32 +1350,27 @@ class Gateway:
                                       "ORDER BY ts DESC LIMIT 1", (r["channel"], r["thread_ts"])).fetchone()
                 reply_ts = str(where["reply_ts"] if where else r["thread_ts"] or "")
                 now = self.clock()
-                c.execute("INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated) "
-                          "VALUES(?,?,?,?,?,'ready',?,?)", (r["id"], r["channel"], reply_ts, r["bot"], r["body"], now, now))
+                c.execute("INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated,recipient_actor) "
+                          "VALUES(?,?,?,?,?,'ready',?,?,?)",
+                          (r["id"], r["channel"], reply_ts, r["bot"], r["body"], now, now, r["to_actor"]))
         return len(rows)
 
     def destination(self, c, row):
-        """The Slack mapping a bot's reply in this conversation goes through (its first that existed before the message
-        and fits the person it is addressed to), or None."""
-        for mapped in c.execute("SELECT channel,thread_ts FROM slack_threads WHERE conversation_id=? AND bot=? "
-                                "AND created<? ORDER BY created", (row["conversation_id"], row["bot"], row["created"])):
-            if self.dm_fits(c, mapped["channel"], str(row["to_actor"] or ""), row["conversation_id"]):
+        """The Slack mapping a bot's reply in this conversation goes through: the first (before the message) that fits
+        its addressee, or None."""
+        for mapped in c.execute("SELECT channel,thread_ts,recipient_actor FROM slack_threads WHERE conversation_id=? "
+                                "AND bot=? AND created<? ORDER BY created",
+                                (row["conversation_id"], row["bot"], row["created"])):
+            if self.mapping_fits(mapped, str(row["to_actor"] or "")):
                 return dict(mapped)
         return None
 
-    def dm_fits(self, c, channel, person, conversation_id):
-        """Whether a Slack channel may carry a copy to `person` (an actor id) from this conversation. A shared channel
-        carries anyone's. A DM is its person's: the humans whose verified messages arrived in it are exactly that
-        person; a DM with none yet is its thread's member, as threads.legacy_participants reads who a thread names
-        (a native DM's other people are thread members, not participants_json rows)."""
-        if not str(channel or "").startswith("D"):
+    def mapping_fits(self, mapped, person):
+        """Whether a Slack mapping may carry a copy to `person` (an actor id). A shared channel carries anyone's. A DM
+        carries only its stored person's copies: the person it was opened for, or backfilled from verified inbound."""
+        if not str(mapped["channel"] or "").startswith("D"):
             return True
-        actors = {r[0] for r in c.execute("SELECT DISTINCT actor FROM slack_events WHERE channel=? AND actor LIKE 'human:%' "
-                                          "AND state IN ('routed','recorded')", (channel,))}
-        if actors:
-            return actors == {person}
-        from . import threads
-        return person in threads.legacy_participants(c, H.conversation(c, conversation_id))
+        return bool(mapped["recipient_actor"]) and mapped["recipient_actor"] == person
 
     def task_completions(self):
         """Completion notices use the same durable post queue, sent by the Tico app."""
@@ -1446,8 +1434,8 @@ class Gateway:
                     text += "\n" + completion["note"]
                 now = self.clock()
                 queued += c.execute(
-                    "INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated) "
-                    "VALUES(?,?, '', '',?,'ready',?,?)", (message["id"], channel, text, now, now)).rowcount
+                    "INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated,recipient_actor) "
+                    "VALUES(?,?, '', '',?,'ready',?,?,?)", (message["id"], channel, text, now, now, message["to_actor"])).rowcount
         return queued
 
     def completion_checked(self, message_id, retry=False, seconds=RETRY_SECONDS):
@@ -1495,6 +1483,12 @@ class Gateway:
                 "icon_emoji": str(config.get("slack_icon") or "") or None,
                 "icon_url": str(config.get("slack_icon_url") or "") or None}
 
+    def copy_bound(self, post, message):
+        """A DM copy is sent only to the person it was queued for. A DM copy with no recorded person is not sent."""
+        if not str(post["channel"] or "").startswith("D"):
+            return True
+        return bool(post.get("recipient_actor")) and post["recipient_actor"] == message.get("to_actor")
+
     def recipient_reads(self, c, message):
         """Whether the person a copy is addressed to can still read its message in its thread. Membership can end after
         the copy was queued, and each send (and each rate-limit retry) checks it again. A copy addressed to no person
@@ -1523,7 +1517,7 @@ class Gateway:
                     c.execute("UPDATE slack_posts SET state='cancelled',text='',error='Task privacy prevents delivery',updated=? "
                               "WHERE message_id=? AND state IN ('ready','rate_limited')", (self.clock(), post["message_id"]))
                     continue
-                if not self.recipient_reads(c, message):
+                if not self.copy_bound(post, message) or not self.recipient_reads(c, message):
                     c.execute("UPDATE slack_posts SET state='cancelled',text='',error='Recipient no longer reads this thread',"
                               "updated=? WHERE message_id=? AND state IN ('ready','rate_limited')",
                               (self.clock(), post["message_id"]))
@@ -1932,8 +1926,10 @@ def conversation_for(c, actor, bot, event, now):
     conv = H.open_conversation(c, actor, [actor, "bot:" + bot], kind="chat",
                                subject=f"Slack {event['channel']} {event['thread_ts']}", scope="direct",
                                allow_held=H.is_human(actor))
-    c.execute("INSERT OR REPLACE INTO slack_threads(channel,thread_ts,bot,conversation_id,created,last_routed) "
-              "VALUES(?,?,?,?,?,NULL)", (event["channel"], event["thread_ts"], bot, conv["id"], now))
+    c.execute("INSERT OR REPLACE INTO slack_threads(channel,thread_ts,bot,conversation_id,created,last_routed,"
+              "recipient_actor) VALUES(?,?,?,?,?,NULL,?)",
+              (event["channel"], event["thread_ts"], bot, conv["id"], now,
+               actor if str(event["channel"]).startswith("D") and H.is_human(actor) else None))
     return conv["id"], True
 
 

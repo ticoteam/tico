@@ -1284,6 +1284,18 @@ class Store:
                 wipe_unclaimable(c)
                 # Who added each credential, for the record. Older rows take it from their audit event once, when the
                 # column arrives. It gives no rights: those come from `member_stored` (backend/credentials.py `owned`).
+                # The person a Slack DM mapping was opened for, and the person a queued copy is for. A DM with no verified
+                # inbound message yet has none: its copies fail closed. A backfill reads each DM's verified history once.
+                H.add_column(c, "slack_threads", "recipient_actor", "TEXT")
+                H.add_column(c, "slack_posts", "recipient_actor", "TEXT")
+                for (channel,) in c.execute("SELECT DISTINCT channel FROM slack_threads WHERE channel LIKE 'D%' "
+                                            "AND recipient_actor IS NULL").fetchall():
+                    actors = {r[0] for r in c.execute(
+                        "SELECT DISTINCT actor FROM slack_events WHERE channel=? AND actor LIKE 'human:%' "
+                        "AND state IN ('routed','recorded')", (channel,))}
+                    if len(actors) == 1:
+                        c.execute("UPDATE slack_threads SET recipient_actor=? WHERE channel=? AND recipient_actor IS NULL",
+                                  (actors.pop(), channel))
                 if "created_by" not in {row[1] for row in c.execute("PRAGMA table_info(credentials)")}:
                     H.add_column(c, "credentials", "created_by", "TEXT")
                     c.executemany("UPDATE credentials SET created_by=? WHERE id=? AND created_by IS NULL",
