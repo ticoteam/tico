@@ -295,8 +295,11 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     bill = obligation.startswith("bill:")
     if bill:
         # A bill's payment: checked against the bill, and its expense budgets (already spent, never held again).
-        from .documents import bill_payment
+        from .documents import bill_ask_waiting, bill_payment
         budget_gate = bill_payment(ctx, who, obligation, rec, amount, line.id)
+        if not ctx.deciding and bill_ask_waiting(ctx, obligation.removeprefix("bill:")):
+            raise FinanceError(CONFLICT, "a payment for this bill is waiting for approval; it settles the bill when "
+                                         "approved")
         gate = budget_gate if gate.outcome == "allow" else gate
 
     def apply(aid: str) -> Result:
