@@ -87,6 +87,7 @@ BUDGET = ("rules_monthly_usd", "rules.spend")     # backend/judge.py: its own ca
 STRICT = {"warn": 1, "block": 2, "escalate": 3}
 REPEAT_BLOCKS = 3             # the 3rd block of one rule by one bot in a UTC day escalates for the rest of that day
 REVIEW_LABEL = "rule-review"
+REVIEW_TITLE = "Rule review"       # a review task's title, and its thread's row title
 CACHE_DAYS = 7
 HOLD_LIST_MAX = 50
 # One hold's text as its readers get it: past this many characters it is cut (`text_cut`); Send anyway sends it whole.
@@ -611,11 +612,12 @@ def _author_name(c, author):
     return (H.bot(c, H.actor_id(author)) or {}).get("display_name") or H.actor_id(author)
 
 
-def _review_task(c, hold_id, author, rule, reviewer, appeal=False):
-    title = ("Appeal: " if appeal else "Held: ") + f"{_author_name(c, author)} and the rule '{rule['text'][:80]}'"
+def _review_task(c, hold_id, author, rule, reviewer):
+    """The review task for a hold (or its appeal). Its title is the plain REVIEW_TITLE, which is also its thread's row in
+    the sidebar, so it names no one and no rule: the hold's text is in the body's Hold line, opened from there."""
     body = ("A message or output was held by an org rule. Open the hold to Keep blocked, Send anyway or Edit rule. "
             "Nothing from the output is copied here.\n\nHold: " + hold_id)
-    task = H.task_create(c, H.KEEPER, title[:200], body, reviewer, labels=[REVIEW_LABEL], lint=False,
+    task = H.task_create(c, H.KEEPER, REVIEW_TITLE, body, reviewer, labels=[REVIEW_LABEL], lint=False,
                          deduplicate=False, quiet_notice=True)
     return task["id"]
 
@@ -1315,7 +1317,7 @@ def appeal(c, who, hold_id, why):
         rid = (json.loads(hold["verdict_json"] or "{}")).get("rule")
         rule = c.execute("SELECT id, text FROM org_rules WHERE id=?", (rid,)).fetchone()
         task_id = _review_task(c, hold_id, hold["author"], dict(rule) if rule else {"text": "a rule"},
-                               hold["reviewer"], appeal=True)
+                               hold["reviewer"])
     c.execute("UPDATE org_rule_holds SET why=?, task_id=? WHERE id=?", (why, task_id, hold_id))
     H.event(c, who.actor, "org_rule_hold.appealed", "org_rule_hold:" + hold_id, {"task": task_id})
     return {"id": hold_id, "task_id": task_id, "reviewer": H.person_name(c, H.actor_id(hold["reviewer"]))}

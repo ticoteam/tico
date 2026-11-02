@@ -3572,6 +3572,16 @@ def _set_progress(c, step, rowid):
               (MIGRATION_PROGRESS_KEY, json.dumps({"step": step, "rowid": rowid})))
 
 
+def rename_rule_reviews(c):
+    """Rule-review threads made before the plain title (org_rule_check.REVIEW_TITLE) took the task's "Held: ..." or
+    "Appeal: ..." title as their subject. Only the threads of tasks labelled as rule reviews change; any other held
+    thread (a screening hold, say) keeps its title. Returns how many changed."""
+    from .org_rule_check import REVIEW_LABEL, REVIEW_TITLE
+    return c.execute("UPDATE conversations SET subject=?, updated_at=? WHERE task_id IN (SELECT tt.task_id FROM task_tags tt "
+                     "JOIN tags g ON g.id=tt.tag_id WHERE g.key=?) AND (subject LIKE 'Held: %' OR subject LIKE 'Appeal: %')",
+                     (REVIEW_TITLE, _now(), REVIEW_LABEL)).rowcount
+
+
 def _migrate(c):
     now = _now()
     # Two open shared rooms for one bot (never written, but a Home is one per owner): the newest is the Home, the
@@ -3586,6 +3596,7 @@ def _migrate(c):
         c.execute("UPDATE conversations SET root_id=COALESCE(root_id,id), path=COALESCE(path,'/'||id||'/'), "
                   "updated_at=COALESCE(updated_at,last_message_at,created)")
         _store_shared_homes(c)
+        rename_rule_reviews(c)
     install = install_id(c)
     _backfill_messages(c, install, now)
     # Conversation counters read the stamped seqs; a temporary table of each conversation's last seq (one pass, no index
