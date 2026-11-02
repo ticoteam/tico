@@ -11,6 +11,8 @@ from ..store import Problem
 
 TRANSPARENCY = ("closed", "private", "open")
 FIELDS = ("slug", "accent", "logo_file_id")
+# The name a logo upload is stored under: its file name starts with this, which marks it as the page's own.
+LOGO_NAME = "company-page-logo"
 # One DNS label, lower case, under the hosted address. `xn--` is out because a punycode name can look like another
 # company's in the address bar.
 SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
@@ -125,10 +127,12 @@ def _clean(c, name, value):
         if not ACCENT.fullmatch(str(value)):
             raise Problem(name, "The accent is a colour like #2255aa", 422)
         return str(value)
-    # A logo is a file in the install's own store, and only ever a picture: it goes out on a public page.
-    found = FILE_ID.fullmatch(str(value)) and c.execute("SELECT content_type FROM blobs WHERE id=?", (str(value),)).fetchone()
-    if not found or not str(found[0]).startswith("image/"):
-        raise Problem(name, "The logo is an image file", 422)
+    # A logo goes out on a public page, so it is only ever a picture the Company page itself uploaded. Any other file in
+    # the library, however much a picture it is, would become public on this one field.
+    found = FILE_ID.fullmatch(str(value)) and c.execute(
+        "SELECT content_type, name FROM blobs WHERE id=?", (str(value),)).fetchone()
+    if not found or not str(found[0]).startswith("image/") or not str(found[1]).startswith(LOGO_NAME):
+        raise Problem(name, "The logo is an image uploaded to the Company page", 422)
     return str(value)
 
 

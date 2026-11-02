@@ -5,6 +5,8 @@ import re
 from datetime import datetime, timezone
 
 from backend import company
+from backend import hubdb as H
+from backend.auth import Identity
 from backend.company_page import audiences as A, disclosure as D, editions as E, release, render, settings as S, stats as ST
 from backend.tests.test_company_page_core import numbers, setup, shown
 from backend.tests.test_company_page_editions import plain_sections
@@ -126,3 +128,58 @@ def test_a_public_update_names_the_company_as_the_board_does(page, monkeypatch):
     with page.store.transaction() as c:
         release._whole_stream(c, "board", "Acme")
     assert seen and seen[0] == "Acme"
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 64
+JPEG = b"\xff\xd8\xff\xe0" + b"\0" * 64
+WEBP = b"RIFF\0\0\0\0WEBP" + b"\0" * 64
+
+
+def upload(api, data, token="ana-test", expected=200):
+    r = api.post("/api/v2/company-page/logo", content=data, headers=headers(token))
+    assert r.status_code == expected, r.text
+    return r.json()
+
+
+def test_a_logo_is_a_picture_by_its_bytes_and_only_the_page_s_own_upload_can_be_the_logo(api):
+    """The logo goes out on the public page. Its type comes from the bytes, an SVG is refused, and a picture from the
+    library can't be made the logo by naming its id."""
+    for data in (b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>", b"RIFF\0\0\0\0WAVE" + b"\0" * 64,
+                 b"not an image at all"):
+        upload(api, data, expected=422)
+    upload(api, b"\x89PNG\r\n\x1a\n" + b"0" * (release.MAX_LOGO_BYTES), expected=413)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created) "
+                  "VALUES ('tour','human:ana','d0',10,'tour.png','image/png',?)", (H.now(),))
+    r = api.patch("/api/v2/company-page", headers=headers(), json={"logo_file_id": "tour"})
+    assert r.status_code == 422 and "uploaded to the Company page" in r.text
+
+    first = upload(api, PNG)
+    assert first["logo_file_id"] and first["public_live"] is False
+    shown = api.get("/api/v2/company-page/logo", headers=headers())
+    assert shown.status_code == 200 and shown.content == PNG and shown.headers["content-type"] == "image/png"
+    assert shown.headers["x-content-type-options"] == "nosniff"
+    replaced = upload(api, JPEG)
+    assert replaced["logo_file_id"] != first["logo_file_id"]
+    assert api.get("/api/v2/company-page/logo", headers=headers()).headers["content-type"] == "image/jpeg"
+    upload(api, WEBP)
+    with api.app.state.store.read() as c:
+        names = [r[0] for r in c.execute("SELECT name FROM blobs WHERE name LIKE 'company-page-logo%'")]
+    assert len(names) == 3 and all(n.startswith(S.LOGO_NAME) for n in names)
+
+    gone = api.delete("/api/v2/company-page/logo", headers=headers())
+    assert gone.status_code == 200 and gone.json()["logo_file_id"] is None
+    assert api.get("/api/v2/company-page/logo", headers=headers()).status_code == 404
+
+
+def test_only_an_owner_or_admin_uploads_the_logo_and_a_bot_is_refused(api):
+    """A bot never changes what leaves the install, and a member who is not an owner or admin doesn't either."""
+    api.app.state.auth.settings.test_identities["ops-test"] = Identity("bot:ops", "bot", agent="test")
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,runtime,created) VALUES('ops','ops','fake',?)", (H.now(),))
+        c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('ops','test','x-ops',?,'human:ana')",
+                  (H.now(),))
+    upload(api, PNG, token="ops-test", expected=403)
+    upload(api, PNG, token="cara-test", expected=403)
+    assert api.get("/api/v2/company-page/logo", headers=headers("cara-test")).status_code == 403
+    assert api.get("/api/v2/company-page", headers=headers()).json()["logo_file_id"] is None

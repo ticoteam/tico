@@ -720,11 +720,13 @@ def test_slug_is_one_dns_label(store):
 
 def test_a_logo_is_an_image_in_the_store(store):
     with store.transaction() as c:
-        for blob, kind in (("logo-1", "image/png"), ("doc-1", "application/pdf")):
+        # The page's own upload is named for it; a library picture is an image too but never the logo.
+        for blob, name, kind in (("logo-1", S.LOGO_NAME + ".png", "image/png"), ("doc-1", "doc.pdf", "application/pdf"),
+                                 ("pic-1", "holiday.png", "image/png")):
             c.execute("INSERT INTO blobs (id, owner, digest, size, name, content_type, created) VALUES (?,?,?,?,?,?,?)",
-                      (blob, OWNER, blob, 1, blob, kind, H.now()))
+                      (blob, OWNER, blob, 1, name, kind, H.now()))
         assert S.update(c, OWNER, logo_file_id="logo-1")["logo_file_id"] == "logo-1"
-        for bad in ("doc-1", "no-such-file", "../etc/passwd"):
+        for bad in ("doc-1", "pic-1", "no-such-file", "../etc/passwd"):
             with pytest.raises(Problem):
                 S.update(c, OWNER, logo_file_id=bad)
         assert set(S.get(c)) >= {"transparency", "accent", "slug", "logo_file_id"}
