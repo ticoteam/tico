@@ -5881,6 +5881,8 @@ class Execution:
         title = H.HELD_REVIEW_TITLE.format(bot=label)
         did = reason or (f"used {', '.join(acted)}" if acted else "ran on a host that does not report its tool calls")
         about = f" on the task \"{task['title']}\" (owner {owner_name(c, task['owner_id'])})" if task else ""
+        # bot_review_tasks decides whose review this is, so the create below skips the same-title refusal: a new bot that
+        # takes a renamed bot's slug files its own review under the same title.
         review = next(iter(H.bot_review_tasks(c, row['bot_id'], H.bot_actor(maintainer), title)), None)
         if review:
             if review['status'] in ('done', 'closed', 'declined'):
@@ -5922,7 +5924,7 @@ class Execution:
                           "already happened, then resume or dismiss each held run with POST jobs/<id>/reconcile. "
                           "The review is done once all choices are saved; Tico applies deferred choices when the lane frees.\n\n"
                           + H.BOT_REVIEW_ID.format(id=row['bot_id']),
-                          H.bot_actor(maintainer))
+                          H.bot_actor(maintainer), deduplicate=False)
         except H.Refused:
             pass
 
@@ -5958,7 +5960,8 @@ class Execution:
         if again:
             job_line += " The earlier review task was closed while the run remained unresolved."
         try:
-            H.task_create(c, H.KEEPER, title, boundary + job_line + "\n\n" + named + "\n" + by_id, owner, private=True)
+            H.task_create(c, H.KEEPER, title, boundary + job_line + "\n\n" + named + "\n" + by_id, owner, private=True,
+                          deduplicate=False)
         except H.Refused:
             pass
 
@@ -5978,6 +5981,6 @@ class Execution:
                           f"Job {row['id']} stopped partway twice and was dismissed.\n"
                           f"Read its attempts (`hub sql`), fix the cause, and send the request again if it still matters.\n\n"
                           + H.BOT_REVIEW_ID.format(id=row['bot_id']),
-                          H.bot_actor(maintainer))
+                          H.bot_actor(maintainer), deduplicate=False)
         except H.Refused:
             pass
