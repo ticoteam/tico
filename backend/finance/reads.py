@@ -1731,6 +1731,12 @@ def record(c: sqlite3.Connection, viewer: str, *, kind: str, record_id: str, at:
     return {kind: out}
 
 
+def books_connected(c: sqlite3.Connection) -> tuple[bool, bool]:
+    """Whether a books connection (QuickBooks or Xero) exists, and whether one still has provider records waiting."""
+    books = SM.books_connections(c)
+    return bool(books), any(bool(SM.mirror_state(c, cid).get("pending")) for cid, _, _ in books)
+
+
 def customer_extras(c: sqlite3.Connection, viewer: str, customer_id: str, at: str | None = None) -> Row:
     """What a customer panel adds beyond its contact, locations, estimates and invoices: the equipment the customer has,
     by name with each piece's next due day, and the live due dates on the contact, its locations and that equipment,

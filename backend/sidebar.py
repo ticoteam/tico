@@ -186,16 +186,15 @@ def _past_setup(c):
 def _connections(c):
     """Whether a books connection (QuickBooks or Xero) exists, whether one still has provider records waiting to come in,
     and whether a Stripe connection exists. Disconnected connections count for nothing; a table this install has not
-    created yet holds none. The waiting read is the books mirror's `pending` (backend/finance/store/mirror.py)."""
-    from .finance.store import mirror as SX
+    created yet holds none. The waiting read is the books mirror's `pending` (finance/reads.py books_connected)."""
+    from .finance import reads as FR
     try:
-        books = SX.books_connections(c)
+        books, waiting = FR.books_connected(c)
         stripe = c.execute("SELECT 1 FROM fin_connections WHERE provider='stripe' AND status!='disconnected' LIMIT 1"
                            ).fetchone() is not None
     except sqlite3.OperationalError:
         return False, False, False
-    waiting = any(bool(SX.mirror_state(c, cid).get("pending")) for cid, _, _ in books)
-    return bool(books), waiting, stripe
+    return books, waiting, stripe
 
 
 def _shown(c):

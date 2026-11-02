@@ -5,6 +5,7 @@ for the reports branch)."""
 import csv
 import json
 import sqlite3
+from datetime import datetime, timezone
 
 import pytest
 
@@ -29,6 +30,12 @@ def count(c, table):
     return int(c.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
 
 
+def warranties(company):
+    today = datetime.now(timezone.utc).date().isoformat()
+    with (DATA / company / "equipment.csv").open(encoding="utf-8", newline="") as f:
+        return sum(1 for row in csv.DictReader(f) if row.get("warranty_ends_on", "") >= today)
+
+
 @pytest.mark.parametrize("company", sorted(COMPANIES))
 def test_h1_a_demo_company_loads_every_row_of_its_files_and_its_documents(tmp_path, company, capsys):
     settings = demo.build(tmp_path / company, company=company)
@@ -39,7 +46,8 @@ def test_h1_a_demo_company_loads_every_row_of_its_files_and_its_documents(tmp_pa
         assert live(c, "items") == rows(company, "items")
         assert live(c, "equipment") == rows(company, "equipment")
         assert c.execute("SELECT count(*) FROM fin_contacts WHERE active=1").fetchone()[0] == rows(company, "contacts")
-        assert count(c, "due_dates") == rows(company, "due_dates")
+        # Equipment whose warranty still runs carries its own due date as well (finance/equipment.py).
+        assert count(c, "due_dates") == rows(company, "due_dates") + warranties(company)
         assert count(c, "projects") == len(doc.get("projects", []))
         assert count(c, "fin_purchase_orders") == len(doc.get("purchase_orders", []))
         assert count(c, "fin_estimates") == len(doc.get("estimates", []))

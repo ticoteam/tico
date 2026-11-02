@@ -18,7 +18,6 @@ from typing import Any
 from . import automation_due
 from . import hubdb as H
 from .finance import context as FC
-from .finance.store import tico as TI
 from .records import due_dates as RD
 
 KEY = "due-dates-day"        # registry_metadata: the company day the pass last ran, as JSON text
@@ -117,6 +116,15 @@ def _open_for(c: Any, actor: str, items: list[dict[str, Any]], at: datetime) -> 
     return {"actor": actor, "task": str(task["id"]), "occurrences": n}
 
 
+def _needs_you(c: Any, person: str, title: str, body: str) -> str | None:
+    """One Needs-you item the person owns; an open one with the same title is reused. None when they can't be given one."""
+    try:
+        task: Any = H.task_create(c, H.KEEPER, title[:200], body, person, deduplicate=True)
+    except H.Refused:
+        return None
+    return str(task["id"]) if isinstance(task, dict) and task.get("id") else None
+
+
 def _notify(c: Any, held: dict[str, Any]) -> str | None:
     """One Needs-you item for the install owner about an assignee that cannot take work, naming its due dates. The title
     has no count, so the open item is reused as more due dates fall to the same assignee."""
@@ -130,7 +138,7 @@ def _notify(c: Any, held: dict[str, Any]) -> str | None:
     more = f"\n...and {n - LISTED} more." if n > LISTED else ""
     body = (f"{n} due date(s) are assigned to {held['assignee']}, which {held['why']}. Their occurrences stay open. "
             "Give them an active teammate (due_date_update) and the next pass opens their tasks.\n\n" + listed + more)
-    return TI.needs_you(c, owner, title, body)
+    return _needs_you(c, owner, title, body)
 
 
 def reassign(c: Any, due_date_id: str, new_actor: str, name: str) -> dict[str, list[str]]:
@@ -178,7 +186,7 @@ def tick(c: Any, at: datetime) -> dict[str, Any] | None:
             owner = FC.owner(c)
             detail = str(getattr(exc, "detail", "") or exc)
             if owner:
-                made = TI.needs_you(c, owner, f"Due dates for {actor} could not open", detail)
+                made = _needs_you(c, owner, f"Due dates for {actor} could not open", detail)
                 notices.extend([made] if made else [])
     c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
               (KEY, json.dumps(today.isoformat())))

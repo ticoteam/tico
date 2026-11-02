@@ -101,11 +101,10 @@ def _documents(c, company, contacts, key):
     name their item by name and post to the default chart's accounts (COST for purchases, REVENUE for estimates)."""
     from .finance import actions as finance
     from .finance.banking import by_code
-    from .finance.context import load
     from .records import csvimport
     from .records import reads
     doc = json.loads((DATA / company / "documents.json").read_text(encoding="utf-8"))
-    ctx = load(c)
+    ctx = finance.load(c)
     accounts = {COST: by_code(ctx, COST).id, REVENUE: by_code(ctx, REVENUE).id}
     items = {csvimport.match_key(str(name)): str(record_id)
              for record_id, name in reads.active_rows(c, "items", ("name",))}

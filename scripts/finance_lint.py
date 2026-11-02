@@ -12,9 +12,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SCAN = ("backend", "clients", "connectors", "integrations", "scripts", "tools", "runner")
 SKIP_DIRS = {"node_modules", "__pycache__", ".git", ".venv", "venv"}
-OWNED = ("backend/finance/",)
+# backend/records holds the shared records Finance reads and writes; a due date on a contact needs that contact.
+OWNED = ("backend/finance/", "backend/records/")
 EXEMPT = ("scripts/finance_lint.py",)
-EXEMPT_PREFIX = ("backend/tests/test_finance_",)
+EXEMPT_PREFIX = ("backend/tests/test_finance_", "backend/tests/test_operations_", "backend/tests/test_record_imports",
+                 "backend/tests/test_due_dates", "backend/tests/test_demo_companies", "backend/tests/test_sidebar")
 READ_OK = {"fin_actions", "fin_connections"}
 WRITE = re.compile(r"\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|REPLACE\s+INTO|UPDATE|DELETE\s+FROM|ALTER\s+TABLE|"
                    r"DROP\s+(?:TABLE|INDEX|TRIGGER)(?:\s+IF\s+EXISTS)?|CREATE\s+(?:TABLE|INDEX|TRIGGER))\s+"
