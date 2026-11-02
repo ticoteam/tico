@@ -256,7 +256,7 @@ def test_migration_0037_adds_its_tables_and_columns_to_an_install_from_main(stor
     history, prepaid lines and their postings, the refund link, invoice reminders, invoice email delivery, the payment
     cancel ask, the card's merchant and the re-read mark. A second start changes nothing."""
     with store.transaction() as c:
-        c.execute("DELETE FROM schema_migrations WHERE version=?", (MIGRATION,))
+        c.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy%'", (MIGRATION,))
         c.execute("DROP INDEX fin_feed_txns_refund")
         c.execute("ALTER TABLE fin_feed_txns DROP COLUMN refund_of")
         c.execute("DROP TABLE fin_prepaid_postings")
@@ -295,12 +295,12 @@ def test_migration_0037_adds_its_tables_and_columns_to_an_install_from_main(stor
 
 def _rewind(c: sqlite3.Connection, version: int, *, refund_of: bool) -> None:
     """Make this hub's schema what an install at cloud step `version` (76 or 77) has: the steps after it and migration
-    0037 are not recorded, what 0037 adds is taken away, and at 76 what step 77 adds too. The feed table keeps its
+    0037 and later files are not recorded, what 0037 adds is taken away, and at 76 what step 77 adds too. The feed table keeps its
     status CHECK as step 77 left it (no 'covered'), and keeps refund_of only when `refund_of` says so (an install that
     ran this branch's step 77 before 0037 existed has it)."""
     for later in range(version + 1, 78):
         c.execute("DELETE FROM cloud_migrations WHERE version=?", (later,))
-    c.execute("DELETE FROM schema_migrations WHERE version=?", (MIGRATION,))
+    c.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy%'", (MIGRATION,))
     c.execute("DROP TABLE IF EXISTS fin_prepaid_postings")
     c.execute("DROP TABLE IF EXISTS fin_invoice_reminders")
     c.execute("ALTER TABLE fin_bill_lines DROP COLUMN prepaid_start")
