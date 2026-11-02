@@ -208,7 +208,7 @@ CONTENT = {
         "root": {"root_name": "Holiday light shows",
                  "description": "Projector and light-show installs in the US, for homes, shops, hotels, towns, HOAs and "
                                 "event venues.",
-                 "geography": "United States", "currency": "USD", "year": 2026,
+                 "geography": "United States", "currency": "USD",
                  "includes": ["Projector kits and installs for homes", "Storefront, hotel and lobby installs",
                               "Public bids for towns, malls and HOAs", "Event venues"],
                  "excludes": ["Light strings and decorations with no projector", "Year-round signage"]},
@@ -220,7 +220,7 @@ CONTENT = {
                       "growth_pct": 9,
                       "arithmetic": "US households with a street-facing wall and a seasonal decor habit, times the "
                                     "average spend on a projector kit and a season's scenes.",
-                      "evidence": [{"source_url": "https://marketdata.example/holiday-decor-2026", "source_kind": "site",
+                      "evidence": [{"source_url": "https://marketdata.example/holiday-decor-{year}", "source_kind": "site",
                                     "quote": "Projectors were the fastest-growing line of outdoor seasonal decor "
                                              "last year, and most buyers set one up themselves.",
                                     "our_read": "Matches what first-season buyers in our store tell us."}]}},
@@ -229,7 +229,7 @@ CONTENT = {
                       "growth_pct": 6,
                       "arithmetic": "About 9,000 storefronts and hotel fronts that light for the season, times about "
                                     "$7,000 a site for a scene and a yearly license.",
-                      "evidence": [{"source_url": "https://marketdata.example/commercial-seasonal-lighting-2026",
+                      "evidence": [{"source_url": "https://marketdata.example/commercial-seasonal-lighting-{year}",
                                     "source_kind": "site",
                                     "quote": "Storefront and hotel seasonal lighting, counted by site, with the "
                                              "average spend per site.",
@@ -238,7 +238,7 @@ CONTENT = {
              "size": {"method": "owner", "spend_usd": 41_000_000, "low_usd": 30_000_000, "high_usd": 52_000_000,
                       "growth_pct": 12,
                       "arithmetic": "Set from the public bids we have seen and the budgets of the towns we would bid for.",
-                      "evidence": [{"source_url": "https://townsite.example/bids/holiday-lights-2026",
+                      "evidence": [{"source_url": "https://townsite.example/bids/holiday-lights-{year}",
                                     "source_kind": "filing",
                                     "quote": "Holiday light installation for the main street and the town square: "
                                              "scope, site survey and a fixed completion date.",
@@ -251,7 +251,7 @@ CONTENT = {
                       "growth_pct": 4,
                       "arithmetic": "Event halls and arenas that light the front of the building each season, times the "
                                     "average install.",
-                      "evidence": [{"source_url": "https://marketdata.example/event-venue-lighting-2026",
+                      "evidence": [{"source_url": "https://marketdata.example/event-venue-lighting-{year}",
                                     "source_kind": "site",
                                     "quote": "Venues spent on seasonal front-of-house lighting, grouped by venue type.",
                                     "our_read": "Rough; we have not sized it from our own sales."}]}},
@@ -266,14 +266,14 @@ CONTENT = {
         "news_town": {"tag": "market", "kind": "other", "ref": "demo-strategy-news-town",
                       "claim": "A town put its holiday light installs out to public bid, with the scope, a site survey "
                                "and a fixed completion date.",
-                      "url": "https://townsite.example/bids/holiday-lights-2026",
+                      "url": "https://townsite.example/bids/holiday-lights-{year}",
                       "quote": "Holiday light installation for the main street and the town square.",
                       "confidence": "high"},
         "news_shortage": {"tag": "hot", "kind": "other", "ref": "demo-strategy-news-shortage",
                           "claim": "The controller boards for two projector models are six weeks from order at the "
                                    "supplier.",
-                          "url": "https://partsdesk.example/notices/controller-boards-2026",
-                          "quote": "Controller boards for the 2026 projector range: six weeks from order.",
+                          "url": "https://partsdesk.example/notices/controller-boards-{year}",
+                          "quote": "Controller boards for the {year} projector range: six weeks from order.",
                           "confidence": "medium"},
     },
     # Days ago, most first: when each step happened.
@@ -388,15 +388,21 @@ def _brand(b):
     b.call("POST", "brand/publish", {"note": CONTENT["brand"]["note"]})
 
 
+def _dated(b, value):
+    """Text and URLs that name a year carry the build's year, so a build in another year names that year."""
+    return value.replace("{year}", str(b.now.year)) if isinstance(value, str) else value
+
+
 def _market(b):
     """The market map, set up the way Where we play sets it, as Ana: the definition and its root, the core segments
     placed under the root, one new segment, the Us and Next marks, an accepted estimate for each segment, and the
-    companies in each. Every write is a market API call."""
+    companies in each. Every write is a market API call. The year is the build's own."""
     spec = CONTENT["market"]
-    root = b.call("PUT", "market/definition", spec["root"])["root"]
+    root = b.call("PUT", "market/definition", {**spec["root"], "year": b.now.year})["root"]
     for seg in spec["existing"] + spec["added"]:
         size = dict(seg["size"])
-        evidence = [b.call("POST", "market/evidence", item)["evidence"]["id"] for item in size.pop("evidence")]
+        evidence = [b.call("POST", "market/evidence", {k: _dated(b, v) for k, v in item.items()})["evidence"]["id"]
+                    for item in size.pop("evidence")]
         if "id" in seg:         # a core segment: placed under the root now
             seg_id = seg["id"]
             b.call("POST", "market/edges", {"src": seg_id, "rel": "member_of", "dst": root, "evidence_ids": evidence})
@@ -412,7 +418,7 @@ def _market(b):
 
 def _news(b, key):
     """A listening find the Librarian filed as an insight. It is prose for the Related news list; no entity changes."""
-    item = CONTENT["news"][key]
+    item = {k: _dated(b, v) for k, v in CONTENT["news"][key].items()}
 
     def work(c):
         MK.report(c, MK.CURATOR, kind=item["kind"], about="Listening: " + item["tag"], claim=item["claim"],

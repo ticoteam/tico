@@ -17,12 +17,18 @@ from backend.app import create_app
 from backend.market_briefing import this_week
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)
+NEXT_YEAR = datetime(2027, 11, 2, 18, 30, tzinfo=timezone.utc)
 FIXED_SECTIONS = ("serve", "sell", "know", "how", "not")
 
 
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
     return demo.build(tmp_path_factory.mktemp("demo-strategy"), now=NOW)
+
+
+@pytest.fixture(scope="module")
+def built_next_year(tmp_path_factory):
+    return demo.build(tmp_path_factory.mktemp("demo-strategy-2027"), now=NEXT_YEAR)
 
 
 def signed_in(settings):
@@ -148,6 +154,9 @@ def test_where_we_play_has_a_market_with_us_next_and_sized_segments(built):
     with signed_in(built) as api:
         spend = api.get("/api/v2/market/spend").json()
     assert spend["definition"]["root"] == "segment/holiday-light-shows"
+    assert spend["year"] == spend["definition"]["year"] == NOW.year
+    urls = [e["source_url"] for seg in spend["segments"] for row in seg["estimates"] for e in row["evidence"]]
+    assert urls and all(f"-{NOW.year}" in url for url in urls)
     segments = {seg["name"]: seg for seg in spend["segments"]}
     assert {"Home light shows", "Shops and hotels", "Towns, malls and HOAs", "Event venues"} <= set(segments)
     assert segments["Home light shows"]["self"] and segments["Shops and hotels"]["self"]
@@ -173,3 +182,17 @@ def test_the_brand_book_is_published_by_the_owner(built):
     assert published["n"] == 1 and published["published_by"] == "human:ana"
     assert published["body"]["name"] == "Acme Lights"
     assert published["body"]["words"]["avoid"] and published["body"]["claims"]["never"]
+
+
+def test_a_build_in_another_year_dates_the_market_and_its_sources_to_that_year(built_next_year):
+    with signed_in(built_next_year) as api:
+        spend = api.get("/api/v2/market/spend").json()
+        insights = api.get("/api/v2/market/insights").json()["insights"]
+    assert spend["year"] == spend["definition"]["year"] == 2027
+    listening = [i for i in insights if i["about"].startswith("Listening:")]
+    urls = [e["source_url"] for seg in spend["segments"] for row in seg["estimates"] for e in row["evidence"]]
+    urls += [i["source_url"] for i in listening]
+    dated = [url for url in urls if "2026" in url or "2027" in url]
+    assert dated and all("-2027" in url for url in dated)
+    assert any("2027" in i["quote"] for i in listening)
+    assert not any("2026" in i["quote"] + i["claim"] for i in listening)
