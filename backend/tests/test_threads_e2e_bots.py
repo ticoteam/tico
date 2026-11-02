@@ -89,9 +89,13 @@ def test_the_loop_guard_stops_bots_pinging_each_other_and_a_person_resumes_them(
     # TICO_THREAD_LOOP_GUARD): the first run plus six bot-caused runs, and then the guard holds the rest.
     assert 1 <= runs <= 7, f"the loop ran {runs} times"
     assert claim(api, r, "cpo") is None and claim(api, r, "product-design") is None
-    # The sidebar's `attention` is the Needs-you list for threads: it names each root with capped wakes (contract 4.5, 10).
+    # The sidebar's `attention` holds each root with capped wakes (contract 4.5, 10), held here by hand: a bot's post that
+    # names Ana is not attention by itself, and this loop may stop before the guard does.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE message_deliveries SET state='capped' WHERE root_id=? AND recipient LIKE 'bot:%' AND state='pending'",
+                  (t["id"],))
     attention = ok(call(api, "GET", "threads", "ana-test"))["attention"]
-    assert [row["root_id"] for row in attention if row.get("root_id") == t["id"]] == [t["id"]], attention
+    assert [row["capped"] for row in attention if row.get("root_id") == t["id"]] == [1], attention
     say(api, "ana-test", t["id"], "@cpo carry on")
     assert claim(api, r, "cpo") is not None, "a person's message resumes the deferred wakes"
 
