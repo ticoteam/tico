@@ -9,9 +9,11 @@ Control endpoints under /_fake/ are not Mercury's:
                                adds a sent transaction and a transaction.created event (the Events API shows it)
   POST /_fake/approve/<id>     the approver approves a send-money request: it becomes a sent transaction
   POST /_fake/reject/<id>      the approver rejects a send-money request
-  POST /_fake/card-spend       {"card", "amount", "merchant", "date"?, "pending"?}: a purchase on a card (its Mercury id,
-                               last four or nickname) on the IO credit account, with its transaction.created event; a
-                               frozen or cancelled card is declined (a failed transaction), as Mercury does
+  POST /_fake/card-spend       {"card", "amount", "merchant", "date"?, "pending"?, "force"?}: a purchase on a card (its Mercury
+                               id, last four or nickname) on the IO credit account, with its transaction.created event;
+                               a frozen or cancelled card is declined (a failed transaction), as Mercury does. A card with
+                               a monthly spendLimit declines a purchase that takes the month's spend past it, unless the
+                               purchase is a force post ("force": true), which posts in full (spec 8.2)
   GET  /_fake/calls            every Mercury call Tico made, in order (method, path, query, body; never the token)
 
   python3 scripts/fake_mercury.py --port 18790
@@ -240,9 +242,18 @@ def new_card(body: dict) -> dict:
     return card
 
 
+def month_spent(card: dict, month: str) -> int:
+    """What the card spent in a calendar month, in cents: its sent and pending purchases (declined ones count for nothing)."""
+    return sum(round(-float(t["amount"]) * 100) for t in STATE.txns
+               if t.get("cardId") == card["id"] and t.get("status") in ("sent", "pending") and float(t["amount"]) < 0
+               and str(t.get("createdAt") or "")[:7] == month)
+
+
 def card_spend(body: dict) -> tuple[int, dict]:
     """A purchase on a card: a creditCardTransaction carrying its cardId, pending until it posts. Mercury declines a
-    card that is not active, which shows as a failed transaction."""
+    card that is not active, which shows as a failed transaction. A card with a monthly spendLimit declines a purchase
+    that takes the month past it, unless `force` is set: a force post (or a recurring charge) posts in full over the
+    limit, as spec 8.2 says it may."""
     key = str(body.get("card") or "")
     card = next((c for c in STATE.cards if key in (c["id"], c["lastFour"], c.get("nickname"))), None)
     if card is None:
@@ -254,12 +265,17 @@ def card_spend(body: dict) -> tuple[int, dict]:
         return 400, {"message": "amount (a number) is required; date is YYYY-MM-DD"}
     name = str(body.get("merchant") or "ACME MERCHANT")
     pending = bool(body.get("pending"))
-    declined = card["status"] != "active"
+    limit = card.get("spendLimit")
+    cap = limit.get("amountCents") if isinstance(limit, dict) else None
+    over = cap is not None and not body.get("force") and \
+        month_spent(card, day[:7]) + round(abs(amount) * 100) > int(cap)
+    declined = card["status"] != "active" or over
+    reason = f"Card {card['status']}" if card["status"] != "active" else "Over the card's spend limit" if over else None
     txn = {"id": STATE.new("txn-card"), "accountId": card["accountId"], "amount": amount,
            "createdAt": f"{day}T15:00:00Z", "postedAt": None if pending or declined else f"{day}T18:00:00Z",
            "status": "failed" if declined else "pending" if pending else "sent",
            "failedAt": f"{day}T15:00:01Z" if declined else None,
-           "reasonForFailure": f"Card {card['status']}" if declined else None,
+           "reasonForFailure": reason,
            "kind": "creditCardTransaction", "counterpartyName": name.upper(), "counterpartyNickname": name,
            "bankDescription": name.upper(), "cardId": card["id"], "requestId": None, "note": None,
            "merchant": {"amount": amount, "currency": "USD"}}

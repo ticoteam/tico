@@ -609,9 +609,10 @@ def amount(value: object) -> float | None:
     return None
 
 
-def budget_rows(api: Api) -> list[dict]:
-    """The REH budgets as of October's end, with the figures (amount, actual, held, remaining) from their `state`."""
-    rows = api.get("finance/budgets", at=f"{PAST_MONTH}-31", limit=200)
+def budget_rows(api: Api, month: str = PAST_MONTH) -> list[dict]:
+    """The REH budgets as of the month's end (October by default), with the figures (amount, actual, held, remaining)
+    from their `state`."""
+    rows = api.get("finance/budgets", at=f"{month}-28", limit=200)
     return [{**d, **d["state"]} for d in walk(rows)
             if str(d.get("name") or "").startswith("REH ") and isinstance(d.get("state"), dict)]
 
@@ -719,20 +720,28 @@ def run_step5(ctx: Context) -> None:
               written is not None and ("writ" in written or written == "paid"), f"status {written}")
 
 
+def card_month() -> str:
+    """The month step 6's card budget and charges sit in. October while it is still open for a new budget amount; from
+    November on, a past period refuses one (handlers._no_past_period), so the card runs in the current month."""
+    return PAST_MONTH if today() <= date.fromisoformat(f"{PAST_MONTH}-31") else today().strftime("%Y-%m")
+
+
 def run_step6(ctx: Context) -> None:
     step, api, fake = "6 cards", ctx.api, ctx.fake
+    cm = card_month()
+    card_day = f"{cm}-22" if cm == PAST_MONTH else today().isoformat()
     chk = bank_id(api, "Acme Checking")
     other = account_ids(api)["Other expenses"]
     line = api.act("budget_create", {"name": "REH Card line", "account_id": other, "period": "month", "amount": 100000000,
-                                     "at_limit": "decline", "warn_pct": 80, "effective_from": f"{PAST_MONTH}-01"})
+                                     "at_limit": "decline", "warn_pct": 80, "effective_from": f"{cm}-01"})
     ctx.check(step, "the Other expenses line budget the card budget splits under", committed(line), describe(line))
-    line_id = by_field(api.get("finance/budgets", at=f"{PAST_MONTH}-31", limit=200), "name", "REH Card line")
+    line_id = by_field(api.get("finance/budgets", at=f"{cm}-28", limit=200), "name", "REH Card line")
     made = api.act("budget_create", {"name": "REH Card budget", "parent_id": line_id, "account_id": other,
                                      "period": "month", "amount": 50000,
                                      "at_limit": "decline", "warn_pct": 80, "teammate": "human:ana",
-                                     "effective_from": f"{PAST_MONTH}-01"})
+                                     "effective_from": f"{cm}-01"})
     ctx.check(step, "a $500.00 monthly budget for a card, declining at its limit", committed(made), describe(made))
-    budget = by_field(api.get("finance/budgets", at=f"{PAST_MONTH}-31", limit=200), "name", "REH Card budget")
+    budget = by_field(api.get("finance/budgets", at=f"{cm}-28", limit=200), "name", "REH Card budget")
     user = pick_user(api.get("finance/mercury-users"))
     made = api.act("card_create", {"holder": "human:ana", "budget_id": budget, "amount": 50000, "kind": "person",
                                    "nickname": "REH owner card", "money_account_id": card_program_id(api),
@@ -747,31 +756,43 @@ def run_step6(ctx: Context) -> None:
               f"spendLimit on Mercury {limit}")
     fake_id = fake_card.get("id") or fake_card.get("cardId")
     s1 = fake.call("POST", "/_fake/card-spend", {"card": fake_id, "amount": 120.50, "merchant": "REH CARD SPEND 1",
-                                                  "date": f"{PAST_MONTH}-22"})
+                                                  "date": card_day})
     ctx.check(step, "a $120.50 card charge is made on Mercury", s1[0] == 200, f"HTTP {s1[0]}")
     row1 = until(ctx, lambda: next(iter(feed_rows(api, "REH CARD SPEND 1")), None), 180)
     ctx.check(step, "the charge comes into Tico's feed on the card", row1 is not None, f"row {bool(row1)}")
+    # Mercury enforces the card's monthly spendLimit: a $450.00 charge that takes the month past $500.00 is declined
+    # (not forced), and a declined charge posts nothing, so it leaves the card and the budget as they were.
+    over = fake.call("POST", "/_fake/card-spend", {"card": fake_id, "amount": 450.00, "merchant": "REH CARD OVER LIMIT",
+                                                    "date": card_day})
+    over_txn = over[1].get("transaction", {}) if isinstance(over[1], dict) else {}
+    ctx.check(step, "Mercury declines a $450.00 charge over the card's $500.00 monthly limit (not forced)",
+              over_txn.get("status") == "failed" and "limit" in str(over_txn.get("reasonForFailure") or "").lower(),
+              f"HTTP {over[0]}; Mercury {over_txn.get('status')} ({over_txn.get('reasonForFailure')})")
+    still_active = fake.mercury(f"/cards/{fake_id}").get("status") if fake_id else None
+    ctx.check(step, "the declined charge leaves the card active on Mercury", still_active == "active",
+              f"status {still_active}")
+    # The second charge is a force post (spec 8.2): Mercury posts it in full, past the $500.00 limit.
     s2 = fake.call("POST", "/_fake/card-spend", {"card": fake_id, "amount": 450.00, "merchant": "REH CARD SPEND 2",
-                                                  "date": f"{PAST_MONTH}-22"})
-    ctx.check(step, "a $450.00 card charge is made on Mercury (takes the card past $500.00)", s2[0] == 200,
-              f"HTTP {s2[0]}")
+                                                  "date": card_day, "force": True})
+    txn2 = s2[1].get("transaction", {}) if isinstance(s2[1], dict) else {}
+    ctx.check(step, "a $450.00 force post goes past the $500.00 limit and posts in full on Mercury",
+              s2[0] == 200 and txn2.get("status") == "sent", f"HTTP {s2[0]}; Mercury {txn2.get('status')}")
     frozen = until(ctx, lambda: find_row(api.get("finance/cards", status="frozen"), id=card) if card else None, 240)
     ctx.check(step, "the card past its budget is frozen by the decline (budget cutoff)", frozen is not None,
               f"card {card or 'none'} frozen in Tico: {frozen is not None}")
     mercury_status = fake.mercury(f"/cards/{fake_id}").get("status") if fake_id else None
     ctx.check(step, "Mercury shows the card frozen", mercury_status == "frozen", f"status {mercury_status}")
     row2 = until(ctx, lambda: next(iter(feed_rows(api, "REH CARD SPEND 2")), None), 180)
-    txn2 = s2[1].get("transaction", {}) if isinstance(s2[1], dict) else {}
-    ctx.check(step, "the charge that went past the limit still posts (actuals always post)",
+    ctx.check(step, "the forced charge past the limit posts in the feed (actuals always post)",
               (row2 or {}).get("status") == "posted",
-              f"feed status {(row2 or {}).get('status')}; Mercury {txn2.get('status')} ({txn2.get('reasonForFailure')})")
+              f"feed status {(row2 or {}).get('status')}; Mercury {txn2.get('status')}")
     unfrozen = api.act("card_unfreeze", {"card_id": card, "reason": "rehearsal: the owner unfreezes"})
     ctx.check(step, "the owner's unfreeze is refused while the budget is over (spec 738)",
               unfrozen.get("status") == "denied" and "used up" in json.dumps(unfrozen), describe(unfrozen))
     still = fake.mercury(f"/cards/{fake_id}").get("status") if fake_id else None
     ctx.check(step, "Mercury still shows the card frozen while the budget is over", still == "frozen",
               f"status {still}")
-    raised = api.act("budget_update", {"budget_id": budget, "amount": 100000, "effective_from": f"{PAST_MONTH}-01"})
+    raised = api.act("budget_update", {"budget_id": budget, "amount": 100000, "effective_from": f"{cm}-01"})
     ctx.check(step, "the owner raises the card budget to $1,000.00", committed(raised), describe(raised))
     released = until(ctx, lambda: fake.mercury(f"/cards/{fake_id}").get("status") == "active" if fake_id else False, 240)
     now_status = fake.mercury(f"/cards/{fake_id}").get("status") if fake_id else None
@@ -779,30 +800,33 @@ def run_step6(ctx: Context) -> None:
               f"status {now_status}")
     spent = sum(int(r.get("amount") or 0) for r in feed_rows(api, "REH CARD SPEND"))
     ctx.check(step, "the two card charges reach the feed at $570.50", spent == -57050, f"feed sum {spent}")
-    rec = next((r for r in budget_rows(api) if r.get("name") == "REH Card budget"), {})
+    rec = next((r for r in budget_rows(api, cm) if r.get("name") == "REH Card budget"), {})
     for label, resp in (("1", s1), ("2", s2)):
         print(f"DIAG fake charge {label}: {json.dumps(resp[1], sort_keys=True)[:700]}")
     for row in feed_rows(api, "REH CARD SPEND"):
         print(f"DIAG feed row: {json.dumps(row, sort_keys=True)[:900]}")
     print(f"DIAG card: {json.dumps(find_row(api.get('finance/cards'), id=card) or {}, sort_keys=True)[:1200]}")
     print(f"DIAG budget: {json.dumps(rec, sort_keys=True)[:1500]}")
-    ctx.check(step, "card spend reconciles: the budget's actual is the two charges", rec.get("actual") == 57050,
-              f"budget actual {rec.get('actual')}, held {rec.get('held')}, remaining {rec.get('remaining')}")
+    # Feed vs actual: the two posted charges are the budget's actual, to the cent; the declined charge is in neither.
+    ctx.check(step, "feed-vs-actual reconciliation: the budget's actual equals the feed's two card charges (570.50)",
+              rec.get("actual") == 57050 and -spent == 57050,
+              f"feed {-spent}, budget actual {rec.get('actual')}, held {rec.get('held')}, remaining {rec.get('remaining')}")
 
 
 def run_step7(ctx: Context) -> None:
     step, api = "7 budgets", ctx.api
+    cm = card_month()
     acct = account_ids(api)
-    base = {"period": "month", "at_limit": "warn", "warn_pct": 80, "effective_from": f"{PAST_MONTH}-01"}
+    base = {"period": "month", "at_limit": "warn", "warn_pct": 80, "effective_from": f"{cm}-01"}
     made = api.act("budget_create", {"name": "REH Software", "account_id": acct["Software"], "amount": 300000, **base})
     ctx.check(step, "a $3,000.00 Software budget", committed(made), describe(made))
-    parent = by_field(api.get("finance/budgets", at=f"{PAST_MONTH}-31", limit=200), "name", "REH Software")
+    parent = by_field(api.get("finance/budgets", at=f"{cm}-28", limit=200), "name", "REH Software")
     made = api.act("budget_create", {"name": "REH Software tools", "parent_id": parent, "account_id": acct["Software"],
                                      "team": "leadership", "amount": 100000, **base})
     ctx.check(step, "a $1,000.00 child budget under it (split by team)", committed(made), describe(made))
-    rows = budget_rows(api)
+    rows = budget_rows(api, cm)
     names = {str(r.get("name")) for r in rows}
-    ctx.check(step, "the two REH budgets are in October's budget list",
+    ctx.check(step, "the two REH budgets are in this month's budget list",
               {"REH Software", "REH Software tools"} <= names, ", ".join(sorted(names)))
     child = next((r for r in rows if r.get("name") == "REH Software tools"), {})
     ctx.check(step, "the child budget sits under its parent", child.get("parent_id") == parent,
@@ -831,7 +855,7 @@ def run_step7(ctx: Context) -> None:
                                         ("REH Hold budget", "REH Meals", "hold_payment", "REH-HOLD")):
         made = api.act("budget_create", {"name": label, "account_id": ids.get(line, ""), "period": "month",
                                          "amount": 5000, "at_limit": at_limit, "warn_pct": 80,
-                                         "effective_from": f"{PAST_MONTH}-01"})
+                                         "effective_from": f"{cm}-01"})
         ctx.check(step, f"a $50.00 monthly budget on {line} at {at_limit}", committed(made), describe(made))
         pay = api.act("payment_create", {"recipient_id": ctx.state["recipient_id"], "amount": 10000,
                                          "money_account_id": bank_id(api, "Acme Checking"), "memo": memo,
