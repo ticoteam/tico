@@ -342,13 +342,13 @@ def covered(ready, runtimes):
 
 
 # ------------------------------------------------------------------------------------------------ views
-# An API key's month cost, driven from the month's turns (turns_started), each one's attempt_subscriptions rows by their
-# primary key, then the attempt. CROSS JOIN keeps that order whatever sqlite_stat1 says: the plan without it read every
-# attempt a key ever ran, and probed each turn, on every listing.
-COSTS_SQL = ("SELECT s.subscription_id, coalesce(sum(t.est_cost_usd),0) AS cost FROM turns t "
-             "CROSS JOIN attempt_subscriptions s ON s.attempt_id=t.id CROSS JOIN attempts a ON a.id=t.id "
-             "WHERE t.started_at>=? AND s.subscription_id IN ({ids}) AND coalesce(a.handed_runtime,s.runtime)=s.runtime "
-             "GROUP BY s.subscription_id")
+# An API key's month cost, driven from the month's runs (their attempts rows, by created_at), each one's
+# attempt_subscriptions rows by their primary key. CROSS JOIN keeps that order whatever sqlite_stat1 says: the plan
+# without it read every attempt a key ever ran, and probed each run, on every listing.
+COSTS_SQL = ("SELECT s.subscription_id, coalesce(sum(t.est_cost_usd),0) AS cost FROM attempts t "
+             "CROSS JOIN attempt_subscriptions s ON s.attempt_id=t.id "
+             "WHERE (t.job_id IS NULL OR t.trigger IS NOT NULL) AND t.created_at>=? AND s.subscription_id IN ({ids}) "
+             "AND coalesce(t.handed_runtime,s.runtime)=s.runtime GROUP BY s.subscription_id")
 
 
 def costs_sql(count):

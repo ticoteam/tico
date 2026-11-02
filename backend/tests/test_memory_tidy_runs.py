@@ -172,12 +172,12 @@ def test_subscription_estimates_count_and_zero_reports_never_erase_cost(api):
     with store.transaction() as c:
         last(c)
         c.execute("UPDATE memory_tidy_passes SET check_task_id='synthetic-check'")
-        c.execute("INSERT INTO turns(id,bot,task_id,started_at,model,input_tokens,cached_tokens,output_tokens,"
+        c.execute("INSERT INTO attempts(id,bot_id,task_id,created_at,usage_model,input_tokens,cached_tokens,output_tokens,"
                   "est_cost_usd,billing) VALUES(?,?,?,?,?,?,?,?,?,?)",
                   ('synthetic-turn', 'ops', 'synthetic-check', '2026-11-01T11:31:00Z',
                    'gpt-6.1-sol', 1000000, 0, 100000, 0, 'subscription'))
         assert runs.refresh_costs(c) == pytest.approx(3)
-        c.execute("UPDATE turns SET input_tokens=0,output_tokens=0")
+        c.execute("UPDATE attempts SET input_tokens=0,output_tokens=0")
         assert runs.refresh_costs(c) == pytest.approx(3)
 
 
@@ -186,7 +186,7 @@ def test_free_skip_excludes_pass_turn_commits_with_ordinary_subjects(api):
     with store.transaction() as c:
         last(c)
         c.execute("UPDATE memory_tidy_passes SET check_task_id='synthetic-check'")
-        c.execute("INSERT INTO turns(id,bot,task_id) VALUES('synthetic-turn','ops','synthetic-check')")
+        c.execute("INSERT INTO attempts(id,bot_id,task_id,created_at) VALUES('synthetic-turn','ops','synthetic-check','2026-11-01T11:31:00Z')")
         commit(c, subject='ordinary looking pass commit', attempt='synthetic-turn')
         assert not runs.changed(c, 'ops', '2026-11-01T11:30:00Z')
         commit(c)
@@ -237,14 +237,14 @@ def test_global_slot_survives_deadline_until_usage_is_reconciled(api):
         child = H.task_create(c, H.KEEPER, 'Synthetic overdue check', '', 'bot:ops',
                               private=True, quiet_notice=True, lint=False)
         c.execute('UPDATE memory_tidy_passes SET check_task_id=?', (child['id'],))
-        c.execute("INSERT INTO turns(id,bot,task_id,started_at,model) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO attempts(id,bot_id,task_id,created_at,usage_model) VALUES(?,?,?,?,?)",
                   ('pending-turn', 'ops', child['id'], '2026-11-01T12:59:00Z', 'gpt-6.1-sol'))
         # The deadline closes the task but its running model is not yet settled.
         runs.sweep(c, AT)
         assert runs.unsettled(c)
-        c.execute("UPDATE turns SET finished_at=?,usage_reason='no_result'", (runs.stamp(AT),))
+        c.execute("UPDATE attempts SET settled_at=?,usage_reason='no_result'", (runs.stamp(AT),))
         assert runs.unsettled(c), 'an expired lease with missing usage is not a free pass'
-        c.execute("UPDATE turns SET input_tokens=1000000,output_tokens=100000,usage_reason=NULL")
+        c.execute("UPDATE attempts SET input_tokens=1000000,output_tokens=100000,usage_reason=NULL")
         assert not runs.unsettled(c)
         # The historical estimate never decreases; reconcile a cost past the stop.
         c.execute("UPDATE memory_tidy_passes SET cost_usd=51")
@@ -305,7 +305,7 @@ def test_two_eligible_bots_serialize_and_next_admission_uses_first_cost(api, mon
         assert runs.admit(c, store.settings, AT) == []
         assert len(filed) == 1
         # Completion and reconciled subscription usage release the global slot.
-        c.execute("INSERT INTO turns(id,bot,task_id,started_at,finished_at,model,input_tokens,output_tokens,billing) "
+        c.execute("INSERT INTO attempts(id,bot_id,task_id,created_at,settled_at,usage_model,input_tokens,output_tokens,billing) "
                   "VALUES(?,?,?,?,?,?,?,?,?)", ('turn-first', 'ops', filed[0], runs.stamp(AT), runs.stamp(AT),
                                                'gpt-6.1-sol', 1000000, 100000, 'subscription'))
         c.execute("UPDATE memory_tidy_passes SET status='no_change' WHERE id=?", (first[0],))

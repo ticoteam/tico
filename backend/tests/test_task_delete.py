@@ -185,11 +185,11 @@ def test_a_task_bots_worked_on_deletes_and_comes_back_whole(api):
     post(api, f"tasks/{task['id']}/comments", {"text": "Look again tomorrow."})
     with store.transaction() as c:
         conversation = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (task["id"],)).fetchone()[0]
-        c.execute("INSERT INTO turns(id,bot,task_id,started_at) VALUES('turn-1','ops',?,?)", (task["id"], H.now()))
+        c.execute("INSERT INTO attempts(id,bot_id,task_id,created_at) VALUES('turn-1','ops',?,?)", (task["id"], H.now()))
     assert post(api, f"tasks/{task['id']}/delete", {}) == {"deleted": task["id"]}
     get(api, "tasks/" + task["id"], expected=404)
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM turns WHERE task_id=?", (task["id"],)).fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM attempts WHERE task_id=?", (task["id"],)).fetchone()[0] == 1
         assert c.execute("SELECT count(*) FROM messages WHERE conversation_id=?", (conversation,)).fetchone()[0] >= 1
         assert c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "WHERE m.conversation_id=? AND j.state='queued'", (conversation,)).fetchone()[0] == 0
@@ -347,13 +347,13 @@ def test_a_delete_finds_its_runs_and_messages_by_index_not_by_scanning_them(api)
     store = api.app.state.store
     ticket = post(api, "tasks", {"owner": "ben", "title": "Fix the cart page", "body": "x"})
     post(api, f"tasks/{ticket['id']}/comments", {"text": "Seen on mobile."})
-    big = {"turns", "attempt_conversations", "bot_file_activity", "messages", "a", "m"}
+    big = {"attempt_conversations", "bot_file_activity", "messages", "a", "m"}
     with store.transaction() as c:
         conversation, message = c.execute("SELECT t.conversation_id, m.id FROM tasks t JOIN messages m "
                                           "ON m.conversation_id=t.conversation_id WHERE t.id=? LIMIT 1",
                                           (ticket["id"],)).fetchone()
         # Work on the task, so the delete takes the keep_work path, which also updates the jobs about it.
-        c.execute("INSERT INTO turns(id,bot,started_at,finished_at,exit,message_id,task_id) VALUES(?,?,?,?,?,?,?)",
+        c.execute("INSERT INTO attempts(id,bot_id,created_at,settled_at,exit,message_id,task_id) VALUES(?,?,?,?,?,?,?)",
                   ("turn-cart", "ops", H.now(), H.now(), "ok", message, ticket["id"]))
         statements = []
         c.set_trace_callback(statements.append)

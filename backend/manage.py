@@ -23,8 +23,10 @@ from . import bot_settings as BS
 CORE_HISTORY = ("conversations", "messages", "tasks", "task_events", "turns", "meetings",
                 "meeting_versions", "meeting_deliveries")
 # A legacy source's task_events rows are the new database's task rows in history_events
-# (backend/migrations/0064_history_events.py); the report keeps the source's name for them.
-HISTORY_COUNTS = {"task_events": "SELECT count(*) FROM history_events WHERE subject_type='task'"}
+# (backend/migrations/0064_history_events.py); the report keeps the source's name for them. A legacy turn is an attempts
+# row with a run record (migration 0071), so a turns count reads those.
+HISTORY_COUNTS = {"task_events": "SELECT count(*) FROM history_events WHERE subject_type='task'",
+                  "turns": "SELECT count(*) FROM attempts WHERE job_id IS NULL OR trigger IS NOT NULL"}
 
 
 def registry_dir():

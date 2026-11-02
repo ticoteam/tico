@@ -524,7 +524,7 @@ Without a CHECK (not constrained here; values are whatever the code writes):
   `mail_items.state`, `mail_items.status`, `market_*.status`, `memory_tidy_cards.status`, `inbound_inboxes.state`, `bills_inbound.state`,
   `learning_runs.status`, `lens_runs.status`, `listen_runs.status`, `flight_slow.status`, `redesign_migrations.state`,
   `task_trash.status`, `assistant_actions.status`, `automation_mail_actions.state`, `ask_ingest_items.outcome`,
-  `batches.state`, `turns.outcome`, `schedule_occurrences.outcome`, `stale_suggestions.verdict`, `stall_triage.outcome`,
+  `batches.state`, `attempts.outcome`, `schedule_occurrences.outcome`, `stale_suggestions.verdict`, `stall_triage.outcome`,
   `trigger_bodies.outcome`, `trigger_deliveries.outcome`, `webhook_attempts.status`, `org_rule_holds.reviewer`, `kpis.stage`
   (the funnel stage from `backend/growth.py`), `status_source` and `status_by` in a goal's `history_events.data` (event history).
 
@@ -541,7 +541,8 @@ Spellings still outside the stable set:
   keeps its state in `automation_versions.status` and `automation_runs.status`).
 - `conversations.kind` (chat, ask, task, notice) and `messages.kind` (say, ask, answer, notice, steer): types, not statuses.
 - `kpis.stage`, `goal_kpis.kind`, `kpi_readings`: the KPI tree's stage and kind; not statuses, not constrained here.
-- `turns`: the unstable run table (`attempts` is the stable one).
+- `attempts.state` is NULL on a run recorded with no lease (the demo seed, a run from before leases; migration 0071 moved
+  the old `turns` rows onto `attempts`); its value triggers allow NULL.
 
 ## Decisions
 

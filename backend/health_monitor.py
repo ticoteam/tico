@@ -642,14 +642,14 @@ def _session_checks(c):
     """A bot whose old session keeps being lost (backend/run_triggers.py SESSION_LOST): more than NEW_SESSIONS runs in
     the last 24 h started a new one because the old was not found, would not resume or compact, was interrupted, or was
     too large to send even after compacting. A first run, a person's Clear and a topic change do not count. One grouped
-    read of the last day's runs (`turns.started_at` is indexed)."""
+    read of the last day's runs (`attempts.created_at` is indexed)."""
     from .run_triggers import SESSION_LOST
     since = H.shift(H.now(), hours=-24)
     marks = ",".join("?" * len(SESSION_LOST))
     out = []
-    for r in c.execute(f"SELECT bot, count(*) AS n, group_concat(DISTINCT session_why) AS why FROM turns "
-                       f"WHERE started_at>=? AND session_kind='new' AND session_why IN ({marks}) "
-                       f"GROUP BY bot HAVING count(*)>? ORDER BY n DESC, bot", (since, *SESSION_LOST, NEW_SESSIONS)):
+    for r in c.execute(f"SELECT bot_id AS bot, count(*) AS n, group_concat(DISTINCT session_why) AS why FROM attempts "
+                       f"WHERE created_at>=? AND session_kind='new' AND session_why IN ({marks}) "
+                       f"GROUP BY bot_id HAVING count(*)>? ORDER BY n DESC, bot", (since, *SESSION_LOST, NEW_SESSIONS)):
         bot = r["bot"]
         row = H.bot(c, bot) or {}
         name = row.get("display_name") or row.get("slug") or bot

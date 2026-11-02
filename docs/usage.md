@@ -7,7 +7,8 @@ list price. It is not an invoice.
 
 The runner adds up the `tokens` events a run's runtime reports (`runner-rs/src/execute.rs`) and sends them with the run's result as
 `usage`: uncached input, cached input and output tokens, the model that ran, and how the run was billed. The server keeps them on the run
-(`turns.input_tokens`, `cached_tokens`, `output_tokens`, `model`, `provider`, `est_cost_usd`, `billing`; migration 12) and prices them
+(`attempts.input_tokens`, `cached_tokens`, `output_tokens`, `usage_model`, `provider`, `est_cost_usd`, `billing`; migration 12, moved
+from the old `turns` table by migration 0071) and prices them
 from `providers.PRICES`, in USD per million tokens, dated by `providers.PRICES_AS_OF`. A cache write counts as input; batch, priority and
 regional premiums are not modelled. A model with no price keeps its tokens and shows a dash for the cost.
 

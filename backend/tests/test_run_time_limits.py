@@ -50,7 +50,7 @@ def test_first_timeout_waiting_for_live_session_has_timeout_card_then_resumes(ap
     other = claim(api, machine)
     post(api, f"attempts/{other['id']}/started", {'thread_id': 'other-session-work'}, machine['token'])
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE turns SET task_id=? WHERE id=?', (task['id'], other['id']))
+        c.execute('UPDATE attempts SET task_id=? WHERE id=?', (task['id'], other['id']))
     cut(api, machine, first)
     assert job_state(api, first['job_id']) == 'uncertain'
     review = get(api, 'bots/ops/execution-review')['jobs'][0]

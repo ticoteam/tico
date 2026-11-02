@@ -47,6 +47,22 @@ SEO = H.bot_actor("seo")
 COO = H.bot_actor("coo")
 ANALYTICS = H.bot_actor("analytics")
 
+# The run table as an install from before migration 0071 had it: a run's record in `turns` (the attempts table keeps
+# the lease). Its usage went to usage_facts in migration 0053, which also dropped turn_usage_segments.
+LEGACY_TURNS = ("CREATE TABLE turns (id TEXT PRIMARY KEY, bot TEXT, thread_id TEXT, started_at TEXT, finished_at TEXT, "
+                "trigger TEXT, message_id TEXT, task_id TEXT, exit TEXT, summary TEXT, input_tokens INTEGER, "
+                "cached_tokens INTEGER, output_tokens INTEGER, model TEXT, provider TEXT, est_cost_usd REAL, "
+                "billing TEXT, trigger_kind TEXT, trigger_source TEXT, writes INTEGER, outcome TEXT, "
+                "did_nothing INTEGER, purpose TEXT)")
+
+
+def with_legacy_run_tables(conn):
+    """Put back `turns` (empty) on a file `H.connect` made, and forget migration 0071, so
+    the numbered steps and the migrations run on them again as on an install from before it."""
+    conn.execute("DELETE FROM schema_migrations WHERE version>='0071' AND version NOT LIKE 'legacy%'")
+    conn.execute(LEGACY_TURNS)
+    conn.commit()
+
 
 class HubCase(unittest.TestCase):
     def setUp(self):
@@ -75,16 +91,17 @@ class Schema(HubCase):
         task = H.task_create(self.conn, ANA, "Prepare packet", "Keep this task through upgrade.", CMO, lint=False)
         # Main has already applied the purpose migration; rotation must be appended after it.
         published_version = H.MIGRATIONS.index(H.RUN_PURPOSE_SCHEMA) + 1
+        with_legacy_run_tables(self.conn)
         self.conn.execute("INSERT INTO turns(id,bot,started_at,purpose) VALUES('before-rotation','cmo',?,'review PR')",
                           (H.now(),))
-        self.conn.execute("ALTER TABLE turns DROP COLUMN rotated")
         self.conn.execute(f"PRAGMA user_version={published_version}")
         self.conn.commit()
         H.migrate(self.conn)
-        self.assertIn("rotated", {r[1] for r in self.conn.execute("PRAGMA table_info(turns)")})
+        self.assertNotIn("turns", {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")})
+        self.assertIn("rotated", {r[1] for r in self.conn.execute("PRAGMA table_info(attempts)")})
         self.assertEqual(self.conn.execute("SELECT title FROM tasks WHERE id=?", (task["id"],)).fetchone()[0],
                          "Prepare packet")
-        self.assertEqual(self.conn.execute("SELECT purpose FROM turns WHERE id='before-rotation'").fetchone()[0],
+        self.assertEqual(self.conn.execute("SELECT purpose FROM attempts WHERE id='before-rotation'").fetchone()[0],
                          "review PR")
         self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
 
@@ -114,7 +131,7 @@ class Schema(HubCase):
             "SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertLessEqual({"bots", "humans", "conversations", "messages", "tasks",
                               "history_events", "approvals", "bot_status", "bot_status_history",
-                              "schedules", "turns", "deltas", "rate_limits", "refusals",
+                              "schedules", "attempts", "deltas", "rate_limits", "refusals",
                               "events"}, names)
         indexes = {r["name"] for r in self.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='index'")}
@@ -1564,6 +1581,7 @@ class TurnLegacyUsageDropped(HubCase):
 
     def install_as_before_measured_usage(self):
         self.before("0009")
+        with_legacy_run_tables(self.conn)
         for column, kind in (("tokens_in", "INTEGER"), ("tokens_out", "INTEGER"), ("cost", "REAL")):
             self.conn.execute(f"ALTER TABLE turns ADD COLUMN {column} {kind}")
         now = H.now()
@@ -1579,14 +1597,14 @@ class TurnLegacyUsageDropped(HubCase):
     def test_the_upgrade_moves_the_legacy_tokens_and_cost_and_drops_the_columns(self):
         self.install_as_before_measured_usage()
         migrations.apply(self.conn)
-        columns = {r[1] for r in self.conn.execute("PRAGMA table_info(turns)")}
+        columns = {r[1] for r in self.conn.execute("PRAGMA table_info(attempts)")}
         self.assertFalse({"tokens_in", "tokens_out", "cost"} & columns)
         self.assertEqual([tuple(r) for r in self.conn.execute(
-            "SELECT id, input_tokens, cached_tokens, output_tokens, est_cost_usd FROM turns ORDER BY id")],
+            "SELECT id, input_tokens, cached_tokens, output_tokens, est_cost_usd FROM attempts ORDER BY id")],
             [("cost-only", None, None, None, 9.0), ("measured", 100, 50, 10, 0.2), ("old-run", 500, None, 5, 0.75)])
 
     def test_the_run_totals_read_the_moved_numbers(self):
         self.install_as_before_measured_usage()
         migrations.apply(self.conn)
-        totals = {r[0]: r[1] for r in self.conn.execute(f"SELECT t.id, {WP.RUN_TOKENS} FROM turns t")}
+        totals = {r[0]: r[1] for r in self.conn.execute(f"SELECT a.id, {WP.RUN_TOKENS} FROM attempts a")}
         self.assertEqual(totals, {"cost-only": 0, "measured": 160, "old-run": 505})

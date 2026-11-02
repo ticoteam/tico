@@ -14,7 +14,7 @@ message H._write_message is about to write to a bot, and answers with an outcome
   the keeper, with the rule id in the event payload, and write the message quietly with its note. An action that fails opens the message: it wakes the
   bot under `fail_open`, so work is never lost to a rule.
 
-The message is stamped `refs.rule` with the rule id, whatever the outcome, and a run copies it to `turns.rule_id`
+The message is stamped `refs.rule` with the rule id, whatever the outcome, and a run copies it to `attempts.rule_id`
 at claim, so every run joins to the rule that woke it (`rule_weekly` in hub sql).
 
 Built-in rules are defined here, in code, with stable ids. They reproduce what the wake filters did before there

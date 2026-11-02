@@ -153,6 +153,7 @@ KEEP = frozenset((
     "task_events", "goal_events", "market_events", "company_events", "strategy_events",
     # A copy of a database from before migrations 0053/0054 still holds these: kept, so the dev server's first start
     # moves them into usage_facts and budget_nodes (the copy is pruned before it is migrated).
+    # A copy from before migration 0071 still holds turns (the run records, now attempts rows): kept until 0071 moves them.
     "turn_usage_segments", "usage_limits", "usage_pools",
     "feedbacks",       # 👍/👎 on bot work (backend/feedback.py)
     # Shared records (backend/records): locations, items and projects
