@@ -213,6 +213,7 @@ def test_a_card_charge_past_the_bill_search_waits_then_settles_its_hold_when_lin
     _arrives(fake, MERCURY["txn_card_pending"], 1, "evt-0001")
     sync_once(books, fake, HOURS[1])
     _arrives(fake, MERCURY["txn_card_posted"], 2, "evt-0002")
+    fake.balances["credit-io"] = -45.0              # the owed balance moves with the spend (owed negative)
     sync_once(books, fake, HOURS[2])
     with books.transaction() as c:
         row = c.execute("SELECT id, status, entry_id FROM fin_feed_txns WHERE card_id IS NOT NULL").fetchone()

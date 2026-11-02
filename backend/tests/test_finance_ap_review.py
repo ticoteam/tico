@@ -223,6 +223,7 @@ def test_a_tico_card_charge_paying_an_entered_bill_clears_ap_instead_of_a_second
     _arrives(fake, MERCURY["txn_card_pending"], 1, "evt-0001")
     sync_once(books, fake, HOURS[1])
     _arrives(fake, MERCURY["txn_card_posted"], 2, "evt-0002")
+    fake.balances["credit-io"] = -45.0              # the owed balance moves with the spend (owed negative)
     sync_once(books, fake, HOURS[2])
     with books.read() as c:
         assert FR.bill(c, OWNER, bid)["status"] == "paid"
