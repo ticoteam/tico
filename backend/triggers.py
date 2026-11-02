@@ -40,7 +40,7 @@ import json
 import re
 import secrets
 from dataclasses import dataclass, field
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -594,9 +594,9 @@ def _unheard(c, found, delivery, type_):
              refs={"trigger": found["id"], "delivery": delivery, "unheard": True})
 
 
-def receive(c, trigger_id: str, body: bytes, headers: Mapping[str, str], *, secret: Optional[str], via: str = "direct",
-            delivery_id: Optional[str] = None, received_at: Optional[str] = None, auth=None, vault=None,
-            recovering: bool = False) -> Received:
+def receive(c: Any, trigger_id: str, body: bytes, headers: Mapping[str, str], *, secret: Optional[str],
+            via: str = "direct", delivery_id: Optional[str] = None, received_at: Optional[str] = None,
+            auth: Any = None, vault: Any = None, recovering: bool = False) -> Received:
     """What one call to a trigger does, once its address is known. Runs in the caller's write transaction; a refusal
     worth logging is logged and comes back as a Received for the caller to answer after the commit.
 
