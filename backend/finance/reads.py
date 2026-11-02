@@ -2139,3 +2139,49 @@ def action_for(c: sqlite3.Connection, viewer: str, action_id: str, at: str | Non
             "code": str(row["code"] or ""), "reason": named_reason(ctx, viewer, str(row["reason"] or ""), result, decider=approver) if shown else "",
             "approval_id": str(row["approval_id"] or "") or None, "approver": str(row["approval_to"] or "") or None,
             "rule": str(row["rule_id"] or "")}
+
+
+# ------------------------------------------------------------------------------------------- the Company page's reads
+# What the Company page's stats read from the books. The page's own check decides what a reader may see; these only say
+# what the books hold, so none of them applies a viewer's view.
+
+@dataclass(frozen=True)
+class BookView:
+    viewer: str                        # the owner who reads the books for the page ("" when there is none)
+    accounts: Mapping[str, Account]
+    private: frozenset[str]            # private lines: never on a page, whatever the grid says
+    currency: str
+    exponent: int                      # minor units of the currency
+
+
+def book_view(c: sqlite3.Connection, at: str) -> BookView:
+    """The books as a Company page reads them at `at`. Raises FinanceError when Finance isn't set up."""
+    ctx = load(c, at)
+    return BookView(viewer=_context.owner(c), accounts=ctx.accounts, private=frozenset(SA.private_lines(c)),
+                    currency=ctx.book.base_currency, exponent=money.EXPONENTS.get(ctx.book.base_currency, 2))
+
+
+def private_line_ids(c: sqlite3.Connection) -> frozenset[str]:
+    return frozenset(SA.private_lines(c))
+
+
+def account_name_and_type(c: sqlite3.Connection, account_id: str) -> dict[str, str] | None:
+    row = c.execute("SELECT name, type FROM fin_accounts WHERE id=?", (account_id,)).fetchone()
+    return {"name": str(row["name"]), "type": str(row["type"])} if row else None
+
+
+def income_and_expense_accounts(c: sqlite3.Connection, limit: int) -> list[dict[str, str]]:
+    """Active income and expense accounts in chart order: the lines a Company page can show."""
+    return [{"id": str(r["id"]), "name": str(r["name"])} for r in c.execute(
+        "SELECT id, name FROM fin_accounts WHERE type IN ('income','expense') AND active=1 ORDER BY code, id LIMIT ?",
+        (limit,))]
+
+
+def descendant_ids(accounts: Mapping[str, Account], account_id: str) -> set[str]:
+    """`account_id` and every account below it in the chart."""
+    return descendants(accounts, account_id)
+
+
+def pnl_section_of(accounts: Mapping[str, Account], account_id: str) -> str:
+    """Where a P&L account sits: revenue, cost of revenue, operating expenses, or other income and expense."""
+    return pnl_section(accounts, accounts[account_id])

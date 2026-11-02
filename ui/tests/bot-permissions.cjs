@@ -4,7 +4,7 @@
 //    with the account, and combines with the Recent sort; a bot page for someone who may only see or write
 //    to it shows no activity.
 //  - roles: Settings > Bots lists who owns each bot and saves co-owners as a diff with Save bot; Settings > Computers has an
-//    admin-only "Accepts members' bots" toggle; a Confirm card BotOps left in a person's chat renders, and
+//    admin-only "Accepts members' bots" toggle; a Confirm card BotOps left in a person's Assistant chat renders, and
 //    only their click confirms it.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -12,6 +12,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
+const {assistantView} = require('./support/assistant-chat.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 
 async function access(browser) {
@@ -35,6 +37,7 @@ async function access(browser) {
     bot('intake', 'Intake', {my_access: {see: true, read: false, write: true}, description: 'Takes requests.', reports_to: 'human:ben'}),
     bot('sales', 'Sales', {my_access: {see: true, read: false, write: false}, description: 'Runs the pipeline.', can_chat: false}),
   ];
+  const intakeThreads = threadsFake({bot: 'intake'});
   await page.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -69,7 +72,8 @@ async function access(browser) {
       return json({key: 'org.mine', value: serverMine});
     }
     if (p === '/api/v2/tasks') return json({tasks: []});
-    if (p === '/api/v2/conversations') return json({conversations: []});
+    const answer = intakeThreads(p, url, method);
+    if (answer !== undefined) return json(answer);
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
@@ -198,13 +202,12 @@ async function access(browser) {
   await page.goto('https://tico-ui.test/#/bot/intake');
   await page.waitForFunction(() => S.route === '#/bot/intake');   // a page change draws a frame later (its fade)
   await page.locator('#btabs').waitFor({state: 'attached'});
-  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['chat', 'tasks', 'info']);
+  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['dm', 'tasks', 'info']);
   await page.locator('#bot-tasks .rail-head').waitFor({state: 'attached'});
   assert.equal(await page.locator('#bot-tasks-board, #bot-sidebar-edit').count(), 0, 'no board or edit icon without read access');
   assert.equal(await page.locator('#bot-goal').count(), 0, 'no goal, no activity');
   assert.equal(await page.locator('#bot-files, #bot-history, #sess-card, #bot-updates-card').count(), 0);
-  assert.match(await page.locator('.bot-request-head').innerText(), /Send a request/);
-  await page.locator('#chat-composer .p-text').waitFor();
+  await page.locator('#bot-thread .thv-composer .p-text').waitFor();
   await page.evaluate(() => { location.hash = '#/bot/intake/more'; });
   await page.locator('#pane-more').waitFor();
   const about = page.locator('#pane-more');
@@ -215,7 +218,7 @@ async function access(browser) {
   await page.goto('https://tico-ui.test/#/bot/sales');
   await page.waitForFunction(() => S.route === '#/bot/sales');
   await page.locator('#btabs').waitFor({state: 'attached'});
-  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['info'], 'see only: no chat, no tasks');
+  assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['info'], 'see only: no DM, no tasks');
   assert.match(await page.locator('#pane-more').innerText(), /See it only/);
   assert.deepEqual(errors, []);
   console.log('PASS: Access column and editor presets, the org filter beside Recent, and bot pages that show no activity to someone who cannot read.');
@@ -236,7 +239,11 @@ async function roles(browser) {
   const bot = (name, display_name, extra = {}) => ({name, display_name, org_parent: '', host: 'keeper', status: 'active',
     state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], operator: 'ana', revision: 1,
     can_manage: true, ...extra});
-  const conv = {id: 'botops-chat', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']};
+  const chatSnapshot = {messages: [
+    {id: 'm1', conversation_id: 'botops-chat', from_actor: 'human:ana', to_actor: 'bot:botops', kind: 'say', body: 'Add sean@example.test please',
+     created: new Date().toISOString(), refs: {}},
+    {id: 'm2', conversation_id: 'botops-chat', from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', body: 'Needs your OK: Add Sean (sean@example.test) to the roster',
+     created: new Date().toISOString(), refs: {assistant: true, action: 'act1'}}], execution: null, has_more: false, next_before: null};
   await page.route('**/*', route => {
     const request = route.request(), url = new URL(request.url()), p = url.pathname, method = request.method();
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -283,12 +290,8 @@ async function roles(browser) {
       posts.push(['confirm', request.postDataJSON()]); action = {...action, status: 'done'}; return json({action});
     }
     if (p === '/api/v2/tasks') return json({tasks: []});
-    if (p === '/api/v2/conversations') return json({conversations: [conv]});
-    if (p.endsWith('/snapshot') || p.endsWith('/messages')) return json({conversation: conv, messages: [
-      {id: 'm1', conversation_id: conv.id, from_actor: 'human:ana', to_actor: 'bot:botops', kind: 'say', body: 'Add sean@example.test please',
-       created: new Date().toISOString(), refs: {}},
-      {id: 'm2', conversation_id: conv.id, from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', body: 'Needs your OK: Add Sean (sean@example.test) to the roster',
-       created: new Date().toISOString(), refs: {assistant: true, action: 'act1'}}], execution: null, has_more: false, next_before: null});
+    if (p === '/api/v2/assistant' && method === 'GET') return json(assistantView('botops-chat', chatSnapshot));
+    if (p.endsWith('/snapshot') || p.endsWith('/messages')) return json(chatSnapshot);
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
   });
@@ -399,8 +402,8 @@ async function roles(browser) {
     'the change made during the save is sent after it, and not with it');
   await page.waitForFunction(() => document.querySelector('[data-turns-at-once=r1]')?.value === '5');
 
-  // ---- BotOps' chat: a Confirm card, and nothing happens until the person clicks it
-  await page.goto('https://tico-ui.test/#/bot/botops');
+  // ---- BotOps' Confirm card, in the Assistant's chat, and nothing happens until the person clicks it
+  await page.goto('https://tico-ui.test/#/assistant');
   const card = page.locator('.asst-card[data-action=act1]');
   await card.waitFor();
   assert.match(await card.innerText(), /Add Sean \(sean@example\.test\) to the roster/);

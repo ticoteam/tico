@@ -436,6 +436,18 @@ class Oidc:
         return claims
 
     def _email(self, claims):
+        email = self._verified_email(claims)
+        domains = self.settings.oidc_allowed_domains
+        if domains:
+            if email.rsplit("@", 1)[1] not in domains:
+                raise SignInError("email domain is not allowed")
+            if _google(self.issuer) and str(claims.get("hd") or "").lower() not in domains:
+                raise SignInError("hosted domain is not allowed")
+        return email
+
+    def _verified_email(self, claims):
+        """The address the ID token vouches for, lowercased. Who may join the team is `_email`'s to add: a Company page
+        reader (backend/company_page/reader_app.py) comes from anywhere and takes only this."""
         microsoft = _microsoft(self.issuer)
         email = claims.get("email")
         if microsoft and not (isinstance(email, str) and "@" in email):
@@ -449,12 +461,6 @@ class Oidc:
         # Microsoft publishes no email_verified; its tenant check above is what vouches for the address.
         if ("email_verified" in claims or not microsoft) and verified is not True:
             raise SignInError("email is not verified")
-        domains = self.settings.oidc_allowed_domains
-        if domains:
-            if email.rsplit("@", 1)[1] not in domains:
-                raise SignInError("email domain is not allowed")
-            if _google(self.issuer) and str(claims.get("hd") or "").lower() not in domains:
-                raise SignInError("hosted domain is not allowed")
         return email
 
     # ---- sessions -----------------------------------------------------------------------
@@ -539,6 +545,31 @@ class Oidc:
             raise SignInError("people list failed: " + type(exc).__name__, 502) from exc
         if reply.status_code == 429:
             # The account may answer in HTML (a proxy's limit page): the wait then comes from its header, if any.
+            return 429, {"retry_after": _retry_after(reply)}
+        try:
+            answer = reply.json()
+        except ValueError:
+            answer = None
+        return reply.status_code, answer if isinstance(answer, dict) else {}
+
+    def digest(self, email, threads):
+        """Ask the issuer to mail `email` one digest of unread threads (backend/thread_digest.py): (HTTP status, answer),
+        or None when the issuer takes none or this is a rehearsal. Same rules as `push_people`: only the issuer's own
+        host, and nothing goes out of a rehearsal. `threads` is [{title, unread, path}]; the issuer mails only an email
+        on this install's people list. Neither the email nor a title is ever logged, here or in the error reason."""
+        from .invites import rehearsing
+        if rehearsing(self.settings):
+            return None
+        endpoint = self._endpoint(self._discover(), "tico_digest_endpoint")
+        if endpoint is None:
+            return None
+        data = {"client_id": self.settings.oidc_client_id, "client_secret": self.settings.oidc_client_secret,
+                "email": email, "threads": json.dumps(threads, separators=(",", ":"), sort_keys=True)}
+        try:
+            reply = httpx.post(endpoint, data=data, timeout=20, follow_redirects=False)
+        except httpx.HTTPError as exc:
+            raise SignInError("digest failed: " + type(exc).__name__, 502) from exc
+        if reply.status_code == 429:
             return 429, {"retry_after": _retry_after(reply)}
         try:
             answer = reply.json()

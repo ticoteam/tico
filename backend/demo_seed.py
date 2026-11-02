@@ -492,7 +492,7 @@ class Builder:
                            "UDEMOTEAM1", "message", text, H.now(), "stored", "human" if index == 0 else "bot", "Sam" if index == 0 else "Support", H.now()))
             conv = H.open_conversation(c, H.KEEPER, [H.KEEPER, "bot:support"], kind="chat", subject="Slack support", scope="direct")
             message = H.feed(c, "bot:support", "Review the support channel's CSV export thread.", conv)
-            c.execute("INSERT INTO slack_threads VALUES(?,?,?,?,?,?)", ("CDEMOTEAM1", timestamp, "support", conv["id"], H.now(), H.now()))
+            c.execute("INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created,last_routed) VALUES(?,?,?,?,?,?)", ("CDEMOTEAM1", timestamp, "support", conv["id"], H.now(), H.now()))
             c.execute("INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created,updated) VALUES(?,?,?,?,?,?,?,?)",
                       (message["id"], "CDEMOTEAM1", timestamp, "support", "Draft: Open Projects > Export > CSV.", "ready", H.now(), H.now()))
             c.execute("INSERT INTO slack_reads VALUES(?,?,?,?,?)", ("CDEMOTEAM1", "support", timestamp, H.now(), 1))

@@ -31,7 +31,7 @@ from . import views
 from .store import H, Problem
 
 
-DRAFT_PAGE_KINDS = ("brand_draft", "gtm_draft")
+DRAFT_PAGE_KINDS = ("brand_draft",)
 
 
 def company_editor(who):
@@ -42,11 +42,11 @@ def company_editor(who):
 
 def strategy_visible(who, proposal, auth=None):
     """A strategy proposal carries unpublished draft text (strategy_draft) or every affected goal's title
-    (strategy_realign): the owner reads it, and the bot that proposed it; no one else. A brand or GTM draft proposal
-    (backend/brand_gtm.py) is the same for the owner and the admins, who write those drafts."""
+    (strategy_realign): the owner reads it, and the bot that proposed it; no one else. A brand draft proposal
+    (backend/brand.py) is the same for the owner and the admins, who write that draft."""
     if proposal["kind"] in DRAFT_PAGE_KINDS:
-        from . import brand_gtm
-        return (auth is not None and brand_gtm.admin(auth, who)) or proposal.get("proposed_by") == who.actor
+        from . import brand
+        return (auth is not None and brand.admin(auth, who)) or proposal.get("proposed_by") == who.actor
     if proposal["kind"] not in ("strategy_draft", "strategy_realign"):
         return True
     return company_editor(who) or proposal.get("proposed_by") == who.actor
@@ -217,9 +217,9 @@ def install(app, store, auth, mutate, settings):
             return False
         if item["kind"] in ("strategy_draft", "strategy_realign"):     # the strategy is the owner's (backend/strategy.py)
             return company_editor(who)
-        if item["kind"] in DRAFT_PAGE_KINDS:                         # the brand and GTM drafts are the admins'
-            from . import brand_gtm
-            return brand_gtm.admin(auth, who)
+        if item["kind"] in DRAFT_PAGE_KINDS:                         # the brand draft is the admins'
+            from . import brand
+            return brand.admin(auth, who)
         goal = G.goal(c, item["goal_id"]) if item["goal_id"] else None
         record = K.kpi(c, item["kpi_id"]) if item["kpi_id"] else None
         by_goal = bool(goal) and may_colour(c, who, goal)

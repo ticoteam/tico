@@ -478,11 +478,16 @@ TEMPORARY_REFUSALS = ("busy", "removing", "version_conflict")
 def bind(c, execution, bot, lasting=False):
     """Assign a cloud-mode bot to its machine's computer if it is not on it. False while it can't be (a turn still out
     on the old computer): asked again at the next look. With `lasting` (a person's choice of a machine), any other
-    refusal raises its Problem; the looks keep it to False."""
+    refusal raises its Problem; the looks keep it to False. With no machine made yet, a lasting choice is refused
+    before one is made (and billed) when the bot's history exists only on its computer now (`stranded`)."""
     target = (home(c, bot) or {}).get("runner_id")
-    if not target:
-        return False
     placed_on = c.execute("SELECT runner_id,generation FROM assignments WHERE bot=?", (bot,)).fetchone()
+    if not target:
+        if lasting and placed_on:
+            from .execution import stranded
+            if blocked := stranded(c, execution.store.settings, bot, placed_on["runner_id"], None):
+                raise Problem("repository_unpublished", blocked, 409)
+        return False
     if placed_on and placed_on["runner_id"] == target:
         return True
     from types import SimpleNamespace

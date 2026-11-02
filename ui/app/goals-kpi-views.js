@@ -2,14 +2,15 @@
    the growth KPIs from GET /api/v2/growth/kpis. Tree is the North Star with its inputs under it, then the guardrails;
    Loops groups KPIs by loop name in step order; Journey puts them in columns by stage. A KPI the caller may edit
    (may_edit on the read, the KPI update route's check) opens its place in them: what it feeds, its role, stage and
-   loop (POST /api/v2/kpis/{id}). The chosen view is remembered in this browser.
+   loop (POST /api/v2/kpis/{id}). The chosen view is remembered in this browser. ?kpi=<id> (a stat on the Growth page)
+   opens Tree and brings that KPI into view.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 const GKV_VIEWS = [['tree', 'Tree'], ['loops', 'Loops'], ['journey', 'Journey']];
 const GKV_ROLES = [['north_star', 'North Star'], ['input', 'Input'], ['guardrail', 'Guardrail']];
 const GKV_KEY = 'tico.goals.kpiView';
-let GKV = null;           // the drawn views: {host, kpis, view}
+let GKV = null;           // the drawn views: {host, kpis, view, find}
 
 // The KPIs below `rootId` in tree order: each input, then its own inputs.
 function gkvTree(kpis, rootId) {
@@ -28,7 +29,8 @@ function gkvStop(route) {
 function goalsKpiViews(host) {
   let view = 'tree';
   try { view = localStorage.getItem(GKV_KEY) || 'tree'; } catch { /* not kept */ }
-  const state = GKV = {host, kpis: [], view: GKV_VIEWS.some(([v]) => v === view) ? view : 'tree'};
+  const find = new URLSearchParams((S.route || '').split('?')[1] || '').get('kpi') || '';
+  const state = GKV = {host, kpis: [], view: find ? 'tree' : GKV_VIEWS.some(([v]) => v === view) ? view : 'tree', find};
   void gkvRead(state);
 }
 async function gkvRead(state) {
@@ -36,10 +38,16 @@ async function gkvRead(state) {
   if (GKV !== state || !state.host.isConnected) return;
   state.kpis = r?.kpis || [];
   gkvDraw(state);
+  if (state.find) {
+    const hit = state.host.querySelector(`[data-kpi="${CSS.escape(state.find)}"]`);
+    hit?.classList.add('gkv-hit');
+    hit?.scrollIntoView({block: 'center'});
+    state.find = '';
+  }
 }
 const gkvK = (k, cls = '') => {
   const inner = `<span class="gkv-n">${esc(k.name)}</span><span class="gkv-v">${esc(grKpiVal(k))}${k.target != null ? `<span class="muted"> / ${esc(kpiNum(k.target, k.unit))}</span>` : ''}</span>`;
-  return k.may_edit === true ? `<button type="button" class="gkv-k ${cls}" data-kpi-place="${esc(k.id)}">${inner}</button>` : `<div class="gkv-k ${cls}">${inner}</div>`;
+  return k.may_edit === true ? `<button type="button" class="gkv-k ${cls}" data-kpi="${esc(k.id)}" data-kpi-place="${esc(k.id)}">${inner}</button>` : `<div class="gkv-k ${cls}" data-kpi="${esc(k.id)}">${inner}</div>`;
 };
 const gkvNone = '<p class="muted gkv-none">None</p>';
 function gkvTreeHtml(kpis) {

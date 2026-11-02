@@ -4,7 +4,8 @@
 A plain message one bot sends another, a direct message or a task comment, starts no run. H.say writes it to
 its room quietly (`refs.quiet`, so store.QUEUE_TRIGGER queues no job) and marks it `refs.can_wait`; `hold` then
 leaves a quiet note linked to it, which the recipient's next run carries whatever starts it (execution.claim),
-in the order sent, and that run marks the message read. Nothing is dropped: a note whose carrying run fails
+in the order sent, and that run marks the message read. Only a message from a private thread waits for a run of its own
+there (threads.note_fits_run), which the recipient's next run starts. Nothing is dropped: a note whose carrying run fails
 waits for the next one (H.NOTE_WAITING_SQL), and the message stays in its room for that room's next turn.
 
 It wakes the recipient at once, as before, when (WAKES):
@@ -87,13 +88,16 @@ def carried(conn, notes, at):
     return notes
 
 
-def continue_backlog(conn, bot):
+def continue_backlog(conn, bot, skip=()):
     """More held messages wait than one run carries (H.notes_waiting's limit): one keeper notice starts the run
     that carries the next ones, so none is left without a run to deliver it. Called after this run's notes are
-    marked carried; at most one such notice waits at a time."""
+    marked carried; at most one such notice waits at a time. `skip`: notes that wait for a run in their own thread
+    (threads.wake_note_threads), which another run here would not carry."""
     from . import hubdb as H
-    left = conn.execute(f"SELECT 1 FROM notes n WHERE n.to_actor=? AND n.message_id IS NOT NULL AND "
-                        f"{H.NOTE_WAITING_SQL} LIMIT 1", ("bot:" + bot,)).fetchone()
+    skip = list(skip)
+    other = f"AND n.id NOT IN ({','.join('?' * len(skip))}) " if skip else ""
+    left = conn.execute(f"SELECT 1 FROM notes n WHERE n.to_actor=? AND n.message_id IS NOT NULL {other}AND "
+                        f"{H.NOTE_WAITING_SQL} LIMIT 1", ("bot:" + bot, *skip)).fetchone()
     if not left:
         return None
     pending = conn.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "

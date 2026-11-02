@@ -69,7 +69,7 @@ EMPTY = (
     "credentials", "credential_keys", "credential_grants", "credential_uses", "credential_requests", "credential_imports",
     "directory_credentials", "company_storage", "tico_storage",
     # company model subscriptions: the sealed logins (vault values) and which computer or attempt holds which one
-    "model_subscriptions", "computer_subscriptions", "attempt_subscriptions", "subscription_connects",
+    "model_subscriptions", "computer_subscriptions", "attempt_subscriptions", "pending_subscription_fallbacks", "subscription_connects",
     # mail, Slack, GitHub, Granola, meeting bots, support
     "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
@@ -95,6 +95,21 @@ EMPTY = (
     "task_cap_sends", "task_cap_log",
     # A hard delete's queue of bytes still to remove from storage: the copy never deletes from the source's stores.
     "blob_purges",
+    # Calls: a live call's room and recorder are on the source's LiveKit, so the copy holds no live call. Its
+    # transcripts and action items are thread messages, kept with the history.
+    "calls", "call_participants", "call_holds",
+    # Federation: the install's keys, its peerings and what it sends or received from other installs; a copy never
+    # speaks for the source to another company (the shared threads' messages are kept with the history).
+    "federation_keys", "federation_peerings", "federation_outbox_items", "federation_receipts", "federation_states",
+    "federation_directory_entries", "federation_threads", "federation_members", "federation_items", "federation_messages",
+    "federation_deferrals",
+    # Slack links: an active link posts to Slack both ways; its queue and message map only serve that link.
+    "slack_thread_links", "slack_link_members", "slack_message_links", "slack_inbound_events",
+    # The Company page: the readers (their addresses, sessions and invite hashes, the messages they wrote, what they read,
+    # what was mailed to them), and the company's published statements and rules. A copy is rehearsal data, so none of it.
+    "readers", "audience_readers", "reader_sessions", "reader_invites", "reader_messages", "reader_notices", "edition_views",
+    "company_page_settings", "audiences", "audience_sources", "disclosure_revisions", "disclosure_rules", "editions",
+    "edition_sources", "edition_checks", "page_stats", "stat_board_approvals", "page_releases",
 )
 # Finance's own tables are classified in finance/actions.py (DEV_COPY_KEPT, and DEV_COPY_EMPTIED which Finance empties
 # in its scrub), so no Finance table name is written here.
@@ -119,7 +134,10 @@ KEEP = frozenset((
     "flight_process", "flight_requests",
     "flight_slow", "flight_sql", "provenance_clock", "roster_clock", "row_clock", "goal_asks", "goal_checkins", "goal_events", "goal_kpis", "goal_proposals", "goals",
     "health_findings", "health_reports", "humans", "import_refs", "invariant_state", "intake_items", "kpi_definitions", "kpi_readings",
-    "kpis", "learning_cursors", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs", "learned_entries", "linked_docs", "listening_destinations",
+    "kpis", "learning_cursors",
+    # Threads: the search index (its triggers follow the messages kept), and the digest and follow-up ledgers, which
+    # stop the copy emailing or nudging again what the source already did.
+    "thread_digests", "thread_followups", "thread_earlier_notices", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs", "learned_entries", "linked_docs", "listening_destinations",
     "listen_items", "listen_judgments", "listen_runs", "live_meeting_chat", "live_meeting_chat_routes",
     "live_meeting_access", "live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_events", "live_meeting_humans",
     "live_meeting_turns", "live_meeting_windows", "live_meetings", "mail_agent_instructions", "mail_messages",
@@ -137,10 +155,13 @@ KEEP = frozenset((
     "usage_limits", "usage_pools", "task_caps",
     # Shared records (backend/records): locations, items and projects
     "items", "locations", "projects", "record_aliases",
-    # Growth, brand and go-to-market (backend/growth.py, backend/brand_gtm.py)
-    "brand_drafts", "brand_versions", "gtm_drafts", "gtm_versions", "gtm_sources", "growth_channels", "growth_ideas",
-    "growth_idea_channels", "growth_cohorts", "growth_settings", "growth_segments", "growth_channel_segments",
-    "growth_idea_segments",
+    # Growth and brand (backend/growth.py, backend/brand.py)
+    "brand_drafts", "brand_versions", "gtm_sources", "growth_channels", "growth_cohorts", "growth_settings",
+    # Native threads (backend/threads.py) and teammate permissions (backend/teammate_access.py). A delivery to an
+    # outside destination that has not gone is made moot below, so the copy never sends it.
+    "message_deliveries", "message_mentions", "message_reactions", "message_revisions", "sequences",
+    "teammate_accesses", "thread_followers", "thread_members", "thread_routings",
+    "message_search_keys",    # the search index's keys (thread_search.py); its FTS table is copied whole too, and search joins messages
 )) | frozenset(finance.DEV_COPY_KEPT)
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.
@@ -352,9 +373,13 @@ def prune(c, days, keep_automations=False):
                 touched.add(child)
                 frontier.add(child)
     if "messages" in present:
-        for table in ("message_links", "message_links_dirty", "message_links_seen"):
+        for table in ("message_links", "message_links_dirty", "message_links_seen", "message_deliveries",
+                      "message_mentions", "message_reactions", "message_revisions"):
             if table in present:
                 delete(table, "message_id NOT IN (SELECT id FROM messages)")
+    if "message_deliveries" in present:
+        c.execute("UPDATE message_deliveries SET state='moot' WHERE state IN ('pending','capped','held') "
+                  "AND (recipient LIKE 'slack:%' OR recipient LIKE 'peer:%')")
     return {t: n for t, n in removed.items() if n}
 
 

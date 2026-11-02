@@ -515,3 +515,14 @@ def test_outside_a_cell_nothing_is_defaulted_and_an_online_computer_does_not_blo
     quiet_routines(api)
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == ""
+
+
+def test_an_open_live_events_stream_is_not_signed_in_activity():
+    """A tab's stream says nothing about a person being there; their own reads do."""
+    from backend.auth import Identity
+    idle = sleep_idle.SleepIdle(None, None, None)
+    person = Identity("human:ana", "human", "ana@acme.example")
+    idle.seen(person, "/api/v2/events?topics=messages&conversation=c1")
+    assert idle.ui_at == 0.0
+    idle.seen(person, "/api/v2/tasks")
+    assert idle.ui_at > 0.0

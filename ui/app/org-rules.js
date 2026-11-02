@@ -47,12 +47,13 @@ function ruActorName(actor) {
 // A Who or With as the API shows it ({everyone, all_bots, groups: [{id, name}], ...}) in words.
 function ruScopeWords(scope, empty = '—') {
   if (!scope) return empty;
-  if (scope.everyone) return 'Everyone';
-  const words = [...(scope.all_bots ? ['All bots'] : []), ...['groups', 'bots', 'people'].flatMap(k => (scope[k] || []).map(x => x.name || x.id))];
+  const outside = scope.outside_editions ? ['Outside editions'] : [];
+  if (scope.everyone) return ['Everyone', ...outside].join(', ');
+  const words = [...(scope.all_bots ? ['All bots'] : []), ...outside, ...['groups', 'bots', 'people'].flatMap(k => (scope[k] || []).map(x => x.name || x.id))];
   return words.length ? words.join(', ') : empty;
 }
 // Its ids only, as the API takes it and as the scope editor keeps it.
-const ruScopeIds = scope => ({everyone: !!scope?.everyone, all_bots: !!scope?.all_bots,
+const ruScopeIds = scope => ({everyone: !!scope?.everyone, all_bots: !!scope?.all_bots, outside_editions: !!scope?.outside_editions,
   groups: (scope?.groups || []).map(x => x.id ?? x), bots: (scope?.bots || []).map(x => x.id ?? x), people: (scope?.people || []).map(x => x.id ?? x)});
 const ruSameScope = (a, b) => JSON.stringify(ruScopeIds(a)) === JSON.stringify(ruScopeIds(b));
 
@@ -154,7 +155,7 @@ async function pageRules() {
       <header class="ru-ph"><h1>Rules</h1><nav class="ru-tabs" aria-label="Rules"></nav><span class="spacer"></span><span class="ru-acts"></span></header>
       <div class="ru-body"><aside class="ru-filters" aria-label="Filters"></aside><section class="ru-list" aria-live="polite">${skelRows(6)}</section>
         <aside class="ru-side" id="ru-side" hidden></aside></div></div>`;
-    RU = {root: $('#ru-root'), tab: null, counts: null, rules: {internal: [], external: []}, suggested: [], due: [], sources: [],
+    RU = {root: $('#ru-root'), tab: null, counts: null, rules: {internal: [], external: []}, suggested: [], due: [], sources: [], threads: null,
           settings: [], settingsBy: new Map(), settingsLeft: 0, filter: {q: '', who: '', with: '', from: '', due: false, status: '', routine: '', settings: false, moreFrom: false},
           seq: 0, loaded: new Set(), error: ''};
     ruWire();
@@ -215,6 +216,7 @@ function ruScopeFacets(rules, key, field) {
     const s = r[field]; if (!s) continue;
     if (s.everyone) add('everyone', 'Everyone');
     if (s.all_bots) add('all_bots', 'All bots');
+    if (s.outside_editions) add('outside_editions', 'Outside editions');
     for (const kind of ['groups', 'bots', 'people']) for (const x of s[kind] || []) add(kind + ':' + x.id, x.name || x.id);
   }
   const cur = RU.filter[key];
@@ -226,6 +228,7 @@ const ruScopeHas = (scope, key) => {
   if (!scope) return false;
   if (key === 'everyone') return !!scope.everyone;
   if (key === 'all_bots') return !!scope.all_bots;
+  if (key === 'outside_editions') return !!scope.outside_editions;
   const [kind, id] = key.split(/:(.*)/);
   return (scope[kind] || []).some(x => x.id === id);
 };
@@ -349,7 +352,7 @@ function ruAddAllSync(group) {
 function ruWhoOptions() {
   const opt = (v, l) => `<option value="${esc(v)}">${esc(l)}</option>`;
   const groups = ruGroups(), bots = ruBots(), people = ruPeople();
-  return (settingsIsAdmin() ? opt('everyone', 'Everyone') : '') + opt('all_bots', 'All bots')
+  return (settingsIsAdmin() ? opt('everyone', 'Everyone') + opt('outside_editions', 'Outside editions') : '') + opt('all_bots', 'All bots')
     + (groups.length ? `<optgroup label="Departments">${groups.map(g => opt('groups:' + g.id, g.name || g.id)).join('')}</optgroup>` : '')
     + (bots.length ? `<optgroup label="Bots">${bots.map(b => opt('bots:' + b.id, b.name)).join('')}</optgroup>` : '')
     + (people.length ? `<optgroup label="People">${people.map(p => opt('people:' + p.id, p.name)).join('')}</optgroup>` : '');
@@ -358,6 +361,7 @@ function ruWhoFromOption(v) {
   if (!v) return null;
   if (v === 'everyone') return {everyone: true};
   if (v === 'all_bots') return {all_bots: true};
+  if (v === 'outside_editions') return {outside_editions: true};
   const [kind, id] = v.split(/:(.*)/);
   return {[kind]: [id]};
 }
@@ -467,15 +471,19 @@ document.addEventListener('keydown', ev => {
 
 // ----------------------------------------------------------------- the scope editor (Who, With)
 // Segments pick what "+ add" offers; the chips are everything chosen. Everyone (Who) is the owner's and admins' alone;
-// Anyone (With) clears it. Its state is {everyone, all_bots, groups, bots, people, seg}, ids only.
+// Anyone (With) clears it. Outside editions (Who, the owner's and admins' alone) stands apart from who else follows the
+// rule: it adds the Company page's editions, and Everyone doesn't include them. The state is
+// {everyone, all_bots, outside_editions, groups, bots, people, seg}, ids only.
 function ruScopeEditor(host, scope, {flags, disabled = false, onChange = () => {}}) {
   const s = {...ruScopeIds(scope)};
   s.seg = s.everyone ? 'everyone' : s.all_bots || s.bots.length ? 'bots' : s.groups.length ? 'groups' : s.people.length ? 'people' : flags ? 'groups' : 'anyone';
   const draw = () => {
-    const segs = flags ? [['everyone', 'Everyone'], ['groups', 'Departments'], ['bots', 'Bots'], ['people', 'People']]
+    const segs = flags ? [['everyone', 'Everyone'], ['groups', 'Departments'], ['bots', 'Bots'], ['people', 'People'],
+      ...(settingsIsAdmin() || s.outside_editions ? [['outside', 'Outside editions']] : [])]
       : [['anyone', 'Anyone'], ['groups', 'Departments'], ['bots', 'Bots'], ['people', 'People']];
     const chips = [
       ...(s.all_bots ? [['all_bots', '', 'All bots']] : []),
+      ...(s.outside_editions ? [['outside_editions', '', 'Outside editions']] : []),
       ...s.groups.map(id => ['groups', id, ruGroupName(id)]), ...s.bots.map(id => ['bots', id, botDisplayName(id)]),
       ...s.people.map(id => ['people', id, ruPersonName(id)])];
     const pool = {groups: ruGroups().map(g => ({id: g.id, name: g.name || g.id})), bots: ruBots(), people: ruPeople()}[s.seg] || [];
@@ -483,10 +491,10 @@ function ruScopeEditor(host, scope, {flags, disabled = false, onChange = () => {
       ...pool.filter(x => !s[s.seg].includes(x.id)).map(x => [x.id, x.name])];
     const adding = !disabled && !s.everyone && s.seg !== 'anyone' && options.length;
     host.innerHTML = `<div class="ru-seg" role="group">${segs.map(([k, label]) => {
-        const on = k === 'everyone' ? s.everyone : k === 'anyone' ? s.seg === 'anyone' : !s.everyone && s.seg === k;
-        const off = disabled || (k === 'everyone' && !settingsIsAdmin());
+        const on = k === 'everyone' ? s.everyone : k === 'outside' ? s.outside_editions : k === 'anyone' ? s.seg === 'anyone' : !s.everyone && s.seg === k;
+        const off = disabled || ((k === 'everyone' || k === 'outside') && !settingsIsAdmin());
         return `<button type="button" data-seg="${k}" aria-pressed="${on}"${off ? ' disabled' : ''}>${label}</button>`; }).join('')}</div>
-      ${s.everyone || (s.seg === 'anyone' && !chips.length) ? '' : `<div class="ru-chips">${chips.map(([k, id, label]) =>
+      ${(s.everyone && !s.outside_editions) || (s.seg === 'anyone' && !chips.length) ? '' : `<div class="ru-chips">${chips.map(([k, id, label]) =>
         `<span class="ru-chip">${esc(label)}${disabled ? '' : `<button type="button" data-unchip="${k}" data-id="${esc(id)}" aria-label="Remove ${esc(label)}">✕</button>`}</span>`).join('')}
         ${adding ? `<select class="ru-addsel" aria-label="Add"><option value="">+ add</option>${options.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select>` : ''}</div>`}`;
   };
@@ -494,6 +502,7 @@ function ruScopeEditor(host, scope, {flags, disabled = false, onChange = () => {
     const seg = ev.target.closest('[data-seg]');
     if (seg && !seg.disabled) {
       const k = seg.dataset.seg;
+      if (k === 'outside') { s.outside_editions = !s.outside_editions; draw(); onChange(); return; }
       if (k === 'everyone') Object.assign(s, {everyone: true, all_bots: false, groups: [], bots: [], people: []});
       else if (k === 'anyone') Object.assign(s, {groups: [], bots: [], people: []});
       else s.everyone = false;
@@ -502,6 +511,7 @@ function ruScopeEditor(host, scope, {flags, disabled = false, onChange = () => {
     const un = ev.target.closest('[data-unchip]');
     if (un) {
       if (un.dataset.unchip === 'all_bots') s.all_bots = false;
+      else if (un.dataset.unchip === 'outside_editions') s.outside_editions = false;
       else s[un.dataset.unchip] = s[un.dataset.unchip].filter(x => x !== un.dataset.id);
       draw(); onChange();
     }
@@ -514,7 +524,7 @@ function ruScopeEditor(host, scope, {flags, disabled = false, onChange = () => {
     host.querySelector('.ru-addsel')?.focus();
   };
   draw();
-  return {value: () => flags ? {everyone: s.everyone, all_bots: s.all_bots, groups: s.groups, bots: s.bots, people: s.people}
+  return {value: () => flags ? {everyone: s.everyone, all_bots: s.all_bots, groups: s.groups, bots: s.bots, people: s.people, ...(s.outside_editions ? {outside_editions: true} : {})}
     : {groups: s.groups, bots: s.bots, people: s.people}};
 }
 const ruSegHTML = (name, options, value, disabled) => `<div class="ru-seg" role="group" data-ru-seg="${name}">${options.map(([k, label]) =>
@@ -565,6 +575,59 @@ function ruQuoteHTML(cite) {
 }
 const ruPanelHead = (title, close) => `<div class="ru-side-h"><h2>${esc(title)}</h2><span class="spacer"></span><a class="ru-x" href="${close}" aria-label="Close">✕</a></div>`;
 
+// The Where a rule keeps, as the panel offers it: anywhere, direct chats, someone outside the company, one team, or one
+// thread. A rule that holds another term (several, or one the picker does not offer) shows as "Other" and keeps it
+// unless the person picks one here.
+function ruWhereKind(where) {
+  const t = where[0] || '';
+  if (!t) return {kind: 'any', team: '', thread: ''};
+  if (t === 'kind:dm') return {kind: 'dm', team: '', thread: ''};
+  if (t === 'has_outside_members') return {kind: 'outside', team: '', thread: ''};
+  if (t.startsWith('team:')) return {kind: 'team', team: t.slice(5), thread: ''};
+  if (t.startsWith('thread:')) return {kind: 'thread', team: '', thread: t.slice(7)};
+  return {kind: 'other', team: '', thread: ''};
+}
+// The threads the viewer can read, for the Where picker: the threads sidebar (GET /v2/threads, which checks each one),
+// a page at a time, newest activity first. Root threads only: a sub-thread's place is its root's.
+const RU_THREADS = 200, RU_THREAD_PAGES = 4;
+async function ruThreadList() {
+  const out = new Map();
+  let cursor = '';
+  for (let i = 0; i < RU_THREAD_PAGES && out.size < RU_THREADS; i++) {
+    const page = await get('/v2/threads?limit=50' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), {fresh: true})
+      .catch(() => null);
+    if (!page) break;
+    for (const t of [...(page.attention || []), ...(page.threads || []), ...(page.dms || [])]) out.set(t.id, t);
+    cursor = page.next_cursor;
+    if (!cursor) break;
+  }
+  return [...out.values()].slice(0, RU_THREADS);
+}
+function ruThreadOptions(thread) {
+  const list = (RU?.threads || []).slice();
+  if (thread && !list.some(t => t.id === thread)) list.unshift({id: thread, title: ''});
+  return `<option value="">Pick a thread</option>${list.map(t =>
+    `<option value="${esc(t.id)}"${t.id === thread ? ' selected' : ''}>${esc(t.title || t.id)}</option>`).join('')}`;
+}
+function ruWhereHTML(where, disabled) {
+  const was = ruWhereKind(where);
+  const radio = (value, label) => `<label><input type="radio" name="where_kind" value="${value}"${was.kind === value ? ' checked' : ''}${disabled}> ${label}</label>`;
+  return `${radio('any', 'Anywhere')}${radio('dm', 'Direct chats only')}${radio('outside', 'Someone outside the company is in it')}
+    <div class="ru-where-pick">${radio('team', 'In team')}<select name="where_team" aria-label="Team"${disabled}><option value="">Pick a team</option>${ruGroups().map(g =>
+      `<option value="${esc(g.id)}"${g.id === was.team ? ' selected' : ''}>${esc(g.name || g.id)}</option>`).join('')}</select></div>
+    <div class="ru-where-pick">${radio('thread', 'In thread')}<select name="where_thread" aria-label="Thread"${disabled}>${ruThreadOptions(was.thread)}</select></div>`;
+}
+function ruWhereValue(form, where) {
+  const pick = form.elements.where_kind.value, was = ruWhereKind(where);
+  // A team or thread keeps the stored term unless the person picks another; no pick keeps the rule's Where.
+  const id = pick === 'team' ? form.elements.where_team.value : pick === 'thread' ? form.elements.where_thread.value : '';
+  if (!pick || (pick === was.kind && (!id || id === was[pick]))) return where;
+  if (pick === 'any') return [];
+  if (pick === 'dm') return ['kind:dm'];
+  if (pick === 'outside') return ['has_outside_members'];
+  return id ? [pick + ':' + id] : where;
+}
+
 async function ruRulePanel(side, id, note = '') {
   const want = side.dataset.open;
   side.innerHTML = ruPanelHead('Rule', ruHref(RU.tab)) + skelRows(4);
@@ -574,6 +637,7 @@ async function ruRulePanel(side, id, note = '') {
   if (side.dataset.open !== want) return;
   const edit = !!r.can_edit, dis = edit ? '' : ' disabled', internal = r.kind === 'internal';
   if (!internal && !RU.sources.length) RU.sources = await ruAll('/v2/rule-sources').catch(() => []);
+  RU.threads = await ruThreadList();
   const dues = ruDueSorted(r);
   const quote = ruQuoteHTML(r.cite);
   const suggested = r.status === 'suggested';
@@ -582,6 +646,7 @@ async function ruRulePanel(side, id, note = '') {
       <label class="ru-fl"><span class="ru-lbl">Rule</span><textarea name="text" rows="2" maxlength="1000" required${dis}>${esc(r.text)}</textarea></label>
       <label class="ru-fl"><span class="ru-lbl">Description</span><textarea name="description" rows="2" maxlength="2000"${dis}>${esc(r.description || '')}</textarea></label>
       <div class="ru-fl"><span class="ru-lbl">Who</span><div data-scope="who"></div></div>
+      <div class="ru-fl"><span class="ru-lbl">Where <span class="ru-opt">(optional)</span></span><div class="ru-where">${ruWhereHTML(r.where || [], dis)}</div></div>
       ${internal ? '<div class="ru-fl"><span class="ru-lbl">With <span class="ru-opt">(optional)</span></span><div data-scope="with"></div></div>'
         : `<label class="ru-fl"><span class="ru-lbl">From</span><select name="source"${dis}>${ruSourceOptions(RU.sources, r.source?.id)}</select></label>`}
       <div class="ru-fl"><span class="ru-lbl">If broken</span>${ruSegHTML('if_broken', RU_BROKEN, r.if_broken, !edit)}
@@ -601,7 +666,7 @@ async function ruRulePanel(side, id, note = '') {
   const form = side.querySelector('form'), status = form.querySelector('.ru-status');
   // A suggestion is added only with a Who: Add waits until the editor names one.
   const addOne = form.querySelector('[data-ru-accept-one]');
-  const whoSet = scope => scope.everyone || scope.all_bots || ['groups', 'bots', 'people'].some(k => scope[k].length);
+  const whoSet = scope => scope.everyone || scope.all_bots || scope.outside_editions || ['groups', 'bots', 'people'].some(k => scope[k].length);
   const who = ruScopeEditor(form.querySelector('[data-scope="who"]'), r.who, {flags: true, disabled: !edit,
     onChange: () => { if (addOne) addOne.disabled = !whoSet(who.value()); }});
   if (addOne) addOne.disabled = !whoSet(who.value());
@@ -614,6 +679,8 @@ async function ruRulePanel(side, id, note = '') {
     if (text !== r.text) body.text = text;
     if (description !== (r.description || '')) body.description = description;
     if (!ruSameScope(who.value(), r.who)) body.who = who.value();
+    const where = ruWhereValue(form, r.where || []);
+    if (JSON.stringify([...where].sort()) !== JSON.stringify([...(r.where || [])].sort())) body.where = where;
     if (withEd && !ruSameScope(withEd.value(), r.with)) body.with = withEd.value();
     if (!internal && form.elements.source.value !== r.source?.id) body.source_id = form.elements.source.value;
     const broken = ruSegValue(form, 'if_broken');
@@ -808,11 +875,13 @@ async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
     document.body.appendChild(dlg);
   }
   const sources = await ruAll('/v2/rule-sources').catch(() => []);
-  dlg.innerHTML = `<form class="ru-form" method="dialog">
+  RU.threads = await ruThreadList();
+  dlg.innerHTML =`<form class="ru-form" method="dialog">
       <div class="ru-side-h"><h2>Add rule</h2><span class="spacer"></span><button class="ghost tmodal-x" type="button" data-ru-close aria-label="Close">✕</button></div>
       ${ruSegHTML('kind', [['internal', 'Internal'], ['external', 'External']], kind)}
       <label class="ru-fl"><span class="ru-lbl">Rule</span><textarea name="text" rows="2" maxlength="1000" required></textarea></label>
       <div class="ru-fl"><span class="ru-lbl">Who</span><div data-scope="who"></div></div>
+      <div class="ru-fl"><span class="ru-lbl">Where <span class="ru-opt">(optional)</span></span><div class="ru-where">${ruWhereHTML([], '')}</div></div>
       <div class="ru-fl" data-for="internal"><span class="ru-lbl">With <span class="ru-opt">(optional)</span></span><div data-scope="with"></div></div>
       <div class="ru-fl" data-for="external"><span class="ru-lbl">From</span>
         <select name="source"><option value="">Pick one</option>${ruSourceOptions(sources, '')}<option value="new">New…</option></select>
@@ -832,7 +901,7 @@ async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
   form.onsubmit = async ev => {
     ev.preventDefault();
     const k = ruSegValue(form, 'kind'), f = form.elements, button = form.querySelector('[type=submit]');
-    const body = {kind: k, text: f.text.value.trim(), who: whoEd.value()};
+    const body = {kind: k, text: f.text.value.trim(), who: whoEd.value(), where: ruWhereValue(form, [])};
     if (k === 'internal') body.with = withEd.value();
     button.disabled = true; status.textContent = 'Saving…';
     try {

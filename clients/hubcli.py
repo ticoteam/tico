@@ -15,10 +15,40 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub message list                       what waits for you
     hub message mark-read <message-id>     an external agent's own delivery
     hub message redact <message-id> [--label L]   take a secret (read from stdin) out of a message
+    hub thread catchup <thread-id> [--thread-only]
+                                           what is new in a thread and its sub-threads you may read, summarized into
+                                           your Assistant DM (the newest 40 messages; nothing new posts nothing)
     hub conversation show <conversation-id> [--before MSG] [--since TIME]
                                            what was said in a conversation: the newest 200, oldest
                                            first; has_more says there is an older page, --before
                                            its next_before reads it. The run's prompt names it
+    hub thread list [--with ACTOR] [--cursor C] [--limit N]   your threads: needs attention, then unread, then recent;
+                                               DMs apart; --with: only the threads shared with that actor
+    hub thread show <thread> [--cursor C]      one thread in tree order: a message's sub-thread sits under it
+    hub thread home <actor>                    a teammate's Home thread, made on first use (needs Read on them)
+    hub thread dm <actor>                      your DM with one person or bot: the open one, or a new one (needs Write)
+    hub thread dm-group <actor> <actor> [...] [--body "<text>"]   a group DM with these people or bots; --body is the first message
+    hub thread create ["<title>"] [--audience members|team|company|personal] [--group G] [--member ACTOR ...]
+                    [--body "<text>"]          the first message goes in with --body
+    hub thread post <thread> "<text>" [--kind say|ask] [--to ACTOR] [--ref KIND:ID ...]
+    hub thread reply <thread> <message> "<text>"   a side topic: the reply goes in that message's sub-thread
+    hub thread edit <message> "<text>"         edit a message you wrote: a new revision
+    hub thread sub <message>                   open a message's sub-thread without posting
+    hub thread react|unreact <message-id> <emoji>   your reaction to a message, such as :+1:
+    hub thread open-earlier <thread>           a bot's manager opens its earlier messages to its Home readers
+    hub thread task <message-id> --title T --owner O   a task from a message: private unless the thread is company-wide
+    hub thread delete <message-id>             delete a message you wrote (a marker stays)
+    hub thread upload <thread> <file> [--text T] [--kind say|ask] [--to ACTOR] [--under MESSAGE]   a file in a message
+    hub thread follow|unfollow <thread> [--notify live|mentions|digest|muted]
+    hub thread read <thread> [--seq N | --all]
+    hub thread search "<words>" [--cursor C]   the messages in threads you can read
+    hub thread members list|add|remove <thread> [<actor>] [--owner]   actors: human:<id>, bot:<slug>, group:<id>
+    hub thread update <thread> [--title T] [--archive|--unarchive] [--audience ...] [--group G] [--keep-days N|--keep-forever]
+    hub thread link-slack <thread> [<channel>] [--history] [--off]
+                                           a thread's Slack link (admins): with a channel, asks for it and Tico
+                                           checks it; --history also brings the channel's earlier messages; --off
+                                           takes it away; with the thread alone, lists its links
+    hub thread slack-resume <link-id>          check a suspended or refused Slack link again (admins)
     hub question ask <bot> [<bot>...] "<question>" --wait 60
     hub question answer <message-id> "<text>" [--unknown "needs X"] [--on-behalf-of turn]
     hub note create <bot> "<text>" [--text-file f] [--defer 4h]  a deferred message: wakes nobody; the bot's next
@@ -109,12 +139,18 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub page list [--bot X] [--task ID] [--archived]   pages you may read, newest first
     hub page show <id>                     one page's status: updated, by, version, cadence, stale or replaced
     hub page archive <id> [--restore]      hide a page from lists and search, or bring it back
-    hub card list [--place P]              what is pinned at dashboard, team:<group>, bot:<slug> or task:<id>
+    hub card list [--place P]              what is pinned at dashboard, team:<group>, bot:<slug>, task:<id> or
+                                           person:me (My dashboard)
     hub card add <template> [--place P] [--team G] [--weeks N] [--count N] [--kpi ID] [--title T] [--size S]
                                            tasks_by_status, done_per_week, needs_you, spend, kpi, automation_runs,
-                                           latest_pages; a bot pins to its own sidebar or task
+                                           latest_pages, needs_attention, unread_threads, my_tasks, updates; a bot
+                                           pins to its own sidebar or task
     hub card update <id> [--title T] [--team G] [--weeks N] [--count N] [--kpi ID]
     hub card remove <id>
+    hub connections list [--cursor C] [--limit N]
+                                           every connection you may see: status, scope, who reads it, its bots
+    hub inbound audience <inbox-id> company|team [--group G]
+                                           who reads an Email & Phone inbox (owner or admin)
     hub pin add <place> <page:FILE|card:ID> [--size small|medium|large] [--position N]
     hub pin update <pin-id> [--size S] [--position N]
     hub pin remove <pin-id>
@@ -136,6 +172,16 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub meeting approve <id>|--all         share your meetings
     hub meeting dismiss <id>               keep a meeting out of the queue
     hub meeting import <file> [--title T] [--date D] [--participant P ...]
+    hub call list <thread> [--limit N] [--before T]  the calls in a thread, newest first
+    hub call start <thread> [--title T] [--speak]  start a call there; you are its connector
+    hub call show <call>                   a call: its state, people, bots, how it ended
+    hub call join <call>                   join: the URL and a token good for 5 minutes
+    hub call token <call>                  a fresh token while you are joined
+    hub call leave <call>                  leave a call you joined
+    hub call end <call>                    end a call you started; its transcript goes to the thread
+    hub call retry <call>                  ask again for action items the Gateway could not make
+    hub call bot add <call> <bot>...       bots listen to a call and reply in its thread
+    hub call bot remove <call> <bot>       take a bot out of a call
     hub assistant propose --summary "..." --path /api/v2/... [--method POST] [--body '{...}']
                                            Assistant only: ask the person to confirm a side effect (an
                                            approval, anything outside the company, spend, settings,
@@ -200,7 +246,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                 [--definition-version N] [--supersedes READING-ID]
                                            a reading: a fact with its period; to correct one, supersede it
     hub proposal create --kind goal_wording|goal_kpi|kpi_definition|kpi_target|flag|goal_why|recovery|strategy_draft|
-                               brand_draft|gtm_draft
+                               brand_draft
                         [--goal ID] [--kpi ID]
                         (--payload '{json}'|--payload-file f.json) [--reason "..."]
                                            a change you may not make yourself, for the owner to confirm
@@ -215,9 +261,11 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub rules ask "<question>"             can I...? Counsel answers with the rules that apply, cited
     hub rules suggested                    the suggestions waiting for a person
     hub rules add --kind internal|external --text "..." [--who N ...] [--everyone] [--all-bots] [--with N ...]
+                  [--where thread:ID|team:GROUP|kind:dm|has_outside_members ...]
                   [--from SOURCE] [--description "..."] [--if-broken block|escalate|warn] [--reviewer P]
                   [--file FILE_ID --version N --section S --quote Q]   external: the words the rule rests on
     hub rules edit <id> --version N [--text ...] [--who N ...] [--everyone] [--all-bots] [--with N ...] [--from SOURCE]
+                   [--where TERM ...]
     hub rules accept <id> --version N [--who N ...] [--everyone] [--all-bots]   a person; a bot is refused
     hub rules skip <id> --version N        set a suggestion aside
     hub rules retire <id> --version N      retire a rule in force; its due dates come back
@@ -230,6 +278,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub rules check "<draft>" --to <teammate> [--as message|comment|task|assign]
                                            a bot checks a draft against its rules; sending it then costs no second check
     hub rules appeal <hold-id> "<why>"     a bot asks the reviewer to look at its held output
+    hub rules withdraw <hold-id>           take back your held write to edit it and send it again
     hub strategy show                      the published strategy, its bets with their goals and colour, the website
     hub strategy summary                   the text every run carries
     hub strategy versions [N]              published versions, newest first; N: that version whole
@@ -246,26 +295,15 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            proposal create --kind strategy_draft
     hub brand show [--section S] [--version N] | summary | check <file|->
                                            the brand; check: avoided words, wrong names, never-made claims in a draft
-    hub gtm show [--section S] [--version N] | summary | sources
-                                           the go-to-market: motion, buyer, playbooks; sources of truth
-    hub brand|gtm draft --section S --body JSON [--revision N] | publish [--note "..."]
-                                           owner or admin; a bot proposes with --kind brand_draft|gtm_draft
-    hub growth segment list | create --name ...|--segment-id ID [--status S --motion M --who-buys ... --deal-size ...
-                             --why ... --owner ...] | update ID   who we sell to; serving/next are Us/Next on Strategy
-    hub growth channel list [--retired] | show SLUG | add SLUG --name ... [--segment ID] | update SLUG | retire SLUG
-    hub growth source list | add --truth-for ... --system ... --reach-kind ... | update ID | retire ID
-    hub growth idea create --title ... [--hypothesis --prediction --bet --kpi --channel ... --segment ... --i --c --e
-                           --source-kind --source-ref --follow-up-of --assignee]
-    hub growth idea list [--status S] [--bet ID] [--channel SLUG] [--segment ID] [--kpi ID] [--q ...] | show ID
-                         | update ID
-    hub growth idea score ID --i N --c N --e N
-    hub growth idea start ID --to D --change ... --stop-if ... [--from D] [--judged-kpi ID] [--min-events N]
-    hub growth idea verdict ID --status won|lost|inconclusive|dropped|paused [--result --learning
-                            --bet-effect --confidence]   a stop-rule hit or missed baseline is lost, before min events
-    hub growth cohort list [--channel SLUG] [--month M] [--segment ID] | set --channel SLUG|unknown --month YYYY-MM
-                           [--segment ID --spend N --bot-cost N --new N --d30 PCT --d90 PCT --d180 PCT --revenue N
+    hub brand draft --section S --body JSON [--revision N] | publish [--note "..."]
+                                           owner or admin; a bot proposes with --kind brand_draft
+    hub growth channel list [--retired] | show SLUG | add SLUG --name ... | update SLUG | retire SLUG
+                                           a channel's open marketing tasks are labelled channel:<slug>
+    hub growth source list [--retired] | add --truth-for ... --system ... --reach-kind ... | update ID | retire ID
+    hub growth cohort list [--channel SLUG] [--month M] [--limit N] | set --channel SLUG|unknown --month YYYY-MM
+                           [--spend N --bot-cost N --new N --d30 PCT --d90 PCT --d180 PCT --revenue N
                            --margin PCT --quality actual|estimate --source FIELD=TEXT]
-    hub growth economics [--month M] [--segment ID] | week | evidence | working | kpis | settings [--set KEY=VALUE]
+    hub growth economics [--month M] | numbers [--months N] | kpis | settings [--set KEY=VALUE]
     hub lens list [--market]               the lenses: thought exercises run against the strategy or the market
     hub lens run <id> [--answers-file f.json] [--draft] [--no-wait]
                                            run one (the owner, the Strategy Bot; a market lens also the Librarian);
@@ -332,6 +370,15 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            who changed caps, spend, groups, automations and inboxes; the owner sees all
     hub automation inbox <inbox> [--send on|off]
                                            an inbox's send switch (email, slack:dm, slack:#chan); off = drafts only
+    hub peer list                          this install's federation: key, Gateway, peerings, shared threads
+    hub peer key | rotate-key              make this install's key, or a new one (both sides approve again)
+    hub peer request <install>             ask another install to peer with this one; it approves, then you do
+    hub peer approve|pause|resume|revoke <peering>
+                                           approve it, the kill switch, resume it, or end it
+    hub peer share|unshare <thread> <install>
+                                           give an active peer a thread you own, or take an install out of one
+    hub peer retry <thread> <install>      send again what that install has not taken from the thread
+    hub peer add-reader <thread> <actor>   let a person here read a shared copy of a thread (an admin adds them)
     hub trigger list                       webhooks people and bots made; an automation runs on one
     hub trigger create <name> [--id X]     make one; the address (with its secret) is shown once
     hub trigger show <id>                  address, settings, 24-hour counts, automations
@@ -488,6 +535,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub human add <email> [--name N] [--title T] [--reports-to P]
                                            add a human to the roster and sign-in list (a Confirm card first, unless they are in the team's domain)
     hub human list                         the humans on the roster
+    hub human access <human> [--see V] [--read V] [--write V]
+                                           show or set who sees, reads (their Home), writes (DMs) to a person
     hub group list                         the groups (they nest), with their humans and bots
     hub group update [<group>] [--name N] [--parent G|''] [--lead bot:B|person:P|''] [--add-human H ...]
                      [--add-bot B ...] [--remove-human H ...] [--remove-bot B ...] [--on-behalf-of turn]
@@ -496,6 +545,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            rename, move, lead or fill it. A teammate is in one group at a time
     hub group delete <group> [--on-behalf-of turn]
                                            delete a group; its teammates and groups move up to its parent
+    hub group access <group> [--see V] [--read V] [--write V]
+                                           show or set who sees, reads, writes to a group (a lead or an admin)
     hub api GET|POST|PUT|PATCH|DELETE <path> ['{json}']
                                            BotOps: any v2 route, as the person who asked; a Confirm card for what
                                            always needs their click. Never a secret in the body
@@ -775,6 +826,12 @@ def _finance_payload(text):
     return value
 
 
+def thread_page_flags(s):
+    """The paging flags of a thread list: a page's next_cursor reads on, and --limit sets the size."""
+    s.add_argument("--cursor", help="the page after this cursor: a page's next_cursor")
+    s.add_argument("--limit", type=int, help="items in the page (50 by default, 100 at most)")
+
+
 def parser():
     p = argparse.ArgumentParser(prog="hub", description="the company hub: messages, tasks, status")
     sub = p.add_subparsers(dest="cmd")
@@ -800,6 +857,8 @@ def parser():
             item.add_argument('--before', type=int)
         if action == 'list':
             item.add_argument('--spam', action='store_true', default=None)
+    item = inbound.add_parser('audience'); item.set_defaults(fn='inbound audience')
+    item.add_argument('inbox_id'); item.add_argument('audience', choices=('company', 'team')); item.add_argument('--group')
     for action in ('read', 'code'):
         item = inbound.add_parser(action); item.set_defaults(fn='inbound '+action)
         item.add_argument('message_id')
@@ -807,12 +866,29 @@ def parser():
             item.add_argument('--offset', type=int); item.add_argument('--max-chars', type=int)
 
 
+    connections = sub.add_parser('connections', help='every connection in one list').add_subparsers(dest='sub')
+    item = connections.add_parser('list'); item.set_defaults(fn='connections list')
+    item.add_argument('--cursor'); item.add_argument('--limit', type=int)
+
     mail = sub.add_parser('mail', help='physical mail the company received (scanned letters)').add_subparsers(dest='sub')
     item = mail.add_parser('list'); item.set_defaults(fn='mail list')
     item.add_argument('--status', choices=('new','filed','archived','failed'))
     item.add_argument('--kind', choices=('legal','government_tax','bill','check','financial','junk','other'))
     item.add_argument('--after'); item.add_argument('--limit', type=int)
     item = mail.add_parser('read'); item.set_defaults(fn='mail read'); item.add_argument('item_id')
+
+    # The Company page, read-only (docs/company-page.md): owners and admins; nothing here publishes or changes a reader.
+    sub.add_parser('company-page', help='the Company page: transparency, address, last update').set_defaults(fn='company-page')
+    audiences = sub.add_parser('audiences', help='the Company page\'s audiences').add_subparsers(dest='sub')
+    item = audiences.add_parser('list'); item.set_defaults(fn='audiences list')
+    item.add_argument('--limit', type=int); item.add_argument('--offset', type=int)
+    editions = sub.add_parser('editions', help='the Company page\'s editions: drafts and published').add_subparsers(dest='sub')
+    item = editions.add_parser('list'); item.set_defaults(fn='editions list')
+    item.add_argument('--audience'); item.add_argument('--status'); item.add_argument('--before'); item.add_argument('--limit', type=int)
+    item = editions.add_parser('show'); item.set_defaults(fn='editions show'); item.add_argument('id')
+    readers = sub.add_parser('readers', help='the Company page\'s readers (owners and admins)').add_subparsers(dest='sub')
+    item = readers.add_parser('list'); item.set_defaults(fn='readers list')
+    item.add_argument('--limit', type=int); item.add_argument('--cursor', type=int)
 
     meeting = sub.add_parser("meeting",
                              help="search meetings, read transcripts, import a transcript from another tool").add_subparsers(dest="sub")
@@ -893,6 +969,139 @@ def parser():
     s.add_argument("--before", help="the page before this message id: a page's next_before")
     s.add_argument("--since", help="only messages sent after this time (ISO 8601)")
     s.set_defaults(fn="conversation show")
+
+    thread = sub.add_parser("thread", help="threads: list yours, read one, post, reply in a sub-thread, follow, search, catch up").add_subparsers(dest="sub")
+    s = thread.add_parser("catchup", help="summarize what is new in a thread into your Assistant DM")
+    s.add_argument("thread_id")
+    s.add_argument("--thread-only", dest="scope", action="store_const", const="thread", default="subtree",
+                   help="this thread only, not its sub-threads")
+    s.set_defaults(fn="thread catchup")
+    s = thread.add_parser("list", help="your threads: needs attention first, then unread, then recent; DMs apart")
+    s.add_argument("--with", dest="with", metavar="ACTOR", help="only the threads shared with this person, bot or group")
+    thread_page_flags(s)
+    s.set_defaults(fn="thread list")
+    s = thread.add_parser("show", help="one thread in tree order: each message, then the sub-threads under it")
+    s.add_argument("thread")
+    thread_page_flags(s)
+    s.set_defaults(fn="thread show")
+    s = thread.add_parser("home", help="a teammate's Home thread, made on first use (needs Read on them)")
+    s.add_argument("actor", help="bot:<slug>, human:<id> or group:<id>")
+    s.set_defaults(fn="thread home")
+    s = thread.add_parser("dm-group", help="a group DM with several people or bots, with an optional first message")
+    s.add_argument("members", nargs="+", metavar="ACTOR", help="human:<id> or bot:<slug>; one or more")
+    s.add_argument("--body", help="the first message")
+    s.set_defaults(fn="thread dm-group")
+    s = thread.add_parser("dm", help="your DM with one person or bot: the open one, or a new one")
+    s.add_argument("actor", help="human:<id> or bot:<slug>")
+    s.set_defaults(fn="thread dm")
+    s = thread.add_parser("create", help="start a thread: its audience decides who reads it")
+    s.add_argument("title", nargs="?")
+    s.add_argument("--audience", choices=["members", "team", "company", "personal"], help="members (private) by default")
+    s.add_argument("--group", dest="audience_group_id", help="with --audience team: the group's id")
+    s.add_argument("--member", dest="members", action="append", metavar="ACTOR",
+                   help="a person, bot or group to add: human:<id>, bot:<slug> or group:<id>; repeat for more")
+    s.add_argument("--body", help="the first message")
+    s.set_defaults(fn="thread create")
+    s = thread.add_parser("post", help="post a message to a thread")
+    s.add_argument("thread")
+    s.add_argument("text")
+    s.add_argument("--kind", choices=["say", "ask"], help="ask: wants an answer from --to")
+    s.add_argument("--to", help="the person or bot it is addressed to: human:<id> or bot:<slug>")
+    s.add_argument("--ref", dest="refs", action="append", metavar="KIND:ID", help="a reference such as task:<id>; repeat for more")
+    s.set_defaults(fn="thread post")
+    s = thread.add_parser("reply", help="reply in a message's sub-thread: a side topic under that message")
+    s.add_argument("thread")
+    s.add_argument("message", help="the message the reply branches from")
+    s.add_argument("text")
+    s.add_argument("--ref", dest="refs", action="append", metavar="KIND:ID", help="a reference such as task:<id>; repeat for more")
+    s.set_defaults(fn="thread reply")
+    s = thread.add_parser("edit", help="edit a message you wrote: its text becomes a new revision")
+    s.add_argument("message")
+    s.add_argument("text")
+    s.set_defaults(fn="thread edit")
+    s = thread.add_parser("sub", help="open a message's sub-thread without posting; it is made if it does not exist")
+    s.add_argument("message")
+    s.set_defaults(fn="thread sub")
+    s = thread.add_parser("react", help="add your reaction to a message, such as :+1:")
+    s.add_argument("message_id")
+    s.add_argument("emoji", help="an emoji, or its shortcode such as :+1:")
+    s.set_defaults(fn="thread react")
+    s = thread.add_parser("unreact", help="remove your reaction from a message")
+    s.add_argument("message_id")
+    s.add_argument("emoji", help="an emoji, or its shortcode such as :+1:")
+    s.set_defaults(fn="thread unreact")
+    s = thread.add_parser("open-earlier", help="open a bot's earlier messages to the people who read its Home (a manager of the bot)")
+    s.add_argument("thread_id")
+    s.set_defaults(fn="thread open-earlier")
+    s = thread.add_parser("task", help="make a task from a message: private unless the thread is company-wide")
+    s.add_argument("message_id")
+    s.add_argument("--title", required=True)
+    s.add_argument("--owner", required=True, help="a bot slug, a person id, or me")
+    s.set_defaults(fn="thread task")
+    s = thread.add_parser("delete", help="delete a message you wrote: a marker stays, and the asks it answered reopen")
+    s.add_argument("message_id")
+    s.set_defaults(fn="thread delete")
+    s = thread.add_parser("upload", help="post a message with a local file to a thread: the file is streamed to Tico")
+    s.add_argument("thread")
+    s.add_argument("path", help="a local file on this computer")
+    s.add_argument("--text", help="the message's text (optional: the file can come alone)")
+    s.add_argument("--kind", choices=["say", "ask"], default="say")
+    s.add_argument("--to", help="the person or bot an ask is for")
+    s.add_argument("--under", metavar="MESSAGE",
+                   help="post the file in that message's sub-thread instead of the thread")
+    s.set_defaults(fn="thread upload")
+    s = thread.add_parser("slack-resume", help="check a suspended or refused Slack link again (admins); its id is in link-slack's listing")
+    s.add_argument("link_id")
+    s.set_defaults(fn="thread slack-resume")
+    s = thread.add_parser("follow", help="follow a thread: live, mentions, digest or muted")
+    s.add_argument("thread")
+    s.add_argument("--notify", choices=["live", "mentions", "digest", "muted"], help="live by default")
+    s.set_defaults(fn="thread follow")
+    s = thread.add_parser("unfollow", help="stop following a thread; you keep what you can read")
+    s.add_argument("thread")
+    s.set_defaults(fn="thread unfollow")
+    s = thread.add_parser("read", help="mark a thread read to a message's seq, or all of it")
+    s.add_argument("thread")
+    s.add_argument("--seq", type=int, help="the seq of the last message you read")
+    s.add_argument("--all", action="store_true", help="read the thread and every sub-thread under it")
+    s.set_defaults(fn="thread read")
+    s = thread.add_parser("search", help="search the threads you can read")
+    s.add_argument("q")
+    thread_page_flags(s)
+    s.set_defaults(fn="thread search")
+    members = thread.add_parser("members", help="who can read a thread: list, add, remove").add_subparsers(dest="subsub")
+    s = members.add_parser("list", help="the people, bots and groups in a thread, with their roles")
+    s.add_argument("thread")
+    thread_page_flags(s)
+    s.set_defaults(fn="thread members list")
+    s = members.add_parser("add", help="add a person, bot or group so it can read the thread")
+    s.add_argument("thread")
+    s.add_argument("actor", help="human:<id>, bot:<slug> or group:<id>")
+    s.add_argument("--owner", dest="role", action="store_const", const="owner",
+                   help="as an owner: may remove members")
+    s.set_defaults(fn="thread members add")
+    s = members.add_parser("remove", help="remove a person, bot or group: they stop reading the thread (owner or admin)")
+    s.add_argument("thread")
+    s.add_argument("actor")
+    s.set_defaults(fn="thread members remove")
+    s = thread.add_parser("update", help="rename, archive or unarchive a thread, or change who may read it")
+    s.add_argument("thread")
+    s.add_argument("--title")
+    s.add_argument("--archive", dest="archived", action="store_const", const=True)
+    s.add_argument("--unarchive", dest="archived", action="store_const", const=False)
+    s.add_argument("--audience", choices=["members", "team", "company"],
+                   help="team or company makes it public; only its starter or an admin can")
+    s.add_argument("--group", dest="audience_group_id", help="with --audience team: the group's id")
+    s.add_argument("--keep-days", dest="retention_days", type=int,
+                   help="delete its messages after this many days, sub-threads included (a root thread's owner or admin)")
+    s.add_argument("--keep-forever", dest="keep_forever", action="store_true", help="keep its messages for good")
+    s.set_defaults(fn="thread update")
+    s = thread.add_parser("link-slack", help="link a thread to a Slack channel (admins), list its links, or --off to take them away")
+    s.add_argument("thread", help="the thread's id")
+    s.add_argument("channel", nargs="?", help="#name or id (C0123456789); left out, the thread's links are listed")
+    s.add_argument("--history", action="store_true", help="also bring in the channel's earlier messages")
+    s.add_argument("--off", action="store_true", help="take the thread's Slack link away")
+    s.set_defaults(fn="thread link-slack")
 
     question = sub.add_parser("question", help="ask other bots a question and wait; answer one asked of you").add_subparsers(dest="sub")
     s = question.add_parser("ask")
@@ -1734,7 +1943,7 @@ def parser():
     proposal = sub.add_parser("proposal", help="a change you may not make yourself, for the owner to confirm").add_subparsers(dest="sub")
     s = proposal.add_parser("create")
     s.add_argument("--kind", required=True, choices=["goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why",
-                                                     "recovery", "strategy_draft", "brand_draft", "gtm_draft"])
+                                                     "recovery", "strategy_draft", "brand_draft"])
     s.add_argument("--goal", dest="goal_id")
     s.add_argument("--kpi", dest="kpi_id")
     s.add_argument("--payload", help="the proposed change, as JSON")
@@ -1789,8 +1998,12 @@ def parser():
                    help="a group, person or bot by id or name; repeatable")
     s.add_argument("--everyone", action="store_true")
     s.add_argument("--all-bots", dest="all_bots", action="store_true")
+    s.add_argument("--outside-editions", dest="outside_editions", action="store_true",
+                   help="what the Company page sends outside (owner and admins only)")
     s.add_argument("--with", dest="with_names", action="append", default=[], metavar="NAME",
                    help="internal: a group, person or bot the rule is about; repeatable")
+    s.add_argument("--where", action="append", default=None, metavar="TERM",
+                   help="where it applies: thread:ID, team:GROUP, kind:dm or has_outside_members; repeatable")
     s.add_argument("--from", dest="source_id", metavar="SOURCE", help="external: the From, by name or id")
     s.add_argument("--file", dest="file_id", metavar="FILE_ID", help="external: the document the rule rests on")
     s.add_argument("--section", help="external: the section of the document")
@@ -1808,7 +2021,10 @@ def parser():
     s.add_argument("--who", dest="who_names", action="append", default=[], metavar="NAME")
     s.add_argument("--everyone", action="store_true")
     s.add_argument("--all-bots", dest="all_bots", action="store_true")
+    s.add_argument("--outside-editions", dest="outside_editions", action="store_true")
     s.add_argument("--with", dest="with_names", action="append", default=[], metavar="NAME")
+    s.add_argument("--where", action="append", default=None, metavar="TERM",
+                   help="where it applies (replaces the list): thread:ID, team:GROUP, kind:dm or has_outside_members")
     s.add_argument("--from", dest="source_id", metavar="SOURCE")
     s.add_argument("--if-broken", dest="if_broken", choices=["block", "escalate", "warn"])
     s.add_argument("--reviewer")
@@ -1819,6 +2035,7 @@ def parser():
     s.add_argument("--who", dest="who_names", action="append", default=[], metavar="NAME")
     s.add_argument("--everyone", action="store_true")
     s.add_argument("--all-bots", dest="all_bots", action="store_true")
+    s.add_argument("--outside-editions", dest="outside_editions", action="store_true")
     s.set_defaults(fn="rules accept")
     s = rules.add_parser("skip", help="set a suggestion aside")
     s.add_argument("id")
@@ -1874,8 +2091,14 @@ def parser():
     s.add_argument("id", help="the hold's id, from the held answer")
     s.add_argument("why", nargs="?", default="", help="why you think the rule does not apply")
     s.set_defaults(fn="rules appeal")
-    strategy = sub.add_parser("strategy", help="the team's strategy: its bets, the four sections, the versions").add_subparsers(dest="sub")
+    s = rules.add_parser("withdraw", help="take back your held write to edit it and send it again (nothing is sent)")
+    s.add_argument("id", help="the hold's id, from the held answer")
+    s.set_defaults(fn="rules withdraw")
+    strategy = sub.add_parser("strategy", help="the team's strategy: its bets, its sections, the versions").add_subparsers(dest="sub")
     s = strategy.add_parser("show", help="the published strategy, its bets and their goals; the owner also gets the draft")
+    s.add_argument("--section", choices=["serve", "sell", "know", "how", "not"],
+                   help="only this section of the published strategy, as text (how: How we sell)")
+    s.add_argument("--json", action="store_true", help="print the API response as JSON")
     s.set_defaults(fn="strategy show")
     s = strategy.add_parser("summary", help="the text every run's context carries")
     s.set_defaults(fn="strategy summary")
@@ -1883,7 +2106,7 @@ def parser():
     s.add_argument("--summary")
     s.add_argument("--vision")
     s.add_argument("--section", action="append", default=[], metavar="KEY=TEXT",
-                   help="serve, sell, know, not, or an extra section's key; KEY= clears it; repeatable")
+                   help="serve, sell, know, how, not, or an extra section's key; KEY= clears it; repeatable")
     s.add_argument("--revision", type=int, help="the draft's revision you read; default the current one")
     s.set_defaults(fn="strategy draft")
     s = strategy.add_parser("publish", help="owner only: the draft becomes the next version")
@@ -1932,59 +2155,28 @@ def parser():
         return s
 
     brand_sections = ("name", "positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples")
-    gtm_sections = ("motion", "buyer", "playbooks")
-    for kind, title, sections in (("brand", "the brand: voice, words, names, claims", brand_sections),
-                                  ("gtm", "the go-to-market: motion, buyer, playbooks", gtm_sections)):
-        page = sub.add_parser(kind, help=title).add_subparsers(dest="sub")
-        s = json_flag(page.add_parser("show", help="the published page; owner and admins also get the draft"))
-        s.add_argument("--section", choices=sections, help="only this section")
-        s.add_argument("--version", type=int, metavar="N", help="a published version; default the latest")
-        s.set_defaults(fn=f"{kind} show")
-        s = json_flag(page.add_parser("summary", help="the text a growth-facing bot's turn carries"))
-        s.set_defaults(fn=f"{kind} summary")
-        if kind == "brand":
-            s = json_flag(page.add_parser("check", help="check a draft against the published brand; - reads stdin"))
-            s.add_argument("file", help="a file holding the draft, or - for stdin")
-            s.set_defaults(fn="brand check")
-        else:
-            s = json_flag(page.add_parser("sources", help="the source of truth for each number, and conflicts"))
-            s.add_argument("--retired", dest="include_retired", action="store_true", default=None)
-            s.set_defaults(fn="gtm sources")
-        s = json_flag(page.add_parser("draft", help=f"owner or admin: change one section of the draft; a bot proposes "
-                                                    f"instead (proposal create --kind {kind}_draft)"))
-        s.add_argument("--section", required=True, choices=sections)
-        s.add_argument("--body", required=True, help="the section's value as JSON; null removes it")
-        s.add_argument("--revision", type=int, help="the draft's revision you read; stale is refused")
-        s.set_defaults(fn=f"{kind} draft")
-        s = json_flag(page.add_parser("publish", help="owner or admin: the draft becomes the next version"))
-        s.add_argument("--note", default="")
-        s.set_defaults(fn=f"{kind} publish")
+    page = sub.add_parser("brand", help="the brand: voice, words, names, claims").add_subparsers(dest="sub")
+    s = json_flag(page.add_parser("show", help="the published page; owner and admins also get the draft"))
+    s.add_argument("--section", choices=brand_sections, help="only this section")
+    s.add_argument("--version", type=int, metavar="N", help="a published version; default the latest")
+    s.set_defaults(fn="brand show")
+    s = json_flag(page.add_parser("summary", help="the text a growth-facing bot's turn carries"))
+    s.set_defaults(fn="brand summary")
+    s = json_flag(page.add_parser("check", help="check a draft against the published brand; - reads stdin"))
+    s.add_argument("file", help="a file holding the draft, or - for stdin")
+    s.set_defaults(fn="brand check")
+    s = json_flag(page.add_parser("draft", help="owner or admin: change one section of the draft; a bot proposes instead "
+                                                "(proposal create --kind brand_draft)"))
+    s.add_argument("--section", required=True, choices=brand_sections)
+    s.add_argument("--body", required=True, help="the section's value as JSON; null removes it")
+    s.add_argument("--revision", type=int, help="the draft's revision you read; stale is refused")
+    s.set_defaults(fn="brand draft")
+    s = json_flag(page.add_parser("publish", help="owner or admin: the draft becomes the next version"))
+    s.add_argument("--note", default="")
+    s.set_defaults(fn="brand publish")
 
-    growth = sub.add_parser("growth", help="growth: segments, channels, sources, ideas and tests, cohorts, unit economics").add_subparsers(dest="sub")
-    segment = growth.add_parser("segment", help="who the company sells to").add_subparsers(dest="subsub")
-
-    def segment_flags(s):
-        s.add_argument("--status", choices=["serving", "testing", "next", "dropped"],
-                       help="serving and next are Us and Next on the Strategy page; a bot adds testing ones")
-        s.add_argument("--motion", choices=["self_serve", "sales_led", "partner", "marketplace", "local", "community",
-                                            "ecommerce"])
-        s.add_argument("--who-buys", dest="who_buys")
-        s.add_argument("--deal-size", dest="deal_size", help="$40/month")
-        s.add_argument("--why")
-        s.add_argument("--owner", help='me, a bot slug or a person id; "" clears')
-        s.add_argument("--sort", type=int)
-    json_flag(segment.add_parser("list")).set_defaults(fn="growth segment list")
-    s = json_flag(segment.add_parser("create", help="by name (found or made in the market graph) or market segment id"))
-    s.add_argument("--name")
-    s.add_argument("--segment-id", dest="segment_id", metavar="ID", help="a market segment: segment/...")
-    segment_flags(s)
-    s.set_defaults(fn="growth segment create")
-    s = json_flag(segment.add_parser("update", help="owner or admin; a bot may change why, who buys and deal size"))
-    s.add_argument("id", help="the segment's id or its market segment id")
-    s.add_argument("--name")
-    segment_flags(s)
-    s.set_defaults(fn="growth segment update")
-
+    growth = sub.add_parser("growth", help="growth: channels, sources, monthly cohorts, unit economics, the numbers") \
+        .add_subparsers(dest="sub")
     channel = growth.add_parser("channel", help="the channels customers come from").add_subparsers(dest="subsub")
 
     def channel_flags(s):
@@ -1997,8 +2189,6 @@ def parser():
         s.add_argument("--guardrail-kpi", dest="guardrail_kpi_id", metavar="ID")
         s.add_argument("--guardrail-max", dest="guardrail_max", type=float, metavar="N")
         s.add_argument("--sort", type=int)
-        s.add_argument("--segment", dest="segments", action="append", metavar="ID",
-                       help='a segment it reaches; repeatable; "" clears')
     s = json_flag(channel.add_parser("list"))
     s.add_argument("--retired", dest="include_retired", action="store_true", default=None, help="also retired ones")
     s.set_defaults(fn="growth channel list")
@@ -2042,91 +2232,15 @@ def parser():
     s.add_argument("id")
     s.set_defaults(fn="growth source retire")
 
-    idea = growth.add_parser("idea", help="growth ideas and their tests").add_subparsers(dest="subsub")
-    idea_sources = ["strategy", "competitor", "listening", "peec", "lost_test", "person", "other"]
-
-    def idea_flags(s):
-        s.add_argument("--hypothesis", help="we believe X because Y")
-        s.add_argument("--prediction", help="what will move, by how much, by when")
-        s.add_argument("--bet", dest="bet_id", metavar="ID", help="the strategy bet it tests")
-        s.add_argument("--kpi", dest="kpi_id", metavar="ID", help="the KPI it should move")
-        s.add_argument("--channel", dest="channels", action="append", metavar="SLUG", help="repeatable")
-        s.add_argument("--segment", dest="segments", action="append", metavar="ID",
-                       help='a segment it targets; repeatable; "" clears')
-        s.add_argument("--source-kind", dest="source_kind", choices=idea_sources)
-        s.add_argument("--source-ref", dest="source_ref", help="a link or id for that source")
-    s = json_flag(idea.add_parser("create", help="file an idea; anyone may"))
-    s.add_argument("--title", required=True)
-    idea_flags(s)
-    s.add_argument("--i", dest="ice_i", type=int, metavar="1-10", help="impact")
-    s.add_argument("--c", dest="ice_c", type=int, metavar="1-10", help="confidence")
-    s.add_argument("--e", dest="ice_e", type=int, metavar="1-10", help="ease")
-    s.add_argument("--follow-up-of", dest="follow_up_of", metavar="ID", help="the finished idea this follows")
-    s.add_argument("--assignee", help="me, a bot slug or a person id; default you")
-    s.add_argument("--body", help="more detail for the task")
-    s.set_defaults(fn="growth idea create")
-    s = json_flag(idea.add_parser("list", help="best ICE first"))
-    s.add_argument("--status", choices=["idea", "testing", "won", "lost", "inconclusive", "dropped", "paused"])
-    s.add_argument("--bet", dest="bet_id", metavar="ID")
-    s.add_argument("--channel", metavar="SLUG")
-    s.add_argument("--segment", metavar="ID")
-    s.add_argument("--kpi", dest="kpi_id", metavar="ID")
-    s.add_argument("--q", help="words in the title or hypothesis")
-    s.add_argument("--limit", type=int)
-    s.set_defaults(fn="growth idea list")
-    s = json_flag(idea.add_parser("show"))
-    s.add_argument("id")
-    s.set_defaults(fn="growth idea show")
-    s = json_flag(idea.add_parser("update", help="its assignee, creator or an admin"))
-    s.add_argument("id")
-    s.add_argument("--title")
-    idea_flags(s)
-    s.add_argument("--judged-kpi", dest="judged_kpi_id", metavar="ID")
-    s.add_argument("--from", dest="test_from", metavar="YYYY-MM-DD")
-    s.add_argument("--to", dest="test_to", metavar="YYYY-MM-DD")
-    s.add_argument("--change")
-    s.add_argument("--stop-if", dest="stop_if")
-    s.add_argument("--min-events", dest="min_events", type=int)
-    s.add_argument("--audience")
-    s.add_argument("--external-ref", dest="external_ref")
-    s.set_defaults(fn="growth idea update")
-    s = json_flag(idea.add_parser("score", help="impact, confidence, ease: 1-10 each"))
-    s.add_argument("id")
-    s.add_argument("--i", type=int, required=True, metavar="1-10")
-    s.add_argument("--c", type=int, required=True, metavar="1-10")
-    s.add_argument("--e", type=int, required=True, metavar="1-10")
-    s.set_defaults(fn="growth idea score")
-    s = json_flag(idea.add_parser("start", help="start its test; its assignee or an admin"))
-    s.add_argument("id")
-    s.add_argument("--from", dest="test_from", metavar="YYYY-MM-DD", help="default today")
-    s.add_argument("--to", dest="test_to", required=True, metavar="YYYY-MM-DD")
-    s.add_argument("--change", required=True, help="what the test changes")
-    s.add_argument("--stop-if", dest="stop_if", required=True, help="stop early if this happens")
-    s.add_argument("--judged-kpi", dest="judged_kpi_id", metavar="ID", help="default the idea's KPI")
-    s.add_argument("--min-events", dest="min_events", type=int, help="events needed before a won verdict")
-    s.add_argument("--audience")
-    s.set_defaults(fn="growth idea start")
-    s = json_flag(idea.add_parser("verdict", help="a stop-rule hit or missed baseline is lost, before min events; "
-                                                  "its assignee or an admin"))
-    s.add_argument("id")
-    s.add_argument("--status", required=True, choices=["won", "lost", "inconclusive", "dropped", "paused"])
-    s.add_argument("--result", help="what happened, with the numbers")
-    s.add_argument("--learning", help="what we now know")
-    s.add_argument("--bet-effect", dest="bet_effect", choices=["supports", "weakens", "none"])
-    s.add_argument("--confidence", choices=["low", "medium", "high"])
-    s.set_defaults(fn="growth idea verdict")
-
     cohort = growth.add_parser("cohort", help="monthly numbers by channel").add_subparsers(dest="subsub")
     s = json_flag(cohort.add_parser("list"))
     s.add_argument("--channel", metavar="SLUG", help="a channel slug, or unknown")
     s.add_argument("--month", metavar="YYYY-MM")
-    s.add_argument("--segment", metavar="ID")
     s.add_argument("--limit", type=int)
     s.set_defaults(fn="growth cohort list")
     s = json_flag(cohort.add_parser("set", help="one channel's month, only the fields given; any bot or an admin"))
     s.add_argument("--channel", required=True, metavar="SLUG", help="a channel slug, or unknown")
     s.add_argument("--month", required=True, metavar="YYYY-MM")
-    s.add_argument("--segment", dest="segment_id", metavar="ID", help="one segment's share of the month")
     s.add_argument("--spend", type=float)
     s.add_argument("--bot-cost", dest="bot_cost", type=float)
     s.add_argument("--new", dest="new_customers", type=int, metavar="N", help="new customers")
@@ -2140,14 +2254,13 @@ def parser():
     s.set_defaults(fn="growth cohort set")
     s = json_flag(growth.add_parser("economics", help="CAC, months kept, LTV and LTV:CAC by channel"))
     s.add_argument("--month", metavar="YYYY-MM")
-    s.add_argument("--segment", metavar="ID", help="only that segment's cohorts")
     s.set_defaults(fn="growth economics")
-    for word, text in (("week", "tests running and due, verdicts, guardrails, the North Star"),
-                       ("evidence", "each bet with the verdicts for and against it"),
-                       ("working", "open work under ideas and on channel-labelled tasks"),
-                       ("kpis", "the KPI tree: North Star, inputs, guardrails")):
-        json_flag(growth.add_parser(word, help=text)).set_defaults(fn="growth " + word)
-    s = json_flag(growth.add_parser("settings", help="unit, revenue, margin, win threshold; --set: owner or admin"))
+    s = json_flag(growth.add_parser("numbers", help="the monthly series, each channel's economics, the KPI tree, markers"))
+    s.add_argument("--months", type=int, metavar="N", help="1 to 24; default 12")
+    s.set_defaults(fn="growth numbers")
+    s = json_flag(growth.add_parser("kpis", help="the KPI tree: North Star, inputs, guardrails"))
+    s.set_defaults(fn="growth kpis")
+    s = json_flag(growth.add_parser("settings", help="unit, revenue, margin; --set: owner or admin"))
     s.add_argument("--set", action="append", metavar="KEY=VALUE", help="repeatable")
     s.set_defaults(fn="growth settings")
 
@@ -2503,6 +2616,39 @@ def parser():
     s.add_argument("--group", help="only this group: task, approval, needs_you, bot, release, meeting, strategy, market, "
                                    "inbound, health, webhook, tico, custom")
     s.set_defaults(fn="event-types")
+    peer = sub.add_parser("peer", help="federation: shared threads with other Tico installs, through Tico HQ").add_subparsers(dest="sub")
+    s = peer.add_parser("list", help="this install's key, Gateway, peerings and shared threads")
+    s.set_defaults(fn="peer list")
+    s = peer.add_parser("key", help="make this install's federation key (does nothing when it has one)")
+    s.set_defaults(fn="peer key")
+    s = peer.add_parser("rotate-key", help="a new key; every peering needs approving again on both sides")
+    s.set_defaults(fn="peer rotate-key")
+    s = peer.add_parser("request", help="ask another install to peer with this one; it approves, then you do")
+    s.add_argument("install", help="the other install's id: gi_ and 24 hex digits")
+    s.set_defaults(fn="peer request")
+    for verb, text in (("approve", "approve a peering, having checked the other install's key"),
+                       ("pause", "the kill switch: nothing crosses a paused peering"),
+                       ("resume", "let a paused peering carry again; what was missed is caught up"),
+                       ("revoke", "end a peering; a new request starts over")):
+        s = peer.add_parser(verb, help=text)
+        s.add_argument("peering", help="the peering's id from `hub peer list`")
+        s.set_defaults(fn="peer " + verb)
+    s = peer.add_parser("share", help="give an active peer a thread you own: it gets the thread from now on")
+    s.add_argument("thread", help="the thread's id")
+    s.add_argument("install", help="the other install's id")
+    s.set_defaults(fn="peer share")
+    s = peer.add_parser("unshare", help="take an install out of a thread you own; it gets the removal and nothing after")
+    s.add_argument("thread", help="the thread's id")
+    s.add_argument("install", help="the other install's id")
+    s.set_defaults(fn="peer unshare")
+    s = peer.add_parser("retry", help="send again now what that install has not taken from a shared thread")
+    s.add_argument("thread", help="the thread's id on this install")
+    s.add_argument("install", help="the other install's id")
+    s.set_defaults(fn="peer retry")
+    s = peer.add_parser("add-reader", help="let a person on this install read a shared copy of a thread")
+    s.add_argument("thread", help="the thread's id on this install (a shared copy)")
+    s.add_argument("actor", help="the person, as human:<name>")
+    s.set_defaults(fn="peer add-reader")
     trigger = sub.add_parser("trigger", help="webhooks that start automations (Settings > Webhooks)").add_subparsers(dest="sub")
     s = trigger.add_parser("list")
     s.set_defaults(fn="trigger list")
@@ -2573,6 +2719,37 @@ def parser():
     s = wake_url.add_parser("set", help="set the address; the signing secret is shown once")
     s.add_argument("url", help="an https address you run")
     s.set_defaults(fn="relay wake-url set")
+    call = sub.add_parser("call", help="Tico Meet: audio and screen share in a thread, with a transcript posted to it"
+                          ).add_subparsers(dest="sub")
+    s = call.add_parser("list", help="the calls in a thread, newest first")
+    s.add_argument("thread_id")
+    s.add_argument("--limit", type=int, default=25)
+    s.add_argument("--before", help="the next_before of the page you read, to read the next page")
+    s.set_defaults(fn="call list")
+    s = call.add_parser("start", help="start a call in a thread you can write to; you become its connector")
+    s.add_argument("thread_id")
+    s.add_argument("--title", default="")
+    s.add_argument("--speak", dest="speak_replies", action="store_true",
+                   help="bots speak their replies on this call (refused until the Gateway has text-to-speech)")
+    s.set_defaults(fn="call start")
+    for action, help_text in (("show", "a call: its state, people, bots and how it ended"),
+                              ("join", "join a call: the URL and a token good for 5 minutes"),
+                              ("token", "a fresh token while you are joined"),
+                              ("leave", "leave a call you joined"),
+                              ("end", "end a call you started; its transcript is posted to the thread"),
+                              ("retry", "ask again for action items the Gateway could not make")):
+        s = call.add_parser(action, help=help_text)
+        s.add_argument("call_id")
+        s.set_defaults(fn="call " + action)
+    bot = call.add_parser("bot", help="bots that listen to a call and reply in its thread").add_subparsers(dest="subsub")
+    s = bot.add_parser("add", help="let bots listen to a call you joined (up to 10)")
+    s.add_argument("call_id")
+    s.add_argument("bots", nargs="+")
+    s.set_defaults(fn="call bot add")
+    s = bot.add_parser("remove", help="take a bot out of a call")
+    s.add_argument("call_id")
+    s.add_argument("bot")
+    s.set_defaults(fn="call bot remove")
     sleep = sub.add_parser("sleep", help="Sleep when idle: a hosted server stops after quiet hours").add_subparsers(dest="sub")
     s = sleep.add_parser("status", help="hosted or not, the hours, what keeps the server up and Tico's last answer")
     s.set_defaults(fn="sleep status")
@@ -3249,6 +3426,11 @@ def parser():
     s.add_argument("--reports-to")
     s.set_defaults(fn="human add")
     humans.add_parser("list", help="the humans on the roster").set_defaults(fn="human list")
+    s = humans.add_parser("access", help="show or set who may see, read and write to a human")
+    s.add_argument("human")
+    for level in ("see", "read", "write"):
+        s.add_argument("--" + level, help="everyone, or a comma list: human ids, group:<id>, bot:<slug>")
+    s.set_defaults(fn="human access")
     groups = sub.add_parser("group", help="the groups: sub-teams that nest, holding humans and bots").add_subparsers(dest="sub")
     groups.add_parser("list", help="the groups with their humans and bots").set_defaults(fn="group list")
 
@@ -3267,6 +3449,11 @@ def parser():
     s.add_argument("group")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="group delete")
+    s = groups.add_parser("access", help="show or set who may see, read and write to a group")
+    s.add_argument("group")
+    for level in ("see", "read", "write"):
+        s.add_argument("--" + level, help="everyone, or a comma list: human ids, group:<id>, bot:<slug>")
+    s.set_defaults(fn="group access")
     s = sub.add_parser("api", help="BotOps: any v2 route, as the person who asked")
     s.add_argument("method", type=str.upper, choices=["GET", "POST", "PUT", "PATCH", "DELETE"])
     s.add_argument("path", help="/api/v2/... or the part after it")
@@ -3500,6 +3687,11 @@ def _context_search(rest):              # --source all|docs|market  ->  --market
     return out + (["--market"] if market else [])
 
 
+def _gtm_how(rest):
+    """`hub gtm show|summary` is the How we sell section now: the old page's flags are gone, `--json` stays."""
+    return [a for a in rest if a == "--json"]
+
+
 # (old words, new words, words added at the end, rewrite of what follows). The old spellings are not in the parser, so
 # they are not in `hub --help`; `rename_argv` maps a command line onto the new one and says so on stderr. They are removed
 # one release after the rename. The longest old spelling that matches wins.
@@ -3559,9 +3751,67 @@ RENAMED = [
     (("calendar", "upcoming"), ("calendar", "list"), (), None),
     (("decisions",), ("decision", "ask"), (), None),
     (("judge",), ("decision", "ask"), (), None),
+    (("gtm", "show"), ("strategy", "show", "--section", "how"), (), _gtm_how),
+    (("gtm", "summary"), ("strategy", "show", "--section", "how"), (), _gtm_how),
+    (("gtm", "sources"), ("growth", "source", "list"), (), None),
 ]
 RENAMED.sort(key=lambda rule: -len(rule[0]))
 NOTICE_COMMANDS = ("list",)                             # the subcommands `hub notice` has now
+
+
+MARKETING_TYPE = "idea"     # the marketing task type's id (backend/marketing_tasks.py TYPE_ID); its name is a team's to set
+LEGACY_IDEA_FLAGS = ("--title", "--hypothesis", "--prediction", "--bet", "--kpi", "--segment", "--source-kind",
+                     "--source-ref", "--i", "--c", "--e", "--follow-up-of", "--assignee", "--body", "--status", "--q",
+                     "--limit", "--result", "--learning", "--bet-effect", "--confidence")
+
+
+def legacy_idea(argv):
+    """The old `hub growth idea create|list|verdict` lines as the task commands they are now, run in order, with the
+    notice to print; None for any other line. Ideas are tasks of the idea type (id, not name: a team's own Marketing type
+    does not change where they go): a channel is its label, a verdict moves the task to its step with what it found as
+    the note. The ICE scores, segments and the idea's source have no task field and are read and dropped; the bet and
+    the KPI stay as lines in the body."""
+    if argv[:2] != ["growth", "idea"] or argv[2:3] not in (["create"], ["list"], ["verdict"]):
+        return None
+    p = argparse.ArgumentParser(prog="hub growth idea", allow_abbrev=False)
+    p.add_argument("verb")
+    p.add_argument("id", nargs="?")
+    p.add_argument("--channel", action="append")
+    for flag in LEGACY_IDEA_FLAGS:
+        p.add_argument(flag)
+    old, _ = p.parse_known_args(argv[2:])
+    json_out = ["--json"] if "--json" in argv else []
+    if old.verb == "create":
+        # A task needs a body, so an idea given only a title uses the title as its body.
+        body = "\n".join(line for line in (
+            f"Hypothesis: {old.hypothesis}" if old.hypothesis else "",
+            f"Prediction: {old.prediction}" if old.prediction else "",
+            f"Bet: {old.bet}" if old.bet else "",
+            f"KPI: {old.kpi}" if old.kpi else "",
+            old.body or "") if line) or old.title or ""
+        line = ["task", "create", "--type", MARKETING_TYPE, "--owner", old.assignee or "me", "--title", old.title or "",
+                "--body", body]
+        for channel in old.channel or []:
+            line += ["--label", f"channel:{channel}"]
+        return f'"hub growth idea create" is now "hub task create --type {MARKETING_TYPE}"', [line + json_out]
+    if old.verb == "list":
+        line = ["task", "list", "--type", MARKETING_TYPE]
+        if old.status:
+            line += ["--step", old.status.capitalize()]
+        if old.channel:
+            line += ["--label", f"channel:{old.channel[0]}"]
+        return f'"hub growth idea list" is now "hub task list --type {MARKETING_TYPE}"', [line + json_out]
+    if not old.status:
+        p.error("verdict needs --status won|lost|inconclusive|dropped|paused")
+    if not old.id:
+        p.error("verdict needs the idea's task id")
+    update = ["task", "update", old.id, "--step", old.status.capitalize()]
+    found = "\n".join(f"{label}: {value}" for label, value in (("Result", old.result), ("Learning", old.learning)) if value)
+    if not found and old.status == "paused":
+        found = "Test paused"           # a pause needs a note; with no result or learning, the note says only that
+    if found:
+        update += ["--note", found]     # the verdict's words are the note of every outcome
+    return ('"hub growth idea verdict" is now "hub task update --step --note"', [update + json_out])
 
 
 def parse(p, argv):
@@ -3620,9 +3870,23 @@ def split_human(argv):
 
 def main(argv):
     argv, who = split_human(argv)
+    old = legacy_idea(argv)
+    if old:
+        notice, lines = old
+        print(f"hub: {notice}; the old name stops working in the next release", file=sys.stderr)
+        for line in lines:
+            code = run(line, who)
+            if code:
+                return code
+        return 0
     argv, renamed = rename_argv(argv)
     if renamed:
         print(f"hub: {renamed}; the old name stops working in the next release", file=sys.stderr)
+    return run(argv, who)
+
+
+def run(argv, who):
+    """One command line in its current spelling: parsed here, then answered here or sent to the hub."""
     p = parser()
     try:
         args = parse(p, argv)
