@@ -295,6 +295,15 @@ class ChannelList(FakeSlack):
         stale = {"tools": [{"service": "slack", "can": ["read"], "channels": ["gone", "agents"]}]}
         slack.check_history_scope(stale, "reader", ["#agents"], rows)
 
+    def test_a_reader_named_by_its_label_matches_the_bot_id_the_list_stores(self):
+        bot_id = "0190f2a1-7c3e-7d1a-9b2e-5f4a3c2b1a00"             # a bot made after the id/slug split
+        manifest = {"tools": [{"service": "slack", "can": ["read"], "channels": []}]}
+        rows = [{"id": "C0000000030", "name": "finance", "post": False, "readers": [bot_id], "note": ""}]
+        slack.HUB_GET = lambda path: {"stage": "active", "id": bot_id} if path == "bots/mira" else None
+        slack.check_history_scope(manifest, "mira", ["#finance"], rows)
+        with self.assertRaises(slack.Refused):                       # another bot, no id from Tico
+            slack.check_history_scope(manifest, "other-bot", ["#finance"], rows)
+
     def test_a_post_follows_the_list_and_externally_shared_channels_stay_refused(self):
         listing = (200, {}, {"ok": True, "channels": [{"id": "C0000000020", "name": "agents"}]})
         rc, out, calls = self.run_cli(["post", "--as", self.slug, "--channel", "#agents", "--text", "hi", "--json"],

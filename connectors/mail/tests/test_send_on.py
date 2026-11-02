@@ -74,6 +74,13 @@ class Chain(Stage2):
         return pl.check_send(policy or self.policy(), slug, "ana@acme.example", list(to), list(cc),
                              root=self.root, body=body, **kw)
 
+    def test_an_owner_message_to_a_bot_named_by_its_label_is_matched_by_the_bot_id(self):
+        bot_id = "0190f2a1-7c3e-7d1a-9b2e-5f4a3c2b1a00"             # Tico writes to_actor with the id, not the label
+        found = {f"messages/{ORDER}": owner_order(slug=bot_id), "bots/mira": {"id": bot_id, "stage": "active"}}
+        pl.HUB_GET = lambda path: found.get(path)
+        self.assertTrue(pl._hub_message_check(ORDER, "mira")["ok"])
+        self.assertFalse(pl._hub_message_check(ORDER, "inbox")["ok"])     # the label of another bot
+
     def test_the_sender_of_the_thread_being_answered_goes_without_approval(self):
         d = self.decide([AVA], thread_id=THREAD, thread_senders=[AVA])
         self.assertTrue(d.allowed, d)

@@ -533,6 +533,16 @@ def _hub_row(kind, n):
     return row if isinstance(row, dict) and row.get("id") else None
 
 
+def _bot_names(slug):
+    """The label and the id of one bot. Tico names a bot in actor strings by its id (`bot:<id>`); a label is
+    what the caller passed. Without a Tico row only the label is known."""
+    names = {slug}
+    row = HUB_GET(f"bots/{slug}")
+    if isinstance(row, dict) and row.get("id"):
+        names.add(row["id"])
+    return names
+
+
 def _blank_approval(n):
     return {"ok": False, "detail": "", "full": False, "named": [], "issue": n}
 
@@ -746,7 +756,7 @@ def _hub_message_check(n, slug):
         out["detail"] = (f"Tico message {n} is from {row.get('from_actor') or 'nobody'}, "
                          f"not {OWNER}")
         return out
-    if slug and row.get("to_actor") != f"bot:{slug}":
+    if slug and row.get("to_actor") not in {f"bot:{name}" for name in _bot_names(slug)}:
         out["detail"] = (f"Tico message {n} was sent to {row.get('to_actor') or 'nobody'}, "
                          f"not bot:{slug}")
         return out
