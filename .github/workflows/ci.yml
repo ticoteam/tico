@@ -423,8 +423,8 @@ jobs:
         with:
           workspaces: candidate/app -> target
           shared-key: release-desktop
-      # The product part tests the release's own images (amd64, this VM's architecture), pulled by digest, once all
-      # six image builds (the images job's 3 images x 2 platforms) have finished.
+      # The product part tests the release's own images (amd64, this VM's architecture), pulled by digest, once the
+      # three amd64 builds have finished. The arm64 builds finish on their own; release-check needs every image.
       - if: matrix.part == 'product'
         name: Wait for the release images
         env:
@@ -432,10 +432,10 @@ jobs:
         run: |
           for _ in $(seq 120); do
             images="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
-              -q '[.jobs[] | select(.name | startswith("images (")) | {status, conclusion}]')"
+              -q '[.jobs[] | select((.name | startswith("images (")) and (.name | contains("amd64"))) | {status, conclusion}]')"
             failed="$(jq '[.[] | select(.status == "completed" and .conclusion != "success")] | length' <<<"$images")"
             [ "$failed" = 0 ] || { echo "::error::An image build did not succeed."; exit 1; }
-            [ "$(jq '[.[] | select(.status == "completed")] | length' <<<"$images")" = 6 ] && exit 0
+            [ "$(jq '[.[] | select(.status == "completed")] | length' <<<"$images")" = 3 ] && exit 0
             sleep 10
           done
           echo "::error::The images were not built within 20 minutes."
@@ -541,7 +541,7 @@ jobs:
 
   # The one verdict: the release passes only when every part passed and every platform's binaries built.
   release-check:
-    needs: [gate, native-macos, factory-sim]
+    needs: [gate, native-macos, factory-sim, images]
     if: always()
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
     timeout-minutes: 5
@@ -551,6 +551,7 @@ jobs:
           GATE: ${{ needs.gate.result }}
           MACOS: ${{ needs.native-macos.result }}
           SIM: ${{ needs.factory-sim.result }}
+          IMAGES: ${{ needs.images.result }}
         run: |
-          echo "Release gate parts: $GATE; Mac binaries: $MACOS; factory sim: $SIM"
-          test "$GATE" = success && test "$MACOS" = success && test "$SIM" = success
+          echo "Release gate parts: $GATE; Mac binaries: $MACOS; factory sim: $SIM; images: $IMAGES"
+          test "$GATE" = success && test "$MACOS" = success && test "$SIM" = success && test "$IMAGES" = success
