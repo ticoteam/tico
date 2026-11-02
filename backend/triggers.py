@@ -317,6 +317,8 @@ def sign(c, who, vault, trigger_id, body):
                       + " (to stop checking, turn signing off)", 422)
     if preset in P.FINANCE:
         _finance_only(c, who, "make a Finance trigger of")     # its calls would go to Finance
+    if preset in P.HQ_CHECKED:
+        raise Problem("trigger", "Intuit and Xero calls are checked by Tico HQ, which holds their keys; this install has none", 422)
     key = body.secret or P.new_secret(preset)
     if (why := P.secret_problem(preset, key)):
         raise Problem("trigger", why, 422)
@@ -334,6 +336,8 @@ def update(c, who, settings, vault, trigger_id, body):
     _may_change(c, who, found, "change")
     if body.preset in P.FINANCE:
         _finance_only(c, who, "make a Finance trigger of")
+    if body.preset in P.HQ_CHECKED:
+        raise Problem("trigger", "Intuit and Xero calls are checked by Tico HQ, which holds their keys; this install has none", 422)
     if builtin(trigger_id) and any(v is not None for k, v in body.model_dump().items() if k != "keep_days"):
         raise Problem("trigger", f"Only how long calls are kept can change on {tico_notices.NAME}", 422)
     sets = {}
@@ -612,7 +616,14 @@ def receive(c, trigger_id: str, body: bytes, headers: Mapping[str, str], *, secr
     at = received_at or H.now()
     preset = effective_preset(found)
     delivery = delivery_id or sender or P.body_id(preset, body) or P.fallback_id(headers, body, at)
-    if preset != "none":
+    if preset in P.HQ_CHECKED:
+        # Tico HQ checked this call with the provider's key (spec §3.4), so the install takes it only over its own relay.
+        # This address never takes one: the install holds no key to check it with, whatever the headers say.
+        if via != "gateway":
+            return _refused(c, found, delivery, body, headers, at, 401, "signature",
+                            "Intuit and Xero calls come through Tico Gateway, not this address", via, secret,
+                            recovering=recovering)
+    elif preset != "none":
         if vault is None:
             return _refused(c, found, delivery, body, headers, at, 503, "vault_unavailable",
                             "This trigger's signing secret cannot be read here", via, secret, recovering=recovering)

@@ -89,3 +89,70 @@ def test_a_trigger_is_finance_s_by_its_consumer_not_its_preset(api):
     assert consumers == {"mercury": "finance", "plain": "automations"}
     assert _post(api, "triggers/mercury", {"preset": "none"}).status_code == 200
     assert {t["id"]: t["consumer"] for t in _get(api, "triggers").json()["triggers"]}["mercury"] == "automations"
+
+
+# ------------------------------------------------------------------------------------------------ Intuit and Xero calls
+# Tico HQ holds Intuit's and Xero's signing keys and checks their calls (spec §3.4). The install takes one only over its
+# own Gateway relay (via="gateway"), and its public address refuses the same preset, whatever the headers say.
+BOOKS_KEY = "intuit-verifier-token-0123456789"
+BOOKS_ADDRESS = "books-addr-secret-0123456789"
+
+
+def _books_trigger(api):
+    """A QuickBooks books connection and the Finance trigger for it: an `intuit` trigger with an address secret and a
+    signing secret the install may hold, which must not make a call count here."""
+    from backend.finance.store import mirror as SX
+    from backend.triggers import digest
+    store = api.app.state.store
+    with store.transaction() as c:
+        FA.setup(c, OWNER, AT)
+        SX.books_connection_insert(c, cid="conn-qb", provider="quickbooks", name="Acme books", by=OWNER, at=AT)
+        SX.set_books_settings(c, "conn-qb", {"provider": "quickbooks", "company_id": "co_acme", "realm_id": "123"})
+        sealed = api.app.state.vault.cipher.seal(c, "triggers:books-qb", BOOKS_KEY)
+        c.execute("INSERT INTO triggers(id,name,kind,secret_hash,created_by,created_at,updated_at,signing_secret,preset,"
+                  "consumer) VALUES('books-qb','QuickBooks','webhook',?,?,?,?,?,'intuit','finance')",
+                  (digest(BOOKS_ADDRESS), OWNER, AT, AT, sealed))
+
+
+def _envelope(external_id="evt-1"):
+    return json.dumps({"type": "tico.finance.webhook", "provider": "quickbooks", "company_id": "co_acme",
+                       "external_id": external_id, "payload": {"eventNotifications": [{"realmId": "123"}]}}).encode()
+
+
+def _intuit_signed(body, key=BOOKS_KEY):
+    import base64
+    import hashlib
+    import hmac
+    return base64.b64encode(hmac.new(key.encode(), body, hashlib.sha256).digest()).decode()
+
+
+def _kept(api):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT count(*) FROM fin_inbox").fetchone()[0]
+
+
+def test_a_quickbooks_call_relayed_over_the_gateway_is_kept_without_a_signature_here(api):
+    from backend import triggers
+    _books_trigger(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        # vault=None: the relayed call needs no signing secret here, so none is read.
+        got = triggers.receive(c, "books-qb", _envelope(), {"content-type": "application/json"}, secret=None,
+                               via="gateway", delivery_id="relay-1", vault=None)
+    assert got.outcome == "accepted"
+    assert _kept(api) == 1
+
+
+def test_the_public_address_refuses_intuit_even_with_a_signature_the_install_could_check(api):
+    _books_trigger(api)
+    body = _envelope()
+    url = "/api/v2/hooks/books-qb/" + BOOKS_ADDRESS
+    headers = {"content-type": "application/json", "intuit-signature": _intuit_signed(body)}
+    refused = api.post(url, content=body, headers=headers)
+    assert refused.status_code == 401 and "Tico Gateway" in refused.text
+    unsigned = api.post(url, content=body, headers={"content-type": "application/json"})
+    assert unsigned.status_code == 401
+    # A header that says the call came over the relay is only a header: `via` is never read from the request.
+    spoofed = api.post(url, content=body, headers={**headers, "via": "gateway", "x-tico-via": "gateway"})
+    assert spoofed.status_code == 401
+    assert _kept(api) == 0
