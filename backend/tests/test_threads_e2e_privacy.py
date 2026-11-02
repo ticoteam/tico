@@ -6,6 +6,7 @@ for a person without its access, and a mention that grants nothing. The same mat
 and SSE renderings in core's privacy fixture; these tests check the API a sidebar and a thread view call.
 """
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.test_api import api, restrict  # noqa: F401  (the api fixture)
 from backend.tests.threads_e2e import (add_member, home_id, call, can_read, create_thread, make_group, ok,
                                        read_status, remove_member, require_threads_api, say, search_ids, sidebar_ids,

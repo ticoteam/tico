@@ -39,7 +39,7 @@ function dashSpark(values) {
 const dashTasksHref = card => `${TASKS}?view=list&who=all${card.settings?.team ? '&team=' + encodeURIComponent(card.settings.team) : ''}`;
 function dashPageRow(p) {
   return `<li><a href="#/page/${encodeURIComponent(p.file_id)}">${esc(p.title || 'Untitled')}</a>
-    <span class="muted">${esc(dashBot(p.bot))} · ${agoSpan(p.updated)}</span></li>`;
+    <span class="muted">${esc(dashBot(p.bot))} · ${agoSpan(p.updated_at)}</span></li>`;
 }
 // A thread's address: the threads page's own when this build has it (ui/app/threads*.js).
 const dashThreadHref = id => typeof window.threadHref === 'function' ? window.threadHref(id) : '#/threads/' + encodeURIComponent(id);
@@ -62,13 +62,13 @@ const DASH_BODY = {
   needs_you: dashNeeds,
   needs_attention: dashNeeds,
   unread_threads: d => d.threads.length ? `<ul class="dash-list">${d.threads.map(t => `<li><a href="${esc(window.threadRowHref ? window.threadRowHref(t) : dashThreadHref(t.id))}">${esc(window.threadTitle ? window.threadTitle(t) : t.title || 'Untitled')}</a>
-      <span class="muted">${t.unread ? dashNum(t.unread) + ' new · ' : ''}${agoSpan(t.updated)}</span></li>`).join('')}</ul>` : '<p class="muted dash-none">Nothing unread</p>',
+      <span class="muted">${t.unread ? dashNum(t.unread) + ' new · ' : ''}${agoSpan(t.updated_at)}</span></li>`).join('')}</ul>` : '<p class="muted dash-none">Nothing unread</p>',
   my_tasks: d => d.tasks.length ? `<a class="dash-big" href="${TASKS}?view=list"><strong>${dashNum(d.count)}</strong><span class="muted">open</span></a>
-    <ul class="dash-list">${d.tasks.map(t => `<li><a href="#/task/${encodeURIComponent(t.id)}">${esc(t.title || 'Untitled')}</a> ${dashDue(t.due)}</li>`).join('')}</ul>`
+    <ul class="dash-list">${d.tasks.map(t => `<li><a href="#/task/${encodeURIComponent(t.id)}">${esc(t.title || 'Untitled')}</a> ${dashDue(t.due_at)}</li>`).join('')}</ul>`
     : '<p class="muted dash-none">No open tasks</p>',
   updates: d => `<a class="dash-big" href="${UPDATES}"><strong>${dashNum(d.unread)}</strong><span class="muted">unread</span></a>
     ${d.updates.length ? `<ul class="dash-list">${d.updates.map(u => `<li><a href="${UPDATES}"${u.read ? '' : ' class="dash-unread"'}>${esc(u.headline || 'Update')}</a>
-      <span class="muted">${esc(String(u.author || '').startsWith('human:') ? (S.people || []).find(p => 'human:' + p.id === u.author)?.name || '' : dashBot(u.author))} · ${agoSpan(u.created)}</span></li>`).join('')}</ul>` : ''}`,
+      <span class="muted">${esc(String(u.author || '').startsWith('human:') ? (S.people || []).find(p => 'human:' + p.id === u.author)?.name || '' : dashBot(u.author))} · ${agoSpan(u.created_at)}</span></li>`).join('')}</ul>` : ''}`,
   spend: d => {
     const pct = d.budget ? Math.min(100, d.spent / d.budget * 100) : 0;
     return `<div class="dash-big"><strong>${dashMoney(d.spent)}</strong><span class="muted">${d.budget ? 'of ' + dashMoney(d.budget) : 'no budget'} · ${esc(d.month)}</span></div>
@@ -77,7 +77,7 @@ const DASH_BODY = {
   kpi: d => `<div class="dash-big"><strong>${dashNum(d.value)}${d.unit ? ` <small>${esc(d.unit)}</small>` : ''}</strong>
     <span class="muted">${esc(d.name)}${d.at ? ' · ' + esc(d.at) : ''}</span></div>${dashSpark(d.spark || [])}`,
   automation_runs: d => `<a class="dash-big" href="${AUTOMATIONS}"><strong>${dashNum(d.total)}</strong><span class="muted">runs in 24h${d.failed ? ` · <span class="dash-bad">${d.failed} failed</span>` : ''}${d.running ? ` · ${d.running} running` : ''}</span></a>
-    ${d.runs.length ? `<ul class="dash-list">${d.runs.map(r => `<li><span class="dash-dot ${r.status === 'failed' ? 'bad' : r.status === 'succeeded' || r.status === 'done' ? 'ok' : ''}" aria-hidden="true"></span>${esc(r.name)} <span class="muted">${agoSpan(r.started)}</span></li>`).join('')}</ul>` : ''}`,
+    ${d.runs.length ? `<ul class="dash-list">${d.runs.map(r => `<li><span class="dash-dot ${r.status === 'failed' ? 'bad' : r.status === 'succeeded' || r.status === 'done' ? 'ok' : ''}" aria-hidden="true"></span>${esc(r.name)} <span class="muted">${agoSpan(r.started_at)}</span></li>`).join('')}</ul>` : ''}`,
   latest_pages: d => d.pages.length ? `<ul class="dash-list dash-pages">${d.pages.map(dashPageRow).join('')}</ul>` : '<p class="muted dash-none">No pages yet</p>',
 };
 function dashCardBody(card) {
@@ -92,7 +92,7 @@ function dashPageEl(page, size) {
   const a = document.createElement('a');
   a.className = 'dash-page-link'; a.href = '#/page/' + encodeURIComponent(page.file_id);
   a.innerHTML = `<span class="nav-icon" aria-hidden="true">article</span><span><strong>${esc(page.title || 'Untitled')}</strong>
-    <span class="muted">${esc(dashBot(page.bot))} · Updated ${agoSpan(page.updated)}</span></span>`;
+    <span class="muted">${esc(dashBot(page.bot))} · Updated ${agoSpan(page.updated_at)}</span></span>`;
   return a;
 }
 // A card names its team, except on that team's own page.
@@ -406,7 +406,7 @@ async function dashPageForm(state) {
   const pages = choices.pages.filter(p => !pinned.has(p.file_id));
   dashDialog(state, 'Add page', pages.length
     ? `<fieldset class="dash-pick"><legend class="sr-only">Page</legend>${pages.map((p, i) => `<label class="dash-pick-row"><input type="radio" name="page" value="${esc(p.file_id)}"${i ? '' : ' checked'} required>
-        <span><strong>${esc(p.title || 'Untitled')}</strong> <span class="muted">${esc(dashBot(p.bot))} · ${agoSpan(p.updated)}</span></span></label>`).join('')}</fieldset>
+        <span><strong>${esc(p.title || 'Untitled')}</strong> <span class="muted">${esc(dashBot(p.bot))} · ${agoSpan(p.updated_at)}</span></span></label>`).join('')}</fieldset>
       <label>Size<select name="size">${DASH_SIZES.map(([id, label]) => `<option value="${id}"${id === 'medium' ? ' selected' : ''}>${label}</option>`).join('')}</select></label>`
     : '<p class="muted">No pages to add</p>',
   async f => {

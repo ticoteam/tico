@@ -23,12 +23,12 @@ const {unrouted} = require('./support/routes.cjs');
     const own = {mode: 'cloud', placement: 'own', size: 'default', always_on: false, state: 'stopped', machine_size: 'default',
       cost_month_usd: 0.42, starts_month: 3, runner_id: 'r9', problem: ''};
     const bot = (name, extra) => ({name, display_name: name[0].toUpperCase() + name.slice(1), description: '', status: 'active',
-      operator: 'ana', repo: 'bot-' + name, can_manage: true, users: [], bot_owners: [], revision: 4, model: 'opus-5-5',
+      owner_id: 'ana', repo: 'bot-' + name, can_manage: true, users: [], bot_owners: [], revision: 4, model: 'opus-5-5',
       harness: 'claude', reasoning_effort: 'high', thread_mode: 'personal', bot_contact: 'open', ...extra});
-    const helper = bot('helper', {machine: {runner_id: 'r9', label: 'Helper (cloud)', operator: 'ana', generation: 2}, cloud_machine: own});
-    const writer = bot('writer', {machine: {runner_id: 'r1', label: 'Box', operator: 'ana', generation: 7},
+    const helper = bot('helper', {machine: {runner_id: 'r9', label: 'Helper (cloud)', owner_id: 'ana', generation: 2}, cloud_machine: own});
+    const writer = bot('writer', {machine: {runner_id: 'r1', label: 'Box', owner_id: 'ana', generation: 7},
       cloud_machine: {...own, mode: 'computer', state: 'none', runner_id: null}});
-    const scout = bot('scout', {machine: {runner_id: 'r8', label: 'Shared cloud machine', operator: 'ana', generation: 1},
+    const scout = bot('scout', {machine: {runner_id: 'r8', label: 'Shared cloud machine', owner_id: 'ana', generation: 1},
       cloud_machine: {...own, placement: 'shared', runner_id: 'r8', starts_month: 1}});
     let bots = [helper, writer, scout], calls = [];
     await page.route('**/*', route => {
@@ -59,9 +59,9 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/operations') return json({services: [], machines: [
-        {id: 'r1', label: 'Box', operator: 'ana', bots: ['writer']},
-        {id: 'r9', label: 'Helper (cloud)', operator: 'ana', bots: ['helper'], cloud_machine: {bot: 'helper', shared: false, size: 'default', state: 'stopped'}},
-        {id: 'r8', label: 'Shared cloud machine', operator: 'ana', bots: ['scout'], cloud_machine: {bot: null, shared: true, size: 'default', state: 'stopped'}}]});
+        {id: 'r1', label: 'Box', owner_id: 'ana', bots: ['writer']},
+        {id: 'r9', label: 'Helper (cloud)', owner_id: 'ana', bots: ['helper'], cloud_machine: {bot: 'helper', shared: false, size: 'default', state: 'stopped'}},
+        {id: 'r8', label: 'Shared cloud machine', owner_id: 'ana', bots: ['scout'], cloud_machine: {bot: null, shared: true, size: 'default', state: 'stopped'}}]});
       if (p === '/api/v2/models') return json({...catalog, enabled_providers: ['anthropic']});
       if (p === '/api/v2/providers') return json({enabled: ['anthropic'], default: catalog.default, revision: 1, providers: [{id: 'anthropic', label: 'Anthropic'}]});
       if (p === '/api/v2/usage/limits') return json({bots: {}});

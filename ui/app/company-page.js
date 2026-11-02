@@ -482,7 +482,7 @@ function cpNoticesHtml(e) {
   if (!n) return '';
   if (n.email_available === false) return '<h4 class="label cp-h">Emails</h4><p class="muted cp-small">Email is off on this install</p>';
   const r = n.readers || {}, i = n.issuer || {};
-  const words = [[r.sent, 'sent'], [r.pending, 'waiting'], [r.failed, 'failed'], [r.unavailable, 'could not send'], [r.cancelled, 'cancelled'], [i.limited, 'over the send limit']]
+  const words = [[r.sent, 'sent'], [r.pending, 'waiting'], [r.failed, 'failed'], [r.unavailable, 'could not send'], [r.canceled, 'canceled'], [i.limited, 'over the send limit']]
     .filter(([count]) => count > 0).map(([count, word]) => `${count} ${word}`);
   return `<h4 class="label cp-h">Emails</h4><p class="muted cp-small" data-cp-notices>${esc(words.join(' · ') || 'None')}</p>`;
 }

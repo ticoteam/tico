@@ -39,14 +39,14 @@ from .store import H, Problem, encode
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cards (
-  id TEXT PRIMARY KEY, template TEXT NOT NULL, settings_json TEXT NOT NULL DEFAULT '{}', title TEXT NOT NULL DEFAULT '',
-  made_by TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL, updated_by TEXT NOT NULL);
+  id TEXT PRIMARY KEY, template TEXT NOT NULL, settings TEXT NOT NULL DEFAULT '{}', title TEXT NOT NULL DEFAULT '',
+  made_by_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pins (
   id TEXT PRIMARY KEY, place TEXT NOT NULL, item TEXT NOT NULL, position INTEGER NOT NULL,
-  size TEXT NOT NULL DEFAULT 'medium', made_by TEXT NOT NULL, created TEXT NOT NULL, UNIQUE(place, item));
+  size TEXT NOT NULL DEFAULT 'medium', made_by TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(place, item));
 CREATE INDEX IF NOT EXISTS pins_item ON pins(item);
 CREATE TABLE IF NOT EXISTS pin_places (
-  place TEXT PRIMARY KEY, audience_json TEXT, saved TEXT NOT NULL, saved_by TEXT NOT NULL);
+  place TEXT PRIMARY KEY, audience TEXT, saved_at TEXT NOT NULL, saved_by TEXT NOT NULL);
 """
 
 SIZES = ("small", "medium", "large")
@@ -233,7 +233,7 @@ def clean_settings(ctx, template, given):
 def kpi_record(ctx, kid):
     from . import goal_routes, kpis as K
     record = K.kpi(ctx.c, kid)
-    if not record or record.get("owner") in goal_routes._hidden_owners(ctx.c, ctx.auth, ctx.who):
+    if not record or record.get("owner_id") in goal_routes._hidden_owners(ctx.c, ctx.auth, ctx.who):
         return None
     return record
 
@@ -243,7 +243,7 @@ def kpi_record(ctx, kid):
 def owner_sql(actors):
     if actors is None:
         return "1", []
-    return "owner IN (SELECT value FROM json_each(?))", [json.dumps(sorted(actors))]
+    return "owner_id IN (SELECT value FROM json_each(?))", [json.dumps(sorted(actors))]
 
 
 def tasks_by_status(ctx, s):
@@ -318,7 +318,7 @@ def thread_rows(ctx, limit):
         me = t.get("me") or {}
         if t.get("id") and me.get("unread") and t["id"] not in {r["id"] for r in rows}:
             rows.append({"id": t["id"], "title": t.get("title") or "", "unread": int(me.get("unread") or 0),
-                         "activity": bool(me.get("activity")), "updated": t.get("last_message_at"),
+                         "activity": bool(me.get("activity")), "updated_at": t.get("last_message_at"),
                          "seq": t.get("activity_seq") or t.get("last_seq") or 0, "audience": t.get("audience"),
                          **{k: t[k] for k in ("dm_with", "dm_with_count", "new_at") if t.get(k) is not None}})
     rows.sort(key=lambda r: r["seq"], reverse=True)
@@ -341,13 +341,13 @@ def my_tasks(ctx, s):
     if ctx.who.role not in ("owner", "human", "bot"):
         return None
     marks = ",".join("?" * len(OPEN_STATUSES))
-    where = f"({ctx.visible()}) AND owner=? AND status IN ({marks})"
+    where = f"({ctx.visible()}) AND owner_id=? AND status IN ({marks})"
     args = (ctx.who.actor, *OPEN_STATUSES)
     count = ctx.c.execute(f"SELECT count(*) FROM tasks WHERE {where}", args).fetchone()[0]
-    rows = ctx.c.execute(f"SELECT id, title, status, due, updated FROM tasks WHERE {where} "
-                         "ORDER BY due IS NULL, due, updated DESC, id LIMIT ?", (*args, s["count"])).fetchall()
-    return {"count": count, "tasks": [{"id": r["id"], "title": r["title"] or "", "status": r["status"], "due": r["due"],
-                                       "updated": r["updated"]} for r in rows]}
+    rows = ctx.c.execute(f"SELECT id, title, status, due_at, updated_at FROM tasks WHERE {where} "
+                         "ORDER BY due_at IS NULL, due_at, updated_at DESC, id LIMIT ?", (*args, s["count"])).fetchall()
+    return {"count": count, "tasks": [{"id": r["id"], "title": r["title"] or "", "status": r["status"], "due_at": r["due_at"],
+                                       "updated_at": r["updated_at"]} for r in rows]}
 
 
 def updates_card(ctx, s):
@@ -360,7 +360,7 @@ def updates_card(ctx, s):
                       meetings=U.meeting_reader(ctx.who))
     return {"unread": found["unread"],
             "updates": [{"id": u["id"], "author": u["bot"], "kind": u["kind"], "day": u["day"],
-                         "headline": u["headline"], "created": u["created"], "read": u["read"]}
+                         "headline": u["headline"], "created_at": u["created_at"], "read": u["read"]}
                         for u in found["updates"][:s["count"]]]}
 
 
@@ -396,16 +396,16 @@ def automation_runs(ctx, s):
     groups = {"group:" + g for g in P.group_and_below(s["team"], ctx.roster)} if s["team"] else None
     keys = {AU._key(a) for a in actors or ()}
     names = {}
-    for row in ctx.c.execute("SELECT id, name, owner, grp, flow_json FROM automations WHERE deleted_at IS NULL"):
-        if groups is not None and row["grp"] not in groups and AU._key(row["owner"]) not in keys:
+    for row in ctx.c.execute("SELECT id, name, owner_id, group_id, flow FROM automations WHERE deleted_at IS NULL"):
+        if groups is not None and row["group_id"] not in groups and AU._key(row["owner_id"]) not in keys:
             continue
         if AU.may_change(ctx.c, ctx.who, {**AU.flow_of(row), "readonly": False}, chart):
             names[row["id"]] = row["name"]
     if not names:
         return {"total": 0, "failed": 0, "running": 0, "runs": []}
     runs = [dict(r) for r in ctx.c.execute(
-        "SELECT id, automation_id, status, started, finished FROM automation_runs WHERE started>=? "
-        "AND automation_id IN (SELECT value FROM json_each(?)) ORDER BY started DESC LIMIT 500",
+        "SELECT id, automation_id, status, started_at, finished_at FROM automation_runs WHERE started_at>=? "
+        "AND automation_id IN (SELECT value FROM json_each(?)) ORDER BY started_at DESC LIMIT 500",
         (ago(hours=24), json.dumps(sorted(names))))]
     failed = [r for r in runs if r["status"] == "failed"]
     shown = (failed + [r for r in runs if r["status"] != "failed"])[:5]
@@ -420,9 +420,9 @@ def pages_for(ctx, team="", limit=5):
     from . import files as F
     bots = ctx.team_bots(team) if team else None
     rows = ctx.c.execute("SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.archived=0 "
-                         "AND p.replaced_by IS NULL AND f.archived=0 AND f.state<>'deleted' "
+                         "AND p.replaced_by_id IS NULL AND f.archived=0 AND f.state<>'deleted' "
                          "ORDER BY f.last_activity_at DESC, f.id DESC LIMIT ?", (PAGE_SCAN,)).fetchall()
-    rows = [r for r in rows if bots is None or r["bot"] in bots]
+    rows = [r for r in rows if bots is None or r["bot_id"] in bots]
     F.prime_visible(ctx.c, rows)
     cache = ctx.memo("file_cache", dict)
     out = []
@@ -435,7 +435,7 @@ def pages_for(ctx, team="", limit=5):
 
 
 def page_brief(row):
-    return {"file_id": row["id"], "title": row["title"], "bot": row["bot"], "updated": row["last_activity_at"],
+    return {"file_id": row["id"], "title": row["title"], "bot": row["bot_id"], "updated_at": row["last_activity_at"],
             "archived": bool(row["archived"])}
 
 
@@ -494,7 +494,7 @@ DATA = {"tasks_by_status": tasks_by_status, "done_per_week": done_per_week, "nee
 
 def card_view(ctx, row):
     """A card for its reader: its settings and what it shows them, or `hidden` when that is nothing."""
-    settings = json.loads(row["settings_json"]) if isinstance(row.get("settings_json"), str) else row["settings"]
+    settings = json.loads(row["settings"]) if isinstance(row.get("settings"), str) else row["settings"]
     template = row["template"]
     team = settings.get("team") or ""
     data = None
@@ -508,7 +508,7 @@ def card_view(ctx, row):
     return {"id": row.get("id"), "template": template, "title": row.get("title") or "", "settings": settings,
             "name": name, "heading": row.get("title") or name,
             "team_name": (ctx.groups.get(team) or {}).get("name") or team if team else "",
-            "hidden": data is None, "data": data, "made_by": row.get("made_by")}
+            "hidden": data is None, "data": data, "made_by_id": row.get("made_by_id")}
 
 
 # ---- places
@@ -521,8 +521,10 @@ def parse(ctx, place):
         return "dashboard", ""
     if kind == "team" and ident in ctx.groups:
         return kind, ident
-    if kind == "bot" and ident and H.bot(ctx.c, ident):
-        return kind, ident
+    if kind == "bot" and ident:
+        ident = (H.resolve_bot(ctx.c, ident) or {}).get("id", ident)
+        if H.bot(ctx.c, ident):
+            return kind, ident
     if kind == "task" and ident and H.task(ctx.c, ident):
         return kind, ident
     if kind == "person" and ident:
@@ -544,7 +546,7 @@ def audience_of(c, place):
     if place.startswith("team:"):
         return teammate_access.document(c, "group:" + place[5:])["read"]
     row = place_row(c, place)
-    return A.audience(json.loads(row["audience_json"]) if row and row["audience_json"] else {"everyone": True})
+    return A.audience(json.loads(row["audience"]) if row and row["audience"] else {"everyone": True})
 
 
 def own_person(ctx, ident):
@@ -602,8 +604,8 @@ def may_manage(ctx, kind, ident):
     except Problem:
         return False
     if who.role == "bot":
-        return not who.via and who.actor in (row["owner"], row["requester"])
-    return ctx.person and (who.role == "owner" or who.actor in (row["owner"], row["requester"])
+        return not who.via and who.actor in (row["owner_id"], row["requester_id"])
+    return ctx.person and (who.role == "owner" or who.actor in (row["owner_id"], row["requester_id"])
                            or H.can_move(ctx.c, who.actor))
 
 
@@ -635,7 +637,7 @@ def canonical(kind, ident):
 
 
 def pins_at(c, place):
-    return [dict(r) for r in c.execute("SELECT * FROM pins WHERE place=? ORDER BY position, created, id", (place,))]
+    return [dict(r) for r in c.execute("SELECT * FROM pins WHERE place=? ORDER BY position, created_at, id", (place,))]
 
 
 def card_row(c, cid):
@@ -650,8 +652,8 @@ def default_settings(kind, ident, template):
 
 def default_pins(kind, ident):
     return [{"id": None, "place": canonical(kind, ident), "item": None, "position": i, "size": size, "made_by": None,
-             "card": {"id": None, "template": t, "settings_json": json.dumps(default_settings(kind, ident, t)),
-                      "title": "", "made_by": None}}
+             "card": {"id": None, "template": t, "settings": json.dumps(default_settings(kind, ident, t)),
+                      "title": "", "made_by_id": None}}
             for i, (t, size) in enumerate(DEFAULTS.get(kind, []))]
 
 
@@ -706,10 +708,10 @@ def ensure(ctx, kind, ident):
     if kind not in DEFAULTS or place_row(ctx.c, place):
         return
     now = H.now()
-    ctx.c.execute("INSERT INTO pin_places(place, audience_json, saved, saved_by) VALUES(?,?,?,?)",
+    ctx.c.execute("INSERT INTO pin_places(place, audience, saved_at, saved_by) VALUES(?,?,?,?)",
                   (place, None, now, ctx.who.actor))
     for pin in default_pins(kind, ident):
-        cid = make_card(ctx, pin["card"]["template"], "", json.loads(pin["card"]["settings_json"]),
+        cid = make_card(ctx, pin["card"]["template"], "", json.loads(pin["card"]["settings"]),
                         private=kind == "person")
         insert_pin(ctx, place, "card:" + cid, pin["size"], pin["position"])
 
@@ -719,7 +721,7 @@ def make_card(ctx, template, title, settings, private=False):
         raise Problem("too_many", f"This team keeps {CARDS_MAX} cards: remove some first", 409)
     settings = clean_settings(ctx, template, settings)
     cid, now = H.new_id(), H.now()
-    ctx.c.execute("INSERT INTO cards(id,template,settings_json,title,made_by,created,updated,updated_by) "
+    ctx.c.execute("INSERT INTO cards(id,template,settings,title,made_by_id,created_at,updated_at,updated_by_id) "
                   "VALUES(?,?,?,?,?,?,?,?)", (cid, template, json.dumps(settings), (title or "").strip(), ctx.who.actor,
                                               now, now, ctx.who.actor))
     log(ctx, "card.added", cid, {"template": template}, private)
@@ -733,7 +735,7 @@ def size_of(value):
 
 
 def file_activity(c, fid, actor, action, place):
-    c.execute("INSERT INTO bot_file_activity(file_id,actor,action,created,detail_json) VALUES(?,?,?,?,?)",
+    c.execute("INSERT INTO bot_file_activity(file_id,actor,action,created_at,detail) VALUES(?,?,?,?,?)",
               (fid, actor, action, H.now(), encode({"place": place})))
 
 
@@ -746,11 +748,11 @@ def check_item(ctx, kind, item):
         row = card_row(ctx.c, ident)
         if not row:
             raise Problem("not_found", "No such card", 404)
-        if who.role == "bot" and row["made_by"] != who.actor:
+        if who.role == "bot" and row["made_by_id"] != who.actor:
             raise Problem("forbidden", "A bot pins only cards it made", 403)
         if not card_readable(ctx, row):
             raise Problem("not_found", "No such card", 404)
-        if kind == "person" and row["made_by"] != who.actor:
+        if kind == "person" and row["made_by_id"] != who.actor:
             raise Problem("forbidden", "My dashboard holds only cards you made", 403)
         return
     if what != "page":
@@ -758,7 +760,7 @@ def check_item(ctx, kind, item):
     row = page_row(ctx.c, ident)
     if not row or not F.file_visible(ctx.c, ctx.auth, who, row, ctx.memo("file_cache", dict)):
         raise Problem("not_found", "No such page", 404)
-    if who.role == "bot" and row["bot"] != H.actor_id(who.actor):
+    if who.role == "bot" and row["bot_id"] != H.actor_id(who.actor):
         raise Problem("forbidden", "A bot pins only its own pages; a person pins another bot's", 403)
     if kind in WIDENING and row["task_id"] and H.task_private(ctx.c, H.task(ctx.c, row["task_id"])):
         raise Problem("privacy", "Private task files stay on their task", 403)
@@ -773,7 +775,7 @@ def insert_pin(ctx, place, item, size, position=None):
     position = count if position is None else min(position, count)
     ctx.c.execute("UPDATE pins SET position=position+1 WHERE place=? AND position>=?", (place, position))
     pid = H.new_id()
-    ctx.c.execute("INSERT INTO pins(id,place,item,position,size,made_by,created) VALUES(?,?,?,?,?,?,?)",
+    ctx.c.execute("INSERT INTO pins(id,place,item,position,size,made_by,created_at) VALUES(?,?,?,?,?,?,?)",
                   (pid, place, item, position, size_of(size), ctx.who.actor, H.now()))
     if item.startswith("page:") and not place.startswith("person:"):     # My dashboard is its person's alone
         file_activity(ctx.c, item[5:], ctx.who.actor, "pinned", place)
@@ -875,7 +877,7 @@ def sync_bot(ctx, slug, widgets):
             ctx.c.execute("UPDATE pins SET position=? WHERE id=?", (at, have[item]["id"]))
         else:
             check_item(ctx, "bot", item)
-            ctx.c.execute("INSERT INTO pins(id,place,item,position,size,made_by,created) VALUES(?,?,?,?,?,?,?)",
+            ctx.c.execute("INSERT INTO pins(id,place,item,position,size,made_by,created_at) VALUES(?,?,?,?,?,?,?)",
                           (H.new_id(), place, item, at, "medium", ctx.who.actor, H.now()))
             if item.startswith("page:"):
                 file_activity(ctx.c, item[5:], ctx.who.actor, "pinned", place)
@@ -901,7 +903,7 @@ def may_edit_card(ctx, row):
     if ctx.admin and not someone_elses(ctx, places):
         return True
     if not places:
-        return row["made_by"] == ctx.who.actor
+        return row["made_by_id"] == ctx.who.actor
     for place in places:
         try:
             kind, ident = parse(ctx, place)
@@ -923,7 +925,7 @@ def card_readable(ctx, row):
     """A card is known to whoever made it, may edit it, or sees a place it is pinned to. Another person's My dashboard
     is no way in, an admin's included."""
     places = card_places(ctx, row)
-    if row["made_by"] == ctx.who.actor or (ctx.admin and not someone_elses(ctx, places)):
+    if row["made_by_id"] == ctx.who.actor or (ctx.admin and not someone_elses(ctx, places)):
         return True
     for place in places:
         try:
@@ -942,12 +944,12 @@ def edit_card(ctx, cid, title=None, settings=None):
     if title is not None:
         fields["title"] = title.strip()
     if settings is not None:
-        merged = {**json.loads(row["settings_json"]), **settings}
-        fields["settings_json"] = json.dumps(clean_settings(ctx, row["template"], merged))
+        merged = {**json.loads(row["settings"]), **settings}
+        fields["settings"] = json.dumps(clean_settings(ctx, row["template"], merged))
     if fields:
-        fields.update(updated=H.now(), updated_by=ctx.who.actor)
+        fields.update(updated_at=H.now(), updated_by_id=ctx.who.actor)
         ctx.c.execute("UPDATE cards SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), cid))
-        log(ctx, "card.changed", cid, {"fields": sorted(k for k in fields if k != "updated")},
+        log(ctx, "card.changed", cid, {"fields": sorted(k for k in fields if k != "updated_at")},
             on_person_place(card_places(ctx, row)))
     return card_view(ctx, card_row(ctx.c, cid))
 
@@ -989,7 +991,7 @@ def save_place(ctx, place, audience=None):
         if current["read"] != level:
             teammate_access.save(ctx.c, ctx.who, target, {**current, "read": level,
                                                          "revision": teammate_access.revision(ctx.c, target)}, ctx.auth)
-        ctx.c.execute("UPDATE pin_places SET saved=?, saved_by=? WHERE place=?", (H.now(), ctx.who.actor, place))
+        ctx.c.execute("UPDATE pin_places SET saved_at=?, saved_by=? WHERE place=?", (H.now(), ctx.who.actor, place))
         H.event(ctx.c, ctx.who.actor, "place.audience", place, {"everyone": level["everyone"]})
     return place
 
@@ -1019,7 +1021,7 @@ def choices(ctx, team=""):
     from . import goal_routes, teammate_access
     hidden = goal_routes._hidden_owners(ctx.c, ctx.auth, ctx.who)
     kpis = [{"id": r["id"], "name": r["name"]} for r in ctx.c.execute(
-        "SELECT id, name, owner FROM kpis WHERE archived_at IS NULL ORDER BY name LIMIT 500") if r["owner"] not in hidden]
+        "SELECT id, name, owner_id FROM kpis WHERE archived_at IS NULL ORDER BY name LIMIT 500") if r["owner_id"] not in hidden]
     return {"templates": [{"id": k, "name": v["name"], "fields": [f for f in v["fields"]]} for k, v in TEMPLATES.items()],
             "teams": teammate_access.group_rows(ctx.c, ctx.who, ctx.groups, ctx.auth),
             "kpis": kpis, "pages": pages_for(ctx, team if team in ctx.groups else "", LIST_MAX)}
@@ -1096,14 +1098,14 @@ def install(app, store, auth, mutate, settings, task_view):
             out, last = [], None
             sql, args = "SELECT * FROM cards", []
             if cursor:
-                sql += " WHERE (created<? OR created=? AND id<?)"
+                sql += " WHERE (created_at<? OR created_at=? AND id<?)"
                 at, _, cid = cursor.partition("|")
                 args += [at, at, cid]
-            for row in c.execute(sql + " ORDER BY created DESC, id DESC", args):
+            for row in c.execute(sql + " ORDER BY created_at DESC, id DESC", args):
                 row = dict(row)
                 if card_readable(ctx, row):
                     if len(out) == limit:
-                        return {"cards": out, "next": f"{last['created']}|{last['id']}"}
+                        return {"cards": out, "next": f"{last['created_at']}|{last['id']}"}
                     out.append(card_view(ctx, row))
                     last = row
             return {"cards": out, "next": None}

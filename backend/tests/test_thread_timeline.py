@@ -1,6 +1,7 @@
 """A thread is one timeline in tree order (docs/threads.md): each message is followed by its sub-thread, recursively, with
 the same per-message read check; a long branch keeps its latest messages under an "N more" row that reads the rest."""
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import hubdb as H
 from backend import threads
 from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)

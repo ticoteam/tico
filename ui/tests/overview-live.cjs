@@ -22,7 +22,7 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     const page = await browser.newPage({viewport: {width: 1280, height: 860}, serviceWorkers: 'block'});
     const errors = [], streams = [], reads = {status: 0};
     page.on('pageerror', e => errors.push(e.message));
-    const bot = name => ({name, display_name: name.toUpperCase(), host: 'keeper', status: 'active', operator: 'ana', can_chat: true,
+    const bot = name => ({name, display_name: name.toUpperCase(), host: 'keeper', status: 'active', owner_id: 'ana', can_chat: true,
       machine: {runner_id: 'alpha', label: 'Garden Mac'}, my_access: {see: true, read: true}});
     const bots = [bot('writer'), bot('editor')];
     await page.route('**/*', async route => {

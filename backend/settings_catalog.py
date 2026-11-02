@@ -266,8 +266,8 @@ def _whose(c, e, target):
     None when the target names no row this knows (the route then decides, and says so itself)."""
     target = target or {}
     if e.target == "computer" and target.get("computer"):
-        row = c.execute("SELECT operator FROM runners WHERE id=?", (target["computer"],)).fetchone()
-        return ("human:" + row["operator"] if row["operator"] else "") if row else None
+        row = c.execute("SELECT owner_id FROM runners WHERE id=?", (target["computer"],)).fetchone()
+        return ("human:" + row["owner_id"] if row["owner_id"] else "") if row else None
     table = {"triggers/": "triggers", "webhooks/": "webhooks"}.get(e.route.split("{")[0])
     if table and target.get("id"):
         row = c.execute(f"SELECT created_by FROM {table} WHERE id=? AND deleted_at IS NULL", (target["id"],)).fetchone()

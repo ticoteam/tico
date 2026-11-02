@@ -5,6 +5,7 @@ Fictional people only: ana (owner), ben (admin), cara (human); the bots come fro
 """
 import json
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import threads
 from backend.auth import Identity
 from backend.store import H
@@ -56,17 +57,17 @@ def finish(api, r, attempt, text="Done"):
 
 
 def job_count(api, bot="cpo"):
-    return rows(api, "SELECT COUNT(*) AS n FROM jobs WHERE bot=?", bot)[0]["n"]
+    return rows(api, "SELECT COUNT(*) AS n FROM jobs WHERE bot_id=?", bot)[0]["n"]
 
 
 def wakes(api, bot="cpo"):
     """Wakes written so far, whatever came of them."""
-    return rows(api, "SELECT COUNT(*) AS n FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
-                     "AND json_extract(m.refs_json,'$.wake')='thread_notes'", bot)[0]["n"]
+    return rows(api, "SELECT COUNT(*) AS n FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
+                     "AND json_extract(m.refs,'$.wake')='thread_notes'", bot)[0]["n"]
 
 
 def waiting(api, bot="bot:cpo"):
-    return rows(api, f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {H.NOTE_WAITING_SQL} ORDER BY n.created", bot)
+    return rows(api, f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {H.NOTE_WAITING_SQL} ORDER BY n.created_at", bot)
 
 
 def drain(api, r, bot="cpo", most=12):
@@ -174,7 +175,7 @@ def test_a_note_whose_bot_left_its_thread_is_cancelled_and_wakes_nothing(api):
     say(api, public, "@cpo work here")
     runs = drain(api, r)
     assert [run["root"] for run in runs] == [public] and runs[0]["notes"] == []
-    assert rows(api, "SELECT body, cancelled_at FROM notes WHERE to_actor='bot:cpo'")[0]["body"] == ""
+    assert rows(api, "SELECT body, canceled_at FROM notes WHERE to_actor='bot:cpo'")[0]["body"] == ""
 
 
 def test_a_failed_run_leaves_its_note_waiting_and_starts_no_loop(api):
@@ -347,7 +348,7 @@ def test_a_company_threads_ordinary_turns_keep_the_public_session(api):
     assert first["conversation"]["audience_class"] == "public"
     finish(api, r, first, text="Our reply")
     reply = rows(api, "SELECT * FROM messages WHERE body='Our reply'")[0]
-    assert reply["restricted"] == 1 and json.loads(reply["refs_json"])["turn_id"] == first["id"]
+    assert reply["restricted"] == 1 and json.loads(reply["refs"])["turn_id"] == first["id"]
     assert session_class(api, company, reply["id"]) == "public"     # flagged for its turn_id, and every reader reads it
     bot_says(api, company, "@cpo about that", bot="human:ana", in_reply_to=reply["id"])
     answered = claim(api, r, "cpo")
@@ -525,7 +526,7 @@ def test_a_bot_removed_before_its_claim_gets_no_run_and_no_grant(api):
     remove(api, thread)
     assert claim(api, r, "cpo") is None
     job = job_of(api, message["id"])
-    assert job["state"] == "cancelled" and job["attempt_id"] is None
+    assert job["state"] == "canceled" and job["attempt_id"] is None
     assert rows(api, "SELECT 1 FROM attempt_conversations WHERE conversation_id=?", thread) == []
     assert claim(api, r, "cpo") is None  # settled, not retried
 

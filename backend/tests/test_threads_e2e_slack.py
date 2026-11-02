@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import screening
 from backend import slack_gateway as G
 from backend.tests.test_api import api, headers  # noqa: F401  (the api fixture)

@@ -45,13 +45,15 @@ def ensure(c):
         if not name:
             return None
         now = H.now()
-        c.execute("INSERT INTO task_types (id, name, created, updated) VALUES (?,?,?,?)", (TYPE_ID, name, now, now))
+        c.execute("INSERT INTO task_types (id, name, created_at, updated_at) VALUES (?,?,?,?)", (TYPE_ID, name, now, now))
     names = {r[0].lower() for r in c.execute("SELECT name FROM task_steps WHERE type_id=?", (TYPE_ID,))}
     have = {r[0] for r in c.execute("SELECT id FROM task_steps WHERE type_id=?", (TYPE_ID,))}
     for position, (key, name, status) in enumerate(STEPS):
         sid = step_id(key)
         if sid in have:
-            c.execute("UPDATE task_steps SET position=? WHERE id=?", (position, sid))
+            # Only a step that moved is written: a changed row bumps the roster clock (backend/roster_clock.py), which
+            # every start would otherwise do for every step.
+            c.execute("UPDATE task_steps SET position=? WHERE id=? AND position IS NOT ?", (position, sid, position))
         elif name.lower() not in names:
             c.execute("INSERT INTO task_steps (id, type_id, name, position, status) VALUES (?,?,?,?,?)",
                       (sid, TYPE_ID, name, position, status))

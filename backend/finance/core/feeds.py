@@ -12,7 +12,8 @@ from typing import Any, cast
 from .errors import invalid
 
 SIGNATURE_TOLERANCE = 300            # seconds a signed delivery may be old (Mercury recommends 5 minutes)
-# Mercury transaction statuses: pending is an authorization or an in-flight transfer; sent has posted. The rest end it.
+# Mercury transaction statuses, in Mercury's spelling: pending is an authorization or an in-flight transfer; sent has
+# posted. The rest end it.
 POSTED, PENDING = "sent", "pending"
 VOID = ("cancelled", "failed", "blocked")
 REVERSED = "reversed"
@@ -182,8 +183,9 @@ def last4(number: object) -> str:
     return digits[-4:]
 
 
-REQUEST_STATUS = {"pendingApproval": "awaiting_bank_approval", "approved": "submitted", "rejected": "cancelled",
-                  "cancelled": "cancelled"}
+# Mercury's approval request statuses, in its spelling, and Tico's own.
+REQUEST_STATUS = {"pendingApproval": "awaiting_bank_approval", "approved": "submitted", "rejected": "canceled",
+                  "cancelled": "canceled"}
 
 
 def request_status(value: object) -> str:

@@ -15,7 +15,7 @@ BOTOPS = "botops"
 MAX_OPEN = 5            # asks one person may have waiting at once
 # What the asker is told, by how the card ended.
 TOLD = {"done": "{name} confirmed it: {what} is done.",
-        "cancelled": "{name} said no to {what}: nothing changed.",
+        "canceled": "{name} said no to {what}: nothing changed.",
         "failed": "{name} confirmed {what}, but it did not go through: {error}",
         "expired": "{name} didn't answer about {what} within a day, so the card expired: nothing changed.",
         "interrupted": "{name} confirmed {what}, but it was cut off before it finished, so it may or may not have "
@@ -141,7 +141,7 @@ def sweep(c, at=None):
     if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='assistant_actions'").fetchone():
         return gone                                     # a database made without the Assistant's tables
     for row in H._rows(c.execute("SELECT * FROM assistant_actions WHERE status='pending' AND ask_json IS NOT NULL "
-                                 "AND created<? ORDER BY created", (H.shift(at, hours=-CONFIRM_TTL_H),))):
+                                 "AND created_at<? ORDER BY created_at", (H.shift(at, hours=-CONFIRM_TTL_H),))):
         with isolated(c, "settings_asks", row["id"]):
             c.execute("UPDATE assistant_actions SET status='expired', decided_at=? WHERE id=? AND status='pending'",
                       (at, row["id"]))
@@ -154,7 +154,7 @@ def interrupted(c, at, ttl_s, orphans=False):
     """The asked cards whose confirm never settled (a restart mid-run): those still `running` past `ttl_s`, and with
     `orphans` (the hourly sweep) those already marked failed without settling their ask (their task still open)."""
     rows = H._rows(c.execute("SELECT * FROM assistant_actions WHERE ask_json IS NOT NULL AND ((status='running' AND "
-                             "running_since<?) OR (? AND status='failed')) ORDER BY created",
+                             "running_since<?) OR (? AND status='failed')) ORDER BY created_at",
                              (H.shift(at, seconds=-ttl_s), int(orphans))))
     ended = ("done", "declined", "closed")
     return [r for r in rows if r["status"] == "running"
@@ -169,7 +169,7 @@ def recover(c, at=None, orphans=False):
     at, done = at or H.now(), []
     for row in interrupted(c, at, RUNNING_TTL_S, orphans):
         with isolated(c, "settings_asks", row["id"]):
-            c.execute("UPDATE assistant_actions SET status='failed', decided_at=?, confirm_hash=NULL, result_json=? "
+            c.execute("UPDATE assistant_actions SET status='failed', decided_at=?, confirm_hash=NULL, result=? "
                       "WHERE id=? AND status='running'",
                       (at, json.dumps({"status_code": 0, "error": "It did not finish; ask again"}), row["id"]))
             settled(c, row, "interrupted")

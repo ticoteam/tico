@@ -82,12 +82,12 @@ class Sources:
         # remains provenance even when its message is deleted or the bot is detached.
         # The sender index scans every keeper notice in the company for each ordinary room, and the room index every
         # message of the room: the meeting-input index holds only the messages that name a meeting turn.
-        rows = self.c.execute("SELECT m.refs_json FROM messages m INDEXED BY messages_live_meeting_input "
+        rows = self.c.execute("SELECT m.refs FROM messages m INDEXED BY messages_live_meeting_input "
                               "JOIN live_meeting_turns t "
-                              "ON t.id=json_extract(m.refs_json,'$.live_meeting.turn_id') "
-                              "AND t.meeting_id=json_extract(m.refs_json,'$.live_meeting.meeting_id') "
-                              "WHERE m.conversation_id=? AND json_extract(m.refs_json,'$.live_meeting.turn_id') IS NOT NULL "
-                              "AND m.from_actor=? AND m.to_actor='bot:'||t.bot LIMIT 101",
+                              "ON t.id=json_extract(m.refs,'$.live_meeting.turn_id') "
+                              "AND t.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') "
+                              "WHERE m.conversation_id=? AND json_extract(m.refs,'$.live_meeting.turn_id') IS NOT NULL "
+                              "AND m.sender_id=? AND m.recipient_id='bot:'||t.bot LIMIT 101",
                               (cid, H.KEEPER)).fetchall()
         return self._legacy_room([row[0] for row in rows])
 
@@ -109,12 +109,12 @@ class Sources:
         for part in H.chunks([cid for cid in cids if not self.bound_conversation(cid)]):
             inputs = {cid: [] for cid in part}
             for cid, refs in self.c.execute(
-                    "SELECT conversation_id,refs_json FROM (SELECT m.conversation_id,m.refs_json,"
+                    "SELECT conversation_id,refs FROM (SELECT m.conversation_id,m.refs,"
                     "row_number() OVER (PARTITION BY m.conversation_id) AS n FROM messages m INDEXED BY messages_live_meeting_input "
-                    "JOIN live_meeting_turns t ON t.id=json_extract(m.refs_json,'$.live_meeting.turn_id') "
-                    "AND t.meeting_id=json_extract(m.refs_json,'$.live_meeting.meeting_id') "
-                    "WHERE m.conversation_id IN (%s) AND json_extract(m.refs_json,'$.live_meeting.turn_id') IS NOT NULL "
-                    "AND m.from_actor=? AND m.to_actor='bot:'||t.bot) WHERE n<=101"
+                    "JOIN live_meeting_turns t ON t.id=json_extract(m.refs,'$.live_meeting.turn_id') "
+                    "AND t.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') "
+                    "WHERE m.conversation_id IN (%s) AND json_extract(m.refs,'$.live_meeting.turn_id') IS NOT NULL "
+                    "AND m.sender_id=? AND m.recipient_id='bot:'||t.bot) WHERE n<=101"
                     % ",".join("?" * len(part)), (*part, H.KEEPER)):
                 inputs[cid].append(refs)
             for cid, found in inputs.items():
@@ -157,7 +157,7 @@ class Sources:
             return set()
         if len(seen) >= 100:
             raise Problem("privacy", "Meeting provenance is too deep to authorize", 403)
-        refs = message.get("refs") or H._json(message.get("refs_json"), {}) or {}
+        refs = H._json(message.get("refs"), {}) or {}
         if not isinstance(refs, dict):
             raise Problem("privacy", "Meeting provenance cannot be authorized", 403)
         cache_key = (mid, include_run, message.get("conversation_id"),
@@ -217,7 +217,7 @@ class Sources:
                               "SELECT m.* FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
                               "WHERE i.attempt_id=?", (aid, aid)).fetchall()
         moved = [row[0] for row in self.c.execute(
-            "SELECT detail_json FROM events WHERE action='attempt.input.moved' AND target=?", (aid,))]
+            "SELECT detail FROM events WHERE action='attempt.input.moved' AND target=?", (aid,))]
         # The walk below reads each input's parents and room one at a time: for a long run they are read together.
         moved_ids = [detail.get("message_id") for detail in (H._json(d, {}) or {} for d in moved)
                      if isinstance(detail, dict) and isinstance(detail.get("message_id"), str)]

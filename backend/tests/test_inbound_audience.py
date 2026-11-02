@@ -96,7 +96,7 @@ def test_sync_gaps_name_only_inboxes_the_reader_may_read(api):
     put(api, "inbound/inboxes/ibx_b/audience", {"audience": "team", "group_id": "ops-team"})
     gaps = [{"inbox_id": "ibx_a", "from": 1, "to": 2, "count": 1}, {"inbox_id": "ibx_b", "from": 3, "to": 4, "count": 2}]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE inbound_sync SET gaps_json=? WHERE singleton=1", (json.dumps(gaps),))
+        c.execute("UPDATE inbound_sync SET gaps=? WHERE singleton=1", (json.dumps(gaps),))
     assert [g["inbox_id"] for g in get(api, "inbound/inboxes", "cara-test")["gaps"]] == ["ibx_a"]
     assert [g["inbox_id"] for g in get(api, "inbound/inboxes")["gaps"]] == ["ibx_a", "ibx_b"]
 

@@ -35,7 +35,7 @@ function connectGuestHTML(actor) {
 }
 // Who wrote a message: a message carried in from another company's Tico is stored as the keeper's, with the real
 // author in refs.origin.actor.
-const connectAuthor = m => (m?.from_actor === 'keeper' && connectIsGuest(m?.refs?.origin?.actor)) ? m.refs.origin.actor : m?.from_actor;
+const connectAuthor = m => (m?.sender_id === 'keeper' && connectIsGuest(m?.refs?.origin?.actor)) ? m.refs.origin.actor : m?.sender_id;
 
 // ----------------------------------------------------------------- rows
 function tcnSlackRowHTML(link, title, {manage = true} = {}) {

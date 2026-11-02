@@ -218,7 +218,7 @@ async function callBarAct(k, button) {
 // Bots the viewer can write to; the server checks again.
 function callBotPick(button) {
   const bots = shownEmps().filter(e => e.status === 'active' && e.can_chat !== false && (!e.my_access || e.my_access.write) && !isAssistantHelper(e.name))
-    .map(e => [e.name, e.display_name || e.name]);
+    .map(e => [e.id, e.display_name || e.slug]);
   if (!bots.length) { toast('No bots to add'); return; }
   thvMenuShow(button, bots, async slug => {
     try { await post(callPath(CALL.id) + '/bots', {bots: [slug]}); toast(`${actorName('bot:' + slug)} joined`); }

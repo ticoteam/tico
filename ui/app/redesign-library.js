@@ -4,7 +4,7 @@
    credential, who it is granted to and when a bot last used it; the groups (GET /api/v2/groups) let the list be
    narrowed to a team, nested teams included. A row opens the tool's page (integrationDetail, ui/app/integrations.js)
    beside the list on a computer, as its own screen on a phone; a credential no tool names is its own row.
-   Addresses: #/library/tools[/<service> | /credentials/<id>][?who=bot:<slug>|human:<id>|group:<id>&issues=1&q=…]. The old
+   Addresses: #/library/tools[/<service> | /credentials/<id>][?who=bot:<id>|human:<id>|group:<id>&issues=1&q=…]. The old
    ones (#/library/connections/<service>, #/integrations, #/credentials, Settings › Credentials) lead here;
    #/library/connections itself is Library › Connections (ui/app/connections.js).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -30,6 +30,8 @@ const lcHref = key => RD_TOOLS + (key ? '/' + key.split('/').map(encodeURICompon
 
 // ----------------------------------------------------------------- the model: one item per tool or loose credential
 const lcBotName = slug => botDisplayName(slug);
+// The tools list names a bot by its id; one named by slug (a server from before ids, or an old link) is read as its id.
+const lcBotId = ref => botByRef(ref)?.id || ref;
 const lcPerson = id => (S.people || []).find(p => p.id === id) || (VAULT?.people || []).find(p => p.id === id) || {id, name: id};
 // Variables a tool names (CLOSE_API_KEY), from its page and from the entries bots declare; words like API are not one.
 const lcEnvs = row => [...new Set([...credEnvs(row.credentials), ...(row.connections || []).map(c => c.env)].filter(e => e && e.includes('_') && !e.includes('<')))];
@@ -38,14 +40,14 @@ function lcModel(rows) {
   const creds = VAULT?.credentials || [], used = new Set();
   const items = rows.map(row => {
     const bots = new Map(), people = new Map(), issues = [];
-    for (const c of row.connections || []) {
-      const was = bots.get(c.bot);
+    for (const conn of row.connections || []) {
+      const c = {...conn, bot: lcBotId(conn.bot)}, was = bots.get(c.bot);
       const level = c.write || row.writes;
       if (!was || LC_LEVEL_RANK[level] > LC_LEVEL_RANK[was.level]) bots.set(c.bot, {level, problem: c.problem || was?.problem || ''});
       else if (c.problem && !was.problem) was.problem = c.problem;
       if (c.problem) issues.push({bot: c.bot, text: c.problem});
     }
-    for (const bot of row.bots || []) if (!bots.has(bot)) bots.set(bot, {level: row.writes, problem: ''});
+    for (const bot of (row.bots || []).map(lcBotId)) if (!bots.has(bot)) bots.set(bot, {level: row.writes, problem: ''});
     const mine = row.status === 'removed' ? [] : vaultForIntegration(row);
     for (const cred of mine) {
       used.add(cred.id);
@@ -90,6 +92,7 @@ function lcGroupMembers(gid) {
   walk(gid);
   return {bots, people};
 }
+const lcWhoRef = who => who.startsWith('bot:') ? 'bot:' + lcBotId(who.slice(4)) : who;
 function lcShown() {
   const {who, issues, q} = LC.filter;
   const words = (q || '').toLowerCase().split(/\s+/).filter(Boolean);
@@ -126,7 +129,7 @@ async function pageRdTools() {
         <section class="lc-pane" aria-live="polite"><div id="int-detail"></div></section></div>
       <dialog class="bot-editor" id="credential-dialog" aria-label="Credential"></dialog></div>`;
     LC = {rows: null, groups: [], items: [], error: '', key: null, root: $('#lc-root'), loading: null,
-          filter: {who: params.get('who') || '', issues: params.get('issues') === '1', q: params.get('q') || ''}};
+          filter: {who: lcWhoRef(params.get('who') || ''), issues: params.get('issues') === '1', q: params.get('q') || ''}};
     const state = LC;
     lcWire();
     state.loading = Promise.all([
@@ -184,7 +187,7 @@ function lcDrawControls() {
   groups.filter(g => !ordered.includes(g)).forEach(g => ordered.push(g));   // a group whose parent is hidden
   const opt = (value, label) => `<option value="${esc(value)}">${esc(label)}</option>`;
   const people = (S.people || []).filter(p => !p.hidden && !p.archived);
-  const bots = (S.emps || []).filter(e => e.status !== 'archived').map(e => [e.name, lcBotName(e.name)]).sort((a, b) => a[1].localeCompare(b[1], undefined, {numeric: true}));
+  const bots = (S.emps || []).filter(e => e.status !== 'archived').map(e => [e.id, lcBotName(e.id)]).sort((a, b) => a[1].localeCompare(b[1], undefined, {numeric: true}));
   who.innerHTML = opt('', 'Everyone')
     + (ordered.length ? `<optgroup label="Teams">${ordered.map(g => opt('group:' + g.id, ' '.repeat(depth(g) * 2) + g.name)).join('')}</optgroup>` : '')
     + (people.length ? `<optgroup label="People">${people.map(p => opt('human:' + p.id, p.name || p.email || p.id)).join('')}</optgroup>` : '')
@@ -261,7 +264,7 @@ function lcAccessHTML(item) {
 }
 // One stored credential: name and variable, whether a value is stored, when a bot last used it, and what may be done.
 function lcCredHTML(cred) {
-  const used = cred.last_used ? `used ${ago(cred.last_used)}${cred.last_used_by ? ' by ' + lcBotName(cred.last_used_by) : ''}` : 'never used';
+  const used = cred.last_used_at ? `used ${ago(cred.last_used_at)}${cred.last_used_by ? ' by ' + lcBotName(cred.last_used_by) : ''}` : 'never used';
   const acts = [
     VAULT?.can_manage ? `<button class="linkish" type="button" data-vault-edit="${esc(cred.id)}">${cred.stored ? 'Rotate' : 'Set'}</button>` : '',
     `<button class="linkish" type="button" data-vault-share="${esc(cred.id)}">${VAULT?.can_manage ? 'Access' : 'Use with my bots'}</button>`,
@@ -270,7 +273,7 @@ function lcCredHTML(cred) {
   return `<div class="lc-cred" data-cred="${esc(cred.id)}"><span class="nav-icon" aria-hidden="true">key_vertical</span>
     <span class="lc-cn"><b>${esc(cred.name)}</b>${cred.env ? ` <span class="mono muted">${esc(cred.env)}</span>` : ''}</span>
     <span class="pill ${cred.stored ? 'ok' : 'fail'}">${cred.stored ? 'Set' : 'No value'}</span>
-    <span class="muted lc-used" title="${esc(cred.last_used ? fmt(cred.last_used) : '')}">${esc(used)}</span>
+    <span class="muted lc-used" title="${esc(cred.last_used_at ? fmt(cred.last_used_at) : '')}">${esc(used)}</span>
     <span class="lc-acts">${acts}</span></div>`;
 }
 // A variable the tool names that the vault does not hold: what the bots' computers say about it, and Add.
@@ -349,7 +352,7 @@ function lcDrawCredential(id, back) {
   detail.innerHTML = `<div class="meeting-head">${back}<div><h1>${esc(cred.name)}</h1></div></div>
     <div id="tool-facts">${lcIssuesHTML(item)}
     <section class="card lc-creds">${lcCredHTML(cred)}<dl class="int-meta">${row('Type', esc(LC_CRED_KIND[cred.kind] || cred.kind))}${row('Username', esc(cred.username || ''))}${row('Value', cred.preview && `<span class="mono">${esc(cred.preview)}</span>`)}${row('From', esc(cred.source || ''))}
-      ${row('Changed', cred.updated && `<span title="${esc(fmt(cred.updated))}">${esc(ago(cred.updated))}</span>`)}</dl>
+      ${row('Changed', cred.updated_at && `<span title="${esc(fmt(cred.updated_at))}">${esc(ago(cred.updated_at))}</span>`)}</dl>
       ${VAULT?.can_manage ? `<div class="row lc-del"><button class="ghost danger small" type="button" data-vault-delete="${esc(cred.id)}">Delete</button></div>` : ''}</section>
     <section class="card lc-access"><header><h2>Access <span class="muted">${(cred.grants || []).length}</span></h2></header>${grants}</section></div>`;
   lcWireFacts();

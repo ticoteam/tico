@@ -29,8 +29,8 @@ def times(api):
 def told(api, person, action_id):
     """What the asker was told about this ask's card, in the chat they asked from."""
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT body, refs_json FROM messages WHERE to_actor=?", ("human:" + person,)).fetchall()
-        return [r["body"] for r in rows if json.loads(r["refs_json"] or "{}").get("settings_ask") == action_id]
+        rows = c.execute("SELECT body, refs FROM messages WHERE recipient_id=?", ("human:" + person,)).fetchall()
+        return [r["body"] for r in rows if json.loads(r["refs"] or "{}").get("settings_ask") == action_id]
 
 
 _SAID = iter(range(1000))
@@ -59,12 +59,12 @@ def test_a_members_yes_to_asking_an_admin_gives_an_admin_one_request_with_a_card
     assert not err and got["asked"] == {"person": "human:ben", "name": got["asked"]["name"]}, got
     assert "Nothing has changed yet" in got["detail"], got
     [(task, card)] = asks(api, "ben")
-    assert task["owner"] == "human:ben" and task["requester"] == "human:cara" and task["status"] == "open", task
+    assert task["owner_id"] == "human:ben" and task["requester_id"] == "human:cara" and task["status"] == "open", task
     assert "Customers are up early" in task["body"] and card["status"] == "pending", (task, card)
     assert card["path"] == "/api/v2/release-schedule" and times(api) == before  # nothing until Ben's tap
     with api.app.state.store.read() as c:
         room = c.execute("SELECT * FROM conversations WHERE id=?", (card["conversation_id"],)).fetchone()
-    assert "human:ben" in room["participants_json"] and "bot:botops" in room["participants_json"]
+    assert "human:ben" in room["participants"] and "bot:botops" in room["participants"]
     assert not asks(api, "ana") and not asks(api, "cara")                      # one request, to one person
     tap = post(api, f"assistant/actions/{card['id']}/confirm", {}, "ben-test")["action"]
     assert tap["status"] == "done", tap
@@ -92,7 +92,7 @@ def test_the_owners_setting_is_asked_of_the_owner_and_an_admin_asks_too(api, bot
     err, got = ask(api, botops, "ben", "team.rules.go_ahead_days", 3)
     assert not err and got["asked"]["person"] == "human:ana", got
     [(task, card)] = asks(api, "ana")
-    assert task["requester"] == "human:ben" and card["path"] == "/api/v2/access/rules", (task, card)
+    assert task["requester_id"] == "human:ben" and card["path"] == "/api/v2/access/rules", (task, card)
 
 
 def test_the_same_ask_again_is_the_same_request(api, botops):
@@ -125,7 +125,7 @@ def test_an_asked_card_nobody_taps_expires_within_the_hour_after_a_day_and_tells
     assert err and got["error"] == "already_asked" and len(asks(api, "ben")) == 1, got
     [(_, old)] = asks(api, "ben")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE assistant_actions SET created=? WHERE id=?", (H.shift(H.now(), hours=-25), old["id"]))
+        c.execute("UPDATE assistant_actions SET created_at=? WHERE id=?", (H.shift(H.now(), hours=-25), old["id"]))
         assert approval_expiry.sweep(c)["cards"] == [old["id"]]
         assert approval_expiry.sweep(c)["cards"] == []                           # once
     assert not ask(api, botops, "cara", "release.times", "08:15")[0]           # asked afresh once it expired
@@ -166,13 +166,13 @@ def test_two_people_asking_for_the_same_change_never_share_one_request(api, boto
     err, got = ask(api, botops, "cara", "team.rules.go_ahead_days", 3)
     assert err and got["error"] == "already_waiting" and "already asked them" in got["detail"], got
     [(task, first)] = asks(api, "ana")
-    assert task["requester"] == "human:ben", task
+    assert task["requester_id"] == "human:ben", task
     post(api, f"assistant/actions/{first['id']}/cancel", {}, "ana-test")
     assert len(told(api, "ben", first["id"])) == 1                             # Ben hears; Cara asked nothing
     err, got = ask(api, botops, "cara", "team.rules.go_ahead_days", 3)          # once settled, hers is her own
     assert not err, got
     [(task, second)] = [(t, card) for t, card in asks(api, "ana") if card["id"] != first["id"]]
-    assert task["requester"] == "human:cara" and task["status"] == "open", task
+    assert task["requester_id"] == "human:cara" and task["status"] == "open", task
     assert post(api, f"assistant/actions/{second['id']}/confirm", {}, "ana-test")["action"]["status"] == "done"
     assert len(told(api, "cara", second["id"])) == 1 and not told(api, "ben", second["id"])
     assert len(told(api, "ben", first["id"])) == 1
@@ -278,7 +278,7 @@ def test_the_assistant_asks_an_admin_on_the_members_cited_yes_and_never_without_
                                                        "on_behalf_of": "turn"}, token)
     assert not err and got["asked"]["person"] == "human:ben", got
     [(task, card)] = asks(api, "ben")
-    assert task["requester"] == "human:cara" and card["path"] == "/api/v2/release-schedule", (task, card)
+    assert task["requester_id"] == "human:cara" and card["path"] == "/api/v2/release-schedule", (task, card)
     post(api, f"assistant/actions/{card['id']}/confirm", {}, "ben-test")
     assert times(api) == ["09:30"]
     [said] = told(api, "cara", card["id"])

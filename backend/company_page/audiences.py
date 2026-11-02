@@ -151,7 +151,7 @@ def sources(c, audience_id, limit=LIST_MAX, offset=0):
 
 
 def _author(c, value):
-    """The form the updates table uses: a bot's slug or `human:<id>`, or `company`. A source that is a bot appears on
+    """The form the updates table uses: a bot's id or `human:<id>`, or `company`. A source that is a bot appears on
     the page under its name; the bot itself stays out of reach."""
     author = str(value or "").strip()
     if author == COMPANY_AUTHOR:
@@ -160,9 +160,9 @@ def _author(c, value):
         if H.human(c, H.actor_id(author)):
             return author
     else:
-        slug = H.actor_id(author) if H.is_bot(author) else author
-        if slug and H.bot(c, slug):
-            return slug
+        found = H.resolve_bot(c, H.actor_id(author) if H.is_bot(author) else author) if author else None
+        if found:
+            return found["id"]
     raise Problem("author", "A source is the company, a bot or a person on the team", 422)
 
 

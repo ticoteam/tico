@@ -23,7 +23,7 @@ def test_a_lifted_quarantine_leaves_the_bot_a_note_with_the_refusal_that_stopped
         assert H.bot(c, "cpo")["state"] == "quarantined"
     assert notes_for(api, "cpo") == [], "nothing until it is back"
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE events SET ts=? WHERE action='quarantine'", (H.shift(H.now(), seconds=-3700),))
+        c.execute("UPDATE events SET created_at=? WHERE action='quarantine'", (H.shift(H.now(), seconds=-3700),))
         assert H.lift_cooled_quarantines(c) == ["cpo"]
     [note] = notes_for(api, "cpo")
     assert note["from_actor"] == H.KEEPER
@@ -47,9 +47,9 @@ def test_a_quarantined_bots_manager_bot_writes_to_it_and_it_waits_but_no_other_b
         said = H.say(c, "bot:ops", "bot:cpo", "Stop adding the roadmap label; Ben will.", refs={"needs_action": True})
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (said["id"],)).fetchone()[0] == "queued"
         H.note_create(c, "bot:ops", "bot:cpo", "The roadmap label needs an approval.")
-        c.execute("UPDATE tasks SET requester='bot:ops' WHERE id=?", (task["id"],))
+        c.execute("UPDATE tasks SET requester_id='bot:ops' WHERE id=?", (task["id"],))
         comment = H.task_comment(c, "bot:ops", task["id"], "Leave the label to a person.")
-        assert comment["to_actor"] == "bot:cpo"
+        assert comment["recipient_id"] == "bot:cpo"
     # Any other bot's message waits too (a refused one quarantined the sender in turn), but its note does not.
     with api.app.state.store.transaction() as c:
         said = H.say(c, "bot:cmo", "bot:cpo", "Are you stuck?", refs={"needs_action": True})
@@ -81,8 +81,8 @@ def test_a_quarantined_bots_manager_bot_writes_to_it_and_it_waits_but_no_other_b
 def test_a_manager_declared_only_in_the_bots_definition_counts_too(api):
     import json
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='cpo'").fetchone()[0])
-        c.execute("UPDATE bot_config SET reports_to=NULL, config_json=? WHERE bot='cpo'",
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='cpo'").fetchone()[0])
+        c.execute("UPDATE bot_config SET reports_to=NULL, config=? WHERE bot='cpo'",
                   (json.dumps({**config, "reports_to": "ops"}),))
         H.quarantine(c, "cpo", "10 repeated refusals today")
     with api.app.state.store.transaction() as c:
@@ -93,7 +93,7 @@ def test_a_manager_declared_only_in_the_bots_definition_counts_too(api):
 def test_quarantined_writer_names_its_cooldown_deadline(api, reason):
     with api.app.state.store.transaction() as c:
         H.quarantine(c, "cpo", reason)
-        c.execute("UPDATE events SET ts=? WHERE action='quarantine' AND target='bot:cpo'",
+        c.execute("UPDATE events SET created_at=? WHERE action='quarantine' AND target='bot:cpo'",
                   ("2026-11-01T23:32:00Z",))
         with pytest.raises(H.Refused) as got:
             H._writer(c, "bot:cpo")
@@ -129,11 +129,11 @@ def test_quarantine_batch_and_single_read_pick_the_same_newest_event_on_a_tied_t
     store = api.app.state.store
     with store.transaction() as c:
         for event_id, reason in (("older", "first"), ("newer", "second")):
-            c.execute("INSERT INTO events(id,ts,actor,action,target,detail_json) VALUES(?,?,?,?,?,?)",
+            c.execute("INSERT INTO events(id,created_at,actor,action,target,detail) VALUES(?,?,?,?,?,?)",
                       (event_id, "2026-11-01T10:00:00Z", "owner", "quarantine", "bot:tied",
                        json.dumps({"reason": reason})))
     with store.read_transaction() as c:
         H.prime_quarantines(c, ["tied"])
-        batched = json.loads(one(c, H.QUARANTINE_DETAIL_SQL, ("bot:tied",))["detail_json"])["reason"]
-        single = json.loads(c.execute(H.QUARANTINE_DETAIL_SQL, ("bot:tied",)).fetchone()["detail_json"])["reason"]
+        batched = json.loads(one(c, H.QUARANTINE_DETAIL_SQL, ("bot:tied",))["detail"])["reason"]
+        single = json.loads(c.execute(H.QUARANTINE_DETAIL_SQL, ("bot:tied",)).fetchone()["detail"])["reason"]
     assert batched == single == "second"

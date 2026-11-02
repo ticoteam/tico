@@ -33,14 +33,18 @@ def test_a_newer_ask_or_the_tasks_end_supersedes_and_old_asks_fold_out(api):
         # done ends every question asked about the work, picks too; the acceptance question asked of its requester
         # once it is done stays until closing ends it
         assert H.open_task_asks(c, H.task(c, tid)) == []
-        c.execute("UPDATE tasks SET requester='human:ana' WHERE id=?", (tid,))
+        c.execute("UPDATE tasks SET requester_id='human:ana' WHERE id=?", (tid,))
         review = bot_ask(c, tid, "Accept the order?", {"questions": [{"id": "ok", "question": "Accept?"}]})
         assert [a["id"] for a in H.open_task_asks(c, H.task(c, tid))] == [review["id"]]
         assert tid in [t["id"] for t in H.tasks_asked_of(c, "human:ana")]
         H.task_close(c, "human:ana", tid)
         assert H.open_task_asks(c, H.task(c, tid)) == []
         old = bot_ask(c, other, "Indoor or outdoor?")
+<<<<<<< HEAD
         c.execute("UPDATE messages SET created=? WHERE id=?", (H.shift(H.now(), days=-7), old["id"]))
+=======
+        c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), days=-6), old["id"]))  # two business days on any weekday
+>>>>>>> origin/main
     queue = needs(api)
     assert tid not in [i["id"] for i in queue["items"]] + [i["id"] for i in queue["older"]]
     stale = next(i for i in queue["items"] if i["id"] == other)

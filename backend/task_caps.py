@@ -79,6 +79,9 @@ def _teammate(c, value):
     """The actor a request names, which must be a bot or a person that exists."""
     found = actor(value) or (H.resolve_actor(c, str(value)) if value else None)
     kind, _, ident = (found or "").partition(":")
+    if kind == "bot":
+        ident = (H.resolve_bot(c, ident) or {}).get("id", ident)
+        found = "bot:" + ident
     exists = (kind == "bot" and H.bot(c, ident)) or (kind == "human" and _person(c, ident))
     if not exists:
         raise Problem("not_found", f"Unknown teammate: {value}", 404)
@@ -157,11 +160,11 @@ def _acted(c, row, receiver):
     """Whether the receiver changed the task after it arrived and before the sender closed it: an event on the task or a
     message in its conversation from the receiver (a status, a step, a comment, an answer)."""
     window = (row["sent_at"], row["closed_at"])     # both ends inclusive: a comment in the same instant as the send counts
-    if c.execute("SELECT 1 FROM events WHERE target=? AND actor=? AND ts>=? AND ts<=? LIMIT 1",
+    if c.execute("SELECT 1 FROM events WHERE target=? AND actor=? AND created_at>=? AND created_at<=? LIMIT 1",
                  (row["task_id"], receiver, *window)).fetchone():
         return True
     return bool(row["conversation_id"]) and c.execute(
-        "SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created>=? AND created<=? LIMIT 1",
+        "SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>=? AND created_at<=? LIMIT 1",
         (row["conversation_id"], receiver, *window)).fetchone() is not None
 
 
@@ -169,12 +172,12 @@ def counted(c, sender, receiver):
     """The tasks `sender` sent `receiver` today that still count, oldest first. A task the sender closed before the
     receiver acted on leaves the count."""
     rows = c.execute(
-        "SELECT s.task_id, s.sent_at, t.title, t.status, t.closed_at, t.closed_by, t.conversation_id "
+        "SELECT s.task_id, s.sent_at, t.title, t.status, t.closed_at, t.closed_by_id, t.conversation_id "
         "FROM task_cap_log s LEFT JOIN tasks t ON t.id = s.task_id "
         "WHERE s.sender=? AND s.receiver=? AND s.sent_at>=? ORDER BY s.sent_at",
         (sender, receiver, _midnight())).fetchall()
     return [dict(row) for row in rows
-            if not (row["closed_by"] == sender and row["closed_at"] and not _acted(c, row, receiver))]
+            if not (row["closed_by_id"] == sender and row["closed_at"] and not _acted(c, row, receiver))]
 
 
 def record(c, task_id, sender, receiver):
@@ -237,8 +240,8 @@ def apply(c, actor_, sender, receiver, per_day, via=None):
     if per_day is None:
         c.execute("DELETE FROM task_caps WHERE sender=? AND receiver=?", (sender, receiver))
     else:
-        c.execute("INSERT INTO task_caps(sender, receiver, per_day, updated, updated_by) VALUES(?,?,?,?,?) "
-                  "ON CONFLICT(sender, receiver) DO UPDATE SET per_day=excluded.per_day, updated=excluded.updated, "
+        c.execute("INSERT INTO task_caps(sender, receiver, per_day, updated_at, updated_by) VALUES(?,?,?,?,?) "
+                  "ON CONFLICT(sender, receiver) DO UPDATE SET per_day=excluded.per_day, updated_at=excluded.updated_at, "
                   "updated_by=excluded.updated_by", (sender, receiver, per_day, H.now(), actor_))
     audit_log.write(c, actor_, f"task_cap:{ref(sender)}>{ref(receiver)}",
                     None if before is None else _cap(sender, receiver, before),
@@ -272,8 +275,8 @@ def forget(c, teammate):
                          (teammate, teammate)).fetchall():
         apply(c, H.KEEPER, row["sender"], row["receiver"], None, via="group move")
     named = ref(teammate)
-    for row in c.execute("SELECT id, payload_json FROM approvals WHERE kind='task_cap' AND decision IS NULL").fetchall():
-        change = json.loads(row["payload_json"] or "{}")
+    for row in c.execute("SELECT id, payload FROM approvals WHERE kind='task_cap' AND decision IS NULL").fetchall():
+        change = json.loads(row["payload"] or "{}")
         if named in (change.get("sender"), change.get("receiver")):
             H.approval_withdraw(c, row["id"], "A teammate in it moved group.")
 
@@ -292,12 +295,12 @@ def may_set(c, auth, who, sender):
 def _proposals(c):
     """The bots' cap changes a person has yet to decide: undecided approvals of kind task_cap."""
     out = []
-    for row in c.execute("SELECT id, requested_by, created, payload_json FROM approvals "
-                         "WHERE kind='task_cap' AND decision IS NULL ORDER BY created"):
-        change = json.loads(row["payload_json"] or "{}")
+    for row in c.execute("SELECT id, requested_by_id, created_at, payload FROM approvals "
+                         "WHERE kind='task_cap' AND decision IS NULL ORDER BY created_at"):
+        change = json.loads(row["payload"] or "{}")
         out.append({"id": row["id"], "sender": change.get("sender"), "receiver": change.get("receiver"),
-                    "per_day": change.get("per_day"), "status": "pending", "proposed_by": ref(row["requested_by"]),
-                    "created": row["created"]})
+                    "per_day": change.get("per_day"), "status": "pending", "proposed_by": ref(row["requested_by_id"]),
+                    "created_at": row["created_at"]})
     return out
 
 
@@ -315,7 +318,7 @@ def _listing(c, auth, who):
     for r in c.execute("SELECT * FROM task_caps ORDER BY sender, receiver"):
         count, closed = tally(c, r["sender"], r["receiver"])
         caps.append({"sender": ref(r["sender"]), "receiver": ref(r["receiver"]), "per_day": r["per_day"],
-                     "count": count, "closed": closed, "updated": r["updated"], "updated_by": ref(r["updated_by"])})
+                     "count": count, "closed": closed, "updated_at": r["updated_at"], "updated_by": ref(r["updated_by"])})
     proposals = _proposals(c) if (who.role == "owner" or auth.bot_admin(who)) else []
     return {"caps": caps, "proposals": proposals}
 

@@ -32,7 +32,7 @@ def _clip(text, n=160):
 
 def _item(kind, item_id, thread_id, title, created, requester=None, message_id=None, first_line=""):
     return {"kind": kind, "id": item_id, "message_id": message_id, "conversation_id": thread_id, "title": title,
-            "first_line": first_line, "created": created, "requester": requester, "origin_actor": requester,
+            "first_line": first_line, "created_at": created, "requester_id": requester, "origin_actor": requester,
             "from_person": requester if H.is_human(requester) else None, "ask": None, "recommend": None,
             "person_ask": None, "ask_missing": False}
 
@@ -54,15 +54,15 @@ def items(c, auth, who, skip=(), with_capped=True):
         kind = "thread_ask" if row["kind"] == "ask" else "thread_mention"
         first = _clip((row["body"] or "").strip().splitlines()[0] if (row["body"] or "").strip() else "")
         out.append(_item(kind, row["id"], row["conversation_id"], first or _clip(row["subject"] or "Thread"),
-                         row["created"], known.name(row["from_actor"], row["conversation_id"]), message_id=row["id"],
+                         row["created_at"], known.name(row["sender_id"], row["conversation_id"]), message_id=row["id"],
                          first_line=first))
     for row in _unread_dms(c, viewer, me):
         out.append(_item("thread_dm", row["id"], row["id"], _clip(row["subject"] or "Direct message"),
-                         row["created"], known.name(row["from_actor"], row["id"])))
+                         row["created_at"], known.name(row["sender_id"], row["id"])))
     for row in _holds(c, viewer):
         title = "A message is held for your review" if row["role"] == "reviewer" else "A message of yours is held"
         # A hold has no thread here: the list names its author only to someone who may see them.
-        out.append({**_item("thread_held", row["id"], None, title, row["created"], known.name(row["author"], None)),
+        out.append({**_item("thread_held", row["id"], None, title, row["created_at"], known.name(row["author"], None)),
                     "thread_id": _held_thread(c, viewer, row["id"])})
     for row in _capped(c) if with_capped else ():
         root = c.execute("SELECT * FROM conversations WHERE id=?", (row["root_id"],)).fetchone()
@@ -74,24 +74,24 @@ def items(c, auth, who, skip=(), with_capped=True):
         if root and threads.readable(c, viewer, dict(root)) and threads.can_manage(c, viewer, dict(root)):
             out.append(_item("thread_unsent", row["root_id"] + ":" + row["recipient"], row["root_id"],
                              _clip(root["subject"] or "Thread") + ": not sent to another company", row["since"]))
-    return sorted(out, key=lambda it: str(it["created"] or ""))
+    return sorted(out, key=lambda it: str(it["created_at"] or ""))
 
 
 def _addressed(c, me):
     """Messages a person may have to answer: a person's, a bot's ask, or a message that names this person, that they
     have not answered since in the same thread. A bot's plain post, one that names nobody, is not theirs to answer."""
     return [dict(r) for r in c.execute(
-        "SELECT m.id, m.conversation_id, m.from_actor, m.kind, m.body, m.created, cv.subject FROM message_deliveries d "
+        "SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.body, m.created_at, cv.subject FROM message_deliveries d "
         "JOIN messages m ON m.id=d.message_id JOIN conversations cv ON cv.id=m.conversation_id "
         "WHERE d.recipient=? AND d.reason IN ('mention','ask','assign','addressed') "
-        "AND d.state IN ('pending','delivered','read') AND m.from_actor<>? "
-        "AND (m.from_actor LIKE 'human:%' OR m.kind='ask' OR d.reason='mention') "
+        "AND d.state IN ('pending','delivered','read') AND m.sender_id<>? "
+        "AND (m.sender_id LIKE 'human:%' OR m.kind='ask' OR d.reason='mention') "
         "AND m.deleted_at IS NULL AND m.superseded_at IS NULL "
-        "AND (m.kind<>'ask' OR m.answered_by IS NULL) "
+        "AND (m.kind<>'ask' OR m.answered_by_id IS NULL) "
         "AND cv.task_id IS NULL AND cv.closed_at IS NULL AND cv.archived_at IS NULL "
-        "AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.conversation_id=m.conversation_id AND r.from_actor=? "
-        "AND r.created>m.created AND r.deleted_at IS NULL) "
-        "ORDER BY m.created", (me, me, me)).fetchall()]
+        "AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.conversation_id=m.conversation_id AND r.sender_id=? "
+        "AND r.created_at>m.created_at AND r.deleted_at IS NULL) "
+        "ORDER BY m.created_at", (me, me, me)).fetchall()]
 
 
 def _unread_dms(c, viewer, me):
@@ -112,8 +112,8 @@ def _unread_dms(c, viewer, me):
                 f"SELECT m.* FROM messages m WHERE m.conversation_id=? AND m.seq>? AND {threads.unread_message_sql()} "
                 "ORDER BY m.seq DESC", (cv["id"], cv["last_read_seq"], me, me)):
             if threads.readable(c, viewer, dict(m)):
-                out.append({"id": cv["id"], "subject": cv["subject"], "from_actor": m["from_actor"],
-                            "created": m["created"]})
+                out.append({"id": cv["id"], "subject": cv["subject"], "sender_id": m["sender_id"],
+                            "created_at": m["created_at"]})
                 break
     return out
 
@@ -129,8 +129,8 @@ def _held_thread(c, viewer, hold_id):
     """The thread a held native post or edit would land in, when this person reads it; None for any other hold and for
     a post that would start its thread."""
     from . import threads
-    row = c.execute("SELECT json_extract(payload_json,'$.replay.thread_id') AS thread, "
-                    "json_extract(payload_json,'$.replay.message_id') AS message FROM org_rule_holds "
+    row = c.execute("SELECT json_extract(payload,'$.replay.thread_id') AS thread, "
+                    "json_extract(payload,'$.replay.message_id') AS message FROM org_rule_holds "
                     "WHERE id=? AND operation IN ('threads','threads_edit')", (hold_id,)).fetchone()
     if row is None:
         return None

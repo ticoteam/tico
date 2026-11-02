@@ -77,8 +77,8 @@ async function open(browser, who, {viewport = DESKTOP} = {}) {
       return found ? json(found) : json({error: 'not_found'}, 404);
     }
     if (p === '/api/v2/threads/t-plan/timeline') return json({thread: state.threads[2], breadcrumb: [{id: 't-plan', title: 'Launch plan'}], next_cursor: null, messages: [
-      {id: 'm1', seq: 1, thread_id: 't-plan', depth: 0, from_actor: 'human:ana', body: 'Launch is Monday.', created: at(30)},
-      {id: 'm2', seq: 2, thread_id: 't-plan', depth: 0, from_actor: 'keeper', body: 'We are ready on our side.', created: at(20),
+      {id: 'm1', seq: 1, thread_id: 't-plan', depth: 0, sender_id: 'human:ana', body: 'Launch is Monday.', created_at: at(30)},
+      {id: 'm2', seq: 2, thread_id: 't-plan', depth: 0, sender_id: 'keeper', body: 'We are ready on our side.', created_at: at(20),
         refs: {via: 'peer', origin: {origin_id: 'o1@' + GLOBEX, revision: 0, install: GLOBEX, actor: 'human:dana@' + GLOBEX}}},
     ]});
     if (/^\/api\/v2\/threads\/[^/]+\/(read|calls)$/.test(p)) return json(p.endsWith('calls') ? {calls: [], next_before: null} : {ok: true});

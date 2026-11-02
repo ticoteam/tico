@@ -27,13 +27,13 @@ const DATA = {
   done_per_week: s => ({weeks: weeks(s.weeks || 8)}),
   needs_you: () => ({count: 2, items: [{id: 't1', kind: 'task', title: 'Approve the Acme launch plan', task_id: 't1'},
     {id: 'q1', kind: 'question', title: 'Pick a pricing page layout', task_id: 'q1'}]}),
-  latest_pages: () => ({pages: [{file_id: 'f1', title: 'Weekly numbers', bot: 'eng-lead', updated: ago(90), archived: false}]}),
+  latest_pages: () => ({pages: [{file_id: 'f1', title: 'Weekly numbers', bot: 'eng-lead', updated_at: ago(90), archived: false}]}),
   needs_attention: () => DATA.needs_you(),
   unread_threads: () => ({count: 0, threads: []}),
-  my_tasks: () => ({count: 2, tasks: [{id: 't7', title: 'Send the Acme renewal quote', status: 'open', due: '2026-11-03', updated: ago(40)},
-    {id: 't8', title: 'Review the onboarding checklist', status: 'doing', due: null, updated: ago(300)}]}),
+  my_tasks: () => ({count: 2, tasks: [{id: 't7', title: 'Send the Acme renewal quote', status: 'open', due_at: '2026-11-03', updated_at: ago(40)},
+    {id: 't8', title: 'Review the onboarding checklist', status: 'doing', due_at: null, updated_at: ago(300)}]}),
   updates: () => ({unread: 1, updates: [{id: 'u1', author: 'eng-lead', kind: 'daily', day: '2026-11-01', headline: 'Shipped the billing fix',
-    created: ago(60), read: false}]}),
+    created_at: ago(60), read: false}]}),
 };
 const TEAMS = {eng: 'Engineering'};
 const card = (id, template, settings, title = '') => ({id, template, title, settings, name: NAMES[template], heading: title || NAMES[template],
@@ -42,7 +42,7 @@ const defaults = (templates, team = '') => templates.map((t, i) => ({id: null, i
   card: card(null, t, {team, ...(t === 'done_per_week' ? {weeks: 8} : {})})}));
 const CHOICES = {templates: Object.entries(NAMES).map(([id, name]) => ({id, name, fields: id === 'done_per_week' ? ['team', 'weeks'] : id === 'kpi' ? ['kpi'] : id === 'latest_pages' ? ['team', 'count'] : ['team']})),
   teams: [{id: 'eng', name: 'Engineering', parent: null}], kpis: [],
-  pages: [{file_id: 'f2', title: 'Acme launch plan', bot: 'eng-lead', updated: ago(30), archived: false}]};
+  pages: [{file_id: 'f2', title: 'Acme launch plan', bot: 'eng-lead', updated_at: ago(30), archived: false}]};
 
 function server(me) {
   let n = 0;

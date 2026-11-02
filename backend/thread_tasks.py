@@ -45,7 +45,7 @@ def private(message, root):
 
 
 def task_body(c, message, row, base_url=""):
-    author = message.get("from_actor") or ""
+    author = message.get("sender_id") or ""
     name = lookup(c, {author}).get(author) or author.split(":", 1)[-1]
     href = f"{base_url}/#/thread/{quote(row['id'], safe='')}?m={quote(message['id'], safe='')}"
     text = str(message.get("body") or "")[:BODY_MAX]

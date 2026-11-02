@@ -143,7 +143,7 @@ def apply_revision(c, origin, *, body, deleted):
 def hold_guest_wakes(c):
     """A remote guest never wakes a bot here: a run queued for a bot whose name carries an install is cancelled. Local
     bots (names without `@`) keep the normal wake rule."""
-    c.execute("UPDATE jobs SET state='cancelled' WHERE state='queued' AND instr(bot, '@') > 0")
+    c.execute("UPDATE jobs SET state='canceled' WHERE state='queued' AND instr(bot_id, '@') > 0")
 
 
 def post_notice(c, thread_id, text, to_actor):
@@ -163,19 +163,19 @@ def checked_inbound(store, judge, actor, text, install, origin_id, thread_id):
 def _shape(c, r):
     """One waiting outside delivery as federation reads it. The message's state is read now, not when the delivery was
     queued: an edit, a delete or a restriction made after staging is what gets sent (or not sent)."""
-    found = c.execute("SELECT m.kind, m.refs_json, m.restricted, m.revision AS message_revision, m.created, c.root_id, "
+    found = c.execute("SELECT m.kind, m.refs, m.restricted, m.revision AS message_revision, m.created_at, c.root_id, "
                       "pm.origin_id AS parent_origin, pm.id AS parent_id FROM messages m "
                       "JOIN conversations c ON c.id=m.conversation_id "
                       "LEFT JOIN messages pm ON pm.id=c.parent_message_id WHERE m.id=?", (r["message_id"],)).fetchone()
-    refs = _refs(found["refs_json"] if found else None)
+    refs = _refs(found["refs"] if found else None)
     return {"id": r["id"], "recipient": r["recipient"],
             "thread_id": (found["root_id"] if found else None) or r.get("thread_id"),
             "message_id": r["message_id"], "origin_id": r.get("origin_id") or r["message_id"],
             "revision": int(found["message_revision"] if found else (r.get("revision") or 0)),
-            "actor": r.get("from_actor") or "",
+            "actor": r.get("sender_id") or "",
             "message_kind": (found["kind"] if found else None) or "say",
             "body": r.get("body") or "", "deleted": r.get("deleted_at") is not None,
-            "created": (found["created"] if found else None) or r.get("created_at") or "",
+            "created_at": (found["created_at"] if found else None) or r.get("created_at") or "",
             "origin_install": str((refs.get("origin") or {}).get("install") or ""),
             "restricted": bool(found["restricted"]) if found else True,
             "parent_message": ((found["parent_origin"] or found["parent_id"]) if found else None) or ""}
@@ -188,7 +188,7 @@ def due(c, limit):
     A delivery with a row in the outbox for its message as it stands is on its way: it stays pending until that row is
     settled, and is not listed, so it never takes the place of one that still needs staging."""
     rows = c.execute(
-        "SELECT d.*, m.body, m.from_actor, m.origin_id, m.deleted_at, m.conversation_id "
+        "SELECT d.*, m.body, m.sender_id, m.origin_id, m.deleted_at, m.conversation_id "
         "FROM message_deliveries d JOIN messages m ON m.id=d.message_id WHERE d.recipient LIKE 'peer:%' "
         "AND d.state='pending' AND (d.next_attempt_at IS NULL OR d.next_attempt_at<=?) "
         "AND NOT EXISTS (SELECT 1 FROM federation_outbox_items o WHERE o.kind='delivery' AND o.delivery_id=d.id) "
@@ -247,7 +247,7 @@ def retry_unsent(c, thread_id, install, origin_id):
 
 def current(c, delivery_id):
     """A pending peer delivery as due() shapes it, read now, or None when it is no longer waiting."""
-    row = c.execute("SELECT d.id, d.recipient, d.message_id, m.origin_id, m.body, m.from_actor, m.deleted_at "
+    row = c.execute("SELECT d.id, d.recipient, d.message_id, m.origin_id, m.body, m.sender_id, m.deleted_at "
                     "FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
                     "WHERE d.id=? AND d.state='pending'", (delivery_id,)).fetchone()
     return _shape(c, dict(row)) if row else None
@@ -265,7 +265,7 @@ def outside_subtree(c, root_id, after, limit):
     """Messages in the sub-threads of a root, numbered after `after`, oldest first. Core writes outside deliveries for a
     root's own messages only, so a shared thread's sub-thread messages are queued from here."""
     return [dict(r) for r in c.execute(
-        "SELECT m.id, m.seq, m.conversation_id, m.from_actor, m.revision, m.created, m.restricted, m.deleted_at "
+        "SELECT m.id, m.seq, m.conversation_id, m.sender_id, m.revision, m.created_at, m.restricted, m.deleted_at "
         "FROM messages m JOIN conversations s ON s.id=m.conversation_id "
         "WHERE s.root_id=? AND s.id<>? AND m.seq>? ORDER BY m.seq LIMIT ?", (root_id, root_id, after, limit)).fetchall()]
 
@@ -274,7 +274,7 @@ def outside_edited(c, root_id, limit):
     """Federated messages in a shared thread whose latest revision is past the one sent: an edit or a delete made after it
     went out. Sub-threads and the root's own messages alike, so an edit never depends on core queueing it again."""
     return [dict(r) for r in c.execute(
-        "SELECT m.id, m.seq, m.conversation_id, m.from_actor, m.revision, m.created, m.restricted, m.deleted_at "
+        "SELECT m.id, m.seq, m.conversation_id, m.sender_id, m.revision, m.created_at, m.restricted, m.deleted_at "
         "FROM federation_messages fm JOIN messages m ON m.id=fm.message_id "
         "WHERE fm.thread_id=? AND fm.message_id<>'' AND fm.sent_revision IS NOT NULL AND m.revision>fm.sent_revision "
         "ORDER BY m.seq LIMIT ?", (root_id, limit)).fetchall()]

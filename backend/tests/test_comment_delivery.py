@@ -32,7 +32,7 @@ def goal_controls(api, cid):
     with api.app.state.store.read() as c:
         return [tuple(r) for r in c.execute(
             "SELECT m.id, j.state FROM messages m LEFT JOIN jobs j ON j.message_id=m.id "
-            "WHERE m.conversation_id=? AND json_extract(m.refs_json,'$.goal_action') IS NOT NULL ORDER BY m.created",
+            "WHERE m.conversation_id=? AND json_extract(m.refs,'$.goal_action') IS NOT NULL ORDER BY m.created_at",
             (cid,))]
 
 
@@ -78,13 +78,13 @@ def test_defer_wakes_nobody_and_keeps_a_deadline(api):
     held = post(api, f"tasks/{tid}/comments", {"text": "Billing first.", "delivery": "defer"})
     assert held["woke"] is False and job_state(api, held["comment"]["id"]) is None
     [row] = deferrals(api, held["comment"]["id"])
-    assert row["kind"] == "comment" and row["task_id"] == tid and row["due"] >= H.shift(before, hours=24)
-    assert held["sent_as"] == {"delivery": "defer", "until": row["due"]}
+    assert row["kind"] == "comment" and row["task_id"] == tid and row["due_at"] >= H.shift(before, hours=24)
+    assert held["sent_as"] == {"delivery": "defer", "until": row["due_at"]}
 
     timed = post(api, f"tasks/{tid}/comments", {"text": "Then the docs.", "delivery": "defer", "defer_for": "30m"})
-    assert deferrals(api, timed["comment"]["id"])[0]["due"] < H.shift(before, hours=1)
+    assert deferrals(api, timed["comment"]["id"])[0]["due_at"] < H.shift(before, hours=1)
     never = post(api, f"tasks/{tid}/comments", {"text": "Some day.", "delivery": "defer", "defer_for": "never"})
-    assert deferrals(api, never["comment"]["id"])[0]["due"] is None and never["sent_as"]["until"] is None
+    assert deferrals(api, never["comment"]["id"])[0]["due_at"] is None and never["sent_as"]["until"] is None
 
 
 def forwarded(turn, after):

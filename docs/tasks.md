@@ -144,7 +144,7 @@ Post Release QA is `release_qa`; reviews send their feedback back to the Builder
 whichever way they go, In QA passes to the merge (skip tag `skip-qa`), Pending Release takes merged tickets, and
 released steps never hold. Change any of it on the steps.
 
-GitHub access is reported restored only after a successful current head and checks read. An expired or cancelled move stops retrying that move; its disappearance never proves access returned. Engineering and Health retain the single source notice while recovery remains unconfirmed.
+GitHub access is reported restored only after a successful current head and checks read. An expired or canceled move stops retrying that move; its disappearance never proves access returned. Engineering and Health retain the single source notice while recovery remains unconfirmed.
 
 ## Automatic starts
 
@@ -203,6 +203,36 @@ hub task relate <task> <blocker> --kind blocked_by
 hub task update <task> --status waiting --note "Needs the build environment"
 ```
 
+### Holds
+
+A task's API view (`GET /api/v2/tasks`, a task's read, the `tasks` live event, Needs you, the MCP tools and the hub
+CLI) lists what holds it in `holds`, empty when nothing does:
+
+```json
+"holds": [{"kind": "blocked", "reason": "Needs the build environment", "since": "2026-11-01T17:02:11.204Z",
+           "until": null, "by": "human:ana", "cause": "manual"},
+          {"kind": "snoozed", "reason": "Check the staging deploy", "since": "2026-11-01T17:05:40.118Z",
+           "until": "2026-11-03T08:00:00.000000Z", "by": "human:ana"}]
+```
+
+- `kind` is `blocked` or `snoozed`, at most one hold of each kind on a task.
+- `blocked` is set when the task moves to a waiting step or status: by a person or bot (`hub task update --status
+  waiting --note ...`, a move to **Blocked** on the board), or by Tico when what it waits on is tracked (a blocker,
+  a subtask, a question, an approval, a review gate). It clears when the task moves on to a working step, or when its
+  last tracked wait clears. `cause` says which: `manual` (a person's or bot's move; `reason` is its note's first
+  line), `dependency`, `stranded`, `gate`, `check` or `worktree` (Tico's own). `by` is the actor who moved it there
+  for `manual`, else `keeper` (Tico). `until` is null: a block lasts until it clears.
+- `snoozed` is set by a snooze ([Snoozing a task](#snoozing-a-task): `POST /api/v2/tasks/{id}/snooze`,
+  `hub_task_snooze`, `hub task snooze`) and cleared by an unsnooze, its date passing, or the task finishing.
+  `reason` is the snoozer's note (left out of a `brief=true` list row), `until` its date, `by` the snoozer, `since` when it was last set.
+- `since` is when the hold began; `by` is an actor id (`human:<id>`, `bot:<slug>` or `keeper`); `reason` and `until`
+  are null when there is none.
+
+The holds are read-only on a task: the moves and endpoints above set and clear them. What a hold is made of keeps its
+own field: `waiting_on` (the person it waits on), `relations.blocks`, `worktree_waits`, `check_waits`,
+`milestone_waits` and `deferred`. Task list filters are unchanged: `?snoozed=only|all` lists snoozed tasks, and a
+blocked task is a `waiting` one (`?status=waiting`).
+
 ### Waiting for a milestone, not the whole task
 
 Often what a task needs is an earlier milestone of another task, not that task being done: a pull request merged
@@ -239,7 +269,7 @@ Reconnected and the owner gets one wake ("Google (ana@acme.example) is reconnect
 the step it held. One card per task and account; tasks waiting on the same account are one Needs-you item. While
 another card or hold still stands on the task, the fix is kept and told once, with the last hold to clear. A card
 stands only while its task is unfinished and keeps the owner it was opened for, and its bot is not archived; otherwise
-it says Not needed and asks nothing (a credential card's request is cancelled, so it can no longer be saved). The
+it says Not needed and asks nothing (a credential card's request is canceled, so it can no longer be saved). The
 person is one who can read the task; on a private task nobody else gets the card. When a task is made private and a
 card's person cannot read it any more, a sign-in card moves to the operator or owner who can. Any other card says Not
 needed, and the task stops waiting on it.
@@ -248,7 +278,7 @@ needed, and the task stops waiting on it.
 | --- | --- | --- | --- |
 | The connector's Google sign-in for a message bot's mailbox (`google:<mailbox>`) | the mailbox's person | Reconnect Google | every service that refused it (mail, calendar) reports that mailbox working, or the person connects it again |
 | The provider refused a computer's sign-in or key for one profile (`login:<computer>:<runtime>:<profile>`, `_default` for the computer's own login) | the bot's operator, else the owner | Sign in (the computer's pop-up, or Settings > Computers) | the computer reports that profile's login ready, or a run on that profile completes (not a fallback's) |
-| A credential the bot (or BotOps, for any bot) asked for from a task (`secret:<bot>:<VARIABLE>`) | the person who wrote to it there, else its operator or the owner; for BotOps, the person it acts for | the credential card | the variable is stored for or granted to the bot; cancelling the card ends the wait too |
+| A credential the bot (or BotOps, for any bot) asked for from a task (`secret:<bot>:<VARIABLE>`) | the person who wrote to it there, else its operator or the owner; for BotOps, the person it acts for | the credential card | the variable is stored for or granted to the bot; canceling the card ends the wait too |
 
 A bot held for failed sign-ins with a standing login card has no second Needs-you item; the fix releases it, and the
 item comes back if the card is retired unfixed. Each card's
@@ -434,7 +464,7 @@ The task's **Runs** section (`GET /api/v2/tasks/{id}/run-view`) shows that check
 author and time, then the task's last 20 attempts, newest first. Each try says its outcome, why it failed or lost its
 lease, and what followed it: run again automatically or by a person, resumed or dismissed with the decision's note, or
 waiting for a person. A try with a resume or dismiss decision shows it beside its state, read from the decision
-record each time so a later decision replaces it: "Cancelled: dismissed by BotOps at 09:50Z, <note>" (or Held,
+record each time so a later decision replaces it: "Canceled: dismissed by BotOps at 09:50Z, <note>" (or Held,
 Queued, Done for a resume), naming BotOps, the person or Tico's auto-reconcile. Once the job has moved to a later
 try, the earlier try says only what was decided ("Resumed by BotOps at 09:50Z, <note>"); a later stop with no
 decision of its own shows none. Under it are the subagents the try started, as a tree with each one's type, model, duration and
@@ -704,9 +734,9 @@ before then. Its requester, its owner, their managers, anyone on it by role, or 
 `hub task snooze <id> --until 2026-11-02`, `hub_task_snooze` or `POST /api/v2/tasks/{id}/snooze`
 with `{"until": ...}`. A bare date means the start of that day, Pacific; a date-time with a zone is
 taken as it is. Snoozing again moves the date. The task keeps its status, owner, goal and place;
-`snoozed_until` and `snoozed_by` say until when and who. A snoozed task still counts toward its goal.
+its `snoozed` hold ([Holds](#holds)) says until when and who. A snoozed task still counts toward its goal.
 The snoozer may leave a **note** (`--note`, `note` on the API, `hub_task_snooze`): what to check when it ends.
-It goes in the **Snooze over** wake, as `Your note:`, and is shown on the task as `snoozed_note` until then
+It goes in the **Snooze over** wake, as `Your note:`, and is the snoozed hold's `reason` until then
 (at most 500 characters; a longer one is refused).
 When someone other than its requester snoozes a task, the requester is told. A role holder's
 manager gains no snooze permission unless they also manage the owner or requester.
@@ -956,7 +986,7 @@ dismissed; a bot's page and Health's queue line count its work the same way, and
 `type` (default the engineering board), `owner`, `label`, `updated_since`, `snoozed=all|hide|only` (default all),
 `bot`, and `since` up to 7 days. Each bot also lists, in `decisions`, its stopped runs with a resume or dismiss
 decision that still hold it or were made since `since` (newest first, 20 at most): the job's state, the decision, who
-made it, when, the note and a `label` like "Cancelled: dismissed by BotOps at 09:50Z, <note>"; once the job has run
+made it, when, the note and a `label` like "Canceled: dismissed by BotOps at 09:50Z, <note>"; once the job has run
 again the decision is history (`current` false, no `state`: "Resumed by BotOps at 09:50Z, <note>"). Counts and ids
 only; no titles or bodies, except that a decision's note, which can name the task, is shown to a reader who may open
 the run's thread.
@@ -1353,7 +1383,7 @@ question. It records the same structured answer as a card pick. Unmatched or amb
 saved as a note, leaving the options and any person wait open. Repeating the same structured
 answer does not record another decision. Settling a question does not approve or execute a
 separate publish, send, spend or hire action.
-Needs you excludes closed, cancelled, archived and declined tasks, even with an open question.
+Needs you excludes closed, canceled, archived and declined tasks, even with an open question.
 The version's metadata points to its ask message. These routes use the usual Idempotency-Key contract:
 
 - `POST /api/v2/tasks/{id}/files` accepts the existing `name` plus `text` or `content_base64`, and
@@ -1563,7 +1593,7 @@ sends anything. Both move the task's updated time and add a line to its history.
 A deleted comment leaves a tombstone with its text cleared. It is excluded from SQL for everyone,
 including the owner, and is excluded from future comment reads and bot context. Cached write replies are refreshed
 so retrying an earlier call does not return old or deleted text. If it started a bot run that has not
-begun yet, the run is cancelled. The questions it answered are open again, and the bot it woke loses the delegation that
+begun yet, the run is canceled. The questions it answered are open again, and the bot it woke loses the delegation that
 came with it. An edit is not sent again: a bot that next reads the comment gets its current text.
 
 Only plain comments can change. Attachment and structured-review comments are refused because
@@ -1620,7 +1650,7 @@ task can restore it.
 A task always deletes, whatever was done on it, because closing it instead would count it as
 finished work. What bots did on it (turns, jobs, approvals, a bot's own files, a routine occurrence,
 a meeting delivery) stays where it is: no one can read the task's thread while it is in the
-trash, its queued bot jobs are cancelled, its subtasks lose their parent and the tasks it blocked
+trash, its queued bot jobs are canceled, its subtasks lose their parent and the tasks it blocked
 are freed. A restore links it all back. Files attached to the task or its comments are not work: they go with the
 task, no one can open them while it is in the trash, and a restore brings them back. The audit log keeps `task.deleted`, `task.restored` and `task.purged` events with who did it
 and the task's title.

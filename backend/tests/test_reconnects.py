@@ -39,15 +39,15 @@ def wakes(api, t):
     with api.app.state.store.read() as c:
         return [r["body"] for r in c.execute(
             "SELECT m.body FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.to_actor='bot:ops' "
-            "AND json_extract(m.refs_json,'$.reconnected') IS NOT NULL", (t["id"],))]
+            f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.recipient_id='bot:ops' "
+            "AND json_extract(m.refs,'$.reconnected') IS NOT NULL", (t["id"],))]
 
 
 def cards(api, t):
     with api.app.state.store.read() as c:
         return [json.loads(r[0])["reconnect"] for r in c.execute(
-            "SELECT m.refs_json FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs_json,'$.reconnect') IS NOT NULL", (t["id"],))]
+            "SELECT m.refs FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE {H.MESSAGE_TASK_SQL}=? AND json_extract(m.refs,'$.reconnect') IS NOT NULL", (t["id"],))]
 
 
 def needs(api, token="ana-test"):
@@ -257,7 +257,7 @@ def test_a_bot_on_a_task_opens_a_credential_card_in_its_thread_and_saving_it_wak
     assert wakes(api, t) == [f"Reconnected: {t['title']}\nthe Acme CRM token is saved. Continue."]
     with api.app.state.store.read() as c:
         # The wake is the bot's one notice: no second "Saved ..." message from the person.
-        assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs_json,'$.credential_saved') IS NOT NULL").fetchone()
+        assert not c.execute("SELECT 1 FROM messages WHERE json_extract(refs,'$.credential_saved') IS NOT NULL").fetchone()
 
 
 def ask_secret(api, attempt, env="ACME_CRM_TOKEN", label="the Acme CRM token", **extra):
@@ -282,8 +282,8 @@ def botops_turn(api, title="Connect the Acme CRM for ops"):
     from backend.store import encode
     from backend.tests.test_api import ready
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('botops',?, 'ana')",
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
+        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('botops',?, 'ana')",
                   (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
     machine = runner(api)
     assign(api, machine, "botops")
@@ -304,7 +304,7 @@ def botops_wakes(api, t):
     with api.app.state.store.read() as c:
         return [r["body"] for r in c.execute(
             "SELECT m.body FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-            f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.to_actor='bot:botops' AND json_extract(m.refs_json,'$.reconnected') IS NOT NULL",
+            f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.recipient_id='bot:botops' AND json_extract(m.refs,'$.reconnected') IS NOT NULL",
             (t["id"],))]
 
 
@@ -339,9 +339,9 @@ def test_another_person_asked_on_the_same_task_gets_a_card_that_replaces_the_fir
     attempt = claim(api, machine)
     first = ask_secret(api, attempt)                                    # for the bot's operator, Ana
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='ben' WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='ops'")
     second = ask_secret(api, attempt)                                   # Ben runs the bot now: his card
-    assert second["id"] != first["id"] and request_status(api, first["id"]) == "cancelled"
+    assert second["id"] != first["id"] and request_status(api, first["id"]) == "canceled"
     assert sorted((c["person"], c["status"]) for c in cards(api, t)) == [("human:ana", "retired"), ("human:ben", "open")]
     post(api, f"credential-requests/{second['id']}/save", {"value": "crm-token-0123456789"}, "ben-test")
     assert len(wakes(api, t)) == 1 and shown(api, t)["task"]["status"] in ("open", "doing")
@@ -356,7 +356,7 @@ def test_a_fix_owed_when_the_task_changes_hands_never_reaches_the_next_owner(api
         assert R.google_connected(c, "ana@acme.example") == []           # owed: the child still holds it
         H.task_update(c, "human:ana", t["id"], owner="bot:finance")
         H.task_update(c, "bot:cpo", child, status="done", note="Sent")
-        told = [r["body"] for r in c.execute("SELECT body FROM messages WHERE to_actor='bot:finance'")]
+        told = [r["body"] for r in c.execute("SELECT body FROM messages WHERE recipient_id='bot:finance'")]
     assert told and not any("reconnected" in b for b in told)
 
 
@@ -383,16 +383,16 @@ def test_a_credential_card_whose_task_finishes_or_changes_hands_can_no_longer_be
                 H.task_close(c, "human:ana", t["id"], "Not needed")
             else:
                 H.task_update(c, "human:ana", t["id"], owner="bot:cpo")
-        assert [c["status"] for c in cards(api, t)] == ["retired"] and request_status(api, asked["id"]) == "cancelled"
+        assert [c["status"] for c in cards(api, t)] == ["retired"] and request_status(api, asked["id"]) == "canceled"
         saved = api.post(f"/api/v2/credential-requests/{asked['id']}/save", json={"value": "crm-token-0123456789"},
                          headers=headers("ana-test"))
-        assert saved.status_code >= 400 and request_status(api, asked["id"]) == "cancelled"
+        assert saved.status_code >= 400 and request_status(api, asked["id"]) == "canceled"
 
 
 def test_a_private_task_cards_a_fixer_who_can_read_it_and_never_one_who_cannot(api, monkeypatch):
     machine = codex_bot(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")           # cara cannot read it
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")           # cara cannot read it
     t = post(api, "tasks", {"owner": "ops", "title": "Price the Acme deal", "body": "x", "private": True}, "ben-test")
     attempt = claim(api, machine)
     # Its turn may not ask for a credential at all: refused, not a card nobody can see.
@@ -428,7 +428,7 @@ def test_a_task_made_private_retires_a_card_nobody_else_can_fix_and_stops_waitin
 def test_a_task_made_private_moves_a_login_card_to_a_fixer_who_can_read_it(api):
     machine = codex_bot(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
     t = post(api, "tasks", {"owner": "ops", "title": "Price the Acme deal", "body": "x"}, "ben-test")
     refused(api, machine, claim(api, machine))
     [first] = cards(api, t)
@@ -444,12 +444,12 @@ def test_a_task_made_private_moves_a_login_card_to_a_fixer_who_can_read_it(api):
 def test_a_former_reader_cannot_load_or_save_the_credential_card_by_id(api):
     machine = ops_machine(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
     t = post(api, "tasks", {"owner": "ops", "title": "Price the Acme deal", "body": "x"}, "ben-test")
     asked = ask_secret(api, claim(api, machine))
     get(api, f"credential-requests/{asked['id']}", "cara-test")
     make_private(api, t)
-    assert request_status(api, asked["id"]) == "cancelled"
+    assert request_status(api, asked["id"]) == "canceled"
     get(api, f"credential-requests/{asked['id']}", "cara-test", expected=404)
     post(api, f"credential-requests/{asked['id']}/save", {"value": "crm-token-0123456789"}, "cara-test", expected=404)
 
@@ -473,15 +473,15 @@ def test_asking_again_on_one_task_reuses_its_card_and_another_task_keeps_its_own
     assert len(wakes(api, first)) == len(wakes(api, second)) == 1
 
 
-def test_cancelling_the_card_ends_the_wait_with_one_wake_that_says_so(api):
+def test_canceling_the_card_ends_the_wait_with_one_wake_that_says_so(api):
     machine = ops_machine(api)
     t = task(api)
     opened = ask_secret(api, claim(api, machine))
     post(api, f"credential-requests/{opened['id']}/cancel", {})
-    assert [c["status"] for c in cards(api, t)] == ["cancelled"]
+    assert [c["status"] for c in cards(api, t)] == ["canceled"]
     assert shown(api, t)["task"]["status"] in ("open", "doing")
     [woke] = wakes(api, t)
-    assert "cancelled the card for the Acme CRM token" in woke
+    assert "canceled the card for the Acme CRM token" in woke
     assert not [i for i in needs(api) if i["id"] == t["id"]]
 
 
@@ -527,7 +527,7 @@ def test_a_fix_while_several_holds_stand_is_told_with_the_wake_the_last_one_clea
 
     def told():
         with api.app.state.store.read() as c:
-            return [r[0] for r in c.execute("SELECT body FROM messages WHERE to_actor='bot:ops' AND body LIKE '%is reconnected%'")]
+            return [r[0] for r in c.execute("SELECT body FROM messages WHERE recipient_id='bot:ops' AND body LIKE '%is reconnected%'")]
     with api.app.state.store.transaction() as c:
         assert R.google_connected(c, "ana@acme.example") == []
         H.task_update(c, "bot:cpo", first, status="done", note="Sent")
@@ -554,7 +554,7 @@ def hold_item(api, bot="ops"):
 
 def login_card(api, t, runner_id="r1"):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO runners(id,label,token_hash,operator,created) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING",
+        c.execute("INSERT INTO runners(id,label,token_hash,owner_id,created_at) VALUES(?,?,?,?,?) ON CONFLICT DO NOTHING",
                   (runner_id, "Acme Mac", "x-" + runner_id, "ana", H.now()))
         return R.login_refused(c, api.app.state.store.settings, "ops", runner_id, "codex", t["id"])
 

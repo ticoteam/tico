@@ -417,7 +417,7 @@ impl Exits {
         self.fence_bot(&g.bot, g.bot_generation, "browser exit changed");
         let (ctx, crx) = oneshot::channel();
         let (etx, erx) = oneshot::channel();
-        let (cancel, cancelled) = watch::channel(None);
+        let (cancel, canceled) = watch::channel(None);
         self.tunnels.insert(
             g.id.clone(),
             Tunnel {
@@ -433,7 +433,7 @@ impl Exits {
                 cancel,
             },
         );
-        Ok((client_ticket, crx, erx, cancelled))
+        Ok((client_ticket, crx, erx, canceled))
     }
 
     /// The socket slot a ticket opens, once.
@@ -524,8 +524,8 @@ impl Exits {
 
 /// The control command: admit the tunnel and start its task. The answer carries the bot computer's ticket.
 pub(super) fn grant(app: &App, exits: &mut Exits, g: Grant) -> std::result::Result<Value, Error> {
-    let (ticket, client, exit, cancelled) = exits.admit(&g)?;
-    tokio::spawn(tunnel_task(app.clone(), g.id, client, exit, cancelled));
+    let (ticket, client, exit, canceled) = exits.admit(&g)?;
+    tokio::spawn(tunnel_task(app.clone(), g.id, client, exit, canceled));
     Ok(json!({"ticket": ticket}))
 }
 
@@ -598,7 +598,7 @@ async fn link_task(app: App, exit: String, mut socket: WebSocket, seen: Option<s
         return;
     }
     let (open, mut opens) = mpsc::unbounded_channel();
-    let (cancel, mut cancelled) = watch::channel(None);
+    let (cancel, mut canceled) = watch::channel(None);
     let serial = {
         let mut hub = app.hub.lock().unwrap();
         hub.exits.serial += 1;
@@ -621,7 +621,7 @@ async fn link_task(app: App, exit: String, mut socket: WebSocket, seen: Option<s
     let mut ping = tokio::time::interval(LINK_PING);
     let outcome = loop {
         tokio::select! {
-            _ = cancelled.changed() => break cancelled.borrow().clone().unwrap_or_else(|| Close::new(1012, "relay stopped")),
+            _ = canceled.changed() => break canceled.borrow().clone().unwrap_or_else(|| Close::new(1012, "relay stopped")),
             Some(text) = opens.recv() => {
                 if !matches!(tokio::time::timeout(WRITE, socket.send(Message::Text(text.into()))).await, Ok(Ok(()))) {
                     break Close::new(1011, "slow exit");
@@ -699,19 +699,19 @@ async fn tunnel_task(
     tid: String,
     mut client_rx: oneshot::Receiver<WebSocket>,
     mut exit_rx: oneshot::Receiver<WebSocket>,
-    mut cancelled: watch::Receiver<Option<Close>>,
+    mut canceled: watch::Receiver<Option<Close>>,
 ) {
     let deadline = Instant::now() + ANSWER;
     let (mut client, mut exit) = (None, None);
     let outcome = loop {
-        if let Some(close) = cancelled.borrow().clone() {
+        if let Some(close) = canceled.borrow().clone() {
             break close;
         }
         if let (Some(c), Some(e)) = (&mut client, &mut exit) {
-            break pump(&app, &tid, c, e, &mut cancelled).await;
+            break pump(&app, &tid, c, e, &mut canceled).await;
         }
         tokio::select! {
-            _ = cancelled.changed() => { if let Some(close) = cancelled.borrow().clone() { break close; } },
+            _ = canceled.changed() => { if let Some(close) = canceled.borrow().clone() { break close; } },
             _ = tokio::time::sleep_until(deadline.into()) => break Close::new(4404, if client.is_none() { "bot computer did not connect" } else { "exit_no_answer" }),
             socket = &mut client_rx, if client.is_none() => match socket {
                 Ok(s) => client = Some(s), Err(_) => break Close::new(1000, "closed"),

@@ -60,7 +60,7 @@ def lines(c: sqlite3.Connection, kind: str, doc_ids: Sequence[str]) -> dict[str,
 def set_line_tags(c: sqlite3.Connection, kind: str, line_id: str, tags: Mapping[str, str]) -> None:
     """A document line's tags, after its posted line was retagged."""
     _, table, _, _, _ = DOCS[kind]
-    c.execute(f"UPDATE {table} SET tags_json=? WHERE id=?", (json.dumps(dict(tags), sort_keys=True), line_id))
+    c.execute(f"UPDATE {table} SET tags=? WHERE id=?", (json.dumps(dict(tags), sort_keys=True), line_id))
 
 
 def replace_lines(c: sqlite3.Connection, kind: str, doc_id: str, rows: Sequence[Mapping[str, object]]) -> list[str]:
@@ -111,8 +111,8 @@ def doc_with_contact(c: sqlite3.Connection, kind: str, doc_id: str) -> Any:
 def doc_actions(c: sqlite3.Connection, kind: str, doc_id: str, most: int) -> list[Any]:
     """The latest actions naming this document (its approvals among them)."""
     named = like(f'"{kind}_id": "{doc_id}"')
-    return c.execute("SELECT * FROM fin_actions WHERE kind LIKE ? ESCAPE '\\' AND (payload_json LIKE ? ESCAPE '\\' "
-                     "OR result_json LIKE ? ESCAPE '\\') ORDER BY created_at DESC LIMIT ?",
+    return c.execute("SELECT * FROM fin_actions WHERE kind LIKE ? ESCAPE '\\' AND (payload LIKE ? ESCAPE '\\' "
+                     "OR result LIKE ? ESCAPE '\\') ORDER BY created_at DESC LIMIT ?",
                      (f"{kind}\\_%", named, named, most)).fetchall()
 
 
@@ -133,9 +133,9 @@ def drafts(c: sqlite3.Connection, book_id: str, most: int) -> list[Any]:
 
 def scheduled_due(c: sqlite3.Connection, book_id: str, day: str, most: int = 200) -> list[Any]:
     """Scheduled bills whose payment day has come and whose payment this schedule has not asked for yet (a request
-    is recorded in schedule_json as its action id; a new schedule starts without one)."""
+    is recorded in schedule as its action id; a new schedule starts without one)."""
     return c.execute("SELECT * FROM fin_bills WHERE book_id=? AND status='scheduled' AND pay_on<=? AND "
-                     "json_extract(schedule_json, '$.action_id') IS NULL ORDER BY pay_on, id LIMIT ?",
+                     "json_extract(schedule, '$.action_id') IS NULL ORDER BY pay_on, id LIMIT ?",
                      (book_id, day, most)).fetchall()
 
 
@@ -159,7 +159,7 @@ def contacts_page(c: sqlite3.Connection, *, book_id: str, kinds: Sequence[str] =
         sql += " AND active=?"
         args.append(1 if active else 0)
     if q:
-        sql += " AND (name LIKE ? ESCAPE '\\' OR emails_json LIKE ? ESCAPE '\\')"
+        sql += " AND (name LIKE ? ESCAPE '\\' OR emails LIKE ? ESCAPE '\\')"
         args += [like(q)] * 2
     if after:
         sql += " AND (name>? OR (name=? AND id>?))"
@@ -230,21 +230,12 @@ def vendor_resolved(c: sqlite3.Connection, book_id: str, key: str) -> str:
 
 def vendor_keys(c: sqlite3.Connection, book_id: str, key: str) -> list[str]:
     """Every key a vendor's lines carry: a contact's id and each name it went by (lines posted under a name before it
-    was the contact's still count, and a rename never loses them); a plain name's own key; and for each name, the
-    values phase 1 posted it under as written (fin_vendor_legacy)."""
+    was the contact's still count, and a rename never loses them), or a plain name's own key."""
     vendor = vendor_resolved(c, book_id, key)
     if not vendor:
         return []
     names = aliases_of(c, vendor) if is_contact(c, vendor) else [vendor]
-    legacy = legacy_of(c, book_id, names)
-    return list(dict.fromkeys([vendor, *names, *legacy]))
-
-
-def legacy_of(c: sqlite3.Connection, book_id: str, name_keys: Sequence[str]) -> list[str]:
-    if not name_keys:
-        return []
-    return [str(r[0]) for r in c.execute(f"SELECT raw FROM fin_vendor_legacy WHERE book_id=? AND name_key IN "
-                                         f"({_marks(name_keys)}) ORDER BY raw", (book_id, *name_keys))]
+    return list(dict.fromkeys([vendor, *names]))
 
 
 def owed(c: sqlite3.Connection, kind: str, contact_ids: Sequence[str]) -> dict[str, int]:
@@ -377,7 +368,7 @@ def raised(c: sqlite3.Connection, name: str, subject: str) -> bool:
 def categorized_into(c: sqlite3.Connection, entry_id: str) -> bool:
     """Whether a person's (or bot's) categorize action posted this entry."""
     return c.execute("SELECT 1 FROM fin_actions WHERE kind='categorize' AND status='committed' AND "
-                     "json_extract(result_json, '$.entry_id')=? LIMIT 1", (entry_id,)).fetchone() is not None
+                     "json_extract(result, '$.entry_id')=? LIMIT 1", (entry_id,)).fetchone() is not None
 
 
 def unmatched_files(c: sqlite3.Connection, book_id: str, most: int, by: str = "") -> list[Any]:

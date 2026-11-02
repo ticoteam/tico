@@ -3,11 +3,12 @@ never selected, so nothing about it shows."""
 
 import sqlite3
 
+from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import thread_search as search
 
 # The visibility a viewer gets in these tests: company threads only, and never a message from one actor.
 THREADS = "cv.audience='company'"
-MESSAGES = "m.from_actor<>'human:eve'"
+MESSAGES = "m.sender_id<>'human:eve'"
 
 
 def database():
@@ -15,8 +16,8 @@ def database():
     c.row_factory = sqlite3.Row
     c.executescript("""
         CREATE TABLE conversations(id TEXT PRIMARY KEY, subject TEXT, audience TEXT);
-        CREATE TABLE messages(id TEXT PRIMARY KEY, conversation_id TEXT, from_actor TEXT, body TEXT,
-          refs_json TEXT, created TEXT, deleted_at TEXT);
+        CREATE TABLE messages(id TEXT PRIMARY KEY, conversation_id TEXT, sender_id TEXT, body TEXT,
+          refs TEXT, created_at TEXT, deleted_at TEXT);
         INSERT INTO conversations VALUES ('t-open', 'Budget', 'company'), ('t-private', 'Launch', 'members');
     """)
     assert search.ensure(c)
@@ -24,7 +25,7 @@ def database():
 
 
 def post(c, mid, thread, body, actor="human:ana", refs=None):
-    c.execute("INSERT INTO messages(id, conversation_id, from_actor, body, refs_json, created) "
+    c.execute("INSERT INTO messages(id, conversation_id, sender_id, body, refs, created_at) "
               "VALUES (?,?,?,?,?,?)", (mid, thread, actor, body, refs, f"2026-11-01T10:00:0{len(mid) % 10}Z"))
 
 
@@ -109,8 +110,8 @@ def test_ensure_fills_an_index_from_existing_messages_and_keeps_it():
     c.row_factory = sqlite3.Row
     c.executescript("""
         CREATE TABLE conversations(id TEXT PRIMARY KEY, subject TEXT, audience TEXT);
-        CREATE TABLE messages(id TEXT PRIMARY KEY, conversation_id TEXT, from_actor TEXT, body TEXT,
-          refs_json TEXT, created TEXT, deleted_at TEXT);
+        CREATE TABLE messages(id TEXT PRIMARY KEY, conversation_id TEXT, sender_id TEXT, body TEXT,
+          refs TEXT, created_at TEXT, deleted_at TEXT);
         INSERT INTO conversations VALUES ('t-open', 'Budget', 'company');
         INSERT INTO messages VALUES ('old', 't-open', 'human:ana', 'Old budget memo', NULL, '2026-10-01', NULL);
     """)

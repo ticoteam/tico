@@ -122,8 +122,8 @@ function finBsTail() {
 }
 
 // ----------------------------------------------------------------- cards
-const FIN_CARD_RANK = {active: 0, frozen: 1, cancelled: 2};
-const FIN_CARD_STATUS = {active: ['ok', 'Active'], frozen: ['waiting', 'Frozen'], cancelled: ['idle', 'Cancelled']};
+const FIN_CARD_RANK = {active: 0, frozen: 1, canceled: 2};
+const FIN_CARD_STATUS = {active: ['ok', 'Active'], frozen: ['waiting', 'Frozen'], canceled: ['idle', 'Canceled']};
 function finCardsPage() {
   const caps = finCaps();
   FIN.cards = {rows: [], next: null, sel: '', load: 0};
@@ -144,7 +144,7 @@ async function finCardsLoad(more) {
   try { d = await get('/v2/finance/cards' + qs + finAs(qs ? '&' : '?'), {fresh: true}); }
   catch (e) { if (FIN?.cards === state && $('#fin-cards')) $('#fin-cards').innerHTML = finFail(e); return; }
   if (FIN?.cards !== state || state.load !== load || !$('#fin-cards')) return;
-  // Live cards first, then frozen, then cancelled; by name within each.
+  // Live cards first, then frozen, then canceled; by name within each.
   state.rows = (more ? [...state.rows, ...(d.cards || [])] : d.cards || [])
     .sort((x, y) => (FIN_CARD_RANK[x.status] ?? 3) - (FIN_CARD_RANK[y.status] ?? 3) || finCardName(x).localeCompare(finCardName(y)));
   state.next = d.next || null;
@@ -172,11 +172,11 @@ function finCardsDraw() {
 function finCardRail() {
   const state = FIN.cards, c = state.rows.find(x => x.id === state.sel);
   if (!c) { finRail(''); return; }
-  const may = finCaps().may('finance.cards') && c.status !== 'cancelled';
+  const may = finCaps().may('finance.cards') && c.status !== 'canceled';
   const [cls, label] = finCardPill(c);
   // A budget's freeze lifts when the budget has room again; only a person's freeze is undone by hand.
   const toggle = c.status === 'frozen' ? (c.frozen_by === 'budget' ? '' : 'Unfreeze') : 'Freeze';
-  const app = c.holder === finMe() && c.status !== 'cancelled' && FIN_CARD_APP[c.provider || 'mercury'];
+  const app = c.holder === finMe() && c.status !== 'canceled' && FIN_CARD_APP[c.provider || 'mercury'];
   const saved = c.saved_on || [], bot = String(c.holder || '').startsWith('bot:');
   finRail(`<div class="fin-rail-title"><h2>${esc(finCardName(c))}</h2><span class="pill ${cls}">${esc(label)}</span></div>
     ${finKv('Holder', esc(finWho(c.holder)))}${finKv('Budget', c.budget ? esc(c.budget.name) : '—')}
@@ -652,7 +652,7 @@ function finTxCatDraw(r) {
 // payment_cancel while one is still queued. GET /api/v2/finance/transfers?cursor= ->
 // {transfers: [{id, from: {id, name, last4}, to: {…}, amount, memo, status, last_error, created_at, created_by}], next_cursor}.
 const FIN_XFER_STATUS = {queued: ['waiting', 'Queued'], submitted: ['waiting', 'Sent'], unknown: ['fail', 'Check bank'],
-  failed: ['fail', 'Failed'], posted: ['ok', 'Posted'], cancelled: ['idle', 'Cancelled']};
+  failed: ['fail', 'Failed'], posted: ['ok', 'Posted'], canceled: ['idle', 'Canceled']};
 const finAcctName = a => a ? `${a.name || ''}${a.last4 ? ' ••' + a.last4 : ''}` : '';
 async function finXferLoad(more) {
   const state = FIN.tx, load = ++state.load;
@@ -689,7 +689,7 @@ function finXferRail() {
     ${r.status === 'queued' && finCaps().may('finance.pay') ? '<div class="fin-foot"><button type="button" class="ghost" data-fin-xfer-cancel>Cancel transfer</button></div>' : ''}`);
   $('#fin-rail [data-fin-xfer-cancel]')?.addEventListener('click', async ev => {
     const btn = ev.currentTarget; btn.disabled = true;
-    try { const res = await finAct('payment_cancel', {transfer_id: r.id}); if (res.status === 'committed') toast('Cancelled'); void finTxLoad(false); }
+    try { const res = await finAct('payment_cancel', {transfer_id: r.id}); if (res.status === 'committed') toast('Canceled'); void finTxLoad(false); }
     catch (e) { toast(e.message, true); btn.disabled = false; }
   });
 }

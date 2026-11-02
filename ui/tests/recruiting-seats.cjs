@@ -13,7 +13,7 @@ const bot = (name, display_name, org_parent, over = {}) => ({name, display_name,
 const bots = [bot('coo', 'Assistant', 'p:ana'), bot('botops', 'BotOps', 'p:ana'), bot('sales', 'Head of Sales', 'p:ana')];
 const seat = (id, title, org_parent, description = '') => ({id, kind: 'seat', stage: 'recruiting', title, description, team: '',
   reports_to: org_parent.startsWith('p:') ? 'human:' + org_parent.slice(2) : org_parent.startsWith('s:') ? 'seat:' + org_parent.slice(2) : org_parent.slice(2),
-  created: '2026-10-24T00:00:00Z', org_parent});
+  created_at: '2026-10-24T00:00:00Z', org_parent});
 const seats = [
   seat('s-eng', 'Head of Engineering', 'p:ana', 'Runs the software factory.\nOwns:\n- the roadmap'),
   seat('s-dev', 'Developer', 's:s-eng', 'Builds features.'),

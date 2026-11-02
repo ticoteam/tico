@@ -32,7 +32,7 @@ const BODY = ['Two drafts for review.', '',
     const errors=[],referers=[];
     page.on('pageerror',e=>errors.push(e.message));
     const bot={name:'finance',display_name:'Finance',host:'keeper',status:'active',can_chat:true,schedules:[]};
-    const threads=threadsFake({bot:'finance',messages:[{id:'m1',from_actor:'bot:finance',body:`Please review [the drafts](https://tico-ui.test/tasks/${TASK}).`}]});
+    const threads=threadsFake({bot:'finance',messages:[{id:'m1',sender_id:'bot:finance',body:`Please review [the drafts](https://tico-ui.test/tasks/${TASK}).`}]});
     await page.context().route('**/*',route=>{
       const url=new URL(route.request().url()),p=url.pathname;
       const json=body=>route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
@@ -48,7 +48,7 @@ const BODY = ['Two drafts for review.', '',
       if(p.endsWith('/watch'))return route.fulfill({contentType:'text/event-stream',body:': fixture\n\n'});
       const answer=threads(p,url,route.request().method());
       if(answer!==undefined)return json(answer);
-      if(p===`/api/v2/tasks/${TASK}`)return json({task:{id:TASK,title:'Review the launch drafts',body:BODY,owner:'human:ana',requester:'bot:finance',status:'open',lane:'company',labels:[],links:[],parts:{total:0,done:0},version:1,updated:new Date().toISOString()},children:[]});
+      if(p===`/api/v2/tasks/${TASK}`)return json({task:{id:TASK,title:'Review the launch drafts',body:BODY,owner_id:'human:ana',requester_id:'bot:finance',status:'open',lane:'company',labels:[],links:[],parts:{total:0,done:0},version:1,updated_at:new Date().toISOString()},children:[]});
       if(p==='/api/v2/tasks')return json({tasks:[]});
       return json(unrouted(p));
     });
