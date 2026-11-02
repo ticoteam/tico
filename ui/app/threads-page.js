@@ -105,11 +105,29 @@ async function pageThreads() {
     if (inbox && d.kind !== 'activity') return liveThrottle('threads-page-inbox', () => { if (S.route === route) reload(true); }, 1500);
     if (d.kind === 'ranked' && sort === 'important' && !withActor) liveSoon('threads-page-ranked', () => { if (S.route === route) reload(true); }, 1500);
   });
-  // A hold decided elsewhere moves Needs you: Inbox draws from the list once it is read again.
   if (inbox) {
-    const offNeeds = liveOn('needs-list', () => { if (S.route !== route) return offNeeds(); draw(); });
-    // Its held messages come from Needs you, read a page at a time: the rest of it, so none is missed.
-    void (async () => { for (let i = 0; i < 10 && typeof needsAll === 'function' && !needsAll(); i++) if (await v2NeedsMore() === false) break; if (S.route === route) draw(); })();
+    // Its held messages come from Needs you, read a page at a time to the end so none is missed; the sidebar counts
+    // them too. Read again whenever Needs you is (the first read may land after this page opened).
+    let paging = false;
+    const readHolds = async () => {
+      if (paging || typeof needsAll !== 'function') return;
+      paging = true;
+      try {
+        for (let i = 0; i < 100 && S.route === route && !needsAll(); i++) {
+          if (await v2NeedsMore() === false) break;
+          if (S.route !== route) break;
+          draw();
+          if (typeof threadsSideRender === 'function') threadsSideRender();
+        }
+      } finally { paging = false; }
+    };
+    // A hold kept or withdrawn moves Needs you and the thread's attention: draw the holds now, read the threads again.
+    const offNeeds = liveOn('needs-list', () => {
+      if (S.route !== route) return offNeeds();
+      draw(); void readHolds();
+      liveThrottle('threads-page-inbox', () => { if (S.route === route) reload(true); }, 1500);
+    });
+    void readHolds();
   }
   $('#threads-more').onclick = ev => { ev.currentTarget.disabled = true; load(st.next).finally(() => { ev.currentTarget.disabled = false; }); };
   try { await load(''); }
