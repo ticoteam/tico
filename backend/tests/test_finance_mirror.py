@@ -783,6 +783,24 @@ def test_a_mirrored_bill_the_provider_refuses_for_good_gives_its_budget_back(boo
     assert _software_held_and_actual(books) == (0, 0)
 
 
+def test_a_mirror_book_refuses_a_recipient_before_anything_reads_its_bank_numbers(books):
+    """§4.1 and §10: a recipient is not made in a mirrored book, and the mirror refusal comes before the sealed-payload
+    checks. A request with bank numbers gets the refusal and no number in its reason; a request that sends the sealed
+    fields itself gets the same refusal rather than a sealed-payload error."""
+    cid = _connection(books)
+    _mirror(books, cid)
+    with books.transaction() as c:
+        made = act(c, OWNER, "recipient_add", {"name": "Acme", "method": "ach", "account_number": "1234567890",
+                                               "routing_number": "123456789"})
+        assert (made.status, made.code) == ("denied", NOT_AVAILABLE)
+        assert "mirror mode" in made.reason and "1234567890" not in made.reason and "123456789" not in made.reason
+        sealed = act(c, OWNER, "recipient_add", {"name": "Acme", "method": "ach", "details_ref": "vault-1",
+                                                 "details_fp": "fp", "last4": "7890"})
+        assert (sealed.status, sealed.code) == ("denied", NOT_AVAILABLE)
+        assert "mirror mode" in sealed.reason
+        assert c.execute("SELECT COUNT(*) FROM fin_recipients").fetchone()[0] == 0
+
+
 def test_a_create_cut_off_after_the_provider_took_it_is_found_and_not_sent_again(books):
     fake = FakeBooks()
     _chart(fake)

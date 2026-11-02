@@ -26,6 +26,7 @@ from .core.errors import CONFLICT, DENIED, INVALID, NOT_AVAILABLE, NOT_FOUND, Fi
 from .store import actions as SX
 from .store import budgets as SB
 from .store import usage as SU
+from .store import ledger as SL
 from .store import tico
 
 # What part B and the HTTP routes call.
@@ -206,12 +207,17 @@ def _decider(ctx: Ctx, row: Mapping[str, object], gate: K.Gate, who: str) -> str
     return _approver(ctx, gate, who)
 
 
+def _mirror_refusal(kind: str) -> str:
+    """Why a mirrored book does not take this kind. It names the kind only, never what the request sent."""
+    return f"{kind} is not available while the books are a provider's (mirror mode)"
+
+
 def _plan(ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object],
           action_id: str) -> tuple[K.Gate, handlers.Plan]:
     """The right check first (a missing right is a denial, or for budgets a request to the asker's manager), then the
     kind's own checks and default gate, then the gate rules (§6.3), which run again whenever this does: at consume."""
     if ctx.book.mode == "mirror" and kind in mirror.REFUSED:
-        raise FinanceError(NOT_AVAILABLE, f"{kind} is not available while the books are a provider's (mirror mode)")
+        raise FinanceError(NOT_AVAILABLE, _mirror_refusal(kind))
     by_right = K.authority(ctx.org, p.who, kind, ctx.rights(p.who))
     if by_right is not None and by_right.outcome == "deny":
         raise FinanceError(DENIED, f"{kind} needs {by_right.rule.removeprefix('right:')}")
@@ -233,6 +239,11 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
     key = (idempotency_key or "").strip()
     if not key or len(key) > MAX_KEY:
         return ActionResult(status="failed", kind=kind, code=INVALID, reason=f"an idempotency key is 1-{MAX_KEY} chars")
+    book = SL.book(c)
+    if book is not None and book.mode == "mirror" and kind in mirror.REFUSED:
+        # Refused before any check reads the payload, so a sealed-payload or card-number error never answers first. Not
+        # recorded: the request may name bank details, and a refusal that names none needs no stored copy.
+        return ActionResult(status="denied", kind=kind, code=NOT_AVAILABLE, reason=_mirror_refusal(kind))
     try:
         body, sealed = payments.strip_details(c, kind, _canonical(payload))
     except FinanceError as e:
