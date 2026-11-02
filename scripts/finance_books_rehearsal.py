@@ -42,7 +42,9 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 import uuid
+from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
 
@@ -52,7 +54,15 @@ COMPANY = "5a0c7e21-9d4b-4f3e-8b2a-6e1d0c9f7a42"          # a fictional company 
 OWNER_ACTOR = "human:ana"
 QBO_REALM, QBO_OTHER_REALM = "1234567", "7654321"
 XERO_TENANT, XERO_OTHER_TENANT = "acme-tenant", "other-tenant"
-WINDOW = ("2026-09-01", "2026-10-31")
+# The whole book, through the open periods (a late edit to a closed month posts in the current open period, §4.1).
+WINDOW = ("2026-09-01", "2027-12-31")
+SEPT = ("2026-09-01", "2026-09-30")
+DAY = "2026-10-30"                                   # the day QuickBooks writes in steps 4 to 7 (October is open)
+RETRY_REHEARSAL = (1, 2, 4, 8)                       # mirror.RETRY for this rehearsal (production: 60 s, 5 min, ...)
+# Steps 4 to 7, in cents. Software is the 21 account in QuickBooks; Office supplies is 24.
+B1, I1, B2, J1, J2 = 150000, 200000, 2500, 5000, 1000
+BUDGET, B3, B4, B5 = 1000000, 400000, 500000, 1000
+SOFTWARE_OCT_BEFORE = 12000 + B1 + B2                 # bill 106 (Oct, Software) + the step 4 bills
 NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -111,6 +121,37 @@ def wait_until(predicate: Callable[[], bool], seconds: float, every: float = 0.5
 
 def cents(value: float) -> int:
     return int(round(value * 100))
+
+
+def rows_of(answer: Any, key: str = "") -> list[dict[str, Any]]:
+    """The records in a read's answer: the list under `key`, else the first list of objects it holds."""
+    if isinstance(answer, dict):
+        if key and isinstance(answer.get(key), list):
+            return [r for r in answer[key] if isinstance(r, dict)]
+        for value in answer.values():
+            if isinstance(value, list) and (not value or isinstance(value[0], dict)):
+                return [r for r in value if isinstance(r, dict)]
+    if isinstance(answer, list):
+        return [r for r in answer if isinstance(r, dict)]
+    return []
+
+
+def moved(before: dict[str, int], deltas: dict[str, int]) -> dict[str, int]:
+    """The books' totals after the deltas, every total in minor units."""
+    return {k: before[k] + deltas.get(k, 0) for k in before}
+
+
+def qbo_writes_delta() -> dict[str, int]:
+    """Steps 4: the bill paid in full (B1), the invoice paid in full (I1), the unpaid bill (B2) and two journals (J1, J2)."""
+    expense = B1 + B2 + J1 + J2
+    income = I1
+    return {"income": income, "expense": expense, "net": income - expense,
+            "bank": -B1 + I1 - J1 - J2, "ar": I1 - I1, "ap": B1 + B2 - B1}
+
+
+def qbo_budget_delta() -> dict[str, int]:
+    """Step 6: two bills the budget holds and then shows as actuals (B3 and B4), both unpaid."""
+    return {"expense": B3 + B4, "net": -(B3 + B4), "ap": B3 + B4}
 
 
 # ------------------------------------------------------------------------------------------------ the fake HQ
@@ -425,6 +466,7 @@ class Rehearsal:
         if self.provider == "quickbooks":
             from backend.finance import qbo as qbo_client
             qbo_client.PAGE = 12                              # QuickBooks query page (default 1000)
+            mirror.RETRY = RETRY_REHEARSAL                    # a lost answer is retried in seconds, not minutes
         self.settings = demo.build(self.data, url=f"http://127.0.0.1:{DEMO_PORT}")
         self.app = create_app(self.settings)
         self.link = hook_relay.Link("gk_rehearsal_not_a_secret", "https://hq.invalid.example/v1/gateway", "fp-rehearsal")
@@ -475,9 +517,14 @@ class Rehearsal:
         books_sync.ring()
 
     def settle(self, predicate: Callable[[], bool], seconds: float = 120) -> bool:
-        """Wakes the books worker and waits until a predicate about the books holds."""
-        self.ring()
-        return wait_until(predicate, seconds, every=1.0)
+        """Wakes the books worker, and wakes it again every few seconds, until a predicate about the books holds. A write
+        due for a retry is only sent on the worker's pass, so one ring is not enough to wait out a retry."""
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            self.ring()
+            if wait_until(predicate, 5, every=1.0):
+                return True
+        return predicate()
 
     def close(self) -> None:
         self.stop_demo()
@@ -487,7 +534,7 @@ class Rehearsal:
 
     # -- the steps
     def step_connect(self) -> None:
-        from backend.finance import books_link, books_sync
+        from backend.finance import books_link
         res = self.res
         res.step = "1 connect"
         status, body = http("POST", self.base + "/finance/books/connect", {"provider": self.provider},
@@ -564,6 +611,13 @@ class Rehearsal:
                   listed[max(0, at - 20):at + 260] if at >= 0 else "not in the bills list")
         archived = json.dumps(self.get("/finance/contacts?kind=vendor&active=false"))
         res.check("the archived vendor comes in inactive (Summit Legal)", "Summit Legal" in archived)
+        if self.provider == "quickbooks":
+            names = Counter(str(r.get("Name", "")).strip().lower() for r in self.fake_rows("Account"))
+            clashes = sorted(n for n, k in names.items() if k > 1 and n)
+            res.check("the switch adds no account beside the provider's own with the same name (§10: their chart is "
+                      "the source of truth)", not clashes,
+                      f"{len(self.fake_rows('Account'))} accounts in QuickBooks; names held twice: {clashes}; "
+                      f"the preview said impact={dry.get('impact')}")
         res.skip("a record deleted before the first sync: the query feed never lists it, so there is nothing to see "
                  "here; deletion is checked in step 3 through the change feed")
         del mirror
@@ -574,6 +628,7 @@ class Rehearsal:
         res = self.res
         res.step = "3 changes"
         expected_before = self.totals()
+        sept_before = self.month_pnl(SEPT)
         status, body = self.act("close_period", {"month": "2026-09"})
         res.check("September closes in Tico before the provider edits it", status == 200,
                   f"HTTP {status} {str(body)[:200]}")
@@ -607,11 +662,28 @@ class Rehearsal:
         res.check("the provider's edit, void and deletes land in Tico and the P&L and balance sheet match to the cent",
                   done, f"want {expected} got {self.totals()}; cdc reads={len(cdc)}; "
                         f"sync={self.accounting_row().get('sync')}; inbox={json.dumps(self.get('/finance/inbox'))[:700]}")
-        close = self.get("/finance/close/2026-09")
-        res.check("the closed month takes the restatement and flags it on its close snapshot",
-                  "restat" in json.dumps(close).lower(), json.dumps(close)[:200])
-        bills = json.dumps(self.get("/finance/bills?status=void"))
-        res.check("the voided bill stays void after the change", "B-1005" in bills)
+        # §10: their edit inside a closed month is accepted and flagged on that month's close snapshot. The P&L of a closed
+        # month reads its snapshot, and carries the marker as snapshot.restatements.
+        sept = self.get("/finance/pnl?start=%s&end=%s&period=month&basis=accrual" % SEPT)
+        marker = sept.get("snapshot") or {}
+        res.check("the closed month takes the restatement and flags it on its close snapshot (§10)",
+                  int(marker.get("restatements") or 0) > 0, json.dumps(marker)[:200])
+        res.check("September's own P&L is unchanged: the late edits post in the open period (§4.1)",
+                  self.month_pnl(SEPT) == sept_before, f"before={sept_before} after={self.month_pnl(SEPT)}")
+        bill_rows = rows_of(self.get("/finance/bills?limit=200"), "bills")
+        b101 = next((r for r in bill_rows if r.get("number") == "B-1001"), {})
+        res.check("the edited bill B-1001 is 150.00 with 120.00 paid, so 30.00 open",
+                  (b101.get("total"), b101.get("paid"), b101.get("status")) == (15000, 12000, "open"),
+                  f"total={b101.get('total')} paid={b101.get('paid')} status={b101.get('status')}")
+        voids = {r.get("number") for r in rows_of(self.get("/finance/bills?status=void&limit=200"), "bills")}
+        res.check("the voided bills stay void: B-1005 (voided in this step) and B-1008 (voided in the seed)",
+                  {"B-1005", "B-1008"} <= voids, f"void bills: {sorted(v for v in voids if v)}")
+
+    def month_pnl(self, window: tuple[str, str]) -> tuple[int, int]:
+        pnl = self.get("/finance/pnl?start=%s&end=%s&period=month&basis=accrual" % window)
+        income = sum(pnl["income"]) if isinstance(pnl["income"], list) else int(pnl["income"])
+        expense = sum(pnl["expense"]) if isinstance(pnl["expense"], list) else int(pnl["expense"])
+        return income, expense
 
     def seed_provider(self) -> None:
         self.fake_call("/_fake/seed", self.seed_body())
@@ -632,6 +704,19 @@ class Rehearsal:
                 else sum(pnl["net"]), "bank": named(bs["assets"], "Checking"),
                 "ar": named(bs["assets"], "Accounts Receivable"), "ap": named(bs["liabilities"], "Accounts Payable")}
 
+    def liability_lines(self) -> list[tuple[str, int]]:
+        """Every liability line with a balance, by name (the balance sheet as the books show it)."""
+        bs = self.get("/finance/balance-sheet?as_of=%s" % WINDOW[1])
+        return [(str(r.get("name")), int(r.get("balance") or 0)) for r in bs["liabilities"] if int(r.get("balance") or 0)]
+
+    def live_books(self) -> list[dict[str, Any]]:
+        """The sources page's books rows that are not disconnected: the active books connections."""
+        return [r for r in self.books_rows() if (r.get("sync") or {}).get("status") != "disconnected"]
+
+    def payable_lines(self) -> list[tuple[str, int]]:
+        """The liability lines with a balance whose name says payable: one is expected, the provider's."""
+        return [(n, b) for n, b in self.liability_lines() if "payable" in n.lower()]
+
     def page_reads(self) -> dict[str, int]:
         """Query pages read per entity, from the fake's call log (QuickBooks query form)."""
         calls = self.fake_call("/_fake/calls")["calls"]
@@ -643,6 +728,310 @@ class Rehearsal:
                 out[entity] = out.get(entity, 0) + 1
         return out
 
+    # -- QuickBooks steps 4 to 7 (the Xero steps are a separate set; none is written in this revision)
+    def outbox_open(self) -> int:
+        counts = self.accounting_row().get("outbox") or {}
+        return sum(int(counts.get(k, 0)) for k in ("pending", "failed", "unknown"))
+
+    def fake_rows(self, entity: str) -> list[dict[str, Any]]:
+        """The provider's own records, read through its query: the check is against the fake, not against Tico."""
+        query = urllib.parse.quote(f"SELECT * FROM {entity}")
+        status, body = http("GET", f"{self.fake}/v3/company/{QBO_REALM}/query?query={query}", token="rehearsal")
+        if status != 200:
+            raise RuntimeError(f"fake query {entity}: {status}")
+        return list((body.get("QueryResponse") or {}).get(entity) or [])
+
+    def fake_posts(self) -> list[dict[str, Any]]:
+        return [c for c in self.fake_call("/_fake/calls")["calls"] if c["method"] == "POST"]
+
+    def local_doc(self, path: str, number: str) -> dict[str, Any] | None:
+        return next((r for r in rows_of(self.get(path + "?limit=200"), path.rsplit("/", 1)[1])
+                     if r.get("number") == number), None)
+
+    def budget(self, name: str, on: str) -> dict[str, Any]:
+        """The budget by name with its figures flat: amount, actual, held and remaining are under its `state`."""
+        rows = rows_of(self.get("/finance/budgets?limit=200&at=%s" % on), "budgets")
+        row = next((r for r in rows if r.get("name") == name), None)
+        return {**row, **(row.get("state") or {})} if row else {}
+
+    def ids(self) -> dict[str, str]:
+        """Tico's own ids for the rehearsal's accounts, parties and money account, found by name."""
+        def coded(rows: list[dict[str, Any]], code: str, name: str) -> str:
+            found = [r for r in rows if str(r.get("number")) == code]
+            if len(found) != 1 or found[0].get("name") != name:
+                raise RuntimeError(f"no account {code} {name!r} in the books; {[(r.get('number'), r.get('name')) for r in found]}")
+            return str(found[0]["id"])
+        bill_lines = rows_of(self.get("/finance/chart?for=bill"))
+        invoice_lines = rows_of(self.get("/finance/chart?for=invoice"))
+        journal_lines = rows_of(self.get("/finance/chart?for=journal"))
+        vendors = rows_of(self.get("/finance/contacts?kind=vendor&limit=200"), "contacts")
+        customers = rows_of(self.get("/finance/contacts?kind=customer&limit=200"), "contacts")
+        def named(rows: list[dict[str, Any]], name: str) -> str:
+            found = [r for r in rows if r.get("name") == name]
+            if not found:
+                raise RuntimeError(f"no {name!r} in the books")
+            return str(found[0]["id"])
+        return {"software": coded(bill_lines, "6120", "Software"),
+                "consulting": coded(invoice_lines, "4010", "Consulting income"),
+                "office": coded(journal_lines, "6410", "Office supplies"),
+                "checking_account": coded(journal_lines, "1010", "Checking"),
+                "vendor": named(vendors, "Acme Supplies"), "customer": named(customers, "Acme Retail")}
+
+    def qbo_step_writes(self) -> None:
+        """Tico writes through the outbox: a bill, an invoice, two payments and two journals, each confirmed by QuickBooks
+        with the same amounts and accounts; a retry after a lost answer makes no duplicate; a 401 gets one refresh."""
+        from backend.finance import mirror
+        res = self.res
+        res.step = "4 writes"
+        ids = self.ids()
+        before = self.totals()
+        a1 = self.act("bill_create", {"vendor_id": ids["vendor"], "number": "R-BILL-1", "bill_date": DAY,
+                                      "due_date": DAY, "lines": [{"account_id": ids["software"], "amount": B1,
+                                                                  "description": "rehearsal bill"}]})
+        a2 = self.act("invoice_create", {"customer_id": ids["customer"], "number": "R-INV-1", "invoice_date": DAY,
+                                         "due_date": DAY, "lines": [{"account_id": ids["consulting"], "amount": I1,
+                                                                     "description": "rehearsal invoice"}]})
+        a3 = self.act("journal", {"date": DAY, "memo": "R-JE-1 rehearsal", "lines": [
+            {"account_id": ids["office"], "amount": J1}, {"account_id": ids["checking_account"], "amount": -J1}]})
+        statuses = [a.get("status") or a.get("reason") for _, a in (a1, a2, a3)]
+        res.check("the bill, the invoice and the journal are accepted as writes out",
+                  all(s == 200 and a.get("status") == "committed" for s, a in (a1, a2, a3)), str(statuses))
+        landed = self.settle(lambda: self.local_doc("/finance/bills", "R-BILL-1") is not None
+                             and self.local_doc("/finance/invoices", "R-INV-1") is not None
+                             and self.outbox_open() == 0, 150)
+        res.check("QuickBooks confirms the bill and the invoice, and Tico takes them in", landed,
+                  f"outbox={self.accounting_row().get('outbox')}")
+        bill = self.local_doc("/finance/bills", "R-BILL-1") or {}
+        inv = self.local_doc("/finance/invoices", "R-INV-1") or {}
+        p1 = self.act("bill_mark_paid", {"bill_id": str(bill.get("id", "")), "amount": B1, "date": DAY,
+                                         "account_id": ids["checking_account"]})
+        p2 = self.act("invoice_record_payment", {"invoice_id": str(inv.get("id", "")), "amount": I1, "date": DAY,
+                                                 "account_id": ids["checking_account"]})
+        res.check("the bill payment and the invoice payment are accepted as writes out",
+                  all(s == 200 and a.get("status") == "committed" for s, a in (p1, p2)),
+                  str([a.get("status") or a.get("reason") for _, a in (p1, p2)]))
+        self.settle(lambda: self.outbox_open() == 0, 150)
+        bill_rows = [r for r in self.fake_rows("Bill") if r.get("DocNumber") == "R-BILL-1"]
+        bill_ok = len(bill_rows) == 1 and float(bill_rows[0].get("TotalAmt", -1)) == qbo_money(B1) and [
+            ln["AccountBasedExpenseLineDetail"]["AccountRef"]["value"] for ln in bill_rows[0].get("Line", [])
+            if ln.get("DetailType") == "AccountBasedExpenseLineDetail"] == ["21"]
+        inv_rows = [r for r in self.fake_rows("Invoice") if r.get("DocNumber") == "R-INV-1"]
+        items = {str(r["Id"]): r for r in self.fake_rows("Item")}
+        inv_ok = len(inv_rows) == 1 and float(inv_rows[0].get("TotalAmt", -1)) == qbo_money(I1) and all(
+            items.get(str(ln["SalesItemLineDetail"]["ItemRef"]["value"]), {}).get("IncomeAccountRef", {}).get("value")
+            == "18" for ln in inv_rows[0].get("Line", []) if ln.get("DetailType") == "SalesItemLineDetail")
+        paid_bill = [r for r in self.fake_rows("BillPayment") if r.get("TxnDate") == DAY
+                     and float(r.get("TotalAmt", -1)) == qbo_money(B1)]
+        paid_inv = [r for r in self.fake_rows("Payment") if r.get("TxnDate") == DAY
+                    and float(r.get("TotalAmt", -1)) == qbo_money(I1)]
+        je = [r for r in self.fake_rows("JournalEntry") if "R-JE-1" in json.dumps(r)]
+        je_ok = len(je) == 1 and sorted(
+            (ln["JournalEntryLineDetail"]["AccountRef"]["value"], ln["JournalEntryLineDetail"]["PostingType"],
+             float(ln["Amount"])) for ln in je[0].get("Line", [])) == [("10", "Credit", 50.0), ("24", "Debit", 50.0)]
+        bill_seen = [(r.get("TotalAmt"), [ln.get("AccountBasedExpenseLineDetail", {}).get("AccountRef")
+                                          for ln in r.get("Line", [])]) for r in bill_rows]
+        res.check("QuickBooks holds the four writes with the same amounts and accounts as Tico",
+                  bill_ok and inv_ok and len(paid_bill) == 1 and len(paid_inv) == 1 and je_ok,
+                  f"bill={bill_ok} (QuickBooks has {bill_seen}) invoice={inv_ok} billpayment={len(paid_bill)} "
+                  f"payment={len(paid_inv)} journal={je_ok}")
+        # A retry after a lost answer: the bill is written, its answer never arrives, and the retry must not duplicate it.
+        lost_before = self.fake_call("/_fake/calls")["lost"]
+        self.fake_call("/_fake/lose", {"path": "bill", "count": 1})
+        a4 = self.act("bill_create", {"vendor_id": ids["vendor"], "number": "R-BILL-2", "bill_date": DAY,
+                                      "due_date": DAY, "lines": [{"account_id": ids["software"], "amount": B2,
+                                                                  "description": "lost answer"}]})
+        done = self.settle(lambda: self.local_doc("/finance/bills", "R-BILL-2") is not None and self.outbox_open() == 0,
+                           150)
+        lost = self.fake_call("/_fake/calls")["lost"] - lost_before
+        copies = [r for r in self.fake_rows("Bill") if r.get("DocNumber") == "R-BILL-2"]
+        tico_copies = [r for r in rows_of(self.get("/finance/bills?limit=200"), "bills") if r.get("number") == "R-BILL-2"]
+        posts = [c for c in self.fake_posts() if c["path"].endswith("/bill")
+                 and c["body"].get("DocNumber") == "R-BILL-2"]
+        request_ids = {c["query"].get("requestid") for c in posts}
+        res.check("a lost answer for a bill is retried and makes no duplicate (one in QuickBooks, one in Tico)",
+                  a4[0] == 200 and done and lost == 1 and len(copies) == 1 and len(tico_copies) == 1,
+                  f"lost answers={lost} copies in QuickBooks={len(copies)} in Tico={len(tico_copies)} "
+                  f"posts={len(posts)} request ids={len(request_ids)} outbox={self.accounting_row().get('outbox')}")
+        # A 401 from QuickBooks: one new token from HQ, then the call is tried again and the write lands.
+        refreshes = self.hq.refreshes
+        refused = self.fake_call("/_fake/calls")["refused"]
+        self.fake_call("/_fake/expire", {})
+        a5 = self.act("journal", {"date": DAY, "memo": "R-JE-2 after expiry", "lines": [
+            {"account_id": ids["office"], "amount": J2}, {"account_id": ids["checking_account"], "amount": -J2}]})
+        landed5 = self.settle(lambda: self.outbox_open() == 0 and any(
+            "R-JE-2" in json.dumps(r) for r in self.fake_rows("JournalEntry")), 150)
+        refused = self.fake_call("/_fake/calls")["refused"] - refused
+        res.check("a 401 gets one token refresh from HQ and the write still lands",
+                  a5[0] == 200 and landed5 and refused >= 1 and self.hq.refreshes > refreshes,
+                  f"401s given={refused} HQ refreshes={self.hq.refreshes - refreshes}")
+        expected = moved(before, qbo_writes_delta())
+        done_totals = self.settle(lambda: self.totals() == expected, 150)
+        res.check("after the writes, the P&L and the balance sheet match the writes to the cent", done_totals,
+                  f"want {expected} got {self.totals()}")
+        payables = self.payable_lines()
+        res.check("the bills' payables post to the provider's Accounts Payable, and no second payable line holds a balance",
+                  [name for name, _ in payables] == ["Accounts Payable"],
+                  f"payable lines with a balance: {payables}; the books' liabilities: {self.liability_lines()}")
+        del mirror
+
+    def qbo_step_refusals(self) -> None:
+        """Writes the mirrored books refuse get a plain reason and write nothing: no outbox row, no call to QuickBooks."""
+        from backend.finance import mirror
+        res = self.res
+        res.step = "5 refusals"
+        ids = self.ids()
+        bill = self.local_doc("/finance/bills", "R-BILL-2") or {}
+        inv = self.local_doc("/finance/invoices", "R-INV-1") or {}
+        outbox_before, posts_before, totals_before = self.outbox_open(), len(self.fake_posts()), self.totals()
+        payloads: dict[str, dict[str, Any]] = {
+            "bill_update": {"bill_id": str(bill.get("id", "")), "memo": "refused"},
+            "bill_approve": {"bill_id": str(bill.get("id", ""))},
+            "bill_schedule": {"bill_id": str(bill.get("id", "")), "pay_on": DAY, "money_account_id": ids["checking_account"]},
+            "invoice_send": {"invoice_id": str(inv.get("id", ""))},
+            "contact_create": {"kind": "vendor", "name": "Refused Vendor"},
+            "contact_update": {"contact_id": ids["vendor"], "name": "Refused"},
+            "account_create": {"code": "9900", "name": "Refused account", "type": "expense"},
+            "account_update": {"account_id": ids["software"], "name": "Refused"},
+            "recipient_add": {"name": "Acme Supplies", "method": "ach", "details_fp": "fp-rehearsal",
+                              "details_ref": "vault-ref-rehearsal", "last4": "4321", "contact_id": ids["vendor"]},
+        }
+        rows = []
+        for kind in mirror.REFUSED:
+            status, answer = self.act(kind, payloads.get(kind, {}))
+            reason = str(answer.get("reason") or answer.get("raw") or "")
+            rows.append((kind, status, answer.get("status"), answer.get("code"), reason[:160]))
+        time.sleep(3)
+        for kind, status, state, code, reason in rows:
+            print(f"[quickbooks] refusal {kind}: HTTP {status} status={state} code={code} reason={reason!r}", flush=True)
+        # The product answers a refused kind with status denied, code not_available (failed is accepted too: the reason is the test).
+        refused_ok = [kind for kind, _, state, _, reason in rows
+                      if state in ("denied", "failed") and "mirror mode" in reason]
+        res.check("each refused write says it is not available while the books are a provider's",
+                  len(refused_ok) == len(mirror.REFUSED),
+                  f"{len(refused_ok)}/{len(mirror.REFUSED)} refused with the mirror reason; not refused with it: "
+                  f"{[k for k in mirror.REFUSED if k not in refused_ok]}")
+        res.check("the refused writes add no outbox row and make no call to QuickBooks",
+                  self.outbox_open() == outbox_before and len(self.fake_posts()) == posts_before,
+                  f"outbox {outbox_before}->{self.outbox_open()}, posts {posts_before}->{len(self.fake_posts())}")
+        res.check("the refused writes change no totals", self.totals() == totals_before)
+        del mirror
+
+    def qbo_step_budgets(self) -> None:
+        """A budget on a mirrored expense line sees the provider's actuals; a queued bill holds its budget until the
+        provider confirms it; actuals post over the limit and show over; paying a bill over a hold_payment limit waits."""
+        from backend.finance import mirror
+        res = self.res
+        res.step = "6 budgets"
+        ids = self.ids()
+        status, made = self.act("budget_create", {"name": "Software", "period": "month", "account_id": ids["software"],
+                                                  "amount": BUDGET, "at_limit": "hold_payment", "warn_pct": 80,
+                                                  "effective_from": "2026-10-01"})
+        res.check("the Software budget is made (October, 10000.00, hold_payment at the limit)",
+                  status == 200 and made.get("status") == "committed", f"HTTP {status} {made.get('reason') or ''}")
+        now = self.budget("Software", DAY)
+        res.check("the budget sees the mirrored actuals on its line (bill 106 and the step 4 bills)",
+                  int(now.get("actual") or 0) == SOFTWARE_OCT_BEFORE and int(now.get("amount") or 0) == BUDGET,
+                  f"budget={now}")
+        before = self.totals()
+        mirror.RETRY = (8,)                                   # a lost answer is retried after 8 s: the bill waits meanwhile
+        try:
+            self.fake_call("/_fake/lose", {"path": "bill", "count": 1})
+            s3, a3 = self.act("bill_create", {"vendor_id": ids["vendor"], "number": "R-BILL-3", "bill_date": DAY,
+                                              "due_date": DAY, "lines": [{"account_id": ids["software"],
+                                                                          "amount": B3, "description": "held"}]})
+            time.sleep(1)
+            waiting = self.budget("Software", DAY)
+            res.check("a queued bill holds its Software budget until QuickBooks confirms it (§4.4)",
+                      s3 == 200 and int(waiting.get("held") or 0) == B3,
+                      f"held={waiting.get('held')} (want {B3}); outbox={self.accounting_row().get('outbox')}")
+            confirmed = self.settle(lambda: self.outbox_open() == 0 and self.local_doc("/finance/bills", "R-BILL-3")
+                                    is not None, 90)
+        finally:
+            mirror.RETRY = RETRY_REHEARSAL
+        after3 = self.budget("Software", DAY)
+        res.check("once confirmed, the bill is actual and its hold is gone",
+                  confirmed and int(after3.get("actual") or 0) == SOFTWARE_OCT_BEFORE + B3
+                  and int(after3.get("held") or 0) == 0, f"actual={after3.get('actual')} held={after3.get('held')}")
+        s4, a4 = self.act("bill_create", {"vendor_id": ids["vendor"], "number": "R-BILL-4", "bill_date": DAY,
+                                          "due_date": DAY, "lines": [{"account_id": ids["software"], "amount": B4,
+                                                                      "description": "over the limit"}]})
+        over_done = self.settle(lambda: self.outbox_open() == 0 and self.local_doc("/finance/bills", "R-BILL-4")
+                                is not None, 150)
+        over = self.budget("Software", DAY)
+        res.check("a bill over the limit still posts (actuals always post) and the budget shows over",
+                  s4 == 200 and over_done and int(over.get("actual") or 0) == SOFTWARE_OCT_BEFORE + B3 + B4
+                  and int(over.get("remaining") or 0) < 0, f"actual={over.get('actual')} remaining={over.get('remaining')}")
+        bill4 = self.local_doc("/finance/bills", "R-BILL-4") or {}
+        sp, dry = self.act("bill_mark_paid", {"bill_id": str(bill4.get("id", "")), "amount": B4, "date": DAY,
+                                              "account_id": ids["checking_account"]}, dry_run=True)
+        res.check("paying that bill over a hold_payment limit waits for a person",
+                  sp == 200 and dry.get("status") == "needs_approval", f"dry run: {dry.get('status')} {dry.get('reason') or ''}")
+        expected = moved(before, qbo_budget_delta())
+        res.check("the P&L and the balance sheet match the two budget bills to the cent",
+                  self.settle(lambda: self.totals() == expected, 90), f"want {expected} got {self.totals()}")
+        del mirror
+
+    def qbo_step_disconnect(self) -> None:
+        """Disconnect: the data stays, no write reaches QuickBooks; reconnect the same organisation: nothing is duplicated.
+        The HTTP disconnect route refuses a demo copy (as the connect route does), so the disconnect and the reconnect are
+        called in-process: books_link.drop and books_link.connect_claim, which the routes call."""
+        from backend.finance import books_link
+        res = self.res
+        res.step = "7 disconnect"
+        ids = self.ids()
+        before = self.totals()
+        calls_before = len(self.hq.calls)
+        try:
+            books_link.drop(self.store, self.vault, self.link, self.cid, by=OWNER_ACTOR)
+            dropped = "dropped"
+        except Exception as exc:
+            dropped = f"{type(exc).__name__}: {exc}"
+        active_after_drop = self.live_books()
+        hq_paths = [path for path, _ in self.hq.calls[calls_before:]]
+        res.check("the books connection disconnects: HQ's grant is revoked and no books connection stays active",
+                  dropped == "dropped" and not active_after_drop and any(p.endswith(("/revoke", "/disconnect"))
+                                                                         for p in hq_paths),
+                  f"drop={dropped}; active books rows={len(active_after_drop)}; HQ calls={hq_paths}")
+        time.sleep(3)
+        res.check("the data stays: the P&L and the balance sheet are as they were", self.totals() == before,
+                  f"want {before} got {self.totals()}")
+        posts_before = len(self.fake_posts())
+        bills_before = len(self.fake_rows("Bill"))
+        s5, a5 = self.act("bill_create", {"vendor_id": ids["vendor"], "number": "R-BILL-5", "bill_date": DAY,
+                                          "due_date": DAY, "lines": [{"account_id": ids["software"], "amount": B5,
+                                                                      "description": "while disconnected"}]})
+        time.sleep(6)
+        res.check("no write reaches QuickBooks while disconnected",
+                  len(self.fake_posts()) == posts_before and len(self.fake_rows("Bill")) == bills_before,
+                  f"write: HTTP {s5} status={a5.get('status')} reason={str(a5.get('reason') or '')[:120]}; "
+                  f"outbox={self.accounting_row().get('outbox')}")
+        queued = s5 == 200 and a5.get("status") == "committed"
+        try:
+            cid = books_link.connect_claim(self.store, self.vault, self.link, provider="quickbooks",
+                                           company_id=COMPANY, claim_id="clm_rehearsal_4", name="back",
+                                           by=OWNER_ACTOR, now="2026-11-01T12:05:00.000000Z")
+        except Exception as exc:
+            cid = f"{type(exc).__name__}: {exc}"
+        active = self.live_books()
+        res.check("reconnecting the same organisation leaves exactly one active books connection",
+                  len(active) == 1 and isinstance(cid, str) and ":" not in cid,
+                  f"cid={cid} (before the disconnect: {self.cid}) active books rows={len(active)}")
+        self.settle(lambda: self.outbox_open() == 0 and (not queued or any(
+            r.get("DocNumber") == "R-BILL-5" for r in self.fake_rows("Bill"))), 150)
+        copies = [r for r in self.fake_rows("Bill") if r.get("DocNumber") == "R-BILL-5"]
+        numbers = Counter(str(r.get("number")) for r in rows_of(self.get("/finance/bills?limit=200"), "bills")
+                           if str(r.get("number", "")).startswith("R-BILL-"))
+        expected = moved(before, {"expense": B5, "net": -B5, "ap": B5} if queued else {})
+        res.check("after reconnect nothing is duplicated: each write is in QuickBooks once and in Tico once",
+                  len(copies) == (1 if queued else 0) and all(n == 1 for n in numbers.values()),
+                  f"R-BILL-5 in QuickBooks={len(copies)} (queued={queued}); Tico numbers={dict(numbers)}; "
+                  f"outbox={self.accounting_row().get('outbox')}")
+        res.check("after reconnect the totals are the writes that were accepted, to the cent",
+                  self.settle(lambda: self.totals() == expected, 120), f"want {expected} got {self.totals()}")
+        res.check("the sources page shows the connection active again",
+                  self.accounting_row().get("sync", {}).get("status") == "active",
+                  str(self.accounting_row().get("sync", {}).get("status")))
+
     def run(self) -> bool:
         self.start_fake()
         try:
@@ -650,6 +1039,11 @@ class Rehearsal:
             self.step_connect()
             self.step_first_sync()
             self.step_changes()
+            if self.provider == "quickbooks":
+                self.qbo_step_writes()
+                self.qbo_step_refusals()
+                self.qbo_step_budgets()
+                self.qbo_step_disconnect()
         finally:
             self.close()
         print(f"[{self.provider}] {'PASSED' if self.res.ok else 'FAILED'}: "
