@@ -993,14 +993,14 @@ def test_a_webhook_with_a_bad_or_stale_signature_is_refused():
 def test_a_webhook_is_kept_once_for_the_one_stripe_connection_and_then_reads_the_balance(books):
     event = {"id": "evt_stripe_1", "type": "charge.succeeded", "data": {}}
     with books.transaction() as c:
-        assert sync.stripe_delivery(c, event, AT) is False          # no Stripe connection yet: not kept
+        assert sync.stripe_delivery(c, event, AT) == "no_connection"   # no Stripe connection yet: refused, not seen
     stripe = FakeStripe()
     connect_stripe(books, stripe)
     stripe.add("charge", 4_000, 120, "Acme Buyer")
     with books.transaction() as c:
-        assert sync.stripe_delivery(c, event, AT) is True
+        assert sync.stripe_delivery(c, event, AT) == "kept"
     with books.transaction() as c:
-        assert sync.stripe_delivery(c, event, AT) is False          # a replay is not kept again
+        assert sync.stripe_delivery(c, event, AT) == "seen"         # a replay is not kept again
     stripe_pass(books, stripe)
     with books.read() as c:
         assert c.execute("SELECT status FROM fin_inbox WHERE provider_event_id='evt_stripe_1'").fetchone()[0] == "done"

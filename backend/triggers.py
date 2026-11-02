@@ -549,8 +549,8 @@ def _route(c, found, delivery, type_, via, body, headers, auth):
         # Stripe's balance events are Finance's alone (backend/finance/stripe_sync.py): kept once by event id, a
         # doorbell only, never shown to rules.
         from .finance import actions as finance
-        kept = finance.stripe_delivery(c, payload if isinstance(payload, dict) else {})
-        return fired, [{"outcome": "finance", "target": "finance", "ok": True, "detail": "kept" if kept else "seen"}]
+        status = finance.stripe_delivery(c, payload if isinstance(payload, dict) else {})
+        return fired, [{"outcome": "finance", "target": "finance", "ok": status in ("kept", "seen"), "detail": status}]
     if effective_preset(found) in ("intuit", "xero"):
         # QuickBooks and Xero events are Finance's too (spec §3.4, §10): kept once by event id for the books worker.
         from .finance import actions as finance
