@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 
 from backend import company
 from backend.company_page import audiences as A, disclosure as D, release, render, settings as S
+from backend.tests.test_api import api, headers  # noqa: F401
+from backend.tests.test_company_page_editions import page  # noqa: F401
 from backend.tests.test_finance_fixtures import OWNER, finance_template, store  # noqa: F401
 
 VISION = "Every landlord runs on Acme."
@@ -49,3 +51,16 @@ def test_going_open_turns_public_on_in_the_same_step(store):  # noqa: F811
         # Going back doesn't have to switch it off; a page is served only while the company is Open.
         S.set_transparency(c, OWNER, "closed")
         assert release.public_view(c, datetime.now(timezone.utc)) == {}
+
+
+def test_a_tightening_says_how_many_published_editions_it_leaves_up(page):  # noqa: F811
+    """Published editions stay when a rule tightens: they're dated statements a person approved. The response says so
+    instead of changing the page in silence. A loosening doesn't carry the count."""
+    page.published()
+    tighter = page.api.put("/api/v2/audiences/board/disclosure", headers=headers(),
+                           json={"rules": [{"data_class": "kpi", "mode": "hidden"}]})
+    assert tighter.status_code == 200 and tighter.json()["published_editions"] == 1
+    looser = page.api.put("/api/v2/audiences/board/disclosure", headers=headers(),
+                          json={"rules": [{"data_class": "kpi", "mode": "show"}]})
+    assert looser.status_code == 200 and "published_editions" not in looser.json()
+    assert page.rows("SELECT status FROM editions WHERE status='published'") != []

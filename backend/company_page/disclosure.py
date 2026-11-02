@@ -192,7 +192,8 @@ def _write(c, audience_id, rule, ts):
 
 def _finish(c, actor, audience, loosened, approved, ts, action, detail):
     """One revision for the change. A pure tightening keeps an approved stats board approved; a loosening does not, so
-    a person has to look again. The public page changes in this step either way."""
+    a person has to look again. The public page changes in this step either way. Returns what the change was, for the
+    route to say: a tightening leaves published editions up, so the caller reports how many."""
     from . import stats
     revision = H.new_id()
     c.execute("INSERT INTO disclosure_revisions (id, audience_id, created_by, created_at) VALUES (?,?,?,?)",
@@ -202,12 +203,12 @@ def _finish(c, actor, audience, loosened, approved, ts, action, detail):
     H.event(c, actor, action, audience["id"], {**detail, "revision": revision, "loosened": loosened})
     if audience["kind"] == "public":
         S.rebuild_if_live(c, "disclosure changed")
-    return revision
+    return {"revision": revision, "loosened": loosened}
 
 
 def set_rules(c, actor, audience_id, changes):
     """Several cells, one revision. Each is compared against what that cell resolved to before, so a new cell that only
-    narrows its class is a tightening."""
+    narrows its class is a tightening. Returns {"revision", "loosened", "tightened"}."""
     from . import stats
     S.require_person(c, actor)
     audience = A.need(c, audience_id)
@@ -217,14 +218,14 @@ def set_rules(c, actor, audience_id, changes):
     moved = [r for r in wanted if before.get((r["data_class"], r["ref_id"])) !=
              {"mode": r["mode"], "lag_days": r["lag_days"], "rounding": r["rounding"]}]
     if not moved:
-        return current_revision(c, audience_id)
+        return {"revision": current_revision(c, audience_id), "loosened": False, "tightened": False}
     approved = stats.board_approved(c, audience_id)
     loosened = any(is_loosening(lookup(before, r["data_class"], r["ref_id"]), r) for r in moved)
     ts = H.now()
     for rule in moved:
         _write(c, audience_id, rule, ts)
-    return _finish(c, actor, audience, loosened, approved, ts, "company_page.disclosure",
-                   {"cells": [[r["data_class"], r["ref_id"], r["mode"]] for r in moved][:50]})
+    return _tightened(_finish(c, actor, audience, loosened, approved, ts, "company_page.disclosure",
+                              {"cells": [[r["data_class"], r["ref_id"], r["mode"]] for r in moved][:50]}))
 
 
 def set_rule(c, actor, audience_id, data_class, ref_id=None, mode="hidden", lag_days=0, rounding=None):
@@ -254,4 +255,8 @@ def apply_preset(c, actor, audience_id, name):
     c.execute("DELETE FROM disclosure_rules WHERE audience_id=?", (audience_id,))
     for (cls, ref), rule in column.items():
         _write(c, audience_id, {"data_class": cls, "ref_id": ref, **rule}, ts)
-    return _finish(c, actor, audience, loosened, approved, ts, "company_page.preset", {"preset": name})
+    return _tightened(_finish(c, actor, audience, loosened, approved, ts, "company_page.preset", {"preset": name}))
+
+
+def _tightened(change):
+    return {**change, "tightened": not change["loosened"]}
