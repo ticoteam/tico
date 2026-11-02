@@ -12,7 +12,7 @@ this week" and the numbers in one line. Do not ask.
 ## 1. Read the week
 
     hub growth numbers                 the growth numbers
-    hub task list --type Marketing     the board: Idea, Testing, Scaling and Paused
+    hub task list --type idea          the board: Idea, Testing, Scaling and Paused
 
 Note anything the numbers show off track; it goes in the question in step 4.
 

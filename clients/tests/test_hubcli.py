@@ -907,16 +907,17 @@ def test_the_retired_gtm_and_growth_idea_lines_run_their_new_commands_with_a_not
     assert hubcli.main(["growth", "idea", "create", "--title", "Referral card", "--hypothesis", "Friends bring friends",
                         "--prediction", "Sign-ups up 10%", "--bet", "b1", "--kpi", "k1", "--channel", "referral",
                         "--channel", "door", "--assignee", "me", "--i", "7", "--segment", "s1"]) == 0
-    assert ran[-1] == ["task", "create", "--type", "Marketing", "--owner", "me", "--title", "Referral card", "--body",
+    assert ran[-1] == ["task", "create", "--type", "idea", "--owner", "me", "--title", "Referral card", "--body",
                        "Hypothesis: Friends bring friends\nPrediction: Sign-ups up 10%\nBet: b1\nKPI: k1",
                        "--label", "channel:referral", "--label", "channel:door"]
-    assert '"hub growth idea create" is now "hub task create --type Marketing"' in capsys.readouterr().err
+    assert '"hub growth idea create" is now "hub task create --type idea"' in capsys.readouterr().err
     assert hubcli.main(["growth", "idea", "list", "--status", "testing", "--channel", "referral"]) == 0
-    assert ran[-1] == ["task", "list", "--type", "Marketing", "--step", "Testing", "--label", "channel:referral"]
+    assert ran[-1] == ["task", "list", "--type", "idea", "--step", "Testing", "--label", "channel:referral"]
     assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "won", "--result", "CPA 31",
                         "--learning", "Video works"]) == 0
-    assert ran[-2:] == [["task", "update", "t1", "--step", "Won"],
-                        ["task", "comment", "t1", "Result: CPA 31\nLearning: Video works"]]
+    assert ran[-1] == ["task", "update", "t1", "--step", "Won", "--note", "Result: CPA 31\nLearning: Video works"]
+    assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "paused", "--result", "CPA 31 so far"]) == 0
+    assert ran[-1] == ["task", "update", "t1", "--step", "Paused", "--note", "Result: CPA 31 so far"]
 
 
 def test_strategy_show_section_how_prints_the_section_or_says_nothing_is_published(monkeypatch, capsys):

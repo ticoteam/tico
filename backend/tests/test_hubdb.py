@@ -220,7 +220,7 @@ class GrowthRethink(unittest.TestCase):
         self.assertEqual(sections["serve"], "SMBs")
         self.assertEqual({r[0]: (r[1], r[2]) for r in conn.execute(
             "SELECT id, status, decision_note FROM goal_proposals")},
-            {"p1": ("rejected", H.GTM_DECLINED), "p2": ("pending", "")})
+            {"p2": ("pending", "")})
         self.assertEqual([r[0] for r in conn.execute("SELECT id FROM growth_cohorts")], ["c1"])
         self.assertNotIn("segment_id", {r[1] for r in conn.execute("PRAGMA table_info(growth_cohorts)")})
         with self.assertRaises(sqlite3.IntegrityError):

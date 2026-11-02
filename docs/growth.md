@@ -93,8 +93,8 @@ hub growth cohort set --channel SLUG|unknown --month YYYY-MM [--spend N] [--bot-
                  [--quality actual|estimate] [--source FIELD=TEXT]
 hub growth settings [--set KEY=VALUE]
 hub kpi log <kpi id> <value> [note] --period-start YYYY-MM-DD --period-end YYYY-MM-DD
-hub task create --owner <who> --type Marketing --label channel:<slug> --title "..." --body "..."
-hub task list --type Marketing
+hub task create --owner <who> --type idea --label channel:<slug> --title "..." --body "..."
+hub task list --type idea
 ```
 
 ## Related
