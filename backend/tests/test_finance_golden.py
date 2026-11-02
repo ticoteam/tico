@@ -26,7 +26,7 @@ def _acme(c):
     spend(c, "6110", 300, day="2026-09-12")
     spend(c, "5100", 2_000, day="2026-09-20")
     assert act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 1_000,
-                                           "effective_from": "2026-09-01"}).status == "committed"
+                                           "effective_from": "2026-09-01"}, at="2026-08-15T12:00:00.000000Z").status == "committed"
     assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
 
 
@@ -127,7 +127,7 @@ def test_a_window_across_a_closed_month_hides_private_spend_as_that_month_does(b
                                                    "others_see": "totals"}).status == "committed"
         spend(c, "6200", 3_000, day="2026-09-15")
         assert act(c, OWNER, "budget_create", {"name": "Other", "account_id": account(c, "6900"), "amount": 5_000,
-                                               "effective_from": "2026-09-01"}).status == "committed"
+                                               "effective_from": "2026-09-01"}, at="2026-08-15T12:00:00.000000Z").status == "committed"
         assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
         assert act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "everything"}).status == "committed"
         assert act(c, OWNER, "account_update", {"account_id": account(c, "6200"),
@@ -216,7 +216,7 @@ def test_a_multi_month_budget_read_omits_a_budget_its_viewer_cannot_see_in_every
                                                 "parent_id": account(c, "6900")}).status == "committed"
         spend(c, "6110", 12_345, day="2026-09-12")
         assert act(c, OWNER, "budget_create", {"name": "Seats", "account_id": account(c, "6110"), "amount": 20_000,
-                                               "effective_from": "2026-09-01"}).status == "committed"
+                                               "effective_from": "2026-09-01"}, at="2026-08-15T12:00:00.000000Z").status == "committed"
         assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
         assert act(c, OWNER, "account_update", {"account_id": account(c, "6110"),
                                                 "parent_id": account(c, "6100")}).status == "committed"
@@ -242,7 +242,7 @@ def test_a_multi_month_budget_read_lists_a_budget_each_month_shows_after_it_move
         spend(c, "6110", 12_345, day="2026-09-12")
         spend(c, "6110", 6_789, day="2026-10-05")
         assert act(c, OWNER, "budget_create", {"name": "Seats", "account_id": account(c, "6110"), "amount": 20_000,
-                                               "effective_from": "2026-09-01"}).status == "committed"
+                                               "effective_from": "2026-09-01"}, at="2026-08-15T12:00:00.000000Z").status == "committed"
         assert act(c, OWNER, "view_grant", {"subject_kind": "teammate", "subject": "human:cara", "what": "pnl_lines",
                                             "account_ids": [account(c, "6100")], "whose": "company"}
                    ).status == "committed"
