@@ -64,6 +64,9 @@
   // answers first. Shown on an open request only, never on an answered, closed or failed one.
   const PROMISE = 'We usually reply within 1 business day (Monday to Friday).';
   const WHO_ANSWERS = "Tico's support assistant answers first and brings in a person when it needs one.";
+  // The line under a request just sent: Ask's thread shows the same words (ui/app/ask-panel.js askFiled).
+  const supportDelivered = () => `Delivered to Tico support. ${PROMISE} The reply will appear here.`;
+  window.supportDelivered = supportDelivered;
   const ICON = {
     send: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 12h15M13 6l6 6-6 6"/></svg>',
     trash: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.8 6.5v4.5M9.2 6.5v4.5"/></svg>',
@@ -223,7 +226,7 @@
   function renderThread(pin = false) {
     const host = pop.querySelector('[data-thread]'), t = current();
     const bubble = (body, staff, at, diag) => `<div class="support-msg ${staff ? 'staff' : 'you'}"><span class="support-who">${staff ? 'Tico support' : 'You'}${at ? ` · <time datetime="${escape(at)}">${escape(when(at))}</time>` : ''}</span><div class="support-body">${escape(body)}</div>${diag ? '<small class="support-sent">Diagnostics attached</small>' : ''}</div>`;
-    const after = {open: `Delivered to Tico support. ${PROMISE} The reply will appear here.`, gone: 'Tico support removed this request.'};
+    const after = {open: supportDelivered(), gone: 'Tico support removed this request.'};
     // No request in the chat: an empty chat, and a way back to the last request when it is closed.
     const recent = newestFirst(state.tickets)[0], closedLast = !latest() && recent?.status === 'closed' ? recent : null;
     const html = t ? bubble(t.message, false, t.created, t.sent?.diagnostics) + (t.messages || []).map(m => bubble(m.body, m.from === 'staff', m.created, m.has_diagnostics)).join('')
@@ -639,6 +642,16 @@
   window.supportStart = (message, kind = 'support') => {
     starting = {message, kind};
     void open({fresh: true});
+  };
+  // Ask's "Attach diagnostics" on a request Loop in Support filed: the pop-up opens on that request and Review and edit
+  // opens over it. Nothing is sent here; the diagnostics ride along only once the person uses them and presses Send.
+  window.supportAttach = async id => {
+    await open({ticket: id});
+    if (!isOpen() || selected !== id || !current()) return;
+    const d = draft();
+    d.open = true;
+    renderComposer();
+    void openEditor(d);
   };
   document.addEventListener('click', async e => {
     const button = e.target.closest('[data-setup-help]');

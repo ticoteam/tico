@@ -3,6 +3,8 @@
 //  - Settings has a Models tab between Computers and Repositories with Subscriptions, Tico Gateway, Defaults and
 //    Limits; old links (AI providers, Subscriptions, Chat, the Models card on Computers) open it;
 //  - Add subscription: a kind search box that starts on Claude plan, a required name, POST {kind, name, secret};
+//  - Connect: a plan signs in through a computer the server picks, in the same dialog, with Reconnect asking first when
+//    runs would restart; no computer says so; an API key and an older server have no button, and the page never holds a value;
 //    Rename, Reconnect and Remove from the row's menu, Reconnect and Remove asking first when runs would restart;
 //  - Computers: one row per computer with a picker per AI tool; a switch that stops runs asks in the page first
 //    (409 confirm_restart), then sends confirm; an older computer says Needs update; Gateway off reads None;
@@ -18,8 +20,8 @@ const {unrouted} = require('./support/routes.cjs');
 const SHOTS = process.env.SUBS_SHOTS || '';
 
 const KINDS = [
-  {kind: 'claude_token', label: 'Claude plan', runtime: 'claude', secret_label: 'Token from claude setup-token', help: 'Run claude setup-token on a computer signed in to the plan, then paste the token.'},
-  {kind: 'codex_login', label: 'ChatGPT plan', runtime: 'codex', secret_label: "Codex's auth.json", help: 'Paste ~/.codex/auth.json from a computer where codex login is signed in.'},
+  {kind: 'claude_token', label: 'Claude plan', runtime: 'claude', secret_label: 'Token from claude setup-token', help: 'Run claude setup-token on a computer signed in to the plan, then paste the token.', connect: true},
+  {kind: 'codex_login', label: 'ChatGPT plan', runtime: 'codex', secret_label: "Codex's auth.json", help: 'Paste ~/.codex/auth.json from a computer where codex login is signed in.', connect: true},
   {kind: 'anthropic_key', label: 'Anthropic API key', runtime: 'claude', secret_label: 'API key', help: ''},
   {kind: 'openai_key', label: 'OpenAI API key', runtime: 'codex', secret_label: 'API key', help: ''}];
 
@@ -111,7 +113,28 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (p === '/api/v2/providers/gateway') return json(data.gateway);
     if (p === '/api/v2/settings/turn-levels' && method === 'GET') return json(data.levels);
     if (old && /^\/api\/v2\/(model|computer)-subscriptions/.test(p)) return json({detail: 'Not Found'}, 404);
-    if (p === '/api/v2/model-subscriptions' && method === 'GET') return json({subscriptions: data.subs, kinds: KINDS});
+    if (p === '/api/v2/model-subscriptions' && method === 'GET') return json({subscriptions: data.subs, kinds: KINDS, connect: data.connect || ['claude_token', 'codex_login']});
+    if (p === '/api/v2/model-subscriptions/connect' && method === 'POST') {
+      const body = req.postDataJSON(); writes.push({p, method, body});
+      const sub = data.subs.find(s => s.id === body.subscription);
+      if (sub?.computers.includes('r1') && !body.confirm)
+        return json(problem('confirm_restart', 'Reconnecting restarts running tasks', {running: 1, sessions: 2, computers: sub.computers.length}), 409);
+      if (data.connectRefused) return json(problem('offline', data.connectRefused), 409);
+      if (data.connectHeld) await data.connectHeld;
+      const kind = KINDS.find(k => k.kind === (body.kind || sub.kind));
+      data.login = {id: `l${writes.length}`, runner_id: 'r1', runtime: kind.runtime, kind: 'connect', state: 'waiting', url: 'https://sign-in.example/authorize?x=1',
+        code: kind.runtime === 'codex' ? 'ABCD-1234' : '', lines: [], message: '', accepts_code: kind.runtime === 'claude', code_sent: false,
+        created: new Date().toISOString(), updated: new Date().toISOString(), computer: 'Tico Team box', not_yours: Boolean(data.connectNotYours), target: body.name};
+      return json(data.login);
+    }
+    const signIn = p.match(/^\/api\/v2\/computers\/r1\/logins\/([^/]+)(?:\/(code|cancel))?$/);
+    if (signIn && data.login?.id === signIn[1]) {
+      if (method === 'GET') return json(data.login);
+      const body = req.postDataJSON(); writes.push({p, method, body});
+      if (signIn[2] === 'code') Object.assign(data.login, {code_sent: true});
+      if (signIn[2] === 'cancel') Object.assign(data.login, {state: 'cancelled', url: ''});
+      return json(data.login);
+    }
     if (p === '/api/v2/model-subscriptions' && method === 'POST') {
       const body = req.postDataJSON(); writes.push({p, method, body});
       const kind = KINDS.find(k => k.kind === body.kind);
@@ -259,7 +282,7 @@ async function addSubscription(browser) {
   assert.equal(await kind.inputValue(), 'Claude plan', 'starts on Claude plan');
   assert.equal(await dialog.locator('#subs-secret').getAttribute('type'), 'password');
   assert.match(await dialog.locator('[data-subs-secret] .k label').innerText(), /Token from claude setup-token/);
-  // No computers to choose here, and no Sign in without the server's sign-in route.
+  // No computers to choose here: the server picks one for Connect.
   assert.equal(await dialog.locator('select, input[type=checkbox]').count(), 0);
   assert.deepEqual(await dialog.locator('.tmodal-foot button').allInnerTexts(), ['Cancel', 'Save']);
   // The name is required.
@@ -291,6 +314,125 @@ async function addSubscription(browser) {
   assert.deepEqual(errors, []);
   await page.close();
   console.log('add subscription: ok');
+}
+
+async function connectPlan(browser) {
+  const {page, errors, writes, data} = await open(browser);
+  await modelsReady(page);
+  await page.locator('#subs-add').click();
+  const dialog = page.locator('dialog[open]');
+  const button = dialog.locator('[data-subs-connect]');
+  assert.equal(await button.innerText(), 'Connect Claude plan');
+  // One primary button: Connect, until there is a value to Save.
+  assert.equal(await dialog.locator('.tmodal-foot button[type=submit]').getAttribute('class'), 'ghost');
+  await shot(page, 'connect-add-desktop-dark', dialog);
+  await dialog.locator('#subs-secret').fill('sk-ant-oat01-abc');
+  assert.equal(await dialog.locator('.tmodal-foot button[type=submit]').getAttribute('class'), 'primary');
+  await dialog.locator('#subs-secret').fill('');
+  // The name comes first, and nothing starts without it.
+  await button.click();
+  assert.equal(await dialog.locator('[data-field-err]').innerText(), 'Enter a name');
+  assert.equal(writes.length, 0);
+  // An API key has no sign-in to run; ChatGPT plan has its own.
+  const kind = dialog.locator('#subs-kind');
+  await kind.fill('anthropic'); await kind.press('Enter');
+  assert.equal(await button.count(), 0);
+  assert.equal(await dialog.locator('.tmodal-foot button[type=submit]').getAttribute('class'), 'primary');
+  await kind.fill('claude'); await kind.press('Enter');
+  // A refusal stays in the form.
+  data.connectRefused = 'That computer is offline';
+  await dialog.locator('input[name=name]').fill('Company Max');
+  await button.click();
+  await until(page, () => writes.length === 1, 'the refused start');
+  assert.equal(await dialog.locator('input[name=name]').inputValue(), 'Company Max');
+  await button.and(page.locator(':not([disabled])')).waitFor();
+  data.connectRefused = '';
+  // The sign-in carries on in the same dialog: a link and a pasted code, as on a computer.
+  await button.click();
+  await dialog.locator('[data-link]').waitFor();
+  assert.deepEqual(writes.at(-1), {p: '/api/v2/model-subscriptions/connect', method: 'POST', body: {kind: 'claude_token', name: 'Company Max'}});
+  assert.equal(await dialog.locator('h2').innerText(), 'Connect Company Max');
+  assert.equal(await dialog.locator('[data-link]').getAttribute('href'), 'https://sign-in.example/authorize?x=1');
+  await shot(page, 'connect-waiting-desktop-dark', dialog);
+  await dialog.locator('[name=code]').fill('pasted-code');
+  await dialog.locator('[data-paste] button').click();
+  await until(page, () => writes.at(-1).p.endsWith('/code'), 'the pasted code');
+  assert.deepEqual(writes.at(-1).body, {code: 'pasted-code'});
+  // Done when the server says so: the row appears, and the dialog goes by itself.
+  data.subs.push({id: 's8', name: 'Company Max', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'new', status_detail: '', computers: [], usage: null, added_by: 'ana'});
+  Object.assign(data.login, {state: 'done', url: ''});
+  await dialog.waitFor({state: 'detached'});
+  await page.locator('[data-subs-row=s8]').waitFor();
+  // Reconnect with a task running: the page asks before the sign-in starts.
+  await page.locator('[data-subs-more=s1]').click();
+  await page.locator('#subs-menu [data-subs-act=reconnect]').click();
+  await page.locator('dialog[open] [data-subs-connect]').click();
+  const confirm = page.locator('dialog.settings-confirm[open]');
+  await confirm.waitFor();
+  await confirm.locator('[data-confirm-ok]').click();
+  await page.locator('dialog.model-login[open] [data-link]').waitFor();
+  assert.deepEqual(writes.at(-1).body, {subscription: 's1', confirm: true});
+  assert.equal(await page.locator('dialog.model-login[open] h2').innerText(), 'Reconnect Claude Max (Ana)');
+  // Closing cancels the sign-in on the computer.
+  await page.locator('dialog.model-login[open] [data-close]').first().click();
+  await page.locator('dialog.model-login[open]').waitFor({state: 'detached'});
+  assert.ok(writes.at(-1).p.endsWith('/cancel'));
+  // Someone else's computer: the dialog says so before the person signs in.
+  data.connectNotYours = true;
+  await page.locator('[data-subs-more=s1]').click();
+  await page.locator('#subs-menu [data-subs-act=reconnect]').click();
+  await page.locator('dialog[open] [data-subs-connect]').click();
+  await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
+  const where = page.locator('dialog.model-login[open] .model-login-where');
+  await where.waitFor();
+  assert.match(await where.innerText(), /Runs on Tico Team box, not your computer/);
+  await shot(page, 'connect-elsewhere-desktop-dark', page.locator('dialog.model-login[open]'));
+  await page.locator('dialog.model-login[open] [data-close]').first().click();
+  await page.locator('dialog.model-login[open]').waitFor({state: 'detached'});
+  data.connectNotYours = false;
+  // Closed while the start is on its way: the sign-in it started is cancelled, not left running out of sight.
+  let release; data.connectHeld = new Promise(done => { release = done; });
+  await page.locator('#subs-add').click();
+  const closing = page.locator('dialog.subs-dialog[open]');
+  await closing.locator('input[name=name]').fill('Closed early');
+  await closing.locator('[data-subs-connect]').click();
+  await until(page, () => writes.at(-1).body?.name === 'Closed early', 'the start');
+  await closing.locator('[data-close], .tmodal-foot button[type=button]').first().click();
+  await closing.waitFor({state: 'detached'});
+  release(); data.connectHeld = null;
+  await until(page, () => writes.at(-1).p.endsWith('/cancel'), 'the cancel');
+  assert.equal(data.login.state, 'cancelled');
+  // The same for Try again after a failure.
+  await page.locator('#subs-add').click();
+  const asking = page.locator('dialog.subs-dialog[open]');
+  await asking.locator('input[name=name]').fill('Retried');
+  await asking.locator('[data-subs-connect]').click();
+  const retrying = page.locator('dialog.model-login[open]');
+  await retrying.locator('[data-link]').waitFor();
+  Object.assign(data.login, {state: 'failed', url: '', message: 'The sign-in command stopped without signing in'});
+  await retrying.locator('[data-retry]').waitFor();
+  const failedLogin = data.login.id;
+  data.connectHeld = new Promise(done => { release = done; });
+  await retrying.locator('[data-retry]').click();
+  await until(page, () => writes.filter(w => w.body?.name === 'Retried').length === 2, 'the second start');
+  await retrying.locator('[data-close]').first().click();
+  await retrying.waitFor({state: 'detached'});
+  release(); data.connectHeld = null;
+  await until(page, () => writes.at(-1).p.endsWith('/cancel') && data.login.id !== failedLogin, 'the cancel of the retry');
+  assert.equal(data.login.state, 'cancelled');
+  assert.deepEqual(errors, []);
+  await page.close();
+  // No computer can run it right now: the button says so and paste still works.
+  const none = await open(browser, {mutate: d => { d.connect = []; }});
+  await modelsReady(none.page);
+  await none.page.locator('#subs-add').click();
+  const off = none.page.locator('dialog.subs-dialog[open]');
+  assert.equal(await off.locator('[data-subs-connect]').isDisabled(), true);
+  assert.match(await off.locator('.subs-connect-or').innerText(), /Needs a computer online/);
+  assert.equal(await off.locator('.tmodal-foot button[type=submit]').getAttribute('class'), 'primary');
+  await shot(none.page, 'connect-none-desktop-dark', off);
+  await none.page.close();
+  console.log('connect a plan: ok');
 }
 
 async function rowMenu(browser) {
@@ -489,7 +631,7 @@ async function screens(browser) {
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
-    await navigation(browser); await modelsTab(browser); await addSubscription(browser); await rowMenu(browser);
+    await navigation(browser); await modelsTab(browser); await addSubscription(browser); await connectPlan(browser); await rowMenu(browser);
     await computersTable(browser); await gatewayOffAndMember(browser); await oldServer(browser); await botEditor(browser); await screens(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

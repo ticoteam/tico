@@ -12,6 +12,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();
 
 const EVENTS = 50;
@@ -24,6 +25,7 @@ const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Detail
   const browser = await chromium.launch();
   const page = await browser.newPage({viewport: {width: 1300, height: 820}, serviceWorkers: 'block'});
   const errors = [], requests = [];
+  const threads = threadsFake({bot: 'ops', messages: [{id: 'm1', from_actor: 'human:ana', body: 'Draft the release notes'}]});
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => {
     window.EventSource = class {
@@ -54,9 +56,8 @@ const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Detail
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
     if (p === '/api/issues') return json([]);
-    if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with')
-      ? [{id: 'c-ops', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:ops']}] : []});
-    if (p === '/api/v2/conversations/c-ops/snapshot') return json({messages: [{id: 'm1', from_actor: 'human:ana', body: 'Draft the release notes', created: now}], execution: null});
+    const answer = threads(p, url, route.request().method());
+    if (answer !== undefined) return json(answer);
     if (p === '/api/v2/tasks') return json({tasks: [task()], next_offset: null, cursor: '12.a'});
     if (p === '/api/v2/tasks/labels') return json({labels: [], tags: []});
     if (p === '/api/v2/needs-you') return json({items: [], version: 'v0'});
@@ -93,8 +94,8 @@ const task = over => ({id: 't1', title: 'Draft the release notes', body: 'Detail
   await page.locator('#task-body', {hasText: `Check release link ${EVENTS - 2}`}).waitFor();
 
   // A bot's page in a hidden tab reads nothing while hidden.
-  await page.evaluate(() => { location.hash = '#/bot/ops/chat'; });
-  await page.waitForFunction(() => V2C?.rendered, null, {timeout: t(8000)});
+  await page.evaluate(() => { location.hash = '#/bot/ops'; });
+  await page.locator('#bot-thread').waitFor({timeout: t(8000)});
   await settle();
   const visible = shown => page.evaluate(shown => {
     Object.defineProperty(document, 'hidden', {configurable: true, get: () => !shown});

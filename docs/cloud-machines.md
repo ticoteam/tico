@@ -24,6 +24,13 @@ cloud machine" under Computer).
 - Its computer is "Shared cloud machine", owned by the company owner and open to member bots: a bot that joins is
   assigned to it, one that leaves (to its own machine or a computer) is unassigned, and the machine keeps running.
   When the last bot leaves it idles to a stop like any other.
+- A new cloud machine gets the company's plan when an admin moves a bot onto it. Before this, the bot waited on "login required" until someone
+  signed in to the machine by hand. The machine takes a plan only when all of these hold: the machine is that bot's own cloud
+  machine; the admin's choice put the bot there, either by moving it or by the machine's first enrollment for a bot an admin placed; no other bot on that machine already runs the same tool; and the machine has no plan or sign-in of its own for
+  that tool, with no run in progress. The machine skips plans that need reconnecting, plans at their limit, and API keys. It
+  prefers the plan on the shared machine, then one on another cloud machine, then the plan with the lowest known usage.
+  Nothing is stopped or reset. A member's moves, and any other assignment, never give a plan. When no plan fits, nothing
+  changes and the bot keeps its current message and its Gateway path.
 - Bots on one machine share its disk and `sudo`: they are one trust group, like bots sharing a computer today. Put a
   bot that must not see the others' files on its own machine.
 - Tico models run on a cloud machine even though its bots don't run as their own user: the runner keeps the company's
@@ -96,8 +103,8 @@ lands while the runner reports a fresh `updating`, except out of credit (HQ stop
 of a frozen company stops at once too) and a person's delete.
 
 The runner knows it is on a cloud machine by the marker `/etc/tico/cloud-machine.json` (root's, naming the runner's
-user), which the base step writes. Machines made before Tico models ran here have it too, so they take Tico models once
-their runner updates.
+user), which the base step writes. Machines made before Tico models ran here have it too, so they take Tico models, and
+keep their own harnesses current ([What's on a machine](#whats-on-a-machine)), once their runner updates.
 
 ## What's on a machine
 
@@ -106,12 +113,26 @@ The base step (below) installs these, so every machine made from the snapshot ha
 - **Google Chrome stable**, headed (x86_64; arm64 gets the distro's Chromium, since Google ships no Linux arm64 Chrome).
 - **Xvfb, x11vnc and matchbox-window-manager**: the same packages as the computer screen (`scripts/tico screen on`),
   so Chrome can run headed on a virtual display. The runner picks the display (`:99` and up); nothing to configure.
+  The screen is on by default on a cloud machine, so bots get a display, and the computer's operator and admins can
+  open it in Settings > Computers. Screen Off there stops people opening it; the display stays up for bots.
+  `scripts/tico screen off` takes the display down.
   A bot whose browser should come from a home connection sets **Browse through** to a computer that shares its internet
   ([Share internet with bots](computers.md#share-internet-with-bots)).
 - **Fonts** (`fonts-liberation`, `fonts-noto-color-emoji`).
 - **Node.js 22 or newer** and npm, from NodeSource's apt repository (a newer Node already on the image is kept). The
-  runner installs each bot's harness (Claude Code, Codex, Pi, Gemini, Grok) with npm on demand, so only the harness a bot
-  uses lands on the machine.
+  runner installs each harness its bots use (Claude Code, Codex, Pi, Gemini, Grok) with npm, as below.
+
+`base` installs no harness, but a machine can still start with one on `PATH`, as old as the snapshot. Tico owns this
+disk and nobody else updates such a copy, so the runner treats it as missing when a bot here wants that harness: it
+installs its own copy in its tools directory (`tools/` beside `runner.json`). Turns keep using the `PATH` copy until
+the new one is switched in at a moment no turn uses that harness. From then on the runner's copy wins, because the tools
+directory comes first on `PATH` here (last on any other computer), and it updates like any managed install
+([Updating and pinning](harnesses.md#updating-and-pinning)). A failed install is retried after 30 minutes and leaves the
+`PATH` copy working. A copy too old for its provider still fails turns until the install lands. A harness no bot here
+wants stays as it is, and reports `source: path`.
+
+Every runner start on a machine checks for new releases at once, so a machine that wakes does not wait out a saved
+24 hours; a check that fails is asked again after 30 minutes.
 
 Nothing else is in the base. A bot that needs ffmpeg, a toolchain or anything else installs it itself with `sudo`; it
 stays on the machine's disk across stops and resumes. On the shared machine, tools a bot installs are there for every

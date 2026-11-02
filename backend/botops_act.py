@@ -193,6 +193,19 @@ def _routes(*rows):
     return [(method, re.compile(API + path)) for method, path in rows]
 
 
+# Thread writes (docs/threads.md): posting, replying, editing, following, reading and managing members, as the person
+# who asked. The route checks that person's rights on the thread (backend/threads.py). `messages/` is in OWN for
+# BotOps' own messages, so `default_delegable` matches these routes before OWN.
+THREADS = _routes(
+    ("POST", r"threads"), ("PATCH", rf"threads/{_S}"),
+    ("POST", rf"threads/{_S}/(messages|read|read-all|members)"), ("DELETE", rf"threads/{_S}/members/{_S}"),
+    ("PUT", rf"threads/{_S}/follow"), ("DELETE", rf"threads/{_S}/follow"),
+    ("PATCH", rf"messages/{_S}"), ("DELETE", rf"messages/{_S}"), ("POST", rf"threads/messages/{_S}/task"),
+    ("PUT", rf"messages/{_S}/reactions/{_S}"), ("DELETE", rf"messages/{_S}/reactions/{_S}"),
+    ("POST", r"threads/dm"), ("POST", rf"threads/{_S}/open-earlier"), ("POST", rf"uploads/threads/{_S}/messages"),
+)
+
+
 # Runs at once, as the person. Some of these keep their own "always a click" rule inside the route (adding someone
 # a role, a Computer that does not take members' bots): the route answers with the card.
 # A credential grant to a bot runs at once when the person is a credential administrator (or stored it, for a bot they
@@ -210,6 +223,8 @@ DO = _routes(
     ("POST", rf"bots/{_S}/(archive|restore)"), ("POST", rf"bots/{_S}/agent-credential"), ("POST", rf"bots/{_S}/agent-credential/revoke"),
     ("POST", r"agents/pairings/(approve|decline)"),
     ("POST", rf"bots/{_S}/access"), ("PUT", rf"bots/{_S}/access"),
+    # A person's or a group's access (backend/teammate_access.py): the route checks the person manages them.
+    ("POST", rf"(people|humans|groups)/{_S}/access"), ("PUT", rf"(people|humans|groups)/{_S}/access"),
     ("PUT", rf"bots/{_S}/repositories"), ("PUT", rf"repositories/{_S}/{_S}"),
     ("PUT", "repositories/settings"), ("POST", "repositories/refresh"),
     ("PUT", rf"bots/{_S}/github-repos"), ("POST", r"github/repos"), ("DELETE", rf"github/repos/{_S}/{_S}"),
@@ -247,6 +262,23 @@ DO = _routes(
     ("PUT", rf"org/order/{_S}"),
     # Which Slack channels bots read and post in: an owner or an admin's call, which the route checks.
     ("POST", r"slack/channels"), ("POST", r"slack/channels/(remove|import)"),
+    # Linking a thread to a Slack channel, taking the link away and checking a suspended one again: an owner's or an
+    # admin's call, which the route checks (backend/slack_threads.py).
+    ("POST", r"slack/links"), ("DELETE", rf"slack/links/{_S}"), ("POST", rf"slack/links/{_S}/resume"),
+    # Calls: starting one, ending it, adding or removing its bots, asking again for action items and leaving. A join
+    # or a token is left out: it hands the person's media token to BotOps, so it stays with the person.
+    ("POST", rf"threads/{_S}/calls"), ("POST", rf"calls/{_S}/(end|leave|bots|action-items/retry)"),
+    ("DELETE", rf"calls/{_S}/bots/{_S}"),
+    # Peering with another company's Tico and what it shares: the owner's or an admin's call, and a thread's routes also
+    # ask for read and manage on that thread (backend/federation_routes.py).
+    ("POST", r"federation/keys(/rotate)?"), ("POST", r"federation/peerings"),
+    ("POST", rf"federation/peerings/{_S}/(approve|pause|revoke)"),
+    ("POST", rf"federation/threads/{_S}/(readers|installs)"), ("POST", rf"federation/threads/{_S}/installs/{_S}/retry"),
+    ("DELETE", rf"federation/threads/{_S}/installs/{_S}"),
+    # Withdrawing a held write to edit and resend it: its author's own call (backend/org_rule_check.py).
+    ("POST", rf"rule-holds/{_S}/withdraw"),
+    # Who reads an inbox: the route checks the person may change it.
+    ("PUT", rf"inbound/inboxes/{_S}/audience"),
     ("POST", rf"credentials/{_S}/grants"), ("POST", rf"credentials/{_S}/grants/{_S}/revoke"),
     ("DELETE", rf"credentials/{_S}"),
     # Computers: a restart, a model sign-in (its code is pasted in the app, never here), who may open its screen (opening
@@ -279,6 +311,16 @@ DO = _routes(
     ("PUT", r"screening"), ("POST", r"screening/test"),
     ("POST", r"settings/turn-budgets"),
     ("PUT", rf"system-routines/{_S}"), ("POST", rf"system-routines/{_S}/run"), ("POST", r"task-manager/turn-(on|off)"),
+    # The Company page's drafts, sources, stats and logo: the route checks the person is an owner or an admin. An
+    # edition is only drafted here; publishing, approving, overriding, retracting and correcting are not listed, so they
+    # are refused for BotOps (editions.require_person, require_own_click). Removing an audience's reader or invite is
+    # a way out, so it is direct. Turning an audience on is a card (`enables_audience`), checked before this list.
+    ("POST", r"audiences"), ("PATCH", rf"audiences/{_S}"),
+    ("POST", rf"audiences/{_S}/sources"), ("DELETE", rf"audiences/{_S}/sources/{_S}"),
+    ("POST", r"company-page/stats"), ("PATCH", rf"company-page/stats/{_S}"), ("DELETE", rf"company-page/stats/{_S}"),
+    ("POST", r"company-page/logo"), ("DELETE", r"company-page/logo"),
+    ("POST", r"editions"), ("PATCH", rf"editions/{_S}"), ("POST", rf"editions/{_S}/check"),
+    ("DELETE", rf"readers/{_S}"), ("DELETE", rf"audiences/{_S}/invites/{_S}"),
 )
 
 # Cards again when the owner turned "BotOps changes providers and limits without asking" off. A limit lowered is
@@ -304,6 +346,11 @@ CONFIRM = _routes(
     ("POST", r"slack/disconnect"), ("POST", r"github/app/disconnect"),
     # Picking a seat's candidate makes a bot (recruiting._may_hire: only on the person's own confirmation).
     ("POST", rf"seats/{_S}/hire"),
+    # The Company page (backend/company_page): what the page or a reader can see is the owner's own tap. Taking a
+    # reader's access away is direct (below).
+    ("PATCH", r"company-page"), ("DELETE", rf"audiences/{_S}"),
+    ("PUT", rf"audiences/{_S}/disclosure"), ("POST", rf"audiences/{_S}/disclosure/preset"),
+    ("POST", r"readers"), ("POST", r"readers/import"), ("PATCH", rf"readers/{_S}"),
 )
 
 # The messages route is a card unless it names a bot (`classify`).
@@ -315,6 +362,8 @@ ADMIN_ONLY = _routes(
     ("POST", rf"(runners|computers)/{_S}/member-bots"),
     ("POST", r"system/update"), ("PUT", r"directory"), ("POST", r"directory/(sync|preview)"),
     ("POST", r"(slack|github/app)/disconnect"), ("POST", rf"credentials/{_S}/grants/{_S}/revoke"),
+    ("PATCH", r"company-page"), ("DELETE", rf"audiences/{_S}"), ("PUT", rf"audiences/{_S}/disclosure"),
+    ("POST", r"readers"), ("POST", r"readers/import"), ("PATCH", rf"readers/{_S}"),
 )
 
 # Always the person's own tap when BotOps acts for them, whatever they said in chat: handing over the company, updating
@@ -332,6 +381,8 @@ PERSON_ONLY = [
     ("POST", re.compile(API + rf"access/(people|humans)/{_S}/password"), "A person makes someone a password in Settings > Humans"),
     ("POST", re.compile(API + r"me/tokens"), "A person makes their own personal API token in Settings"),
     ("POST", re.compile(API + r"directory/scim-token"), "The owner makes a SCIM token in Settings > Humans"),
+    # The invite's link is the only copy of its token (readers.create_invite), so it goes to the person, not the chat.
+    ("POST", re.compile(API + rf"audiences/{_S}/invites"), "A person makes a reader's invite link in Company page > Readers"),
 ]
 DETAIL_PERSON_ONLY = ": its value never goes to a bot, so BotOps does not do this for you."
 
@@ -369,15 +420,26 @@ def classify(method, path, body=None, rules=None, to_bot=None):
         return None
     if method == "GET":
         return None if NO_READ.fullmatch(path) else "do"
-    if any(m == method and p.fullmatch(path) for m, p in CONFIRM):
+    if any(m == method and p.fullmatch(path) for m, p in CONFIRM) or enables_audience(method, path, body):
         return "confirm"
     if method == "POST" and MESSAGES.fullmatch(path):
         return "do" if to_bot and isinstance(body, dict) and to_bot(body.get("to")) else "confirm"
     if rules and not rules.get("botops_direct", True) and any(m == method and p.fullmatch(path) for m, p in TIGHTENED):
         return "confirm"
-    if any(m == method and p.fullmatch(path) for m, p in DO):
+    if any(m == method and p.fullmatch(path) for m, p in DO + THREADS):
         return "do"
     return None
+
+
+AUDIENCE = re.compile(API + rf"audiences/{_S}")
+
+
+def enables_audience(method, path, body=None):
+    """Turning an audience on (Public, or a reader's audience) serves what its approved content says, so it is the
+    owner's own tap. Turning one off is a way out and stays direct."""
+    path, method = normalize(path) or "", str(method or "").upper()
+    return (method == "PATCH" and bool(AUDIENCE.fullmatch(path)) and isinstance(body, dict) and "enabled" in body
+            and bool(body["enabled"]))
 
 
 def person_only(method, path):
@@ -420,7 +482,7 @@ def card_for_person(method, path, body=None, rules=None, lowers=None, *, force_c
     if force_confirm:
         return True
     match = lambda routes: any(m == method and p.fullmatch(path) for m, p in routes)
-    if match(ALWAYS) or match(CONFIRM):
+    if match(ALWAYS) or match(CONFIRM) or enables_audience(method, path, body):
         return True
     if method == "PUT" and RULES.fullmatch(path) and own_powers(body):
         return True
@@ -442,6 +504,7 @@ SUMMARIES = [
     ("DELETE", re.compile(API + r"providers/gateway"), "Turn off the Tico AI Gateway (its saved key is forgotten)"),
     ("POST", re.compile(API + r"providers/gateway/automatic"), "Connect the Tico AI Gateway automatically again"),
     ("PUT", re.compile(API + rf"usage/(limits(/{_S})?|pools/.+)"), "Change a spending limit"),
+    ("PATCH", AUDIENCE, "Turn on a Company page audience"),
     ("DELETE", re.compile(API + rf"automations/{_S}"), "Delete an automation"),
     ("POST", re.compile(API + rf"automations/{_S}/delete"), "Delete an automation"),
 ]
@@ -573,6 +636,8 @@ def default_delegable(method, path, body=None, query=None):
     may do or propose for a person, and never its own plumbing or its own messages."""
     path = normalize(path)
     if path and str(method).upper() in ("GET", "POST") and re.fullmatch(API + rf"(?:runners|computers)/{_S}/logins(?:/{_S}(?:/cancel)?)?", path):
+        return classify(method, path, body) == "do"
+    if path and any(m == str(method).upper() and p.fullmatch(path) for m, p in THREADS):
         return classify(method, path, body) == "do"
     if not path or OWN.fullmatch(path):
         return False

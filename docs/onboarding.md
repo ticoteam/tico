@@ -205,12 +205,12 @@ second). It reaches no computer.
   unless the owner already filed it from the Market page ([An empty Market page](#an-empty-market-page)).
 - The template and the reviewed instructions are stored in the bot's server-side config, with the **template version** (the release whose
   templates it came from: `template_version`).
-- A **starter** template (a card with a `first_routine` and an `onboarding` conversation) is created whole and parked:
+- A **starter** template (a card with a `first_routine` and an `onboarding` thread) is created whole and parked:
   - `onboarding_state: needs_setup`, exposed on `/api/v2/bots`, `/api/v2/bots/{bot}` and `/api/v2/org`;
   - its first routine is seeded off (the template declares `enabled: false`) and goes on when its setup starts (**Set up**, a first message from someone who manages it, or go-live), so nobody approves it separately;
   - **no task is filed for BotOps**: the computer materializes its repository from its template as soon as the bot is placed on it
     (`materialize: true` in its config, which only the wizard writes), and the bot is activated as soon as it is placed;
-  - the scheduler skips it, and only a human's chat message is claimed for it (a task message, a Slack route, a bot's request or a routine
+  - the scheduler skips it, and only a human's message is claimed for it (a task message, a Slack route, a bot's request or a routine
     waits), so nothing runs until it is set up;
   - it does not count toward a member's bot limit while parked.
   The built-ins and every other template are not parked.
@@ -255,11 +255,11 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
   nothing behind: a bot needs a role to build its repository (`backend/cloud_agents.py`).
 - **Onboarding** replaces *Set up*. A starter is created Onboarding: the team chart shows a small amber gear (hover it for
   *Onboarding*) and its page an **Onboarding** pill. **Start onboarding** sends it "Let's set you up." as the person, in their
-  own chat with it (the **Chat** tab); any first message from a person does the same. It learns only: it answers and asks in
-  chat, reads, connects tools and talks with its manager. It takes no task, files none, runs no routine (timed or on an event),
+  own DM with it (the **Chat** tab); any first message from a person does the same. It learns only: it answers and asks in
+  its thread, reads, connects tools and talks with its manager. It takes no task, files none, runs no routine (timed or on an event),
   comments on, asks about or attaches to no task (one it held before included), asks no approval, sends no email and posts
   nothing on Slack, and sends messages, answers and notes only to its manager, the people above it and a person it answers in
-  chat. A run that cannot confirm its stage with Tico sends no email or Slack post either. Each attempt is refused with a
+  a thread. A run that cannot confirm its stage with Tico sends no email or Slack post either. Each attempt is refused with a
   plain reason. Any number of bots may be onboarding at once.
 - When it has learned enough, the bot says so with `hub bot ready --summary "..."` (MCP `hub_bot_ready`); its page shows the
   summary. Only a person above it on the org chart (its manager, their managers, the owner) sees **Mark onboarding complete**
@@ -295,7 +295,7 @@ whole change. Members can add seats under themselves or someone below them; only
   until you add a domain and sign-in; adding an admin still saves their roster entry.
 - **Who owns each bot**: add a human as an owner of any bot (`POST /api/v2/bots/{bot}/co-owners`; [permissions](permissions.md#bot-owners)).
 - **Tools**: links to Credentials and Tools, where credentials go. Credentials
-  are entered in those fields, **never in a chat with a bot**; the BotOps playbook says the same, and a credential pasted into a chat is treated as
+  are entered in those fields, **never in a message to a bot**; the BotOps playbook says the same, and a credential pasted into a message is treated as
   leaked.
 
 ## After the wizard
@@ -392,9 +392,9 @@ read the task, `hub bot create --template <template> --name "<Display>"` (Tico p
 instructions into `AGENT.md` (or tailor the template's to the answers), run `hub bot check <slug>`
 and fix every failure, then commit the result.
 
-For a human's authorized chat request, BotOps finishes the work: it places the bot on a computer,
+For a human's authorized request, BotOps finishes the work: it places the bot on a computer,
 turns it on, starts Setup, opens [Credential cards](credential-vault.md#credentials-asked-for-in-the-chat)
-for missing values, runs one small test and reports the result in chat. It stores and grants
+for missing values, runs one small test and reports the result in the thread. It stores and grants
 Credentials with the requester's rights; values stay out of messages.
 
 An unattended setup task prepares and checks the repository, then reports readiness, the repository
@@ -445,7 +445,7 @@ Only an active bot is given work. Finishing setup activates the assistant and Bo
 as a computer hosts them (and again when a computer is enrolled later), because BotOps cannot be
 handed setup tasks while it is planned. A starter is activated the same way once placed, and is still parked: it answers a human and
 nothing else until it is set up. A ready bot has an **Activate** action when its repository is
-reported present. BotOps can activate it for an authorized human chat request; an unattended
+reported present. BotOps can activate it for an authorized human request; an unattended
 setup task reports readiness for the owner to act.
 
 Automatic placement when a Computer enrolls skips only archived teammates. Paused or draining teammates
@@ -461,7 +461,7 @@ Applicants page ([Recruiting a seat](#recruiting-a-seat)).
 **Settings → Bots → Add bot** (Tico Recruit) starts with a role title and job description, then offers **Post a job**
 (the same Recruiting seat), a template, an existing agent or a bot from scratch. The optional tools and
 reviewer answers carry into the selected template's instructions. Choosing a template there uses `POST /api/v2/bots`
-and creates a planned bot that waits for its setup conversation. External services link to their own setup instructions.
+and creates a planned bot that waits for its setup thread. External services link to their own setup instructions.
 
 ### Recruiting a seat
 
@@ -597,11 +597,11 @@ and that the key is a slug: lowercase letters, digits and single hyphens.
 offer, and the bots screen says so. On a hosted server that means the release did not carry
 `templates/catalog`, or `TICO_CATALOG_DIR` points somewhere empty.
 
-**A starter does not answer, or a routine never runs.** While it is `needs_setup` it answers only a human's chat message: a task
-message, a Slack route, a bot's request and its routines wait. Press **Set up**, or say anything to it in its chat, and answer its
+**A starter does not answer, or a routine never runs.** While it is `needs_setup` it answers only a human's message: a task
+message, a Slack route, a bot's request and its routines wait. Press **Set up**, or say anything to it in its DM, and answer its
 questions. When its setup is done it calls `hub bot setup-done`. If it cannot (a member's bot at their limit answers
 `bot_limit`), archive a bot you no longer need or ask an admin to raise the limit in Settings > People. An owner or a bot's manager can
-also call `POST /api/v2/bots/{bot}/onboarded` to release a bot whose conversation went wrong.
+also call `POST /api/v2/bots/{bot}/onboarded` to release a bot whose thread went wrong.
 
 In **AI providers**, choose **Your company's plans or API keys** to show the provider checkboxes.
 With none ticked, **Skip for now** continues without a provider; bots wait until one is added.

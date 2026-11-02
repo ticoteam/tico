@@ -215,6 +215,8 @@ def redact_value(c, person, value, env, conversation_id="", attempt_id="", messa
         row = c.execute("SELECT body,from_actor FROM messages WHERE id=?", (mid,)).fetchone()
         if row and row["from_actor"] == person.actor and value in (row["body"] or ""):
             c.execute("UPDATE messages SET body=? WHERE id=?", ((row["body"] or "").replace(value, label), mid))
+            # Its revision history (backend/threads.py) keeps each body too.
+            c.execute("UPDATE message_revisions SET body=replace(body, ?, ?) WHERE message_id=?", (value, label, mid))
             count += 1
     if attempt_id:
         for row in c.execute("SELECT id,payload_json FROM attempt_events WHERE attempt_id=?", (attempt_id,)).fetchall():
@@ -450,6 +452,7 @@ def install_credential_cards(app, store, vault, auth, botops, delegate, manager)
             if not span or span not in (msg["body"] or ""):
                 return {"redacted": 0}
             c.execute("UPDATE messages SET body=? WHERE id=?", ((msg["body"] or "").replace(span, f"{MASK} {label}"), mid))
+            c.execute("UPDATE message_revisions SET body=replace(body, ?, ?) WHERE message_id=?", (span, f"{MASK} {label}", mid))
             from .stream_capture import scrub_value
             scrub_value(c, span, f"{MASK} {label}", conversation_id=msg["conversation_id"])
             H.event(c, person.actor, "message.redacted", mid, {"messages": 1, "label": label})

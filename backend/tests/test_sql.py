@@ -158,6 +158,21 @@ def test_secret_tables_and_columns_are_denied_for_everyone(api, world):
     assert query(api, "SELECT email FROM humans WHERE id='ben'", "ben-test")["rows"] == [["ben@acme.example"]]
 
 
+def test_the_company_page_s_readers_are_denied_to_everyone_and_its_rules_are_the_owner_s(api, world):
+    """Who the readers are, their sessions and invites, what they wrote and read: nobody reads these through SQL, the owner
+    included. The company's own rules, drafts and stats are the owner's, as its page's API shows them."""
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO audiences (id, name, kind, created_at, updated_at) VALUES ('board','Board','board',?,?)",
+                  (H.now(), H.now()))
+    for token in ("ana-test", "ben-test", world["attempt"]["token"]):
+        for table in ("readers", "audience_readers", "reader_sessions", "reader_invites", "reader_messages",
+                      "reader_notices", "edition_views"):
+            assert error(api, f"SELECT count(*) FROM {table}", token) == "not authorized", (table, token)
+    assert query(api, "SELECT name FROM audiences", "ana-test")["rows"] == [["Board"]]
+    assert query(api, "SELECT name FROM audiences", "ben-test")["rows"] == []
+    assert query(api, "SELECT name FROM audiences", world["attempt"]["token"])["rows"] == []
+
+
 def test_recruiting_seats_are_readable_by_everyone_like_the_org_chart(api, world):
     seat = post(api, "seats", {"title": "Bookkeeper", "description": "Keeps the ledgers.", "reports_to": "finance"})
     for token in ("ana-test", "cara-test", world["attempt"]["token"]):
@@ -215,7 +230,8 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "idempotency_messages.ready", "inbox-only-runners", "librarian_wording35", "librarian_wording36",
         "message_links.ready", "onboarding", "owner", "people", "redesign_cutover", "release-history",
         "repositories-access-migrated", "roadmap_ready_to_ship_step", "roadmaps_copies_cleared_by_field",
-        "roadmaps_explicit_public_text", "strategy-bot", "task_session_default", "usage-count"]
+        "roadmaps_explicit_public_text", "strategy-bot", "task_session_default", "threads-audit-scrub",
+        "threads-migration", "threads-neutral-titles", "usage-count"]
 
 
 def test_a_person_sees_the_company_but_not_private_bots_or_other_rooms(api, world):
@@ -513,8 +529,9 @@ def test_direct_refs_cannot_override_denied_conversation_task(api, world, unknow
         hidden = H.task_create(c, 'human:ben', 'Hidden conversation source', '', 'bot:finance', private=True, lint=False)
         c.execute('UPDATE conversations SET task_id=? WHERE id=?',
                   ('unknown-fixture-task' if unknown else hidden['id'], room))
-    # The attempt's room grant is still valid, isolating the provenance denial.
-    assert query(api, 'SELECT id FROM conversations WHERE id=?', world['attempt']['token'], params=[room])['rows'] == [[room]]
+    # The attempt's room grant no longer opens a room of a task the bot may not read: SQL fences it as the API does
+    # (threads.readable_sql). ReadIndex below still checks the provenance denial on its own.
+    assert query(api, 'SELECT id FROM conversations WHERE id=?', world['attempt']['token'], params=[room])['rows'] == []
     with store.read() as c:
         who = Identity('bot:ops', 'bot', attempt_id=world['attempt']['id'])
         fast, recursive = ReadIndex(c, who), ReadIndex(c, who)
@@ -676,14 +693,15 @@ def test_carried_private_tasks_and_unknown_plain_rooms_stay_hidden(api, world):
     with store.transaction() as c:
         c.execute('UPDATE conversations SET task_id=? WHERE id=?',
                   (hidden['id'], world['ana_room']))
-    # A valid room grant cannot expose plain messages from a denied private task.
-    assert rows('conversations', world['ana_room']) == [[world['ana_room']]]
+    # A valid room grant cannot expose a denied private task's room or its plain messages (threads.readable_sql
+    # fences the room as Auth.conversation does).
+    assert rows('conversations', world['ana_room']) == []
     assert rows('messages', msg['id']) == []
     with store.transaction() as c:
         c.execute('UPDATE conversations SET task_id=? WHERE id=?',
                   ('unknown-fixture-task', world['ana_room']))
-    # The room grant remains valid, so the plain-message provenance gate must deny.
-    assert rows('conversations', world['ana_room']) == [[world['ana_room']]]
+    # Nor an unknown task's.
+    assert rows('conversations', world['ana_room']) == []
     assert rows('messages', msg['id']) == []
 
 

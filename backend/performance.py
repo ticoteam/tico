@@ -92,16 +92,28 @@ def _volume(sample):
     return d.free_bytes, d.total_bytes
 
 
+def backfill_last_sampled(c):
+    """A computer that sampled before its last-sample mark existed takes the time of its newest kept sample. Runs at
+    every start; a mark already set is left as it is."""
+    c.execute("UPDATE runners SET last_sampled_at=(SELECT max(sampled_at) FROM runner_load_samples s "
+              "WHERE s.runner_id=runners.id) WHERE last_sampled_at IS NULL")
+
+
 def ingest(c, runner_id, samples, now=None):
     """Store a batch of samples; returns the number kept. A sample from more than a day away is dropped, and one
     ahead of the server's clock counts as now, so a computer's fast clock cannot hold back the minutes after it."""
     now = int(now or time.time())
-    kept, minutes = 0, []
+    kept, minutes, readings = 0, [], []
+    # A batch that was held back (the sampler keeps failed posts and sends them with the next) may carry readings
+    # older than the newest one already stored; those cannot move the memory hold.
+    stored = c.execute("SELECT max(sampled_at) FROM runner_load_samples WHERE runner_id=?", (runner_id,)).fetchone()[0] or 0
     for s in sorted(samples, key=lambda s: s.at):
         at = min(int(s.at), now)
         if now - at > 86400:
             continue
         kept += 1
+        if at >= stored:
+            readings.append((at, _pct(s.mem_used, s.mem_total)))
         ts = at // MINUTE * MINUTE
         if not minutes or minutes[-1] != ts:
             minutes.append(ts)
@@ -138,6 +150,18 @@ def ingest(c, runner_id, samples, now=None):
                        s.swap_used if s.swap_total else None, s.swap_total or None, free, total, s.active))
         for p in s.procs:
             _add_usage(c, runner_id, MINUTE, ts, "proc", p.name, "", "", s.interval_s // SAMPLE_S, p.cpu, p.cpu, p.mem, p.mem)
+    if readings:
+        # The readings in time order set the computer's memory hold (start_places.computer_hold): at 85% or more it
+        # holds, below 80% it clears, and in between it keeps the state the earlier reading left. Replaying the batch
+        # in order means 86% then 82% holds, and 79% then 82% releases, whichever way the batch was delivered.
+        held = c.execute("SELECT memory_hold FROM runners WHERE id=?", (runner_id,)).fetchone()[0]
+        for _, mem in readings:
+            if mem is not None and mem >= MEM_HOLD_AT:
+                held = 1
+            elif mem is not None and mem < MEM_HOLD_CLEAR:
+                held = 0
+        c.execute("UPDATE runners SET memory_hold=?,last_sampled_at=max(coalesce(last_sampled_at,0),?) WHERE id=?",
+                  (held, max(at for at, _ in readings), runner_id))
     for ts in sorted(set(minutes)):    # each minute in turn: a backlog's calm minute ends an overload
         detect(c, runner_id, ts)
     c.execute("DELETE FROM runner_load_samples WHERE runner_id=? AND ts<?", (runner_id, now - 48 * 3600))
@@ -162,6 +186,7 @@ def _add_usage(c, runner_id, span, ts, kind, key, bot, harness, n, cpu, cpu_max,
 
 # ------------------------------------------------------------------------------------------------ simple load
 LOAD_FRESH_S = 120
+MEM_HOLD_AT, MEM_HOLD_CLEAR = 85.0, 80.0     # new starts wait at this memory, and start again below the lower one
 
 
 def load_status(c, runner_id, now=None):

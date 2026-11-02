@@ -37,11 +37,50 @@ def ready_waiting(c, runner_id):
         return values[key]
     out = bool(c.execute("SELECT 1 FROM attempts a JOIN start_places p ON p.attempt_id=a.id "
                          "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested IS NULL "
-                         "AND p.wait_reason IN ('computer busy',?) LIMIT 1",
+                         "AND (p.wait_reason LIKE 'computer busy%' OR p.wait_reason=?) LIMIT 1",
                          (runner_id, H.now(), REASON)).fetchone())
     if values is not None:
         values[key] = out
     return out
+
+
+MEMORY_HOLD = 'computer busy: memory'
+NOT_REPORTING = 'computer not reporting'
+
+
+def computer_hold(c, runner_id, now=None, status=None):
+    """Why this computer holds a bot's new start, as (wait reason, words for people), or None. Diagnostics on only.
+
+    - Sustained CPU or memory overload (performance.load_status): "computer busy", as before.
+    - The latest sample older than two minutes, or none in the retention window after one was ever kept:
+      "computer not reporting". A frozen computer stops sampling, so a silent one admits no work. A computer that
+      has never sampled is not held: older runners never sent samples.
+    - Memory at 85% or more: "computer busy: memory N%". It is admitted again below 80%; between the two it keeps
+      the state its newest sample set (performance.ingest), so the queue does not flap.
+    A person's own message skips this at each caller, as it skips the overload hold."""
+    from .performance import MEM_HOLD_AT, MEM_HOLD_CLEAR, load_status, on
+    if status is None:
+        if not on(c, runner_id):
+            return None
+        status = load_status(c, runner_id, now)
+    latest = status['latest_sample']
+    if latest is None:
+        # Samples past retention are gone, but a computer that reported before still reports nothing now.
+        if not on(c, runner_id):
+            return None
+        seen = c.execute("SELECT last_sampled_at FROM runners WHERE id=?", (runner_id,)).fetchone()
+        return (NOT_REPORTING, NOT_REPORTING) if seen and seen[0] else None
+    if latest['stale']:
+        return NOT_REPORTING, NOT_REPORTING
+    if status['overloaded']:
+        return 'computer busy', 'computer busy'
+    mem = latest['mem_pct']
+    if mem is None:
+        return None
+    held = c.execute("SELECT memory_hold FROM runners WHERE id=?", (runner_id,)).fetchone()
+    if mem >= MEM_HOLD_AT or (mem >= MEM_HOLD_CLEAR and held and held[0]):
+        return MEMORY_HOLD, f'{MEMORY_HOLD} {round(mem)}%'
+    return None
 
 
 def held(c, runner_id):
@@ -171,14 +210,14 @@ def person_queued(c, runner_id):
 
 def reserve(c, attempt, settings=None):
     """Called inside the API writer transaction; two contenders cannot win the last place."""
-    from .performance import load_status
     aid, rid = attempt['id'], attempt['runner_id']
     if attempt['stop_requested']:
         return {"reserved": False, "stop": True}
     person = from_person(c, attempt['job_id'])
-    if not person and load_status(c, rid)['overloaded']:
-        waiting(c, aid, 'computer busy')
-        return {"reserved": False, "waiting": "computer busy"}
+    hold = None if person else computer_hold(c, rid)
+    if hold:
+        waiting(c, aid, hold[0])
+        return {"reserved": False, "waiting": hold[1]}
     place = c.execute("SELECT * FROM start_places WHERE attempt_id=?", (aid,)).fetchone()
     if place and place['start_until']:
         return {"reserved": place['start_until'] > H.now(), "start_until": place['start_until']}
@@ -201,7 +240,7 @@ def reserve(c, attempt, settings=None):
     # Waiters ready to run take their turns by original claim order. Login/lane waiters are not ready yet.
     ahead = c.execute("SELECT 1 FROM start_places p JOIN attempts a ON a.id=p.attempt_id "
                       "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested IS NULL "
-                      "AND p.wait_reason IN ('computer busy',?) AND (a.created,a.id)<(?,?) LIMIT 1",
+                      "AND (p.wait_reason LIKE 'computer busy%' OR p.wait_reason=?) AND (a.created,a.id)<(?,?) LIMIT 1",
                       (rid, H.now(), org_turns.REASON, attempt['created'], aid)).fetchone()
     if sum(held(c, rid).values()) >= capacity or (ahead and not person):
         waiting(c, aid, 'computer busy')
@@ -265,7 +304,8 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
     from .execution import claim_refusal
     from .store import readiness_document
     runners = {row['id']: row for row in c.execute(f"SELECT * FROM runners WHERE id IN ({marks})", runner_ids)}
-    overloaded = {rid: status['overloaded'] for rid, status in performance.load_statuses(c, runner_ids).items()}
+    statuses = performance.load_statuses(c, runner_ids)
+    holds = {}      # a computer's hold, asked once and only for a computer with queued work
     reasons = {'cooling_off': 'quota', 'limit': 'spending limit', 'not_ready': 'computer readiness',
                'readiness_unknown': 'computer readiness', 'sign_in_rejected': 'sign-in',
                'draining': 'bot paused', 'run_hold': 'stopped runs', 'backoff': 'a failed run', 'budget': 'run budget',
@@ -282,8 +322,10 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
             refused, _ = claim_refusal(c, settings, runner, row['bot'], row['config_json'], False, ready,
                                        default=default)
             why = reasons.get(refused, 'pre-start requirements') if refused else ''
-        if not why and overloaded[rid]:
-            why = 'computer busy'
+        if not why:
+            if rid not in holds:
+                holds[rid] = computer_hold(c, rid, status=statuses[rid])
+            why = holds[rid][0] if holds[rid] else ''
         if why:
             add(rid, why, row['n'], row['oldest'])
         else:
@@ -300,8 +342,8 @@ def describe(counts):
         since = H.parse_ts(wait['oldest'])
         minutes = max(0, int((now - since).total_seconds() / 60)) if now is not None and since is not None else 0
         age = f"{minutes // 60} h" if minutes >= 60 else f"{minutes} min"
-        reason = ("waiting: computer busy" if wait['reason'] == 'computer busy' else
-                  "waiting: " + wait['reason'] if wait['reason'].startswith('at ') else "waiting for " + wait['reason'])
+        reason = ("waiting: " + wait['reason'] if wait['reason'].startswith(('computer busy', 'computer not reporting', 'at '))
+                  else "waiting for " + wait['reason'])
         parts.append(f"{wait['count']} {reason} (oldest {age})")
     if not counts['waiting']:
         parts.append('0 waiting')

@@ -70,10 +70,10 @@ local ticket record. Closed requests remain readable.
 
 ### Reach us from anywhere
 
-- **Tico support** opens from any link to `#/support` (a chat reply's "Loop in Tico support", `#/help`): Help with a
+- **Tico support** opens from any link to `#/support` (a DM reply's "Loop in Tico support", `#/help`): Help with a
   new request, ready to write; a `#/support/manage` link opens one asking for full management. **Loop in Support**,
-  the link at the top right of the Ask panel, shows an open request's messages in that chat as blue-gray bubbles and
-  writes your replies to it. It sends the chat's last 20
+  the link at the top right of the Ask panel, shows an open request's messages in that DM as blue-gray bubbles and
+  writes your replies to it. It sends the DM's last 20
   turns, keys cut out, to that request, or to a new request sent at once when none is open ([The Assistant](assistant.md)). Empty lists carry no support line of their own.
 - **Report this** appears on every error message (toast), on a failed run (a task's Runs section and Settings → History → Runs), on a red
   Health line and on a stuck bot. It opens a new request with what failed named in the message and attached as

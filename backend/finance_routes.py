@@ -23,10 +23,11 @@ from .store import Problem
 
 STATUS = {"not_found": 404, "denied": 403, "invalid": 422, "conflict": 409, "not_available": 409,
           "period_closed": 409, "unbalanced": 422}
-Group = Literal["department", "team", "teammate", "bot", "person", "vendor", "account"]
+Group = Literal["department", "team", "teammate", "bot", "person", "vendor", "account", "location", "class", "project",
+                "location_class", "location_project", "class_project"]
 DAY = r"^\d{4}-\d{2}-\d{2}$"
 Aging = Literal["current", "1_30", "31_60", "61_90", "over_90"]
-Report = Literal["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by"]
+Report = Literal["pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by"]
 Metric = Literal["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
                  "ar_overdue", "uncategorized_count", "unreconciled_days"]
 
@@ -262,6 +263,91 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.bill(c, actor, bill_id))
 
+    @app.get("/api/v2/purchase-orders")
+    def finance_purchase_orders(request: Request, status: str | None = Query(None, max_length=80),
+                                vendor_id: str | None = Query(None, max_length=80),
+                                q: str = Query("", max_length=100), cursor: str | None = Query(None, max_length=600),
+                                limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+        """Purchase orders the caller sees (payables), newest first; `next_cursor` pages. `status` takes
+        draft|sent|approved|partial|closed|void, and `q` searches number, memo and vendor name."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.orders(c, actor, status=status, vendor_id=vendor_id, q=q, cursor=cursor,
+                                                   limit=limit))
+
+    @app.get("/api/v2/purchase-orders/{po_id}")
+    def finance_purchase_order(request: Request, po_id: ID, view_as: str | None = None):
+        """One purchase order with its lines and what each line has billed."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.order(c, actor, po_id))
+
+    @app.get("/api/v2/estimates")
+    def finance_estimates(request: Request, status: str | None = Query(None, max_length=80),
+                          customer_id: str | None = Query(None, max_length=80),
+                          q: str = Query("", max_length=100), cursor: str | None = Query(None, max_length=600),
+                          limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+        """Estimates the caller sees (receivables), newest first; `next_cursor` pages. `status` takes
+        draft|sent|accepted|declined|invoiced, and `q` searches number, memo and customer name."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.estimates(c, actor, status=status, customer_id=customer_id, q=q,
+                                                      cursor=cursor, limit=limit))
+
+    @app.get("/api/v2/estimates/{estimate_id}")
+    def finance_estimate(request: Request, estimate_id: ID, view_as: str | None = None):
+        """One estimate with its lines; each line says whether it is taxable."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.estimate(c, actor, estimate_id))
+
+    @app.get("/api/v2/locations")
+    def finance_locations(request: Request, q: str = Query("", max_length=100),
+                          archived: Literal["hide", "only", "all"] = "hide",
+                          cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
+                          view_as: str | None = None):
+        """Locations by name then id; `q` searches names, and `archived` hides the archived ones (the default), shows
+        only them, or shows both. `next_cursor` pages."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.records(c, actor, kind="location", q=q, archived=archived, cursor=cursor,
+                                                    limit=limit))
+
+    @app.get("/api/v2/locations/{location_id}")
+    def finance_location(request: Request, location_id: ID, view_as: str | None = None):
+        """One location, archived or not."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.record(c, actor, kind="location", record_id=location_id))
+
+    @app.get("/api/v2/items")
+    def finance_items(request: Request, q: str = Query("", max_length=100),
+                      archived: Literal["hide", "only", "all"] = "hide",
+                      cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
+                      view_as: str | None = None):
+        """Products and services by name or sku; `archived` hides the archived ones (the default), shows only them, or
+        shows both. `next_cursor` pages."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.records(c, actor, kind="item", q=q, archived=archived, cursor=cursor,
+                                                    limit=limit))
+
+    @app.get("/api/v2/items/{item_id}")
+    def finance_item(request: Request, item_id: ID, view_as: str | None = None):
+        """One product or service, archived or not, without the accounts it posts to."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.record(c, actor, kind="item", record_id=item_id))
+
+    @app.get("/api/v2/projects")
+    def finance_projects(request: Request, q: str = Query("", max_length=100),
+                         archived: Literal["hide", "only", "all"] = "hide",
+                         cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
+                         view_as: str | None = None):
+        """Projects by name; `archived` hides the archived ones (the default), shows only them, or shows both.
+        `next_cursor` pages."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.records(c, actor, kind="project", q=q, archived=archived, cursor=cursor,
+                                                    limit=limit))
+
+    @app.get("/api/v2/projects/{project_id}")
+    def finance_project(request: Request, project_id: ID, view_as: str | None = None):
+        """One project, archived or not."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.record(c, actor, kind="project", record_id=project_id))
+
     @app.get("/api/v2/finance/invoices")
     def finance_invoices(request: Request, status: str | None = Query(None, max_length=80),
                          customer_id: str | None = Query(None, max_length=80), q: str = Query("", max_length=100),
@@ -328,9 +414,10 @@ def install(app, store, auth, mutate):
                        end: str | None = Query(None, pattern=DAY),
                        period: Literal["day", "week", "month", "quarter", "year"] = "month",
                        basis: Literal["cash", "accrual"] | None = None, compare: Literal["prior"] | None = None,
-                       top_n: int = Query(20, ge=1, le=200), by: Group = "vendor", view_as: str | None = None):
-        """One report cut to the caller's view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging
-        or spend_by. `compare=prior` adds the window before; rows past `top_n` fold into "Other · n"."""
+                       top_n: int = Query(20, ge=1, le=200), by: Group | None = None, view_as: str | None = None):
+        """One report cut to the caller's view: pnl, pnl_by, balance_sheet, cash_flow, budget_vs_actual, ap_aging,
+        ar_aging or spend_by (`by` picks the grouping; pnl_by defaults to location, spend_by to vendor).
+        `compare=prior` adds the window before; rows past `top_n` fold into "Other · n"."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.report(c, actor, kind, start=start, end=end, period=period, basis=basis,
                                                    compare=compare, top_n=top_n, by=by))
@@ -374,7 +461,8 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/finance/search")
     def finance_search(request: Request,
-                       kind: Literal["entry", "feed", "bill", "invoice", "contact", "rule", "card"] | None = None,
+                       kind: Literal["entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location",
+                                     "project", "po", "estimate"] | None = None,
                        q: str = Query("", max_length=100), status: str | None = Query(None, max_length=80),
                        vendor: str | None = Query(None, max_length=120),
                        contact_id: str | None = Query(None, max_length=80),

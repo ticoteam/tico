@@ -1,12 +1,13 @@
 // Offline browser check: a message the server sent into a fresh session because its topic changed
 // (backend/topic_change.py, `refs.topic_changed`) shows one quiet "Topic changed" line above it, the same divider as
 // "New session started", and nothing else: no undo link, no line on any other message. Both when the send's own answer
-// adopts it and when a later snapshot lists it; desktop and phone.
+// adopts it and when a later read lists it; desktop and phone. On the Assistant page, the one old chat left.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {assistantView} = require('./support/assistant-chat.cjs');
 const launch = () => chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
 
 async function run(browser, viewport) {
@@ -15,8 +16,8 @@ async function run(browser, viewport) {
   page.on('pageerror', e => errors.push(e.message));
   const at = n => new Date(Date.UTC(2026, 9, 18, 12, n)).toISOString();
   const earlier = [
-    {id: 'a1', from_actor: 'human:ana', to_actor: 'bot:sales', kind: 'say', body: 'Fix the login redirect bug', created: at(0)},
-    {id: 'a2', from_actor: 'bot:sales', to_actor: 'human:ana', kind: 'say', in_reply_to: 'a1', body: 'Done.', created: at(1)},
+    {id: 'a1', from_actor: 'human:ana', to_actor: 'bot:coo', kind: 'say', body: 'Fix the login redirect bug', created: at(0)},
+    {id: 'a2', from_actor: 'bot:coo', to_actor: 'human:ana', kind: 'say', in_reply_to: 'a1', body: 'Done.', created: at(1)},
   ];
   let server = earlier.slice();
   await page.route('**/*', async route => {
@@ -28,22 +29,21 @@ async function run(browser, viewport) {
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-    if (p === '/api/employees') return json([{name: 'sales', display_name: 'Sales', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+    if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/issues') return json([]);
-    if (p === '/api/v2/conversations')
-      return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:sales']}] : []});
-    if (p.endsWith('/snapshot')) return json({messages: server.slice(), execution: null});
+    if (p === '/api/v2/assistant') return json(assistantView('c1', {messages: server.slice()}));
+    if (p === '/api/v2/conversations/c1/snapshot') return json({messages: server.slice(), execution: null});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    if (p === '/api/v2/chat/sales') {
+    if (p === '/api/v2/assistant/messages') {
       const text = route.request().postDataJSON().text;
-      const message = {id: 'm1', from_actor: 'human:ana', to_actor: 'bot:sales', kind: 'say', body: text, created: at(9),
+      const message = {id: 'm1', from_actor: 'human:ana', to_actor: 'bot:coo', kind: 'say', body: text, created: at(9),
                        conversation_id: 'c1', refs: {topic_changed: true}};
       server = [...server, message];
-      return json({conversation: {id: 'c1'}, message});
+      return json({message, fast: true});
     }
     return json(unrouted(p));
   });
-  await page.goto('https://tico-ui.test/#/bot/sales');
+  await page.goto('https://tico-ui.test/#/assistant');
   const box = page.locator('#chat-composer textarea');
   await box.waitFor();
   await page.waitForFunction(() => V2C?.loaded);
@@ -65,7 +65,8 @@ async function run(browser, viewport) {
   };
   await check('after the send');
   // A redraw from the server's snapshot keeps exactly one line, still above the same message.
-  await page.evaluate(() => { BOT = null; route(); });
+  await page.goto('https://tico-ui.test/#/updates');
+  await page.goto('https://tico-ui.test/#/assistant');
   await page.waitForFunction(() => V2C?.loaded && document.querySelector('#conv-thread [data-message="m1"]'));
   await check('after a reload of the thread');
   assert.deepEqual(errors, []);

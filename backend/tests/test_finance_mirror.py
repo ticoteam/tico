@@ -64,6 +64,7 @@ class FakeBooks:
             return self.replies.pop(0)
         kind = {"account.create": "Account", "party.create": "Vendor", "bill.create": "Bill", "bill.void": "Bill",
                 "invoice.create": "Invoice", "invoice.void": "Invoice", "payment.bill": "BillPayment",
+                "purchaseorder.create": "PurchaseOrder", "estimate.create": "Estimate",
                 "payment.invoice": "Payment", "writeoff.create": "CreditMemo", "credit.apply": "Payment"}.get(
                     op, "JournalEntry")
         return mirror.Sent(True, kind=kind, external_id=str(900 + len(self.sent)), revision="1")
@@ -411,7 +412,9 @@ def test_a_bill_made_here_goes_to_the_provider_and_is_booked_once_the_provider_c
     assert _drain(books, fake, cid, now=LATER) == []
     assert _sent(fake, "bill.create") == {"party": "Vendor:9", "number": "B-77", "day": "2026-10-05",
                                           "due": "2026-11-05", "memo": "", "lines": [
-                                              {"account": "Account:2", "amount": 1500, "description": "seats"}]}
+                                              {"account": "Account:2", "amount": 1500, "description": "seats", "item":
+                                              "", "item_code": "", "location": "",
+                   "class": "", "project": ""}]}
     with books.read() as c:
         bill = _local(c, "Bill:901", "fin_bills")
         assert tuple(c.execute("SELECT status, total, number FROM fin_bills WHERE id=?", (bill,)).fetchone()) == (

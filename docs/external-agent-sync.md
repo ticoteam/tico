@@ -27,13 +27,13 @@ but Tico does not dispatch webhook calls through this sync integration.
   `config_json.grok.instructions` (Dots: `config_json.dots`), with when they last changed, so the bot can be rebuilt
   on another runtime. Sending an explicit empty description or instructions clears it; leaving either field out
   preserves it.
-- The transcript is copied into the human's own chat with the bot, already read, with no job queued. Resending a
+- The transcript is copied into the human's own DM with the bot, already read, with no job queued. Resending a
   message adds nothing. Each bot in the reply carries `synced_through`: send only newer messages next time.
 - A sync with `inbox: true` (`hub_external_sync` sends it) also gets `inbox` on each bot: what the human wrote to it
   in Tico since the last sync, oldest first, given once and then counted as delivered. The routine hands those to
   that bot; its answer comes back with the next transcript. Without `inbox: true` (a routine set up before, on
   `hub_grokbot_sync`), `inbox` is empty and the messages keep waiting. Messages from other humans stay in Tico.
-- Images in a message are fetched once (public https only, up to 10 MB each), stored like a chat attachment and
+- Images in a message are fetched once (public https only, up to 10 MB each), stored like a thread attachment and
   shown inline. One Tico cannot fetch stays in the message as a link, as do links past the first 50 in one sync.
   Nothing is fetched for a sync Tico would refuse (a bot, a malformed body, or new bots past the member's limit).
 - Grok Bots named "Tico …" in Grok read "Grok …" here: in Grok the word marks the Bot as one of ours; here it says
@@ -76,7 +76,7 @@ The tool is `hub_external_sync` with `provider` `grokbot` or `dots` (`POST /api/
 
 The daily routine makes a message wait up to a day. With app delivery on, a Grok Bot is a bot like any other in Tico:
 a message to it reaches it within a minute, it shows as working while it answers, its reply streams into its Tico
-chat, and what it says on its own in Grok (a scheduled result, a follow-up) shows up there within a few minutes.
+DM, and what it says on its own in Grok (a scheduled result, a follow-up) shows up there within a few minutes.
 
 It runs on a Mac of yours that stays signed in, with the Grok app installed and signed in to your account:
 
@@ -92,7 +92,7 @@ The runner works only through macOS Accessibility: it sets the Grok Bot's messag
 the reply. It never moves the pointer, types through the keyboard or brings Grok to the front, so you can keep using
 the Mac. It presses nothing but the bot's row, the message box and Send. When a reply asks for something only you can
 do in Grok (an approval, a sign-in, a payment), Tico asks you instead. When Grok is signed out, missing its
-permission, or changed its layout, Health names the problem for that Mac and the bot's chat says why the message
+permission, or changed its layout, Health names the problem for that Mac and the bot's thread says why the message
 didn't go; the Health line goes once the runner next reads the conversation without a problem.
 
 The routine keeps working and stays optional; with app delivery on it is only needed to copy the bot's instructions
@@ -125,7 +125,7 @@ Dots, a human has one Muse, and it needs no `id`.
 
 ## Recovering a bot
 
-The bot's Tico chat holds its history and `config_json.grok.instructions` (or `config_json.dots` / `config_json.muse`)
+The bot's Tico Home holds its history and `config_json.grok.instructions` (or `config_json.dots` / `config_json.muse`)
 holds its instructions. To bring a Grok Bot back, paste those instructions into a new Grok Bot (or share the old
 one to another account, which copies its instructions but not its history), or move the Tico bot to the `grok`
 runtime on a registered computer with the same instructions.

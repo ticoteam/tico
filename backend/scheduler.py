@@ -151,6 +151,44 @@ def run_bookkeeper_rules_digest(store, auth, at, failures=None):
         run.did(made["words"], quiet=not made["items"])
 
 
+def run_thread_followups(store, auth, at, failures=None):
+    # Asks a bot left unanswered for a day get one nudge in their thread, and a bot's managers one notice about its Home's
+    # closed history (backend/thread_followups.py). Nothing due is a quiet run: no post, no model.
+    with SR.recording(store, "thread_followups", failures, "helper") as run:
+        from . import thread_followups
+        with store.transaction() as c:
+            nudged = thread_followups.sweep(c, stamp(at))
+            thread_followups.earlier_sweep(c, auth, stamp(at))
+        run.did(SR.words_of(nudged, "follow-up", "Nothing to follow up"), quiet=not nudged)
+
+
+def run_thread_digest(store, auth, at, failures=None):
+    # One email an hour to each person with threads to list on digest (backend/thread_digest.py). Nothing unread is a
+    # quiet run: no mail and no write.
+    from . import thread_digest
+    with SR.recording(store, "thread_digest", failures, "helper") as run:
+        sent = thread_digest.sweep(store, thread_digest.sender_for(auth))
+        run.did(SR.words_of(sent, "digest", "No digests to send"), quiet=not sent)
+
+
+def run_thread_bot_digest(store, auth, at, failures=None):
+    # A bot on digest gets one run an hour for what its threads gathered (backend/thread_bot_digest.py). Plain code: a
+    # model runs only when a batch has something in it.
+    from . import thread_bot_digest
+    with SR.recording(store, "thread_bot_digest", failures, "helper") as run:
+        woken = thread_bot_digest.sweep(store)
+        run.did(SR.words_of(woken, "bot", "No bot digests"), quiet=not woken)
+
+
+def run_thread_retention(store, auth, at, failures=None):
+    # Threads that keep their messages for a set time lose what is past it (backend/thread_retention.py), in short
+    # batches. Plain code; nothing past its time is a quiet run.
+    from . import thread_retention
+    with SR.recording(store, "thread_retention", failures, "helper") as run:
+        purged = thread_retention.sweep(store)
+        run.did(SR.words_of(purged, "message", "Nothing past its time"), quiet=not purged)
+
+
 QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
          "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report,
          "engineering_exceptions": run_engineering_exceptions, "bookkeeper_check": run_bookkeeper_check}
@@ -158,7 +196,11 @@ QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_sca
 # The Bookkeeper's Watch (daily) and rules digest (weekly): their own cadence, not controlled jobs (CONTROLS has the
 # six a person switches). The Bookkeeper's pause is their off switch.
 FIXED = {"bookkeeper_watch": (run_bookkeeper_watch, timedelta(days=1)),
-         "bookkeeper_rules_digest": (run_bookkeeper_rules_digest, timedelta(days=7))}
+         "bookkeeper_rules_digest": (run_bookkeeper_rules_digest, timedelta(days=7)),
+         "thread_followups": (run_thread_followups, timedelta(minutes=15)),
+         "thread_digest": (run_thread_digest, timedelta(hours=1)),
+         "thread_bot_digest": (run_thread_bot_digest, timedelta(hours=1)),
+         "thread_retention": (run_thread_retention, timedelta(minutes=15))}
 
 
 def run_now(store, auth, key, actor):
@@ -196,10 +238,12 @@ def run_now(store, auth, key, actor):
 class Scheduler:
     def __init__(self, store, execution):
         self.store, self.execution = store, execution
+        self.listening_since = H.now()  # when this server began listening; a computer is not silent before it
         self.swept = None
         self.stranded = None
         self.asks_checked = None
         self.stall_checked = None
+        self.stall_marks_checked = None
         self.goals_checked = None
         self.go_lives_checked = None
         self.gateway_checked = None
@@ -305,6 +349,15 @@ class Scheduler:
         def company_turns_tick(c):
             from . import org_turns
             org_turns.observe(c, self.store.settings, detailed=False)
+        # Stall marks and the server's run cap first, in their own short write, every minute: a slow step below must
+        # not keep a silent run unmarked, and a run past its limit lapses here, before plain expiry looks at it.
+        if self.stall_marks_checked is None or at - self.stall_marks_checked >= timedelta(minutes=1):
+            self.stall_marks_checked = at
+            with SR.recording(self.store, "stall_marks", failures) as run:
+                with locked("stall_marks") as c:
+                    from . import run_diagnostics
+                    run_diagnostics.sweep(c, stamp(at), listening_since=self.listening_since)
+                run.did("Checked", quiet=True)
         # The turn fixer first: a start it proves dead is freed with a note on its task before plain expiry takes it.
         # Fleet classification for the Health finding runs on a read connection between two short writes, so claim
         # renewals and events are not parked behind every queued bot's refusal check (TK / #1654 residual).
@@ -467,6 +520,18 @@ class Scheduler:
                 threading.Thread(target=updates.write_draft, args=(self.store, sent, writer, settings.assistant_bot),
                                  name="update-draft", daemon=True).start()
             run.did("1 asked" if sent else "Nobody due", quiet=not sent)
+        # The Company page's editions that came due (backend/company_page/schedule.py); the model call is off this loop.
+        try:
+            from .company_page import schedule as company_page_schedule
+            company_page_schedule.start(self.store, at)
+        except Exception as exc:
+            failures.append({"company_page": type(exc).__name__})
+        # Reader notices a restart or the issuer's limit left waiting; the mail goes on a thread of its own.
+        try:
+            from .company_page import readers as company_page_readers
+            company_page_readers.tick(self.store)
+        except Exception as exc:
+            failures.append({"company_page_readers": type(exc).__name__})
         # The nightly learning run (backend/learnings.py): one row per night claims it; the work runs
         # in a background thread, so the decision model's calls never hold the write lock.
         try:
@@ -575,6 +640,18 @@ class Scheduler:
                 if mark is None or at - mark >= every:
                     self.marks[key] = at
                     run(self.store, self.execution.auth, at, failures)
+        # Thread messages waiting to be routed: on their own thread, since a tick never waits on the decision model.
+        try:
+            from . import thread_routing
+            thread_routing.kick(self.store)
+        except Exception as exc:
+            failures.append({"thread_routing": type(exc).__name__})
+        # Bot wakes the loop guard held: they go by themselves as their root's rolling hour reopens. Plain SQL, no model.
+        try:
+            from . import threads
+            threads.reopen_due(self.store)
+        except Exception as exc:
+            failures.append({"thread_loop_guard": type(exc).__name__})
         # Production invariants every 15 minutes (backend/invariants.py): plain SQL, no model.
         if self.invariants_checked is None or at - self.invariants_checked >= timedelta(minutes=15):
             self.invariants_checked = at
@@ -666,9 +743,6 @@ class Scheduler:
             # Every minute: bot tasks nothing is going to move (H.wake_stalled).
             self.stall_checked = at
             with SR.recording(self.store, "stall_checks") as run:
-                with self.store.transaction() as c:
-                    from . import run_diagnostics
-                    run_diagnostics.sweep(c, stamp(at))
                 # Holds include person and approval waits that deliberately
                 # never enter the stall candidate list. Reconcile them independently,
                 # with one short transaction per task so runner writes can progress.

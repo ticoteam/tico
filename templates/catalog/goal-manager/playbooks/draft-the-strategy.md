@@ -6,6 +6,8 @@ recognise, so that every bot reads the same summary on every run and the goals h
 propose; they write, confirm and publish. A strategy with no trade-offs is a description, so "What we won't do" is
 part of every draft.
 
+Inputs: `hub strategy show` and `hub strategy versions`, the market pages (`hub market show company/self`, `hub doc search --market`), `knowledge/company.md`, the goals and KPIs, and the owner's words in the task.
+
 The outcome is one `strategy_draft` proposal the owner can confirm and publish after twenty minutes of their time:
 a summary of at most 400 characters, the vision (at most 400), the four sections filled or marked unknown, and three
 to five bets, each with a statement, why, what it rules out and what would prove it wrong. Nothing else counts as
@@ -136,7 +138,7 @@ The payload is partial: send only the fields you have something for.
                "wrong_if": {"kind": "kpi", "kpi_id": "...", "direction": "above", "threshold": 4, "check_by": "2027-03-31"},
                "cites": ["..."], "status": "active"}]}
 
-A bet already on the page carries its `id`. A bet may list the growth ideas it serves as `"ideas": ["<idea task id>"]`; confirming links them. Look at `hub proposal list` first: one pending `strategy_draft` from a
+A bet already on the page carries its `id`. Look at `hub proposal list` first: one pending `strategy_draft` from a
 drafting run at a time; replace yours rather than file a second beside it. Confirming writes the draft and the bets
 as the owner; nothing is published.
 
@@ -148,6 +150,8 @@ rules-out and a wrong-if, and something under "What we won't do"; the page refus
 Rewrite `state.md` (what the draft rests on, which claims were kept, edited or struck, what is still open), record
 a durable lesson about this team's words or sources in `knowledge/`, and commit this repository. From a task,
 finish it with `hub task update <id> --status done --note "<the message above>"`.
+
+**Done when:** one `strategy_draft` proposal is pending (or it replaced an older one), every bet has a rules-out and a wrong-if or is left `proposed` with the gap named, the owner's message with its ask is the task note, and `state.md` says what the draft rests on.
 
 ## After the owner publishes
 

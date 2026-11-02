@@ -9,7 +9,7 @@ with `--harness openclaw`.
 
 **Tested with** OpenClaw 2026.10.3 (stable, October 2026) on macOS with Node 24 and a local model
 (`qwen3.5:9b` through Ollama 0.40.3), and earlier with 2026.10.1, 2026.9.9 and 2026.3.13 (scripted stand-in model).
-With the real model, a scheduled `tico-sync` run answered a person's message in its chat and finished an assigned
+With the real model, a scheduled `tico-sync` run answered a person's message in its thread and finished an assigned
 task with a useful result note; pairing, `doctor`, Gateway restart, changing the interval and `uninstall` worked too.
 A smaller model (`qwen3:8b`) could not follow the skill: it dropped `call` from the connector command and stopped.
 An idle run, with nothing waiting, took about a minute and some 47,000 tokens (mostly OpenClaw's own prompt) on the
@@ -59,7 +59,7 @@ You need:
    problem, with the command that signs it in. An OpenClaw whose check `doctor` cannot read gets a `NOTE` that the
    model was not checked, and the last line says so instead of `Everything needed is working.`. `doctor` also
    reports a sync run that failed, with OpenClaw's error.
-4. **Test it.** Message the bot in Tico. It answers in the same chat at its next sync run, up to the sync interval
+4. **Test it.** Message the bot in Tico. It answers in the same thread at its next sync run, up to the sync interval
    later (an hour by default). To see it now, run the job once:
    `openclaw --profile <name> cron run <job id> --wait` (the id is in `openclaw --profile <name> cron list`).
 
@@ -102,7 +102,7 @@ waits up to one interval for its answer.
 - **Change it:** `python3 ~/.config/tico/agents/hermes_agent.py reinstall --harness openclaw --profile <name> --sync 30m`.
   This replaces the one `tico-sync` job and leaves your other jobs alone.
 - **What each run does:** the same skill as Hermes ([what it does](hermes-agents.md#keep-it-in-sync)): read
-  what is waiting, answer each person in their conversation, move its tasks (to done with a result note; the
+  what is waiting, answer each person in their thread, move its tasks (to done with a result note; the
   requester closes them), mark the messages read, stop. Once a week it runs the `update` command in
   `hermes_agent.py`.
 - **Check it:** `python3 hermes_agent.py doctor --harness openclaw --profile <name>` says whether the job

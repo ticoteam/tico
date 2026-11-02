@@ -208,7 +208,7 @@ def test_a_task_still_in_a_chat_room_never_shows_that_chats_run(api):
     secret = claim(api, machine)
     post(api, f"attempts/{secret['id']}/started", {"thread_id": "chat"}, machine["token"])
     events(api, machine, secret["id"], [("message", {"text": "With your 123k salary save 2k a month", "final": False})])
-    get(api, f"conversations/{chat['conversation_id']}/snapshot", "ben-test", expected=403)
+    get(api, f"conversations/{chat['conversation_id']}/snapshot", "ben-test", expected=404)
     for token in ("ana-test", "ben-test"):
         assert get(api, f"tasks/{tid}", token)["execution"] is None, "the chat's run is not the task's"
 

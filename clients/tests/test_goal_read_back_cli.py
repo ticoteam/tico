@@ -127,3 +127,17 @@ def test_save_requires_created_goal_before_substitution(api, extra):
         hubtools.goal_save(api, {'method': 'POST', 'path': '/api/v2/goals/{new}/why',
                                 'body_json': '{}', 'on_behalf_of': 'turn', **extra})
     assert not api.calls
+
+
+def test_a_turned_down_suggestion_saves_through_the_same_cited_save(api):
+    body = '{"kind":"goal_kpi","goal_id":"g","payload":{"kpi":{"name":"Companies that tried Tico"}},"reason":"A number."}'
+    cli = ['goal', 'save', 'POST', '/api/v2/goal-proposals/turned-down', body, '--on-behalf-of', 'turn']
+    result = remotecli.run(hubcli.parser().parse_args(cli))
+    assert result == hubtools.goal_save(api, {'method': 'POST', 'path': '/api/v2/goal-proposals/turned-down',
+                                            'body_json': body, 'on_behalf_of': 'turn',
+                                            'operation_id': 'synthetic-operation'})
+    assert api.calls[0] == api.calls[1] == ('POST', 'goal-proposals/turned-down', json.loads(body),
+                                            'synthetic-operation', 'turn')
+    with pytest.raises(ValueError):
+        hubtools.goal_save(api, {'method': 'POST', 'path': '/api/v2/goal-proposals/x/turned-down',
+                                 'body_json': body, 'on_behalf_of': 'turn'})

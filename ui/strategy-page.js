@@ -1,5 +1,5 @@
 /* Strategy: how the team means to win (backend/strategy.py, docs/strategy.md#the-page). One line on top (the summary),
-   then Where we play beside the bets, the competitors beside related news, then four fixed sections and any the owner
+   then Where we play beside the bets, the competitors beside related news, then five fixed sections and any the owner
    adds. The owner edits the draft in place and publishes numbered versions with a note; everyone else reads the latest
    published version. Where we play and Competitors are the market graph's own rows (backend/strategy_market.py), and
    Related news is what Listening found. Lenses (ui/lenses-page.js) and Market (ui/market-page.js) are the section's
@@ -12,11 +12,12 @@ let STRAT_MKT = {};
 const isStrategyRoute = r => r === '#/strategy' || r.startsWith('#/strategy?');
 const STRAT_STATUS = {proposed: 'Proposed', active: 'Active', retired: 'Retired'};
 const STRAT_MAX_ACTIVE = 7;
-// The four sections every strategy has, in this order. The placeholder is the question; nothing else is shown.
+// The five sections every strategy has, in this order. The placeholder is the question; nothing else is shown.
 const STRAT_SECTIONS = [
   {key: 'serve', title: 'Who we serve', prompt: 'The customer, what they use today, and the one you turned down'},
   {key: 'sell', title: 'What we sell, and for how much', prompt: 'The product, the price, and the price that would break if doubled or halved'},
   {key: 'know', title: "What we know that others don't", prompt: 'What the team understands that the obvious competitors miss'},
+  {key: 'how', title: 'How we sell', prompt: 'How customers find us, who does the selling, and what closes a sale'},
   {key: 'not', title: "What we won't do", prompt: 'The trade-offs: what the team refuses'},
 ];
 const STRAT_WRONG_KINDS = {kpi: 'KPI', thesis: 'Market', text: 'Sentence'};
@@ -295,8 +296,7 @@ function strategyRetiredHtml(view) {
 
 // ---------------------------------------------------------------- Where we play
 // The market's segments by spend (GET /v2/market/spend), a sized segment inside its sized parent, the rest as plain
-// tiles. Us is filled, Next outlined; a click moves a segment Us, then Next, then neither. Several may be Us or Next, as
-// Growth's Serving and Next segments are (the server keeps both in step).
+// tiles. Us is filled, Next outlined; a click moves a segment Us, then Next, then neither. Several may be Us or Next.
 function strategyAddRowHtml(kind, placeholder) {
   return `<form class="strat-addrow" data-add="${kind}" novalidate><input type="text" name="name" maxlength="${kind === 'rival' ? 300 : 120}" autocomplete="off" placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}">
       <button type="submit" class="strat-add">Add</button></form>`;
@@ -382,10 +382,8 @@ async function strategyMarketRead(key, load, fresh = false) {
     if (key === 'spend') value = await get('/v2/market/spend', opts);
     else if (key === 'rivals') value = (await get('/v2/market/competitors', opts))?.competitors || [];
     else if (key === 'growth') {
-      // The Brand strip and the Go-to-market card (ui/app/brand-page.js, gtm-page.js).
-      const [brand, gtm, ch, src, k] = await Promise.all([get('/v2/brand', opts).catch(() => null), get('/v2/gtm', opts).catch(() => null),
-        get('/v2/growth/channels', opts).catch(() => null), get('/v2/growth/sources', opts).catch(() => null), get('/v2/growth/kpis', opts).catch(() => null)]);
-      value = {brand, gtm, channels: ch?.channels || [], sources: src?.sources || [], kpis: k?.kpis || []};
+      // The Brand strip (ui/app/brand-page.js).
+      value = {brand: await get('/v2/brand', opts).catch(() => null)};
     }
     else {
       const since = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 19);
@@ -403,9 +401,8 @@ function strategyPaintMarket(key) {
   const owner = strategyView(STRAT.data).owner;
   if (key === 'growth') {
     const g = STRAT_MKT.growth;
-    if ($('#strat-setup')) patchHTML($('#strat-setup'), g ? brandSetupHtml(g.brand) + gtmSetupHtml(g.gtm, g) : '');
+    if ($('#strat-setup')) patchHTML($('#strat-setup'), g ? brandSetupHtml(g.brand) : '');
     if ($('#strat-brand')) patchHTML($('#strat-brand'), g ? brandStripHtml(g.brand) : '');
-    if ($('#strat-gtm')) patchHTML($('#strat-gtm'), g ? gtmCardHtml(g.gtm, g) : '');
     return;
   }
   const box = {spend: '#strat-where', rivals: '#strat-rivals', news: '#strat-news'}[key];
@@ -415,7 +412,7 @@ function strategyPaintMarket(key) {
 }
 
 // ---------------------------------------------------------------- the sections
-// The four fixed sections, then the extra ones in the order they were added. The owner writes each, one at a time;
+// The five fixed sections, then the extra ones in the order they were added. The owner writes each, one at a time;
 // an extra one can be renamed or removed, and nothing else ever drops it.
 function strategySectionList(version) {
   const s = version?.sections || {};
@@ -456,7 +453,7 @@ const STRAT_FRAME = `<div id="strat-pub"></div>
     <div class="strat-row"><section class="card strat-card strat-where" id="strat-where"></section><section class="card strat-card strat-bets-card" id="strat-sec-bets" aria-labelledby="strat-bets-h"></section></div>
     <div class="strat-setup" id="strat-setup"></div>
     <div class="strat-brand" id="strat-brand"></div>
-    <div class="strat-row strat-gtm-row"><div class="strat-gtm" id="strat-gtm"></div><div class="strat-col"><section class="card strat-card" id="strat-rivals"></section><section class="card strat-card" id="strat-news"></section></div></div>
+    <div class="strat-row"><section class="card strat-card" id="strat-rivals"></section><section class="card strat-card" id="strat-news"></section></div>
     <div class="strat-secs" id="strat-secs"></div>
     <div class="strat-add-sec" id="strat-add-sec"></div>
   </div>`;

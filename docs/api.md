@@ -38,6 +38,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Changelog | Shipped Tico releases, product announcements and the signed-in person's read state ([guide](updates.md)). |
 | Needs you | What is waiting on the signed-in person: questions, tasks, approvals. |
 | Meetings | Recorded meetings. |
+| Calls | Tico Meet calls ([guide](meet.md)): audio and screen share in a thread, a live transcript posted to it when it ends, and bots that listen. Joining hands back a token for audio and screen share only, never a camera. |
 | Files | What a bot creates, revises or delivers, listed on its page ([guide](files.md)). |
 | Pages | HTML pages bots publish and keep current ([guide](pages.md)): a file with a cadence, a data date and a status line. |
 | Docs | The team's docs ([guide](docs.md)): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them. |
@@ -56,6 +57,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Strategy | The team's strategy: a draft the owner edits, numbered published versions, and the bets goals serve. |
 | Inbound | Shared company inbound email and SMS for people and agents; reads never consume messages. |
 | Triggers | Webhook triggers: an address any sender can post to, how its calls are verified, kept and run again. |
+| Connections | Every connection in one list: who reads what it brings in, its bots and where to configure it. |
 | Webhook relay | Addresses for triggers through Tico Gateway: they keep deliveries while this server is off (backend/hook_relay.py). |
 | Sleep when idle | A server Tico hosts stops after quiet hours and starts again on a webhook, a routine or a sign-in (backend/sleep_idle.py). |
 | Screening | Prompt-injection screening of outside text at the doors it comes in by (backend/screening.py). |
@@ -63,7 +65,11 @@ The operation groups below are generated from the committed spec's tags. After r
 | Webhooks | Outgoing webhooks: endpoints a person owns, the events Tico sends them, and each send's log ([guide](webhooks.md)). |
 | Cards and pins | Tico's built-in cards and where pages and cards are pinned: the Dashboard, team pages, bot sidebars and tasks ([guide](overview.md)). A card shows each reader only what they may see. |
 | Model subscriptions | The company's saved model logins and keys, given to computers per runtime. A value is sent only to add or reconnect one; no answer carries it. |
+| Slack links | A thread's link to a Slack channel, both ways ([guide](slack.md)): asked for by an admin, checked by the gateway, then active, suspended or refused. Admins only. |
 | Memory tidy | Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks. |
+| Federation | Shared threads between Tico installs through Tico HQ: this install's key, peerings (both installs approve, and a pause stops one) and the threads it shares ([guide](federation.md)). |
+| Threads | Threads: the sidebar, a thread and its timeline, read marks, search, members, follow, and the messages in a thread. A thread the viewer may not read answers 404, never 403. |
+| Company page | The public page for the company's updates: its audiences, the editions each one reads, the stats the page shows, the readers who sign in to it, and the logo ([guide](company-page.md)). |
 <!-- api-tags:end -->
 
 Internal developer tutorials: [Listening](listening.md#save-decide-and-resolve) and [Needs you batches](needs-you-batches.md).
@@ -179,7 +185,7 @@ the task's comments as the task lists them. Neither wakes anyone or sends anythi
 
 - `404 not_found`: the comment is not on this task, or was already deleted.
 - `403`: the caller did not write it, or is acting for its author (BotOps, or the Assistant, which gets
-  `confirm_required`); or the message is a question, an answer, a notice or a chat line in a bot's room
+  `confirm_required`); or the message is a question, an answer, a notice or a message in a bot's thread
   rather than a comment.
 - An edit's text gets the checks a new comment's text gets (`422` when empty; a path it names is kept as
   written), and an edit needs what a new comment needs: Write on the bot on the other
@@ -225,6 +231,13 @@ New tasks and canonical chats to an original route to the caller's active branch
 Stored keys, room-mode `shared`, independent copy routes and older runner payloads keep their meanings.
 
 Public roadmap publication, requesters and anonymous endpoints are described in [Public roadmaps](roadmaps.md).
+
+## Threads
+
+Threads have their own routes under `/api/v2/threads`: list and search, create, read, timeline, post, members,
+follow and read marks, with `PATCH` and `DELETE` on `/api/v2/messages/{id}` for edits and deletes. Lists are paged by
+`cursor` and `limit` and capped in bytes. The audiences, the rules for who may read what, and the CLI and MCP tools are
+in [Threads](threads.md).
 
 ## Incoming webhooks
 
@@ -287,6 +300,13 @@ creates a free inbound address under the company quota, with an `Idempotency-Key
 `used_for` remains a local dependency note and is preserved when omitted or when HQ syncs a name change.
 Updating only dependency notes works even while HQ is unavailable.
 Phone edits and releases are owner/admin actions. Releasing an inbox with dependencies requires its exact address in `confirm`.
+
+Each inbox has an audience. `company`, the default, is everyone above. An owner or admin narrows it with
+`PUT inboxes/{id}/audience` and `{audience:"team",group_id}`: then only the people and bots in that group and the groups
+under it read it, with the owner and admins. Outside its audience an inbox is not there on any read: the inbox list,
+`messages` (search included), `cursor`, `wait`, a message and its code (`404`). Each change leaves an `audit_log` row
+(`inbound_inbox:<id>`) and an `inbound.inbox_audience` event. CLI: `hub inbound audience <id> company|team --group G`;
+MCP: `hub_inbound_audience`. Settings > More > Email & Phone shows who reads each inbox, and an admin changes it there.
 Phone cancellation keeps receiving until the paid period ends; email retirement is permanent.
 
 Phone provisioning requires TICO approval until billing is available. Owners and admins can

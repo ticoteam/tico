@@ -7,13 +7,13 @@ reads: []                        # other bot repositories this one may clone rea
 reasoning_effort: medium
 max_run_minutes: 60
 
-# It sends nothing outside the team itself; an invoice reminder goes through Finance's own send.
+# It sends nothing outside the team: an overdue-invoice reminder is a draft on its task for a person to send.
 outbound_send: false
 
 # Its work comes two ways. Events that want an answer on the day are routines below, one task per event. Everything
 # that arrives in volume (rows to categorize, receipts, emailed bills) or is a standing state (reconciling) comes from
 # the server's hourly Books check (backend/bookkeeper.py): plain code reads its Finance work queue and opens a task only
-# when the queue has something new, so a quiet month wakes no model. The monthly report is real work every month. The
+# when the queue has something new, so a quiet month wakes no model. The monthly report is real work every month.
 # The server's daily Books watch and weekly rules digest are checks of the same kind: a task only when one finds
 # something new (playbooks/books-watch.md, playbooks/rules-digest.md).
 # server seeds these once, when the Bookkeeper is built in; from then on Tico's rows are the routines

@@ -37,13 +37,17 @@ class DocLine:
     description: str = ""
     tags: Mapping[str, str] = field(default_factory=lambda: cast(dict[str, str], {}))
     taxable: bool | None = None         # an invoice line only: whether sales tax applies to it (None: not said)
+    item_id: str = ""                   # the shared item the line sells or buys, if any (backend/records)
+    po_line_id: str = ""                # a bill line only: the purchase order line this bill line bills
 
 
 def doc_lines(raw: object, *, invoice: bool = False) -> list[DocLine]:
     """A bill's or invoice's lines: each a positive amount with an account (a bill's may leave it out for the vendor's
-    default or a posting rule to fill), a description and tags. An invoice line may also say whether it is taxable."""
+    default or a posting rule to fill), a description and tags. An invoice line may also say whether it is taxable,
+    and a bill line may name the purchase order line it bills."""
     out: list[DocLine] = []
-    allowed = ("account_id", "amount", "description", "tags", *(("taxable",) if invoice else ()))
+    allowed = ("account_id", "item_id", "amount", "description", "tags",
+               *(("taxable",) if invoice else ("po_line_id",)))
     for item in V.items(raw, "lines", L.MAX_LINES):
         q = V.obj(item, "a line")
         V.only(q, allowed)
@@ -52,7 +56,8 @@ def doc_lines(raw: object, *, invoice: bool = False) -> list[DocLine]:
             raise invalid("a document line's amount is more than 0")
         taxable = V.flag(q, "taxable") if "taxable" in q else None
         out.append(DocLine(V.opt_text(q, "account_id", 80) or "", amount, V.opt_text(q, "description") or "",
-                           L.tags(q.get("tags")), taxable))
+                           L.tags(q.get("tags")), taxable, V.opt_text(q, "item_id", 80) or "",
+                           V.opt_text(q, "po_line_id", 80) or ""))
     return out
 
 

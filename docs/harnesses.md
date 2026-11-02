@@ -295,11 +295,14 @@ The remaining provider catalogs are preserved by this update; their next refresh
 
 Installs go into the runner's **tools directory**, never system-wide: `TICO_TOOLS_DIR`, else `tools_dir` in the
 registration, else `tools/` beside `runner.json`. In the Docker image that is `/home/runner/tools`, inside the runner
-volume, so harnesses survive a restart or a new image. The directory is put last on `PATH`.
+volume, so harnesses survive a restart or a new image. The directory is put last on `PATH`, except on a cloud machine.
 
 - **Mac**: a harness already on `PATH` (Homebrew, `npm -g`) is used as it is. The runner installs into its tools
   directory only when the harness is missing, and never updates one it did not install. Installing needs `node` and
   `npm` on the Mac.
+- **Cloud machine**: Tico owns the disk, so a copy on `PATH` is not left alone. A harness a bot wants gets the runner's
+  own install, which then wins and updates as usual; the tools directory goes first on `PATH`. See
+  [Cloud machines](cloud-machines.md#whats-on-a-machine).
 - **Linux (Docker)**: the image has node, npm, python, pip, git, gh, build tools, ripgrep, jq and curl, and no model
   CLI. It also has the system libraries Chromium needs, so a browser a bot installs (`npx playwright install
   chromium`) starts. When a Playwright Chromium is on a computer, the runner starts it headless every 15 minutes;
@@ -338,7 +341,7 @@ Only an install that failed (no `npm` on a Mac, say) blocks the move, with the r
 
 ## Updating and pinning
 
-Every day the runner asks each harness it installed (and has not been turned off) for the newest release. With the default policy (`latest`) it
+Every day, and at every start on a cloud machine, the runner asks each harness it installed (and has not been turned off) for the newest release. With the default policy (`latest`) it
 installs the new version **between runs**: the copy is downloaded and checked beside the old one while runs are in progress,
 and switched in only at a moment no run in progress uses that harness (a run on another harness does not hold it
 back). A failed install keeps the working version and is retried after 30 minutes.
@@ -406,6 +409,9 @@ A harness is a manifest plus a host adapter.
    seed = []                    # of files, those copied into the side folder first (settings the CLI keeps with the login)
    keychain = []                # platforms (as the runner names them, e.g. "darwin") where the CLI keeps the login in
                                 # the system keychain instead: no Switch account there (`switch_unavailable_on`)
+   connect = ["login", "--device-auth"]  # optional: signs a plan in for a company subscription (Connect in Settings > Models)
+   connect_file = "auth.json"   # its result: this one of files, in a home of its own; or connect_token = "<prefix>",
+                                # a token it prints starting with that (and a kind in backend/model_subscriptions.py)
 
    [capabilities]               # what Tico does differently for this CLI; see Capabilities below
    terminal_login = ["login"]
@@ -429,7 +435,7 @@ is a bug in its host, not a reason to compare names.
 
 Sign-in facts come from the tables that already hold them: `[login]` present means the browser relay (Settings >
 Computers), `paste_code` means it takes a pasted code, `logout` means Sign out and Switch account (`sign_out` in
-`harnesses[].capabilities`), `auth.api_key_env` names the keys. A login's `files` are paths inside its home (the
+`harnesses[].capabilities`), `connect` means Connect in Settings > Models (`subscription_connect`), `auth.api_key_env` names the keys. A login's `files` are paths inside its home (the
 `profile_home` variable's folder, or `HOME`), never absolute, never with `..` or an empty part; `seed` names only
 some of `files`, and `logout` needs `files`. `keychain` lists the platforms where Switch account is not offered
 (`switch_unavailable_on` in `harnesses[].capabilities`; Claude Code on a Mac).
@@ -455,7 +461,7 @@ another bot's home; all turns use the original login in its own home.
 | `tool_events` | The host emits one `tool` event per tool call, so a run with none provably did nothing | No evidence either way |
 | `mcp_transports` / `mcp_unsupported` | The MCP transports a run takes; the reason shown when it takes none | No MCP servers, "it has no MCP support in Tico" |
 | `resume_after_interrupt` | An interrupted thread can be continued | `true`. No longer read: an interrupted session is always kept and resumed ([sessions](sessions.md#checkpoints-and-resume)) |
-| `steer` | A message sent while a turn runs is written into that turn (Claude Code, Codex and pi; Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; chat says so and offers Stop and redirect |
+| `steer` | A message sent while a turn runs is written into that turn (Claude Code, Codex and pi; Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; DM says so and offers Stop and redirect |
 | `persistent_session` | One process per conversation is kept between turns (pi, Antigravity) | One process per turn |
 | `goal_runs_across_turns` | A native goal keeps the thread going after a turn completes, and a clear is reconciled | A goal ends with its turn |
 | `serial_cold_start` | An expired stored token is refreshed by the first turn; the others wait for it | Turns start together |

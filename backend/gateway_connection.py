@@ -511,6 +511,12 @@ def _identity(record):
     return bool(record.get("install") and record.get("install_secret"))
 
 
+def install_id(c):
+    """The install's Gateway id (`gi_...`), or '' before its first sign-up. It names the install on Tico HQ, in
+    federation envelopes and in every actor it sends out (backend/federation*.py)."""
+    return str(_row(c).get("install") or "")
+
+
 def maintained(c, settings=None):
     """Whether the install looks after its own Gateway key: it has an invite to sign up with, a Tico company link that
     gives it one, or the identity a first sign-up gave it (which keeps rotating and enrolling again by its secret with
