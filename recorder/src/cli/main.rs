@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 mod acceptance;
+mod privacy_replay;
 
 #[derive(Parser)]
 #[command(
@@ -15,6 +16,13 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    #[command(hide = true)]
+    PrivacyReplayTest {
+        #[arg(long)]
+        tico_url: String,
+        #[arg(long)]
+        scenario: String,
+    },
     Devices,
     Inspect {
         file: std::path::PathBuf,
@@ -293,6 +301,9 @@ fn main() -> Result<()> {
                             serde_json::json!({"voices":voices.as_ref().ok(),"speaker_error":voices.as_ref().err()})
                         )
                     );
+                }
+                Command::PrivacyReplayTest { tico_url, scenario } => {
+                    privacy_replay::run(&store, &tico_url, &scenario)?
                 }
                 Command::ReplayTest {
                     tico_url,

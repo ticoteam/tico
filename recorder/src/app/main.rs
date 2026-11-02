@@ -65,6 +65,7 @@ commands! {
     stop_recording() => |app| app.stop();
     rename(title: String) => |app| app.rename(&title);
     finish_live() => |app| app.finish_live();
+    control_live(action: String) => |app| app.control_live(&action);
     edit_shared_line(id: String, seq: i64, text: String) => |app| app.edit_shared_line(&id, seq, Some(&text));
     remove_shared_line(id: String, seq: i64) => |app| app.edit_shared_line(&id, seq, None);
     retry(id: String) => |app| app.retry(&id);
@@ -73,7 +74,7 @@ commands! {
     edit_item(id: String, title: String) => |app| app.edit_item(&id, &title);
     set_owner(id: String, owner: String) => |app| app.set_owner(&id, &owner);
     remove_item(id: String) => |app| app.remove_item(&id);
-    send_item(id: String, owner: String) => |app| app.send_item(&id, &owner);
+    send_item(id: String, owner: String, paused_confirmed: Option<bool>) => |app| if paused_confirmed.unwrap_or(false) { app.send_item_confirmed(&id, &owner, true) } else { app.send_item(&id, &owner) };
     choose_org(id: String) => |app| app.choose_org(&id);
     change_org() => |app| app.change_org();
     load_roster() => |app| app.load_roster();
@@ -86,7 +87,7 @@ commands! {
     ask(question: String) => |app| app.ask(&question);
     chat_send(text: String) => |app| app.chat_send(&text);
     set_chat_private(private: bool) => |app| app.set_chat_private(private);
-    send_meeting(id: String, destination: String) => |app| app.send_meeting(&id, &destination);
+    send_meeting(id: String, destination: String, paused_confirmed: Option<bool>) => |app| app.send_meeting_confirmed(&id, &destination, paused_confirmed.unwrap_or(false));
     delete_recording(id: String) => |app| app.delete(&id);
     save_settings(form: SettingsForm) => |app| app.save_settings(form);
     set_audio(microphone: String, meeting: bool) => |app| app.set_audio(&microphone, meeting);
@@ -236,6 +237,7 @@ fn main() {
             stop_recording,
             rename,
             finish_live,
+            control_live,
             edit_shared_line,
             remove_shared_line,
             retry,
