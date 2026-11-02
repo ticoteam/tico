@@ -537,8 +537,6 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         if other is not None:
             transfer(ctx, row, money, other)
         return                      # one side of a move between our accounts: it posts when the other side arrives
-    if card is None and t.kind not in F.CARD_KINDS and not t.request_id and _card_payment(ctx, row, money):
-        return
     if program and card is not None:
         # A charge or refund on a card Tico issued posts against the card liability: to the line a posting rule picks,
         # else the card's budget line, tagged with its holder either way.
@@ -605,6 +603,10 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         if refunds.settle(ctx, row, money, t, None):
             return
     if posting_rules.post_feed(ctx, row, money, t, gl.id):
+        return
+    # Nothing above decided it (a rule, a bill, a top-up...): it may be one side of a card payment (_card_payment). Here,
+    # after those, so the bank side gets the same decision whichever side comes first.
+    if card is None and t.kind not in F.CARD_KINDS and not t.request_id and _card_payment(ctx, row, money):
         return
     if t.amount < 0:
         spend = by_code(ctx, OTHER)
@@ -946,8 +948,8 @@ def _counterpart(ctx: Ctx, row: Any, money: Any) -> Any:
 def _card_payment(ctx: Ctx, row: Any, money: Any) -> bool:
     """A payment from a bank account to a credit card program of the same connection (Mercury IO's autopay: a plain
     row on each side, no transfer kind) posts as a transfer: Dr the card liability, Cr the bank. Whichever side comes
-    second pairs them; a bank side already posted to Other expenses (still waiting for a category) is taken back.
-    No pair, or several, and the row posts as any other."""
+    second pairs them; a bank side already posted to Other expenses (still waiting for a category) is taken back, one
+    a rule or match posted elsewhere is not. No pair, or several, and the row posts as any other."""
     kind, amount = str(money["kind"]), int(row["amount"])
     if kind == "card_program" and str(money["subtype"]) == "credit" and amount > 0:
         want = "bank"

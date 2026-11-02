@@ -436,6 +436,30 @@ def test_a_bank_payment_to_the_io_card_program_is_a_transfer_whichever_side_come
         assert _row(c, "amb-in")[1] is None and _row(c, "amb-a")[1] != _row(c, "amb-b")[1]
 
 
+def test_a_bank_row_a_posting_rule_covers_never_pairs_with_the_io_card_program(books):
+    """A rule that posts a bank debit to an expense line decides it whichever side comes first: a same-amount credit
+    on the IO card program never takes it as the card's payment, and stays waiting."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        rule = {"kind": "posting", "name": "Rent", "when": {"counterparty": "Acme Rent"},
+                "outcome": {"outcome": "post", "account_id": account(c, "6100")},
+                "examples": [{"input": {"counterparty": "Acme Rent"}, "expect": "post"}]}
+        assert act(c, OWNER, "rule_create", rule).status == "committed"
+    fake.txns["rent-1"] = _txn("rent-1", "acct-chk", -60.0, "other", day="2026-10-01", counterpartyName="Acme Rent")
+    sync_once(books, fake)                                                                       # bank side first
+    fake.txns["io-1"] = _txn("io-1", "credit-io", 60.0, "other", day="2026-10-01")
+    fake.txns["io-2"] = _txn("io-2", "credit-io", 70.0, "other", day="2026-10-03")              # card side first
+    fake.txns["rent-2"] = _txn("rent-2", "acct-chk", -70.0, "other", day="2026-10-03", counterpartyName="Acme Rent")
+    with books.transaction() as c:
+        c.execute("UPDATE fin_connections SET settings='{}', cursor=NULL")             # backfill again
+    sync_once(books, fake, LATER)
+    with books.read() as c:
+        for rent, io, cents in (("rent-1", "io-1", 6_000), ("rent-2", "io-2", 7_000)):
+            assert ("6100", cents) in _codes(c, _row(c, rent)[1])
+            assert tuple(_row(c, io)) == ("new", None)
+
+
 def test_a_settled_card_charge_uses_its_allocation_at_its_actual_amount(books):
     """P: a card charge first seen settled (a backfill, no authorization) still uses the card's allocation, and a
     refund gives it back."""
