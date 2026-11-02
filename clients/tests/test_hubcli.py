@@ -918,6 +918,8 @@ def test_the_retired_gtm_and_growth_idea_lines_run_their_new_commands_with_a_not
     assert ran[-1] == ["task", "update", "t1", "--step", "Won", "--note", "Result: CPA 31\nLearning: Video works"]
     assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "paused", "--result", "CPA 31 so far"]) == 0
     assert ran[-1] == ["task", "update", "t1", "--step", "Paused", "--note", "Result: CPA 31 so far"]
+    assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "paused"]) == 0
+    assert ran[-1] == ["task", "update", "t1", "--step", "Paused", "--note", "Test paused"]
 
 
 def test_strategy_show_section_how_prints_the_section_or_says_nothing_is_published(monkeypatch, capsys):

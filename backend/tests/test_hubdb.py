@@ -231,6 +231,19 @@ class GrowthRethink(unittest.TestCase):
         self.assertEqual(tuple(conn.execute("SELECT unit, revenue_month, margin_pct FROM growth_settings "
                                             "WHERE id=1").fetchone()), ("customers", 1000, 40))
 
+    def test_a_hypothesis_that_already_is_the_body_is_not_copied_into_it_again(self):
+        conn = self.before_rethink()
+        conn.execute("INSERT INTO task_types (id, name, created, updated) VALUES ('idea', 'Idea', 'x', 'x')")
+        conn.execute("INSERT INTO tasks (id, title, body, requester, owner, status, type_id, created, updated) "
+                     "VALUES ('t2', 'Try ads', 'Ads bring buyers', 'me', 'cmo', 'open', 'idea', 'x', 'x')")
+        conn.execute("INSERT INTO growth_ideas (task_id, hypothesis, prediction, result, learning, created_at, "
+                     "updated_at) VALUES ('t2', 'Ads bring buyers', '', '', 'Cheap wins', 'x', 'x')")
+
+        H.migrate(conn)
+
+        self.assertEqual(conn.execute("SELECT body FROM tasks WHERE id='t2'").fetchone()[0],
+                         "Ads bring buyers\n\nLearning: Cheap wins")
+
     def test_a_team_that_already_has_a_marketing_type_keeps_the_idea_type_under_its_old_name(self):
         conn = self.before_rethink()
         conn.execute("INSERT INTO task_types (id, name, created, updated) VALUES ('idea', 'Idea', 'x', 'x'), "

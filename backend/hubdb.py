@@ -1418,10 +1418,11 @@ def migrate_growth_rethink(conn):
                 "SELECT i.task_id, i.hypothesis, i.prediction, i.result, i.learning FROM growth_ideas i "
                 "JOIN tasks t ON t.id=i.task_id").fetchall():
             body = conn.execute("SELECT body FROM tasks WHERE id=?", (task_id,)).fetchone()[0] or ""
-            notes = [f"{label}: {str(text).strip()}" for label, text in (
+            # A text already in the body is not copied again: an idea filed with only a hypothesis had it as the body.
+            texts = [(label, str(text).strip()) for label, text in (
                 ("Hypothesis", hypothesis), ("Prediction", prediction), ("Result", result), ("Learning", learning))
                 if str(text or "").strip()]
-            missing = [note for note in notes if note not in body]
+            missing = [f"{label}: {text}" for label, text in texts if text not in body]
             if missing:
                 body = "\n\n".join(part for part in (body.strip(), "\n".join(missing)) if part)
                 conn.execute("UPDATE tasks SET body=? WHERE id=?", (body, task_id))

@@ -36,7 +36,15 @@ Each measurement a KPI tracks is a reading, with the period it describes:
 
     hub kpi log <kpi id> <value> --period-start <YYYY-MM-DD> --period-end <YYYY-MM-DD>
 
-Log only what you read today. To correct a reading, supersede it (`--supersedes <reading id>`); do not add a second one.
+Log only what you read today, and only for a KPI you own or one that a goal you own uses. For a KPI someone else owns,
+do not try to log it: name it and its owner in the closing line.
+
+To correct a reading, supersede it rather than adding a second one. The note says what the correction changes, and it
+is the third argument:
+
+    hub kpi log <kpi id> <value> "<what the correction changes>" --period-start <YYYY-MM-DD> --period-end <YYYY-MM-DD> --supersedes <reading id>
+
+A supersede needs a note or `--evidence`; without either, the reading is refused.
 
 ## 4. Read the numbers back
 

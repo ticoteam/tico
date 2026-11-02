@@ -851,6 +851,17 @@ def test_the_verdict_alias_on_a_live_server_pauses_an_idea_with_its_result_as_th
     assert (task["status"], task["step_id"], task["note"]) == ("waiting", "idea-paused", "Result: CPA 31 so far")
 
 
+def test_the_verdict_alias_on_a_live_server_pauses_an_idea_with_no_result_and_a_note_says_so(api, live, monkeypatch):
+    with api.app.state.store.transaction() as c:
+        tid = marketing_idea(c)
+    monkeypatch.setenv("HUB_API_URL", live)
+    monkeypatch.setenv("HUB_TOKEN", bot_token(api, "cmo"))
+    assert hubcli.main(["growth", "idea", "verdict", tid, "--status", "paused"]) == 0
+    with api.app.state.store.transaction() as c:
+        task = H.task(c, tid)
+    assert (task["status"], task["step_id"], task["note"]) == ("waiting", "idea-paused", "Test paused")
+
+
 def test_the_verdict_alias_on_a_live_server_finishes_an_idea_the_owner_bot_won(api, live, monkeypatch):
     with api.app.state.store.transaction() as c:
         tid = marketing_idea(c)

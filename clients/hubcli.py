@@ -3512,8 +3512,10 @@ def legacy_idea(argv):
         p.error("verdict needs the idea's task id")
     update = ["task", "update", old.id, "--step", old.status.capitalize()]
     found = "\n".join(f"{label}: {value}" for label, value in (("Result", old.result), ("Learning", old.learning)) if value)
+    if not found and old.status == "paused":
+        found = "Test paused"           # a pause needs a note; with no result or learning, the note says only that
     if found:
-        update += ["--note", found]     # a pause needs a note, and the verdict's words are the note of every outcome
+        update += ["--note", found]     # the verdict's words are the note of every outcome
     return ('"hub growth idea verdict" is now "hub task update --step --note"', [update + json_out])
 
 
