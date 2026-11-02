@@ -193,22 +193,19 @@ def bill_orders(c: sqlite3.Connection, bill_id: str) -> list[str]:
         "JOIN fin_purchase_orders p ON p.id=l.po_id WHERE bl.bill_id=? ORDER BY p.id", (bill_id,))]
 
 
-def linked_bills(c: sqlite3.Connection, po_id: str, *, limit: int) -> list[sqlite3.Row]:
+def linked_bills(c: sqlite3.Connection, po_id: str, *, hidden_accounts: Sequence[str], limit: int) -> list[sqlite3.Row]:
     """The bills linked to an order (`purchase_order_id`), of any vendor and status, oldest first, with the vendor's
-    name, at most `limit`. A link bills no line, so these are not in the order's billed total."""
+    name, at most `limit`, leaving out any bill with a line on one of hidden_accounts. A link bills no line, so these
+    are not in the order's billed total."""
+    hidden = ""
+    if hidden_accounts:
+        marks = ",".join("?" * len(hidden_accounts))
+        hidden = (" AND NOT EXISTS (SELECT 1 FROM fin_bill_lines x WHERE x.bill_id=b.id "
+                  f"AND x.account_id IN ({marks}))")
     return c.execute(
         "SELECT b.*, k.name AS contact_name FROM fin_bills b LEFT JOIN fin_contacts k ON k.id=b.vendor_id "
-        "WHERE b.purchase_order_id=? ORDER BY b.bill_date, b.id LIMIT ?", (po_id, limit)).fetchall()
-
-
-def bills_on_accounts(c: sqlite3.Connection, bill_ids: Sequence[str], account_ids: Sequence[str]) -> set[str]:
-    """The bills among bill_ids with a line on one of account_ids: the check a viewer's cut makes, answered by the ids
-    alone, with no line row read."""
-    if not bill_ids or not account_ids:
-        return set()
-    sql = (f"SELECT DISTINCT bill_id FROM fin_bill_lines WHERE bill_id IN ({','.join('?' * len(bill_ids))}) "
-           f"AND account_id IN ({','.join('?' * len(account_ids))})")
-    return {str(r[0]) for r in c.execute(sql, [*bill_ids, *account_ids])}
+        f"WHERE b.purchase_order_id=?{hidden} ORDER BY b.bill_date, b.id LIMIT ?",
+        (po_id, *hidden_accounts, limit)).fetchall()
 
 
 def claim_invoice(c: sqlite3.Connection, estimate_id: str, invoice_id: str, at: str) -> int:

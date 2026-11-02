@@ -708,6 +708,27 @@ def test_a_new_schedule_or_a_stop_closes_the_open_task_and_a_rename_does_not(boo
     assert open_tasks() == [], "a stopped due date asks for nothing"
 
 
+def test_a_new_interval_keeps_the_open_task_of_a_day_still_on_the_schedule(books):
+    def open_tasks():
+        return [t for t in _tasks(books, "human:eve") if t["status"] != "closed"]
+
+    with books.transaction() as c:
+        due = _due(c, "location", _location(c, "Acme Interval Store"), name="Interval check", assignee="human:eve",
+                   repeats="every_days", every=30)
+    _tick(books)
+    [task] = open_tasks()
+    with books.transaction() as c:
+        assert act(c, OWNER, "due_date_update", {"due_date_id": due, "every_count": 60}).status == "committed"
+    assert [t["id"] for t in open_tasks()] == [task["id"]], "the open day is still the next one, so the work stands"
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM due_date_occurrences WHERE due_date_id=? AND due_on=? AND task_id=? "
+                         "AND completed_at IS NULL", (due, DAY, task["id"])).fetchone()[0] == 1
+    with books.transaction() as c:
+        moved = act(c, OWNER, "due_date_update", {"due_date_id": due, "next_due_on": "2027-01-15"})
+        assert moved.status == "committed", moved.reason
+    assert open_tasks() == [], "a day off the schedule has nothing left to complete"
+
+
 def test_reassigning_a_due_date_moves_its_open_task_to_the_new_assignee(books):
     with books.transaction() as c:
         due = _due(c, "location", _location(c, "Acme Handoff Store"), name="Handoff check", assignee="bot:coder")

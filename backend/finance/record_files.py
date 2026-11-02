@@ -46,10 +46,10 @@ def _readable(ctx: Ctx, who: str, file_id: str) -> bool:
 
 def visible(c: sqlite3.Connection, viewer: str, table: str, record_id: str) -> tuple[list[dict[str, object]], bool]:
     """The files a record links that the viewer may read, oldest first, at most FILES_SHOWN: id (the link's, for
-    record_file_remove), file_id, added_at and added_by_id; and files_more, whether more are readable. It reads at most
-    FILES_READ links, and a file the viewer can't read does not count toward FILES_SHOWN. files_more is also true when
-    the read ran out at FILES_READ links, since later ones may be readable: the Library lists the rest. With no check
-    installed no file shows, since none can be read unchecked."""
+    record_file_remove), file_id, added_at and added_by_id; and files_more, true only once one more readable file was
+    found, so it says nothing about files the viewer can't read. It reads at most FILES_READ links, and a file the
+    viewer can't read does not count toward FILES_SHOWN. With no check installed no file shows, since none can be read
+    unchecked."""
     check = EQ.file_readable
     if check is None:
         return [], False
@@ -61,7 +61,7 @@ def visible(c: sqlite3.Connection, viewer: str, table: str, record_id: str) -> t
         shown.append({"id": link, "file_id": file, "added_at": at, "added_by_id": by})
         if len(shown) > FILES_SHOWN:
             break
-    return shown[:FILES_SHOWN], len(shown) > FILES_SHOWN or len(links) == FILES_READ
+    return shown[:FILES_SHOWN], len(shown) > FILES_SHOWN
 
 
 def record_file_add(ctx: Ctx, who: str, p: V.Payload) -> Plan:

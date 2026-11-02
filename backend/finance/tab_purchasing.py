@@ -120,21 +120,15 @@ def _list(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | None, 
     return out, nxt
 
 
-# An order read shows this many linked bills the viewer may see. It reads at most LINKED_READ linked bills; past the
-# shown ones the Library holds the rest, so there is no paging.
-LINKED_READ = 200
+# An order read shows this many linked bills the viewer may see; past them the Library holds the rest, so no paging.
 LINKED_SHOWN = 50
 
 
 def _linked_bills(c: sqlite3.Connection, po_id: str, cut: set[str]) -> tuple[list[sqlite3.Row], bool]:
-    """The bills linked to an order that the viewer may see, oldest first, at most LINKED_SHOWN; and whether more are
-    visible. A bill with a line on an account the viewer's cut leaves out is not visible and does not count toward the
-    shown ones. The check reads bill ids and the cut's line matches only, never a bill's lines. more is also true when
-    the read ran out at LINKED_READ bills, since later ones may be visible."""
-    rows = SP.linked_bills(c, po_id, limit=LINKED_READ)
-    hidden = SP.bills_on_accounts(c, [str(r["id"]) for r in rows], sorted(cut))
-    seen = [r for r in rows if str(r["id"]) not in hidden]
-    return seen[:LINKED_SHOWN], len(seen) > LINKED_SHOWN or len(rows) == LINKED_READ
+    """The bills linked to an order that the viewer may see, oldest first, at most LINKED_SHOWN; and whether one more is
+    visible. A bill with a line on an account the viewer's cut leaves out is never read, so it counts toward nothing."""
+    rows = SP.linked_bills(c, po_id, hidden_accounts=sorted(cut), limit=LINKED_SHOWN + 1)
+    return rows[:LINKED_SHOWN], len(rows) > LINKED_SHOWN
 
 
 def _one(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str | None) -> Row:

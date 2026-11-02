@@ -44,9 +44,9 @@ async function opsDueLoad(box) {
   box.onLoad?.(dues);
 }
 async function opsDueMore(box) {
-  const load = box.load, next = box.rows.slice(box.dues.length, box.dues.length + OPS_DUE_PAGE);
+  const load = box.load, list = box.rows, next = list.slice(box.dues.length, box.dues.length + OPS_DUE_PAGE);
   const dues = await opsDueDetails(next);
-  if (load !== box.load || !opsDueLive(box)) return;
+  if (load !== box.load || list !== box.rows || !opsDueLive(box)) return;   // a reload finished first: its rows stand
   box.dues = [...box.dues, ...dues];
   box.shown = box.dues.length;
   opsDueDraw(box);

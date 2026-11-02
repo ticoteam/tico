@@ -16,6 +16,7 @@ ONE task per teammate listing them all, so a teammate with forty of them is woke
   open with a note when another due date's occurrence is on it.
 """
 import json
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -181,15 +182,19 @@ def reassign(c: Any, due_date_id: str, new_actor: str, name: str) -> dict[str, l
     return {"moved": moved, "closed": closed}
 
 
-def withdraw(c: Any, due_date_id: str, name: str) -> dict[str, list[str]]:
+def withdraw(c: Any, due_date_id: str, name: str, keep: Callable[[str], bool] | None = None) -> dict[str, list[str]]:
     """Take a due date's incomplete occurrences off it, because its days moved or it was cleared (a warranty's end does
-    both). Their rows go, so the next pass opens what the due date asks for now. Each open task that carried one closes
-    with a note, unless it also holds another due date's open occurrence: that task stays open for them and gets the
-    note. Writes only through the hub's task calls."""
+    both). `keep` spares the days it answers true for, each an ISO day: a schedule change that leaves an open day on
+    the schedule leaves its work alone. The other rows go, so the next pass opens what the due date asks for now. Each
+    open task that carried one closes with a note, unless it also holds another open occurrence: that task stays open
+    for them and gets the note. Writes only through the hub's task calls."""
     note = f"{name} changed: its open occurrence is withdrawn. The next pass opens its current one, if it has one."
-    rows = c.execute("SELECT DISTINCT task_id FROM due_date_occurrences WHERE due_date_id=? AND task_id IS NOT NULL "
-                     "AND completed_at IS NULL", (due_date_id,)).fetchall()
-    c.execute("DELETE FROM due_date_occurrences WHERE due_date_id=? AND completed_at IS NULL", (due_date_id,))
+    found = c.execute("SELECT due_on, task_id FROM due_date_occurrences WHERE due_date_id=? AND completed_at IS NULL",
+                      (due_date_id,)).fetchall()
+    gone = [(str(day), task) for day, task in found if keep is None or not keep(str(day))]
+    c.executemany("DELETE FROM due_date_occurrences WHERE due_date_id=? AND due_on=? AND completed_at IS NULL",
+                  [(due_date_id, day) for day, _ in gone])
+    rows = sorted({(str(task),) for _, task in gone if task is not None})
     kept: list[str] = []
     closed: list[str] = []
     for (task_id,) in rows:

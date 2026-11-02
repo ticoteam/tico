@@ -164,15 +164,15 @@ def test_a_viewer_with_fewer_than_fifty_readable_files_sees_them_all_and_no_more
         assert eve["files_more"] is False
 
 
-def test_a_record_reads_at_most_two_hundred_links_and_says_more_past_them(books, open_and_owner):
+def test_a_record_reads_at_most_two_hundred_links_and_hidden_ones_never_say_more(books, open_and_owner):
     with books.transaction() as c:
         item = _made(c, "item_create", {"name": "Gadget", "kind": "service"}, "item_id")
         _bulk(c, "items", item, [f"lib-owner-{i:03d}" for i in range(200)] + _open(*range(5)))
         assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
-        # The first 200 links are all hidden from her, so the five readable ones past the read are not seen, and
-        # files_more says the Library holds more.
+        # The first 200 links are all hidden from her, so the five readable ones past the read are not seen. files_more
+        # stays false: a flag that followed the raw count would tell her hidden files exist.
         eve = FR.record(c, EVE, kind="item", record_id=item, at=AT)["item"]
-        assert eve["files"] == [] and eve["files_more"] is True
+        assert eve["files"] == [] and eve["files_more"] is False
         owner = FR.record(c, OWNER, kind="item", record_id=item, at=AT)["item"]
         assert len(owner["files"]) == 50 and owner["files_more"] is True
 
