@@ -28,7 +28,7 @@ const {unrouted} = require('./support/routes.cjs');
       points: erased ? [] : points, mem_total: 16e9, swap_total: 0, disk_total: 1e11, scope: 'container_cpu',
       runs: [{attempt: 'a1', bot: 'ops', model: 'claude-opus-5-5', started_at: iso(now - 7300), finished_at: iso(now - 6500), state: 'done'}],
       busiest: {bots: [{bot: 'ops', model: 'claude-opus-5-5', runs: 1}], processes: [{name: 'cargo', cpu_minutes: 40.5, cpu_max: 400, mem_max: 2e9}]},
-      overloads: [{started_at: now - 7200, ended: now - 6600, last: now - 6660, minutes: 10, reasons: ['cpu'], cpu_max: 99, mem_max: 60, runs_max: 3,
+      overloads: [{started_at: now - 7200, ended_at: now - 6600, last_seen_at: now - 6660, minutes: 10, reasons: ['cpu'], cpu_max: 99, mem_max: 60, runs_max: 3,
         bots: [{bot: 'ops', model: 'claude-opus-5-5', runs: 1}], procs: [{name: 'cargo'}]}],
       summary: 'Overloaded once in the last 1 day (CPU over 90%): CPU over 90% for 10 minutes; running: ops; busiest processes: cargo.'});
     const writes = [];

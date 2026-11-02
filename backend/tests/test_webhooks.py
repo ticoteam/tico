@@ -281,6 +281,16 @@ def test_a_private_task_is_never_published_to_an_endpoint_whose_owner_cannot_rea
     assert envelope["links"]["app"].endswith("#/task/" + public["id"])
 
 
+def test_a_task_event_names_its_owner_and_requester_as_the_api_does_with_real_values(api, net):
+    hook = make(api, events=["task.*"])
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ben", "Plan the launch", "Details.", "bot:cpo", lint=False)
+    data = json.loads(next(s for s in sends(api, hook["id"]) if s["type"] == "task.created")["body"])["data"]
+    assert data["id"] == task["id"]
+    assert data["owner_id"] == "bot:cpo" and data["requester_id"] == "human:ben"
+    assert "owner" not in data and "requester" not in data
+
+
 def test_task_changes_are_published_with_their_own_names_and_a_retried_write_sends_nothing_twice(api, net):
     made = make(api, events=["task.done", "task.state_changed", "task.assigned"])
     task = _post(api, "tasks", {"owner": "ops", "title": "Ship it", "body": "Ship it."})

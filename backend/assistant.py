@@ -381,7 +381,7 @@ def approval_words(c, who, cited, assistant_bot, approval):
     after it: "wait, no" takes it back. Their own sentence, words in a file, a page, a bot's message or the read-back
     alone never approve, and the Assistant never approves what it asked for itself."""
     bot = "bot:" + assistant_bot
-    if (H.approval(c, approval) or {}).get("requested_by") == bot:
+    if (H.approval(c, approval) or {}).get("requested_by_id") == bot:
         raise Problem("own_request", "You asked for this approval yourself, so it stays the person's click: propose it "
                       "on a card (`hub assistant propose`)", 403)
     msg = H.message(c, cited) or {}

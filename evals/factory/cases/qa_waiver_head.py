@@ -172,7 +172,7 @@ def standing_at(w, ticket_id, head, when):
     found = []
     for c in qa_children(w, ticket_id):
         found += judgments_at(w, c, head)
-    found += [(w.H.parse_ts(e["ts"]), "waiver") for e in waiver_events(w, ticket_id)
+    found += [(w.H.parse_ts(e["created_at"]), "waiver") for e in waiver_events(w, ticket_id)
               if e["head"] == head and e["actor"].startswith("human:")]
     found = sorted(f for f in found if f[0] <= w.H.parse_ts(when))
     failed = [f for f in found if f[1] not in GOOD]

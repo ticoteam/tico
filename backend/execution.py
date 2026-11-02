@@ -436,9 +436,9 @@ def settle_status(c, bot, state, focus, claimed=None, task_id=None, stop=None):
     ended without finishing, which the status line then explains (`last_stop`); any other settled status forgets it."""
     if state in ("idle", "crashed", "running"):
         status = H.status(c, bot) or {}
-        if (status.get("state") == "limited" and status.get("since")
-                and limit_until(c, bot, status["since"]) > H.now()
-                and (state == "running" or claimed is None or claimed < status["since"])):
+        if (status.get("state") == "limited" and status.get("changed_at")
+                and limit_until(c, bot, status["changed_at"]) > H.now()
+                and (state == "running" or claimed is None or claimed < status["changed_at"])):
             return
     if state in ("idle", "crashed"):
         if c.execute("SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1",
@@ -481,7 +481,7 @@ def last_stop(c, bot, status):
     from .read_cache import one
     mark = metadata(c, LAST_STOP + bot)
     attempt = one(c, STOP_ATTEMPT_SQL, (mark["attempt_id"],)) if mark.get("attempt_id") else None
-    at = (attempt["finished_at"] if attempt else None) or status.get("since")
+    at = (attempt["finished_at"] if attempt else None) or status.get("changed_at")
     # An older held task must not replace the run that produced the current status.
     held = ((one(c, HELD_RUN_SQL, (bot, mark["attempt_id"])) if mark.get("attempt_id") else one(c, HELD_SQL, (bot,)))
             if state == "crashed" else None)
@@ -1533,9 +1533,9 @@ def _cooling_off(c, bot):
     wait = metadata(c, GATEWAY_WAIT + bot)
     if wait.get("until") and wait["until"] > H.now() and not person_wrote_since(c, bot, wait.get("since") or ""):
         return True
-    return bool(status.get("state") == "limited" and status.get("since")
-                and limit_until(c, bot, status["since"]) > H.now()
-                and not person_wrote_since(c, bot, status["since"]))
+    return bool(status.get("state") == "limited" and status.get("changed_at")
+                and limit_until(c, bot, status["changed_at"]) > H.now()
+                and not person_wrote_since(c, bot, status["changed_at"]))
 
 
 GATEWAY_WAIT = "gateway-unavailable:"

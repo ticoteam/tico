@@ -742,12 +742,12 @@ def _hub_message_check(n, slug):
     if not row:
         out["detail"] = f"Tico has no approval or message {n} this employee may read"
         return out
-    if row.get("from_actor") != f"human:{OWNER}":
-        out["detail"] = (f"Tico message {n} is from {row.get('from_actor') or 'nobody'}, "
+    if row.get("sender_id") != f"human:{OWNER}":
+        out["detail"] = (f"Tico message {n} is from {row.get('sender_id') or 'nobody'}, "
                          f"not {OWNER}")
         return out
-    if slug and row.get("to_actor") != f"bot:{slug}":
-        out["detail"] = (f"Tico message {n} was sent to {row.get('to_actor') or 'nobody'}, "
+    if slug and row.get("recipient_id") != f"bot:{slug}":
+        out["detail"] = (f"Tico message {n} was sent to {row.get('recipient_id') or 'nobody'}, "
                          f"not bot:{slug}")
         return out
     if not SEND_INTENT.search(str(row.get("body") or "")):

@@ -143,7 +143,7 @@ ALLOWED = {
 # process names, bot labels and models; `points` rows follow performance.COLUMNS.
 ALLOWED["performance"] = {"hours": None, "computers": [{
     "label": None, "scope": None, "mem_total": None, "disk_total": None, "span": None, "points": None, "summary": None,
-    "overloads": [{"started_at": None, "ended": None, "minutes": None, "reasons": None, "cpu_max": None, "mem_max": None,
+    "overloads": [{"started_at": None, "ended_at": None, "minutes": None, "reasons": None, "cpu_max": None, "mem_max": None,
                    "runs_max": None, "bots": [{"bot": None, "model": None, "runs": None}],
                    "procs": [{"name": None, "cpu": None, "mem": None}]}],
     "bots": [{"bot": None, "model": None, "runs": None}],

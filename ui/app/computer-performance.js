@@ -104,7 +104,7 @@ function perfChart(state) {
     if (!next || next[0] - p[0] > brk) strip += `V${sy(0)}Z`;
   });
   const bands = d.overloads.map(o => {
-    const a = Math.max(L, x(o.started_at)), b = Math.min(L + pw, x(o.ended || o.last + 60));
+    const a = Math.max(L, x(o.started_at)), b = Math.min(L + pw, x(o.ended_at || o.last_seen_at + 60));
     return `<rect class="perf-band" x="${a.toFixed(1)}" y="${T}" width="${Math.max(4, b - a).toFixed(1)}" height="${PH}" rx="2"/>`;
   }).join('');
   const grid = [0, 50, 100].map(v => `<line class="perf-grid" x1="${L}" x2="${L + pw}" y1="${y(v)}" y2="${y(v)}"/><text class="perf-axis" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v}%</text>`).join('')
@@ -193,7 +193,7 @@ function perfTicks(d) {
 function perfOverloadsHTML(d) {
   if (!d.overloads.length) return '';
   const rows = [...d.overloads].reverse().map(o => {
-    const end = o.ended || o.last + 60;
+    const end = o.ended_at || o.last_seen_at + 60;
     const replay = '#/replay?' + new URLSearchParams({from: new Date(o.started_at * 1000).toISOString(), to: new Date(end * 1000).toISOString()});
     return `<tr><td class="tnum">${esc(perfWhen(o.started_at))}</td><td class="tnum">${esc(perfMinutes(o.minutes))}${o.ended ? '' : ' <span class="pill fail">now</span>'}</td>
       <td>${esc(o.reasons.map(r => PERF_REASONS[r] || r).join(', '))}<span class="settings-cell-note">peak CPU ${perfPct(o.cpu_max)} · memory ${perfPct(o.mem_max)} · ${o.runs_max} turn${o.runs_max === 1 ? '' : 's'}</span></td>

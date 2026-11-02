@@ -357,9 +357,9 @@ def verify(row: Mapping[str, object], appr: Mapping[str, object]) -> str:
     exactly the payload about to run. "" when it is; "payload" when the payload differs (ask again); else why not."""
     if appr.get("kind") != K.approval_kind(str(row["kind"])):
         return "it is a different kind of approval"
-    if appr.get("requested_by") != row["approval_by"]:
+    if appr.get("requested_by_id") != row["approval_by"]:
         return "Finance did not ask for it"
-    decided_by = str(appr.get("decided_by") or "")
+    decided_by = str(appr.get("decided_by_id") or "")
     if not decided_by.startswith("human:") or decided_by != row["approval_to"]:
         return "it was decided by someone other than the person it was sent to"
     if appr.get("consumed_at"):
@@ -424,9 +424,9 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
     if not decision:
         return _stored(row)
     if decision == "declined":
-        return _close(ctx, row, "denied", "declined", f"declined by {appr.get('decided_by')}")
+        return _close(ctx, row, "denied", "declined", f"declined by {appr.get('decided_by_id')}")
     if decision != "approved":
-        stale = appr.get("decided_by") == "keeper" and str(appr.get("created_at") or "") <= \
+        stale = appr.get("decided_by_id") == "keeper" and str(appr.get("created_at") or "") <= \
             tico.shift(ctx.at, days=-STALE_DAYS)
         status = "expired" if stale else "withdrawn"
         return _close(ctx, row, status, status, "nobody decided in time; ask again" if stale else

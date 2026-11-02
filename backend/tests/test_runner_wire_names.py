@@ -16,6 +16,10 @@ def test_a_task_and_a_worktree_link_go_out_under_their_old_names():
     assert link["detail_json"] == "{}" and link["updated"] == "u"     # runner-rs worktrees.rs reads row["updated"]
 
 
+def test_a_worktree_link_keeps_its_owner_for_a_runner_that_reads_the_old_name():
+    assert RW.worktree({"id": "l1", "detail": "{}", "owner_id": "bot:ops"})["owner"] == "bot:ops"
+
+
 def test_an_assignment_adds_its_config_text_and_old_time_names():
     assert RW.assignment({"config": "{}", "updated_at": "u"}) == {"config_json": "{}", "updated": "u"}
 

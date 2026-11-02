@@ -58,7 +58,7 @@ def send_approval(to, files, draft="d-1", **row):
 
 def owner_order(slug="inbox"):
     """The owner's Tico message telling the bot to send: a standing yes for mail without files."""
-    return {"id": ORDER, "from_actor": f"human:{access.OWNER}", "to_actor": f"bot:{slug}",
+    return {"id": ORDER, "sender_id": f"human:{access.OWNER}", "recipient_id": f"bot:{slug}",
             "body": "Please send it to them."}
 
 

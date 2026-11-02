@@ -200,7 +200,7 @@ def outcome(status, state, flow):
 def run_row(run, row, flow):
     """An automation run for the overview: no step detail, but what started it, how it ended and its step count."""
     try:
-        state = json.loads(run["state"]) if run["state"] else None
+        state = json.loads(run["saved_state"]) if run["saved_state"] else None
     except (TypeError, ValueError):
         state = None
     kind = kind_of(flow)

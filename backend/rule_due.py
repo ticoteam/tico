@@ -207,7 +207,7 @@ def views(c, rows, today=None):
             "task_days": days.get(row["routine_id"] or ""),
             "ended_on": row["ended_on"], "retired_at": row["retired_at"],
             "due_on": current["due_on"], "status": current["status"], "open": current["open"],
-            "history": [{"due_on": m["due_on"], "satisfied_by": m["satisfied_by"], "via": m["via"], "at": m["at"],
+            "history": [{"due_on": m["due_on"], "satisfied_by": m["satisfied_by"], "via": m["via"], "at": m["satisfied_at"],
                          "task_id": m["task_id"]} for m in marks[:HISTORY]],
         })
     return out

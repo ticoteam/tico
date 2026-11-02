@@ -351,8 +351,8 @@ def ran(c, runner_id, start, end):
 
 
 def overload_view(row):
-    return {"started_at": row["started_at"], "ended": row["ended"], "last": row["last"],
-            "minutes": (( row["ended"] or row["last"] + MINUTE) - row["started_at"]) // MINUTE,
+    return {"started_at": row["started_at"], "ended_at": row["ended_at"], "last_seen_at": row["last_seen_at"],
+            "minutes": ((row["ended_at"] or row["last_seen_at"] + MINUTE) - row["started_at"]) // MINUTE,
             "reasons": json.loads(row["reasons"]), "cpu_max": row["cpu_max"], "mem_max": row["mem_max"],
             "runs_max": row["runs_max"], "bots": json.loads(row["bots"]), "procs": json.loads(row["procs"])}
 

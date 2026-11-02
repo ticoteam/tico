@@ -34,7 +34,7 @@ def queued(api, aid, payload=None):
 def run_row(api, rid):
     with api.app.state.store.read() as c:
         row = dict(c.execute("SELECT * FROM automation_runs WHERE id=?", (rid,)).fetchone())
-    return {**row, "saved_state": json.loads(row["saved_state"] or "{}")}
+    return {**row, "state": json.loads(row["saved_state"] or "{}")}
 
 
 def sql(api, query, args=()):
@@ -325,7 +325,7 @@ def test_a_run_cut_off_during_a_hold_resumes_held_not_queued(api):
     put_on_hold(api, aid)
     automations.tick(api.app.state.store)
     held = run_row(api, rid)
-    assert held["status"] == "held" and held["claimed_at"] is None and held["saved_state"]["resumes"] == 1
+    assert held["status"] == "held" and held["claimed_at"] is None and held["state"]["resumes"] == 1
     assert release(api, aid) == 1 and run_row(api, rid)["status"] == "queued"
 
 

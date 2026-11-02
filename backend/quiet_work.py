@@ -123,7 +123,7 @@ def carried_at(conn, aid, task_id):
     try:
         for r in rows(conn, CARRIED_SQL, (CARRIED, aid)):
             if task_id in (json.loads(r["detail"] or "{}").get("tasks") or []):
-                return r["ts"]
+                return r["created_at"]
     except Exception:  # noqa: BLE001 - fail quiet: the view only loses the time
         return None
     return None

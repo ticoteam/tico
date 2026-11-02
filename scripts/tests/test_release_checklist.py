@@ -12,18 +12,18 @@ PR = {"number": 12, "head": HEAD, "merge_commit": "d" * 40, "merged_at": "2026-0
 
 
 def message(task, body, *, actor=None, ident="receipt", created="2026-01-02T00:00:00Z", **fields):
-    return {"id": ident, "body": body, "from_actor": actor or task["owner_id"], "created_at": created,
+    return {"id": ident, "body": body, "sender_id": actor or task["owner_id"], "created_at": created,
             "refs": {"task": task["id"]}, **fields}
 
 
 def child(role, *, head=HEAD, verdict="approve"):
-    task = {"id": role, "owner": "bot:checker", "title": f"{role}: PR #12", "status": "done", "links": []}
+    task = {"id": role, "owner_id": "bot:checker", "title": f"{role}: PR #12", "status": "done", "links": []}
     task["messages"] = [message(task, f"VERDICT: {verdict} PR #12 head {head}")]
     return task
 
 
 def complete():
-    task = {"id": "dev-ticket", "number": 7, "title": "Improve tasks", "owner": "bot:builder",
+    task = {"id": "dev-ticket", "number": 7, "title": "Improve tasks", "owner_id": "bot:builder",
             "step": {"name": "Pending Release"}, "tags": [{"key": "qa", "label": "QA"}],
             "links": [{"kind": "pr", "url": PR["url"]}],
             "children": [child("Review 1"), child("Review 2"), child("QA"), child("Docs")]}

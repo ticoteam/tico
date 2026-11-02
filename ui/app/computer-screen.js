@@ -20,7 +20,7 @@ function screenMachine(id) {
   const row = (SETTINGS_DATA.machines || []).find(m => m.id === id);
   const bot = (S.emps || []).find(e => e.machine?.runner_id === id)?.machine;
   if (!row && !bot) return null;
-  return {id, label: bot?.label || row?.label, operator: bot?.owner_id ?? row?.owner_id, revoked_at: row?.revoked_at,
+  return {id, label: bot?.label || row?.label, owner_id: bot?.owner_id ?? row?.owner_id, revoked_at: row?.revoked_at,
           screen: bot?.screen ?? row?.screen, screen_available: bot?.screen_available ?? row?.screen_available};
 }
 // A mode just saved, written into both loaded copies so neither shows the old one until the next refresh.
@@ -55,7 +55,7 @@ function botScreenState(slug) {
   if (e && !('machine' in e)) return {state: 'hidden'};
   const id = e?.machine?.runner_id, machine = screenMachine(id);
   if (!machine) return {state: e?.agent ? 'external' : 'none'};
-  const base = {id, machine, operator: machine.owner_id ? botPersonName(machine.owner_id) : '', may: screenMayOpen(machine)};
+  const base = {id, machine, owner_id: machine.owner_id ? botPersonName(machine.owner_id) : '', may: screenMayOpen(machine)};
   if (!e.online) return {...base, state: 'offline'};
   if (!machine.screen_available) return {...base, state: 'not_offered'};
   if (!machine.screen || machine.screen === 'off') return {...base, state: 'off'};

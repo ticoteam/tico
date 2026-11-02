@@ -125,7 +125,7 @@ def remembered(c, row, at=None):
     if (detail.get("state") != "waiting" or row["status"] not in H.ACTIVE_STATUSES
             or row.get("step_id") != last["old"]):
         return None
-    first = H.parse_ts(detail.get("since") or detail.get("at")) or H.parse_ts(last["ts"])
+    first = H.parse_ts(detail.get("since") or detail.get("at")) or H.parse_ts(last["created_at"])
     if first and at - first >= RETRY_FOR:
         return None                 # first refused RETRY_FOR ago: retries that kept failing do not extend it
     return last, detail

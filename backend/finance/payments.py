@@ -515,7 +515,7 @@ def decided_by(ctx: Ctx, action: Any) -> str:
     The action's own `approval_by` is the requester, never the decider."""
     approval = str(action["approval_id"] or "") if action is not None else ""
     appr = tico.approval(ctx.c, approval) if approval else None
-    return str(appr.get("decided_by") or "") if appr is not None and appr.get("decision") == "approved" else ""
+    return str(appr.get("decided_by_id") or "") if appr is not None and appr.get("decision") == "approved" else ""
 
 
 def approved_for(ctx: Ctx, action: Any, who: str, who_needed: str, rule: str) -> bool:

@@ -159,8 +159,8 @@ def view(c, row, who=None, detail=False, chart=None, jobs=None):
     last = c.execute("SELECT id, status, started_at, finished_at FROM automation_runs WHERE automation_id=? "
                      "ORDER BY started_at DESC LIMIT 1", (row["id"],)).fetchone()
     from . import redesign_migration
-    flow["owner_id"] = flow.pop("owner")
-    out = {"id": row["id"], **flow, "version": row["version"], "created_at": row["created_at"],
+    out = {"id": row["id"], **{k: v for k, v in flow.items() if k != "owner"}, "owner_id": flow["owner"],
+           "version": row["version"], "created_at": row["created_at"],
            "created_by_id": row["created_by_id"], "updated_at": row["updated_at"], "last_run": dict(last) if last else None,
            "kind": AO.kind_of(flow),
            # Wake rules that name a step their type does not have: they never fire until one is changed.
@@ -924,7 +924,7 @@ def hold_of(c, aid):
     if not row:
         return None
     held = c.execute("SELECT count(*) FROM automation_runs WHERE status='held' AND automation_id=?", (aid,)).fetchone()[0]
-    return {"rule": row["rule"], "since": row["since"], "held": held, "dropped": row["dropped"], "task": row["task_id"]}
+    return {"rule": row["rule"], "since": row["held_at"], "held": held, "dropped": row["dropped"], "task": row["task_id"]}
 
 
 def _hold(c, row, rule):
@@ -1142,7 +1142,7 @@ def turn_source(c):
     out = {"turn": {"attempt": attempt, "bot": found["bot_id"], "task": refs.get("task")},
            "automation": run["automation_id"], "run": refs["automation_run"]}
     try:
-        heard = (json.loads(run["state"] or "{}").get("payload") or {}).get("listening")
+        heard = (json.loads(run["saved_state"] or "{}").get("payload") or {}).get("listening")
     except (TypeError, ValueError, AttributeError):
         heard = None
     if isinstance(heard, dict):
@@ -1292,7 +1292,7 @@ def turn_done(c, attempt, outcome, text):
         c.execute("INSERT OR REPLACE INTO automation_turn_answers(run_id,ref,text,cost,ok,created_at) VALUES(?,?,?,?,?,?)",
                   (rid, ref, text or "", cost, int(ok), H.now()))
         return
-    state = json.loads(run["state"]) if run["state"] else None
+    state = json.loads(run["saved_state"]) if run["saved_state"] else None
     c.execute("DELETE FROM automation_holds WHERE ref=?", (ref,))
     if state is None:
         c.execute("UPDATE automation_runs SET cost=round(cost+?,6) WHERE id=?", (cost, rid))
@@ -1910,7 +1910,7 @@ class Hub:
                           (state.get("cost", 0), json.dumps(state, default=str), rid))
                 return
             status = state["status"]
-            if any(t.get("saved_state") == E.READY for t in state.get("threads") or []) and status not in ("failed",):
+            if any(t.get("state") == E.READY for t in state.get("threads") or []) and status not in ("failed",):
                 # Put on hold while a step ran: it finished that step and stopped, and waits held, not queued.
                 status = state["status"] = _runnable(c, run["automation_id"])
             if status == "failed":
@@ -2372,7 +2372,7 @@ def _summary(state):
 
 
 def run_view(run, detail=True):
-    state = json.loads(run["state"]) if run["state"] else None
+    state = json.loads(run["saved_state"]) if run["saved_state"] else None
     out = {"id": run["id"], "automation_id": run["automation_id"], "version": run["version"],
            "trigger_ref": run["trigger_ref"], "started_at": run["started_at"], "finished_at": run["finished_at"],
            "status": run["status"], "cost": run["cost"]}

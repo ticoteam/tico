@@ -339,7 +339,7 @@ def _evidence_for(conn, entity_id, edges):
 
 def _current(edge, today):
     """An edge in force on `today`: unknown ends count, a future start and a past end do not."""
-    since, until = edge.get("since"), edge.get("until")
+    since, until = edge.get("valid_from_on"), edge.get("valid_until_on")
     if since and str(since)[:10] > today:
         return False
     if until and str(until)[:10] < today:

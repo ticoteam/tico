@@ -807,7 +807,7 @@ class Auth:
         if who.role not in ("owner", "human", "bot"):
             return "0"
         hidden = ["bot:" + slug for slug in sorted(self.unreadable_bots(c, who) if unreadable is None else unreadable)]
-        clear = ("NOT (owner IN %s OR requester IN %s)" % ((A.qlist(hidden),) * 2)) if hidden else "1"
+        clear = ("NOT (owner_id IN %s OR requester_id IN %s)" % ((A.qlist(hidden),) * 2)) if hidden else "1"
         from .task_rights import subjects, private_subjects
         inherited_private = A.qlist(sorted(private_subjects(c, who.actor)))
         parties = A.qlist(sorted(subjects(c, who.actor)))
@@ -1142,7 +1142,7 @@ class Auth:
     def fleet_task_sql(self, c, who):
         """Every task except those that involve a bot this caller may not read."""
         hidden = ["bot:" + slug for slug in sorted(self.unreadable_bots(c, who))]
-        return ("NOT (owner IN %s OR requester IN %s)" % ((A.qlist(hidden),) * 2)) if hidden else "1"
+        return ("NOT (owner_id IN %s OR requester_id IN %s)" % ((A.qlist(hidden),) * 2)) if hidden else "1"
 
     def approval(self, c, who, approval_id, decide=False):
         self.domain(who)

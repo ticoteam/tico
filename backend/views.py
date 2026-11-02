@@ -1883,7 +1883,7 @@ def needs_actor(it, me):
     """The teammate one Needs-you item goes with (needs_bots), or None."""
     actor = None
     if it.get("kind") == "approval":
-        actor = it.get("requested_by") or it.get("requester_id")
+        actor = it.get("requested_by_id") or it.get("requester_id")
     elif it.get("kind") == "ask":
         actor = it.get("requester_id")
     elif it.get("kind") in ("task", "question", "waiting"):

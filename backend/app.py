@@ -1300,7 +1300,7 @@ def create_app(settings=None):
             origins[event["target"]] = origin if H.is_bot(origin) else None
 
         legacy_owner = None
-        if any(row.get("requester_id") == H.KEEPER and H.is_human(row.get("owner")) for row in rows):
+        if any(row.get("requester_id") == H.KEEPER and H.is_human(row.get("owner_id")) for row in rows):
             legacy_owner = H.human_actor(H.default_human(c))
         pipelines = H.type_list(c)
         summaries = H.children_summaries(c, ids, visible_sql)
@@ -1334,7 +1334,7 @@ def create_app(settings=None):
                 value["routine_id"] = routines_by_task[row["id"]]
             if row["id"] in origins:
                 value["origin_actor"] = origins[row["id"]]
-            elif row.get("requester_id") == H.KEEPER and row.get("owner") == legacy_owner:
+            elif row.get("requester_id") == H.KEEPER and row.get("owner_id") == legacy_owner:
                 # Only legacy keeper reviews need the refusal-window fallback.
                 value["origin_actor"] = H.task_origin(c, row)
             else:

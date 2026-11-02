@@ -64,9 +64,9 @@ def _current(c, where, args):
 def _end(c, actor, edge, ev):
     """The edge holds no longer: its last day was yesterday. One that started today starts yesterday too."""
     _, yesterday = _days()
-    since = edge["since"] if edge["since"] and str(edge["since"])[:10] <= yesterday else None
+    since = edge["valid_from_on"] if edge["valid_from_on"] and str(edge["valid_from_on"])[:10] <= yesterday else None
     MK.update_edge(c, actor, edge["id"], until=yesterday, evidence_ids=ev,
-                   **({"since": yesterday} if edge["since"] and not since else {}))
+                   **({"since": yesterday} if edge["valid_from_on"] and not since else {}))
 
 
 def _own(c, actor, name, ev):

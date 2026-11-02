@@ -132,7 +132,7 @@ def _held_at(holds, ts):
     """Whether a ticket's hold history (blocked_since events: set, then cleared) has it held at `ts`."""
     held = False
     for h in holds:
-        if h["ts"] > ts:
+        if h["created_at"] > ts:
             break
         held = bool(h["new"])
     return held

@@ -23,7 +23,7 @@ def write(c, actor, obj, before, after, via=None):
 
 
 def _row(r):
-    return {"id": r["id"], "at": r["at"], "actor": r["actor"], "object": r["object"], "via": r["via"],
+    return {"id": r["id"], "created_at": r["created_at"], "actor": r["actor"], "object": r["object"], "via": r["via"],
             "before": None if r["before"] is None else json.loads(r["before"]),
             "after": None if r["after"] is None else json.loads(r["after"])}
 

@@ -70,10 +70,10 @@ def _build():
     add("task.reopened", "A finished task was opened again.",
         _change("status", "done", "open", status="open", actor="human:ana"))
 
-    approval = {"id": "a1", "kind": "send", "task_id": _TASK, "requested_by": "bot:ops", "decision_owner": "human:ana"}
+    approval = {"id": "a1", "kind": "send", "task_id": _TASK, "requested_by_id": "bot:ops", "decision_owner": "human:ana"}
     add("approval.requested", "A bot asked a person to approve something.", approval)
     add("approval.decided", "A person approved or declined a request.",
-        {**approval, "decision": "approved", "decided_by": "human:ana"})
+        {**approval, "decision": "approved", "decided_by_id": "human:ana"})
     add("approval.withdrawn", "A request was withdrawn because it no longer applies.", approval)
 
     asked = {"id": "n1", "to": "human:ana", "from": "bot:ops", "task_id": _TASK}

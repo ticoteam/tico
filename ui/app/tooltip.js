@@ -18,7 +18,7 @@ function tipHTML(slug) {
   const rows = [];
   if (s) {
     rows.push(['State', `<span class="pill ${V2_PILL[s.state] ?? ''}">${esc(V2_WORD[s.state] || s.state || 'unknown')}</span>${
-      s.since ? ` <span class="muted">${esc(ago(s.since))}</span>` : ''}`]);
+      s.changed_at ? ` <span class="muted">${esc(ago(s.changed_at))}</span>` : ''}`]);
     if (s.focus) rows.push(['Focus', esc(s.focus)]);
     if (s.last_result) rows.push(['Last result', esc(String(s.last_result).slice(0, 160))]);
     rows.push(['Next run', s.next_due_at ? `${esc(until(s.next_due_at))} <span class="muted">${esc(fmt(s.next_due_at))}</span>` : '—']);

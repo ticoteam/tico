@@ -50,7 +50,7 @@ def test_turning_the_routine_on_makes_one_linked_automation_whose_run_opens_the_
     assert auto["trigger"] == {"type": "due", "first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC",
                                "rule_due_id": due["id"]}
     assert auto["owner_id"] == "bot:ops" and auto["steps"][0]["args"]["title"] == TEXT
-    assert auto["steps"][0]["args"]["owner_id"] == "bot:ops"
+    assert auto["steps"][0]["args"]["owner"] == "bot:ops"
     assert auto["next_due_at"] == "2030-03-01"
     assert len(sql(api, "SELECT id FROM automations WHERE flow LIKE ?", (f"%{due['id']}%",))) == 1
     tick(api, datetime(2030, 2, 14, 23, 59, tzinfo=timezone.utc))
@@ -237,7 +237,7 @@ def test_a_due_dates_owner_is_the_caller_a_teammate_in_who_or_someone_they_manag
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(raw),))
     post(api, f"rules/{r['id']}/due", {**body, "owner": "dan"}, token="cara-test")
     # The owner names anyone.
-    assert post(api, f"rules/{r['id']}/due", {**body, "owner": "ben"})["owner_id"] in ("human:ben", "ben")
+    assert post(api, f"rules/{r['id']}/due", {**body, "owner": "ben"})["owner"] in ("human:ben", "ben")
     # An owner change passes the same test; an edit that keeps the owner is not asked again.
     post(api, f"rule-due/{ops['id']}", {"owner": "ana"}, token="cara-test", expected=403)
     assert automation(api, ops["routine_id"])["owner_id"] == "bot:ops"

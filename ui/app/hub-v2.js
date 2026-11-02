@@ -239,11 +239,11 @@ function pausedNotice(slug) {
     // A refusal-count quarantine lifts itself after an hour; anything else waits for a person (backend/hubdb.py).
     const q = s.quarantine || {}, e = botRow(slug);
     const resume = e && settingsCanManageBot(e) ? ' <button type="button" class="linkish" data-quarantine-resume>Resume bot</button>' : '';
-    const at = q.since || s.since, paused = (at ? ` paused at ${clockTime(at)}` : ' is paused') + (q.auto ? '' : ' for review');
+    const at = q.since || s.changed_at, paused = (at ? ` paused at ${clockTime(at)}` : ' is paused') + (q.auto ? '' : ' for review');
     const who = q.auto || resume ? '' : ' A person who manages it can resume it.';
     return `${empName(slug)}${esc(paused)}. ${esc(quarantineWhy(slug) + who)} Your messages are saved and run when it's back.${resume}`;
   }
-  let why = PAUSED_WHY[s.state], since = s.since;
+  let why = PAUSED_WHY[s.state], since = s.changed_at;
   if (s.state === 'paused' && /^Paused: over /.test(s.focus || '')) why = s.focus.replace(/^Paused: /, '');     // a spend limit (Usage)
   if (s.state === 'crashed')
     return s.last_stop ? `${empName(slug)}: ${esc(s.last_stop.text)}`

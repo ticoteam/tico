@@ -248,7 +248,7 @@ def install(app, store, auth):
                                      "AND started_at>=? AND started_at<? ORDER BY started_at LIMIT ?", (slug, first, last, LIMIT + 1)))
             current = H._one(c, "SELECT bot,state,focus,task_id,changed_at FROM bot_status WHERE bot=?", (slug,))
             if len(rows) > LIMIT:
-                caps.append(rows[-1]["since"])
+                caps.append(rows[-1]["started_at"])
             if current and first <= (current["changed_at"] or "") < last:
                 rows.append(current)
             before = H._one(c, "SELECT bot,state,focus,task_id,started_at FROM bot_status_history WHERE bot=? AND started_at<? "
@@ -260,7 +260,7 @@ def install(app, store, auth):
                 start_states[slug] = {"state": shown["state"], "focus": clip_text(shown.get("focus"), 200)}
             for row in rows:
                 shown = privacy.status(c, who, row, **inputs[slug])
-                items.append({"at": row["since"], "kind": "bot.status", "who": "bot:" + slug, "bot": slug,
+                items.append({"at": row.get("started_at") or row["changed_at"], "kind": "bot.status", "who": "bot:" + slug, "bot": slug,
                               "state": shown["state"], "text": clip_text(shown.get("focus"), 200)})
         sources.append(items)
 
