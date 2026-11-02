@@ -230,6 +230,15 @@ def test_times_and_ids_in_the_facts_do_not_make_figures_allowed():
     assert E.leak_findings("t", plain_sections("Revenue hit $1m."), facts, START, END)["numbers"] == ["1"]
 
 
+def test_a_sentence_copied_from_an_approved_update_is_not_news_and_a_year_month_title_is_not_a_figure():
+    """The updates an edition is drafted from are what the page may say, so a sentence copied from one passes. A
+    "2026-10" title is a date, not the figure 10."""
+    source = "Routed 31 requests; 28 were finished within a day."
+    assert E.leak_findings("Update", plain_sections(source), FACTS, START, END) != {}
+    assert E.leak_findings("Update", plain_sections(source), FACTS, START, END, sources=[source]) == {}
+    assert E.leak_findings("2026-10", plain_sections("Revenue reached $120,000."), FACTS, START, END) == {}
+
+
 def test_a_leak_holds_a_draft_and_a_clean_edit_by_a_person_releases_it(page):
     page.answer = {**GOOD, "sections": {**GOOD["sections"], "highlights": ["We signed Globex for $900k."]}}
     edition = page.draft()
