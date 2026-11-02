@@ -5,12 +5,13 @@
    narrowed to a team, nested teams included. A row opens the tool's page (integrationDetail, ui/app/integrations.js)
    beside the list on a computer, as its own screen on a phone; a credential no tool names is its own row.
    Addresses: #/library/tools[/<service> | /credentials/<id>][?who=bot:<slug>|human:<id>|group:<id>&issues=1&q=…]. The old
-   ones (#/library/connections, #/integrations, #/credentials, Settings › Credentials) lead here.
+   ones (#/library/connections/<service>, #/integrations, #/credentials, Settings › Credentials) lead here;
+   #/library/connections itself is Library › Connections (ui/app/connections.js).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 const RD_TOOLS = '#/library/tools';
-const RD_CONNECTIONS = '#/library/connections';   // the page's first name
+const RD_CONNECTIONS = '#/library/connections';   // Library › Connections; a tool under it is this page's first name
 const LC_KIND_ICONS = {api: 'api', sql: 'inventory_2', browser: 'travel_explore', mail: 'mail', cli: 'code', mcp: 'link', credential: 'key_vertical'};
 const LC_CRED_KIND = {api_key: 'API key', password: 'Password', token: 'Token', file: 'File', connection: 'Connection'};
 const LC_LEVEL_RANK = {never: 0, approval: 1, allowed: 2};
@@ -373,6 +374,7 @@ function lcVaultChanged() {
 
 // The redesign's router asks first (ui/app/redesign.js): Library › Tools, and every old address of what it holds.
 function rdToolsRoute(r) {
+  if (r.split('?')[0] === RD_CONNECTIONS) { pageConnections(); return true; }
   for (const old of [RD_CONNECTIONS, INTEGRATIONS]) if (rdUnder(r, old)) { rdToolsOpen(RD_TOOLS + r.slice(old.length)); return true; }
   if (rdUnder(r, CREDENTIALS)) { rdToolsOpen(RD_TOOLS + '?show=credentials'); return true; }
   if (rdUnder(r, RD_TOOLS)) { pageRdTools(); return true; }

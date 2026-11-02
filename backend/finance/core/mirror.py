@@ -29,8 +29,8 @@ OLDER = "older"         # a revision older than the books hold arrived late: not
 GONE = "gone"           # deleted at the provider and never in the books: nothing to do
 
 BOOK_ENTITIES = {  # what a provider's backfill reads, in the order the books take it (one cursor per entity)
-    "quickbooks": ("accounts", "parties", "documents", "payments", "entries"),
-    "xero": ("accounts", "parties", "invoices", "credit_notes", "payments", "manual_journals",
+    "quickbooks": ("accounts", "parties", "records", "documents", "payments", "entries"),
+    "xero": ("accounts", "parties", "items", "tracking", "invoices", "credit_notes", "payments", "manual_journals",
              "bank_transactions", "bank_transfers", "overpayments", "prepayments"),
 }
 
@@ -38,13 +38,16 @@ BOOK_ENTITIES = {  # what a provider's backfill reads, in the order the books ta
 @dataclass(frozen=True)
 class Ext:
     """A provider record's identity: its entity kind, its id within that kind, and its revision (a counter the provider
-    bumps on each change). `reference` is the write reference the provider holds on the record, when it holds one."""
+    bumps on each change). A provider that gives no revision gives a `content` digest instead, and the books make the
+    revision from it (`content_revision`). `reference` is the write reference the provider holds on the record, when it
+    holds one."""
     kind: str
     external_id: str
     revision: str
     deleted: bool = False
     reference: str = ""
     currency: str = ""      # the record's currency code ("" when the provider names none)
+    content: str = ""       # a digest of the record's content, for a record whose revision the books make
 
     @property
     def key(self) -> str:
@@ -73,6 +76,49 @@ class Party:
 
 
 @dataclass(frozen=True)
+class Item:
+    """A provider product or service: what a line sells or buys, and the accounts it posts to (provider keys)."""
+    ext: Ext
+    name: str
+    sku: str = ""
+    kind: str = "service"   # service | inventory | non_inventory | bundle | category (the books' item kinds)
+    price: int | None = None
+    income: str = ""        # the provider's key for the account a sale posts to, "" for none
+    expense: str = ""       # the provider's key for the account a purchase posts to, "" for none
+    asset: str = ""         # the provider's key for an inventory item's asset account, "" for none
+    active: bool = True
+
+
+@dataclass(frozen=True)
+class Location:
+    """A provider location (a department): what a line is tagged with for the location it was for."""
+    ext: Ext
+    name: str
+    active: bool = True
+
+
+@dataclass(frozen=True)
+class Dimension:
+    """A provider class: a line's class, which the books keep as a class dimension."""
+    ext: Ext
+    name: str
+    active: bool = True
+
+
+@dataclass(frozen=True)
+class Project:
+    """A provider job: a customer that is a job of its parent customer. The books keep it as a project under that
+    customer, and a line for it is tagged with the project."""
+    ext: Ext
+    name: str
+    customer: str = ""      # the parent customer's key ("Customer:4"), "" when the provider names none
+    active: bool = True
+
+
+Tags = tuple[tuple[str, str], ...]     # a provider line's tags: (kind, provider key), kind location | class | project
+
+
+@dataclass(frozen=True)
 class EntryLine:
     account: str        # the provider's key for the account ("Account:55")
     amount: int         # minor units, debits positive
@@ -80,6 +126,8 @@ class EntryLine:
     description: str = ""
     rounding: bool = False  # the provider's rounding on a document: the one line that may be negative
     key: str = ""       # the provider's id for the line: it stays the same when the line's amount changes
+    tags: Tags = ()     # the line's location, class and project (provider keys), a transaction's header ones included
+    item: str = ""      # the provider's key for the product or service the line sells or buys ("Item:5"), "" for none
 
 
 @dataclass(frozen=True)
@@ -149,6 +197,14 @@ def revision_order(a: str, b: str) -> int:
     if a.isdigit() and b.isdigit():
         return (int(a) > int(b)) - (int(a) < int(b))
     return (a > b) - (a < b)
+
+
+def content_revision(stored: str, at: str, digest: str) -> str:
+    """The revision a record takes when the provider gives it none: the time the books first see its content, so a
+    change
+    sorts after the revision it replaces. The stored revision stays while the content is the same, so an unchanged
+    record is not a new revision on every read."""
+    return stored if stored.endswith(f"-{digest}") else f"{at}-{digest}"
 
 
 def decide(have: tuple[str, str] | None, ext: Ext) -> str:
@@ -226,9 +282,12 @@ def cdc_due(cursor: str | None, now: str, every: int = CDC_EVERY) -> bool:
     return cursor is None or (parse(now) - parse(cursor)).total_seconds() >= every
 
 
-def class_refs(tags: Mapping[str, str], mapping: Mapping[str, Mapping[str, str]]) -> dict[str, str]:
-    """The provider class for each tag a line carries, by tag kind. `mapping` is {tag kind: {tag value: class id}}; a
-    tag with no class in it sends none, and an empty mapping (the default) sends nothing."""
+def class_refs(tags: Mapping[str, str], mapping: Mapping[str, Mapping[str, str]], own: str = "") -> dict[str, str]:
+    """The provider class a line is sent with. A line's own class (`own`, its class tag's provider class) is the class
+    it is sent with; otherwise each tag's class from `mapping`, which is {tag kind: {tag value: class id}}. A tag with no
+    class in it sends none, and an empty mapping (the default) sends nothing."""
+    if own:
+        return {"class": own}
     out: dict[str, str] = {}
     for kind, value in tags.items():
         cls = mapping.get(kind, {}).get(value, "")
@@ -238,7 +297,7 @@ def class_refs(tags: Mapping[str, str], mapping: Mapping[str, Mapping[str, str]]
 
 
 # ------------------------------------------------------------------------------------------------ parked records
-Record = ChartAccount | Party | Journal | Document | Settlement | Ext | Refused
+Record = ChartAccount | Party | Journal | Document | Settlement | Item | Location | Dimension | Project | Ext | Refused
 
 
 def encode(r: Record) -> dict[str, Any]:
@@ -248,13 +307,15 @@ def encode(r: Record) -> dict[str, Any]:
 
 def _ext(d: Mapping[str, Any]) -> Ext:
     return Ext(str(d["kind"]), str(d["external_id"]), str(d["revision"]), bool(d.get("deleted", False)),
-               str(d.get("reference", "")), str(d.get("currency", "")))
+               str(d.get("reference", "")), str(d.get("currency", "")), str(d.get("content", "")))
 
 
 def _lines(raw: Any) -> tuple[EntryLine, ...]:
     return tuple(EntryLine(str(x["account"]), int(x["amount"]), str(x.get("party", "")),
                            str(x.get("description", "")), bool(x.get("rounding", False)),
-                           key=str(x.get("key", ""))) for x in raw)
+                           key=str(x.get("key", "")),
+                           tags=tuple((str(k), str(v)) for k, v in x.get("tags", [])),
+                           item=str(x.get("item", ""))) for x in raw)
 
 
 def _pairs(raw: Any) -> tuple[tuple[str, int], ...]:
@@ -285,6 +346,17 @@ def decode(d: Mapping[str, Any]) -> Record:
     if kind == "Settlement":
         return Settlement(ext, str(d["day"]), str(d["memo"]), str(d["party"]), str(d["bank"]), int(d["total"]),
                           _pairs(d.get("links", [])), _pairs(d.get("credits", [])), str(d.get("currency", "")))
+    if kind == "Item":
+        price = d.get("price")
+        return Item(ext, str(d["name"]), str(d.get("sku", "")), str(d.get("kind", "service")),
+                    None if price is None else int(price), str(d.get("income", "")), str(d.get("expense", "")),
+                    str(d.get("asset", "")), bool(d.get("active", True)))
+    if kind == "Location":
+        return Location(ext, str(d["name"]), bool(d.get("active", True)))
+    if kind == "Dimension":
+        return Dimension(ext, str(d["name"]), bool(d.get("active", True)))
+    if kind == "Project":
+        return Project(ext, str(d["name"]), str(d.get("customer", "")), bool(d.get("active", True)))
     if kind == "Refused":
         return Refused(ext, str(d["why"]))
     raise ValueError(f"not a mirror record: {kind}")

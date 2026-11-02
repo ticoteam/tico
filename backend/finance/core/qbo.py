@@ -16,18 +16,24 @@ MINOR_VERSION = "65"
 POSTED = ("Purchase", "Deposit", "Transfer", "SalesReceipt", "RefundReceipt", "VendorCredit")
 # Every QuickBooks entity the change feed reads.
 ENTITIES = ("Account", "Vendor", "Customer", "JournalEntry", "Bill", "Invoice", "CreditMemo", "BillPayment", "Payment",
-            *POSTED)
+            *POSTED, "Item", "Department", "Class")
 # The QuickBooks entities behind each backfill entity, in the order the books take them in (the mirror's ENTITIES).
 PAGES: dict[str, tuple[str, ...]] = {
-    "accounts": ("Account",), "parties": ("Vendor", "Customer"), "documents": ("Bill", "Invoice", "CreditMemo"),
-    "payments": ("BillPayment", "Payment"), "entries": ("JournalEntry", *POSTED)}
+    "accounts": ("Account",), "parties": ("Vendor", "Customer"), "records": ("Item", "Department", "Class"),
+    "documents": ("Bill", "Invoice", "CreditMemo"), "payments": ("BillPayment", "Payment"),
+    "entries": ("JournalEntry", *POSTED)}
 # The entities a query reads with WHERE Active IN (true,false): QuickBooks reads only the active ones otherwise.
-ACTIVE_FILTERED = ("Account", "Vendor", "Customer", "Item", "Employee")
+ACTIVE_FILTERED = ("Account", "Vendor", "Customer", "Item", "Employee", "Department", "Class")
+# QuickBooks item Type -> the books' item kind. An item of another type is not taken in.
+ITEM_KINDS = {"Service": "service", "Inventory": "inventory", "NonInventory": "non_inventory", "Group": "bundle",
+              "Category": "category"}
 DOCUMENTS = ("Bill", "Invoice", "CreditMemo")
 PAYMENTS = ("BillPayment", "Payment")
 # A document line's detail. Its account is its own (a purchase on an account) or its item's: income for a sale, expense
 # for a purchase on an item.
 LINE_DETAILS = ("AccountBasedExpenseLineDetail", "ItemBasedExpenseLineDetail", "SalesItemLineDetail")
+# The lines a bill carries as expenses: each one is a line the bill sent, with its own id.
+EXPENSE_LINES = ("AccountBasedExpenseLineDetail", "ItemBasedExpenseLineDetail")
 # QuickBooks AccountType -> Tico (type, subtype). Subtypes are only the ones the default chart uses.
 TYPES: dict[str, tuple[str, str]] = {
     "Bank": ("asset", "bank"), "Accounts Receivable": ("asset", "receivable"), "Other Current Asset": ("asset", ""),
@@ -47,7 +53,8 @@ _OUT: dict[tuple[str, str], str] = {("asset", "bank"): "Bank", ("income", "other
                                     ("asset", "receivable"): "Accounts Receivable"}
 _DEFAULT_OUT = {"asset": "Other Current Asset", "liability": "Other Current Liability", "equity": "Equity",
                 "income": "Income", "expense": "Expense"}
-Made = M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Ext | M.Refused
+Made = (M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Item | M.Location | M.Dimension | M.Project
+        | M.Ext | M.Refused)
 
 
 def as_map(value: object) -> dict[str, Any] | None:
@@ -121,6 +128,55 @@ def party_record(row: dict[str, Any], kind: str) -> M.Party:
                    emails=emails)
 
 
+def _active(row: Mapping[str, Any]) -> bool:
+    return bool(row.get("Active", True))
+
+
+def _account_key(row: Mapping[str, Any], key: str) -> str:
+    """An account reference on a record (an item's income, expense or asset account) as the provider's key, or ""."""
+    value = _ref(row, key)
+    return f"Account:{value}" if value else ""
+
+
+def item_record(row: dict[str, Any]) -> M.Item | None:
+    """A QuickBooks Item as a product or service; None for an item type the books do not hold. Its price is its unit
+    price (none when QuickBooks keeps none)."""
+    ext = M.Ext("Item", _id(row.get("Id")), _id(row.get("SyncToken")))
+    kind = ITEM_KINDS.get(_id(row.get("Type")))
+    if kind is None:
+        return None
+    price = _units(row.get("UnitPrice")) if row.get("UnitPrice") not in (None, "") else None
+    return M.Item(ext, name=_id(row.get("Name")), sku=_id(row.get("Sku")), kind=kind, price=price,
+                  income=_account_key(row, "IncomeAccountRef"), expense=_account_key(row, "ExpenseAccountRef"),
+                  asset=_account_key(row, "AssetAccountRef"), active=_active(row))
+
+
+def location_record(row: dict[str, Any]) -> M.Location:
+    """A QuickBooks Department as a location."""
+    return M.Location(M.Ext("Department", _id(row.get("Id")), _id(row.get("SyncToken"))), name=_id(row.get("Name")),
+                   active=_active(row))
+
+
+def dimension_record(row: dict[str, Any]) -> M.Dimension:
+    """A QuickBooks Class as a class dimension."""
+    return M.Dimension(M.Ext("Class", _id(row.get("Id")), _id(row.get("SyncToken"))), name=_id(row.get("Name")),
+                       active=_active(row))
+
+
+def project_record(row: dict[str, Any]) -> M.Project:
+    """A QuickBooks job (a customer with Job set) as a project under its parent customer."""
+    parent = _ref(row, "ParentRef")
+    return M.Project(M.Ext("Project", _id(row.get("Id")), _id(row.get("SyncToken"))),
+                     name=_id(row.get("DisplayName")) or _id(row.get("CompanyName")),
+                     customer=f"Customer:{parent}" if parent else "", active=_active(row))
+
+
+def _is_job(row: Mapping[str, Any]) -> bool:
+    """A customer is a project when it is a job (a sub-customer with Job set) or a project made in the QuickBooks UI
+    (IsProject, read when the provider sends it)."""
+    return str(row.get("Job", False)).lower() == "true" or str(row.get("IsProject", False)).lower() == "true"
+
+
 def journal_record(row: dict[str, Any]) -> M.Journal:
     """A QuickBooks JournalEntry as one balanced entry. Debits are positive; lines without an account are skipped."""
     ext = M.Ext("JournalEntry", _id(row.get("Id")), _id(row.get("SyncToken")))
@@ -144,14 +200,31 @@ def journal_record(row: dict[str, Any]) -> M.Journal:
             if kind in ("Vendor", "Customer"):
                 party = f"{kind}:{_id(entity_ref.get('value'))}"
         lines.append(M.EntryLine(account=f"Account:{_id(ref.get('value'))}", amount=units, party=party,
-                                 description=_id(line.get("Description")), key=_id(line.get("Id"))))
+                                 description=_id(line.get("Description")), key=_id(line.get("Id")),
+                                 tags=_dims(detail)))
     return M.Journal(ext, _id(row.get("TxnDate")), _memo(row), "sync", tuple(lines))
 
 
-def _doc_line(raw: object, items: Mapping[str, Mapping[str, str]]) -> M.EntryLine | None:
+def _dims(detail: Mapping[str, Any], location: str = "") -> M.Tags:
+    """A line's location, class and project as provider keys: its own DepartmentRef (a journal line's), else the
+    transaction's (`location`), its ClassRef, and the job it is billed to (its CustomerRef)."""
+    out: list[tuple[str, str]] = []
+    where = _ref(detail, "DepartmentRef") or location
+    if where:
+        out.append(("location", f"Department:{where}"))
+    cls = _ref(detail, "ClassRef")
+    if cls:
+        out.append(("class", f"Class:{cls}"))
+    customer = _ref(detail, "CustomerRef")
+    if customer:
+        out.append(("project", f"Customer:{customer}"))
+    return tuple(out)
+
+
+def _doc_line(raw: object, items: Mapping[str, Mapping[str, str]], location: str = "") -> M.EntryLine | None:
     """One document line as an entry line on its account. None for a line that carries no money (a description, a
     subtotal). Tax and discount lines are not taken in, so a document that has them does not add up to its total and
-    waits as unmapped (the mirror says so)."""
+    waits as unmapped (the mirror says so). `location` is the transaction's location, which each line inherits."""
     line = as_map(raw)
     if line is None:
         return None
@@ -168,8 +241,10 @@ def _doc_line(raw: object, items: Mapping[str, Mapping[str, str]]) -> M.EntryLin
         side = "expense" if detail_type == "ItemBasedExpenseLineDetail" else "income"
         found = items.get(_ref(detail, "ItemRef"))
         account = found.get(side, "") if found is not None else ""
+    item = _ref(detail, "ItemRef")
     return M.EntryLine(account=f"Account:{account}" if account else "", amount=units,
-                       description=_id(line.get("Description")), key=_id(line.get("Id")))
+                       description=_id(line.get("Description")), key=_id(line.get("Id")),
+                       tags=_dims(detail, location), item=f"Item:{item}" if item else "")
 
 
 def document_record(row: dict[str, Any], kind: str, items: Mapping[str, Mapping[str, str]]) -> M.Document:
@@ -180,7 +255,8 @@ def document_record(row: dict[str, Any], kind: str, items: Mapping[str, Mapping[
     ext = M.Ext(kind, _id(row.get("Id")), _id(row.get("SyncToken")))
     party_kind = "Vendor" if kind == "Bill" else "Customer"
     party_value = _ref(row, "VendorRef" if kind == "Bill" else "CustomerRef")
-    lines = tuple(x for x in (_doc_line(raw, items) for raw in as_list(row.get("Line"))) if x is not None)
+    location = _ref(row, "DepartmentRef")
+    lines = tuple(x for x in (_doc_line(raw, items, location) for raw in as_list(row.get("Line"))) if x is not None)
     control = _ref(row, "APAccountRef" if kind == "Bill" else "ARAccountRef")
     return M.Document(ext, party=f"{party_kind}:{party_value}" if party_value else "",
                       number=_id(row.get("DocNumber")), day=_id(row.get("TxnDate")), due=_id(row.get("DueDate")),
@@ -264,8 +340,16 @@ def _reference(row: Mapping[str, Any]) -> str:
 def _one(entity: str, row: dict[str, Any], items: Mapping[str, Mapping[str, str]]) -> Made | None:
     if entity == "Account":
         return account_record(row)
+    if entity == "Customer" and _is_job(row):
+        return project_record(row)
     if entity in ("Vendor", "Customer"):
         return party_record(row, entity)
+    if entity == "Item":
+        return item_record(row)
+    if entity == "Department":
+        return location_record(row)
+    if entity == "Class":
+        return dimension_record(row)
     if entity not in ENTITIES:
         return None
     if entity == "JournalEntry":
@@ -370,7 +454,8 @@ def posted_record(row: dict[str, Any], kind: str, items: Mapping[str, Mapping[st
     refund, so its entry is reversed. Lines that do not add up to the total are refused, so nothing is posted short."""
     ext = M.Ext(kind, _id(row.get("Id")), _id(row.get("SyncToken")))
     total = _units(row.get("TotalAmt")) or 0
-    doc_lines = [x for x in (_doc_line(raw, items) for raw in as_list(row.get("Line"))) if x is not None]
+    location = _ref(row, "DepartmentRef")
+    doc_lines = [x for x in (_doc_line(raw, items, location) for raw in as_list(row.get("Line"))) if x is not None]
     doc_sign = -1 if kind in ("SalesReceipt", "VendorCredit") else 1
     if kind == "Transfer":
         amount = _units(row.get("Amount")) or 0
@@ -415,11 +500,18 @@ def journal_body(body: Mapping[str, Any]) -> dict[str, Any]:
         units = int(x["amount"])
         detail: dict[str, Any] = {"PostingType": "Debit" if units >= 0 else "Credit", "AccountRef": {"value": value}}
         party = _party_ref(str(x.get("party") or ""))
+        project = str(x.get("project") or "")
         if party is not None:
             detail["Entity"] = {"Type": party[0], "EntityRef": {"type": party[0], "value": party[1]}}
+        elif project:
+            # A line with no party that is for a job is entered against the job's customer.
+            detail["Entity"] = {"Type": "Customer", "EntityRef": {"type": "Customer",
+                                                                  "value": _keyed(project, "Customer")}}
         classes = as_map(x.get("classes"))
         if classes:
             detail["ClassRef"] = {"value": str(next(iter(classes.values())))}
+        if x.get("location"):
+            detail["DepartmentRef"] = {"value": _keyed(x["location"], "Department")}
         lines.append({"DetailType": "JournalEntryLineDetail", "Amount": decimal_text(units),
                       "Description": str(x.get("description") or ""), "JournalEntryLineDetail": detail})
     return {"TxnDate": str(body["date"]), "PrivateNote": _note(body), "Line": lines}
@@ -452,6 +544,33 @@ def _account_id(key: object) -> str:
     return value
 
 
+def _keyed(key: object, kind: str) -> str:
+    """The QuickBooks id in a provider key of one kind ("Department:3"); raises for a key of another kind."""
+    found, _, value = str(key).partition(":")
+    if found != kind or not value:
+        raise ValueError(f"not a QuickBooks {kind.lower()}: {key!r}")
+    return value
+
+
+def _single(values: Iterable[str], what: str) -> str:
+    """The one value a transaction's lines share ("" when none names one). Raises when they name more than one, since a
+    QuickBooks transaction takes one location or one job."""
+    found = {v for v in values if v}
+    if len(found) > 1:
+        raise ValueError(f"the lines name more than one {what}; QuickBooks takes one per transaction")
+    return found.pop() if found else ""
+
+
+def _line_extras(x: Mapping[str, Any]) -> dict[str, Any]:
+    """A line's class and the job it is billed to, as QuickBooks line references."""
+    out: dict[str, Any] = {}
+    if x.get("class"):
+        out["ClassRef"] = {"value": str(x["class"])}
+    if x.get("project"):
+        out["CustomerRef"] = {"value": _keyed(x["project"], "Customer")}
+    return out
+
+
 def _party_id(key: object, kind: str) -> str:
     found = _party_ref(str(key))
     if found is None or found[0] != kind:
@@ -481,6 +600,18 @@ def _header(body: Mapping[str, Any]) -> dict[str, Any]:
     return {"TxnDate": str(body["day"]), "PrivateNote": _note(body)}
 
 
+def line_ids(made: Mapping[str, Any]) -> tuple[str, ...]:
+    """The provider's id for each expense line of a bill it holds, in the order the lines are stored. Lines that carry
+    no
+    money (a description) have none and are left out, so the ids line up with the lines Tico sent."""
+    out: list[str] = []
+    for raw in as_list(made.get("Line")):
+        line = as_map(raw)
+        if line is not None and _id(line.get("DetailType")) in EXPENSE_LINES:
+            out.append(_id(line.get("Id")))
+    return tuple(out)
+
+
 def _applied(links: Sequence[Sequence[Any]]) -> list[dict[str, Any]]:
     """Each applied amount as a line linked to the bill or invoice it pays."""
     out: list[dict[str, Any]] = []
@@ -492,12 +623,24 @@ def _applied(links: Sequence[Sequence[Any]]) -> list[dict[str, Any]]:
 
 def bill_body(body: Mapping[str, Any]) -> dict[str, Any]:
     """A bill's request body from an outbox payload (keys already translated to QuickBooks ids). Each line is an
-    expense on its account; QuickBooks posts the bill when it is saved."""
-    lines = [{"DetailType": "AccountBasedExpenseLineDetail", "Amount": decimal_text(int(x["amount"])),
-              "Description": str(x.get("description") or ""),
-              "AccountBasedExpenseLineDetail": {"AccountRef": {"value": _account_id(x["account"])}}}
-             for x in body["lines"]]
+    expense on its account, or on its item when it names one; QuickBooks posts the bill when it is saved. The bill's
+    location is its lines' one location, and each line keeps its class and job."""
+    lines: list[dict[str, Any]] = []
+    for x in body["lines"]:
+        description = str(x.get("description") or "")
+        if x.get("item"):
+            detail: dict[str, Any] = {"ItemRef": {"value": _keyed(x["item"], "Item")}, "Qty": 1,
+                                      "UnitPrice": decimal_text(int(x["amount"])), **_line_extras(x)}
+            lines.append({"DetailType": "ItemBasedExpenseLineDetail", "Amount": decimal_text(int(x["amount"])),
+                          "Description": description, "ItemBasedExpenseLineDetail": detail})
+        else:
+            detail = {"AccountRef": {"value": _account_id(x["account"])}, **_line_extras(x)}
+            lines.append({"DetailType": "AccountBasedExpenseLineDetail", "Amount": decimal_text(int(x["amount"])),
+                          "Description": description, "AccountBasedExpenseLineDetail": detail})
     out: dict[str, Any] = {**_header(body), "VendorRef": {"value": _party_id(body["party"], "Vendor")}, "Line": lines}
+    location = _single((str(x.get("location") or "") for x in body["lines"]), "location")
+    if location:
+        out["DepartmentRef"] = {"value": _keyed(location, "Department")}
     if body.get("number"):
         out["DocNumber"] = str(body["number"])
     if body.get("due"):
@@ -506,26 +649,48 @@ def bill_body(body: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def invoice_body(body: Mapping[str, Any], income: Mapping[str, str]) -> dict[str, Any]:
-    """An invoice's request body. QuickBooks bills lines by item, so each line uses the item that sells to its account
-    (`income` maps an account id to an item id). A line with no such item is refused, so nothing is half-written."""
+    """An invoice's request body. QuickBooks bills lines by item: a line that names one uses it, else the item that
+    sells to its account (`income` maps an account id to an item id). A line with no such item is refused, so nothing is
+    half-written. A line for a job bills the job, so the invoice is to the job's customer."""
     lines: list[dict[str, Any]] = []
     for x in body["lines"]:
-        account = _account_id(x["account"])
-        item = income.get(account)
-        if item is None:
-            raise ValueError(f"no QuickBooks item sells to account {account}; add one in QuickBooks")
         units = int(x["amount"])
+        if x.get("item"):
+            item = _keyed(x["item"], "Item")
+        else:
+            account = _account_id(x["account"])
+            found = income.get(account)
+            if found is None:
+                raise ValueError(f"no QuickBooks item sells to account {account}; add one in QuickBooks")
+            item = found
+        detail: dict[str, Any] = {"ItemRef": {"value": item}, "Qty": 1, "UnitPrice": decimal_text(units)}
+        if x.get("class"):
+            detail["ClassRef"] = {"value": str(x["class"])}
         lines.append({"DetailType": "SalesItemLineDetail", "Amount": decimal_text(units),
-                      "Description": str(x.get("description") or ""),
-                      "SalesItemLineDetail": {"ItemRef": {"value": item}, "Qty": 1,
-                                              "UnitPrice": decimal_text(units)}})
-    out: dict[str, Any] = {**_header(body), "CustomerRef": {"value": _party_id(body["party"], "Customer")},
-                           "Line": lines}
+                      "Description": str(x.get("description") or ""), "SalesItemLineDetail": detail})
+    jobs = _single((str(x.get("project") or "") for x in body["lines"]), "job")
+    customer = _keyed(jobs, "Customer") if jobs else _party_id(body["party"], "Customer")
+    out: dict[str, Any] = {**_header(body), "CustomerRef": {"value": customer}, "Line": lines}
+    location = _single((str(x.get("location") or "") for x in body["lines"]), "location")
+    if location:
+        out["DepartmentRef"] = {"value": _keyed(location, "Department")}
     if body.get("number"):
         out["DocNumber"] = str(body["number"])
     if body.get("due"):
         out["DueDate"] = str(body["due"])
+    if body.get("linked_estimate"):
+        out["LinkedTxn"] = [{"TxnId": str(body["linked_estimate"]), "TxnType": "Estimate"}]
     return out
+
+
+def purchase_order_body(body: Mapping[str, Any]) -> dict[str, Any]:
+    """A purchase order's request body: a bill's lines on its vendor, open until QuickBooks closes it."""
+    return {**bill_body(body), "POStatus": "Open"}
+
+
+def estimate_body(body: Mapping[str, Any], income: Mapping[str, str]) -> dict[str, Any]:
+    """An estimate's request body: an invoice's lines, since QuickBooks prices an estimate by item too."""
+    return invoice_body(body, income)
 
 
 def bill_payment_body(body: Mapping[str, Any]) -> dict[str, Any]:
@@ -554,6 +719,48 @@ def item_body(name: str, account: str) -> dict[str, Any]:
     """A non-inventory item that sells to one account (by the account's QuickBooks id). The write-off item is this kind,
     with the bad debt expense account as its income account, as Intuit's write-off article sets it up."""
     return {"Name": name, "Type": "NonInventory", "IncomeAccountRef": {"value": account}}
+
+
+# Tico's raw material and assembly labels have no books type: the books take them as a plain non-inventory item, and the
+# label stays in Tico.
+ITEM_TYPES = {"service": "Service", "inventory": "Inventory", "non_inventory": "NonInventory", "bundle": "Group",
+              "category": "Category", "raw_material": "NonInventory", "assembly": "NonInventory"}
+
+
+def _head(body: Mapping[str, Any], kind: str) -> dict[str, Any]:
+    """The id and revision a sparse update names: QuickBooks checks the SyncToken, so a stale write is refused."""
+    return {"Id": _keyed(body["ext"], kind), "SyncToken": str(body["revision"]), "sparse": True}
+
+
+def item_write(body: Mapping[str, Any], *, update: bool = False) -> dict[str, Any]:
+    """An item as QuickBooks takes it. Its type is set on create only (QuickBooks does not change it). An inventory item
+    starts at zero on the day it is made, as QuickBooks requires."""
+    out: dict[str, Any] = {"Name": str(body["name"])[:100], "Active": bool(body.get("active", True))}
+    if body.get("sku"):
+        out["Sku"] = str(body["sku"])[:100]
+    if body.get("price") is not None:
+        out["UnitPrice"] = decimal_text(int(body["price"]))
+    for key, field in (("income", "IncomeAccountRef"), ("expense", "ExpenseAccountRef"), ("asset", "AssetAccountRef")):
+        if body.get(key):
+            out[field] = {"value": _keyed(body[key], "Account")}
+    if update:
+        return {**out, **_head(body, "Item")}
+    out["Type"] = ITEM_TYPES[str(body["kind"])]
+    if str(body["kind"]) == "inventory":
+        out.update({"TrackQtyOnHand": True, "QtyOnHand": 0, "InvStartDate": str(body["day"])})
+    return out
+
+
+def location_write(body: Mapping[str, Any], *, update: bool = False) -> dict[str, Any]:
+    """A location as a QuickBooks department: its name and whether it is active."""
+    out: dict[str, Any] = {"Name": str(body["name"])[:100], "Active": bool(body.get("active", True))}
+    return {**out, **_head(body, "Department")} if update else out
+
+
+def job_write(body: Mapping[str, Any]) -> dict[str, Any]:
+    """A project as a QuickBooks job: a customer with Job set, under its parent customer (the one QuickBooks requires)."""
+    return {"DisplayName": str(body["name"])[:500], "Job": True, "Active": bool(body.get("active", True)),
+            "ParentRef": {"value": _keyed(body.get("customer"), "Customer")}}
 
 
 def writeoff_body(body: Mapping[str, Any]) -> dict[str, Any]:

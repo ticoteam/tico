@@ -186,9 +186,11 @@ def assign(api, r, bot, generation=0, operator="ana-test"):
                 "expected_generation": generation}, token=operator)
 
 
-def ready(api, r, bots):
-    return post(api, "runners/heartbeat", {"version": "test", "platform": "test",
-                "readiness": {bot: True for bot in bots}}, token=r["token"])
+def ready(api, r, bots, capabilities=()):
+    body = {"version": "test", "platform": "test", "readiness": {bot: True for bot in bots}}
+    if capabilities:
+        body["capabilities"] = list(capabilities)
+    return post(api, "runners/heartbeat", body, token=r["token"])
 
 
 def claim(api, r, bot=None, key=None):
@@ -261,7 +263,7 @@ def test_the_assistant_chats_only_in_its_own_room_and_people_still_hand_it_work(
     ben = post(api, "tasks", {"owner": "coo", "title": "Ben's review", "body": "Private context."},
                   token="ben-test")
     assert ana["conversation_id"] != ben["conversation_id"]
-    get(api, "conversations/" + ana["conversation_id"] + "/messages", "ben-test", expected=403)
+    get(api, "conversations/" + ana["conversation_id"] + "/messages", "ben-test", expected=404)   # unreadable looks missing
     post(api, "messages", {"to": "coo", "text": "Injected", "conversation_id": ana["conversation_id"]},
          token="ben-test", expected=403)
 
@@ -270,7 +272,7 @@ def test_shared_room_membership_updates_and_revokes_history_access(api):
     message = post(api, "chat/cpo", {"text": "The group can read this."})
     changed = post(api, "bots/cpo/owners", {"owners": ["cara"], "expected_revision": 1})
     assert [owner["id"] for owner in changed["owners"]] == ["cara"]
-    get(api, "conversations/" + message["conversation_id"] + "/messages", "ben-test", expected=403)
+    get(api, "conversations/" + message["conversation_id"] + "/messages", "ben-test", expected=404)
     visible = get(api, "conversations/" + message["conversation_id"] + "/messages", "cara-test")
     assert visible[0]["body"] == "The group can read this."
 
@@ -410,3 +412,44 @@ def test_healthz_answers_while_slow_handlers_hold_every_shared_worker(api):
         assert api.get("/healthz").json()["ok"] is True
     finally:
         api.portal.call(release_all)
+
+
+def test_a_second_start_over_a_store_still_owing_the_redesign_cutover_finishes(tmp_path):
+    """The cutover runs in initialize, one write per object, after the store is ready. A store a restart finds part way
+    through it (its record says running) must finish under the next start and not wait on writes the start holds.
+    The second start runs on its own thread, so a stall fails here after a minute instead of hanging the run."""
+    import json
+    import threading
+    from backend import redesign_migration
+
+    def record_of(path):
+        with closing(sqlite3.connect(path)) as c:
+            raw = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (redesign_migration.CUTOVER,)).fetchone()
+        return json.loads(raw[0])
+
+    settings = api_settings(tmp_path)
+    with TestClient(create_app(settings)):
+        pass
+    assert record_of(settings.db_path)["state"] == "done"
+    with closing(sqlite3.connect(settings.db_path)) as c:
+        record = record_of(settings.db_path)
+        record["state"] = "running"
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key=?",
+                  (json.dumps(record, sort_keys=True), redesign_migration.CUTOVER))
+        c.commit()
+
+    outcome = []
+
+    def start_again():
+        try:
+            with TestClient(create_app(settings)):
+                pass
+            outcome.append("started")
+        except BaseException as exc:    # reported to the test thread below
+            outcome.append(exc)
+
+    worker = threading.Thread(target=start_again, daemon=True)
+    worker.start()
+    worker.join(60)
+    assert outcome == ["started"], f"the second start did not finish: {outcome!r}"
+    assert record_of(settings.db_path)["state"] == "done"

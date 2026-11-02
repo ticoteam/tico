@@ -1,12 +1,12 @@
 // Journey 8 on a real hub (redesign TESTING.md §L3): Library › Tools lists the tool a computer reported (the
 // Engineering Lead's Acme Billing, read and refund, from the runner's heartbeat) under In use, with how many have it, and
 // its row opens the tool: who has it (the Engineering Lead, free to change things there), then its page. The old
-// Connections address leads here. Phone, then desktop.
+// Tools address (#/integrations) leads here. Phone, then desktop.
 const assert = require('node:assert/strict');
 const {run, open, ok, sideways, shot, t} = require('./support/redesign-e2e.cjs');
 
 run('redesign-e2e-tools', ['org', 'toured', 'connection'], async ({hub, browser, phone, tag}) => {
-  const page = await open(browser, hub, 'dana', {phone, hash: '#/library/connections'});
+  const page = await open(browser, hub, 'dana', {phone, hash: '#/integrations'});
   await page.waitForFunction(() => location.hash.startsWith('#/library/tools'), null, {timeout: t(5000)});
   const tools = await ok(page, 'GET', 'tools');
   assert.ok(JSON.stringify(tools).includes('acme-billing'), `${tag}: the hub lists it`);

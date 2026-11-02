@@ -9,7 +9,7 @@ async function inboundMount() {
   const version = ++INBOUND_VIEW;
   clearInterval(INBOUND_TIMER);
   host.innerHTML = `<header><h2>Email &amp; Phone</h2></header>
-    <p>Incoming messages for your company’s agents. Every company agent can check these inboxes. Reading a message leaves it available to everyone else.</p>
+    <p>Incoming messages for your company’s agents. Reading a message leaves it available to everyone else.</p>
     <p id="inbound-status" role="status"></p>
     ${settingsIsAdmin() ? `<details id="inbound-connection"><summary>Connect Inbox to Tico account/company</summary>
       <p>Get a connection code for your company from <a href="https://app.tico.dev/inbox" target="_blank" rel="noopener noreferrer">Inbox in the customer portal</a>. The code expires after five minutes.</p>
@@ -135,7 +135,7 @@ async function inboundMount() {
         if (active()) $('#inbound-phone-status').textContent=error.message;
       });
     }
-    $('#inbound-inboxes').innerHTML = inboxes.length ? `<table class="inbound-table"><thead><tr><th>Name</th><th>Address / number</th><th>Status</th><th>Used for</th><th>Actions</th></tr></thead><tbody>${inboxes.map(i => `<tr><td>${esc(i.name)}</td><td>${esc(i.address)}</td><td>${esc(i.state)}${i.cancel_pending ? ' · renewal off' : ''}${i.period_end ? `<br>Paid through ${esc(new Date(i.period_end*1000).toLocaleDateString())}` : ''}</td><td>${esc(i.used_for)}</td><td>${i.kind!=='sms' || settingsIsAdmin() ? `<button class="linkish" data-inbound-edit="${esc(i.inbox_id)}">Edit</button>` : '—'}${settingsIsAdmin() && i.state !== 'released' ? ` <button class="linkish" data-inbound-release="${esc(i.inbox_id)}">${i.kind === 'sms' ? 'Cancel renewal' : 'Release'}</button>` : ''}</td></tr>`).join('')}</tbody></table>` : '<p>No inboxes yet.</p>';
+    $('#inbound-inboxes').innerHTML = inboxes.length ? `<table class="inbound-table"><thead><tr><th>Name</th><th>Address / number</th><th>Status</th><th>Used for</th><th>Readers</th><th>Actions</th></tr></thead><tbody>${inboxes.map(i => `<tr><td>${esc(i.name)}</td><td>${esc(i.address)}</td><td>${esc(i.state)}${i.cancel_pending ? ' · renewal off' : ''}${i.period_end ? `<br>Paid through ${esc(new Date(i.period_end*1000).toLocaleDateString())}` : ''}</td><td>${esc(i.used_for)}</td><td>${inboundReaders(i)}</td><td>${i.kind!=='sms' || settingsIsAdmin() ? `<button class="linkish" data-inbound-edit="${esc(i.inbox_id)}">Edit</button>` : '—'}${settingsIsAdmin() && i.state !== 'released' ? ` <button class="linkish" data-inbound-release="${esc(i.inbox_id)}">${i.kind === 'sms' ? 'Cancel renewal' : 'Release'}</button>` : ''}</td></tr>`).join('')}</tbody></table>` : '<p>No inboxes yet.</p>';
   }
   async function messages() {
     const form = $('#inbound-filter'), params = new URLSearchParams({limit:'50'});
@@ -154,6 +154,25 @@ async function inboundMount() {
       return `<tr><td>${esc(new Date(m.received_at*1000).toLocaleString())}</td><td>${esc(m.kind.toUpperCase())}</td><td>${esc(i?.address || m.inbox_id)}<br><span class="muted">${esc(i?.name || '')}</span></td><td>${esc(m.from)}</td><td><button class="linkish" data-inbound-read="${esc(m.message_id)}">${esc(m.subject || m.preview || (m.retention_removed ? 'Removed by retention' : 'View message'))}</button>${m.subject ? `<p>${esc(m.preview)}</p>` : ''}${m.spam ? '<span class="muted">Spam</span>' : ''}${m.truncated ? '<span class="muted"> · Truncated</span>' : ''}</td><td>${m.has_code ? `<button class="linkish" data-inbound-code="${esc(m.message_id)}">Reveal code</button>` : '—'}</td></tr>`;
     }).join('') : '<tr><td colspan="6">No messages match these filters.</td></tr>';
   }
+  // Who reads an inbox: the company, or one group and the groups under it. Admins change it here.
+  function inboundReaders(i) {
+    const groups = S.orgGroups || [], here = i.audience === 'team' ? i.group_id : '';
+    const name = here ? groups.find(g => g.id === here)?.name || here : 'Everyone';
+    if (!settingsIsAdmin()) return esc(name);
+    return `<select data-inbound-audience="${esc(i.inbox_id)}" aria-label="Readers of ${esc(i.name)}"><option value="">Everyone</option>
+      ${groups.map(g => `<option value="${esc(g.id)}"${g.id === here ? ' selected' : ''}>${esc(g.name || g.id)}</option>`).join('')}</select>`;
+  }
+  host.onchange = async event => {
+    const pick = event.target.closest('[data-inbound-audience]');
+    if (!pick) return;
+    pick.disabled = true;
+    try {
+      await put(`/v2/inbound/inboxes/${encodeURIComponent(pick.dataset.inboundAudience)}/audience`,
+        pick.value ? {audience: 'team', group_id: pick.value} : {audience: 'company'});
+      await refreshInboxes();
+    } catch (error) { failure(error); await refreshInboxes().catch(() => {}); }
+    finally { pick.disabled = false; }
+  };
   $('#inbound-filter').onsubmit = event => { event.preventDefault(); before=0; void messages().catch(failure); };
   $('#inbound-newest').onclick = () => { before=0; void messages().catch(failure); };
   $('#inbound-older').onclick = () => { before=next; void messages().catch(failure); };

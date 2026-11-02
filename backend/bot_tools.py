@@ -22,6 +22,7 @@ import json
 from fastapi import Request
 
 from clients import access_entry, harness_manifests, mcp_servers
+from . import model_subscriptions
 from . import models as M
 from . import providers, read_cache, routines
 from .harnesses import EXTERNAL_HARNESSES, resolve_harness
@@ -79,7 +80,7 @@ def _unique(used, base):
     return name
 
 
-def _model_tool(c, settings, bot, config, readiness, label):
+def _model_tool(c, settings, bot, config, readiness, label, runner=None):
     row = H.bot(c, bot) or {}
     runtime, model = providers.bot_choice(c, settings, config)
     runtime = runtime or row.get("runtime") or ""
@@ -99,7 +100,10 @@ def _model_tool(c, settings, bot, config, readiness, label):
     if isinstance(state, dict):
         if not state.get("installed"):
             status, problem = "problem", "Runtime is not installed on " + label
-        elif state.get("authenticated") in ("missing", "failed", "rejected"):
+        elif state.get("authenticated") in ("missing", "failed", "rejected") and not (
+                # The computer's company subscription signs this bot's turns in (backend/model_subscriptions.py).
+                runner and runtime in model_subscriptions.covered_runtimes(
+                    c, runner, providers.fill(providers.load(c, settings), config))):
             status, problem = "problem", state.get("detail") or "Runtime is not signed in on " + label
         else:
             status = "ready"
@@ -252,12 +256,44 @@ def agent_report(c, bot, tools):
     reconcile(c, {bot: raw}, complete=True)
 
 
+STATE_CONFIG_SQL = "SELECT config_json,repo FROM bot_config WHERE bot=?"
+STATE_RUNNER_SQL = ("SELECT r.id,r.label,r.last_seen,r.revoked_at,r.readiness_json,r.capabilities_json FROM assignments a "
+                    "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?")
+REQUESTS_SQL = "SELECT * FROM bot_tool_requests WHERE bot=? AND state='pending' ORDER BY created,id"
+
+
+def prime_state(c, bots):
+    """Each bot's configuration, computer and pending tool requests, read together for every bot's listing (per 500
+    bots, not three reads per bot). Outside a snapshot nothing is kept."""
+    from .read_cache import cache, prime, prime_rows
+    if cache(c) is None:
+        return
+    for part in H.chunks(sorted(set(bots))):
+        marks = ",".join("?" * len(part))
+        configs = {r["bot"]: r for r in c.execute(
+            f"SELECT bot,config_json,repo FROM bot_config WHERE bot IN ({marks})", part)}
+        prime(c, STATE_CONFIG_SQL, {(s,): configs.get(s) for s in part})
+        runners = {r["bot"]: r for r in c.execute(
+            "SELECT a.bot,r.id,r.label,r.last_seen,r.revoked_at,r.readiness_json,r.capabilities_json FROM assignments a "
+            f"JOIN runners r ON r.id=a.runner_id WHERE a.bot IN ({marks})", part)}
+        prime(c, STATE_RUNNER_SQL, {(s,): runners.get(s) for s in part})
+        # The same computers, for the subscription lookups each Model row may make.
+        prime(c, model_subscriptions.RUNNER_READINESS_SQL, {(r["id"],): r for r in runners.values()})
+        prime(c, model_subscriptions.RUNNER_CAPABILITIES_SQL,
+              {(r["id"],): None if r["revoked_at"] else r for r in runners.values()})
+        requests = {}
+        for r in c.execute(f"SELECT * FROM bot_tool_requests WHERE bot IN ({marks}) AND state='pending' "
+                           "ORDER BY created,id", part):
+            requests.setdefault(r["bot"], []).append(r)
+        prime_rows(c, REQUESTS_SQL, {(s,): requests.get(s, ()) for s in part})
+
+
 def _state(c, settings, bot):
-    row = c.execute("SELECT config_json,repo FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    from .read_cache import one
+    row = one(c, STATE_CONFIG_SQL, (bot,))
     config = H._json(row["config_json"], {}) if row else {}
     config = config if isinstance(config, dict) else {}
-    runner = c.execute("SELECT r.label,r.last_seen,r.revoked_at,r.readiness_json FROM assignments a "
-                       "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (bot,)).fetchone()
+    runner = one(c, STATE_RUNNER_SQL, (bot,))
     readiness = readiness_document(runner["readiness_json"]) if runner else {}
     report = (readiness.get("bots") or {}).get(bot)
     report = report if isinstance(report, dict) else {}
@@ -275,8 +311,8 @@ def _state(c, settings, bot):
 
 
 def _requests(c, bot):
-    return [dict(row, entry=H._json(row["entry_json"], {}) or {}) for row in c.execute(
-        "SELECT * FROM bot_tool_requests WHERE bot=? AND state='pending' ORDER BY created,id", (bot,))]
+    from .read_cache import rows
+    return [dict(row, entry=H._json(row["entry_json"], {}) or {}) for row in rows(c, REQUESTS_SQL, (bot,))]
 
 
 def _pending_tool(request):
@@ -290,8 +326,9 @@ def _pending_tool(request):
             **({"kind": "mcp", "mcp": _mcp_view(entry["mcp"])} if _mcp_view(entry.get("mcp")) else {})}
 
 
-def listing(c, settings, bot):
-    """Everything the row shows for one bot, from records this server already holds."""
+def listing(c, settings, bot, reads=None):
+    """Everything the row shows for one bot, from records this server already holds. `reads` (a repositories.Reads
+    covering `bot`) when the caller lists many bots."""
     state = _state(c, settings, bot)
     runner, report, label = state["runner"], state["report"], state["label"]
     online = bool(runner and not runner["revoked_at"] and runner["last_seen"]
@@ -331,7 +368,7 @@ def listing(c, settings, bot):
     if external:
         for tool in adding:
             tool["detail"] = "Waiting for this external profile to configure and report the tool"
-    tools = [_model_tool(c, settings, bot, state["config"], state["readiness"], label)]
+    tools = [_model_tool(c, settings, bot, state["config"], state["readiness"], label, state["runner"])]
     repo = _repo_tool(settings, bot, state["row"] and state["row"]["repo"], report)
     if repo:
         matching = next((tool for tool in declared if tool["service"].lower() in ("github", "github-app")
@@ -347,7 +384,7 @@ def listing(c, settings, bot):
     from .github_app import repo_of
     own = repo_of(state['row']['repo'] if state['row'] else '', settings.github_owner)
     org = app_row['org'] if app_row else settings.github_owner or (own.split('/')[0] if own else '')
-    extras = access(c, bot, org)['effective'] if state['row'] else []
+    extras = access(c, bot, org, reads=reads)['effective'] if state['row'] else []
     represented = {str(tool.get("scope", {}).get("repo") or tool.get("identity") or "").lower()
                    for tool in tools + declared if tool["service"].lower() in ("github", "github-app")}
     for index, grant in enumerate(extras):

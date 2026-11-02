@@ -34,6 +34,10 @@ seed = [".claude.json"]
 # On a Mac the CLI keeps this login in the Keychain, not in `files`, so it cannot be signed in on the side: Switch
 # account is not offered there (sign out, then sign in).
 keychain = ["darwin"]
+# Connect (Settings > Models): the command that signs a plan in for a company subscription, and how the result comes out.
+# This one prints a long-lived token and leaves the computer's own login as it was.
+connect = ["setup-token"]
+connect_token = "sk-ant-oat"
 
 # What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
 [capabilities]

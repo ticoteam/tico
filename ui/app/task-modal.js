@@ -21,7 +21,7 @@ function taskDialogWire(d) {
     if (d.open || d.taskOpening?.pending) return;
     if (!TASK_CHAT || TASK_CHAT.dialog === d) taskChatStop();
     d.tfEl?.querySelector('video, audio')?.pause();
-    d.tfEl = null; d.tfOpen = null; d.giEl = null;
+    d.tfEl = null; d.tfOpen = null;
     d.taskOpening = {}; d.askDrafts = new Map();
   });
 }
@@ -206,7 +206,6 @@ function taskModalBind(d, task, full = false) {
   tfAdopt(d, task);
   taskPagesAdopt(d, task);      // the task's pages, as cards at its top (ui/app/pages.js)
   ruleHoldsAdopt(d, task);      // a rule review's held outputs and their actions (ui/app/org-rule-holds.js)
-  growthIdeaAdopt(d, task);     // an Idea task's hypothesis, test and verdict (ui/app/growth-idea.js)
   d.dataset.version = String(task.version ?? '');
   if (!d.liveTask || String(d.liveTask.id) !== String(task.id) || Number(task.version) >= Number(d.liveTask.version)) d.liveTask = task;
   if (d.taskRail?.id !== String(task.id)) d.taskRail = {id: String(task.id), open: new Set()};
@@ -477,7 +476,6 @@ async function taskSave(d, id, body, then, field) {
     if (here() && then !== false && data.task) void taskModalShow(data.task, d);       // the server's answer, at once
     if (BOT) {
       if (isKeeper(BOT.slug)) void loadBotTasksV2(BOT.slug);
-      void loadBotChatTasks(BOT.slug);
     }
     void personTasksReload();
     // The list reloads behind it. If the task left the view (done, closed, handed on, declined), the list and the
@@ -957,6 +955,12 @@ async function taskCommentSend(state) {
     const picked = split ? taskDeliveryPicked(state) : null;
     const body = {text, public: !!$('[data-comment-public]', form)?.checked, ...deliveryBody(picked)};
     const data = await post(`/v2/tasks/${encodeURIComponent(state.id)}/comments`, body);
+    if (data.held) {
+      // Held by an org rule: nothing was written, so the text stays in the box and the hold shows here with its actions.
+      if (taskChatCurrent(state)) ruleTaskHeld(state, data.held);
+      status.textContent = '';
+      return;
+    }
     if (!taskChatCurrent(state)) return;
     box.value = ''; box.style.height = ''; TASK_DRAFTS.delete(String(state.id)); state.sending = false;
     const thread = $('.task-comments', state.host);
@@ -1065,7 +1069,6 @@ function hubModalHTML(t, it, opts = {}) {
     ${t.goal_id ? `<div class="muted tmeta"><a href="#/goals/${encodeURIComponent(t.goal_id)}" class="task-goal" data-goal-title="${esc(t.goal_id)}">serves a goal</a></div>` : ''}
     <div class="tmodal-body task-layout">
       <div class="tmodal-main">
-      <section class="gr-idea" data-growth-idea aria-label="Idea" hidden></section>
       <section class="task-pages" data-task-pages aria-label="Pages" hidden></section>
       <section class="rule-holds" data-rule-holds aria-label="Held by a rule" hidden></section>
       ${askToYou && qcardItem(t) ? qcardBoxHTML(t) : waitLabel && waitText ? (askToYou ? `<div class="task-ask"${taskQcardWait(t)}><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`

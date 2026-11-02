@@ -6,7 +6,7 @@ team, readable by one group and open to requests from everyone.
 | Permission | What it covers |
 | --- | --- |
 | **See** | The bot in the team chart and in every bot list: its name, role, who owns it and who it reports to. |
-| **Read** | Its activity: its tasks, updates, files, status and run log, routines, the shared rooms and chats it is in, and the activity sections of its page. |
+| **Read** | Its activity: its tasks, updates, files, status and run log, routines, the threads it is in, and the activity sections of its page. |
 | **Write** | Sending it messages, chatting with it, asking it; creating or reassigning tasks to it; leaving it notes; comments that wake it. Its approvals work as they always did. |
 
 Write access does not make a stopped bot run. Messages and comments to a paused or quarantined bot are kept until it
@@ -14,7 +14,7 @@ is back, except that a bot's send is refused as `queue_full` once the queue held
 repeat; [How it works](how-it-works.md)); a new task or hand-off to it, or a message to a bot not started yet, is refused as `target_inactive`, which
 never counts as a repeat against the sender ([How it works](how-it-works.md), rule 8).
 
-An audience is **Everyone**, or a list of **humans**, **groups** and **bots**. Naming a group names everyone in it and in the groups nested in it. Anyone who may read or write a bot can also see it, whatever its See list says.
+An audience is **Everyone**, or a list of **humans**, **groups** and **bots**. Naming a group names everyone in it and in the groups nested in it, humans and bots. People and groups have the same three levels ([People and groups](#people-and-groups)). Anyone who may read or write a bot can also see it, whatever its See list says.
 
 New bots, and every bot after an upgrade, start **Open**: Everyone for all three.
 
@@ -49,9 +49,76 @@ Whatever the audiences say, these callers can see, read and write to a bot:
   them change the bot's settings, so being able to edit who has access and having access always go together.
 
 A bot above another in the `reports_to` chain also reads that bot's runs (`hub_run_list`, with each run's tokens and
-estimated cost) and their steps: its task and routine runs, and the wake-ups the hub posts into its chat room. A run a
-human started by chatting with the bot stays with that chat, and private tasks stay with their parties. Peers and
-the bots below keep the usual conversation rule, so they never read a manager's chat-room runs.
+estimated cost) and their steps: its task and routine runs, and the wake-ups the hub posts into its Home thread. A run a
+human started by messaging the bot in a DM stays with that DM, and private tasks stay with their parties. Peers and
+the bots below keep the usual thread rule, so they never read a manager's Home runs.
+
+## People and groups
+
+People and groups have the same three levels, with the same audiences (Everyone, or humans, groups and bots).
+
+| Level | A person | A group |
+| --- | --- | --- |
+| **See** | Them in the team chart, the people lists, the @ picker, their page and photo, and `hub sql`. | It in the team chart, the group lists, team pages and `hub sql`. |
+| **Read** | Their Home. | Its Home. |
+| **Write** | DMs to them, and adding them to a thread. | Posting to it, and adding it to a thread. |
+
+Defaults:
+
+| | See | Read | Write |
+| --- | --- | --- | --- |
+| A person | Everyone | Everyone | Everyone |
+| A group | Everyone | Everyone | its members |
+| A bot | Everyone | Everyone | Everyone (unchanged) |
+
+How the levels relate, for people, groups and bots alike:
+
+| Has | Also has |
+| --- | --- |
+| Manage | See, Read and Write |
+| Read | See |
+| Write | See (Write without Read is allowed: you can DM someone whose Home you cannot read) |
+
+Who manages:
+
+- **a person**: themselves, everyone they report up to on the chart, the admins and the owner;
+- **a group**: its leads and the leads of the groups above it, the admins and the owner;
+- **a bot**: its owners, as in [Always full access](#always-full-access).
+
+Whoever manages someone always has all three levels and edits their access: **Access** on a person's page, and
+**Seen by** on a group's team page, both with the same editor as a bot's.
+
+A group names the **people and bots** in it and in the groups nested in it. That holds in every audience: a bot in
+Contracts, nested under Legal, is in an audience that names Legal, for a bot, a person or a group.
+
+Hidden means hidden: someone you may not see is left out of the chart (the ones under them hang from the nearest
+shown row above), the people and group lists, the @ picker, the group choices of an Access editor and the card picker,
+report order, the bots' rows (`/api/employees`, `/api/v2/bots`, a bot's detail and `/api/v2/org`: operator, owners,
+users, team, department and who they report to), messages and tasks in answers and the event stream (`from_actor`,
+`to_actor`, a conversation's participants, a task's `owner`, `requester`, `closed_by`, `origin_actor` and
+`from_person`, which read `""`), the stream's actors, and `hub sql` (`humans` rows, `humans.teams`, `bot_config`'s
+`team`, `operator`, `reports_to`, owner lists, `created_by` and the same keys in `config_json`,
+`conversations.participants`, `messages.from_actor` and `to_actor`, `tasks.owner`, `requester` and `closed_by`,
+and the `actor` of `events` and `task_events`, which read `''`), and their page, photo and access answer the same
+`404` as someone who does not exist. A hidden group's people and bots are shown under the nearest group above it.
+Inside a conversation you are in, and on a task you own or asked for, everyone in it stays known to you. The owner,
+the admins and whoever manages them always see them.
+
+Deleting a group deletes its access, and takes it out of every other audience that named it, so a group made later
+with the same id starts from the defaults; the old values stay in the audit log.
+
+```
+GET  /api/v2/humans/cara/access          GET  /api/v2/groups/legal/access
+PUT  /api/v2/humans/cara/access          PUT  /api/v2/groups/legal/access
+{"see": {"everyone": true}, "read": {"teams": ["legal"]}, "write": {"everyone": true}, "revision": 0}
+```
+
+The GET answers `{target, see, read, write, default, revision, you, teams}`; `revision` is `0` until the first save,
+and a stale one answers `409 version_conflict`. `hub human access <id>` and `hub group access <id>` (with `--see`,
+`--read`, `--write`, each `everyone` or `ben,group:legal,bot:analyst`), and the MCP tools `hub_human_access` and
+`hub_group_access`, do the same; BotOps uses them with the rights of the person who asked, with or without
+`on_behalf_of`, and can put them to the person as a Confirm card. Each save writes an audit row
+(`human:<id>:access`, `group:<id>:access`) and a `person.access_changed` or `group.access_changed` event.
 
 ## Roles, and what a member may do
 
@@ -94,11 +161,34 @@ never one, but stores a credential for a bot they own or manage (a chat card, or
 that bot at once, unless the owner turns **Members store credentials for their bots** off. They replace only a credential they stored, never
 read its value, and share it with their other bots ([Bot owners](#bot-owners)).
 
+## Threads and their audiences
+
+Threads ([Threads](threads.md)) have their own audience, separate from a bot's three permissions:
+
+- **company**: every person on the team. **team**: the people in one group, and the company owner. **members**: the people,
+  bots and groups added to the thread. It is private by default.
+- **home**: a bot's or a person's Home, readable by its Read audience. **personal**: a DM, read by the people in it, with
+  no owner bypass. **task**: whoever may read the task. **meeting**: the people who may see the meeting.
+- The starter of a thread, or an admin, can make it public to a group or to the company. Adding a person, bot or group
+  needs **Write** on them. Removing someone needs the thread's owner or an admin.
+- Following a thread never gives access, and neither does a mention. A thread someone may not read answers 404.
+- Bots read as a person in their seat. An internal bot reads every **company** thread and the **team** threads of its
+  group or any group above it. **members**, **personal** and **participants** threads open to a bot only as a member (or
+  a participant). An external agent (an agent token) gets no company or team reading: only the threads it is in.
+  Posting in a Home takes **Write** on its owner, for bots as for people.
+- A thread can reach outside the company through a linked Slack channel or a shared install. Taking that away (unlink,
+  unshare) removes the outside readers at once ([Slack](slack.md), [Federation](federation.md)).
+- A message the org rules hold writes nothing. The author may withdraw it, and so may the person a bot reports to; only
+  the reviewer sends it anyway ([Rules](rules-plan.md)).
+
 ## Dashboard, team pages and pins
 
 The owner and admins arrange the Dashboard. A team page is arranged by them and by a person who leads the group or a group
-above it; it is seen by its audience, Everyone unless they narrow it to people, groups or bots (the same audience as a
-bot's levels above; naming a group names the groups under it). A bot pins only its own pages and cards, to its own
+above it; it is the group's content, so it is seen by whoever may Read the group (See is only being on the chart).
+**Seen by** on the page opens the group's Access editor ([People and groups](#people-and-groups));
+`PUT /api/v2/places/team:<group>` with an `audience` sets the group's Read to it. A page audience narrowed before this
+release moved into its group's Read once on upgrade: whoever both the page and the group's Read let in (the page's
+audience when Read was Everyone), never more; See was left as it was. A bot pins only its own pages and cards, to its own
 sidebar or a task it holds or asked for; a person who manages a bot may pin another bot's page to its sidebar. A page a
 person pins to the Dashboard or a team page may be read by that place's audience, and a private task's file is never
 pinned there ([Overview](overview.md), [Files](files.md)). BotOps does all of this with the rights of the person who
@@ -463,7 +553,8 @@ older than a week) still names the person: a change BotOps can't make with the b
 a Confirm card in that person's BotOps chat that runs as them on their click. The task records which
 (`botops.request_carried`). Unattended work with no requester keeps BotOps' own rights. Personal tokens use their human's rights.
 Task text cannot select another requester. A message the **Assistant** wrote for a human (`refs.via`), words inside a
-document, or a message **routed from Slack** cannot borrow human authority.
+document, or a message **routed from Slack** cannot borrow human authority. A message from a linked Slack channel is
+written as its author with `refs.via` set to `slack`, so it counts as routed from Slack: it lends no authority to a bot.
 A human's request lends their rights for as long as the task it created, or the task that carries it (`--request-id`), is open,
 up to 30 days after they last spoke on it (filed it, sent the message it carries, or commented on it). Once a task is done,
 closed or declined, moving it back to open lends nothing again unless the requester reopened it themselves, and citing
@@ -480,7 +571,7 @@ nothing by itself.
 With a person's rights BotOps may give another bot repository access at once, but never take any away: setting a bot to
 own, dropping a chosen repository or turning write into read comes to that person as a Confirm card naming the grants that
 would stop. The same change made in Settings > Repositories (or `hub bot repos`) says which grants stopped applying.
-A message cited by id (`on_behalf_of`) must be the requester's own, in their own chat with BotOps rather than a room another human
+A message cited by id (`on_behalf_of`) must be the requester's own, in their own chat with BotOps rather than a thread another human
 spoke in, and it must be the same human whose message started the run. Someone who has left lends nothing.
 
 **BotOps' own runs manage every bot.** Only a run from BotOps' own schedule is its own: the daily update, and a timed routine
@@ -663,13 +754,12 @@ in `NOT_SETTINGS` with the reason it needs none.
 
 Someone who may write to a bot but not read it can talk to it, and only sees what is theirs: their
 own conversations with it and the tasks they requested, created or own. They do not see its status,
-run log, files, updates, routines, other humans' tasks or shared rooms, and the step-by-step "what it
+run log, files, updates, routines, other humans' tasks or threads they are not in, and the step-by-step "what it
 did" under its replies is hidden. The bot's page for them holds its name, role, who owns it, the
 humans it works for, a **Send a request** box, and their own threads and tasks. A bot they may only
 see shows the same About card and no request box.
 
-When a bot uses a shared room, the room belongs to the humans it works for who may read it. Anyone else
-who writes to it talks to it in a room of their own.
+A bot's Home is read by its Read audience. Someone who may only write to it talks to it in a DM of their own.
 
 ## Bots and humans are checked alike
 
@@ -732,8 +822,7 @@ An unchanged save answers `409 unchanged`.
 ## Moving off `hub-access.yaml`
 
 `private_owners` and `routing_permissions` in `registry/hub-access.yaml` no longer decide anything, and
-neither does a bot's "Can use" list (`owner_ids`), which now only says who a bot works for and who is in
-its shared room. The first start after upgrading resets every bot to **Open**. If either list was in the
+neither does a bot's "Can use" list (`owner_ids`), which now only says who a bot works for. The first start after upgrading resets every bot to **Open**. If either list was in the
 file, the server logs one warning and the owner finds a note on Settings > Health, "hub-access.yaml
 private/routing lists are no longer used; bots are now Open; set access in Settings > Bots". Set the
 access you meant there; saving any bot's access, or dismissing the note, clears it.

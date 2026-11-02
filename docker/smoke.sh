@@ -134,6 +134,11 @@ route="$(dc exec -T server cat /tunnel/ingress.yml)"
 printf '%s\n' "$route" | grep -A1 -x '  - hostname: runner.smoke.example.test' | grep -qF "path: '^/(?:api/v2|download)(?:/.*)?\$'" \
   || fail "the tunnel does not route the runner hostname's API and downloads"
 [ "$(printf '%s\n' "$route" | tail -1)" = "  - service: http_status:404" ] || fail "the tunnel's catch-all 404 is not last"
+# With calls on the app host, the tunnel sends LiveKit's signal to the media server ahead of the app's own route.
+dc exec -T -e TICO_DOMAIN=smoke.example.test -e TICO_MEET_URL=wss://smoke.example.test -e TICO_MEET_API_KEY=smoke \
+  -e TICO_MEET_API_SECRET=smoke server tico-entrypoint tunnel-config || fail "the server cannot write the tunnel's route with calls"
+dc exec -T server cat /tunnel/ingress.yml | head -3 | grep -qF "path: '^/rtc(?:/.*)?\$'" || fail "the tunnel has no /rtc route for calls"
+dc exec -T -e TICO_DOMAIN=smoke.example.test server tico-entrypoint tunnel-config || fail "the server cannot restore the tunnel's route"
 
 step "a malformed expected AWS account refuses to start, without calling AWS"
 out="$(dc exec -T -e TICO_EXPECTED_AWS_ACCOUNT=12345 server tico-entrypoint aws-identity 2>&1)" && fail "a malformed TICO_EXPECTED_AWS_ACCOUNT was accepted"

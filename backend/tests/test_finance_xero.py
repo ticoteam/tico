@@ -26,9 +26,10 @@ LATER2 = "2026-10-15T14:00:00.000000Z"
 TENANT = "acme-tenant"
 BASE_PATH = "/api.xro/2.0"
 BASE = "https://api.xero.test" + BASE_PATH
-ENDPOINTS = ("Accounts", "Contacts", "Invoices", "CreditNotes", "Payments", "ManualJournals", "BankTransactions",
-             "BankTransfers", "Overpayments", "Prepayments")
-IDS = {"Accounts": "AccountID", "Contacts": "ContactID", "Invoices": "InvoiceID", "CreditNotes": "CreditNoteID",
+ENDPOINTS = ("Accounts", "Contacts", "Items", "TrackingCategories", "Invoices", "CreditNotes", "Payments",
+             "ManualJournals", "BankTransactions", "BankTransfers", "Overpayments", "Prepayments")
+IDS = {"Accounts": "AccountID", "Contacts": "ContactID", "Items": "ItemID", "Invoices": "InvoiceID",
+       "CreditNotes": "CreditNoteID",
        "Payments": "PaymentID", "ManualJournals": "ManualJournalID", "BankTransactions": "BankTransactionID",
        "BankTransfers": "BankTransferID", "Overpayments": "OverpaymentID", "Prepayments": "PrepaymentID"}
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -119,6 +120,10 @@ class XeroBooks:
             return xero.Reply(200, {name: rows})
         if name == "Contacts" and query.get("includeArchived") != "true":
             rows = [r for r in rows if r.get("ContactStatus") != "ARCHIVED"]
+        if name == "TrackingCategories":       # archived categories and options are listed only when asked for
+            keep = query.get("includeArchived") == "true"
+            rows = [{**r, "Options": [o for o in r.get("Options") or [] if keep or o.get("Status") != "ARCHIVED"]}
+                    for r in rows if keep or r.get("Status") != "ARCHIVED"]
         if since:
             floor = (parsedate_to_datetime(since) - EPOCH) // timedelta(milliseconds=1)
             rows = [r for r in rows if _ms_of(r.get("UpdatedDateUTC")) > floor]
@@ -347,8 +352,8 @@ def _pass_setup(books: Any, xbooks: XeroBooks, monkeypatch: Any, transport: Any 
     real = xero.Xero
     monkeypatch.setattr("backend.hook_relay.link_of", lambda c, vault, settings: object())
     monkeypatch.setattr(books_link, "access_token", lambda *a, **k: "token-1")
-    monkeypatch.setattr(xero, "Xero", lambda tenant, tokens: real(
-        tenant, tokens, base=BASE, transport=transport or xbooks, sleep=lambda s: None))
+    monkeypatch.setattr(xero, "Xero", lambda tenant, tokens, **kw: real(
+        tenant, tokens, base=BASE, transport=transport or xbooks, sleep=lambda s: None, **kw))
     return cid
 
 
@@ -843,6 +848,37 @@ def test_a_categorized_bank_row_is_sent_as_a_bank_transaction_in_its_direction()
     assert receive["Type"] == "RECEIVE" and receive["LineItems"][0]["LineAmount"] == "15.00"
     with pytest.raises(ValueError):
         X.bank_body({"date": "2026-10-05", "memo": "", "marker": "", "lines": lines(-1500, other=-1000)})
+
+
+def test_a_journal_or_bank_line_sends_the_location_it_was_for_as_a_tracking_option():
+    location = "TrackingOption:cat-loc/opt-austin"
+    journal = X.journal_body({"date": "2026-10-05", "memo": "", "marker": "[tico:x]", "lines": [
+        {"account": "Account:acct-1000", "amount": 1500, "description": "", "location": location, "classes": {}},
+        {"account": "Account:acct-6100", "amount": -1500, "description": "", "location": location,
+         "classes": {"class": "cat-team/opt-field"}}]})
+    assert journal["JournalLines"][0]["Tracking"] == [
+        {"TrackingCategoryID": "cat-loc", "TrackingOptionID": "opt-austin"}]
+    assert journal["JournalLines"][1]["Tracking"] == [
+        {"TrackingCategoryID": "cat-team", "TrackingOptionID": "opt-field"},
+        {"TrackingCategoryID": "cat-loc", "TrackingOptionID": "opt-austin"}]
+    bank = X.bank_body({"date": "2026-10-05", "memo": "", "marker": "[tico:x]", "lines": [
+        {"account": "Account:acct-1000", "amount": -1500, "role": L.MONEY_ROLE},
+        {"account": "Account:acct-6100", "amount": 1500, "role": "", "description": "tool", "location": location,
+         "party": "Contact:contact-1"}]})
+    assert bank["LineItems"][0]["Tracking"] == [{"TrackingCategoryID": "cat-loc", "TrackingOptionID": "opt-austin"}]
+
+
+def test_an_archived_tracking_option_comes_in_inactive_and_archiving_or_renaming_it_changes_its_content():
+    def category(status: str) -> dict[str, Any]:
+        return {"TrackingCategoryID": "cat-1", "Name": "Team", "Status": "ACTIVE",
+                "Options": [{"TrackingOptionID": "opt-1", "Name": "Field", "Status": status},
+                            {"TrackingOptionID": "opt-2", "Name": "Office", "Status": "ACTIVE"}]}
+
+    live = {r.ext.external_id: r for r in X.tracking_records(category("ACTIVE"), lambda key: "")}
+    archived = {r.ext.external_id: r for r in X.tracking_records(category("ARCHIVED"), lambda key: "")}
+    assert archived["cat-1/opt-1"].active is False and archived["cat-1/opt-2"].active is True
+    assert archived["cat-1/opt-1"].ext.content != live["cat-1/opt-1"].ext.content
+    assert archived["cat-1/opt-2"].ext.content == live["cat-1/opt-2"].ext.content
 
 
 def test_a_payment_keeps_the_kind_its_type_names_even_once_deleted():
@@ -1850,3 +1886,317 @@ def test_a_full_refund_of_a_credit_note_with_a_negative_rounding_line_recognizes
         rounding = c.execute("SELECT COALESCE(SUM(r.amount), 0) FROM fin_cash_rollups r JOIN fin_accounts a "
                              "ON a.id = r.account_id WHERE a.code = '4900' AND r.day = ?", (refund_day,)).fetchone()[0]
         assert abs(credit) == 9999 and recognized == credit and rounding == -1
+
+
+def _local(c: Any, ext: str, table: str) -> str:
+    """The local record a provider record is bound to."""
+    return str(c.execute("SELECT local_id FROM fin_external_refs WHERE external_id=? AND local_table=?",
+                         (ext, table)).fetchone()[0])
+
+
+def _tracked_chart(xbooks: XeroBooks) -> None:
+    """The chart, an item sold on account 4000 and bought on 6100, and two tracking categories: the location one and a
+    team one (which the books take as classes)."""
+    _chart(xbooks)
+    xbooks.rows["Items"] = [{"ItemID": "item-1", "Code": "CONSULT", "Name": "Consulting", "IsTrackedAsInventory": False,
+                             "SalesDetails": {"UnitPrice": 150.0, "AccountCode": "4000"},
+                             "PurchaseDetails": {"AccountCode": "6100"}, "UpdatedDateUTC": ms("2026-10-01T00:00:00Z")}]
+    xbooks.rows["TrackingCategories"] = [
+        {"TrackingCategoryID": "cat-loc", "Name": "Location", "Status": "ACTIVE",
+         "Options": [{"TrackingOptionID": "opt-austin", "Name": "Austin", "Status": "ACTIVE"}]},
+        {"TrackingCategoryID": "cat-team", "Name": "Team", "Status": "ACTIVE",
+         "Options": [{"TrackingOptionID": "opt-field", "Name": "Field", "Status": "ACTIVE"}]}]
+
+
+def test_xero_items_and_tracking_options_come_in_and_a_line_takes_its_location_and_class(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    tracked = [{"Name": "Location", "Option": "Austin"}, {"Name": "Team", "Option": "Field"}]
+    xbooks.rows["Invoices"] = [{**_invoice("inv-1"), "LineItems": [{**_line("acct-4000", "100.00"), "Tracking": tracked}]}]
+    cid = _connection(books)
+    _mirror(books, cid)
+    with books.transaction() as c:
+        SL.set_setting(c, mirror.XERO_LOCATION_SETTING, "cat-loc", by=OWNER, at=AT)
+    client = xero.Xero(TENANT, lambda force: "token-1", base=BASE, transport=xbooks, sleep=lambda s: None,
+                       location="cat-loc")
+    assert _drain(books, client, cid) == []
+    with books.read() as c:
+        item = c.execute("SELECT name, sku, price, income_account_id FROM items").fetchone()
+        assert item[:3] == ("Consulting", "CONSULT", 15000)
+        assert item[3] == _local(c, "Account:acct-4000", "fin_accounts")
+        location = _local(c, "TrackingOption:cat-loc/opt-austin", "locations")
+        clazz = _local(c, "TrackingOption:cat-team/opt-field", "fin_dimensions")
+        assert {(str(k), str(v)) for k, v in c.execute("SELECT kind, value FROM fin_line_tags")} == {
+            ("location", location), ("class", clazz)}
+
+
+def test_a_bill_backfilled_on_an_archived_tracking_option_imports_with_its_tag(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    xbooks.rows["TrackingCategories"][1]["Options"][0]["Status"] = "ARCHIVED"      # Team/Field is archived by now
+    xbooks.rows["Contacts"][0]["IsSupplier"] = True
+    tracked = [{"Name": "Team", "Option": "Field"}]
+    xbooks.rows["Invoices"] = [{**_invoice("bill-1", kind="ACCPAY"),
+                                "LineItems": [{**_line("acct-6100", "100.00"), "Tracking": tracked}]}]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_bills").fetchone()[0] == 1
+        clazz = _local(c, "TrackingOption:cat-team/opt-field", "fin_dimensions")
+        assert c.execute("SELECT active FROM fin_dimensions WHERE id=?", (clazz,)).fetchone()[0] == 0
+        assert {(str(k), str(v)) for k, v in c.execute("SELECT kind, value FROM fin_line_tags")} == {("class", clazz)}
+
+
+def test_a_bill_backfilled_on_an_option_in_an_archived_category_imports_with_its_tag(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    xbooks.rows["TrackingCategories"][1]["Status"] = "ARCHIVED"      # the Team category is archived by now
+    xbooks.rows["Contacts"][0]["IsSupplier"] = True
+    tracked = [{"Name": "Team", "Option": "Field"}]
+    xbooks.rows["Invoices"] = [{**_invoice("bill-1", kind="ACCPAY"),
+                                "LineItems": [{**_line("acct-6100", "100.00"), "Tracking": tracked}]}]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_bills").fetchone()[0] == 1
+        clazz = _local(c, "TrackingOption:cat-team/opt-field", "fin_dimensions")
+        assert c.execute("SELECT active FROM fin_dimensions WHERE id=?", (clazz,)).fetchone()[0] == 0
+        assert {(str(k), str(v)) for k, v in c.execute("SELECT kind, value FROM fin_line_tags")} == {("class", clazz)}
+
+
+@pytest.mark.parametrize("echoed", [True, False], ids=["item_code_echoed", "item_code_not_echoed"])
+def test_a_bill_made_here_on_an_item_keeps_the_item_when_xero_edits_it(books, echoed):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    xbooks.rows["Contacts"][0]["IsSupplier"] = True
+    cid = _connection(books)
+    _mirror(books, cid)
+    client = _client(xbooks)
+    assert _drain(books, client, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "bill_create", {
+            "vendor_id": _local(c, "Contact:contact-1", "fin_contacts"), "number": "B-1", "bill_date": "2026-10-05",
+            "due_date": "2026-11-05",
+            "lines": [{"item_id": _local(c, "Item:item-1", "items"), "amount": 10_000, "description": "Consulting"}]})
+        assert made.status == "committed", made
+    assert _drain(books, client, cid, now=LATER) == []
+    (bill,) = [r for r in xbooks.rows["Invoices"] if r["Type"] == "ACCPAY"]
+    assert bill["LineItems"][0]["ItemCode"] == "CONSULT"            # the item goes to Xero by its code
+    if not echoed:
+        del bill["LineItems"][0]["ItemCode"]
+    bill["LineItems"][0]["LineAmount"] = "120.00"                   # the provider edits the bill
+    bill["UpdatedDateUTC"] = _later_than_now()
+    assert _drain(books, client, cid, now=LATER2) == []
+    with books.read() as c:
+        assert c.execute("SELECT total FROM fin_bills WHERE number='B-1'").fetchone()[0] == 12_000
+        assert c.execute("SELECT l.item_id FROM fin_bill_lines l JOIN fin_bills b ON b.id = l.bill_id "
+                         "WHERE b.number='B-1'").fetchone()[0] == _local(c, "Item:item-1", "items")
+
+
+def test_a_renamed_xero_location_option_is_taken_in_as_a_newer_revision_and_an_unchanged_one_keeps_its_revision(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    options = xbooks.rows["TrackingCategories"][0]["Options"]
+    options[0] = {"TrackingOptionID": "opt-austin", "Name": "West", "Status": "ACTIVE"}
+    cid = _connection(books)
+    _mirror(books, cid)
+    with books.transaction() as c:
+        SL.set_setting(c, mirror.XERO_LOCATION_SETTING, "cat-loc", by=OWNER, at=AT)
+    client = xero.Xero(TENANT, lambda force: "token-1", base=BASE, transport=xbooks, sleep=lambda s: None,
+                       location="cat-loc")
+    assert _drain(books, client, cid) == []
+    with books.read() as c:
+        location = _local(c, "TrackingOption:cat-loc/opt-austin", "locations")
+        first = SX.ref(c, cid, "locations", "TrackingOption:cat-loc/opt-austin")["revision"]
+        assert c.execute("SELECT name FROM locations WHERE id=?", (location,)).fetchone()[0] == "West"
+    options[0] = {"TrackingOptionID": "opt-austin", "Name": "East", "Status": "ACTIVE"}
+    assert _drain(books, client, cid, now=LATER) == []
+    with books.read() as c:
+        renamed = SX.ref(c, cid, "locations", "TrackingOption:cat-loc/opt-austin")["revision"]
+        assert c.execute("SELECT name FROM locations WHERE id=?", (location,)).fetchone()[0] == "East"
+    assert renamed > first
+    assert _drain(books, client, cid, now=LATER2, passes=1) == []
+    with books.read() as c:
+        assert SX.ref(c, cid, "locations", "TrackingOption:cat-loc/opt-austin")["revision"] == renamed
+
+
+def test_a_tracking_lookup_that_fails_is_asked_again_and_a_read_waits_until_its_options_are_known():
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    tracked = [{"Name": "Location", "Option": "Austin"}]
+    xbooks.rows["Invoices"] = [{**_invoice("inv-1"),
+                                "LineItems": [{**_line("acct-4000", "100.00"), "Tracking": tracked}]}]
+    xbooks.fail.add(("TrackingCategories", 1))
+    client = xero.Xero(TENANT, lambda force: "token-1", base=BASE, transport=xbooks, sleep=lambda s: None,
+                       location="cat-loc")
+    waiting = client.page("invoices", 1, 10)
+    assert not waiting.ok and "tracking options could not be read" in waiting.error
+    read = client.page("invoices", 1, 10)
+    assert read.ok
+    assert [tuple(line.tags) for doc in read.records for line in doc.lines] == [
+        (("location", "TrackingOption:cat-loc/opt-austin"),)]
+
+
+def test_an_item_write_whose_tracking_lookup_fails_waits_and_is_sent_with_its_account_codes_once_it_answers():
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    xbooks.fail.add(("TrackingCategories", 1))
+    client = _client(xbooks)
+    body = {"name": "Consulting", "sku": "CONSULT", "kind": "service", "price": 15000,
+            "income": "Account:acct-4000", "expense": "Account:acct-6100", "asset": ""}
+    waiting = client.send("item.create", body, "key-item-tracking")
+    assert not waiting.ok and not waiting.final
+    assert not [c for c in xbooks.calls if c["method"] in ("PUT", "POST") and c["path"].startswith("Items")]
+    sent = client.send("item.create", body, "key-item-tracking")
+    assert sent.ok
+    assert [c["body"]["Items"][0]["SalesDetails"]["AccountCode"] for c in xbooks.calls
+            if c["method"] == "PUT" and c["path"] == "Items"] == ["4000"]
+
+
+def test_a_lost_write_found_while_the_tracking_lookup_is_down_is_asked_again_and_not_bound_without_its_record():
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    client = _client(xbooks)
+    xbooks.lost = 1                                                   # the write lands; its answer never arrives
+    lost = client.send("invoice.create", _doc_body("INV-T"), "key-tracking-find")
+    assert not lost.ok and not lost.final
+    xbooks.fail.add(("TrackingCategories", 1))
+    waiting = client.find("invoice.create", _doc_body("INV-T"), "key-tracking-find")
+    assert waiting is not None and not waiting.ok and not waiting.final
+    found = client.find("invoice.create", _doc_body("INV-T"), "key-tracking-find")
+    assert found is not None and found.ok and found.record is not None
+    assert len(xbooks.rows["Invoices"]) == 1
+
+
+def test_a_line_on_a_tracking_option_the_books_do_not_hold_waits_on_its_document_journal_or_bank_entry():
+    def system(name: str) -> str:
+        return {"location": "cat-loc", "option:Location/Austin": "TrackingOption:cat-loc/opt-austin"}.get(name, "")
+
+    gone = [{"Name": "Team", "Option": "Gone"}]
+    invoice = _invoice("inv-9")
+    invoice["LineItems"] = [{**_line("acct-4000", "100.00"), "Tracking": gone}]
+    journal = _journal("mj-9", "15.00")
+    journal["JournalLines"][0]["Tracking"] = gone
+    bank = _spend("bt-9", [{**_line("acct-6100", "15.00"), "Tracking": gone}])
+    assert isinstance(X.document_record(invoice, system), M.Refused)
+    assert isinstance(X.manual_journal_record(journal, system), M.Refused)
+    assert isinstance(X.bank_record(bank, system), M.Refused)
+    mapped = [{"Name": "Location", "Option": "Austin"}]
+    invoice["LineItems"] = [{**_line("acct-4000", "100.00"), "Tracking": mapped}]
+    assert isinstance(X.document_record(invoice, system), M.Document)
+
+
+def test_a_bank_transaction_line_takes_in_its_tracking_option_and_a_revision_keeps_it(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    tracked = [{"Name": "Location", "Option": "Austin"}]
+    xbooks.rows["BankTransactions"] = [_spend("bt-1", [{**_line("acct-6100", "15.00"), "Tracking": tracked}])]
+    cid = _connection(books)
+    _mirror(books, cid)
+    with books.transaction() as c:
+        SL.set_setting(c, mirror.XERO_LOCATION_SETTING, "cat-loc", by=OWNER, at=AT)
+    client = xero.Xero(TENANT, lambda force: "token-1", base=BASE, transport=xbooks, sleep=lambda s: None,
+                       location="cat-loc")
+    assert _drain(books, client, cid) == []
+
+    def expense_tags() -> list[tuple[str, str]]:
+        with books.read() as c:
+            entry = _local(c, "BankTransaction:bt-1", "fin_entries")
+            return [tuple(r) for r in c.execute(
+                "SELECT t.kind, t.value FROM fin_line_tags t JOIN fin_lines l ON l.id=t.line_id "
+                "WHERE l.entry_id=? AND l.account_id=?", (entry, account(c, "6100")))]
+
+    with books.read() as c:
+        austin = _local(c, "TrackingOption:cat-loc/opt-austin", "locations")
+    assert expense_tags() == [("location", austin)]
+    revised = {**xbooks.rows["BankTransactions"][0], "UpdatedDateUTC": ms("2026-10-15T12:45:00Z"),
+               "LineItems": [{**_line("acct-6100", "20.00"), "Tracking": tracked}]}
+    xbooks.change("BankTransactions", revised)
+    assert _drain(books, client, cid, now=LATER) == []
+    assert expense_tags() == [("location", austin)]
+
+
+def test_a_revised_invoice_naming_a_tracking_option_the_books_do_not_hold_keeps_its_tags_and_revision(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    both = [{"Name": "Location", "Option": "Austin"}, {"Name": "Team", "Option": "Field"}]
+    xbooks.rows["Invoices"] = [{**_invoice("inv-1"), "LineItems": [{**_line("acct-4000", "100.00"), "Tracking": both}]}]
+    cid = _connection(books)
+    _mirror(books, cid)
+    with books.transaction() as c:
+        SL.set_setting(c, mirror.XERO_LOCATION_SETTING, "cat-loc", by=OWNER, at=AT)
+    client = xero.Xero(TENANT, lambda force: "token-1", base=BASE, transport=xbooks, sleep=lambda s: None,
+                       location="cat-loc")
+    assert _drain(books, client, cid) == []
+    with books.read() as c:
+        invoice = _local(c, "Invoice:inv-1", "fin_invoices")
+        before = tuple(c.execute("SELECT status, total FROM fin_invoices WHERE id=?", (invoice,)).fetchone())
+        tags = c.execute("SELECT tags_json FROM fin_invoice_lines WHERE invoice_id=?", (invoice,)).fetchone()[0]
+        revision = c.execute("SELECT revision FROM fin_external_refs WHERE external_id='Invoice:inv-1'").fetchone()[0]
+    assert sorted(json.loads(tags)) == ["class", "location"]
+    gone = [{"Name": "Location", "Option": "Austin"}, {"Name": "Team", "Option": "Gone"}]
+    xbooks.change("Invoices", {**xbooks.rows["Invoices"][0], "UpdatedDateUTC": ms("2026-10-15T12:45:00Z"),
+                               "LineItems": [{**_line("acct-4000", "100.00"), "Tracking": gone}]})
+    _drain(books, client, cid, now=LATER, passes=2)
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, total FROM fin_invoices WHERE id=?", (invoice,)).fetchone()) == before
+        assert c.execute("SELECT tags_json FROM fin_invoice_lines WHERE invoice_id=?", (invoice,)).fetchone()[0] == tags
+        assert c.execute("SELECT revision FROM fin_external_refs WHERE external_id='Invoice:inv-1'").fetchone()[0] \
+            == revision
+
+
+def test_xero_takes_an_item_by_its_account_codes_and_a_bill_line_by_its_tracking_options():
+    item = X.item_body({"name": "Consulting", "sku": "CONSULT", "kind": "service", "price": 15_000,
+                        "income_code": "4000", "expense_code": "6100"})
+    assert item == {"Code": "CONSULT", "Name": "Consulting", "IsSold": True, "IsPurchased": True,
+                    "SalesDetails": {"AccountCode": "4000", "UnitPrice": "150.00"},
+                    "PurchaseDetails": {"AccountCode": "6100"}}
+    bill = X.document_body({"party": "Contact:contact-1", "day": "2026-10-05", "memo": "", "lines": [
+        {"account": "Account:acct-6100", "amount": 1500, "description": "seats",
+         "location": "TrackingOption:cat-loc/opt-austin", "class": "cat-team/opt-field"}]}, "Bill")
+    assert bill["Invoices"][0]["LineItems"][0]["Tracking"] == [
+        {"TrackingCategoryID": "cat-loc", "TrackingOptionID": "opt-austin"},
+        {"TrackingCategoryID": "cat-team", "TrackingOptionID": "opt-field"}]
+
+
+def test_an_item_made_here_is_sent_to_xero_by_the_codes_of_its_accounts():
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    client = xero.Xero(TENANT, lambda force: "token-1", base=BASE, transport=xbooks, sleep=lambda s: None)
+    sent = client.send("item.create", {"name": "Design", "sku": "DESIGN", "kind": "service", "price": 9_000,
+                                       "income": "Account:acct-4000", "expense": "", "asset": ""}, "item:design")
+    assert sent.ok and sent.kind == "Item" and sent.external_id, sent
+    assert xbooks.rows["Items"][-1]["SalesDetails"] == {"AccountCode": "4000", "UnitPrice": "90.00"}
+
+
+def test_an_item_made_here_in_a_xero_book_is_written_to_xero_and_its_row_appears_once_xero_confirms(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    cid = _connection(books)
+    _mirror(books, cid)
+    client = _client(xbooks)
+    assert _drain(books, client, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "item_create", {"name": "Design", "sku": "DESIGN", "kind": "service", "price": 9_000,
+                                             "income_account_id": _local(c, "Account:acct-4000", "fin_accounts")})
+        assert made.status == "committed", made
+        assert c.execute("SELECT COUNT(*) FROM items WHERE name='Design'").fetchone()[0] == 0
+    assert _drain(books, client, cid, now=LATER) == []
+    assert [row["Code"] for row in xbooks.rows["Items"]] == ["CONSULT", "DESIGN"]
+    with books.read() as c:
+        assert c.execute("SELECT price FROM items WHERE id=?", (made.result["item_id"],)).fetchone()[0] == 9_000
+        assert c.execute("SELECT COUNT(*) FROM items WHERE name='Design'").fetchone()[0] == 1
+
+
+def test_a_location_or_job_made_here_in_a_xero_book_is_refused_since_xero_keeps_them_elsewhere(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.transaction() as c:
+        assert act(c, OWNER, "location_create", {"name": "Dallas"}).code == "invalid"
+        customer = _local(c, "Contact:contact-1", "fin_contacts")
+        assert act(c, OWNER, "project_create", {"name": "Deck", "customer_id": customer}).code == "invalid"

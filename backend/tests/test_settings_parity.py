@@ -98,11 +98,11 @@ NOT_PROVEN = {
 "tasks.tag": "422: the body shape",
     "inbound.inbox.create": "422: the body shape", "inbound.inbox": "422: no synthetic inbox yet",
     "inbound.phone_request.cancel": "409: inbound is not configured",
+    "inbound.inbox.audience": "503: inbound is not configured",
     # Confirm entries: the card is made, but the tap can't run on this fixture.
     "bot.agent_credential.revoke": "tap 404: finance has no agent credential",
     "webhooks.gateway.wake": "tap 404: the trigger has no Tico Gateway address (a member's tap is refused first)",
     "me.tokens.revoke": "tap 404: no synthetic API token",
-    "company.server_connection.remove": "tap 409: this server is not connected to a company server",
     "storage.s3.remove": "tap 409: no company storage is set",
     "people.person.delete": "tap 409: the fixture person can't be removed for good",
     "repos.product.create": "422: the body shape (and no GitHub App here)", "listening.destination": "422: the body shape",

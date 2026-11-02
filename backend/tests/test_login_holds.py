@@ -734,6 +734,23 @@ def test_a_primary_usage_limit_names_the_primary_and_its_window(api, monkeypatch
     assert health_detail(api, "ops").startswith("Primary fake plan usage limit (5-hour window); resumes at 02:40 UTC")
 
 
+def test_a_refused_request_flagged_with_the_logins_limit_says_it_was_refused(api, monkeypatch):
+    # The runner flags a turn when the login's rate-limit event said rejected, whatever line then stopped it.
+    at(monkeypatch, "2026-10-19T01:46:47.000000Z")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})
+    refusal = "API Error: 400 Claude Code 2.1.220 does not support this model; version 2.1.280 or newer is required."
+    limit(api, machine, claim(api, machine), errors=(refusal,))
+    with api.app.state.store.read() as c:
+        focus = H.status(c, "ops")["focus"]
+        assert focus.startswith(f"Primary fake refused the request ({refusal}) at 01:46"), focus
+        assert "plan usage limit" not in focus
+    assert login_holds.window("You've hit your limit") == "plan usage limit"
+    assert login_holds.window("") == "plan usage limit"
+
+
 def test_both_limits_in_one_window_keep_two_holds_each_with_its_own_retry(api, monkeypatch):
     machine = two_bots(api, monkeypatch)
     post(api, "tasks", {"owner": "ops", "title": "Work", "body": "Please do it."})

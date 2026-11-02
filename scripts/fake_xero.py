@@ -28,9 +28,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-ENDPOINTS = ("Accounts", "Contacts", "Invoices", "CreditNotes", "Payments", "ManualJournals", "BankTransactions",
-             "BankTransfers")
-ID_KEY = {"Accounts": "AccountID", "Contacts": "ContactID", "Invoices": "InvoiceID", "CreditNotes": "CreditNoteID",
+ENDPOINTS = ("Accounts", "Contacts", "Items", "TrackingCategories", "Invoices", "CreditNotes", "Payments",
+             "ManualJournals", "BankTransactions", "BankTransfers")
+ID_KEY = {"Accounts": "AccountID", "Contacts": "ContactID", "Items": "ItemID", "Invoices": "InvoiceID",
+          "CreditNotes": "CreditNoteID",
           "Payments": "PaymentID", "ManualJournals": "ManualJournalID", "BankTransactions": "BankTransactionID",
           "BankTransfers": "BankTransferID"}
 ACCOUNT_TYPES = {"BANK", "CURRENT", "CURRLIAB", "EQUITY", "EXPENSE", "REVENUE", "FIXED", "SALES", "OVERHEADS"}

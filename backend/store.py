@@ -1061,6 +1061,8 @@ class WriterGate:
 class Store:
     def __init__(self, settings, recorder=None):
         self.settings = settings
+        # The server's file reader, set by the app once it has one (backend/media.py); None until then.
+        self.blobs = None
         # The flight recorder (backend/flight.py) times every statement and write transaction when one is given.
         self.recorder = recorder
         self.factory = sqlite3.Connection
@@ -1138,10 +1140,16 @@ class Store:
             from . import system_routines as _system_routines
             c.executescript(_system_routines.SCHEMA)
             _system_routines.ensure(c)
+            from . import thread_followups as _thread_followups
+            _thread_followups.ensure(c)
+            from . import thread_digest as _thread_digest
+            _thread_digest.ensure(c)
             from . import task_rules as _task_rules
             c.executescript(_task_rules.SCHEMA)
             from . import audit_log as _audit_log
             c.executescript(_audit_log.SCHEMA)
+            from . import teammate_access as _teammate_access
+            _teammate_access.ensure(c)              # people's and groups' See/Read/Write (docs/permissions.md)
             from . import rules as _rules
             c.executescript(_rules.SCHEMA)
             _rules.ensure_schema(c)
@@ -1175,6 +1183,7 @@ class Store:
             c.executescript(_support.SCHEMA)
             from . import inbound as _inbound
             c.executescript(_inbound.SCHEMA)
+            _inbound.ensure(c)
             from . import bills_address as _bills_address
             c.executescript(_bills_address.SCHEMA)
             from . import support_access as _support_access
@@ -1199,6 +1208,8 @@ class Store:
             c.executescript(_learned.SCHEMA)
             from . import cards as _cards
             c.executescript(_cards.SCHEMA)
+            from . import memory_tidy_cards as _memory_tidy_cards
+            c.executescript(_memory_tidy_cards.SCHEMA)
             from . import task_manager as _task_manager
             c.executescript(_task_manager.SCHEMA)
             from . import bookkeeper as _bookkeeper
@@ -1213,6 +1224,8 @@ class Store:
             c.executescript(_invariants.SCHEMA)
             from . import slack_channels as _slack_channels
             c.executescript(_slack_channels.SCHEMA)
+            from . import slack_threads as _slack_threads
+            _slack_threads.ensure(c)
             from . import flight as _flight
             c.executescript(_flight.SCHEMA)
             for column, kind in (("sql_ms", "REAL"), ("wait_ms", "REAL"), ("queries", "INTEGER")):
@@ -1227,6 +1240,9 @@ class Store:
             # Destinations saved in Settings > Listening (backend/listening.py).
             from . import listening as _listening
             _listening.ensure(c)
+            # Tico Meet calls and their people (backend/calls.py): a call belongs to a thread.
+            from . import calls as _calls
+            _calls.ensure(c)
             # Each credential's newest use per (actor, bot) (credentials.last_used): credentials.record_use keeps it.
             H.backfill_credential_uses(c)
             c.execute("BEGIN IMMEDIATE")
@@ -1247,6 +1263,12 @@ class Store:
                 H.add_column(c, "runners", "screen_default_pending", "INTEGER NOT NULL DEFAULT 0")
                 # Performance diagnostics: on unless a person turns them off (backend/performance.py).
                 H.add_column(c, "runners", "performance", "TEXT NOT NULL DEFAULT 'on'")
+                # Memory hold on a computer: its newest sample at 85% or more sets it, below 80% clears it
+                # (backend/performance.py ingest; backend/start_places.py computer_hold).
+                H.add_column(c, "runners", "memory_hold", "INTEGER NOT NULL DEFAULT 0")
+                # The newest sample's time, kept with the computer: sample retention drops old rows, not this mark.
+                H.add_column(c, "runners", "last_sampled_at", "INTEGER")
+                _performance.backfill_last_sampled(c)
                 # When a computer said it is restarting after a person pressed Restart, from its heartbeat; NULL once
                 # a heartbeat no longer says so (backend/health.py `restarting`).
                 H.add_column(c, "runners", "restart_since", "TEXT")
@@ -1264,6 +1286,18 @@ class Store:
                 wipe_unclaimable(c)
                 # Who added each credential, for the record. Older rows take it from their audit event once, when the
                 # column arrives. It gives no rights: those come from `member_stored` (backend/credentials.py `owned`).
+                # The person a Slack DM mapping was opened for, and the person a queued copy is for. A DM with no verified
+                # inbound message yet has none: its copies fail closed. A backfill reads each DM's verified history once.
+                H.add_column(c, "slack_threads", "recipient_actor", "TEXT")
+                H.add_column(c, "slack_posts", "recipient_actor", "TEXT")
+                for (channel,) in c.execute("SELECT DISTINCT channel FROM slack_threads WHERE channel LIKE 'D%' "
+                                            "AND recipient_actor IS NULL").fetchall():
+                    actors = {r[0] for r in c.execute(
+                        "SELECT DISTINCT actor FROM slack_events WHERE channel=? AND actor LIKE 'human:%' "
+                        "AND state IN ('routed','recorded')", (channel,))}
+                    if len(actors) == 1:
+                        c.execute("UPDATE slack_threads SET recipient_actor=? WHERE channel=? AND recipient_actor IS NULL",
+                                  (actors.pop(), channel))
                 if "created_by" not in {row[1] for row in c.execute("PRAGMA table_info(credentials)")}:
                     H.add_column(c, "credentials", "created_by", "TEXT")
                     c.executemany("UPDATE credentials SET created_by=? WHERE id=? AND created_by IS NULL",
@@ -1793,6 +1827,19 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.feed_lines(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(75,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=76").fetchone():
+                    # The shared records (backend/records: locations, items, projects) and the location, class and item
+                    # tags
+                    # Finance lines take. Project dimensions move to projects keeping each tag's value (schema.catalog).
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.catalog(c, H.now())
+                    c.execute("INSERT INTO cloud_migrations VALUES(76,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=77").fetchone():
+                    # Purchase orders and estimates (backend/finance/store/purchasing.py), and the bill line an order line
+                    # is billed on. Idempotent like 76.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.purchasing(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(77,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the
@@ -1836,9 +1883,9 @@ class Store:
                 # Unversioned the same way; the first run makes the draft from the company profile.
                 from .strategy import ensure as ensure_strategy
                 ensure_strategy(c)
-                # The built-in Idea task type growth ideas are filed as (backend/growth.py).
-                from .growth import ensure as ensure_growth
-                ensure_growth(c)
+                # The built-in Marketing task type marketing ideas are filed as (backend/marketing_tasks.py).
+                from .marketing_tasks import ensure as ensure_marketing
+                ensure_marketing(c)
                 # Org rules and their due dates (backend/org_rules.py, backend/rule_due.py): sources, rules, holds, due
                 # dates and their status rows. Unversioned the same way: an older release never reads the tables.
                 from .org_rules import ensure as ensure_org_rules
@@ -2105,6 +2152,9 @@ class Store:
             # What each message's and run's readability depends on (backend/read_deps.py); settled beside the server.
             from . import read_deps
             read_deps.ensure(c)
+            # Federation between installs (backend/federation_schema.py): its own tables, kept beside the threads.
+            from . import federation_schema
+            federation_schema.ensure(c)
             # Every start, in short batches of their own: rows written since the last pass, including any an
             # older server wrote after a rollback, get their task links (backend/message_links.py).
             message_links.backfill(c)
@@ -2159,6 +2209,9 @@ class Store:
         if c is None:
             c = self.connect(factory=self.pooled, check_same_thread=False)
             c.pool_file = identity
+        # The server's file reader as the app has it configured now (media.install_media): work that holds only the
+        # connection reads a company page's logo through it, so one saved in the company's own places is found.
+        c.blobs = self.blobs
         c.read_cache = {}
         c.provenance_cache = self.provenance_cache
         c.roster_rows = self.roster_rows
@@ -2167,6 +2220,7 @@ class Store:
         c.after_commit = []
         c.provenance_changes = c.total_changes
         c.provenance_start = None
+        c.settings = self.settings      # the server's own settings, for work that holds only the connection
         return c
 
     def _give(self, c):

@@ -1,4 +1,4 @@
-/* ui/app/goals.js — Goals page shell and the goal editor
+/* ui/app/goals.js — Goals page shell and the goal editor; the KPI views under the tree are ui/app/goals-kpi-views.js
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -474,13 +474,15 @@ function pageGoals() {
   const state = GOALS_ST = {goals: [], other: [], proposals: [], needs: [], owners: {}, groups: [], loaded: false, open, panel: null, strategy: null};
   // Goals is a Strategy tab: the tree is the page and "+ Goal" heads it. Talking about goals is the Ask panel's.
   $('#main').classList.add('strategy-layout', 'rd-goals');
-  $('#main').innerHTML = strategyHeadHtml('goals') + `<div class="goals-main"><div id="goal-body"><p class="muted">Loading…</p></div></div>`;
+  $('#main').innerHTML = strategyHeadHtml('goals') + `<div class="goals-main"><div id="goal-body"><p class="muted">Loading…</p></div>
+    <section class="card gkv" id="goal-kpis" aria-label="KPIs" hidden></section></div>`;
   const actions = $('#strat-actions');
   if (actions && (mePerson() || S.me?.role === 'owner')) {
     actions.innerHTML = '<button class="primary" type="button" id="goal-new">+ Goal</button>';
     actions.querySelector('#goal-new').onclick = () => { if (state.loaded) goalSheetOpen(state); };
   }
   goalsLoad(state);
+  goalsKpiViews($('#goal-kpis'));   // Tree · Loops · Journey (ui/app/goals-kpi-views.js)
 }
 function goalsApply(state, data, needs) {
   state.goals = (data.goals || []).filter(g => !goalBuiltInOwner(g.owner));

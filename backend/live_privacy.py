@@ -24,6 +24,19 @@ def sources(c):
 def member(c, actor, meeting):
     if not meeting:
         return False
+    thread = meeting["thread_id"]
+    if thread:
+        # A call's meeting follows its thread (backend/calls.py): whoever can read the thread may hear it, and a bot is
+        # in only while a person with Write attached it (calls.Calls.detach_bot and the sweep remove the row otherwise).
+        from . import calls    # lazy: calls reads this module's neighbours
+        if H.is_human(actor):
+            return calls.readable(c, actor, thread)
+        if H.is_bot(actor):
+            # A bot hears the call only while the person who attached it may still read the thread and write to the bot.
+            attached = c.execute("SELECT joined_by FROM live_meeting_bots WHERE meeting_id=? AND bot=?",
+                                 (meeting["id"], H.actor_id(actor))).fetchone()
+            return bool(attached) and calls.attachment_standing(c, attached[0], thread, H.actor_id(actor))
+        return False
     if H.is_human(actor):
         return (meeting["visibility"] == "team" or actor == meeting["owner_actor"] or bool(c.execute(
             "SELECT 1 FROM live_meeting_access WHERE meeting_id=? AND actor=?", (meeting["id"], actor)).fetchone()))

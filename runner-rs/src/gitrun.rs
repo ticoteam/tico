@@ -21,7 +21,10 @@ pub const STOPPED: &str = "Repository sync interrupted by computer shutdown";
 #[derive(Debug, Clone, Default)]
 pub struct Out {
     pub code: i32,
+    /// Lossy text: invalid bytes read as U+FFFD, so a name read from it may not be the name on disk.
     pub stdout: String,
+    /// The exact bytes git wrote. Read names from these, never from `stdout`.
+    pub raw: Vec<u8>,
     pub stderr: String,
 }
 
@@ -131,9 +134,11 @@ async fn run_once(argv: &[String], env: &Env, cwd: Option<&Path>, timeout_s: u64
             if stopping() && out.status.code().is_none() {
                 return Err(Fault::Stopped);
             }
+            let raw = out.stdout;
             Ok(Out {
                 code: out.status.code().unwrap_or(-1),
-                stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+                stdout: String::from_utf8_lossy(&raw).into_owned(),
+                raw,
                 stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
             })
         }

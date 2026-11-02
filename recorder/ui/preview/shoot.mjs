@@ -8,7 +8,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const { webkit } = require(process.env.PLAYWRIGHT || 'playwright');
+const { webkit, chromium } = require(process.env.PLAYWRIGHT || 'playwright');
+// WebKit is the macOS engine; TICO_PREVIEW_BROWSER=chromium runs the same scenes where WebKit's libraries are missing.
+const engine = process.env.TICO_PREVIEW_BROWSER === 'chromium' ? chromium : webkit;
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
 const out = path.join(root, 'screenshots');
@@ -73,6 +75,41 @@ const scenes = {
     await page.keyboard.type('item');
     await page.keyboard.press('Enter');
   }],
+  // Drafts and removal questions belong to the meeting they were started in: an open edit does not
+  // follow the person to a second shared meeting, and a removal question does not either.
+  'shared-two': ['shared', open('m2'), transcript, async (page) => {
+    const openOther = async (id) => {
+      await page.click('[data-act="back"]');
+      await page.click(`.row[data-id="${id}"]`);
+      await page.waitForSelector('.title-input');
+      await transcript(page);
+    };
+    await page.hover('.bubble:has([data-act="edit-line"][data-seq="1"])');
+    await page.click('[data-act="edit-line"][data-seq="1"]');
+    await page.fill('textarea.line-edit', 'Draft for the first call');
+    await openOther('m3');
+    if ((await page.locator('textarea.line-edit').count()) !== 0) throw new Error('an edit draft followed to another meeting');
+    await openOther('m2');
+    await page.hover('.bubble:has([data-act="ask-remove-line"][data-seq="2"])');
+    await page.click('[data-act="ask-remove-line"][data-seq="2"]');
+    await openOther('m3');
+    if ((await page.getByText('Remove this line in Tico?').count()) !== 0) throw new Error('a removal question followed to another meeting');
+  }],
+  // Sent lines of a live meeting: edit one (the draft survives a refresh), then remove another.
+  shared: ['shared', open('m2'), transcript, async (page) => {
+    if ((await page.locator('[data-act="edit-line"]').count()) !== 2) throw new Error('two sent lines should be editable');
+    await page.hover('.bubble:has([data-act="edit-line"][data-seq="1"])');
+    await page.click('[data-act="edit-line"][data-seq="1"]');
+    await page.fill('textarea.line-edit', 'Hi there, shall we start?');
+    await page.waitForTimeout(1200);
+    if ((await page.inputValue('textarea.line-edit')) !== 'Hi there, shall we start?') throw new Error('edit draft lost');
+    await page.click('[data-act="save-line"]');
+    await page.waitForSelector('.turn .bubble p:text("Hi there, shall we start?")');
+    await page.hover('.bubble:has([data-act="ask-remove-line"][data-seq="2"])');
+    await page.click('[data-act="ask-remove-line"][data-seq="2"]');
+    await page.click('[data-act="remove-line"]');
+    await page.waitForSelector('.turn.removed');
+  }],
   sending: [open('m2')],
   recording: [open('m0'), transcript],
   retrying: [open('m0'), transcript],
@@ -102,7 +139,7 @@ const scenes = {
 const sizes = [[1040, 690], [760, 490], [640, 460]];
 const themes = ['light', 'dark'];
 const only = process.argv.slice(2);
-const browser = await webkit.launch();
+const browser = await engine.launch();
 const shots = [];
 const errors = [];
 for (const [name, steps] of Object.entries(scenes)) {

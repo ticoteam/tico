@@ -31,7 +31,7 @@ one PostHog project between several apps by filtering on the `app` property (Tic
    for the existing static-file deployment. To regenerate it: `npm ci` then
    `npm run build:observability`. Commit the generated bundle with source/dependency changes.
 4. In a staging deployment, sign in, navigate, create a test task,
-   send a test chat, and exercise a safe rejected submission. Inspect `app=tico`, environment,
+   send a test message, and exercise a safe rejected submission. Inspect `app=tico`, environment,
    outcomes and duration fields in PostHog. Inspect one controlled frontend error and API
    failure in Sentry. Confirm network payloads contain no content or raw URLs. Test logout
    and a different account; check that identities change and prior events do not follow it.
@@ -60,7 +60,7 @@ and a fixed `route` template. It never invents a team field.
 | `workflow_completed` | Its API operation returned success after the existing retry cycle |
 | `workflow_failed` | The API operation rejected or exhausted retries; no error text or request content accompanies it |
 
-Instrumented submissions: chat sends (including task/conversation and page chat), task
+Instrumented submissions: message sends (including task/thread and page thread sends), task
 creation/update, approval decisions, note saves, meeting import/edit/delete/send,
 bot definition changes, and settings transition requests. JSON and supported multipart
 submissions use the same wrapper; individual network retry attempts do not duplicate events.
@@ -117,7 +117,7 @@ If the project is shared, always filter by `app` and `environment` first. Sugges
 
 Sentry receives frontend uncaught errors/unhandled rejections, relevant API 5xx/unhandled
 exceptions, scheduler failures and runner panics (see [Server and runner errors](#server-and-runner-errors)).
-Bot chat sends also report `source=chat_send` when they cross five seconds while still pending,
+Bot message sends also report `source=chat_send` when they cross five seconds while still pending,
 then report their outcome when a slow send finishes or any send fails. The only send fields are
 `outcome` (a fixed label), `duration_ms`, `retries`, and `status` (the last HTTP status, or zero
 when no response arrived). No message text, bot name, attachment names, raw URL or error text is

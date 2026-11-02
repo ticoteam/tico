@@ -349,11 +349,10 @@ def chat_running(c, conversation_id):
 def clear_chat_session(c, settings, actor, bot, conversation_id, detail=None):
     """Clear a direct chat's session: a person's Clear (POST /api/employees/{bot}/session/clear) and a topic change
     (backend/topic_change.py) alike. The conversation's epoch moves, so its history starts after the clear; the next
-    turn starts a fresh provider thread and loads the recovery pack. The caller checks no turn is running."""
+    turn starts a fresh provider thread. The caller checks no turn is running."""
     c.execute("INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
               "epoch=epoch+1,updated=excluded.updated", (conversation_id, H.now()))
-    # Drop the provider pointer so the next turn tries a fresh thread and loads the
-    # recovery pack from Hub history instead of resuming the cleared session.
+    # Drop the provider pointer so the next turn tries a fresh thread instead of resuming the cleared session.
     config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
     cfg = json.loads(config[0] or "{}") if config else {}
     if config:
@@ -362,7 +361,11 @@ def clear_chat_session(c, settings, actor, bot, conversation_id, detail=None):
     # This chat's turns continue the bot's thread every direct chat shares: the next turn of any of them
     # starts a new one, while each other chat keeps its own history.
     from .shared_bots import follow
-    if sessions.session_key(follow(c, bot, cfg), bot, None, conversation_id) == sessions.BOT_THREAD:
+    from . import threads
+    room = threads.thread_row(c, conversation_id) or {}
+    key = sessions.session_key(follow(c, bot, cfg), bot, None, conversation_id, room.get("root_id") or conversation_id,
+                               "private" if threads.private_task_thread(c, room) else threads.audience_class(room))
+    if key in (sessions.BOT_THREAD, sessions.PUBLIC_THREAD):
         bump_bot_session_epoch(c, bot)
     H.event(c, actor, "session.clear", conversation_id, detail)
     # A new session is said in the task's history: a task room's own, or the task of the run that failed (run_triggers).
@@ -840,7 +843,7 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     """(label, readiness_reason) for a bot's queued work: what it is waiting for, in a person's words. `human`: a
     person's message; `behind`: the bot is still answering earlier work in this same conversation; `queued`: it was
     sent with queue, so it waits for that turn to end rather than steering into it (backend/delivery.py)."""
-    from .performance import load_status
+    from .start_places import computer_hold
     from . import org_turns
     bot_state = H.bot(c, bot)["state"]
     label, readiness_reason = "Saved — queued", ""
@@ -867,10 +870,10 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     elif settings and org_turns.admission(c)['at_stop']:
         # Admission only: queued labels must not classify every bot's readiness and spend on each chat/status poll.
         label = 'Saved — ' + org_turns.REASON
-    elif not human and (location.get("machine") or {}).get("runner_id") and load_status(
-            c, location["machine"]["runner_id"])["overloaded"]:
+    elif not human and (location.get("machine") or {}).get("runner_id") and (
+            hold := computer_hold(c, location["machine"]["runner_id"])):
         # A person's own message still starts on a busy computer (start_places.from_person); it may wait for a turn.
-        label = "Saved — waiting: computer busy"
+        label = "Saved — waiting: " + hold[1]
     elif not location["ready"]:
         problems = (location.get("readiness") or {}).get("problems") or []
         if any(str(p).startswith("No AI provider is chosen") for p in problems):
@@ -1029,7 +1032,10 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
 PRESSING_DAYS = 3
 DECISIVE_DAYS = 1
 # A bot's task set waiting on the person blocks that bot just as its question does.
-KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "setup": 1, "declined": 2, "stale": 3, "task": 3, "report": 4}
+KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "setup": 1, "declined": 2, "stale": 3, "task": 3, "report": 4,
+             # Thread items (backend/thread_attention.py): an ask, a held message or a paused thread blocks a bot; a
+             # mention or an unread DM is a person's to read.
+             "thread_ask": 1, "thread_held": 1, "thread_capped": 1, "thread_unsent": 1, "thread_mention": 2, "thread_dm": 2}
 # A card whose bot has not yet said plainly what it needs (`ask_missing`) waits at the very bottom: there is nothing
 # for the person to do on it until the bot restates it (backend/restate_asks.py asks it to).
 
@@ -1209,10 +1215,16 @@ def yes_no_ask(text):
 def need_of(item):
     """The group a Needs you card goes in (NEED_GROUPS)."""
     kind = item.get("kind")
-    if kind == "stale":
+    if kind in ("stale", "memory_tidy"):
         return "decide"         # Accept or Skip, row by row
     if kind == "setup":
         return "connect"        # sign in to a provider (backend/models_preset.py)
+    if kind == "thread_ask":
+        return "decide"         # a thread's question to the person, answered in the thread
+    if kind == "thread_held":
+        return "review"         # a message held for review (backend/org_rule_check.py)
+    if kind in ("thread_mention", "thread_dm", "thread_capped", "thread_unsent"):
+        return "do"             # read or answer in the thread
     if item.get("reconnect"):
         return "connect"        # an account or credential a bot's task stopped on (backend/reconnects.py)
     if kind == "approval":
@@ -1757,6 +1769,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                 item["title"] = "Send this to Tico support?"
                 item["support"] = {"to": hq_url().split("://", 1)[-1].split("/", 1)[0]}
             items.append(item)
+    from . import memory_tidy_cards
+    items.extend(memory_tidy_cards.cards_for(c, who.actor))
     from . import stale_review
     stale = stale_review.card(c, who.actor) if H.is_human(who.actor) else None
     if stale:
@@ -1771,6 +1785,11 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
         setup = models_preset.card(c)
         if setup:
             items.append(setup)
+    if H.is_human(who.actor):
+        # The thread items (backend/thread_attention.py); an ask Needs you already lists as a loose ask is not listed twice.
+        from . import thread_attention
+        listed = {it["message_id"] for it in items if it.get("message_id")}
+        items.extend(thread_attention.items(c, auth, who, skip=listed))
     items = fold_reconnects(fold_related(items, c, who.actor))
     if count_only:
         return items
@@ -2046,6 +2065,10 @@ def install_views(app, store, auth, mutate, task_view):
             latest_models[slug] = (family, ", ".join(providers.MODEL_BY_ID.get(model, {}).get("label") or model for model in models))
         rows = []
         access = auth.bot_accesses(c, who)
+        # The viewer's own access to each bot, {see, read, write, manage}, from the teammate rules in one pass (the
+        # `my_access` a row shows). The gates below still read `access`, which applies the same rules.
+        from . import teammate_access
+        mine = teammate_access.levels_many(c, who, ["bot:" + bot["slug"] for bot in bots], auth=auth)
         # What the loop reads per bot, read for every bot at once: its computer, its open and doing tasks, and its
         # declared configuration from the rows above.
         shown = [bot["slug"] for bot in bots if bot.get("state") != "archived"
@@ -2090,6 +2113,7 @@ def install_views(app, store, auth, mutate, task_view):
         for bot in bots:
             slug = bot["slug"]
             level = access.get(slug, auth.FULL)
+            mine_level = mine.get("bot:" + slug) or {**level, "manage": False}
             if bot.get("state") == "archived" or not level["see"]:
                 continue
             registry = registries.get(slug)
@@ -2110,7 +2134,7 @@ def install_views(app, store, auth, mutate, task_view):
                     reports = ""
                 rows.append({"name": slug, "display_name": bot["display_name"], "state": bot["state"],
                              "status": bot["state"], "description": (configs.get(slug, {}) or {}).get("description") or "",
-                             "reports_to": reports, "my_access": level, **policy,
+                             "reports_to": reports, "my_access": mine_level, **policy,
                              "private_tasks_default": H.private_tasks_default(c, "bot:" + slug, declared),
                              "team": P.team_of(slug, configs, people),
                              "org_parent": P.org_parent("bot", slug, people, chart, archived, bare),
@@ -2169,7 +2193,7 @@ def install_views(app, store, auth, mutate, task_view):
                          # What Settings and the branch editor show and pick from (backend/wake_presets.py).
                          "wake": wake_presets.effective(config),
                          "profile": profiles.effective(config),
-                         "my_access": level, **policy,
+                         "my_access": mine_level, **policy,
                          "can_chat": level["write"] and slug not in (auth.settings.assistant_bot, STRATEGY_BOT),
                          # Onboarding or Active, and whether this person may mark onboarding complete (backend/lifecycle.py).
                          "stage": lifecycle.stage(config.get("onboarding_state")),
@@ -2229,7 +2253,9 @@ def install_views(app, store, auth, mutate, task_view):
         human_only(request.state.identity)
         # One snapshot from the start, so read_cache serves the roster, configs and access rows once.
         with store.read_transaction() as c:
-            return employee_rows(c, request.state.identity)
+            from . import teammate_access
+            # The people and groups this caller may not see are not named on a bot either.
+            return teammate_access.redact_bots(c, request.state.identity, employee_rows(c, request.state.identity), auth)
 
     @app.get("/api/people")
     def people(request: Request):
@@ -2253,7 +2279,7 @@ def install_views(app, store, auth, mutate, task_view):
             places = positions(c)
             from . import lifecycle
             seats = lifecycle.chart_seats(c, r, chart, archived, lambda slug: access.get(slug, auth.FULL)["see"])
-            return {**r, "by_team": P.by_team(r), "org_groups": view["org_groups"], "seats": seats, "people": [{
+            out = {**r, "by_team": P.by_team(r), "org_groups": view["org_groups"], "seats": seats, "people": [{
                 **p, "org_parent": P.org_parent("person", p["id"], r, configs, archived, bare),
                 "report_position": places.get("human:" + p["id"]),
                 **({"photo_url": "/api/humans/" + p["id"] + "/photo"}
@@ -2261,6 +2287,21 @@ def install_views(app, store, auth, mutate, task_view):
                 "bots": [b for b in P.bots_of(p["id"], r, configs)
                          if access.get(b, auth.FULL)["see"] and b not in archived]}
                 for p in r["people"]]}
+            # The people and groups this caller may not see are not on the roster, the chart or the @mention picker.
+            from . import teammate_access
+            # The caller's own access to each, from the teammate rules in one pass, as a bot's row has it: what a page
+            # offers (edit a profile, add to a thread), which the server checks again.
+            mine = teammate_access.levels_many(c, who, ["human:" + p["id"] for p in out["people"]]
+                                               + ["group:" + g["id"] for g in out["org_groups"]], auth=auth)
+            out["people"] = [{**p, "my_access": mine["human:" + p["id"]]} for p in out["people"]]
+            out["org_groups"] = [{**g, "my_access": mine["group:" + g["id"]]} for g in out["org_groups"]]
+            people_hidden, groups_hidden = teammate_access.unseen(c, who, auth)
+            if people_hidden or groups_hidden:
+                out = teammate_access.redact_chart(out, r, people_hidden, groups_hidden)
+                out["by_team"] = {gid: [pid for pid in ids if pid not in people_hidden]
+                                  for gid, ids in out["by_team"].items() if gid not in groups_hidden}
+                out["developers"] = [pid for pid in out.get("developers") or [] if pid not in people_hidden]
+            return out
 
     @app.get("/api/people/{pid}/photo")
     def person_photo(request: Request, pid: str):
@@ -2269,7 +2310,8 @@ def install_views(app, store, auth, mutate, task_view):
         with store.read() as c:
             r = roster(c)
             row = P.person(pid, r)
-            if not row or row.get("hidden"):
+            from . import teammate_access
+            if not row or row.get("hidden") or not teammate_access.can(c, who, "see", "human:" + pid, auth):
                 raise Problem("not_found", "Person not found", 404)
             from . import people_photos
             fetched = people_photos.load(store.settings, row.get("email"),

@@ -230,7 +230,7 @@ def test_write_without_read_shows_only_your_own_threads_and_tasks(world):
     others_task = post(api, "tasks", {"owner": "counsel", "title": "Cara's contract", "body": "Please look."}, token="cara-test")
     # Dee's own thread and task, and nothing else the bot is doing.
     assert get(api, f"conversations/{mine['conversation_id']}/messages", "dee-test")
-    get(api, f"conversations/{theirs['conversation_id']}/messages", "dee-test", expected=403)
+    get(api, f"conversations/{theirs['conversation_id']}/messages", "dee-test", expected=404)
     ids = [t["id"] for t in get(api, "tasks", "dee-test")["tasks"]]
     assert ids == [dees_task["id"]]
     assert get(api, "tasks/" + dees_task["id"], "dee-test")["task"]["title"] == "Dee's contract"
