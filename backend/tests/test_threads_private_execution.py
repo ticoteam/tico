@@ -144,6 +144,60 @@ def test_the_cleanup_keeps_a_title_a_person_gave_and_a_visible_parent_keeps_its_
     assert api.get(f"/api/v2/threads/{keeper}", headers=headers("ben-test")).json()["title"] == "Plain topic line"
 
 
+def runner_reply(c, thread_id, question, text, refs):
+    """A runner's final reply: it carries its turn and answers a message, which makes it restricted by flag alone."""
+    return threads.post(c, "bot:ops", thread_id, text, kind="answer", refs=refs, in_reply_to=question)
+
+
+def test_a_sub_thread_on_an_ordinary_bot_reply_keeps_its_title(api):
+    thread = api.post("/api/v2/threads", json={"title": "Company", "audience": "company"},
+                      headers=headers("ana-test")).json()
+    with api.app.state.store.transaction() as c:
+        question = threads.post(c, "human:ana", thread["id"], "When is the launch?")
+        reply = runner_reply(c, thread["id"], question["id"], "The launch is on Friday.", {"turn_id": "turn_1"})
+        assert H.message(c, reply["id"])["restricted"] == 1
+        sub_id = threads.sub_thread(c, "human:ana", reply["id"])["id"]
+        assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] == "The launch is on Friday."
+        threads._neutral_titles(c)
+        assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] == "The launch is on Friday."
+    for reader in ("ana-test", "ben-test"):
+        seen = api.get(f"/api/v2/threads/{sub_id}", headers=headers(reader)).json()
+        assert seen["title"] == "The launch is on Friday."
+        assert seen["breadcrumb"][-1]["title"] == "The launch is on Friday."
+
+
+def test_a_sub_thread_on_a_private_task_reply_stores_no_title(api):
+    secret = task(api, requester="human:cara", owner="human:cara")
+    thread = api.post("/api/v2/threads", json={"title": "Company", "audience": "company"},
+                      headers=headers("ana-test")).json()
+    with api.app.state.store.transaction() as c:
+        question = threads.post(c, "human:ana", thread["id"], "What are the terms?")
+        named = runner_reply(c, thread["id"], question["id"], "Terms are on the private task.",
+                             {"turn_id": "turn_2", "task": secret["id"]})
+        sub_id = threads.sub_thread(c, "human:cara", named["id"])["id"]
+        assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] == ""
+    # And in the run's own private task thread.
+    row, attempt = private_run(api)
+    own = api.post(f"/api/v2/threads/{row['conversation_id']}/messages", json={"text": "Private progress"},
+                   headers=headers(attempt["token"]))
+    assert own.status_code == 200, own.text
+    with api.app.state.store.transaction() as c:
+        own_sub = threads.sub_thread(c, "human:ben", own.json()["id"])["id"]
+        assert c.execute("SELECT subject FROM conversations WHERE id=?", (own_sub,)).fetchone()[0] == ""
+
+
+def test_the_title_cleanup_runs_once(api):
+    _, parent, sub_id = hidden_sub_thread(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE conversations SET subject=? WHERE id=?", ("Secret launch plan for the board", sub_id))
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (threads.NEUTRAL_TITLES_KEY,))
+        threads._neutral_titles_once(c)
+        assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] == ""
+        c.execute("UPDATE conversations SET subject=? WHERE id=?", ("Secret launch plan for the board", sub_id))
+        threads._neutral_titles_once(c)
+        assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] != ""
+
+
 def test_a_private_run_posts_to_no_other_private_task_thread_and_edits_its_own_message(api):
     row, attempt = private_run(api)
     other = task(api, requester="human:ben", owner="human:ana")

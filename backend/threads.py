@@ -326,7 +326,7 @@ def ensure(c):
             continue            # built by migrate, after the backfill (building them first is slow, and it stalls)
         c.execute(statement)
     _scrub_audits(c)
-    _neutral_titles(c)
+    _neutral_titles_once(c)
 
 
 AUDIT_SCRUB_KEY = "threads-audit-scrub"
@@ -2329,11 +2329,17 @@ def sub_thread_title(body):
     return cut.rstrip(" ,.;:-") + "…"
 
 
-def sub_thread_title_for(message):
-    """The title a new sub-thread of `message` is stored with. A parent some readers of its thread may not read (a
-    restricted message, or one kept for its old readers) gives no title: the stored title would show its first line to
-    everyone who reads the sub-thread, through every read path."""
-    if message.get("restricted") or message.get("legacy_audience"):
+def _stored_message(c, message_id):
+    row = c.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def sub_thread_title_for(c, message):
+    """The title a new sub-thread of `message` is stored with. A parent some readers of its thread may not read
+    (`_narrower_than_thread`) gives no title: the stored title would show its first line to everyone who reads the
+    sub-thread, through every read path. `restricted` alone only asks for that check: every runner reply carries it."""
+    stored = _stored_message(c, message["id"])
+    if stored is None or _narrower_than_thread(c, stored):
         return ""
     return sub_thread_title(message.get("body"))
 
@@ -2348,26 +2354,42 @@ def _derived_title(c, message_id, title):
 
 
 def _shown_title(c, v, row):
-    """A thread's stored title as the viewer may read it. A title that is its parent message's first line shows only to
-    a viewer who reads that parent message; any other title is the thread's own and shows as stored."""
+    """A thread's stored title as the viewer may read it. A title that is its parent message's first line shows to every
+    reader of the thread unless the parent is narrower than the thread (`_narrower_than_thread`), and then only to a
+    viewer who reads that parent; a deleted parent shows it to nobody. Any other title is the thread's own."""
     title = row.get("subject") or ""
     parent_id = row.get("parent_message_id")
     if not title or not parent_id or not _derived_title(c, parent_id, title):
         return title
-    parent = H.message(c, parent_id, include_deleted=True)
-    return title if v is not None and parent and message_readable(c, v, parent) else ""
+    parent = _stored_message(c, parent_id)
+    if parent is None or parent.get("deleted_at"):
+        return ""
+    if not _narrower_than_thread(c, parent):
+        return title
+    return title if v is not None and message_readable(c, v, parent) else ""
 
 
 def _neutral_titles(c):
-    """Stored sub-thread titles that are their parent's first line, where that parent is hidden from some readers (a
-    restricted message, or one with a legacy audience), are cleared: a stored title reaches SQL and search too. Run on
-    every start and after the migration's backfill, which sets those flags. Idempotent."""
+    """Stored sub-thread titles that are their parent's first line, where that parent is narrower than the thread
+    (`_narrower_than_thread`), are cleared: a stored title reaches SQL and search too. Any other title stays."""
     rows = c.execute("SELECT s.id, s.subject, s.parent_message_id FROM conversations s JOIN messages m "
-                     "ON m.id=s.parent_message_id WHERE COALESCE(s.subject,'')<>'' AND (m.restricted<>0 OR "
-                     "m.legacy_audience IS NOT NULL)").fetchall()
+                     "ON m.id=s.parent_message_id WHERE s.parent_message_id IS NOT NULL AND COALESCE(s.subject,'')<>'' "
+                     "AND (m.restricted<>0 OR m.legacy_audience IS NOT NULL)").fetchall()
     for thread_id, title, parent_id in rows:
-        if _derived_title(c, parent_id, title):
+        if _derived_title(c, parent_id, title) and _narrower_than_thread(c, _stored_message(c, parent_id)):
             c.execute("UPDATE conversations SET subject='' WHERE id=?", (thread_id,))
+
+
+NEUTRAL_TITLES_KEY = "threads-neutral-titles"
+
+
+def _neutral_titles_once(c):
+    """Once, after the migration's backfill (which sets the flags the rule reads): a new title follows the rule when it
+    is made (`sub_thread_title_for`), so nothing needs this on a later start."""
+    if not migrated(c) or c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (NEUTRAL_TITLES_KEY,)).fetchone():
+        return
+    _neutral_titles(c)
+    c.execute("INSERT INTO registry_metadata(key,value_json) VALUES(?,?)", (NEUTRAL_TITLES_KEY, json.dumps({"at": _now()})))
 
 
 def sub_thread(c, principal, parent_message_id):
@@ -2386,7 +2408,7 @@ def sub_thread(c, principal, parent_message_id):
     import sqlite3
     try:
         c.execute("SAVEPOINT threads_sub_thread")
-        row = _insert_thread(c, actor, title=sub_thread_title_for(parent_message), audience=None,
+        row = _insert_thread(c, actor, title=sub_thread_title_for(c, parent_message), audience=None,
                              parent=parent, parent_message_id=parent_message_id,
                              kind=parent.get("kind") or "chat", owner_actor=None)
         for outside in _outside(c, root_of(c, parent)["id"]):        # an outside destination follows its root's replies
@@ -3678,7 +3700,7 @@ def _migrate(c):
                   (MIGRATION_KEY, json.dumps({"at": now, "seq": c.execute(
                       "SELECT value FROM sequences WHERE name='messages'").fetchone()[0]})))
     with _chunk(c):
-        _neutral_titles(c)      # the backfill sets the flags that decide a sub-thread's title
+        _neutral_titles_once(c)     # the backfill sets the flags that decide a sub-thread's title
 
 
 def _backfill_messages(c, install, now):
