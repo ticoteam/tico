@@ -179,6 +179,8 @@ def test_a_sub_thread_on_a_private_task_reply_stores_no_title(api):
                              {"turn_id": "turn_2", "task": secret["id"]})
         sub_id = threads.sub_thread(c, "human:cara", named["id"])["id"]
         assert c.execute("SELECT subject FROM conversations WHERE id=?", (sub_id,)).fetchone()[0] == ""
+    assert api.get(f"/api/v2/threads/{sub_id}", headers=headers("ben-test")).json()["title"] == ""
+    assert api.get(f"/api/v2/threads/{sub_id}", headers=headers("cara-test")).json()["title"] == "Terms are on the private task."
     # And in the run's own private task thread.
     row, attempt = private_run(api)
     own = api.post(f"/api/v2/threads/{row['conversation_id']}/messages", json={"text": "Private progress"},

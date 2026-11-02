@@ -2335,11 +2335,6 @@ def sub_thread_title(body):
     return cut.rstrip(" ,.;:-") + "…"
 
 
-def _stored_message(c, message_id):
-    row = c.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
-    return dict(row) if row else None
-
-
 def _derived_title(c, message_id, title):
     """Whether `title` is a sub-thread title its parent message gives: that message's first line, now or in an earlier
     revision of it (a sub-thread keeps the title it was made with after an edit)."""

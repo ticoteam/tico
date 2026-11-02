@@ -1944,7 +1944,7 @@ def test_a_staged_home_item_whose_task_turned_private_is_skipped_at_send_time(ma
     with a.app.state.store.transaction() as c:
         task = H.task_create(c, "human:ana", "Public launch notes", "", "human:ana", lint=False, private=False)["id"]
     question = say(a, tid, "What is the status?")
-    reply = answer(a, tid, question, "See the launch notes.", {"turn_id": "turn_9", "task": task})
+    answer(a, tid, question, "See the launch notes.", {"turn_id": "turn_9", "task": task})
     relay = a.app.state.federation_relay
     with a.app.state.store.transaction() as c:
         S.stage(c, relay.vault(), R.now())
