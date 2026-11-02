@@ -664,6 +664,11 @@ _FINANCE_CONTACT = obj({
         "is_1099": "b", "has_tax_id": "b", "tax_id_last4": "n", "recipient_id": "n", "active": "b",
         "owed": obj({"bills": "i", "invoices": "i"}, required=[]), "created_at": "s"},
         required=["id", "name", "kind", "active"])
+# A Library file a record links (the files on a record's detail): its link id, the file, and who linked it when.
+_RECORD_FILE = obj({"id": "s", "file_id": "s", "added_at": "s", "added_by_id": "s"},
+                   required=["id", "file_id", "added_at", "added_by_id"])
+# Where a record's copy came from and how fresh it is: its source (tico or the provider), as_of, and stale.
+_FRESHNESS = {"source": "s", "as_of": "n", "stale": "b"}
 SCHEMAS = {
     "SubscriptionList": obj({"profiles_by_computer": items(obj({"runner_id": "s", "label": "s", "profiles": items(
         obj({"name": "s", "id": "s", "display_name": "s", "runtimes": "o"}))}))}),
@@ -1525,7 +1530,9 @@ STABLE.extend([
      "overdue invoices, budgets near their limit, failed syncs and months ready to close, with counts and a cursor",
      "FinanceInbox"),
     ("/api/v2/finance/reports/{kind}", "get", "Finance", "getFinanceReport",
-     "pnl (cash or accrual), pnl_by_account (by=location|project and id: that record's row by account), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or "
+     "pnl (cash or accrual), pnl_by (income, expense, cost_of_goods and gross_margin per location, class or project), "
+     "pnl_by_account (by=location|project and id: that record's row by account, with its cost_of_goods and "
+     "gross_margin), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or "
      "revenue_by_item (posted invoices by the item each line names; receivables view), cut to the caller's view; "
      "compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the "
      "group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
@@ -1793,7 +1800,7 @@ SCHEMAS.update({
         "terms_days": {"type": ["integer", "null"]}, "schedule": {"type": ["object", "null"]}, "view_version": "i"},
         required=["lines", "settlements", "attachments", "actions"])]},
     "FinanceContacts": obj({"contacts": items(_FINANCE_CONTACT), "next_cursor": "n", "view_version": "i"}),
-    "FinanceContact": obj({"contact": _FINANCE_CONTACT, "view_version": "i"}),
+    "FinanceContact": obj({"contact": _FINANCE_CONTACT, "view_version": "i", "files": items(_RECORD_FILE)}),
     "FinanceInbox": obj({"items": items(obj({"kind": {"type": "string", "enum": [
         "uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
         "budget_near_limit", "sync_failed", "period_ready"]}, "id": "s", "label": "s"})),
@@ -1828,7 +1835,8 @@ SCHEMAS.update({
     "EquipmentOne": obj({"equipment": ref("Equipment")}, required=["equipment"]),
     "Equipment": obj({"id": "s", "name": "s", "kind": {"type": "string", "enum": ["owned", "customer"]},
                       "location_id": "n", "customer_id": "n", "make": "s", "model": "s", "serial": "s",
-                      "installed_on": "n", "warranty_ends_on": "n", "photo_file_id": "n", "archived_at": "n"},
+                      "installed_on": "n", "warranty_ends_on": "n", "photo_file_id": "n", "archived_at": "n",
+                      **_FRESHNESS, "files": items(_RECORD_FILE)},
                      required=["id", "name", "kind", "make", "model", "serial"]),
     "Locations": obj({"locations": items(ref("Location")), "next_cursor": "n"}, required=["locations", "next_cursor"]),
     "LocationOne": obj({"location": ref("Location")}, required=["location"]),
@@ -1843,7 +1851,8 @@ SCHEMAS.update({
     "DueDay": obj({"due_on": "s", "completed_at": "n", "completed_by_id": "n", "task_id": "n"},
                   required=["due_on"]),
     "Location": obj({"id": "s", "name": "s", "kind": "s", "parent_id": "n", "address": "o", "archived_at": "n",
-                     "customer_id": "n", "customer_name": "n", "next_due_on": "n", "in_books": "b"},
+                     "customer_id": "n", "customer_name": "n", "next_due_on": "n", "in_books": "b",
+                     **_FRESHNESS, "files": items(_RECORD_FILE)},
                     required=["id", "name", "kind", "address"]),
     "Items": obj({"items": items(ref("Item")), "next_cursor": "n"}, required=["items", "next_cursor"]),
     "ItemOne": obj({"item": ref("Item")}, required=["item"]),
@@ -1851,13 +1860,13 @@ SCHEMAS.update({
         "service", "inventory", "non_inventory", "bundle", "category", "raw_material", "assembly"]}, "unit": "s",
         "price": {"type": ["integer", "null"]}, "currency": "s", "archived_at": "n", "income_account_id": "n",
         "expense_account_id": "n", "asset_account_id": "n", "quantity_on_hand": {"type": ["number", "null"]},
-        "quantity_synced_at": "n"},
+        "quantity_synced_at": "n", **_FRESHNESS, "files": items(_RECORD_FILE)},
         required=["id", "name", "sku", "kind", "unit", "currency"]),
     "Projects": obj({"projects": items(ref("Project")), "next_cursor": "n"}, required=["projects", "next_cursor"]),
     "ProjectOne": obj({"project": ref("Project")}, required=["project"]),
     "Project": obj({"id": "s", "name": "s", "customer_id": "n", "customer_name": "n", "status": {"type": "string",
                                                                           "enum": ["open", "closed"]},
-                    "archived_at": "n"}, required=["id", "name", "status"]),
+                    "archived_at": "n", **_FRESHNESS}, required=["id", "name", "status"]),
     "Customers": obj({"customers": items(obj({"id": "s", "name": "s"}, required=["id", "name"])),
                       "next_cursor": "n"}, required=["customers", "next_cursor"]),
     "CustomerPanel": obj({"contact": obj({"id": "s", "name": "s"}, required=["id", "name"]),
@@ -1867,7 +1876,7 @@ SCHEMAS.update({
     "FinanceSearch": obj({"results": items(obj({"kind": {"type": "string", "enum": [
         "entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project",
         "equipment"]}, "id": "s",
-        "label": "s"})),
+        "label": "s", **_FRESHNESS}, required=["kind", "id", "label"])),
         "next_cursor": "n", "currency": "s", "view_version": "i"}),
     "FinanceMetric": obj({"name": "s", "value": {"type": ["integer", "string", "null"]}, "unit": {
         "type": "string", "enum": ["minor", "percent", "months", "count", "days"]}, "as_of": "s",

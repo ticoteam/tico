@@ -25,7 +25,7 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "import_raw_totals",
        # shared records (backend/records): items, locations and projects
        "item_create", "item_update", "location_create", "location_update", "project_create", "project_update",
-       "equipment_create", "equipment_update",
+       "equipment_create", "equipment_update", "record_file_add", "record_file_remove",
        # purchase orders and estimates (backend/finance/purchasing.py)
        "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
        "estimate_accept", "estimate_decline", "estimate_convert",
@@ -54,7 +54,7 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         "import_raw_totals",
         # shared records (backend/records): items, locations and projects
         "item_create", "item_update", "location_create", "location_update", "project_create", "project_update",
-        "equipment_create", "equipment_update",
+        "equipment_create", "equipment_update", "record_file_add", "record_file_remove",
         # purchase orders and estimates
         "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
         "estimate_accept", "estimate_decline", "estimate_convert",
@@ -80,6 +80,7 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "item_create": R.RECORDS, "item_update": R.RECORDS, "location_create": R.RECORDS,
          "location_update": R.RECORDS, "project_create": R.RECORDS, "project_update": R.RECORDS,
          "equipment_create": R.RECORDS, "equipment_update": R.RECORDS,
+         "record_file_add": R.RECORDS, "record_file_remove": R.RECORDS,
          "po_create": R.AP, "po_send": R.AP, "po_approve": R.AP, "po_close": R.AP, "po_void": R.AP,
          "estimate_create": R.AR, "estimate_send": R.AR, "estimate_accept": R.AR, "estimate_decline": R.AR,
          "estimate_convert": R.AR,
@@ -92,7 +93,8 @@ ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_cr
 ADMIN_GRANTS = ("right_grant", "right_revoke")
 # Record kinds a bot without the records right asks for: a person who holds the right decides (BotOps parity).
 RECORD_KINDS = ("item_create", "item_update", "location_create", "location_update", "project_create", "project_update",
-                "equipment_create", "equipment_update", "due_date_create", "due_date_update")
+                "equipment_create", "equipment_update", "record_file_add", "record_file_remove", "due_date_create",
+                "due_date_update")
 # Only the owner turns direct send on or off for the company (§9) and sets what each role sees by default (§7.5).
 OWNER_ONLY = ("payment_settings", "view_defaults_set", "mirror_tags", "mirror_xero_location")
 # System work may freeze cards (a budget at cutoff, §6.4 rule 4) and nothing else card-side.
@@ -389,6 +391,9 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                          ("installed_on?", "day", "empty to clear"), ("warranty_ends_on?", "day", "empty to clear"),
                          ("photo_file_id?", "str", "a bot's photo asks a person to confirm it"),
                          ("active?", "bool", "")),
+    "record_file_add": (("subject_type", "contact|equipment|item|location", "the record the file is for"),
+                        ("subject_id", "str", ""), ("file_id", "str", "a Library file the asker can read")),
+    "record_file_remove": (("record_file_id", "str", "the link's id, as a record's files list shows it"),),
     "location_create": (("name", "str", ""), ("kind?", "store|office|warehouse|plant|customer_site|vehicle|other", ""),
                         ("in_books?", "bool",
                          "a mirrored book: false keeps it in Tico; customer sites and vehicles default to false"),
@@ -481,6 +486,8 @@ WORDS: dict[str, str] = {
     "item_update": "Rename, re-account, deactivate, or change the price of an item (a price change asks first).",
     "equipment_create": "Add a van, tool or customer unit: local records, never sent to the books.",
     "equipment_update": "Change equipment, or archive it (active false).",
+    "record_file_add": "Link a Library file (contract, certificate, photo) to a contact, equipment, item or location.",
+    "record_file_remove": "Unlink a file from its record; the file stays in the Library.",
     "location_create": "Add a location that lines can be tagged with.",
     "location_update": "Rename, move, or deactivate a location.",
     "project_create": "Add a project that lines can be tagged with.",

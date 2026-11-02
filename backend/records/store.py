@@ -61,6 +61,14 @@ CREATE TABLE IF NOT EXISTS due_date_occurrences (
   UNIQUE (due_date_id, due_on), CHECK ((completed_at IS NULL) = (completed_by_id IS NULL)));
 
 CREATE INDEX IF NOT EXISTS due_date_occurrences_task ON due_date_occurrences(task_id) WHERE task_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS record_files (
+  id TEXT PRIMARY KEY,
+  record_table TEXT NOT NULL CHECK (record_table IN ('fin_contacts','equipment','items','locations')),
+  record_id TEXT NOT NULL, file_id TEXT NOT NULL, created_at TEXT NOT NULL, created_by_id TEXT NOT NULL,
+  UNIQUE (record_table, record_id, file_id));
+
+CREATE INDEX IF NOT EXISTS record_files_record ON record_files(record_table, record_id);
 """
 
 
@@ -130,3 +138,39 @@ def delete(c: sqlite3.Connection, table: str, row_id: str) -> None:
     """Remove one row. A row that other rows, ledger lines or queued writes name is archived instead, by callers."""
     assert table in ROW_TABLES
     c.execute(f"DELETE FROM {table} WHERE id=?", (resolve(c, table, row_id),))
+
+
+# The Library files a record links: a vendor's contract, an item's certificate, a piece of equipment's docs.
+FILE_TABLES = ("fin_contacts", "equipment", "items", "locations")
+
+
+def link_file(c: sqlite3.Connection, record_table: str, record_id: str, file_id: str, at: str, who: str) -> str:
+    """Link one Library file to a record, once: a file already linked answers with its link's id. Returns that id."""
+    assert record_table in FILE_TABLES
+    found = c.execute("SELECT id FROM record_files WHERE record_table=? AND record_id=? AND file_id=?",
+                      (record_table, record_id, file_id)).fetchone()
+    if found is not None:
+        return str(found[0])
+    link_id = str(uuid.uuid4())
+    c.execute("INSERT INTO record_files(id, record_table, record_id, file_id, created_at, created_by_id) "
+              "VALUES(?,?,?,?,?,?)", (link_id, record_table, record_id, file_id, at, who))
+    return link_id
+
+
+def file_link(c: sqlite3.Connection, link_id: str) -> tuple[str, str, str] | None:
+    """One link's (record table, record id, file id), or None."""
+    row = c.execute("SELECT record_table, record_id, file_id FROM record_files WHERE id=?", (link_id,)).fetchone()
+    return (str(row[0]), str(row[1]), str(row[2])) if row is not None else None
+
+
+def unlink_file(c: sqlite3.Connection, link_id: str) -> None:
+    """Remove one link; the Library file itself is left alone."""
+    c.execute("DELETE FROM record_files WHERE id=?", (link_id,))
+
+
+def file_links(c: sqlite3.Connection, record_table: str, record_id: str) -> list[tuple[str, str, str, str]]:
+    """A record's links, oldest first: (link id, file id, added at, added by)."""
+    rows = c.execute("SELECT id, file_id, created_at, created_by_id FROM record_files "
+                     "WHERE record_table=? AND record_id=? ORDER BY created_at, id",
+                     (record_table, record_id)).fetchall()
+    return [(str(r[0]), str(r[1]), str(r[2]), str(r[3])) for r in rows]

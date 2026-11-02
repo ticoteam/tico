@@ -1097,7 +1097,14 @@ export type Empty = Record<string, unknown>;
 
 export type Equipment = {
   archived_at?: string | null;
+  as_of?: string | null;
   customer_id?: string | null;
+  files?: Array<{
+  added_at: string;
+  added_by_id: string;
+  file_id: string;
+  id: string;
+}>;
   id: string;
   installed_on?: string | null;
   kind: "owned" | "customer";
@@ -1107,6 +1114,8 @@ export type Equipment = {
   name: string;
   photo_file_id?: string | null;
   serial: string;
+  source?: string;
+  stale?: boolean;
   warranty_ends_on?: string | null;
 };
 
@@ -1540,6 +1549,12 @@ export type FinanceContact = {
   recipient_id?: string | null;
   tax_id_last4?: string | null;
 };
+  files: Array<{
+  added_at: string;
+  added_by_id: string;
+  file_id: string;
+  id: string;
+}>;
   view_version: number;
 };
 
@@ -1882,7 +1897,7 @@ export type FinanceReport = {
 };
 
 export type FinanceReportOf = {
-  kind: "pnl" | "pnl_by" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by" | "revenue_by_item";
+  kind: "pnl" | "pnl_by" | "pnl_by_account" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by" | "revenue_by_item";
   prior?: Record<string, unknown>;
 };
 
@@ -1928,9 +1943,12 @@ export type FinanceSearch = {
   currency: string;
   next_cursor: string | null;
   results: Array<{
+  as_of?: string | null;
   id: string;
   kind: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project" | "equipment";
   label: string;
+  source?: string;
+  stale?: boolean;
 }>;
   view_version: number;
 };
@@ -2594,15 +2612,26 @@ export type InternalDocVersions = {
 
 export type Item = {
   archived_at?: string | null;
+  as_of?: string | null;
   asset_account_id?: string | null;
   currency: string;
   expense_account_id?: string | null;
+  files?: Array<{
+  added_at: string;
+  added_by_id: string;
+  file_id: string;
+  id: string;
+}>;
   id: string;
   income_account_id?: string | null;
   kind: "service" | "inventory" | "non_inventory" | "bundle" | "category" | "raw_material" | "assembly";
   name: string;
   price?: number | null;
+  quantity_on_hand?: number | null;
+  quantity_synced_at?: string | null;
   sku: string;
+  source?: string;
+  stale?: boolean;
   unit: string;
 };
 
@@ -2886,13 +2915,23 @@ export type LocalFinding = {
 export type Location = {
   address: Record<string, unknown>;
   archived_at?: string | null;
+  as_of?: string | null;
   customer_id?: string | null;
   customer_name?: string | null;
+  files?: Array<{
+  added_at: string;
+  added_by_id: string;
+  file_id: string;
   id: string;
+}>;
+  id: string;
+  in_books?: boolean;
   kind: string;
   name: string;
   next_due_on?: string | null;
   parent_id?: string | null;
+  source?: string;
+  stale?: boolean;
 };
 
 export type LocationOne = {
@@ -3350,10 +3389,13 @@ export type ProfileChoices = {
 
 export type Project = {
   archived_at?: string | null;
+  as_of?: string | null;
   customer_id?: string | null;
   customer_name?: string | null;
   id: string;
   name: string;
+  source?: string;
+  stale?: boolean;
   status: "open" | "closed";
 };
 
@@ -6293,7 +6335,8 @@ export type GetFinanceReportParams = {
   by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account" | "location" | "class" | "project" | "location_class" | "location_project" | "class_project" | null;
   compare?: "prior" | null;
   end?: string | null;
-  kind: "pnl" | "pnl_by" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by" | "revenue_by_item";
+  id?: string | null;
+  kind: "pnl" | "pnl_by" | "pnl_by_account" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by" | "revenue_by_item";
   period?: "day" | "week" | "month" | "quarter" | "year";
   start?: string | null;
   top_n?: number;

@@ -1,7 +1,7 @@
 """The records right and the view split (plan §3, §4): who writes locations, items and projects, what each viewer
 reads of them, the item and location fields, what a bot may do to an archived item, and the source and read time every
 record result carries, who reads the customer picker and panel, and revenue by item. Case IDs are the operations test
-cases (X11, X12, X13, B5, P2a, X16, X21, H2a); the guest case X11b is in test_finance_reads_records.py."""
+cases (X11, X12, X13, B5, P2a, X10, X16, X20, X21, H2a); the guest case X11b is in test_finance_reads_records.py."""
 import json
 import sqlite3
 
@@ -189,6 +189,45 @@ def test_x21_every_record_result_carries_its_source_and_read_time(books):
                   "created_by) VALUES('ref-gadget','conn-books','items',?,'Item:9',?,?)", (item, AT, OWNER))
         assert FR.search(c, OWNER, kind="item", q="gad", at=AT)["results"][0]["source"] == "quickbooks"
         assert FR.record(c, OWNER, kind="item", record_id=item, at=AT)["item"]["source"] == "quickbooks"
+
+
+def test_x10_a_copy_the_owning_system_cannot_reach_says_as_of_when_it_last_synced_and_goes_stale(books):
+    with books.transaction() as c:
+        item = str(_ok(act(c, OWNER, "item_create", {"name": "Gadget", "kind": "service", "price": 2_500}))
+                   .result["item_id"])
+        plain = str(_ok(act(c, OWNER, "item_create", {"name": "Plain", "kind": "service"})).result["item_id"])
+        c.execute("INSERT INTO fin_connections(id, provider, purpose, status, last_ok_at, created_at, created_by) "
+                  "VALUES('conn-books','quickbooks','books','active',?,?,?)",
+                  ("2026-10-15T11:00:00.000000Z", AT, OWNER))
+        c.execute("INSERT INTO fin_external_refs(id, connection_id, local_table, local_id, external_id, created_at, "
+                  "created_by) VALUES('ref-gadget','conn-books','items',?,'Item:9',?,?)", (item, AT, OWNER))
+
+        def copy_of(record: str) -> tuple:
+            shown = FR.record(c, OWNER, kind="item", record_id=record, at=AT)["item"]
+            return shown["source"], shown["as_of"], shown["stale"]
+
+        assert copy_of(item) == ("quickbooks", "2026-10-15T11:00:00.000000Z", False)     # an hour old: not stale
+        assert copy_of(plain) == ("tico", AT, False)                                    # Tico's own: as of the read
+        c.execute("UPDATE fin_connections SET last_ok_at=? WHERE id='conn-books'", ("2026-10-14T11:00:00.000000Z",))
+        assert copy_of(item) == ("quickbooks", "2026-10-14T11:00:00.000000Z", True)    # 25 hours: stale
+        c.execute("UPDATE fin_connections SET status='error', last_ok_at=? WHERE id='conn-books'",
+                  ("2026-10-15T11:00:00.000000Z",))
+        assert copy_of(item) == ("quickbooks", "2026-10-15T11:00:00.000000Z", True)    # failing: stale
+        c.execute("UPDATE fin_connections SET status='new', last_ok_at=NULL WHERE id='conn-books'")
+        assert copy_of(item) == ("quickbooks", None, True)                              # never synced: no as_of
+        found = FR.search(c, OWNER, kind="item", q="gad", at=AT)["results"]
+        assert [(r["source"], r["as_of"], r["stale"]) for r in found] == [("quickbooks", None, True)]
+
+
+def test_x20_a_location_takes_a_shipped_kind_and_the_table_refuses_the_retired_one(books):
+    with books.transaction() as c:
+        refused = act(c, OWNER, "location_create", {"name": "Old", "kind": "location"})
+        assert refused.status != "committed" and refused.code == "invalid", refused
+        kept = str(_ok(act(c, OWNER, "location_create", {"name": "Dock", "kind": "warehouse"})).result["location_id"])
+        assert c.execute("SELECT kind FROM locations WHERE id=?", (kept,)).fetchone()[0] == "warehouse"
+        with pytest.raises(sqlite3.IntegrityError):
+            c.execute("INSERT INTO locations(id, name, kind, created_at, created_by_id) "
+                      "VALUES('loc-old', 'Old', 'location', ?, ?)", (AT, OWNER))
 
 
 def test_h2a_a_customer_site_names_its_customer_to_every_teammate_and_the_panel_to_the_receivables_view(books):

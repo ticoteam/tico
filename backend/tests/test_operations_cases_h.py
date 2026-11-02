@@ -77,7 +77,7 @@ def test_h5_a_procurement_bots_draft_po_carries_its_item_lines_and_holds_nothing
 def test_h7_a_bots_plate_draft_saves_at_the_customers_site_with_its_photo_once_a_person_confirms(books, monkeypatch):
     """H7 (gate side): the draft names the customer and the site it sits at; nothing is saved before the owner
     approves, and the approved record keeps the site, the customer, the data and the photo."""
-    monkeypatch.setattr(EQ, "FILE_READABLE", lambda c, who, file_id: file_id == PHOTO)
+    monkeypatch.setattr(EQ, "file_readable", lambda c, who, file_id: file_id == PHOTO)
     with books.transaction() as c:
         assert act(c, OWNER, "right_grant", {"teammate": "bot:coder", "right": "finance.records"}).status == "committed"
         smith = str(act(c, OWNER, "contact_create", {"name": "Smith Homes", "kind": "customer"}).result["contact_id"])
