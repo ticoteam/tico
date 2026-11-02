@@ -128,6 +128,11 @@ fi
 # asked for, so they are off. --disable-features is one switch and Chrome keeps only its last occurrence, so the caller's
 # own list is folded into ours and removed from the arguments rather than left to override it.
 features="OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationGuideOnDeviceModel"
+for word in $CHROMIUM_FLAGS; do
+  switch="" value=""
+  read_switch "$word"
+  [ "$switch" = disable-features ] && [ -n "$value" ] && features="$features,$value"
+done
 left=$#
 while [ "$left" -gt 0 ]; do
   word=$1

@@ -1609,7 +1609,7 @@ mod tests {
             .env("HOME", &home)
             .env("HUB_BOT", "ops")
             .env("TICO_BROWSER_PROXY", "http://127.0.0.1:21001")
-            .env("CHROMIUM_FLAGS", "")
+            .env("CHROMIUM_FLAGS", "--disable-features=FromEnv")
             .output()
             .unwrap();
         assert!(out.status.success());
@@ -1619,7 +1619,7 @@ mod tests {
         let features: Vec<&str> = args.iter().filter_map(|a| a.strip_prefix("--disable-features=")).collect();
         assert_eq!(
             features,
-            ["OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationGuideOnDeviceModel,Foo,Bar"],
+            ["OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationGuideOnDeviceModel,FromEnv,Foo,Bar"],
             "one switch, the caller's features included: {args:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
