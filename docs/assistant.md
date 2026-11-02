@@ -6,7 +6,7 @@ computer it is the sidebar's bottom row, above your account, with Search's icon 
 opens a small panel straight above that row, over the sidebar, and nothing floats over the page. On a phone the Liquid Dot in the
 middle of the tab bar opens it as a sheet. The panel names the page it sees, and a message sent from it carries that
 page, so "this" and "here" mean what you are looking at. The panel is called **Tico Assistant** (or the name your team
-gave the assistant); its header has the dot, the name, the page it sees and **Loop in Support**. The chat is also a
+gave the assistant); its header has the dot, the name, the page it sees, **Your requests** and **Loop in Support**. The chat is also a
 page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's chat, with a
 few things to ask while it is empty. The **Assistant** tab, first on your own page (`#/person/<you>`), opens the same
 page. Attach files or
@@ -27,11 +27,23 @@ time as blue-gray bubbles under a headset (yours on the right), a reply seen the
 support instead of the Assistant; the link hides while support is in. Looping support in shares the chat, as the line says: the chat's last 20 turns
 (yours and the Assistant's, one line each, up to 4000 characters) go to the request at once, with keys and tokens cut
 out by the same rules support reports use (`backend/redaction.py`), and the thread doesn't draw that message again.
+On a phone, the first time you open the panel, a line under the header says what Loop in Support shares. It goes once you
+close the panel or press the link.
 With no open request, it sends a new request holding them, with no form; a request taken out earlier comes
 back and gets them instead. The chip's **×** takes it out: "Tico Support can no longer see chats."
 Nothing more from this chat goes to support; the request itself stays open in Support, only this chat stops showing it
 (remembered on this browser). Support itself (every request, diagnostics, a new request) opens from any link to
 `#/support`, such as the Assistant's "Loop in Tico support" reply.
+
+**Your requests**, beside Loop in Support, opens Support's list of your requests over the page; the Ask panel stays where
+it was. Its label counts the replies you have not read, as in **Your requests (2)**, and has no count when there are none.
+It shows only when Support is available on this Tico (not in a demo or rehearsal, or with `TICO_SUPPORT=off`).
+
+When Loop in Support opens a new request for the chat, the thread adds two lines: "Delivered to Tico support. We usually
+reply within 1 business day (Monday to Friday). The reply will appear here.", and "Diagnostics weren't sent." with an
+**Attach diagnostics** link. The link opens
+that request in Support with **Review and edit**; nothing is sent until you press **Send** there. Looping in again to the
+same request does not add these lines again.
 
 A **peek** is a few words beside the closed dot, just past the sidebar level with the Ask row (above the tab bar on a phone), Tico saying something waits on you:
 "Got a quick question for you", "3 questions are waiting on you", "Need your OK on something". Six words at most,

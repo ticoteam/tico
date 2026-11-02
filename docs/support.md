@@ -55,8 +55,8 @@ grouped, and how many entries were evicted or omitted. Computer heartbeat time d
 This is redacted technical evidence, not an anonymous ticket: the message and optional email/install ID may identify you.
 The allowlist and examples are in [PRIVACY.md](../PRIVACY.md#support-diagnostics).
 
-Replies appear in their conversation, raise a notice, and put the number of unread replies inside Ask, on **Tico support**
-under its **+**; Ask's button carries no count. Opening a
+Replies appear in their conversation, raise a notice, and put the number of unread replies inside Ask: on **Your requests**
+in the Ask header, and on **Tico support** under its **+**. Ask's own button carries no count. Opening a
 conversation, or having it open in front of you when a reply lands, marks it read; there is no Mark read or Refresh button.
 Replies are checked when you open Help, when the app regains focus or comes back into view, and on the timer below. Background
 refresh preserves your draft, focus and scroll position. Deleting removes the request and all its attachments at HQ and its
@@ -74,7 +74,8 @@ local ticket record. Closed requests remain readable.
   new request, ready to write; a `#/support/manage` link opens one asking for full management. **Loop in Support**,
   the link at the top right of the Ask panel, shows an open request's messages in that chat as blue-gray bubbles and
   writes your replies to it. It sends the chat's last 20
-  turns, keys cut out, to that request, or to a new request sent at once when none is open ([The Assistant](assistant.md)). Empty lists carry no support line of their own.
+  turns, keys cut out, to that request, or to a new request sent at once when none is open ([The Assistant](assistant.md)).
+  A new request sent that way has no diagnostics; **Attach diagnostics** under its line in the chat opens **Review and edit** for it. Empty lists carry no support line of their own.
 - **Report this** appears on every error message (toast), on a failed run (a task's Runs section and Settings → History → Runs), on a red
   Health line and on a stuck bot. It opens a new request with what failed named in the message and attached as
   diagnostics in a `report` section: its kind (`toast`, `run`, `health`, `stuck`, `setup_check`), the words on screen,
