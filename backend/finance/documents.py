@@ -1640,16 +1640,19 @@ def pay_due(ctx: Ctx) -> int:
     return n
 
 
+RENEWAL_TASK_MIN_LEAD = 30      # days before the cancel-by day, so a vendor with short or no notice still gets time
+
+
 def _renewal_task(ctx: Ctx, vendor: Any, today: date) -> None:
-    """The task that puts a vendor's renewal in front of someone (plan P3). It opens the vendor's notice days before its
-    cancel-by day and falls due on that day, once per renewal date. It goes to the vendor's owner, else to the install
+    """The task that puts a vendor's renewal in front of someone (plan P3). It opens the vendor's notice days, at least
+    RENEWAL_TASK_MIN_LEAD, before its cancel-by day and falls due on that day, once per renewal date. It goes to the vendor's owner, else to the install
     owner; a vendor whose owner can't take work sends the install owner a Needs-you item instead."""
     renewal_on = str(vendor["renewal_on"])
     notice_by = AP.renewal_notice_by(renewal_on, int(vendor["renewal_notice_days"] or 0))
     if notice_by is None:
         return
     cancel_by = dates.day(notice_by)
-    opens = cancel_by - timedelta(days=int(vendor["renewal_notice_days"] or 0))
+    opens = cancel_by - timedelta(days=max(int(vendor["renewal_notice_days"] or 0), RENEWAL_TASK_MIN_LEAD))
     if not opens <= today <= cancel_by:
         return
     key = f"vendor-renewal-task:{vendor['id']}:{renewal_on}"
@@ -1662,11 +1665,10 @@ def _renewal_task(ctx: Ctx, vendor: Any, today: date) -> None:
         return
     actor, why = FLOW.assignee(ctx.c, target)
     if why:
-        if install:
-            TI.needs_you(ctx.c, install, f"Vendor renewal needs a teammate: {name}"[:200],
-                         f"{name} renews on {renewal_on} and its notice runs out on {cancel_by.isoformat()}. Its owner "
-                         f"{why}, so no one has its renewal task. Give the vendor an active owner (contact_update "
-                         "owner_id) and the next pass opens the task.")
+        _renewal_notice(ctx, key, install, f"Vendor renewal needs a teammate: {name}",
+                        f"{name} renews on {renewal_on} and its notice runs out on {cancel_by.isoformat()}. Its owner "
+                        f"{why}, so no one has its renewal task. Give the vendor an active owner (contact_update "
+                        "owner_id) and the next pass opens the task.")
         return
     title = f"Vendor renewal: {name}"[:200]
     body = (f"{name} renews on {renewal_on}, and its notice runs out on {cancel_by.isoformat()}. Decide before then "
@@ -1675,12 +1677,19 @@ def _renewal_task(ctx: Ctx, vendor: Any, today: date) -> None:
         task = H.task_create(ctx.c, H.KEEPER, title, body, actor, due=automation_due.due_end(cancel_by, FLOW.zone()),
                              deduplicate=False, trigger="schedule", trigger_source="vendor_renewal")
     except H.Refused as exc:
-        if install:
-            TI.needs_you(ctx.c, install, f"Vendor renewal could not open: {name}"[:200],
-                         f"{title} was refused: {exc}")
+        _renewal_notice(ctx, key, install, f"Vendor renewal could not open: {name}", f"{title} was refused: {exc}")
         return
     ctx.c.execute("INSERT INTO registry_metadata(key, value_json) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
                   "value_json=excluded.value_json", (key, json.dumps(str(task["id"]))))
+
+
+def _renewal_notice(ctx: Ctx, key: str, install: str, title: str, body: str) -> None:
+    """Tell the install owner once per vendor and renewal date: this runs every pass, and a closed item stays closed."""
+    told = f"{key}:told"
+    if not install or ctx.c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (told,)).fetchone() is not None:
+        return
+    tico.needs_you(ctx.c, install, title[:200], body)
+    ctx.c.execute("INSERT INTO registry_metadata(key, value_json) VALUES(?,'true')", (told,))
 
 
 def watch(ctx: Ctx) -> int:

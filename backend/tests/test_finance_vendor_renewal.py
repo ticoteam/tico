@@ -80,6 +80,37 @@ def test_a_renewal_task_opens_once_per_date_and_falls_to_the_install_owner(books
         assert tasks == [(FC.owner(c), "Vendor renewal: Laser Service Co")]
 
 
+def test_a_renewal_with_no_notice_opens_its_task_thirty_days_before_the_renewal(books):  # noqa: F811
+    with books.transaction() as c:
+        early = _vendor(c, "Early Co")
+        soon = _vendor(c, "Soon Co")
+        for vendor, renews in ((early, "2026-12-14"), (soon, "2026-11-10")):
+            assert act(c, OWNER, "contact_update", {"contact_id": vendor, "renewal_on": renews}).status == "committed"
+        FA.watch_documents(c, "2026-10-15T13:00:00.000000Z")
+    with books.read() as c:
+        tasks = [str(r[0]) for r in c.execute("SELECT title FROM tasks WHERE title LIKE 'Vendor renewal:%'")]
+        assert tasks == ["Vendor renewal: Soon Co"]
+
+
+def test_a_renewal_whose_owner_cannot_take_it_tells_the_install_owner_once_and_opens_when_fixed(books):  # noqa: F811
+    with books.transaction() as c:
+        vendor = _vendor(c, "Orphan Co")
+        assert act(c, OWNER, "contact_update", {"contact_id": vendor, "renewal_on": "2026-11-10"}).status == "committed"
+        c.execute("UPDATE fin_contacts SET owner_id='human:gone' WHERE id=?", (vendor,))
+        FA.watch_documents(c, "2026-10-15T13:00:00.000000Z")
+    with books.transaction() as c:
+        rows = c.execute("SELECT id FROM tasks WHERE title='Vendor renewal needs a teammate: Orphan Co'").fetchall()
+        assert len(rows) == 1
+        c.execute("UPDATE tasks SET status='done' WHERE id=?", (rows[0][0],))
+        FA.watch_documents(c, "2026-10-15T14:00:00.000000Z")
+    with books.transaction() as c:
+        assert c.execute("SELECT count(*) FROM tasks WHERE title LIKE 'Vendor renewal needs%'").fetchone()[0] == 1
+        c.execute("UPDATE fin_contacts SET owner_id=NULL WHERE id=?", (vendor,))
+        FA.watch_documents(c, "2026-10-15T15:00:00.000000Z")
+    with books.read() as c:
+        assert c.execute("SELECT count(*) FROM tasks WHERE title='Vendor renewal: Orphan Co'").fetchone()[0] == 1
+
+
 def test_a_renewal_task_goes_to_the_vendors_owner_when_it_has_one(books):  # noqa: F811
     with books.transaction() as c:
         laser = _vendor(c, "Laser Service Co")

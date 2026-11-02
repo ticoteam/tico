@@ -86,7 +86,8 @@ def _fields(ctx: Ctx, who: str, p: V.Payload, create: bool) -> dict[str, object]
 def _sync_warranty(ctx: Ctx, equipment_id: str, day: str | None, creator: str, who: str) -> None:
     """Keep the piece's warranty due date in step with its warranty end. No row yet: a date from today on adds one (the
     creator takes it), and a past date adds nothing. An active row follows a changed date, counting from today, and is
-    archived when the date is cleared. A row that was renamed or archived is the person's now, so it is left alone."""
+    archived when the date is cleared; a new date brings an archived one back, since that warranty is a new fact. A row
+    that was renamed is the person's now, so it is left alone."""
     due_id = f"warranty-{equipment_id}"
     today = RD.local_day(datetime.fromisoformat(ctx.at), FLOW.zone())
     row = RD.get(ctx.c, due_id)
@@ -97,13 +98,14 @@ def _sync_warranty(ctx: Ctx, equipment_id: str, day: str | None, creator: str, w
                               "counted_from_on": today.isoformat(), "next_due_on": None, "lead_days": WARRANTY_LEAD,
                               "assignee_id": creator, "created_at": ctx.at, "created_by_id": who})
         return
-    if row["archived_at"] is not None or str(row["name"]) != WARRANTY_NAME:
+    if str(row["name"]) != WARRANTY_NAME:
         return
     if day is None:
-        RD.update(ctx.c, due_id, {"archived_at": ctx.at, "updated_at": ctx.at, "updated_by_id": who})
-    elif day != str(row["starts_on"]):
-        RD.update(ctx.c, due_id, {"starts_on": day, "counted_from_on": today.isoformat(), "updated_at": ctx.at,
-                                  "updated_by_id": who})
+        if row["archived_at"] is None:
+            RD.update(ctx.c, due_id, {"archived_at": ctx.at, "updated_at": ctx.at, "updated_by_id": who})
+    elif day != str(row["starts_on"]) or row["archived_at"] is not None:
+        RD.update(ctx.c, due_id, {"starts_on": day, "counted_from_on": today.isoformat(), "archived_at": None,
+                                  "updated_at": ctx.at, "updated_by_id": who})
 
 
 def _check_owner(kind: str, customer: str) -> None:

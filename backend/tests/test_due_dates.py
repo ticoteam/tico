@@ -121,18 +121,18 @@ def test_h8_a_moved_warranty_end_moves_the_same_due_date_and_counts_from_today(b
     assert _tick(books)["tasks"] == []
 
 
-def test_h8_clearing_a_warranty_end_archives_its_due_date_and_a_new_date_does_not_bring_it_back(books):
+def test_h8_clearing_a_warranty_end_archives_its_due_date_and_a_new_date_brings_it_back(books):
     with books.transaction() as c:
         unit = _equipment(c, "Kiln 3", warranty="2026-12-14", who="bot:coder")
         assert act(c, OWNER, "equipment_update", {"equipment_id": unit, "warranty_ends_on": None}).status == "committed"
         assert RD.get(c, f"warranty-{unit}")["archived_at"] == AT
         assert act(c, OWNER, "equipment_update", {"equipment_id": unit, "warranty_ends_on": "2027-01-13"}).status == \
             "committed"
-        assert RD.get(c, f"warranty-{unit}")["starts_on"] == "2026-12-14"
-    assert _tick(books)["tasks"] == []
+        row = RD.get(c, f"warranty-{unit}")
+        assert (row["starts_on"], row["archived_at"]) == ("2027-01-13", None)
 
 
-def test_h8_a_renamed_or_archived_warranty_due_date_is_left_alone_when_the_warranty_moves(books):
+def test_h8_a_renamed_warranty_due_date_is_left_alone_and_a_stopped_one_comes_back_when_the_warranty_moves(books):
     with books.transaction() as c:
         renamed = _equipment(c, "Oven 5", warranty="2026-12-14")
         assert act(c, OWNER, "due_date_update", {"due_date_id": f"warranty-{renamed}",
@@ -145,8 +145,8 @@ def test_h8_a_renamed_or_archived_warranty_due_date_is_left_alone_when_the_warra
                        ).status == "committed"
         assert (RD.get(c, f"warranty-{renamed}")["name"], RD.get(c, f"warranty-{renamed}")["starts_on"]) == \
             ("Service oven", "2026-12-14")
-        assert RD.get(c, f"warranty-{stopped}")["archived_at"] is not None
-        assert RD.get(c, f"warranty-{stopped}")["starts_on"] == "2026-12-14"
+        assert RD.get(c, f"warranty-{stopped}")["archived_at"] is None
+        assert RD.get(c, f"warranty-{stopped}")["starts_on"] == "2027-01-13"
 
 
 def test_h8_a_warranty_end_added_later_makes_one_due_date_and_a_past_one_makes_none(books):
