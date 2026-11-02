@@ -358,7 +358,11 @@ const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =
     }
     assert.deepEqual(titles, ['Tasks', 'Team', 'Docs', 'Strategy', 'Meetings']);
     assert.equal(await tour.locator('[data-tour-next]').textContent(), 'Done');
+    // Removing the dialog is synchronous; its remembered-state write finishes separately.
+    const tourSaved = page.waitForResponse(r => r.url().endsWith('/api/v2/setup/getting-started/state')
+      && r.request().method() === 'POST' && r.request().postDataJSON()?.tour === true);
     await page.keyboard.press('Escape');
+    assert.equal((await tourSaved).ok(), true);
     await tour.waitFor({state: 'detached'});
     assert.equal(await page.evaluate(() => document.body.classList.contains('drawer')), false);
     assert.deepEqual(calls.filter(c => c.body.tour).length >= 1, true);
