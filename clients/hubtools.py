@@ -6760,7 +6760,9 @@ def _rule_scope(description):
     names = {"type": "array", "items": {"type": "string"}}
     return {"type": "object", "additionalProperties": False, "description": description, "properties": {
         "everyone": {"type": "boolean"}, "all_bots": {"type": "boolean"}, "groups": names, "bots": names,
-        "people": names, "names": {**names, "description": "A group, person or bot, by id or name"}}}
+        "people": names, "names": {**names, "description": "A group, person or bot, by id or name"},
+        "outside_editions": {"type": "boolean", "description": "What the Company page sends outside (its editions); "
+                                                               "the owner and admins only"}}}
 
 
 def _present(values):

@@ -1798,6 +1798,8 @@ def parser():
                    help="a group, person or bot by id or name; repeatable")
     s.add_argument("--everyone", action="store_true")
     s.add_argument("--all-bots", dest="all_bots", action="store_true")
+    s.add_argument("--outside-editions", dest="outside_editions", action="store_true",
+                   help="what the Company page sends outside (owner and admins only)")
     s.add_argument("--with", dest="with_names", action="append", default=[], metavar="NAME",
                    help="internal: a group, person or bot the rule is about; repeatable")
     s.add_argument("--from", dest="source_id", metavar="SOURCE", help="external: the From, by name or id")
@@ -1817,6 +1819,7 @@ def parser():
     s.add_argument("--who", dest="who_names", action="append", default=[], metavar="NAME")
     s.add_argument("--everyone", action="store_true")
     s.add_argument("--all-bots", dest="all_bots", action="store_true")
+    s.add_argument("--outside-editions", dest="outside_editions", action="store_true")
     s.add_argument("--with", dest="with_names", action="append", default=[], metavar="NAME")
     s.add_argument("--from", dest="source_id", metavar="SOURCE")
     s.add_argument("--if-broken", dest="if_broken", choices=["block", "escalate", "warn"])
@@ -1828,6 +1831,7 @@ def parser():
     s.add_argument("--who", dest="who_names", action="append", default=[], metavar="NAME")
     s.add_argument("--everyone", action="store_true")
     s.add_argument("--all-bots", dest="all_bots", action="store_true")
+    s.add_argument("--outside-editions", dest="outside_editions", action="store_true")
     s.set_defaults(fn="rules accept")
     s = rules.add_parser("skip", help="set a suggestion aside")
     s.add_argument("id")
