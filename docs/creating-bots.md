@@ -281,7 +281,9 @@ manifest, the instructions, the routines and stale references, reported as `{"re
 "problems": [...]}`. It is what BotOps runs before it hands a new bot over, and it needs no registry
 entry, so it works on a repository the server has never seen. `clients/preflight.py` is still the
 full check, including credentials, runtime and mail, and is what to run before flipping a bot to
-`active`.
+`active`. `hub bot check-names <slug>` lists the old column, field and command names a checkout still
+uses (SQL in `hub sql`, keys read from the API, old `hub` commands); `--fix` rewrites the ones with a
+single new spelling and runs on the computer, without the server.
 
 ### The `.data/` sibling
 

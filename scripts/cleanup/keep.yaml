@@ -41,6 +41,7 @@ names:
   ui/tests/settings-billing.cjs: [expires]
   ui/app/meetings-granola.js: [last_sync]   # Granola's sync status: a stored document's field, not a column
   ui/tests/meetings-granola.cjs: [last_sync]
+  examples/custom-frontend/app.js: [next]   # the login page's next= URL parameter, not a column
 keys:
   runner/tests/test_worktree*.py: [detail_json, created, updated]   # fake runners/me/worktrees rows (the wire); their hub SQL is renamed
   backend/company_billing.py: [created, expires]   # Tico HQ's billing answer: another system's fields

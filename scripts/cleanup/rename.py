@@ -38,9 +38,13 @@ WAVE_ORDER = ["1", "2", "2s", "2b", "3"]
 PY_DIRS = ("backend", "e2e", "clients", "runner", "scripts", "setup", "evals", "connectors", "integrations", "tools", "ui", "docker",
            "docs-eval", "contracts")
 PY_FILES = ("conftest.py",)
-JS_GLOBS = ("ui/**/*.js", "ui/**/*.cjs", "ui/**/*.mjs", "app/shell/**/*.js", "scripts/**/*.cjs", "scripts/**/*.mjs")
+JS_GLOBS = ("ui/**/*.js", "ui/**/*.cjs", "ui/**/*.mjs", "app/shell/**/*.js", "scripts/**/*.cjs", "scripts/**/*.mjs",
+            "examples/**/*.js")                                  # the custom frontend example reads the API's field names
 RS_DIRS = ("runner-rs", "relay-rs", "app/src")
-MD_DIRS = ("docs", "templates", "skills", "examples", "integrations", "contracts", "questions", "runner-rs")
+MD_DIRS = ("docs", "templates", "skills", "examples", "integrations", "contracts", "questions", "runner-rs", "policies",
+           "connectors", "tools")                               # bot-facing prose and each folder's README
+YAML_DIRS = ("templates", "connectors")                         # bot.yaml, card.yaml, playbook metadata: prose and backticks
+SH_BOT_DIRS = ("templates", "skills", "examples", "connectors")  # bot-side scripts that run hub sql
 JSON_GLOBS = ("contracts/runner/fixtures/*.json", "ui/tests/fixtures/*.json")   # the UI tests answer with these
 SKIP_PARTS = ("node_modules", "/vendor/", "ui/assets/", "__pycache__", "scripts/cleanup/", "/target/")
 
@@ -1450,14 +1454,17 @@ def classify(rel):
         return "rs"
     if rel.endswith(".md") and (rel.split("/", 1)[0] in MD_DIRS or "/" not in rel):
         return "md"
+    if rel.endswith((".yaml", ".yml")) and rel.split("/", 1)[0] in YAML_DIRS:
+        return "yaml"
     if rel.endswith(".json") and any(glob_match(rel, g) for g in JSON_GLOBS):
         return "json"
-    if rel.endswith(".sh") and rel.split("/", 1)[0] in ("docker", "scripts", "setup", "deploy"):
+    if rel.endswith(".sh") and rel.split("/", 1)[0] in ("docker", "scripts", "setup", "deploy") + SH_BOT_DIRS:
         return "sh"
     return None
 
 
-HANDLERS = {"js": js_file, "rs": rust_file, "md": md_file, "json": json_fixture, "sh": sh_file}
+# YAML is prose-shaped here: backticked identifiers in comments and scalars, handled exactly as markdown prose.
+HANDLERS = {"js": js_file, "rs": rust_file, "md": md_file, "yaml": md_file, "json": json_fixture, "sh": sh_file}
 
 
 MODEL_ROOTS = {"TypedDict", "BaseModel"}

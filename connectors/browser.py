@@ -108,7 +108,7 @@ def check_social(slug, sites=(), text=""):
     named = social(list(sites) + URLS.findall(text or "") + bare)
     if named:
         raise Refused(f"{slug} may not use the owner's social sessions ({', '.join(named)}); only {SESSION_OWNER} reads them.",
-                      "Read what Listening saved from your hub inbox (hub intake list), or open a task on "
+                      "Read what Listening saved from your hub inbox (hub listening item list), or open a task on "
                       "listening for a lookup.")
 
 
