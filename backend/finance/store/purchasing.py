@@ -4,7 +4,6 @@ and states; this module writes rows and reads sums. A stored status is what was 
 reader sees can be derived: an approved order billed in part is partial, and an estimate with an invoice is invoiced."""
 import json
 import sqlite3
-from collections.abc import Sequence
 from collections.abc import Mapping, Sequence
 from typing import Any
 
