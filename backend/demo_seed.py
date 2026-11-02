@@ -22,6 +22,7 @@ warnings.filterwarnings("ignore", message=".*starlette.testclient.*")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from . import demo_content as D
+from . import demo_sections
 from . import docs, goals as G, hubdb, market, onboarding, providers, routines, updates
 from .auth import Identity
 from .scheduler import next_due, stamp
@@ -140,6 +141,7 @@ class Builder:
             self.history()
             self.messaging()
             self.files()
+            demo_sections.seed_all(self)
             self.finish()
 
     def write(self, work):
