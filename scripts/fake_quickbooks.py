@@ -7,7 +7,10 @@ Control endpoints under /_fake/ are not QuickBooks':
   POST /_fake/seed     {"Account": [...], "Vendor": [...], "Item": [...], ...} adds records of any entity
   POST /_fake/change   the same shape: records the change feed (CDC) reports next time it is read
   POST /_fake/expire   the next call is refused with 401 once (the token has expired)
-  GET  /_fake/calls    every call made, in order (method, path, query, body; never the token)
+  POST /_fake/lose     {"path": "bill", "count": 1}: the next <count> creates at that path are written, then the
+                       answer is lost (the connection closes with no reply); a retry with the same RequestId finds it
+  GET  /_fake/calls    every call made, in order (method, path, query, body; never the token), plus "lost" and
+                       "refused" (401s given) counts
   POST /_fake/reset    empties everything
 
   python3 scripts/fake_quickbooks.py --port 18791
@@ -21,9 +24,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 ENTITIES = ("Account", "Vendor", "Customer", "JournalEntry", "Item", "Department", "Class", "PurchaseOrder", "Estimate",
-            "Invoice")
+            "Invoice", "Bill", "BillPayment", "Payment")
 CREATE = {"account": "Account", "vendor": "Vendor", "customer": "Customer", "journalentry": "JournalEntry",
-          "purchaseorder": "PurchaseOrder", "estimate": "Estimate", "invoice": "Invoice"}
+          "purchaseorder": "PurchaseOrder", "estimate": "Estimate", "invoice": "Invoice", "bill": "Bill",
+          "billpayment": "BillPayment", "payment": "Payment"}
 LOCK = threading.Lock()
 STATE: dict[str, object] = {}
 
@@ -31,7 +35,7 @@ STATE: dict[str, object] = {}
 def reset() -> None:
     STATE.clear()
     STATE.update({"books": {e: [] for e in ENTITIES}, "changes": [], "by_request": {}, "calls": [], "expire": False,
-                  "next_id": 100})
+                  "next_id": 100, "lose": [], "lost": 0, "refused": 0})
 
 
 def _rows(entity: str) -> list[dict[str, object]]:
@@ -73,8 +77,32 @@ def cdc(entities: str) -> tuple[int, dict[str, object]]:
     for entity, row in STATE["changes"]:  # type: ignore[index,misc]
         if entity in wanted:
             block[entity].append(row)  # type: ignore[union-attr]
-    STATE["changes"] = []
+    # Rows of the entities this call did not ask for wait for their own call (the client reads one entity at a time).
+    STATE["changes"] = [(e, r) for e, r in STATE["changes"] if e not in wanted]  # type: ignore[index,misc]
     return 200, {"CDCResponse": [{"QueryResponse": [block]}]}
+
+
+def _lose(path: str) -> bool:
+    """True when the next create at this path is one whose answer is lost (the write itself is kept)."""
+    for rule in STATE["lose"]:  # type: ignore[attr-defined]
+        if rule["path"] == path and rule["count"] > 0:
+            rule["count"] -= 1
+            STATE["lost"] = int(STATE["lost"]) + 1  # type: ignore[call-overload]
+            return True
+    return False
+
+
+def _complete(made: dict[str, object], entity: str) -> None:
+    """What QuickBooks adds to a record it keeps: an Id for each line that has none, and a total from the lines when
+    the write leaves it out."""
+    lines = made.get("Line")
+    if not isinstance(lines, list):
+        return
+    for n, line in enumerate(lines, 1):
+        if isinstance(line, dict) and "Id" not in line:
+            line["Id"] = f"{made['Id']}-{n}"
+    if entity in ("Bill", "Invoice", "Payment", "BillPayment") and "TotalAmt" not in made:
+        made["TotalAmt"] = float(sum(Decimal(str(x.get("Amount", 0))) for x in lines if isinstance(x, dict)))
 
 
 def create(path: str, body: dict[str, object], request_id: str, operation: str) -> tuple[int, dict[str, object]]:
@@ -90,6 +118,7 @@ def create(path: str, body: dict[str, object], request_id: str, operation: str) 
             return _fault("Journal entry does not balance")
         made = {**body, "Id": str(STATE["next_id"]), "SyncToken": "0"}
         STATE["next_id"] = int(made["Id"]) + 1  # type: ignore[call-overload]
+        _complete(made, entity)
         _rows(entity).append(made)
         answer = (200, {entity: made})
     if request_id and answer[0] == 200:
@@ -139,6 +168,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(401, {"Fault": {"Error": [{"Message": "no token"}]}})
             if STATE["expire"]:
                 STATE["expire"] = False
+                STATE["refused"] = int(STATE["refused"]) + 1  # type: ignore[call-overload]
                 return self._send(401, {"Fault": {"Error": [{"Message": "token expired"}]}})
             parts = url.path.strip("/").split("/")
             if len(parts) < 4 or parts[0] != "v3" or parts[1] != "company":
@@ -148,18 +178,25 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and parts[3] == "cdc":
                 return self._send(*cdc(query_string.get("entities", "")))
             if method == "POST":
-                return self._send(*create(parts[3], body, query_string.get("requestid", ""),
-                                          query_string.get("operation", "")))
+                answer = create(parts[3], body, query_string.get("requestid", ""), query_string.get("operation", ""))
+                if _lose(parts[3]):
+                    # The write is kept above; its answer never leaves (the caller sees the connection close).
+                    self.close_connection = True
+                    return None
+                return self._send(*answer)
             self._send(404, {})
 
     def _control(self, method: str, path: str, body: dict[str, object]) -> None:
         if path == "/_fake/calls":
-            return self._send(200, {"calls": STATE["calls"]})
+            return self._send(200, {"calls": STATE["calls"], "lost": STATE["lost"], "refused": STATE["refused"]})
         if path == "/_fake/reset":
             reset()
             return self._send(200, {"ok": True})
         if path == "/_fake/expire":
             STATE["expire"] = True
+            return self._send(200, {"ok": True})
+        if path == "/_fake/lose":
+            STATE["lose"].append({"path": str(body.get("path", "")), "count": int(body.get("count", 1))})  # type: ignore[attr-defined]
             return self._send(200, {"ok": True})
         if path == "/_fake/seed" or path == "/_fake/change":
             for entity, rows in body.items():

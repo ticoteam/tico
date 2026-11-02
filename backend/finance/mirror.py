@@ -967,11 +967,17 @@ def _document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str)
     verdict = M.decide(_have(row), d.ext)
     if verdict not in (M.CREATE, M.REPLACE):
         return
-    if d.ext.kind == "Invoice" and d.total == 0:
-        # QuickBooks zeroes a voided invoice rather than deleting it: a zero invoice is one the books void.
+    if d.total == 0 and d.ext.kind in ("Bill", "Invoice"):
+        # QuickBooks zeroes a voided bill or invoice rather than deleting it (its lines go to zero, or are dropped): a zero
+        # document is one the books hold as void (§4.2), never as paid. A void of a document the books hold reverses its
+        # entry; a voided bill first read is taken in as void, with no entry.
         if verdict == M.REPLACE and row is not None and row["local_id"]:
             local = str(row["local_id"])
             _void(c, ctx, cid, table, local, d.ext.key, at)
+            _bind(c, cid, table, local, d.ext, at, status="deleted")
+        elif verdict == M.CREATE and d.ext.kind == "Bill":
+            contact, _ = _party_of(c, cid, d.party)
+            local = SAP.insert(c, table, _doc_row(ctx, "bill", contact, d, 0, "void", at))
             _bind(c, cid, table, local, d.ext, at, status="deleted")
         return
     _currency(ctx, d.currency)

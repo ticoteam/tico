@@ -749,6 +749,91 @@ def test_a_void_of_a_closed_month_bill_at_the_provider_is_flagged_as_a_restateme
         assert c.execute("SELECT SUM(amount) FROM fin_lines").fetchone()[0] == 0
 
 
+def _bank_to(c: sqlite3.Connection, day: str) -> int:
+    """The chart's bank line (1000) as the books hold it through `day`."""
+    return int(c.execute("SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
+                         "WHERE l.account_id=? AND e.entry_date<=?", (account(c, "1000"), day)).fetchone()[0])
+
+
+def test_a_settled_bill_in_a_closed_month_is_revised_in_the_open_period_and_its_payment_stays(books):
+    """§4.1 and §10: a provider edit to a settled bill in a closed month posts in the open period, with the month flagged
+    as restated. The closed month reads as it closed, the bill owes what its payment did not cover, and the payment that
+    settled it stays settled and in the month it was paid."""
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    fake.records["documents"] = [M.Document(M.Ext("Bill", "12", "1"), party="Vendor:9", number="B-12",
+                                            day="2026-09-10", due="2026-10-10", total=1500,
+                                            lines=(M.EntryLine("Account:2", 1500),))]
+    fake.records["payments"] = [M.Settlement(M.Ext("BillPayment", "30", "1"), day="2026-09-18", memo="Acme payment",
+                                             party="Vendor:9", bank="Account:1", total=1500,
+                                             links=(("Bill:12", 1500),))]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+    with books.read() as c:
+        sept = FR.pnl(c, OWNER, "2026-09-01", "2026-09-30", "month", "accrual", AT)
+        bank = _bank_to(c, "2026-09-30")
+    fake.changes = [M.Document(M.Ext("Bill", "12", "2"), party="Vendor:9", number="B-12", day="2026-09-10",
+                               due="2026-10-10", total=2000, lines=(M.EntryLine("Account:2", 2000),))]
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        bill = _local(c, "Bill:12", "fin_bills")
+        assert tuple(c.execute("SELECT status, amount_paid, total FROM fin_bills WHERE id=?", (bill,)).fetchone()) == (
+            "open", 1500, 2000)
+        assert [tuple(r) for r in c.execute("SELECT from_kind, amount FROM fin_settlements WHERE to_id=? "
+                                            "AND voided_at IS NULL", (bill,)).fetchall()] == [("account", 1500)]
+        assert FR.pnl(c, OWNER, "2026-09-01", "2026-09-30", "month", "accrual", AT) == sept
+        assert _bank_to(c, "2026-09-30") == bank
+        # The change lands in October (the open period): reversal and new entry, so October's expense moves by 500.
+        assert FR.pnl(c, OWNER, "2026-10-01", "2026-10-31", "month", "accrual", AT)["expense"] == [500]
+        assert [tuple(r) for r in c.execute("SELECT change, day FROM fin_restatements").fetchall()] == [
+            ("replaced", "2026-09-10")]
+        assert c.execute("SELECT SUM(amount) FROM fin_lines").fetchone()[0] == 0
+
+
+def test_a_bill_zeroed_at_the_provider_in_a_closed_month_lands_as_void_and_is_flagged(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    fake.records["documents"] = [M.Document(M.Ext("Bill", "12", "1"), party="Vendor:9", number="B-12",
+                                            day="2026-09-10", due="2026-10-10", total=1500,
+                                            lines=(M.EntryLine("Account:2", 1500),))]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+    # QuickBooks zeroes the voided bill and keeps its line at zero.
+    fake.changes = [M.Document(M.Ext("Bill", "12", "2"), party="Vendor:9", number="B-12", day="2026-09-10",
+                               due="2026-10-10", total=0, lines=(M.EntryLine("Account:2", 0),))]
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_bills WHERE number='B-12'").fetchone()[0] == "void"
+        assert [tuple(r) for r in c.execute("SELECT change, day FROM fin_restatements").fetchall()] == [
+            ("deleted", "2026-09-10")]
+        assert c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?", (account(c, "2000"),)
+                         ).fetchone()[0] == 0
+        assert c.execute("SELECT SUM(amount) FROM fin_lines").fetchone()[0] == 0
+
+
+def test_a_voided_bill_first_read_with_no_lines_is_taken_in_as_void_and_adds_nothing(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    fake.records["documents"] = [M.Document(M.Ext("Bill", "13", "1"), party="Vendor:9", number="B-13",
+                                            day="2026-10-05", due="2026-11-05", total=0, lines=())]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.read() as c:
+        assert c.execute("SELECT status, total FROM fin_bills WHERE number='B-13'").fetchone()[:] == ("void", 0)
+        assert not c.execute("SELECT entry_id FROM fin_bills WHERE number='B-13'").fetchone()[0]
+        assert c.execute("SELECT COUNT(*) FROM fin_entries").fetchone()[0] == 0
+
+
 def test_a_bill_the_provider_took_before_its_answer_was_kept_is_adopted_from_the_change_feed_and_not_sent_again(books):
     fake = FakeBooks()
     _chart(fake)
