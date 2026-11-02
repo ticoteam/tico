@@ -242,18 +242,28 @@ MONEY = re.compile(r"[$€£]\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?%"
                    r"|\d[\d,]*(?:\.\d+)?(?:[kKmMbB]\b|\s(?:thousand|million|billion)\b)", re.I)
 
 
+IRREGULAR_PAST = frozenset("""built sent made ran won lost wrote began held kept met paid set got took gave found led cut
+    grew saw did""".split())
+
+
 def _source_words(text):
-    """The words an approved update may put in an edition: its lowercase words and its capitalized words that start a
-    sentence. A capital inside a sentence is a name, which a source does not allow."""
+    """The words an approved update may put in an edition: its lowercase words, and its capitalized words that start a
+    sentence when they read as ordinary words. A capital inside a sentence is a name, which a source does not allow. A
+    sentence can start with a name too ("Northwind renewed."), so a starting capital counts as ordinary only when the
+    text also has it lowercase, or it reads as a past or -ing word. The check errs toward flagging."""
+    matches = [(m.start(), m.group().removesuffix("'s").removesuffix("’s")) for m in WORD.finditer(text)]
+    lowercase = {word.lower() for _, word in matches if not word[0].isupper()}
     found = set()
-    for m in WORD.finditer(text):
-        word = m.group().removesuffix("'s").removesuffix("’s")
+    for start, word in matches:
+        low = word.lower()
         if not word[0].isupper():
-            found.add(word.lower())
+            found.add(low)
             continue
-        before = text[:m.start()].rstrip()
-        if not before or before[-1] in ".!?:;—–-•":
-            found.add(word.lower())
+        before = text[:start].rstrip()
+        if before and before[-1] not in ".!?:;—–-•":
+            continue
+        if low in lowercase or low.endswith(("ed", "ing")) or low in IRREGULAR_PAST:
+            found.add(low)
     return found
 
 

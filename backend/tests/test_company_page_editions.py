@@ -260,6 +260,18 @@ def test_a_source_allows_its_counts_and_plain_words_but_not_money_names_links_or
     assert E.leak_findings("t", plain_sections(small), FACTS, START, END, sources=[small], unseen=[8.0]) == {}
 
 
+def test_a_sentence_start_word_in_a_source_is_a_name_unless_it_reads_as_an_ordinary_word():
+    """"Northwind renewed." starts a sentence, but nothing says it's ordinary: it stays a name. A started word that
+    reads as ordinary (lowercase elsewhere in the text, -ed or -ing, or a common past verb) is allowed."""
+    source = "Northwind renewed."
+    assert E.leak_findings("t", plain_sections("We signed Northwind."), FACTS, START, END,
+                           sources=[source])["names"] == ["Northwind"]
+    assert E.leak_findings("t", plain_sections("Sent the report to readers."), FACTS, START, END,
+                           sources=["Sent the report to readers."]) == {}
+    assert E.leak_findings("t", plain_sections("Growth came in."), FACTS, START, END,
+                           sources=["Growth came in. The growth held."]) == {}
+
+
 def test_a_leak_holds_a_draft_and_a_clean_edit_by_a_person_releases_it(page):
     page.answer = {**GOOD, "sections": {**GOOD["sections"], "highlights": ["We signed Globex for $900k."]}}
     edition = page.draft()
