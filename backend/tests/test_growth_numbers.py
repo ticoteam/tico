@@ -124,7 +124,7 @@ def test_kpis_group_by_growth_role_and_carry_their_last_24_readings_for_whoever_
     post(api, "kpis", {"name": "Inbox depth"})
     with api.app.state.store.transaction() as c:
         # The fixture restricts the inbox bot to Ana.
-        c.execute("UPDATE kpis SET owner='bot:inbox' WHERE id=?", (triage["id"],))
+        c.execute("UPDATE kpis SET owner_id='bot:inbox' WHERE id=?", (triage["id"],))
     for day in range(1, 27):
         post(api, f"kpis/{booked['id']}/readings", {"value": day, "period_end": f"2026-10-{day:02d}T00:00:00Z"})
     kpis = get(api, "growth/numbers")["kpis"]

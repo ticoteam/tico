@@ -2366,7 +2366,7 @@ export type GrowthMarker = {
   at: string;
   channels: Array<string>;
   goal_id: string | null;
-  kind: "started_at" | "finished_at";
+  kind: "started" | "finished";
   outcome: "won" | "lost" | "inconclusive" | "dropped" | null;
   task_id: string;
   title: string;

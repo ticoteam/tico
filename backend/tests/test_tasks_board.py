@@ -791,7 +791,7 @@ def test_the_owner_bot_finishes_its_marketing_idea_on_an_outcome_step_and_the_re
         second = marketing_idea(c)
         H.task_close(c, "bot:cmo", second, note="Lost on cost.", step="Lost")
         closed_by_close = H.task(c, second)
-    assert (task["status"], task["step_id"], task["closed_by"]) == ("closed", "idea-won", "bot:cmo")
+    assert (task["status"], task["step_id"], task["closed_by_id"]) == ("closed", "idea-won", "bot:cmo")
     assert task["note"] == "Result: CPA 31"
     assert tuple(last) == ("step", "idea-doing", "idea-won")
     assert (closed_by_close["status"], closed_by_close["step_id"]) == ("closed", "idea-lost")
@@ -871,7 +871,7 @@ def test_the_verdict_alias_on_a_live_server_finishes_an_idea_the_owner_bot_won(a
                         "--learning", "Video works"]) == 0
     with api.app.state.store.transaction() as c:
         task = H.task(c, tid)
-    assert (task["status"], task["closed_by"], task["note"]) == (
+    assert (task["status"], task["closed_by_id"], task["note"]) == (
         "closed", "bot:cmo", "Result: CPA 31\nLearning: Video works")
 
 

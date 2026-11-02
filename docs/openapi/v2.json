@@ -48459,8 +48459,8 @@
           },
           "kind": {
             "enum": [
-              "started_at",
-              "finished_at"
+              "started",
+              "finished"
             ]
           },
           "outcome": {
