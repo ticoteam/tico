@@ -3,7 +3,7 @@ on that computer (backend/model_subscriptions.py)."""
 
 import base64
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -17,6 +17,12 @@ from backend.tests.test_credentials import setup
 TOKEN = "sk-ant-oat01-" + "a" * 24
 OTHER = "sk-ant-oat01-" + "b" * 24
 CLAUDE_LIMIT = "You've hit your limit · resets 2:40am (UTC)"
+
+
+def limit_notice_soon():
+    # Relative to the clock: a date-less reset more than 20 hours away is not believed (login_holds.reset_from_text).
+    soon = datetime.now(timezone.utc) + timedelta(hours=2)
+    return f"You've hit your limit · resets {soon:%-I:%M}{soon:%p} (UTC)".replace("AM", "am").replace("PM", "pm")
 
 
 def codex_file(account="acct-1", refresh="r-1", email="ana@acme.example"):
@@ -591,11 +597,8 @@ def limited_on(api, m, sid, bot="ops"):
     post(api, f"chat/{bot}", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "limit"}, m["token"])
-    # A fixed clock time is nearly a day away just after it passes, outside the provider's reset window.
-    reset = H.parse_ts(H.now()) + timedelta(hours=1)
-    notice = "You've hit your limit · resets " + reset.strftime("%I:%M%p") + " (UTC)"
     post(api, f"attempts/{turn['id']}/events", {"events": [
-        {"seq": 1, "kind": "error", "payload": {"error": notice, "limit": True}}]}, m["token"])
+        {"seq": 1, "kind": "error", "payload": {"error": limit_notice_soon(), "limit": True}}]}, m["token"])
     post(api, f"attempts/{turn['id']}/complete", {"outcome": "failed", "last_seq": 1, "limited": True, "text": ""},
          m["token"])
     return turn
