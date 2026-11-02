@@ -543,7 +543,7 @@ class PostalMail:
 
     def fail(self, row, code):
         attempts = row["attempts"] + 1
-        wait = SCHEDULE.after(attempts)
+        wait = SCHEDULE.wait_for(attempts)
         with self.store.transaction() as c:
             c.execute("UPDATE mail_items SET status='failed',attempts=?,next_try_at=?,error=?,updated_at=? "
                       "WHERE id=? AND status IN ('new','failed')",
