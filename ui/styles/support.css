@@ -17,6 +17,11 @@
 .support-pop .support-close{flex:none;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:0;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer}
 .support-pop .support-close:hover{background:var(--surface2);color:var(--ink)}
 .support-close .nav-icon{font-size:20px;width:20px;height:20px;color:inherit}
+.support-pop .support-close[hidden]{display:none}
+/* Delete chat history, asked inside the chat in place of the conversation. */
+.support-confirm{flex:1;display:flex;flex-direction:column;justify-content:center;gap:8px;padding:24px 20px}.support-confirm[hidden]{display:none}
+.support-confirm p{margin:0}.support-confirm .support-row{margin-top:8px}
+.support-confirm .danger{background:var(--fail);border-color:var(--fail);color:#fff}
 .support-connection{margin:0;padding:6px 12px 0;font-size:var(--t-sm);color:var(--muted)}.support-connection:empty{display:none}.support-connection.err{color:var(--fail)}
 .support-loading,.support-off{margin:0;padding:12px;font-size:var(--t-base);color:var(--muted)}
 .support-view{display:flex;flex-direction:column;min-height:0;flex:1}

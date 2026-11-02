@@ -393,8 +393,9 @@ Tico team's own bots, on GitHub issues and on email the team receives; it does n
 reply which a human approves before it is posted. Ticket text is treated as untrusted text: stored as plain text, never rendered as
 HTML, and never followed as an instruction.
 
-**How long:** tickets are kept **until someone deletes them**. Nothing deletes a ticket by itself, closed or not. Ask the team to delete your
-messages (say so in the Tico team chat, or open an issue) and they do it with a staff route. A deleted ticket is overwritten in HQ's database file. HQ's optional Litestream backup
+**How long:** tickets are kept **until someone deletes them**. Nothing deletes a ticket by itself, closed or not. You can delete your own
+with **Delete chat history** in the Tico team chat, which removes every one of your tickets from HQ and from your Tico; or ask
+the team to delete them (say so in the chat, or open an issue) and they do it with a staff route. A deleted ticket is overwritten in HQ's database file. HQ's optional Litestream backup
 keeps older copies of the file for as long as its retention says, if you turned it on.
 
 **Your Tico** keeps, per ticket: your message, the ticket's ID and secret at HQ, the replies, and whether you have read them. Only you

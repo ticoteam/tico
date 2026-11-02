@@ -165,7 +165,8 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     // The header: the headset and "Tico team", a close button. No list, form, subject, status or ticket words.
     assert.equal(await pop.locator('.support-head h2').innerText(), 'Tico team');
     assert.equal(await pop.locator('.support-head .support-av').innerText(), 'headset_mic');
-    assert.equal(await pop.locator('[data-requests], [data-list], [data-mine], [data-new], [name=email], [name=subject], .support-badge, [data-delete]').count(), 0, 'no list, form or statuses');
+    assert.equal(await pop.locator('[data-requests], [data-list], [data-mine], [data-new], [name=email], [name=subject], .support-badge').count(), 0, 'no list, form or statuses');
+    assert.equal(await pop.locator('[data-delete]').isHidden(), true, 'nothing to delete yet');
     const box = pop.locator('[name=message]');
     assert.equal(await box.getAttribute('placeholder'), 'Message the Tico team');
     assert.equal(await box.getAttribute('maxlength'), '4000');
@@ -291,6 +292,28 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     await chat.locator('.support-msg.you', {hasText: 'Logs attached'}).waitFor();
     assert.ok(v.calls.includes(`POST tickets/sup_2/messages {"message":"Logs attached","diagnostics":"${'e'.repeat(64)}"}`), 'the edited capture goes with it');
     assert.equal(await chat.locator('[data-report]').count(), 0, 'the next message starts with none');
+    // Access isn't allowed on this server: nothing about it shows.
+    assert.equal(await chat.locator('[data-access]').isHidden(), true, 'no standing access-off line');
+    assert.doesNotMatch(await chat.innerText(), /Access for/);
+    // Delete chat history: asked inside the chat (Cancel keeps everything), then every ticket deleted and the chat empty.
+    const trash = chat.getByRole('button', {name: 'Delete chat history'});
+    const boxes = await page.evaluate(() => { const b = s => document.querySelector(s).getBoundingClientRect(); return [b('#support-pop [data-delete]').right, b('#support-pop [data-close]').left]; });
+    assert.ok(boxes[0] <= boxes[1], 'left of Close');
+    await trash.click();
+    const confirmBox = chat.getByRole('alertdialog', {name: 'Delete chat history?'});
+    await confirmBox.waitFor();
+    assert.equal(await chat.locator('[data-view]').isHidden(), true);
+    await confirmBox.getByRole('button', {name: 'Cancel'}).click();
+    await chat.locator('.support-msg.you', {hasText: 'Logs attached'}).waitFor();
+    assert.ok(!v.calls.some(c => c.startsWith('DELETE')), 'Cancel deletes nothing');
+    page.on('dialog', d => { throw new Error('window dialog: ' + d.message()); });
+    await trash.click();
+    await confirmBox.getByRole('button', {name: 'Delete'}).click();
+    await confirmBox.waitFor({state: 'hidden'});
+    assert.deepEqual(v.calls.filter(c => c.startsWith('DELETE')).sort(), ['DELETE tickets/sup_1', 'DELETE tickets/sup_2'], "each ticket's DELETE");
+    assert.equal(await chat.locator('.support-msg, .support-day').count(), 0, 'the chat is empty');
+    assert.equal(await chat.locator('[name=message]').getAttribute('placeholder'), 'Message the Tico team');
+    assert.equal(await trash.isHidden(), true, 'nothing left to delete');
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 

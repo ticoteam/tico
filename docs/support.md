@@ -21,6 +21,9 @@ has written something you haven't seen.
   message is sending the box is locked. If it fails, **Not sent** and the reason appear under the box and the message
   stays in it; nothing has reached the Tico team. A sent message appears in the chat at once.
 - Your email, the version and the install ID go with each message on their own; there is no form.
+- The trash icon in the header, left of Close, is **Delete chat history**. It asks first, inside the chat ("Delete chat
+  history?", Delete or Cancel); Delete removes every one of your tickets and their attachments at HQ and the local
+  ticket records, and leaves the empty chat.
 - When support is off on the server (demo, rehearsal or `TICO_SUPPORT=off`) the **?** is hidden, and a `#/support` link
   says messages to the Tico team are off.
 
@@ -141,8 +144,8 @@ No email and no diagnostics bundle go this way: diagnostics need a person to pre
 When a reply is not enough, an owner or an admin can let the Tico team into their app for a while. It is off until you
 start it, it always starts from your open conversation with the team, and it ends on its own.
 
-1. Open the Tico team chat and press **Let the Tico team in**, over the box. Where it is off, the same place says
-   why in one line (the server's `TICO_SUPPORT_ACCESS`, or the team rule).
+1. Open the Tico team chat and press **Let the Tico team in**, over the box. Where it is off (the server's
+   `TICO_SUPPORT_ACCESS`, or the team rule), the chat shows nothing about it.
 2. Choose what support may do:
    - **App only**: what an admin sees (settings, Health, computers, bots, tasks and run history), and changes to setup only: a
      bot's model, fallback and context size; a computer's runner restart; asking a computer to read its subscriptions'
@@ -204,8 +207,8 @@ server cannot tell one is connected. One list in `backend/beta.py` drives all of
 The request is `POST <TICO_HQ_URL>/v1/support` with `message`, and, only if present, `email`, `version`, `install_id`, `app_version` (the
 desktop app's, when sent from it) and `diagnostics` (up to 256 KB). The answer is a ticket ID and a **secret for that ticket alone**. Your Tico keeps the ticket, the ID and the secret; the secret
 never reaches a browser. HQ keeps the message, the email, the version and install ID and diagnostics if sent, a hash of the secret, the status,
-the times, and the thread. It keeps no IP address and no log of a request. Tickets are **kept until someone deletes them**: the
-team, when you ask (write "delete my messages" in the chat, or open an issue). The 13 month rule is for
+the times, and the thread. It keeps no IP address and no log of a request. Tickets are **kept until someone deletes them**: you,
+with **Delete chat history**, or the team when you ask (say so in the chat, or open an issue). The 13 month rule is for
 the anonymous install rows only. The reference for HQ's routes is in [telemetry.md](telemetry.md#support-tickets).
 
 Your Tico asks HQ about your tickets only when the app asks: when you open Help, when the app regains focus or comes back

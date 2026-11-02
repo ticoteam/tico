@@ -178,7 +178,9 @@
     const off = state.enabled === false, known = state.enabled !== null;
     pop.querySelector('[data-loading]').hidden = known || !loading;
     pop.querySelector('[data-off]').hidden = !off;
-    pop.querySelector('[data-view]').hidden = !known || off;
+    const asking = !pop.querySelector('[data-confirm]').hidden;
+    pop.querySelector('[data-view]').hidden = !known || off || asking;
+    pop.querySelector('[data-delete]').hidden = !known || off || !state.tickets.length;
     if (!known || off) return;
     renderThread(pin); renderAccess(); lockSending();
   }
@@ -223,9 +225,6 @@
   let access = {available: false, active: null, sessions: [], at: 0}, accessTimer = 0, accessRevision = 0;
   const accessLogs = new Map();
   const TIERS = {app: 'App only', full: 'Full access'};
-  // Why the backend says support access is off (backend/support_access.py off_reason).
-  const ACCESS_OFF = {TICO_SUPPORT_ACCESS: 'Access for the Tico team is off on this server.', team_rule: 'Access for the Tico team is off for this team.',
-    other: 'Access for the Tico team is not available here.'};
   const remaining = () => access.active ? access.active.seconds_left - (Date.now() - access.at) / 1000 : 0;
   const timeLeft = () => {
     const m = Math.max(1, Math.ceil(remaining() / 60)), h = Math.floor(m / 60);
@@ -261,7 +260,6 @@
     if (here) html = `<p class="support-access-on">${escape(accessWords(here))}${canStop() ? ' · <button type="button" class="ghost" data-access-stop>Stop</button>' : ''}</p>`;
     else if (t && access.available && access.can_start && !access.active)
       html = `<button type="button" class="linkish" data-access-start>Let the ${NAME} in</button>`;
-    else if (t && !access.available && access.off_reason) html = `<p class="support-note">${escape(ACCESS_OFF[access.off_reason] || ACCESS_OFF.other)}</p>`;
     const sessions = (access.sessions || []).filter(x => mine.has(x.ticket_id));
     if (sessions.length) {
       for (const x of sessions) if (!accessLogs.has(x.id) || x.id === here?.id) void loadLog(x.id);
@@ -569,10 +567,16 @@
     pop.id = 'support-pop'; pop.className = 'support-pop'; pop.setAttribute('aria-labelledby', 'support-pop-h');
     pop.innerHTML = `<div class="support-pop-in">
       <header class="support-head">${AVATAR}<h2 id="support-pop-h">${NAME}</h2><span class="spacer"></span>
+        <button type="button" class="support-close support-trash" data-delete aria-label="Delete chat history" title="Delete chat history" hidden><span class="nav-icon" aria-hidden="true">delete</span></button>
         <button type="button" class="support-close" data-close aria-label="Close" title="Close (Esc)"><span class="nav-icon" aria-hidden="true">close</span></button></header>
       <p class="support-connection" data-connection role="status"></p>
       <p class="support-note support-loading" data-loading hidden>Loading…</p>
       <p class="support-off" data-off hidden>Messages to the ${NAME} are off on this Tico server.</p>
+      <div class="support-confirm" data-confirm role="alertdialog" aria-labelledby="support-confirm-h" hidden>
+        <p id="support-confirm-h"><strong>Delete chat history?</strong></p>
+        <p class="support-note">Every message and its diagnostics, here and at the ${NAME}. This cannot be undone.</p>
+        <p class="err" data-confirm-error role="alert" hidden></p>
+        <div class="support-row"><button type="button" class="ghost" data-confirm-no>Cancel</button><button type="button" class="danger" data-confirm-yes>Delete</button></div></div>
       <div class="support-view" data-view hidden>
         <div class="support-thread" data-thread role="log" aria-label="Conversation with the ${NAME}"></div>
         <div class="support-access" data-access hidden></div>
@@ -580,6 +584,23 @@
       </div></div>`;
     document.body.appendChild(pop);
     pop.querySelector('[data-close]').onclick = () => pop.close();
+    // Delete chat history: asked inside the chat, then every one of the person's tickets is deleted at HQ.
+    const ask = pop.querySelector('[data-confirm]'), askErr = pop.querySelector('[data-confirm-error]');
+    const asking = on => { ask.hidden = !on; askErr.hidden = true; pop.querySelector('[data-view]').hidden = on || state.enabled !== true; if (!on) focusBox(); };
+    pop.querySelector('[data-delete]').onclick = () => { asking(true); pop.querySelector('[data-confirm-no]').focus(); };
+    pop.querySelector('[data-confirm-no]').onclick = () => asking(false);
+    pop.querySelector('[data-confirm-yes]').onclick = async e => {
+      const yes = e.currentTarget; yes.disabled = true;
+      try {
+        for (const t of [...state.tickets]) {
+          await call('DELETE', `/support/tickets/${encodeURIComponent(t.id)}`);
+          stateRevision++;
+          state.tickets = state.tickets.filter(x => x.id !== t.id);
+        }
+        state.unread = 0; mark(); asking(false); render(); renderComposer(); focusBox();
+      } catch (error) { askErr.textContent = error.message; askErr.hidden = false; render(); }
+      finally { yes.disabled = false; }
+    };
     // A click that starts and ends on the backdrop (the dialog itself, outside its box) closes it.
     let downOutside = false;
     pop.addEventListener('pointerdown', e => { downOutside = e.target === pop; });
