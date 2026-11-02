@@ -389,6 +389,11 @@ environment_identity() {
   TICO_ENVIRONMENT_ID="$(python - <<'PY'
 import json, os, re, secrets, sqlite3
 from backend.hubdb import leave_wal_for_litestream
+if os.path.exists(os.environ["TICO_DB"]):
+    # An upgraded database gets its pending migrations first: the cleanup renamed registry_metadata.value_json to value.
+    from backend.config import Settings
+    from backend.store import Store
+    Store(Settings.from_env()).migrate()
 db = leave_wal_for_litestream(sqlite3.connect(os.environ["TICO_DB"]))
 row = db.execute("SELECT value FROM registry_metadata WHERE key='docker-environment-id'").fetchone()
 value = os.environ.get("TICO_ENVIRONMENT_ID") or (json.loads(row[0]) if row else secrets.token_hex(8))
