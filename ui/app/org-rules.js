@@ -603,8 +603,9 @@ async function ruThreadList() {
   }
   return [...out.values()].slice(0, RU_THREADS);
 }
+let RU_ADD_THREADS = null;   // the Add rule dialog's threads when it opens away from the Rules page (a bot's tab, Overview › Graph)
 function ruThreadOptions(thread) {
-  const list = (RU?.threads || []).slice();
+  const list = ((RU ? RU.threads : RU_ADD_THREADS) || []).slice();
   if (thread && !list.some(t => t.id === thread)) list.unshift({id: thread, title: ''});
   return `<option value="">Pick a thread</option>${list.map(t =>
     `<option value="${esc(t.id)}"${t.id === thread ? ' selected' : ''}>${esc(t.title || t.id)}</option>`).join('')}`;
@@ -875,7 +876,8 @@ async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
     document.body.appendChild(dlg);
   }
   const sources = await ruAll('/v2/rule-sources').catch(() => []);
-  RU.threads = await ruThreadList();
+  const threads = await ruThreadList();
+  if (RU) RU.threads = threads; else RU_ADD_THREADS = threads;
   dlg.innerHTML =`<form class="ru-form" method="dialog">
       <div class="ru-side-h"><h2>Add rule</h2><span class="spacer"></span><button class="ghost tmodal-x" type="button" data-ru-close aria-label="Close">✕</button></div>
       ${ruSegHTML('kind', [['internal', 'Internal'], ['external', 'External']], kind)}
