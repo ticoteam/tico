@@ -1037,7 +1037,9 @@ function pageOverviewCompany() {
   cpTeardown();
   const main = $('#main'), allowed = cpAllowed();
   main.classList.add('overview-layout');
-  const acts = !allowed ? '' : `<span class="cp-tab-acts" hidden><span data-cp-tab-pick></span>
+  // The frame can hold unapproved stats under the badge readers see, and its contents stay exactly what a reader gets,
+  // so the app says which one this is.
+  const acts = !allowed ? '' : `<span class="cp-tab-acts" hidden><span class="cp-tab-preview" data-cp-preview hidden>Preview</span><span class="cp-tab-pick" data-cp-tab-pick></span>
     <button type="button" class="ghost cp-share-btn" data-cp-share aria-label="Share" aria-haspopup="dialog" title="Share"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M8 7.5l4-4 4 4"/><path d="M8 11H6v9.5h12V11h-2"/></svg></button>
     <a class="cp-manage" href="${CP_ROUTE}" data-cp-manage>Manage</a></span>`;
   main.innerHTML = `<section class="overview-page cp-tab" aria-label="Company page"><div class="overview-tabs"><h1>Overview</h1>${dashTabsHTML('company')}${acts}</div>
@@ -1072,11 +1074,13 @@ function cpTabPick(state) {
 // never an error page inside the frame.
 async function cpTabFrame(state) {
   const id = state.pick.frame, src = id && cpPreviewSrc(id), body = $('#cp-tab-body');
-  if (!id) { body.innerHTML = cpEmpty('No audiences yet'); return; }
+  const label = document.querySelector('[data-cp-preview]');
+  if (!id) { label.hidden = true; body.innerHTML = cpEmpty('No audiences yet'); return; }
   let failure = null;
   try { const r = await fetch(src, {cache: 'no-store'}); if (!r.ok) failure = {status: r.status, message: 'Did not load'}; }
   catch { failure = {message: 'Did not load'}; }
   if (CP !== state || state.pick.frame !== id) return;
+  label.hidden = !!failure;
   body.innerHTML = failure ? `<div class="cp-tab-line">${cpFail('frame', failure)}</div>`
     : `<iframe class="cp-frame" title="Company page" sandbox="allow-scripts" referrerpolicy="no-referrer" src="${esc(src)}"></iframe>`;
 }

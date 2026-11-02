@@ -189,7 +189,9 @@ a.cp-preview .nav-icon{font-size:16px;width:16px;height:16px;color:var(--muted)}
 .cp-tab .overview-tabs{flex-wrap:wrap}
 .cp-tab-acts{margin-left:auto;display:flex;align-items:center;gap:var(--s2);min-width:0}
 .cp-tab-acts[hidden]{display:none}
-.cp-tab-acts select{height:32px}
+.cp-tab-preview{flex:none;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
+.cp-tab-pick{min-width:0}
+.cp-tab-acts select{height:32px;max-width:100%}
 .cp-share-btn{display:inline-grid;place-items:center;width:32px;height:32px;padding:0}
 a.cp-manage{display:inline-flex;align-items:center;height:32px;padding:0 10px;border:1px solid var(--line);border-radius:var(--r-ctl);color:var(--ink);font-size:var(--t-sm)}
 a.cp-manage:hover{background:var(--surface2);text-decoration:none}

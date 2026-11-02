@@ -210,7 +210,7 @@ async function shotPart(page, id, name) {
     assert.equal(await tab.page.evaluate(() => searchEntries().some(x => x.label === 'Company page')), false);
     await tab.page.evaluate(h => { location.hash = h; }, '#/overview/company-page');
     await tab.page.locator('#cp-tab-body .empty-state').waitFor();
-    assert.equal(await tab.page.locator('.cp-frame, [data-cp-share], [data-cp-manage]').count(), 0, 'no frame, no controls');
+    assert.equal(await tab.page.locator('.cp-frame, [data-cp-preview], [data-cp-share], [data-cp-manage]').count(), 0, 'no frame, no controls');
     assert.deepEqual(await tabLabels(tab.page), ['Dashboard', 'Campus']);
     assert.deepEqual(tab.hub.reads, [], 'a member asks the server for nothing here');
     assert.deepEqual(tab.hub.previews, []);
@@ -696,14 +696,17 @@ async function shotPart(page, id, name) {
     await none.page.locator('#cp-tab-body .empty-state').waitFor();
     assert.equal(await none.page.locator('.cp-frame, .cp-tab-acts select').count(), 0);
     assert.ok(await none.page.locator('[data-cp-share]').isVisible());
+    assert.equal(await none.page.locator('[data-cp-preview]').isVisible(), false, 'no frame, nothing to label');
     assert.deepEqual(none.errors, []);
     await none.close();
     const broken = await open(browser, {hash: '#/overview/company-page', hubOpts: {fail: ['/api/v2/company-page/preview']}, ready: false});
     await broken.page.locator('#cp-tab-body [data-cp-retry]').waitFor();
     assert.equal(await broken.page.locator('.cp-frame').count(), 0, 'no frame');
+    assert.equal(await broken.page.locator('[data-cp-preview]').isVisible(), false, 'no frame, nothing to label');
     broken.hub.fail.clear();
     await broken.page.locator('#cp-tab-body [data-cp-retry]').click();
     await broken.page.locator('iframe.cp-frame').waitFor();
+    assert.ok(await broken.page.locator('[data-cp-preview]').isVisible(), 'the frame is back, and so is the label');
     assert.deepEqual(broken.errors, []);
     await broken.close();
   }
@@ -720,6 +723,23 @@ async function shotPart(page, id, name) {
       });
       assert.ok(fit.extra <= 1, `one scrollbar at ${w} ${JSON.stringify(fit)}`);
       assert.ok(Math.abs(fit.gapBelow) <= 1 && Math.abs(fit.gapRight) <= 1 && Math.abs(fit.gapLeft) <= 1, `the frame fills at ${w} ${JSON.stringify(fit)}`);
+      // The label sits beside the picker on one row, and stays on the app's side of the frame.
+      const besidePicker = () => page.evaluate(() => {
+        const box = el => el.getBoundingClientRect(), label = box(document.querySelector('[data-cp-preview]')), pick = box(document.querySelector('.cp-tab-acts select')), last = box(document.querySelector('[data-cp-manage]'));
+        return {besides: label.right <= pick.left, sameRow: Math.abs((label.top + label.bottom) / 2 - (pick.top + pick.bottom) / 2) <= 2, left: label.left, right: last.right, clear: document.documentElement.clientWidth};
+      });
+      const row = await besidePicker();
+      assert.ok(row.besides && row.sameRow && row.left >= 0 && row.right <= row.clear, `the label fits at ${w} ${JSON.stringify(row)}`);
+      assert.equal(await page.frameLocator('iframe.cp-frame').locator('[data-cp-preview]').count(), 0);
+      if (viewport === PHONE && theme === 'light') {
+        // A narrower phone and a long audience name: the picker gives way, the label and the controls stay.
+        await page.setViewportSize({width: 360, height: viewport.height});
+        await page.evaluate(() => { document.querySelector('.cp-tab-acts select').selectedOptions[0].textContent = 'Series B lead investors and observers'; });
+        const tight = await besidePicker();
+        assert.ok(tight.besides && tight.sameRow && tight.left >= 0 && tight.right <= tight.clear, `the label fits a long name at 360 ${JSON.stringify(tight)}`);
+        await flat(page, 'a long audience name at 360');
+        await page.setViewportSize(viewport);
+      }
       await shot(page, `tab-${w}-${theme}`);
       await page.locator('[data-cp-share]').click();
       await page.locator('dialog.cp-share [data-cp-reader="r1"]').waitFor();
