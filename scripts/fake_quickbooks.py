@@ -35,7 +35,8 @@ STATE: dict[str, object] = {}
 def reset() -> None:
     STATE.clear()
     STATE.update({"books": {e: [] for e in ENTITIES}, "changes": [], "by_request": {}, "calls": [], "expire": False,
-                  "next_id": 100, "lose": [], "lost": 0, "refused": 0})
+                  # Ids are unique per entity, as in QuickBooks: a new record must not take a seeded id (101 to 706).
+                  "next_id": 1000, "lose": [], "lost": 0, "refused": 0})
 
 
 def _rows(entity: str) -> list[dict[str, object]]:
