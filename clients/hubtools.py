@@ -6276,7 +6276,8 @@ def replay_show(api, args):
 # has neither the credential nor any business connecting to a team database. A person makes and
 # revokes service keys in their own shell: a new key is shown to them, never to an agent's context.
 # `hub_team_icon` streams a local image file; the JSON tool transport cannot open that path.
-SHELL_ONLY = {"hub_task_worktree_setup", "hub_bot_check", "hub_db", "hub_service_key_create",
+# `hub_bot_check_names` scans a bot's checkout on this computer (`clients/bot_names.py`): no hub, no credential.
+SHELL_ONLY = {"hub_task_worktree_setup", "hub_bot_check", "hub_bot_check_names", "hub_db", "hub_service_key_create",
               "hub_service_key_list", "hub_service_key_revoke", "hub_team_icon"}
 
 @tool("hub_task_requesters", "Internal requester contacts and counts, paged. Tokens are never listed.",
