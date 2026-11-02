@@ -1026,17 +1026,54 @@ def named(counterparty: str, docs: Sequence[Any]) -> list[Any]:
 OWING_MOST = 50             # open documents owing a row's exact amount looked at; with more, the row is unclear
 
 
-def match_feed(ctx: Ctx, row: Any, t: F.FeedTxn) -> tuple[str, Any] | str | None:
-    """The one open document a new settled feed row pays: a debit and an open bill (a credit and a sent invoice) that
-    still owes exactly the row's amount, from a contact whose name the counterparty carries. None when there is none
-    or more than one (it posts as usual); ASK when more documents owe that amount than were looked at (the one it pays
-    may be among those left out: the row stays new, nothing posts, and a person links it)."""
+MANY = "many"               # match_feed: several open documents could be the one the row pays; nothing posts, a person picks
+
+
+def _owed_by(ctx: Ctx, t: F.FeedTxn) -> tuple[str, list[Any], bool]:
+    """(kind, the open documents that owe the row's exact amount from a contact its counterparty names, and whether more
+    owed that amount than were looked at)."""
     kind = "bill" if t.amount < 0 else "invoice"
     owing = SAP.open_owing(ctx.c, kind, ctx.book.id, abs(t.amount), OWING_MOST + 1)
     if len(owing) > OWING_MOST:
+        return kind, [], True
+    return kind, [d for d in owing if _same_name(t.counterparty, str(d["contact_name"] or ""))], False
+
+
+def match_feed(ctx: Ctx, row: Any, t: F.FeedTxn) -> tuple[str, Any] | str | None:
+    """The one open document a new settled feed row pays: a debit and an open bill (a credit and a sent invoice) that
+    still owes exactly the row's amount, from a contact whose name the counterparty carries. None when there is none
+    (it posts as usual). MANY when more than one does: the row must not post, since the document it pays is still
+    open and would be expensed twice; it stays new, and `review_candidates` lists them for a person. ASK when more
+    documents owe that amount than were looked at (the one it pays may be among those left out: the row stays new,
+    nothing posts, and a person links it)."""
+    kind, found, cut = _owed_by(ctx, t)
+    if cut:
         return ASK
-    found = [d for d in owing if _same_name(t.counterparty, str(d["contact_name"] or ""))]
-    return (kind, found[0]) if len(found) == 1 else None
+    if len(found) > 1:
+        return MANY
+    return (kind, found[0]) if found else None
+
+
+def review_candidates(ctx: Ctx, who: str, row: Any) -> list[dict[str, object]]:
+    """The open documents a settled feed row that is waiting for a person may pay (what `match_feed` found), those the
+    viewer sees: for the review that lists them. Empty when there are none or more than the search looks at."""
+    t = _row_txn(row)
+    kind, found, cut = _owed_by(ctx, t)
+    if cut:
+        return []
+    return [{"kind": kind, "id": str(d["id"]), "number": str(d["number"] or ""),
+             "contact": str(d["contact_name"] or ""), "owed": abs(t.amount), "due_date": str(d["due_date"] or "")}
+            for d in found if _sees_doc(ctx, who, kind, d)]
+
+
+def match_candidates(ctx: Ctx, t: F.FeedTxn) -> list[str]:
+    """The ids of the open documents `match_feed` found several of (MANY), for the event that names them."""
+    return [str(d["id"]) for d in _owed_by(ctx, t)[1]]
+
+
+def several_match(ctx: Ctx, row: Any) -> bool:
+    """Whether a settled row may pay one of several open documents (match_feed: MANY), so a person picks which first."""
+    return match_feed(ctx, row, _row_txn(row)) == MANY
 
 
 def _window(day: str) -> tuple[str, str]:
@@ -1657,4 +1694,4 @@ PLANNERS = {"contact_create": contact_create, "contact_update": contact_update, 
 
 __all__ = ["PLANNERS", "settle", "unsettle", "feed_gone", "payment_settled", "payment_ended", "match_feed",
            "feed_paid", "pay_due", "watch", "control", "document", "expected_match", "ASK", "bill_payment",
-           "retagged", "expected_for", "bill_budget"]
+           "retagged", "expected_for", "bill_budget", "MANY", "match_candidates", "review_candidates"]

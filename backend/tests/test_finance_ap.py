@@ -309,6 +309,32 @@ def test_a_feed_row_pays_bills_in_parts_and_together_and_never_posts_expense_twi
         assert _balance(c, "2000") == -50_000
 
 
+def test_a_feed_row_that_could_pay_two_open_bills_never_posts_and_names_both_for_review(books):  # noqa: F811
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        one = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 12_345}], number="B-1")
+        two = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 12_345}], number="B-2")
+        for b in (one, two):
+            assert act(c, OWNER, "bill_approve", {"bill_id": b}).status == "committed"
+        fid = _ingest(c, _txn("txn-twin", -123.45))
+        # Either bill may be the one this row pays: nothing posts, so no second expense, and both bills stay open.
+        assert _balance(c, "6900") == 0
+        assert _balance(c, "6100") == 24_690
+        assert FR.bill(c, OWNER, one)["status"] == "open" and FR.bill(c, OWNER, two)["status"] == "open"
+        assert tuple(c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE id=?", (fid,)).fetchone()) == ("new", None)
+        [(raw,)] = c.execute("SELECT payload_json FROM fin_events WHERE name='finance.feed.needs_category' "
+                             "AND subject=?", (fid,)).fetchall()
+        assert sorted(json.loads(raw)["candidates"]) == sorted([one, two])
+        [listed] = [x for x in FR.inbox(c, OWNER, kind="uncategorized")["items"] if x["feed_id"] == fid]
+        assert sorted(x["id"] for x in listed["candidates"]) == sorted([one, two])
+        # Categorizing it by hand would expense it a second time, so it is refused until a bill takes it.
+        refused = act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100")})
+        assert refused.code == "conflict", refused
+        assert _balance(c, "6900") == 0
+
+
 def test_cash_and_accrual_agree_exactly_once_documents_are_paid_and_partials_recognize_what_was_paid(books):
     rng = random.Random(7)
     with books.transaction() as c:

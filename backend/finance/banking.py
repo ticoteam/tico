@@ -48,6 +48,16 @@ def event(ctx: Ctx, name: str, subject: str, payload: Mapping[str, object], key:
     SB.event(ctx.c, name, subject, key, payload, SYSTEM, ctx.at)
 
 
+def _review_match(ctx: Ctx, fid: str, t: F.FeedTxn, found: str) -> None:
+    """A row that may pay an open document is not posted (its document is still open, so posting it would expense it
+    twice): it stays new and is asked about (needs_category). Where several documents could be the one it pays, the
+    event names them (ids only) for the review."""
+    payload: dict[str, object] = {"feed_id": fid}
+    if found == documents.MANY:
+        payload["candidates"] = documents.match_candidates(ctx, t)
+    event(ctx, CATEGORY_EVENT, fid, payload)
+
+
 def by_code(ctx: Ctx, code: str) -> L.Account | None:
     return next((a for a in ctx.accounts.values() if a.code == code), None)
 
@@ -355,8 +365,8 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         # hold work the same either way.
         account, tags = card_line(ctx, card)
         found = documents.match_feed(ctx, row, t) if t.amount < 0 else None
-        if isinstance(found, str):      # it may pay a bill past what was looked at: it stays new, a person links it
-            event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
+        if isinstance(found, str):      # it may pay a bill past what was looked at, or one of several: a person links it
+            _review_match(ctx, fid, t, found)
             return
         if found is not None:
             lines = [feed_line(documents.control(ctx, "bill").id, -t.amount, {},
@@ -386,8 +396,8 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
             event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
         return                      # the bank row of a payment marked paid from this account: linked, posted once
     found = documents.match_feed(ctx, row, t)
-    if isinstance(found, str):          # it may pay a document past what was looked at: it stays new, a person links it
-        event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
+    if isinstance(found, str):          # it may pay a document past what was looked at, or one of several: a person links it
+        _review_match(ctx, fid, t, found)
         return
     if found is not None:
         kind, doc = found
@@ -752,6 +762,9 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if money is not None and documents.may_wait(ctx, row, money):
         raise FinanceError(CONFLICT, "that row may be a payment already marked paid that waits for its bank row; "
                                      "link it with feed_match")
+    if documents.several_match(ctx, row):
+        raise FinanceError(CONFLICT, "that row may pay one of several open documents for its amount; link it to the "
+                                     "one it pays first (bill_mark_paid or invoice_record_payment with its feed_id)")
     account = ctx.accounts.get(V.text(p, "account_id", 80))
     if account is None or not account.active:
         raise FinanceError(NOT_FOUND, "no such account")

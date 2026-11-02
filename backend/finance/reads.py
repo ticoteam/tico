@@ -1659,9 +1659,11 @@ def _inbox_kind(s: _Seen, kind: str, n: int, skip: int = 0) -> tuple[list[Row], 
     held = ctx.rights(s.view.viewer)
     cut = set(tab.private_cut(ctx, view))
     if kind == "uncategorized":
+        from .documents import review_candidates     # lazy: keeps the module import order as it was
         rows, over = _uncategorized(s, today - timedelta(days=RECEIPT_DAYS), today, n, skip)
         return [{"id": str(r["id"]), "feed_id": str(r["id"]), "date": str(r["txn_date"]),
                  "amount": int(r["amount"]), "entry_id": r["entry_id"], "status": str(r["status"]),
+                 "candidates": review_candidates(ctx, view.viewer, r),
                  "label": f"{r['counterparty'] or r['description'] or 'Row'} · {_money(int(r['amount']))}"}
                 for r in rows], over
     if kind == "bill_to_enter":
