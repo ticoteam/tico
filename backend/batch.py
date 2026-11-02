@@ -472,8 +472,14 @@ def _apply_decide(c, auth, who, item, r):
                 require_person(who)
             except Problem:
                 raise Problem("forbidden", "Say yes to a support report in Tico itself", 403) from None
+        from .company_page import editions
+        own_click = editions.own_click_approval(row.get("payload"))
+        if own_click:
+            editions.require_own_click(who)
         verdict = "approved" if decision == "approve" else "declined"
-        H.approval_decide(c, who.actor, ident, verdict, note=text[:2000])
+        decided = H.approval_decide(c, who.actor, ident, verdict, note=text[:2000])
+        if own_click:
+            editions.approval_decided(c, decided)
         if row["kind"] in ("finance", "spend"):
             from .finance import actions as finance
             finance.approval_decided(c, ident)                   # Finance acts on it in the same transaction

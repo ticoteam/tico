@@ -46,8 +46,10 @@ RUNTIME_ENV = {
     "trusted_proxies": "TICO_TRUSTED_PROXIES", "client_ip_header": "TICO_CLIENT_IP_HEADER",
     "edge_subnet": "TICO_EDGE_SUBNET", "edge_dynamic_range": "TICO_EDGE_DYNAMIC_RANGE",
     "caddy_address": "TICO_CADDY_ADDRESS", "cloudflared_address": "TICO_CLOUDFLARED_ADDRESS",
+    "reader_origin": "TICO_READER_ORIGIN",
 }
-RUNTIME_FLAGS = ("domain_aliases", "public_url", "cors_origins", "hq_url", "visual_origin", "visual_same_origin", "caddy_visuals")
+RUNTIME_FLAGS = ("domain_aliases", "public_url", "cors_origins", "hq_url", "visual_origin", "visual_same_origin", "caddy_visuals",
+                 "reader_origin")
 
 
 @dataclass
@@ -124,6 +126,7 @@ class Settings:
     visual_origin: str = ""
     visual_same_origin: str = ""
     caddy_visuals: str = ""
+    reader_origin: str = ""       # the Company page's own HTTPS origin (docs/company-page.md); Caddy serves it
     runner_url: str = ""          # passive endpoint preservation is not DNS authority
     gateway_url: str = ""
     visual_secret: str = ""       # private saved env only, never a flag or public state
@@ -302,7 +305,7 @@ def endpoint(value: str, key: str, *, origin=False, https=False):
     return parsed
 
 
-def aliases(value: str, canonical: str, runner_host="", visual_host="") -> list[str]:
+def aliases(value: str, canonical: str, runner_host="", visual_host="", reader="") -> list[str]:
     if not isinstance(value, str) or not value.isascii() or any(ord(c) < 32 or ord(c) == 127 for c in value):
         raise MissingInput("TICO_DOMAIN_ALIASES: use comma-separated plain DNS hostnames")
     if not value:
@@ -312,8 +315,8 @@ def aliases(value: str, canonical: str, runner_host="", visual_host="") -> list[
         host = part.strip(" ").lower()
         if not plain_hostname(host):
             raise MissingInput("TICO_DOMAIN_ALIASES: use plain DNS hostnames without empty entries")
-        if host in (runner_host, visual_host):
-            raise MissingInput("TICO_DOMAIN_ALIASES: app aliases must differ from restricted runner and visual hosts")
+        if host in (runner_host, visual_host, reader):
+            raise MissingInput("TICO_DOMAIN_ALIASES: app aliases must differ from restricted runner, visual and reader hosts")
         if host not in seen:
             result.append(host); seen.add(host)
     return result
@@ -325,6 +328,19 @@ def visual_host(value: str, canonical: str, runner_host="") -> str:
     host = endpoint(value, "TICO_VISUAL_ORIGIN", origin=True, https=True).hostname
     if not plain_hostname(host) or host in (canonical.lower(), runner_host):
         raise MissingInput("TICO_VISUAL_ORIGIN: use a separate DNS origin, distinct from app and runner")
+    return host
+
+
+def reader_host(value: str, canonical: str, *taken: str) -> str:
+    """The Company page's own origin (docs/company-page.md): a plain DNS host of its own on the standard HTTPS port,
+    never the app's, the runner's, the visual origin's or an alias. Caddy serves it, so the tunnel is not an option."""
+    if not value:
+        return ""
+    parsed = endpoint(value, "TICO_READER_ORIGIN", origin=True, https=True)
+    host = parsed.hostname or ""
+    if not plain_hostname(host) or host in (canonical.lower(), *(t for t in taken if t)) or parsed.port not in (None, 443):
+        raise MissingInput("TICO_READER_ORIGIN: use a separate DNS origin on the standard HTTPS port, distinct from the app, "
+                           "runner, visual and alias hosts")
     return host
 
 
@@ -369,6 +385,13 @@ def validate_runtime(s: Settings, *, final=True, new_public=False, new_hq=False,
         parsed = endpoint(s.visual_origin, "TICO_VISUAL_ORIGIN", origin=True, https=True)
         if not plain_hostname(parsed.hostname or ""):
             raise MissingInput("TICO_VISUAL_ORIGIN: use a plain DNS origin")
+    if s.reader_origin:
+        # The tunnel routes only the app's hosts; the Company page's reader origin is served by the Caddy front door.
+        if s.front_door != "caddy":
+            raise MissingInput("TICO_READER_ORIGIN needs --front-door caddy: the tunnel does not route the Company page")
+        parsed = endpoint(s.reader_origin, "TICO_READER_ORIGIN", origin=True, https=True)
+        if not plain_hostname(parsed.hostname or ""):
+            raise MissingInput("TICO_READER_ORIGIN: use a plain DNS origin")
     if s.domain_aliases:
         aliases(s.domain_aliases, s.domain)
     if not final:
@@ -376,7 +399,8 @@ def validate_runtime(s: Settings, *, final=True, new_public=False, new_hq=False,
     runner_host = s.effective_runner_host()
     collision_runner = endpoint(s.runner_url, "TICO_RUNNER_URL").hostname if s.runner_url else runner_host
     visual = visual_host(s.visual_origin, s.domain, collision_runner)
-    hosts = aliases(s.domain_aliases, s.domain, runner_host, visual)
+    reader = reader_host(s.reader_origin, s.domain, collision_runner, visual)
+    hosts = aliases(s.domain_aliases, s.domain, runner_host, visual, reader)
     if s.domain_aliases and s.front_door != "cloudflared":
         raise MissingInput("TICO_DOMAIN_ALIASES needs --front-door cloudflared")
     if any(f"https://{host}" not in origins for host in hosts):
@@ -404,8 +428,9 @@ def gather_runtime(args, s: Settings, *, final=False) -> None:
                      new_hq=getattr(args, "hq_url", None) is not None,
                      runner_override=not final and getattr(args, "runner_host", None) is not None)
     if final:
-        s.domain_aliases = ",".join(aliases(s.domain_aliases, s.domain, s.effective_runner_host(),
-                                          visual_host(s.visual_origin, s.domain, s.effective_runner_host())))
+        visual = visual_host(s.visual_origin, s.domain, s.effective_runner_host())
+        s.domain_aliases = ",".join(aliases(s.domain_aliases, s.domain, s.effective_runner_host(), visual,
+                                          reader_host(s.reader_origin, s.domain, s.effective_runner_host(), visual)))
 
 
 class Asker:

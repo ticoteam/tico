@@ -1,6 +1,7 @@
 """The reader origin and the reader list, end to end through a real app and a real OIDC provider in the test process. The
 modules that make a page's content are stubbed at the package, so what is under test is who gets what."""
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -1028,3 +1029,23 @@ def test_assets_come_from_the_release_on_both_private_and_open_and_fonts_outlive
     assert plain_404(client.get("/assets/logo-" + "a" * 32 + ".png"))
     site.transparency("closed")
     assert plain_404(client.get("/assets/fonts/t.woff2"))
+
+
+def test_the_real_modules_together_give_a_reader_a_page_and_take_it_back(site, monkeypatch):
+    """The fixture stands in for its neighbours everywhere else; this is the one place they meet for real."""
+    for name in ("stats", "editions", "settings", "render"):
+        monkeypatch.setattr(package, name, importlib.import_module("backend.company_page." + name))
+    audience = site.audience("investors", "Investors")
+    edition = site.edition(audience, "October")
+    client = site.signed_in("pat@other.example", audience)
+    text = client.get("/").text
+    assert "October" in text and "pat@other.example" in text
+    reader = site.rows("SELECT id FROM readers")[0]["id"]
+    with site.store.read() as c:
+        anchor = package.editions.anchor_of(dict(c.execute("SELECT * FROM editions WHERE id=?", (edition,)).fetchone()))
+        assert R.readable_edition_id(c, reader, anchor) == edition
+    assert anchor in text
+    site.write("UPDATE editions SET status='retracted',retracted_at=? WHERE id=?", H.now(), edition)
+    assert "October" not in client.get("/").text
+    site.transparency("closed")
+    assert plain_404(client.get("/"))

@@ -116,7 +116,7 @@ def test_unwritable_unmounted_directory_is_inert_while_off_but_refuses_explicit_
         for env in ({"TICO_CADDY_DIR": str(directory)},
                     {"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP, "TICO_CADDY_VISUALS": "0"}):
             assert assets.prepare(env) == {"written": False, "path": None, "generation": None,
-                                           "serve_visuals": False, "reason": None}
+                                           "serve_visuals": False, "reason": None, "serve_reader": False}
         with pytest.raises(RuntimeError, match="^caddy_config_write_failed$"):
             assets.prepare({"TICO_CADDY_DIR": str(directory), "TICO_DOMAIN": APP, "TICO_CADDY_VISUALS": "1",
                             "TICO_VISUAL_ORIGIN": "https://" + VISUAL})
@@ -333,3 +333,92 @@ def test_pinned_caddy_routes_exact_signed_reads_strips_auth_and_does_not_log_tok
             backend.shutdown()
             backend.server_close()
         thread.join(timeout=2)
+
+
+# --- the Company page's reader origin (docs/company-page.md) ----------------------------------------------------------
+
+READER = "reader.acme.example"
+READER_PATHS = ["/", "/data.json", "/feed.xml", "/assets/*", "/auth/*", "/sign-in", "/sign-out", "/reply", "/can-help",
+                "/unsubscribe", "/invite/*"]
+
+
+def reader_routes(config):
+    return [route for route in config["apps"]["http"]["servers"]["tico"]["routes"]
+            if any(READER in match.get("host", []) for match in route.get("match", []))]
+
+
+def test_the_reader_origin_proxies_five_paths_keeps_the_cookie_and_leaves_the_app_as_it_was():
+    base = assets.render(APP, runner_hostname=RUNNER)
+    config = assets.render(APP, runner_hostname=RUNNER, reader_origin="https://" + READER, serve_reader=True)
+    (route,) = reader_routes(config)
+    assert route["match"] == [{"host": [READER], "path": READER_PATHS,
+                               "expression": "{http.request.orig_uri.path} == {http.request.uri.path}"}]
+    proxy = route["handle"][0]
+    assert proxy["handler"] == "reverse_proxy" and proxy["upstreams"] == [{"dial": "server:8765"}]
+    assert proxy["load_balancing"] == {"try_duration": "30s", "try_interval": "250ms"}
+    assert proxy["headers"] == {"request": {"delete": ["Authorization", "Proxy-Authorization", "Cf-Access-*",
+                                                       "X-Amzn-Oidc-*", "X-Tico-*"]},
+                                "response": {"set": {"Content-Security-Policy": ["frame-ancestors 'none'; base-uri 'none'"]}}}
+    # no /reader/* and no script or style policy here: the page's own CSP meta tag carries those
+    assert not any(path.startswith("/reader") or path.startswith("/api") for path in READER_PATHS)
+    server = config["apps"]["http"]["servers"]["tico"]
+    assert server["routes"][:-2] == base["apps"]["http"]["servers"]["tico"]["routes"][:-1]
+    assert server["routes"].index(route) == len(server["routes"]) - 2
+    assert server["routes"][-1]["handle"] == [{"handler": "static_response", "status_code": 404}]
+    assert hosts(config) == [APP, READER]
+
+
+def test_the_reader_origin_is_off_unless_it_is_asked_for_and_is_never_the_visual_or_app_host():
+    base = assets.render(APP, runner_hostname=RUNNER)
+    assert assets.render(APP, runner_hostname=RUNNER, reader_origin="https://" + READER) == base
+    assert assets.render(APP, runner_hostname=RUNNER, reader_origin="https://" + READER, serve_reader=True) != base
+
+
+@pytest.mark.parametrize("origin", [
+    "https://" + APP, "https://" + RUNNER, "https://" + VISUAL, "http://" + READER, "https://" + READER + ":8443",
+    "https://user@" + READER, "https://" + READER + "/reader", "https://" + READER + "?x", "https://127.0.0.1",
+    "https://" + "r" * 300 + ".example", "https://Reader.Acme.\nExample", "*.acme.example"])
+def test_a_reader_origin_that_is_not_its_own_https_host_is_left_out(origin):
+    config = assets.render(APP, "https://" + VISUAL, RUNNER, serve_visuals=True, reader_origin=origin, serve_reader=True)
+    assert hosts(config) == [APP, VISUAL] and not reader_routes(config)
+
+
+def test_the_reader_origin_stays_off_the_visual_host_even_while_visuals_are_not_served():
+    config = assets.render(APP, "https://" + VISUAL, RUNNER, reader_origin="https://" + VISUAL, serve_reader=True)
+    assert hosts(config) == [APP] and not reader_routes(config)
+
+
+def test_the_reader_origin_needs_the_app_it_proxies_to():
+    *_, reading, reason = assets._configuration("", "", "", False, "https://" + READER, True)
+    assert (reading, reason) == (False, "reader_app_required")
+
+
+def test_prepare_serves_the_reader_origin_and_says_why_it_will_not(tmp_path, caplog):
+    env = {"TICO_CADDY_DIR": str(tmp_path), "TICO_DOMAIN": APP, "TICO_READER_ORIGIN": "https://" + READER,
+           "TICO_RUNNER_URL": "https://" + RUNNER}
+    result = assets.prepare(env)
+    assert result["written"] and result["serve_reader"] and not result["serve_visuals"]
+    assert hosts(json.loads((tmp_path / "caddy.json").read_bytes())) == [APP, READER]
+    assert "reader" not in caplog.text
+    result = assets.prepare({**env, "TICO_READER_ORIGIN": "https://" + APP})
+    assert not result["serve_reader"] and "reader_origin_host_collision" in caplog.text
+    assert hosts(json.loads((tmp_path / "caddy.json").read_bytes())) == [APP]
+    caplog.clear()
+    result = assets.prepare({**env, "TICO_RUNNER_URL": "https://user@" + RUNNER})
+    assert not result["serve_reader"] and "runner_url_invalid" in caplog.text
+    assert hosts(json.loads((tmp_path / "caddy.json").read_bytes())) == [APP]
+
+
+def test_the_pinned_caddy_accepts_the_reader_origin_configuration(tmp_path):
+    # Caddy's own JSON loader and placeholder parser, on the image this install pins (docker/compose.yaml).
+    import shutil
+    from setup import cell
+    if not shutil.which("docker") or subprocess.run(
+            ["docker", "image", "inspect", cell.ROUTER_IMAGE], capture_output=True).returncode:
+        pytest.skip("the pinned caddy image is not on this machine")
+    config = assets.render(APP, "https://" + VISUAL, RUNNER, serve_visuals=True, reader_origin="https://" + READER,
+                           serve_reader=True)
+    (tmp_path / "caddy.json").write_text(json.dumps(config))
+    run = subprocess.run(["docker", "run", "--rm", "-v", f"{tmp_path}:/etc/caddy:ro", cell.ROUTER_IMAGE, "caddy",
+                          "validate", "--config", "/etc/caddy/caddy.json"], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr[-800:]

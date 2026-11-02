@@ -33,6 +33,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 
 - [Use Tico](using-tico.md): your team's address, tasks, chats, results and Needs you.
 - [Sessions](sessions.md): each task a bot owns is its own session, apart from its main chat.
+- [Company page](company-page.md): what outside people see of the company (investors, the board, the public), and who approves it.
 - [Desktop app](desktop.md), [Your Assistant](assistant.md) and [External agents](connect-an-agent.md).
 - Knowledge and results: [Docs](docs.md), [Librarian](librarian.md), [Market watch](market-watch.md), [Weekly briefing](market-briefing.md), [Files](files.md), [Pages](pages.md), [Meetings](meetings.md), [Listening](listening.md), [Physical mail](physical-mail.md).
 - [Task Manager](task-manager.md): the built-in helper that tidies tasks once an hour on weekdays.
