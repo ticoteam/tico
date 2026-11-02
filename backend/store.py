@@ -1814,6 +1814,12 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.payment_cancel_asks(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(78,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=79").fetchone():
+                    # The merchant a card is asked for is kept on the card (fin_cards.merchant; finance/cards.py).
+                    # Idempotent like 78.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.card_merchant(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(79,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the

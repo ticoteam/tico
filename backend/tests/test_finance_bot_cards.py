@@ -221,6 +221,24 @@ def test_the_card_help_marks_the_mercury_user_required_as_the_code_does(books):
         assert "provider_user_id is required" in refused.reason
 
 
+def test_a_card_request_may_name_its_merchant_which_is_kept_on_the_card_and_not_sent_to_mercury(books):
+    """Spec §8.1: Mercury has no merchant locks, so a card's merchant is the request's intent. It is kept on the card
+    and the help lists it; it is not sent to Mercury, and the card's limit is what Mercury enforces."""
+    assert {f["name"] for f in FA.help("card_create")["fields"]} >= {"merchant"}
+    fake = FakeMercury()
+    connect(books, fake)
+    fake.queue["create_card"] = [{**MERCURY["card_created"], "cardId": "card-coder", "lastFourDigits": "1111"}]
+    with books.transaction() as c:
+        made = act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": _budget(c), "amount": 20_000,
+                                             "provider_user_id": "user-cara", "merchant": "Acme Cloud"})
+        assert made.status == "committed", (made.code, made.reason)
+        card_id = str(made.result["card_id"])
+    sync_once(books, fake)
+    assert fake.sent("create_card") == [("user-cara", 20_000)]
+    with books.read() as c:
+        assert c.execute("SELECT merchant FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0] == "Acme Cloud"
+
+
 def test_a_person_who_freezes_a_budget_frozen_card_keeps_it_frozen_when_the_budget_has_room(books):
     fake = FakeMercury()
     budget, coder, _ = _world(books, fake)
@@ -330,8 +348,6 @@ def test_single_use_waits_for_a_provider_that_has_them_and_each_kind_fits_its_ho
         for holder, kind in (("bot:coder", "person"), ("human:eve", "standing"), ("bot:coder", "gift")):
             assert act(c, OWNER, "card_create", {"holder": holder, "budget_id": budget, "amount": 5_000, "kind": kind,
                                                  "provider_user_id": "u"}).code == "invalid", (holder, kind)
-        assert act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": budget, "amount": 5_000,
-                                             "merchant": "acme.example", "provider_user_id": "u"}).code == "invalid"
         dry = act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": budget, "amount": 5_000,
                                             "kind": "standing", "provider_user_id": "u"}, dry_run=True)
         assert dry.rule == "rule:bot-card-standing"

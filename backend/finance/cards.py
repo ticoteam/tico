@@ -309,8 +309,9 @@ def card_kind(p: V.Payload, bot: bool) -> str:
 
 def card_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """A card for a teammate or a bot under a budget, with `amount` a month set aside for it. `provider_user_id` is the
-    Mercury user the card is issued to (Mercury issues cards to its own users)."""
-    V.only(p, ("holder", "budget_id", "amount", "kind", "nickname", "money_account_id", "provider_user_id"))
+    Mercury user the card is issued to (Mercury issues cards to its own users). `merchant` is the merchant the card is
+    asked for, kept as the request's intent: Mercury has no merchant locks (§8.1), so the limit is what it enforces."""
+    V.only(p, ("holder", "budget_id", "amount", "kind", "nickname", "money_account_id", "provider_user_id", "merchant"))
     holder = V.text(p, "holder", 120)
     if holder not in ctx.org.humans | ctx.org.bots:
         raise invalid("no such teammate")
@@ -326,6 +327,7 @@ def card_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     alloc = handlers.allocation_plan(ctx, who, {"budget_id": budget_id, "target_kind": "card", "target_id": card_id,
                                                 "amount": amount}, route)
     nickname = V.opt_text(p, "nickname", 50) or holder.split(":", 1)[-1]
+    merchant = V.opt_text(p, "merchant", 120) or ""
     user = V.text(p, "provider_user_id", 120)
 
     def apply(aid: str) -> Result:
@@ -333,8 +335,8 @@ def card_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         SK.insert(ctx.c, "fin_cards", {
             "id": card_id, "provider": str(program["provider"] or "mercury"), "holder": holder, "budget_id": budget_id,
             "money_account_id": str(program["id"]), "kind": kind, "limit_amount": amount, "limit_interval": "month",
-            "currency": ctx.book.base_currency, "status": "active", "nickname": nickname, "created_at": ctx.at,
-            "created_by": who, "updated_at": ctx.at})
+            "currency": ctx.book.base_currency, "status": "active", "nickname": nickname, "merchant": merchant,
+            "created_at": ctx.at, "created_by": who, "updated_at": ctx.at})
         queue(ctx, SK.get(ctx.c, "fin_cards", card_id), "card_create",
               {"user_id": user, "nickname": nickname, "monthly": amount}, f"card-create-{card_id}", aid, who)
         return {"card_id": card_id, "sync_status": "pending"}

@@ -506,6 +506,7 @@ ADDED = (
     ("fin_cards", "sync_status", "TEXT NOT NULL DEFAULT ''"), ("fin_cards", "sync_error", "TEXT"),
     ("fin_cards", "synced_at", "TEXT"),
     ("fin_cards", "freeze_by", "TEXT"), ("fin_cards", "freeze_budget_id", "TEXT"),
+    ("fin_cards", "merchant", "TEXT NOT NULL DEFAULT ''"),
     ("fin_connections", "name", "TEXT NOT NULL DEFAULT ''"),
     ("fin_connections", "settings_json", "TEXT NOT NULL DEFAULT '{}'"), ("fin_connections", "events_cursor", "TEXT"),
     ("fin_connections", "last_sync_at", "TEXT"), ("fin_connections", "next_sync_at", "TEXT"),
@@ -775,6 +776,12 @@ def purchasing(c: sqlite3.Connection) -> None:
 def payment_cancel_asks(c: sqlite3.Connection) -> None:
     """Cloud migration 78: the cancel a finance admin asks of an unknown payment (fin_payments.cancel_asked_at), which the
     worker resolves by a lookup by its key. Idempotent: `_add_columns` adds only what is missing."""
+    _add_columns(c)
+
+
+def card_merchant(c: sqlite3.Connection) -> None:
+    """Cloud migration 79: the merchant a card was asked for (fin_cards.merchant), kept as the request's intent.
+    Idempotent: `_add_columns` adds only what is missing."""
     _add_columns(c)
 
 
