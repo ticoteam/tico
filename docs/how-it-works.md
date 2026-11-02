@@ -392,7 +392,7 @@ the cloud cooldown applies.
 
 A bot with no fallback of its own still gets one on a usage limit (a spend cap such as "monthly spend
 limit" counts): the runner runs that turn once on the first of the company's other providers that is
-signed in on the same computer, with that provider's default model (`fallback_models` in
+signed in on the same computer, either by its own sign-in or by a company subscription given to that computer ([Computers](computers.md)), with that provider's default model (`fallback_models` in
 `GET /api/v2/config`), and reports `fallback` with `primary_limited`. A provider signed in only by a key in
 the environment is skipped (a turn carries only its own runtime's keys; Codex turns its key into a login).
 A login on that computer that failed a turn on its usage limit is skipped until the provider's reset time, or for
