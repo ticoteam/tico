@@ -3658,9 +3658,9 @@ def sidebar(c, v, *, cursor=None, limit=50):
     where = ["r.parent_id IS NULL", "r.archived_at IS NULL", "r.closed_at IS NULL",
              f"(NOT {is_task} OR {by_person} OR {to_viewer})",
              f"(r.audience IN ('company','team') OR r.owner_id=:me OR {is_needing} OR EXISTS (SELECT 1 FROM "
-             f"thread_members m WHERE m.thread_id=r.id AND m.actor IN ({marks})) OR EXISTS (SELECT 1 FROM "
-             f"thread_followers f JOIN conversations s ON s.id=f.thread_id WHERE s.root_id=r.id AND f.actor=:me "
-             f"AND f.following=1 AND {_SUBTREE_OPEN}) OR EXISTS (SELECT 1 FROM "
+             f"thread_members m WHERE m.thread_id=r.id AND m.actor IN ({marks})) OR r.id IN (SELECT s.root_id FROM "
+             f"thread_followers f JOIN conversations s ON s.id=f.thread_id WHERE f.actor=:me AND f.following=1 "
+             f"AND {_SUBTREE_OPEN} AND s.root_id IS NOT NULL) OR EXISTS (SELECT 1 FROM "
              f"{_PARTICIPANTS.format(r='r')} WHERE value=:me))", readable]
     positions = _sidebar_positions(cursor)
     is_dm = f"COALESCE(r.audience,{_derived_audience('r')}) IN ('personal','participants')"

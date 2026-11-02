@@ -164,7 +164,8 @@ function threadsSync() {
     if (d.kind === 'read' && d.read) threadsMarkedRead(d.thread_id, Number(d.read.last_read_seq) || 0);
     else if (d.thread && !d.thread.parent_id) threadsPut(d.thread);
     if (d.kind === 'unsent' || d.kind === 'capped') liveSoon('threads-needs', () => liveEmit('needs', {version: 'read'}), 400);
-    liveSoon('threads-side', threadsLoad, 400);
+    // Not while the tab is hidden: a hidden tab reads the list once when it is shown again (liveThrottle).
+    liveThrottle('threads-side', threadsLoad, 400);
     threadViewsLive('threads', d);
   });
   // A hold or an ask moved on the viewer's Needs you list: the rows it marks are ranked first.
