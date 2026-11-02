@@ -1,13 +1,15 @@
 """The Growth page's numbers (backend/growth_numbers.py): the months' totals and each channel's, the KPI tree with its
-readings, and the idea tests that started or ended. Examples use Acme, a home-cleaning company."""
+readings, and the marketing tests that started or finished. Examples use Acme, a home-cleaning company."""
 
 from backend import growth as G
 from backend.tests.test_api import api, get, headers, post, put  # noqa: F401
 from backend.tests.test_company import bot
 from backend.tests.test_openapi_v2 import conforms
 
-FIGURES = ("spend", "bot_cost", "new_customers", "cac", "kept_d30", "kept_d90", "kept_d180", "expected_months", "ltv",
-           "ltv_cac", "payback_months", "quality")
+ECONOMICS = ("spend", "bot_cost", "new_customers", "cac", "kept_d30", "kept_d90", "kept_d180", "expected_months", "ltv",
+             "ltv_cac", "payback_months", "quality")
+MONEY = ("revenue_month", "margin_pct")
+FIGURES = ECONOMICS + MONEY
 
 
 def add_channel(api, slug="google-search", name="Google Search", **more):
@@ -58,9 +60,20 @@ def test_the_total_is_economics_total_over_the_months_cohorts(api):
     put(api, "growth/cohorts", {"channel": "unknown", "month": "2026-10", "new_customers": 18, "kept_d30": 70})
     with api.app.state.store.read() as c:
         expected = G.economics_total(G.cohorts(c, month="2026-10"), G.settings(c))
-    total = get(api, "growth/numbers")["series"][0]
-    assert {key: total[key] for key in FIGURES} == {key: expected[key] for key in FIGURES}
+        money = G.aggregate(G.cohorts(c, month="2026-10"), G.settings(c))
+        referrals_own = G.aggregate(G.cohorts(c, channel_slug="referrals", month="2026-10"), G.settings(c))
+    numbers = get(api, "growth/numbers")
+    total = numbers["series"][0]
+    assert {key: total[key] for key in ECONOMICS} == {key: expected[key] for key in ECONOMICS}
+    assert {key: total[key] for key in MONEY} == {key: money[key] for key in MONEY} == {"revenue_month": 95.5,
+                                                                                       "margin_pct": 37.7}
     assert total["new_customers"] == 109 and total["cac"] == round((3400 + 500 + 260) / 109, 2)
+    # Each channel's own cohort: referrals sets its own revenue and margin, google search takes the settings.
+    referrals = next(ch for ch in numbers["channels"] if ch["slug"] == "referrals")["series"][0]
+    assert {key: referrals[key] for key in MONEY} == {key: referrals_own[key] for key in MONEY} == {
+        "revenue_month": 120, "margin_pct": 30}
+    google = next(ch for ch in numbers["channels"] if ch["slug"] == "google-search")["series"][0]
+    assert (google["revenue_month"], google["margin_pct"]) == (90, 40)
 
 
 def test_the_months_are_the_newest_with_cohorts_oldest_first_and_limited_to_one_to_twenty_four(api):
@@ -128,6 +141,25 @@ def test_kpis_group_by_growth_role_and_carry_their_last_24_readings_for_whoever_
     assert "Inbox depth" not in str(kpis)
 
 
+def test_a_kpi_series_is_the_sparkline_rule_one_value_per_period_without_partials_or_superseded_readings(api):
+    kpi = post(api, "kpis", {"name": "Bookings"})["kpi"]
+    post(api, f"kpis/{kpi['id']}", {"growth_role": "input"})
+
+    def log(value, period, **more):
+        return post(api, f"kpis/{kpi['id']}/readings", {"value": value, "period_end": period, **more})["reading"]
+    log(1, "2026-10-01T00:00:00Z")
+    log(2, "2026-10-02T00:00:00Z", quality="partial")
+    first = log(3, "2026-10-03T00:00:00Z")
+    # A correction names the reading it supersedes, which then drops out of the series.
+    log(30, "2026-10-03T00:00:00Z", supersedes=first["id"], note="Recounted the day's bookings")
+    log(4, "2026-10-04T00:00:00Z")
+    log(40, "2026-10-04T00:00:00Z")   # a second reading of the same period: the later one is the value
+    series = get(api, "growth/numbers")["kpis"]["inputs"][0]["series"]
+    assert series == [{"at": "2026-10-01T00:00:00.000000Z", "value": 1},
+                      {"at": "2026-10-03T00:00:00.000000Z", "value": 30},
+                      {"at": "2026-10-04T00:00:00.000000Z", "value": 40}]
+
+
 def test_a_test_gives_a_started_and_a_finished_marker_newest_first(api):
     made = post(api, "growth/ideas", {"title": "Weekend discount", "assignee": "ops"})["idea"]
     tid = made["task_id"]
@@ -152,7 +184,7 @@ def test_a_task_moved_twice_gives_two_markers_with_its_channel_and_goal(api):
         ("started", tid, ["seo"], goal)] * 2
 
 
-def test_a_private_idea_is_marked_only_for_a_reader_who_may_see_the_task(api):
+def test_a_private_marketing_task_is_marked_only_for_a_reader_who_may_see_it(api):
     add_fay(api)
     tid = post(api, "tasks", {"title": "Cold email to dentists", "body": "Test a cold email.", "owner": "cara",
                               "type": "idea", "private": True, "labels": ["channel:email"]})["id"]

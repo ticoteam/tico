@@ -14438,7 +14438,7 @@
     },
     "/api/v2/growth/numbers": {
       "get": {
-        "summary": "The Growth page's numbers: the newest months (1 to 24, default 12), every channel's and the total's CAC, LTV and retention per month (null where not recorded), the KPI tree with each KPI's last 24 readings, and the idea tests that started or ended, newest first",
+        "summary": "The Growth page's numbers: the newest months (1 to 24, default 12), every channel's and the total's CAC, LTV and retention, revenue and margin per month (null where not recorded), the KPI tree with each KPI's last 24 readings, and the marketing tests that started or finished, newest first",
         "operationId": "getGrowthNumbers",
         "parameters": [
           {
@@ -45492,6 +45492,18 @@
               "string",
               "null"
             ]
+          },
+          "revenue_month": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "margin_pct": {
+            "type": [
+              "number",
+              "null"
+            ]
           }
         },
         "required": [
@@ -45503,10 +45515,12 @@
           "kept_d90",
           "ltv",
           "ltv_cac",
+          "margin_pct",
           "month",
           "new_customers",
           "payback_months",
           "quality",
+          "revenue_month",
           "spend"
         ],
         "additionalProperties": true

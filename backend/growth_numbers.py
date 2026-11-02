@@ -2,13 +2,16 @@
 
 `GET /api/v2/growth/numbers?months=12` (1 to 24, default 12):
 - `months`: the newest N months with cohort rows, oldest first.
-- `series`: one per month, every channel together (growth.economics' total). A figure not recorded is null, never 0.
+- `series`: one per month, every channel together (growth.economics' total, with revenue and margin from
+  growth.aggregate over the same rows). A figure not recorded is null, never 0.
 - `channels`: each live channel in its sort order with the months it has cohort rows for, then Unknown when it has any.
-- `kpis`: the KPI tree by growth role, each with its last 24 effective readings, oldest first. A KPI with no growth
-  field is left out; `other` holds one with a stage or loop but no role.
-- `markers`: the moves of idea tasks that start a test or end it with a verdict, newest first, at most 200. Each move is
-  one marker, so a task moved twice gives two. The window is the first month's start to now (the last twelve months
-  when there are no cohorts).
+  Each month carries the channel's own figures, revenue and margin included.
+- `kpis`: the KPI tree by growth role, each with its last 24 readings as the sparkline plots them (one value per period,
+  partials left out, oldest first). A KPI with no growth field is left out; `other` holds one with a stage or loop but
+  no role.
+- `markers`: the moves of marketing tasks that start a test or finish it, newest first, at most 200. Each move is one
+  marker, so a task moved twice gives two. The window is the first month's start to now (the last twelve months when
+  there are no cohorts).
 
 The tasks, KPIs and channels are read as their own routes read them: a marker shows only a task the reader may see
 (auth.task_sql, as task lists do). `may_edit` is who may record cohorts: an admin or a bot (growth.py's cohort rule).
@@ -28,13 +31,13 @@ MARKERS_MAX = 200
 KPI_KEYS = ("id", "name", "unit", "latest", "latest_at", "target", "goal_id", "parent_kpi_id", "growth_role", "stage",
             "loop_name", "loop_step")
 SERIES_KEYS = ("spend", "bot_cost", "new_customers", "cac", "kept_d30", "kept_d90", "kept_d180", "expected_months",
-               "ltv", "ltv_cac", "payback_months", "quality")
-# The Idea type's steps that start a test or end it with a verdict (growth.py IDEA_STEPS), by step id: (kind, outcome).
+               "ltv", "ltv_cac", "payback_months", "quality", "revenue_month", "margin_pct")
+# The marketing tasks' steps (growth.py IDEA_STEPS) that start a test or finish it, by step id: (kind, outcome).
 MOVES = {G.step_id("testing"): ("started", None), **{G.step_id(key): ("finished", key) for key in G.TERMINAL}}
 
 
 def _month(row, month):
-    """A channel's or the total's figures for one month, from growth.economics."""
+    """A channel's or the total's figures for one month."""
     return {"month": month, **{key: row.get(key) for key in SERIES_KEYS}}
 
 
@@ -53,6 +56,21 @@ def _since(window):
     return f"{index // 12:04d}-{index % 12 + 1:02d}-01T00:00:00"
 
 
+def _money(c, month, conf):
+    """Revenue and margin for one month, per channel and in total, over the rows growth.economics adds up: each
+    channel's whole rows, not its segment splits, when it has any."""
+    groups = {}
+    for row in G.cohorts(c, month=month, limit=G.COHORTS_MAX):
+        groups.setdefault(row["channel"] or G.UNKNOWN, []).append(row)
+    picked = {slug: [r for r in group if not r.get("segment_id")] or group for slug, group in groups.items()}
+    return ({slug: G.aggregate(group, conf) for slug, group in picked.items()},
+            G.aggregate([r for group in picked.values() for r in group], conf))
+
+
+def _with_money(row, money):
+    return {**row, "revenue_month": money["revenue_month"], "margin_pct": money["margin_pct"]}
+
+
 def _channels(c, window, by_month):
     live = H._rows(c.execute("SELECT slug, name, stage, owner_ref FROM growth_channels WHERE retired_at IS NULL "
                              "ORDER BY sort, name COLLATE NOCASE"))
@@ -66,13 +84,21 @@ def _channels(c, window, by_month):
     return out
 
 
+def _points(readings):
+    """A KPI's series as kpis.spark plots it: one value per period (a later reading of a period replaces an earlier
+    one), partial readings left out, oldest first, the last K.SPARK."""
+    by_period = {}
+    for r in readings:
+        if r.get("quality") != "partial":
+            by_period[r["period_end"]] = r
+    return [{"at": period, "value": by_period[period]["value"]} for period in sorted(by_period)][-K.SPARK:]
+
+
 def _kpis(c, hidden):
     tree = [k for k in G.kpis(c, hidden)["kpis"]
             if k["growth_role"] or k["stage"] or k["loop_name"] or k["loop_step"] is not None]
     readings = K.effective_many(c, [k["id"] for k in tree])
-    views = [{**{key: k[key] for key in KPI_KEYS},
-              "series": [{"at": r["period_end"] or r["collected_at"], "value": r["value"]}
-                         for r in readings.get(k["id"], [])[-K.SPARK:]]} for k in tree]
+    views = [{**{key: k[key] for key in KPI_KEYS}, "series": _points(readings.get(k["id"], []))} for k in tree]
     return {"north_star": next((v for v in views if v["growth_role"] == "north_star"), None),
             "inputs": [v for v in views if v["growth_role"] == "input"],
             "guardrails": [v for v in views if v["growth_role"] == "guardrail"],
@@ -84,8 +110,8 @@ def _markers(c, auth, who, since):
     rows = H._rows(c.execute(
         "SELECT e.task_id, e.ts, e.new, t.title, t.goal_id FROM task_events e JOIN tasks t ON t.id=e.task_id "
         f"WHERE e.field='step' AND e.new IN ({','.join('?' * len(MOVES))}) AND t.type_id=? AND e.ts>=? "
-        f"AND t.id IN (SELECT id FROM tasks WHERE {visible}) ORDER BY e.ts DESC, e.id DESC LIMIT ?",
-        [*MOVES, G.IDEA_TYPE, since, MARKERS_MAX]))
+        f"AND t.id IN (SELECT id FROM tasks WHERE type_id=? AND {visible}) ORDER BY e.ts DESC, e.id DESC LIMIT ?",
+        [*MOVES, G.IDEA_TYPE, since, G.IDEA_TYPE, MARKERS_MAX]))
     tags = {}
     ids = list(dict.fromkeys(r["task_id"] for r in rows))
     if ids:
@@ -103,10 +129,15 @@ def _markers(c, auth, who, since):
 
 def numbers(c, auth, who, months, hidden):
     window = _window(c, months)
-    econ = {m: G.economics(c, m) for m in window}
-    by_month = {m: {row["channel"]: row for row in econ[m]["rows"]} for m in window}
+    conf = G.settings(c)
+    totals, by_month = {}, {}
+    for m in window:
+        econ = G.economics(c, m)
+        per, total = _money(c, m, conf)
+        totals[m] = _with_money(econ["total"], total)
+        by_month[m] = {row["channel"]: _with_money(row, per[row["channel"]]) for row in econ["rows"]}
     return {"months": window,
-            "series": [_month(econ[m]["total"], m) for m in window],
+            "series": [_month(totals[m], m) for m in window],
             "channels": _channels(c, window, by_month),
             "kpis": _kpis(c, hidden),
             "markers": _markers(c, auth, who, _since(window)),
@@ -118,8 +149,9 @@ def install(app, store, auth):
 
     @app.get("/api/v2/growth/numbers")
     def growth_numbers(request: Request, months: int = MONTHS_DEFAULT):
-        """The Growth page's numbers: the months, every channel's and the total's CAC, LTV and retention, the KPI tree
-        with its last readings, and the idea tests that started or ended. `months`: the newest 1 to 24 months."""
+        """The Growth page's numbers: the months, every channel's and the total's CAC, LTV, retention, revenue and
+        margin, the KPI tree with its last readings, and the marketing tests that started or finished. `months`: the
+        newest 1 to 24 months."""
         who = request.state.identity
         auth.domain(who)
         if not MONTHS_MIN <= months <= MONTHS_MAX:

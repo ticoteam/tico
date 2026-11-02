@@ -2552,13 +2552,14 @@ SCHEMAS["Seat"]["required"] = sorted(set(SCHEMAS["Seat"]["required"]) | {"agent"
 # The Growth page's numbers (backend/growth_numbers.py): the one read it draws from.
 STABLE.append(("/api/v2/growth/numbers", "get", "KPIs", "getGrowthNumbers",
                "The Growth page's numbers: the newest months (1 to 24, default 12), every channel's and the total's CAC, LTV "
-               "and retention per month (null where not recorded), the KPI tree with each KPI's last 24 readings, and the idea "
-               "tests that started or ended, newest first", "GrowthNumbers"))
+               "and retention, revenue and margin per month (null where not recorded), the KPI tree with each KPI's last 24 "
+               "readings, and the marketing tests that started or finished, newest first", "GrowthNumbers"))
 NUM_N_INT = {"type": ["integer", "null"]}
 SCHEMAS.update({
     "GrowthMonth": obj({"month": "s", "spend": NUM_N, "bot_cost": NUM_N, "new_customers": NUM_N_INT, "cac": NUM_N,
                         "kept_d30": NUM_N, "kept_d90": NUM_N, "kept_d180": NUM_N, "expected_months": NUM_N, "ltv": NUM_N,
-                        "ltv_cac": NUM_N, "payback_months": NUM_N, "quality": "n"}),
+                        "ltv_cac": NUM_N, "payback_months": NUM_N, "quality": "n", "revenue_month": NUM_N,
+                        "margin_pct": NUM_N}),
     "GrowthChannel": obj({"slug": "s", "name": "s", "stage": "n", "owner_ref": "n",
                           "series": items(ref("GrowthMonth"))}),
     "GrowthKpi": obj({"id": "s", "name": "s", "unit": "s", "latest": NUM_N, "latest_at": "n", "target": NUM_N,
