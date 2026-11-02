@@ -3917,6 +3917,26 @@ export type Rules = {
   rules: Array<Rule>;
 };
 
+export type RulesByTeammate = {
+  bots: Array<{
+  slug: string;
+  who: Array<string>;
+  with: Array<string>;
+}>;
+  people: Array<{
+  id: string;
+  who: Array<string>;
+  with: Array<string>;
+}>;
+  rules: Array<{
+  can_edit: boolean;
+  id: string;
+  if_broken: "block" | "escalate" | "warn" | null;
+  kind: "internal" | "external";
+  text: string;
+}>;
+};
+
 export type RunNow = {
   input?: Record<string, unknown>;
 };
@@ -8293,6 +8313,11 @@ export type ListRulesParams = {
 };
 export type ListRulesBody = never;
 export type ListRulesResponse = unknown;
+
+/** GET /api/v2/rules/by-teammate */
+export type ListRulesByTeammateParams = Record<string, never>;
+export type ListRulesByTeammateBody = never;
+export type ListRulesByTeammateResponse = RulesByTeammate;
 
 /** GET /api/v2/seats */
 export type ListSeatsParams = Record<string, never>;

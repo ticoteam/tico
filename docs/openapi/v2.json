@@ -28184,6 +28184,47 @@
         ]
       }
     },
+    "/api/v2/rules/by-teammate": {
+      "get": {
+        "summary": "The rules in force the caller may read, each with can_edit; and per bot and per person the caller may see, the ids of the rules whose Who (who) or With (with) names it, only those with one",
+        "operationId": "listRulesByTeammate",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RulesByTeammate"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Rules"
+        ]
+      }
+    },
     "/api/v2/rules/check": {
       "post": {
         "summary": "A bot checks a draft as the write it will be; sending that exact draft then costs no second check",
@@ -60308,6 +60349,114 @@
           "rules"
         ],
         "title": "Rules"
+      },
+      "RulesByTeammate": {
+        "type": "object",
+        "properties": {
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "internal",
+                    "external"
+                  ]
+                },
+                "text": {
+                  "type": "string"
+                },
+                "if_broken": {
+                  "enum": [
+                    "block",
+                    "escalate",
+                    "warn",
+                    null
+                  ]
+                },
+                "can_edit": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "can_edit",
+                "id",
+                "if_broken",
+                "kind",
+                "text"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "bots": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "slug": {
+                  "type": "string"
+                },
+                "who": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "with": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "slug",
+                "who",
+                "with"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "people": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "who": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "with": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "who",
+                "with"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "bots",
+          "people",
+          "rules"
+        ],
+        "additionalProperties": true
       },
       "RunNow": {
         "properties": {

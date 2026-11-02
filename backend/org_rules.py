@@ -33,6 +33,7 @@ from . import hubdb as H
 from . import people as P
 from . import rule_due as D
 from . import task_caps
+from . import teammate_access as TA
 from .models import Contract
 from .store import Problem
 
@@ -474,21 +475,31 @@ def outside_edition_rules(c):
     return [row for row in _active(c) if row["who"].get("outside_editions")]
 
 
+def _names(rule, key):
+    """Whether a rule's Who names a teammate, and whether its With does (an empty With names no one). The one check
+    `applies_to` and `teammate_rules` both read, so the two cannot drift apart."""
+    return _hits(rule["who"], key), _has(rule["with"]) and _hits(rule["with"], key)
+
+
 def applies_to(c, bot, rules, ctx=None):
     """The rules a bot reads as its own: those whose Who names it, and those whose With names it."""
     key = who_key(c, "bot:" + bot, ctx)
-    return [r for r in rules if _hits(r["who"], key) or (_has(r["with"]) and _hits(r["with"], key))]
+    return [r for r in rules if any(_names(r, key))]
 
 
 # ----------------------------------------------------------------------------- permissions
 def _led(ctx, actor):
-    roster, configs = ctx["roster"], ctx["configs"]
-    led = set()
-    for gid in ctx["groups"]:
-        lead = G.lead_of(gid, roster, configs)
-        if lead and task_caps.actor(lead) == actor:
-            led.add(gid)
-    return led
+    """The groups this actor leads, read once per context (a list of rules asks once per rule)."""
+    led_by = ctx.setdefault("led_by", {})
+    if actor not in led_by:
+        roster, configs = ctx["roster"], ctx["configs"]
+        led = set()
+        for gid in ctx["groups"]:
+            lead = G.lead_of(gid, roster, configs)
+            if lead and task_caps.actor(lead) == actor:
+                led.add(gid)
+        led_by[actor] = led
+    return led_by[actor]
 
 
 def may_manage(c, auth, who, scope, ctx=None):
@@ -1098,6 +1109,48 @@ def bot_rules(c, auth, who, bot, cursors=None, limit=BOT_LIST_MAX):
     return out
 
 
+def _split(rules, keys):
+    """{name: {"who": [rule ids], "with": [rule ids]}} for each `keys` entry ({name: who_key}), over `rules`. A name no
+    rule names is left out."""
+    out = {}
+    for name, key in keys.items():
+        who_ids, with_ids = [], []
+        for r in rules:
+            names_who, names_with = _names(r, key)
+            if names_who:
+                who_ids.append(r["id"])
+            if names_with:
+                with_ids.append(r["id"])
+        if who_ids or with_ids:
+            out[name] = {"who": who_ids, "with": with_ids}
+    return out
+
+
+def teammate_rules(c, auth, who):
+    """The rules each teammate follows, for the Rules view of the org chart. `rules`: every rule in force that the caller
+    may read (GET /api/v2/rules answers the same set: every teammate reads every sentence), each with whether the caller
+    may edit it. `bots` and `people`: the bots and people the caller may see, as GET /api/v2/org shows them, each with the
+    ids of the rules whose Who or With names it, and only those that name it. The matching is `applies_to`'s, from one
+    context: a group, a group nested in it, everyone and all bots (all bots reaches bots, never a person)."""
+    auth.domain(who)
+    ctx = _ctx(c)
+    rules = _active(c)
+    # Visibility as GET /api/v2/org applies it: a bot is keyed by its id (bot_config's key; the slug is only its label),
+    # and a person left off the chart or unseen by the caller is out.
+    access = auth.bot_accesses(c, who)
+    bot_keys = {row["slug"]: who_key(c, "bot:" + row["id"], ctx) for row in H.bots(c)
+                if row.get("state") != "archived" and access.get(row["id"], auth.FULL)["see"]}
+    unseen_people, _ = TA.unseen(c, who, auth)
+    person_keys = {p["id"]: who_key(c, "human:" + p["id"], ctx) for p in P.visible_people(ctx["roster"])
+                   if p["id"] not in unseen_people}
+    return {
+        "rules": [{"id": r["id"], "kind": r["kind"], "text": r["text"], "if_broken": r["if_broken"],
+                   "can_edit": may_manage(c, auth, who, r["who"], ctx)} for r in rules],
+        "bots": [{"slug": slug, **found} for slug, found in sorted(_split(rules, bot_keys).items())],
+        "people": [{"id": pid, **found} for pid, found in sorted(_split(rules, person_keys).items())],
+    }
+
+
 def due_list(c, auth, who, args):
     """Due dates of rules in force: overdue always; the rest that fall due within `next` days."""
     auth.domain(who)
@@ -1267,6 +1320,14 @@ def install(app, store, auth, mutate):
         args = {"next": next, "status": status, "cursor": cursor, "limit": limit}
         with store.read() as c:
             return due_list(c, auth, request.state.identity, args)
+
+    # Declared before /api/v2/rules/{rule_id}, which would otherwise take "by-teammate" for a rule id.
+    @app.get("/api/v2/rules/by-teammate")
+    def rules_by_teammate(request: Request):
+        """The rules in force, and for each bot and person the caller may see, the ids of the rules whose Who or With names
+        it (only those with one). `can_edit` says whether the caller may change a rule."""
+        with store.read() as c:
+            return teammate_rules(c, auth, request.state.identity)
 
     @app.get("/api/v2/rules")
     def rules_list(request: Request, kind: str | None = None, status: str | None = "active", who: str | None = None,
