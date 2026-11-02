@@ -66,7 +66,6 @@ import json
 import logging
 import os
 import re
-import secrets
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -82,7 +81,6 @@ from . import task_roles as TRo
 from . import task_snooze as TS
 from . import run_triggers as RT
 from . import status_values as SV
-from clients.manifest import repo_dir
 from backend.chat_goals_schema import SCHEMA as CHAT_GOALS_SCHEMA
 from backend.repositories_schema import SCHEMA as REPOSITORIES_SCHEMA
 from backend.subscriptions_schema import SCHEMA as SUBSCRIPTIONS_SCHEMA

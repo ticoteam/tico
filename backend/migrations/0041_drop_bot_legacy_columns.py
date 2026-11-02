@@ -37,7 +37,7 @@ def up(conn):
             config = _config(row[1])
             if config is None:
                 continue
-            values = dict(zip(copied, row[2:]))
+            values = dict(zip(copied, row[2:], strict=True))
             changed = False
             for name in ("runtime", "model"):
                 if name in values and values[name] and not config.get(name):
