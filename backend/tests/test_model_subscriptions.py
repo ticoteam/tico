@@ -3,6 +3,7 @@ on that computer (backend/model_subscriptions.py)."""
 
 import base64
 import json
+from datetime import timedelta
 
 import pytest
 
@@ -590,8 +591,11 @@ def limited_on(api, m, sid, bot="ops"):
     post(api, f"chat/{bot}", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "limit"}, m["token"])
+    # A fixed clock time is nearly a day away just after it passes, outside the provider's reset window.
+    reset = H.parse_ts(H.now()) + timedelta(hours=1)
+    notice = "You've hit your limit · resets " + reset.strftime("%I:%M%p") + " (UTC)"
     post(api, f"attempts/{turn['id']}/events", {"events": [
-        {"seq": 1, "kind": "error", "payload": {"error": CLAUDE_LIMIT, "limit": True}}]}, m["token"])
+        {"seq": 1, "kind": "error", "payload": {"error": notice, "limit": True}}]}, m["token"])
     post(api, f"attempts/{turn['id']}/complete", {"outcome": "failed", "last_seq": 1, "limited": True, "text": ""},
          m["token"])
     return turn
