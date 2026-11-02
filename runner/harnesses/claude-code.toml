@@ -34,6 +34,10 @@ seed = [".claude.json"]
 # On a Mac the CLI keeps this login in the Keychain, not in `files`, so it cannot be signed in on the side: Switch
 # account is not offered there (sign out, then sign in).
 keychain = ["darwin"]
+# Connect (Settings > Models): the command that signs a plan in for a company subscription, and how the result comes out.
+# This one prints a long-lived token and leaves the computer's own login as it was.
+connect = ["setup-token"]
+connect_token = "sk-ant-oat"
 
 # What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
 [capabilities]
@@ -54,6 +58,8 @@ mcp_transports = ["http", "sse"]
 # An expired stored token is refreshed by the first turn, so turns wait for one to land before the rest start.
 serial_cold_start = true
 compaction = true
+# Every compaction, manual or automatic, is a `compact_boundary` system message in stream-json.
+compaction_events = true
 # A message for the running turn is written into it (stream-json input, needs a CLI that echoes it).
 steer = true
 resume_command = "claude --resume"

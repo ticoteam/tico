@@ -12,6 +12,7 @@ const PEOPLE_SOURCE = {google: 'Google Workspace', entra: 'Microsoft Entra ID', 
 // Team rules the owner turns off to tighten (backend/team_rules.py): all on by default.
 const PEOPLE_RULES = [['assistant_direct', 'Assistant acts without asking'], ['assistant_approvals', 'People may let their Assistant decide their approvals'], ['botops_direct', 'BotOps changes providers and limits without asking'],
   ['botops_manages_bots', 'BotOps manages every bot'],
+  ['managers_manage_reports', 'Managers change their direct reports (model, task model, name, description)'],
   ['admin_credentials', 'Admins store credentials'], ['members_store_credentials', 'Members store credentials for their bots'], ['admin_sql', 'Admins see SQL'], ['member_tokens', 'Members make personal tokens'],
   ['bots_go_ahead', 'Bots go ahead on their recommendation when nobody answers'], ['support_access', 'Owners and admins may let Tico support in']];
 let PEOPLE_MODE = '';        // 'manual' or 'sync' picked on this page; '' follows the saved directory source
@@ -109,7 +110,9 @@ async function renderSettingsPeople() {
           <div class="people-cell-more">${owner && p.removable ? '<button class="ghost danger-text" type="button" data-person-act="remove">Remove</button>' : ''}<button class="ghost" type="button" data-person-act="restore">Restore</button></div></li>`).join('')}</ul></details>` : ''}
         <label class="people-line people-limit">Bot limit per member<input id="member-bot-limit" type="number" inputmode="numeric" min="0" max="1000" value="${esc(String(view.member_bot_limit))}"></label>
         ${owner ? `<div class="people-rules">${PEOPLE_RULES.map(([key, label]) => `<label class="people-line">${peopleSwitch(`data-rule="${key}"`, view.rules?.[key] !== false, false, label)}<span>${label}</span></label>`).join('')}
-          <label class="people-line"><span>Days a bot waits before it goes ahead (reversible, internal steps; sends, spending and deletes always wait)</span><input type="number" min="1" max="14" step="1" data-rule-days="go_ahead_days" value="${esc(String(view.rules?.go_ahead_days ?? 3))}" aria-label="Days a bot waits before it goes ahead"></label></div>` : ''}
+          <label class="people-line"><span>Days a bot waits before it goes ahead (reversible, internal steps; sends, spending and deletes always wait)</span><input type="number" min="1" max="14" step="1" data-rule-days="go_ahead_days" value="${esc(String(view.rules?.go_ahead_days ?? 3))}" aria-label="Days a bot waits before it goes ahead"></label>
+          <label class="people-line"><span>Reports a manager may create a week (BotOps asks; over the limit, the person above decides)</span><input type="number" min="0" max="50" step="1" data-rule-count="report_creates_per_week" value="${esc(String(view.rules?.report_creates_per_week ?? 3))}" aria-label="Reports a manager may create a week"></label>
+          <label class="people-line"><span>Reports a manager may archive or restore a week</span><input type="number" min="0" max="50" step="1" data-rule-count="report_archives_per_week" value="${esc(String(view.rules?.report_archives_per_week ?? 3))}" aria-label="Reports a manager may archive or restore a week"></label></div>` : ''}
       </section>`;
     if (mode === 'sync' && owner) window.mountDirectorySync?.($('#directory-sync'), renderSettingsPeople);   // ui/directory-sync.js
     if (owner) void peopleFromSetup($('#people-from-setup'));
@@ -213,6 +216,11 @@ async function renderSettingsPeople() {
       const days = Math.round(Number(box.value));
       if (days >= 1 && days <= 14) change(() => put('/v2/access/rules', {[box.dataset.ruleDays]: days}), 'Saved', box);
       else settingsFieldError(box, 'Choose a number of days from 1 to 14.');
+    });
+    el.querySelectorAll('[data-rule-count]').forEach(box => box.onchange = () => {
+      const count = Math.round(Number(box.value));
+      if (count >= 0 && count <= 50) change(() => put('/v2/access/rules', {[box.dataset.ruleCount]: count}), 'Saved', box);
+      else settingsFieldError(box, 'Choose a number from 0 to 50.');
     });
     $('#member-bot-limit').onchange = event => change(() => put('/v2/access/limits', {member_bot_limit: Number(event.target.value)}), 'Saved', event.target);
     el.querySelectorAll('.people-row').forEach(row => {

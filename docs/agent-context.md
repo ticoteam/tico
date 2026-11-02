@@ -4,7 +4,7 @@
 
 Once the owner has published a [strategy](strategy.md) version, every bot's run context carries the text of
 `GET /api/v2/strategy/summary` under a **Team strategy** header, about 500 characters: the summary, one line per active
-bet with its wrong-if, then "version N". It is there on every turn, not only the CEO Bot's, so a bot reads the team's bets
+bet with its wrong-if, then "version N". It is there on every turn, not only the Strategy Bot's, so a bot reads the team's bets
 before it reads its task. Nothing is added while no version is published, and a bot never sees the owner's draft. The full
 published page (the four sections, every bet with its why, what it rules out and its health) is `hub strategy show` /
 `hub_strategy_show`; the same short text is `hub strategy summary` / `hub_strategy_summary`. Publishing sends no note to any

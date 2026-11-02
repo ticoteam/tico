@@ -2,23 +2,18 @@
 
 > **Beta**: message bots (mail and calendar) work today and may still change. See [Beta features](support.md#beta-features).
 
-For quiet Notes and deferred Tasks, see [Leave work for the next run](using-tico.md#leave-work-for-the-next-run).
+For how a message reaches a bot, see [Steer, queue or defer](using-tico.md#steer-queue-or-defer); for deferred
+messages and tasks, [Leave work for the next run](using-tico.md#leave-work-for-the-next-run).
 
 The **Message bots** section in the sidebar is the directory for repeating email and Slack work;
 there is no separate messaging index or search page. Choosing a mailbox or channel opens its bot
-directly. The left side shows covered sources, published instructions, status, current routines,
-and recent occurrences. The right side is a list of example messages and actions. Email and
+directly. The left side shows covered sources, published instructions, status and recent Slack channel checks. The right side is a list of example messages and actions. Email and
 Slack thread viewers open the original message context, and Slack messages link back to Slack.
 The source chips can widen or narrow the examples to the bot's other mailboxes and channels.
 
-Last run includes recorded runs as well as routine and digest activity. Routine history shows each completed
-occurrence and its task, including the sample runs in the demo.
-
-Bot pause/resume and routine pause/resume use the same APIs and authorization as the bot and
-Routines pages. **Run now** opens one manual occurrence of an active timed routine. It refuses
-when the routine or bot is paused or that routine still has unfinished work. The resulting task
-and occurrence are part of the normal history. Event routines need their event's subject and
-cannot run this way.
+A message bot's schedules and other triggers are automations: **Automations** on its page opens the Automations page
+searched by its name, with each automation's runs and **Run**. **Pause bot** uses the same API and authorization as the bot's
+page.
 
 Coverage is read from the live bot config and roster for Gmail, and from
 the Slack channel list (Tools > Slack) for Slack readers. A bot may cover many sources. Source assignments

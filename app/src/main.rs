@@ -309,7 +309,10 @@ mod visual_bridge_tests {
         for body in [None, Some(Value::Null), Some(Value::String(ASSETS.into())),
                      Some(serde_json::json!({})), Some(serde_json::json!({"origin": false})),
                      Some(serde_json::json!({"origin": ASSETS, "other": true})),
-                     Some(serde_json::json!({"origin": ""})), Some(serde_json::json!({"origin": "http://team.files.example.com"}))] {
+                     Some(serde_json::json!({"origin": ""})), Some(serde_json::json!({"origin": "http://team.files.example.com"})),
+                     Some(serde_json::json!({"files": FILES})), Some(serde_json::json!({"origin": "", "files": ""})),
+                     Some(serde_json::json!({"origin": "", "files": false})),
+                     Some(serde_json::json!({"origin": ASSETS, "files": "http://acme-files.ticofiles.com"}))] {
             assert_eq!(set_visual_origin(&state, "main", Some(&hub), Some(&valid)), Ok(true));
             assert_eq!(set_visual_origin(&state, "main", Some(&hub), body.as_ref()), Ok(false));
             assert!(state.visual_origin.lock().unwrap().is_none());
@@ -324,6 +327,25 @@ mod visual_bridge_tests {
         assert!(set_visual_origin(&state, "main", Some(&hub), Some(&valid)).is_err());
         let visual = url::Url::parse(&format!("{ASSETS}/visuals/payload.{}", "A".repeat(43))).unwrap();
         assert!(!old.permits(Some(&next), &visual));
+    }
+
+    const FILES: &str = "https://acme-files.ticofiles.com";
+
+    #[test]
+    fn file_hosting_alone_allows_its_signed_visual_links_in_frames() {
+        let state = state();
+        let hub = url::Url::parse(HUB).unwrap();
+        let link = url::Url::parse(&format!("{FILES}/visuals/ab/ab{}?e=1793250000&k=k1&s={}", "0".repeat(62), "A".repeat(43))).unwrap();
+        let signing_in = AtomicBool::new(false);
+        assert!(!follow_window(&state, &signing_in, true, &link), "not before the signed-in page names the address");
+        let body = serde_json::json!({"origin": "", "files": FILES});
+        assert_eq!(set_visual_origin(&state, "main", Some(&hub), Some(&body)), Ok(true));
+        assert!(follow_window(&state, &signing_in, true, &link));
+        assert!(!signing_in.load(Ordering::Relaxed));
+        let other = url::Url::parse(&format!("{FILES}/blobs/ab/ab{}?e=1793250000&k=k1&s={}", "0".repeat(62), "A".repeat(43))).unwrap();
+        assert!(!follow_window(&state, &signing_in, true, &other));
+        assert!(!follow_window(&state, &signing_in, false, &link), "a meeting window never follows one");
+        assert!(set_visual_origin(&state, "main", Some(&link), Some(&body)).is_err(), "a hosted page can't configure visuals");
     }
 
     #[test]
@@ -366,11 +388,13 @@ mod visual_bridge_tests {
 fn build_window(app: &App) -> tauri::Result<()> {
     let Some(config) = connection(app) else { return build_server_window(app) };
     let start = config.start_url();
+    // Files dropped on a page reach it (chat composers, task files): Tauri's own drop handler would swallow them on macOS.
     let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(start))
         .title(config::app_name())
         .inner_size(1240.0, 820.0)
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
         .user_agent(USER_AGENT)
+        .disable_drag_drop_handler()
         .devtools(true)
         .visible(false)
         .initialization_script(&bridge_script(app))
@@ -557,6 +581,7 @@ fn open_hub_window(app: &App, url: url::Url) {
         .inner_size(1000.0, 800.0)
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
         .user_agent(USER_AGENT)
+        .disable_drag_drop_handler()
         .on_new_window(new_window_handler(app)), false);
     // A file the web view cannot show (Word, Excel, zip) downloads, leaving this window empty: save
     // it to Downloads, show it there and close the window. Only the file this window opened on
@@ -773,6 +798,7 @@ fn open_meeting_window(app: &App, id: &str) {
         .min_inner_size(MIN_WIDTH as f64, MIN_HEIGHT as f64)
         .resizable(true)
         .user_agent(USER_AGENT)
+        .disable_drag_drop_handler()
         .on_new_window(new_window_handler(app));
     let _ = follow_sign_in(app, builder, false).build();
 }
@@ -788,7 +814,7 @@ const BRIDGE_SCRIPT: &str = r#"
   window.ticoNative = name => ({postMessage: body => invoke('bridge', {name, body: body === undefined ? null : body})});
   // What this build's bridge answers beyond the first three, so a page never posts into a
   // shell too old to hear it.
-  window.ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', 'appLog', 'visualOrigin'];
+  window.ticoNativeFeatures = ['openWindow', 'checkForUpdates', 'showLog', 'appLog', 'visualOrigin', 'visualFiles'];
   // The shell's version and the end of its log ({version, lines}), for Support diagnostics.
   window.ticoNativeLog = () => invoke('app_log');
 })();
@@ -1016,9 +1042,13 @@ fn set_visual_origin(state: &AppState, label: &str, document: Option<&url::Url>,
         return Err("Only the selected server's page may configure visuals.".into());
     }
     let mut visual = state.visual_origin.lock().unwrap();
-    let raw = body.and_then(Value::as_object).filter(|object| object.len() == 1)
-        .and_then(|object| object.get("origin")).and_then(Value::as_str);
-    *visual = hub.zip(raw).and_then(|(hub, raw)| visual_origin::VisualOrigin::new(hub, raw));
+    // `{origin}`, or `{origin, files}` from a page that saw `visualFiles` in this shell's features: Tico file
+    // hosting's address, which shows pages and SVG when the server has no visual origin. Anything else clears.
+    fn text(value: Option<&Value>) -> Option<&str> { value.map_or(Some(""), Value::as_str) }
+    let raw = body.and_then(Value::as_object)
+        .filter(|object| object.contains_key("origin") && object.keys().all(|key| key == "origin" || key == "files"))
+        .and_then(|object| Some((text(object.get("origin"))?, text(object.get("files"))?)));
+    *visual = hub.zip(raw).and_then(|(hub, (raw, files))| visual_origin::VisualOrigin::with_files(hub, raw, files));
     Ok(visual.is_some())
 }
 

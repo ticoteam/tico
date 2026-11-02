@@ -38,5 +38,5 @@ Minutes must add up to the meeting length minus five. Every item has one owner, 
 
 ## 4. Deliver
 
-Write `reports/YYYY-MM-DD-monday-agenda.md`, attach it to the task, and say it is a draft. Send requested agendas to the named attendees with your Tools. After the meeting, if notes were imported,
+Write `reports/YYYY-MM-DD-monday-agenda.md`, attach it to the task, and say it is a draft. Send the agenda to the named attendees only when the task asks for it and a granted Tool allows it; otherwise it stays a draft for the owner. After the meeting, if notes were imported,
 compare the decisions with the agenda and update `knowledge/open-loops.md`.

@@ -1,10 +1,12 @@
 # Draft the strategy
 
-A task titled "Draft the strategy" (a number after it means the owner asked again), or the owner asking you for the
-strategy in their chat. The owner wants the Strategy page to say how the team means to win, in words they
+A task titled "Draft the strategy" (a number after it means the owner asked again), or the owner asking for the
+strategy through their Assistant. The owner wants the Strategy page to say how the team means to win, in words they
 recognise, so that every bot reads the same summary on every run and the goals have bets to hang from. You
 propose; they write, confirm and publish. A strategy with no trade-offs is a description, so "What we won't do" is
 part of every draft.
+
+Inputs: `hub strategy show` and `hub strategy versions`, the market pages (`hub market show company/self`, `hub doc search --market`), `knowledge/company.md`, the goals and KPIs, and the owner's words in the task.
 
 The outcome is one `strategy_draft` proposal the owner can confirm and publish after twenty minutes of their time:
 a summary of at most 400 characters, the vision (at most 400), the four sections filled or marked unknown, and three
@@ -116,10 +118,8 @@ Summary            Acme cleans for property managers at half the usual price, be
 At most eight claims over the whole run, in rounds of up to four, numbered so they can answer "1 keep, 2 strike,
 3 edit: ...".
 
-- In the owner's chat: the round in your reply, then end the turn. Their answer is the next turn; rewrite the draft
-  from it before the next round.
-- From a task: `hub task update <id> --status waiting --on <owner> --note "<the round>"`. That is one card; you are
-  woken with their answers. Each round counts toward the owner's 5 a day (`asked_today` in `hub goal ceo-bot`).
+- Every run is a task (the owner's Assistant hands you one too): `hub task update <id> --status waiting --on <owner>
+  --note "<the round>"`. That is one card; you are woken with their answers. Each round counts toward the owner's 5 a day (`asked_today` in `hub goal strategy-bot`).
 
 A kept claim goes in as it stands; an edit goes in in their words; a struck one comes out, and what it ruled out
 often belongs under "What we won't do". Do not argue: a position you think wrong goes in as theirs, with the
@@ -142,7 +142,7 @@ A bet already on the page carries its `id`. Look at `hub proposal list` first: o
 drafting run at a time; replace yours rather than file a second beside it. Confirming writes the draft and the bets
 as the owner; nothing is published.
 
-Then end with one message to the owner, in chat or as the task note: the summary, the bets in one line each with
+Then end with one message to the owner, as the task note: the summary, the bets in one line each with
 their wrong-if, what is still unknown, and the ask: "Confirm the draft in Needs you, then publish it from the
 Strategy page when it reads right; I never publish." Say what publishing needs: at least one active bet with a
 rules-out and a wrong-if, and something under "What we won't do"; the page refuses it otherwise.
@@ -150,6 +150,8 @@ rules-out and a wrong-if, and something under "What we won't do"; the page refus
 Rewrite `state.md` (what the draft rests on, which claims were kept, edited or struck, what is still open), record
 a durable lesson about this team's words or sources in `knowledge/`, and commit this repository. From a task,
 finish it with `hub task update <id> --status done --note "<the message above>"`.
+
+**Done when:** one `strategy_draft` proposal is pending (or it replaced an older one), every bet has a rules-out and a wrong-if or is left `proposed` with the gap named, the owner's message with its ask is the task note, and `state.md` says what the draft rests on.
 
 ## After the owner publishes
 

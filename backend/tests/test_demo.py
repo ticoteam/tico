@@ -1,14 +1,19 @@
 """Demo mode: a fixed fictional company that passes the app's own rules, cannot be mistaken for an
 install, listens only where it may, and never touches the network."""
 
+import contextlib
+import os
+import signal
 import socket
 import sqlite3
+import tempfile
 from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import demo
+from backend import demo, screen_binary
+from backend import server as serving
 from backend.app import create_app
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)      # a Friday, so a week in review exists
@@ -100,3 +105,45 @@ def test_nothing_leaves_the_machine(built):
     assert demo.ATTEMPTS == ["example.com", "93.184.216.34", "api.github.com"]     # only the three we tried
     with pytest.raises(OSError):                                                   # and the block is gone outside
         socket.create_connection(("192.0.2.1", 9), timeout=0.2)
+
+
+# ----------------------------------------------------------------------------- the folder a demo runs in
+ENDINGS = [("returns", None), ("ctrl-c", KeyboardInterrupt), ("sigterm", SystemExit)]
+
+
+def stub_server(monkeypatch, tmp_path, ending):
+    """Built, then 'run' in place of the relay and the server, which end the way `ending` says. Returns the folders
+    the demo ran in; temporary folders are made under tmp_path."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(screen_binary, "prepare", lambda: None)
+    running = []
+
+    def run(*, settings, **kw):
+        running.append(settings.db_path.parent)
+        assert settings.db_path.exists()
+        if ending == "ctrl-c":
+            raise KeyboardInterrupt
+        if ending == "sigterm":
+            os.kill(os.getpid(), signal.SIGTERM)
+
+    monkeypatch.setattr(serving, "run", run)
+    return running
+
+
+@pytest.mark.parametrize("ending,raised", ENDINGS)
+def test_the_temporary_folder_goes_when_the_demo_stops(tmp_path, monkeypatch, ending, raised):
+    running = stub_server(monkeypatch, tmp_path, ending)
+    with pytest.raises(raised) if raised else contextlib.nullcontext():
+        demo.main([])
+    [folder] = running
+    assert folder.parent == tmp_path and folder.name.startswith("tico-demo-") and not folder.exists()
+
+
+@pytest.mark.parametrize("ending,raised", ENDINGS)
+def test_a_data_dir_is_never_removed(tmp_path, monkeypatch, ending, raised):
+    running = stub_server(monkeypatch, tmp_path, ending)
+    data = tmp_path / "kept"
+    with pytest.raises(raised) if raised else contextlib.nullcontext():
+        demo.main(["--data-dir", str(data)])
+    assert running == [data] and (data / "hub.sqlite").exists()
+    assert not any(tmp_path.glob("tico-demo-*"))         # and no temporary folder was made for it

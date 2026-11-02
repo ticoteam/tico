@@ -100,17 +100,19 @@ elif [ -e "$LAYOUT" ]; then
   log "warning: this volume has the two-user layout but the container is not starting as root, so bot code runs as the runner's own user (start it with the current runner.compose.yaml to separate them)"
 fi
 
-# ok, rejected (the server does not know this token) or unreachable (it may just be restarting)
-registration() {
-  python - "$CONFIG" <<'PY'
+# ok, rejected (the server does not know this token) or unreachable (it may just be restarting).
+# Asks the saved url unless another one is given (follow_server).
+registration() {  # [url]
+  python - "$CONFIG" "${1-}" <<'PY'
 import json, sys
 from clients.tico import APIError, Client
 config = json.load(open(sys.argv[1]))
+url = sys.argv[2] or config["url"]
 try:
-    Client(config["url"], config["token"]).get("runners/assignments")
+    Client(url, config["token"]).get("runners/assignments")
 except APIError as exc:
     print("rejected" if exc.status in (401, 403) else "unreachable")
-except OSError:
+except (OSError, ValueError):   # ValueError: a url Client refuses (no https, credentials in it)
     print("unreachable")
 else:
     print("ok")
@@ -145,6 +147,32 @@ PY
   die "could not enroll: check the URL, and that the code is unused and under 15 minutes old"
 }
 
+# A runner keeps the url it enrolled with. Given a different one (the same server moved), it switches only when that
+# address accepts this runner's login: another server, or a typo, leaves the saved url alone.
+follow_server() {  # url
+  local new="${1%/}" old
+  old="$(jq -r '.url // empty' "$CONFIG")"
+  [ "$new" = "${old%/}" ] && return 0
+  case "$(registration "$new")" in
+    ok) ;;
+    rejected) log "the given --url $new was not used: that server does not know this runner; still using $old"; return 0 ;;
+    *) log "the given --url $new was not used: that server is not answering; still using $old"; return 0 ;;
+  esac
+  # Written beside the file and renamed over it, so a crash leaves the old file whole. The mode is kept (0600).
+  python - "$CONFIG" "$new" <<'PY'
+import json, os, sys, tempfile
+path, new = sys.argv[1], sys.argv[2]
+config = json.load(open(path))
+config["url"] = new
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix="runner.json.new.")
+with os.fdopen(fd, "w") as out:
+    json.dump(config, out, indent=2)
+os.chmod(tmp, os.stat(path).st_mode & 0o777)
+os.replace(tmp, path)
+PY
+  log "the server moved: now $new (was $old)"
+}
+
 url="" code="" label="${TICO_RUNNER_LABEL:-$(uname -n)}"
 mode="${1:-run}"
 [ "$#" -eq 0 ] || shift
@@ -162,6 +190,8 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -f "$CONFIG" ]; then
+  # --url only enrolls; one that differs from the saved url means the server moved (TICO_URL changed in .env).
+  if [ -n "$url" ]; then follow_server "$url"; fi
   case "$(registration)" in
     ok) log "already enrolled" ;;
     unreachable) log "the server is not answering; the runner will keep trying" ;;

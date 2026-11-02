@@ -7,12 +7,17 @@
 //!
 //! The same relay signs a login out (the CLI's own logout, checked afterwards), switches it to another account
 //! (signed in on the side in a home of its own, moved into place only once it has finished and the server has agreed
-//! it is no longer cancelled, so a cancelled or failed switch leaves the old login working), and lets the company's shared key sign a signed-out computer login in again.
+//! it is no longer canceled, so a canceled or failed switch leaves the old login working), and lets the company's shared key sign a signed-out computer login in again.
 //! A computer login a person signed out stays signed out (signin.rs SIGNED_OUT_FILE).
 //!
 //! It also clears this computer's own model key (`clear_key`) and puts a new one in its place (`use_key`), or in place of
 //! the subscription its own login runs on (`to_key`, Switch to API key). No key ever travels in the queue: a new key is
 //! fetched from the app over the runner's own connection.
+//!
+//! Connect (`connect`, Settings > Models) signs a plan in for a company subscription and leaves this computer's own login
+//! as it was: the CLI prints a token, or writes its login in a home of its own. That one result goes to the server in its
+//! own request (`runner-logins/<id>/subscription`, backend/model_subscriptions.py) and is kept nowhere here. No line of a
+//! Connect's output is relayed, and its link and code are read only from what came before the token.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -43,6 +48,8 @@ pub const REMOVE_CAPABILITY: &str = "model_remove_v1";
 /// Switch to API key (`to_key`): a use_key job for the computer's own login on a subscription, which signs the
 /// subscription out once the key is in place.
 pub const SWITCH_TO_KEY_CAPABILITY: &str = "model_switch_to_key_v1";
+/// Connect (`connect`): this runner signs a plan in for a company subscription.
+pub const CONNECT_CAPABILITY: &str = "model_connect_v1";
 const LOGOUT_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long a finished switch waits for the server to agree it goes ahead (`finishing`) before giving up.
 const CONFIRM_TIMEOUT: Duration = Duration::from_secs(30);
@@ -108,6 +115,40 @@ fn squash(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// A terminal's output as the text it shows.
+fn plain(raw: &str) -> String {
+    let p = patterns();
+    let text = p.osc.replace_all(raw, "");
+    let text = p.cursor_column.replace_all(&text, " ");
+    let text = p.csi.replace_all(&text, "");
+    let text = p.esc.replace_all(&text, "");
+    p.control.replace_all(&text, "").into_owned()
+}
+
+/// The shortest thing Connect takes for a token: anything less is the CLI naming the format, or a piece of a token.
+const MIN_TOKEN: usize = 90;
+/// How long a Connect's command has to end by itself once it has printed its token.
+#[cfg(not(test))]
+const TOKEN_GRACE: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const TOKEN_GRACE: Duration = Duration::from_millis(500);
+
+/// The token `prefix` starts, from what a Connect's command has printed so far. Until the command has `ended` a token
+/// counts only once something follows it: the rest of it may still be arriving.
+fn printed_token(raw: &str, prefix: &str, ended: bool) -> Option<String> {
+    if !raw.contains(prefix) {
+        return None;
+    }
+    let text = plain(raw);
+    let part = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+    text.match_indices(prefix).find_map(|(at, _)| {
+        let tail = &text[at..];
+        let end = tail.find(|c| !part(c));
+        let token = &tail[..end.unwrap_or(tail.len())];
+        (token.len() >= MIN_TOKEN && (end.is_some() || ended)).then(|| token.to_string())
+    })
+}
+
 /// What the login command has shown so far: {url, code, lines, prompt} (login.py `parse`). `hide` is a pasted
 /// code a terminal may echo.
 pub fn parse(raw: &str, hide: &str) -> (String, String, Vec<String>, bool) {
@@ -119,11 +160,7 @@ pub fn parse(raw: &str, hide: &str) -> (String, String, Vec<String>, bool) {
             links.push(fields[2].to_string());
         }
     }
-    let text = p.osc.replace_all(raw, "");
-    let text = p.cursor_column.replace_all(&text, " ");
-    let text = p.csi.replace_all(&text, "");
-    let text = p.esc.replace_all(&text, "");
-    let text = p.control.replace_all(&text, "");
+    let text = plain(raw);
     let pieces: Vec<&str> = p.newline.split(&text).collect();
     let complete = &pieces[..pieces.len() - 1]; // the last piece may still be arriving
     let lines: Vec<String> = pieces.iter().map(|s| squash(s)).collect();
@@ -172,18 +209,20 @@ struct Inner {
     taken: bool,
     dirty: bool,
     finished: bool,
+    /// A Connect's result, until the server has taken it (`Logins::flush`).
+    captured: Option<String>,
 }
 
 /// One login command, from start to a verdict.
 pub struct Session {
     id: String,
-    /// sign_in | switch | sign_out | use_shared_key | clear_key | use_key | to_subscription | to_key (backend/model_login.py KINDS).
+    /// sign_in | switch | sign_out | use_shared_key | clear_key | use_key | to_subscription | to_key | remove | connect (backend/model_login.py KINDS).
     kind: String,
     runtime: String,
     profile: String,
     inner: Mutex<Inner>,
-    cancelled: AtomicBool,
-    /// The server took this switch's `finishing` report: it can no longer be cancelled, so the new login goes in.
+    canceled: AtomicBool,
+    /// The server took this switch's `finishing` report: it can no longer be canceled, so the new login goes in.
     confirmed: AtomicBool,
 }
 
@@ -195,7 +234,7 @@ impl Session {
             runtime: text_of(&work["runtime"]),
             profile: text_of(&work["profile"]),
             inner: Mutex::new(Inner { state: "starting".into(), dirty: true, ..Default::default() }),
-            cancelled: AtomicBool::new(false),
+            canceled: AtomicBool::new(false),
             confirmed: AtomicBool::new(false),
         })
     }
@@ -430,6 +469,14 @@ fn file_command(args: &[&str], env: &Env) -> Result<(), String> {
     }
 }
 
+/// A file's contents, read as the user the CLI runs as; None when it cannot be read or is empty.
+fn file_text(path: &std::path::Path, env: &Env) -> Option<String> {
+    let path = path.display().to_string();
+    let out = model_command("cat", &[&path], env).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+    let text = String::from_utf8(out.stdout).ok()?;
+    (out.status.success() && !text.trim().is_empty()).then_some(text)
+}
+
 /// The folder `runtime`'s login lives in with `env`: its home variable (CODEX_HOME, HOME), or Codex's own default.
 fn login_home(runtime: &str, env: &Env) -> Option<std::path::PathBuf> {
     let var = crate::harness_tools::caps(runtime, "").profile_home;
@@ -545,7 +592,8 @@ fn restore(moved: &[Moved], env: &Env) -> Result<(), String> {
 /// has, a cancel is refused there, so the change can go ahead; a cancel (or a refusal) that came first wins, and so
 /// does no answer.
 fn confirm_commit(s: &Session, late: &str) -> Result<(), (String, String)> {
-    let cancelled = || ("cancelled".to_string(), "Cancelled".to_string());
+    // "cancelled" is the wire's spelling: runners and servers of every release read it (backend/model_login.py WIRE_STATE).
+    let canceled = || ("cancelled".to_string(), "Canceled".to_string());
     {
         let mut i = s.inner.lock().unwrap();
         i.state = "finishing".into();
@@ -558,8 +606,8 @@ fn confirm_commit(s: &Session, late: &str) -> Result<(), (String, String)> {
         if s.confirmed.load(Ordering::SeqCst) {
             return Ok(());
         }
-        if s.cancelled.load(Ordering::SeqCst) {
-            return Err(cancelled());
+        if s.canceled.load(Ordering::SeqCst) {
+            return Err(canceled());
         }
         if Instant::now() > until {
             return Err(("failed".into(), late.into()));
@@ -585,15 +633,26 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
     let default = profile_for(&config, "").map(|p| p.name).unwrap_or_default();
     let fail = |state: &str, msg: &str| s.finish(state, msg, &runner, &default);
     let Some(login) = crate::harness_tools::login_command(&s.runtime) else { return fail("failed", "Browser sign-in is not available") };
+    let connect = s.kind == "connect";
+    if connect && login.connect.is_empty() {
+        return fail("failed", "Connect is not available for this tool");
+    }
     let (exe, mut env, profile) = match login_env(&s.runtime, &config, &s.profile) {
         Ok(found) => found,
         Err(e) => return fail("failed", &e),
     };
     // A switch signs in on the side: the old login keeps working until the new one is in place. So does a switch to
-    // a subscription, whose old login is the API key.
+    // a subscription, whose old login is the API key. A Connect whose result is a file signs in there too, and leaves
+    // the computer's own login alone for good.
     let real_env = env.clone();
+    if connect {
+        // The sign-in is for the plan the person picks, whatever key this computer's own login uses.
+        for key in crate::harness_tools::api_key_env(&s.runtime).into_iter().chain(crate::signin::headless_names(&s.runtime)) {
+            env.remove(&key);
+        }
+    }
     let to_subscription = s.kind == "to_subscription";
-    let switch = if s.kind == "switch" || to_subscription {
+    let switch = if s.kind == "switch" || to_subscription || (connect && !login.connect_file.is_empty()) {
         match begin_switch(&s.runtime, &s.id, &env) {
             Ok((home, side)) => {
                 let var = crate::harness_tools::caps(&s.runtime, "").profile_home;
@@ -610,7 +669,9 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             log(&format!("Tico runner: {} switch left {}: {e}", s.runtime, side.display()));
         }
     };
-    let (mut child, read_fd, writer) = match spawn(&exe, &login.command, &env, login.terminal) {
+    let command = if connect { &login.connect } else { &login.command };
+    let token_prefix = if connect { login.connect_token.clone() } else { String::new() };
+    let (mut child, read_fd, writer) = match spawn(&exe, command, &env, login.terminal) {
         Ok(x) => x,
         Err(e) => {
             if let Some((_, side)) = &switch {
@@ -622,6 +683,7 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
     let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
     let reader = {
         let s = s.clone();
+        let token_prefix = token_prefix.clone();
         std::thread::spawn(move || {
             let mut file = std::fs::File::from(read_fd);
             let mut buf = [0u8; 4096];
@@ -641,7 +703,15 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
                     }
                     (i.raw.clone(), i.typed.clone().unwrap_or_default())
                 };
-                let (url, code, lines, _) = parse(&raw, &hide);
+                // A Connect relays its link and code from before the token, and none of what it prints.
+                let shown = match raw.find(&token_prefix) {
+                    Some(at) if !token_prefix.is_empty() => &raw[..at],
+                    _ => raw.as_str(),
+                };
+                let (url, code, mut lines, _) = parse(shown, &hide);
+                if connect {
+                    lines.clear();
+                }
                 let mut i = s.inner.lock().unwrap();
                 if (i.url.as_str(), i.code.as_str(), &i.lines) != (url.as_str(), code.as_str(), &lines) {
                     i.url = url;
@@ -658,18 +728,28 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         })
     };
     let deadline = Instant::now() + lifetime;
+    // A Connect's command that printed its token and then would not end: its token still counts.
+    let mut token_at = None;
+    let mut stopped_after_token = false;
     let verdict: Option<(String, String)> = loop {
         match child.try_wait() {
             Ok(Some(_)) | Err(_) => break None,
             Ok(None) => {}
         }
-        if s.cancelled.load(Ordering::SeqCst) {
+        if s.canceled.load(Ordering::SeqCst) {
             kill(&mut child);
-            break Some(("cancelled".into(), "Cancelled".into()));
+            break Some(("cancelled".into(), "Canceled".into()));
         }
         if Instant::now() > deadline {
             kill(&mut child);
             break Some(("failed".into(), "The sign-in was not finished in time".into()));
+        }
+        // The token is all a Connect wants. The command gets to end by itself, so a failure it reports still counts.
+        if !token_prefix.is_empty() && printed_token(&s.inner.lock().unwrap().raw, &token_prefix, false).is_some()
+            && token_at.get_or_insert_with(Instant::now).elapsed() > TOKEN_GRACE {
+            kill(&mut child);
+            stopped_after_token = true;
+            break None;
         }
         if let Some(w) = &writer {
             let code = s.inner.lock().unwrap().pending.take();
@@ -690,9 +770,26 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
     let _ = done_rx.recv_timeout(Duration::from_secs(3));
     // Kept only when the old login's files are still in it, so a failed restore never deletes them.
     let mut keep_side = false;
+    let mut captured = false;
     let (state, message) = match verdict {
         Some(v) => v,
-        None if s.cancelled.load(Ordering::SeqCst) => ("cancelled".into(), "Cancelled".into()),
+        None if s.canceled.load(Ordering::SeqCst) => ("cancelled".into(), "Canceled".into()),
+        None if connect => {
+            let finished = child.wait().map(|st| st.success()).unwrap_or(false);
+            let value = match &switch {
+                _ if !finished && !stopped_after_token => None,
+                Some((_, side)) => file_text(&side.join(&login.connect_file), &real_env),
+                None => printed_token(&s.inner.lock().unwrap().raw, &token_prefix, true),
+            };
+            match value {
+                Some(value) => {
+                    s.inner.lock().unwrap().captured = Some(value);
+                    captured = true;
+                    (String::new(), String::new())
+                }
+                None => ("failed".into(), "The sign-in command stopped without signing in".into()),
+            }
+        }
         None if !child.wait().map(|st| st.success()).unwrap_or(false) => ("failed".into(), "The sign-in command stopped without signing in".into()),
         None if switch.is_some() => {
             // Signed in on the side? Then, once the server agrees, that login takes the old one's place and is checked
@@ -758,7 +855,10 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             crate::accounts::forget(&profile.as_ref().map(|p| p.name.clone()).unwrap_or_default(), &s.runtime);
         }
     }
-    s.finish(&state, &message, &runner, &default);
+    // A captured Connect ends once the server has taken it (`Logins::flush`).
+    if !captured {
+        s.finish(&state, &message, &runner, &default);
+    }
     {
         let mut i = s.inner.lock().unwrap();
         i.typed = None;
@@ -1315,7 +1415,7 @@ impl Logins {
         let named = (!s.profile.is_empty()).then(|| profile_for(&config, &s.profile)).flatten();
         // A key job runs for a runtime with no browser sign-in too, and only on the computer's own login.
         let key_job = ["clear_key", "use_key", "to_key"].contains(&s.kind.as_str());
-        if !s.profile.is_empty() && ["sign_in", "switch", "to_subscription"].contains(&s.kind.as_str()) {
+        if !s.profile.is_empty() && ["sign_in", "switch", "to_subscription", "connect"].contains(&s.kind.as_str()) {
             // One login per tool per computer, used by all its bots: no named subscription signs in any more.
             s.finish("failed", "Each computer has one login per AI tool; sign in the computer's login, or add another runner for a different account", runner, &default);
         } else if key_job && !s.profile.is_empty() {
@@ -1337,7 +1437,7 @@ impl Logins {
             }
         } else if crate::harness_tools::login_command(&s.runtime).is_none() {
             s.finish("failed", &format!("Browser sign-in is not available for {}", s.runtime), runner, &default);
-        } else if !["sign_in", "switch", "sign_out", "use_shared_key", "to_subscription", "remove"].contains(&s.kind.as_str()) {
+        } else if !["sign_in", "switch", "sign_out", "use_shared_key", "to_subscription", "remove", "connect"].contains(&s.kind.as_str()) {
             // Never a sign-in in place of something this runner does not know.
             s.finish("failed", &format!("Update this computer's runner to {}", s.kind.replace('_', " ")), runner, &default);
         } else if self.sessions.values().any(|o| o.live() && o.runtime == s.runtime && o.profile == s.profile) {
@@ -1393,7 +1493,7 @@ impl Logins {
         }
         for (id, s) in &self.sessions {
             if s.live() && !wanted.contains_key(id) {
-                s.cancelled.store(true, Ordering::SeqCst); // cancelled or expired on the server
+                s.canceled.store(true, Ordering::SeqCst); // canceled or expired on the server
             }
         }
         let mut ids: Vec<&String> = wanted.keys().collect();
@@ -1414,6 +1514,7 @@ impl Logins {
         let ids: Vec<String> = self.sessions.keys().cloned().collect();
         for id in ids {
             let s = self.sessions[&id].clone();
+            Self::send_captured(&s, runner).await;
             let body = s.report().filter(|b| b["state"] != "cancelled"); // the server ended it: nothing to tell it
             if let Some(body) = body {
                 let reply = match runner.client.post(&format!("runner-logins/{id}/report"), &body, None).await {
@@ -1424,11 +1525,11 @@ impl Logins {
                     }
                 };
                 // A switch goes ahead only once the server holds it as finishing; if it had already ended there
-                // (cancelled, expired), the runner stops too.
+                // (canceled, expired), the runner stops too.
                 match text_of(&reply["state"]).as_str() {
                     "finishing" if body["state"] == "finishing" => s.confirmed.store(true, Ordering::SeqCst),
                     // A removal Tico refused at its commit point (a bot runs on it now) stops before anything is removed.
-                    "cancelled" | "expired" | "failed" if s.live() => s.cancelled.store(true, Ordering::SeqCst),
+                    "cancelled" | "expired" | "failed" if s.live() => s.canceled.store(true, Ordering::SeqCst),
                     _ => {}
                 }
                 {
@@ -1447,9 +1548,27 @@ impl Logins {
         }
     }
 
+    /// A Connect's result goes to the server once, and is dropped here as soon as the server has answered for it. A
+    /// connection that fails keeps it for the next poll, until the server has let the job go (`cancelled`).
+    async fn send_captured(s: &Arc<Session>, runner: &Arc<Runner>) {
+        let Some(value) = s.inner.lock().unwrap().captured.clone() else { return };
+        let path = format!("runner-logins/{}/subscription", s.id);
+        let verdict = if s.canceled.load(Ordering::SeqCst) {
+            ("cancelled".to_string(), "Canceled".to_string())
+        } else {
+            match runner.client.post(&path, &json!({"value": value}), Some(&format!("connect:{}", s.id))).await {
+                Ok(reply) => (text_of(&reply["state"]), text_of(&reply["message"])),
+                Err(e) if e.retryable => return,
+                Err(e) => ("failed".to_string(), redact(&e.detail)),
+            }
+        };
+        s.inner.lock().unwrap().captured = None;
+        s.finish(if verdict.0 == "done" { "done" } else if verdict.0 == "cancelled" { "cancelled" } else { "failed" }, &verdict.1, runner, "");
+    }
+
     pub fn stop(&self) {
         for s in self.sessions.values() {
-            s.cancelled.store(true, Ordering::SeqCst);
+            s.canceled.store(true, Ordering::SeqCst);
         }
     }
 }
@@ -1457,6 +1576,124 @@ impl Logins {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connect_takes_a_printed_token_only_once_it_has_all_arrived() {
+        let token = format!("sk-ant-oat01-{}", "a1_B-".repeat(20));
+        let shown = format!("\x1b[1mYour token:\x1b[0m\r\n{token}\x1b[0m\r\nStore it safely.\r\n");
+        assert_eq!(printed_token(&shown, "sk-ant-oat", false).as_deref(), Some(token.as_str()));
+        // Still arriving: no verdict until something follows it, or the command has ended.
+        assert_eq!(printed_token(&token, "sk-ant-oat", false), None);
+        assert_eq!(printed_token(&token, "sk-ant-oat", true).as_deref(), Some(token.as_str()));
+        // The CLI naming the format is not a token.
+        assert_eq!(printed_token("It looks like sk-ant-oat01-… or sk-ant-oat01-abc\n", "sk-ant-oat", true), None);
+        assert_eq!(printed_token("no such thing\n", "sk-ant-oat", true), None);
+        // Nor is a piece of one.
+        assert_eq!(printed_token(&format!("{}\n", &token[..80]), "sk-ant-oat", true), None);
+    }
+
+    /// A Connect relays the link, leaves the login it does not need alone, and holds its one result for the server.
+    #[test]
+    fn connect_captures_the_result_and_leaves_the_computers_own_login() {
+        const CHILD: &str = "TICO_TEST_CONNECT";
+        let token = format!("sk-ant-oat01-{}", "x".repeat(95));
+        let Some(root) = std::env::var_os(CHILD).map(std::path::PathBuf::from) else {
+            let root = std::env::temp_dir().join(format!("tico-connect-{}", uuid::Uuid::new_v4().simple()));
+            std::fs::create_dir_all(root.join("bin")).unwrap();
+            crate::util::write_script(&root.join("bin/claude"), &format!(r#"#!/bin/sh
+case "$*" in
+  setup-token)
+    test -z "$ANTHROPIC_API_KEY" || exit 3
+    echo 'Use the url below to sign in'; echo 'https://claude.example/authorize?x=1'; echo 'Paste code here if prompted >'
+    read code
+    test "$code" = pasted-code || exit 4
+    echo 'Your OAuth token:'; echo '{token}'; echo 'Store it safely.'
+    test ! -e "$HOME/fails-after-token" || exit 7
+    sleep 30 ;;
+  --version) echo 1.0.0 ;;
+  *) exit 2 ;;
+esac
+"#));
+            crate::util::write_script(&root.join("bin/codex"), r#"#!/bin/sh
+case "$*" in
+  "login --device-auth")
+    echo 'Open https://auth.example/device'; echo 'Enter code ABCD-1234'
+    case "$CODEX_HOME" in *.tico-switch-*) ;; *) exit 5 ;; esac
+    echo '{"tokens":{"refresh_token":"r-new"}}' > "$CODEX_HOME/auth.json"
+    test ! -e "$HOME/fails-after-token" || exit 7 ;;
+  --version) echo 1.0.0 ;;
+  *) exit 2 ;;
+esac
+"#);
+            let mut cmd = Command::new(std::env::current_exe().unwrap());
+            cmd.args(["--exact", "login::tests::connect_captures_the_result_and_leaves_the_computers_own_login", "--nocapture"])
+                .env(CHILD, &root).env("PATH", format!("{}:/usr/bin:/bin", root.join("bin").display())).env("HOME", &root)
+                .env("CODEX_HOME", root.join(".codex")).env("ANTHROPIC_API_KEY", "own-key")
+                .env_remove(crate::isolation::UID_ENV).env_remove(crate::isolation::GID_ENV);
+            let out = cmd.output().unwrap();
+            std::fs::remove_dir_all(&root).ok();
+            assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            return;
+        };
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        std::fs::create_dir_all(root.join(".codex")).unwrap();
+        std::fs::write(root.join(".codex/auth.json"), "{\"own\":true}").unwrap();
+        let path = root.join("runner.json");
+        std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "synthetic", "runner_id": "r1", "projects_dir": root.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 1, 0).unwrap();
+        let runner = Arc::new(Runner::new(config.clone(), client, crate::state::State::open(&root.join("state")).unwrap()));
+
+        // Claude Code prints it; the pasted code reaches the CLI, and the token is never in what is reported.
+        let login = Session::new(&json!({"id": "c1", "runtime": "claude", "kind": "connect"}));
+        let (s2, r2, c2) = (login.clone(), runner.clone(), config.clone());
+        let running = std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(20)));
+        wait_for(|| login.inner.lock().unwrap().url.starts_with("https://claude.example/"));
+        login.submit("pasted-code");
+        running.join().unwrap();
+        {
+            let i = login.inner.lock().unwrap();
+            assert_eq!(i.captured.as_deref(), Some(token.as_str()));
+            assert!(!i.finished, "it ends once the server has taken the value");
+            assert!(i.lines.is_empty() && i.raw.is_empty());
+        }
+        let shown = login.report().map(|b| b.to_string()).unwrap_or_default();
+        assert!(!shown.contains("sk-ant"), "{shown}");
+
+        // Codex leaves a file in a home of its own, and the computer's own login stays.
+        let login = Session::new(&json!({"id": "c2", "runtime": "codex", "kind": "connect"}));
+        run_session(login.clone(), runner.clone(), config.clone(), Duration::from_secs(20));
+        assert_eq!(login.inner.lock().unwrap().captured.as_deref().map(str::trim), Some("{\"tokens\":{\"refresh_token\":\"r-new\"}}"));
+        assert_eq!(std::fs::read_to_string(root.join(".codex/auth.json")).unwrap(), "{\"own\":true}");
+        let left: Vec<_> = std::fs::read_dir(root.join(".codex")).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left.len(), 1, "no side home stays: {left:?}");
+
+        // A command that says it failed gives nothing, whatever it printed or wrote first.
+        std::fs::write(root.join("fails-after-token"), "").unwrap();
+        for (id, runtime) in [("c4", "claude"), ("c5", "codex")] {
+            let login = Session::new(&json!({"id": id, "runtime": runtime, "kind": "connect"}));
+            let (s2, r2, c2) = (login.clone(), runner.clone(), config.clone());
+            let running = std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(20)));
+            if runtime == "claude" {
+                wait_for(|| !login.inner.lock().unwrap().url.is_empty());
+                login.submit("pasted-code");
+            }
+            running.join().unwrap();
+            let i = login.inner.lock().unwrap();
+            assert!(i.captured.is_none() && i.finished && i.state == "failed", "{runtime}: {}", i.state);
+        }
+        std::fs::remove_file(root.join("fails-after-token")).unwrap();
+
+        // Cancelled: nothing is captured.
+        let login = Session::new(&json!({"id": "c3", "runtime": "claude", "kind": "connect"}));
+        let (s2, r2, c2) = (login.clone(), runner.clone(), config.clone());
+        let running = std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(20)));
+        wait_for(|| !login.inner.lock().unwrap().url.is_empty());
+        login.canceled.store(true, Ordering::SeqCst);
+        running.join().unwrap();
+        let i = login.inner.lock().unwrap();
+        assert!(i.captured.is_none() && i.finished && i.state == "cancelled");
+    }
 
     #[test]
     fn a_switch_whose_setup_fails_leaves_no_side_folder() {
@@ -1594,7 +1831,7 @@ exit 2
     }
 
     /// Run a switch on its own thread, the way the relay does, with `server` standing in for Tico's answer once the
-    /// runner says it is finishing (true: confirmed; false: it had been cancelled).
+    /// runner says it is finishing (true: confirmed; false: it had been canceled).
     fn switch_with(runner: &Arc<Runner>, config: &Config, server: Option<bool>) -> (Arc<Session>, std::thread::JoinHandle<()>) {
         switch_kind(runner, config, server, "switch")
     }
@@ -1609,7 +1846,7 @@ exit 2
         (s, running)
     }
 
-    /// Stand in for Tico's answer once the runner says `s` is finishing (true: confirmed; false: it had been cancelled).
+    /// Stand in for Tico's answer once the runner says `s` is finishing (true: confirmed; false: it had been canceled).
     fn answer_finishing(s: &Arc<Session>, confirm: bool) {
         let s3 = s.clone();
         std::thread::spawn(move || {
@@ -1618,7 +1855,7 @@ exit 2
                 std::thread::sleep(Duration::from_millis(20));
             }
             if state(&s3).0 == "finishing" {
-                if confirm { s3.confirmed.store(true, Ordering::SeqCst) } else { s3.cancelled.store(true, Ordering::SeqCst) }
+                if confirm { s3.confirmed.store(true, Ordering::SeqCst) } else { s3.canceled.store(true, Ordering::SeqCst) }
             }
         });
     }
@@ -1763,7 +2000,7 @@ exit 2
         assert_eq!(std::fs::read_to_string(&auth).unwrap(), "new\n");
         assert_eq!(sides(), 0);
 
-        // Nothing moves before Tico confirms: a switch Tico says was cancelled meanwhile keeps the old login.
+        // Nothing moves before Tico confirms: a switch Tico says was canceled meanwhile keeps the old login.
         std::fs::write(&auth, "old\n").unwrap();
         let (refused, running) = switch_with(&runner, &config, Some(false));
         running.join().unwrap();
@@ -1775,7 +2012,7 @@ exit 2
         std::fs::write(root.join("hold-probe"), "").unwrap();
         let (late, running) = switch_with(&runner, &config, Some(true));
         wait_for(|| root.join("probing").exists());
-        late.cancelled.store(true, Ordering::SeqCst);
+        late.canceled.store(true, Ordering::SeqCst);
         std::fs::write(root.join("release"), "").unwrap();
         running.join().unwrap();
         assert_eq!(state(&late).0, "cancelled", "{:?}", state(&late));
@@ -1796,7 +2033,7 @@ exit 2
         std::fs::remove_file(root.join("refuse")).unwrap();
 
         // Switch to subscription (Computers part 2): the login runs on the company's key until the subscription is in
-        // place. Cancelled before the commit point, or not working once in place, the key stays in use.
+        // place. Canceled before the commit point, or not working once in place, the key stays in use.
         let key_in_use = || runner.sign_in.headless_secret("codex").map(|(_, v)| v) == Some("sk-team-0123456789".into());
         std::fs::write(&team, "OPENAI_API_KEY=sk-team-0123456789\n").unwrap();
         std::fs::write(&auth, "old\n").unwrap();
@@ -1887,20 +2124,20 @@ exit 2
         assert_eq!(std::fs::read_to_string(root.join("runs")).unwrap_or_default(), runs, "a CLI ran for an unknown kind");
         assert_eq!(std::fs::read_to_string(&auth).unwrap(), "old\n");
 
-        // A switch cancelled partway leaves the old login exactly as it was.
+        // A switch canceled partway leaves the old login exactly as it was.
         std::fs::write(&auth, "old\n").unwrap();
         std::fs::write(root.join("slow"), "").unwrap();
-        let cancelled = session("switch");
-        let (s2, r2, c2) = (cancelled.clone(), runner.clone(), config.clone());
+        let canceled = session("switch");
+        let (s2, r2, c2) = (canceled.clone(), runner.clone(), config.clone());
         let running = std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(20)));
         let until = Instant::now() + Duration::from_secs(10);
-        while state(&cancelled).0 != "waiting" && Instant::now() < until {
+        while state(&canceled).0 != "waiting" && Instant::now() < until {
             std::thread::sleep(Duration::from_millis(50));
         }
         assert_eq!(sides(), 1, "the switch signs in on the side");
-        cancelled.cancelled.store(true, Ordering::SeqCst);
+        canceled.canceled.store(true, Ordering::SeqCst);
         running.join().unwrap();
-        assert_eq!(state(&cancelled).0, "cancelled");
+        assert_eq!(state(&canceled).0, "cancelled");
         assert_eq!(std::fs::read_to_string(&auth).unwrap(), "old\n");
         assert_eq!(sides(), 0);
     }
@@ -2041,7 +2278,7 @@ exit 2
         std::fs::write(&hand, "OPENAI_API_KEY=sk-hand-0123456789\n").unwrap();
         replies.lock().unwrap().0 = r#"{"credentials":[{"env":"OPENAI_API_KEY","value":"sk-other-0123456789","source":"computer"}]}"#.into();
         std::fs::write(&hold, "").unwrap();
-        let (cancelled, running) = start_use_key(next, Some(false));
+        let (canceled, running) = start_use_key(next, Some(false));
         wait_for(|| probing.exists());
         let (fetched, logged) = (fetches(), key_logins());
         sign.refresh_now("codex");
@@ -2052,7 +2289,7 @@ exit 2
         assert_eq!(std::fs::read_to_string(&auth).unwrap(), "apikey sk-new-0123456789\n");
         std::fs::write(&release, "").unwrap();
         running.join().unwrap();
-        assert_eq!(state(&cancelled), ("cancelled".into(), "Cancelled".into()));
+        assert_eq!(state(&canceled), ("cancelled".into(), "Canceled".into()));
         assert_eq!(read_env(&computer)["OPENAI_API_KEY"], "sk-new-0123456789");
         assert_eq!(std::fs::read_to_string(&auth).unwrap(), "apikey sk-new-0123456789\n");
         assert_eq!(read_env(&hand)["OPENAI_API_KEY"], "sk-hand-0123456789");
@@ -2064,7 +2301,7 @@ exit 2
         // Run out on Tico while it is checked (the next poll no longer lists it): the same.
         let (expired, running) = start_use_key(next, None);
         wait_for(|| probing.exists());
-        expired.cancelled.store(true, Ordering::SeqCst);
+        expired.canceled.store(true, Ordering::SeqCst);
         std::fs::write(&release, "").unwrap();
         running.join().unwrap();
         assert_eq!(state(&expired).0, "cancelled");
@@ -2102,9 +2339,9 @@ exit 2
         assert!(sign.signed_out("codex") && !read_env(&computer).contains_key("OPENAI_API_KEY"));
         assert!(sign.headless_secret("codex").is_none());
         // From a cleared key, a cancel leaves it cleared, signed out and with no login.
-        let (cancelled, running) = start_use_key(next, Some(false));
+        let (canceled, running) = start_use_key(next, Some(false));
         running.join().unwrap();
-        assert_eq!(state(&cancelled).0, "cancelled");
+        assert_eq!(state(&canceled).0, "cancelled");
         assert!(sign.signed_out("codex") && !read_env(&computer).contains_key("OPENAI_API_KEY") && !auth.exists() && no_side());
 
         // No key staged for the job, or a shared one: nothing changes.
@@ -2232,8 +2469,8 @@ exit 2
         sign.mark_key_off("codex").unwrap();
         let subscription_in_use = || std::fs::read_to_string(&auth).unwrap() == "chatgpt\n" && sign.key_off("codex")
             && sign.headless_secret("codex").is_none() && !read_env(&computer).contains_key("OPENAI_API_KEY");
-        // Cancelled before its commit point, or a key the provider refuses: the subscription stays signed in and in use.
-        assert_eq!(to_key("codex", codex_key, Some(false)), ("cancelled".into(), "Cancelled".into()));
+        // Canceled before its commit point, or a key the provider refuses: the subscription stays signed in and in use.
+        assert_eq!(to_key("codex", codex_key, Some(false)), ("cancelled".into(), "Canceled".into()));
         assert!(subscription_in_use() && no_side());
         let bad = r#"{"credentials":[{"env":"OPENAI_API_KEY","value":"sk-bad-0123456789","source":"computer"}]}"#;
         assert_eq!(to_key("codex", bad, Some(true)), ("failed".into(), "The new key did not sign codex in; the subscription is still in use".into()));
@@ -2414,7 +2651,7 @@ exit 2
             let (s2, r2, c2) = (s.clone(), runner.clone(), Config::load(&path).unwrap());
             let running = std::thread::spawn(move || run_remove(s2, r2, c2));
             wait_for(|| state(&s).0 == "finishing" || !s.live());
-            if server { s.confirmed.store(true, Ordering::SeqCst) } else { s.cancelled.store(true, Ordering::SeqCst) }
+            if server { s.confirmed.store(true, Ordering::SeqCst) } else { s.canceled.store(true, Ordering::SeqCst) }
             running.join().unwrap();
             state(&s)
         };
@@ -2540,17 +2777,17 @@ esac
             assert_eq!(sign_in_status("musecode", &exe, &env).unwrap().0, false);
             assert_eq!(std::fs::read(other).unwrap(), untouched);
 
-            // A cancelled sign-in has already written a new file on the side; the old file must stay in use.
+            // A canceled sign-in has already written a new file on the side; the old file must stay in use.
             std::fs::write(auth, old).unwrap();
             std::fs::write(root.join("hold"), "").unwrap();
-            let cancelled = session("switch");
-            let (s, r, c) = (cancelled.clone(), runner.clone(), config.clone());
+            let canceled = session("switch");
+            let (s, r, c) = (canceled.clone(), runner.clone(), config.clone());
             let running = std::thread::spawn(move || run_session(s, r, c, Duration::from_secs(20)));
             wait_for(|| root.join("started").exists());
             assert_eq!(std::fs::read_to_string(auth).unwrap(), old);
-            cancelled.cancelled.store(true, Ordering::SeqCst);
+            canceled.canceled.store(true, Ordering::SeqCst);
             running.join().unwrap();
-            assert_eq!(state(&cancelled).0, "cancelled", "{:?}", state(&cancelled));
+            assert_eq!(state(&canceled).0, "cancelled", "{:?}", state(&canceled));
             assert_eq!(std::fs::read_to_string(auth).unwrap(), old);
             std::fs::remove_file(root.join("hold")).unwrap();
             std::fs::remove_file(root.join("started")).unwrap();
@@ -2930,10 +3167,10 @@ esac
                 assert_eq!(std::fs::read_to_string(&auth).unwrap(), old);
                 assert!(!root.join("outside").exists());
             }
-            let cancelled = make("switch");
-            answer_finishing(&cancelled, false);
-            run_session(cancelled.clone(), runner.clone(), config.clone(), Duration::from_secs(5));
-            assert_eq!(state(&cancelled).0, "cancelled", "{:?}", state(&cancelled));
+            let canceled = make("switch");
+            answer_finishing(&canceled, false);
+            run_session(canceled.clone(), runner.clone(), config.clone(), Duration::from_secs(5));
+            assert_eq!(state(&canceled).0, "cancelled", "{:?}", state(&canceled));
             assert_eq!(std::fs::read_to_string(&auth).unwrap(), old);
             let switch = make("switch");
             answer_finishing(&switch, true);

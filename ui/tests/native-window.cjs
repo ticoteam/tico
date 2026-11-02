@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 const VISUAL = 'https://visuals.acme-files.example', NEXT_VISUAL = 'https://next.acme-files.example';
 const TOKEN = 'YQ.' + 'a'.repeat(43);
 const bridge = fs.readFileSync(require('node:path').join(__dirname, '../../app/src/main.rs'), 'utf8')
@@ -33,13 +34,14 @@ async function visualHandshake(browser) {
   `});
   let config = {company_name:'Acme', visual_origin:VISUAL}, visual = VISUAL, revision = 1;
   let authenticated = true, holdEmployees = null;
-  const message = () => ({id:'m1', from_actor:'bot:ops', body:'Visual revision '+revision,
-    created:'2026-01-01T00:00:00Z', refs:{attachments:[{id:'f1', file_id:'f1', version:revision,
+  const message = () => ({id:'m1', sender_id:'bot:ops', body:'Visual revision '+revision,
+    created_at:'2026-01-01T00:00:00Z', refs:{attachments:[{id:'f1', file_id:'f1', version:revision,
       current_version:revision, ref:'f1@'+revision, title:'Plan', kind:'page', name:'plan.html',
       size:100, content_type:'text/html', url:'/api/v2/files/f1', src:visual+'/visuals/'+TOKEN}]}});
-  const task = {id:'t1', title:'Visual task', owner:'bot:ops', requester:'human:ana', status:'review', lane:'company',
-    rank:1, version:1, created:'2026-01-01T00:00:00Z', updated:'2026-01-01T00:00:00Z', body:'Plan',
+  const task = {id:'t1', title:'Visual task', owner_id:'bot:ops', requester_id:'human:ana', status:'review', lane:'company',
+    rank:1, version:1, created_at:'2026-01-01T00:00:00Z', updated_at:'2026-01-01T00:00:00Z', body:'Plan',
     parts:{total:0, done:0}, labels:[], links:[], attachments:[]};
+  const threads = threadsFake({bot:'ops', messages:() => [message()]});
   await page.route('**/*', async route => {
     const url = new URL(route.request().url()), p = url.pathname;
     const json = body => route.fulfill({contentType:'application/json', body:JSON.stringify(body)});
@@ -64,8 +66,8 @@ async function visualHandshake(browser) {
     if (p === '/api/status') return json({cloud:true, keeper_alive:true, health_issues:[]});
     if (p === '/api/v2/status') return json({bots:[{bot:'ops', state:'idle', open_tasks:0}]});
     if (p === '/api/v2/needs-you') return json({items:[]});
-    if (p === '/api/v2/conversations') return json({conversations:[{id:'c-ops', kind:'chat', scope:'personal', participants:['human:ana','bot:ops']}]});
-    if (p === '/api/v2/conversations/c-ops/snapshot') return json({messages:[message()], execution:null});
+    const answer = threads(p, url, route.request().method());
+    if (answer !== undefined) return json(answer);
     if (p === '/api/v2/tasks/t1') return json({task, comments:[{...message(), kind:'say'}], events:[], children:[], parent:null, mover:true, can_comment:true});
     if (p === '/api/v2/tasks/t1/files') return json({files:[]});
     return json(unrouted(p));
@@ -78,7 +80,7 @@ async function visualHandshake(browser) {
     const call = window.__pending[index]; window.__nativeOrigin = accepted ? call.origin : ''; call.resolve(accepted);
   }, {index, accepted});
   const refresh = () => page.evaluate(() => { window.__refresh = refreshConfig(); });
-  await page.goto('https://tico-ui.test/#/bot/ops/chat', {waitUntil:'domcontentloaded'});
+  await page.goto('https://tico-ui.test/#/bot/ops/dm', {waitUntil:'domcontentloaded'});
   await waitCall(0, '');
   await page.waitForFunction(() => typeof visualSrc === 'function');
   assert.equal(await page.evaluate(() => visualSrc({src:'/visuals/local'})), 'https://tico-ui.test/visuals/local',
@@ -99,7 +101,7 @@ async function visualHandshake(browser) {
   config = {company_name:'Acme revised', visual_origin:NEXT_VISUAL};
   await refresh(); await waitCall(2, NEXT_VISUAL);
   visual = NEXT_VISUAL; revision++;
-  await page.evaluate(() => Promise.all([v2ChatSnapshot(V2C), taskChatRead(TASK_CHAT)]));
+  await page.evaluate(() => Promise.all([...[...THV_VIEWS].map(v => thvRefresh(v)), taskChatRead(TASK_CHAT)]));
   assert.equal(await page.locator('iframe.vcard-frame').count(), 0, 'live snapshot stays file chips during config ACK');
   assert.equal(reads.includes(NEXT_VISUAL), false);
   const nextRead = page.waitForResponse(response => new URL(response.url()).origin === NEXT_VISUAL);
@@ -250,8 +252,85 @@ async function visualHandshake(browser) {
   await page.close();
 }
 
+// Tico file hosting with no visual address: a page's `src` is on the app's own route, which sends its frame on to the
+// company's files address. The shell is told that address with the visual origin, and the page frames only once it
+// acknowledged it; a shell too old to know it never hears the address, and the page stays an Open card.
+async function hostedHandshake(browser, current) {
+  const FILES = 'https://acme-files.ticofiles.com';
+  const page = await browser.newPage({serviceWorkers:'block', userAgent:'Mozilla/5.0 AppleWebKit/605.1.15 TicoHub'});
+  const errors = [], reads = [];
+  page.on('pageerror', e => {
+    if (e.message !== "Service Worker is disabled because the context is sandboxed and lacks the 'allow-same-origin' flag") errors.push(e.message);
+  });
+  await page.addInitScript({content:`
+    (() => {
+    if (window.top !== window) return;
+    window.EventSource = undefined;
+    window.__calls = []; window.__pending = [];
+    window.__TAURI__ = {core:{invoke: (command, args) => {
+      if (command !== 'bridge' || args.name !== 'visualOrigin') return Promise.resolve(null);
+      window.__calls.push(args.body);
+      return new Promise(resolve => window.__pending.push(resolve));
+    }}};
+    ${bridge}
+    ${current ? '' : "window.ticoNativeFeatures = window.ticoNativeFeatures.filter(f => f !== 'visualFiles');"}
+    })();
+  `});
+  const config = {company_name:'Acme', visual_origin:'', visual_files:FILES, visuals:'hosted'};
+  const message = {id:'m1', sender_id:'bot:ops', body:'Weekly', created_at:'2026-01-01T00:00:00Z',
+    refs:{attachments:[{id:'f1', file_id:'f1', version:1, current_version:1, ref:'f1@1', title:'Weekly', kind:'page',
+      name:'weekly.html', size:100, content_type:'text/html', url:'/api/v2/files/f1', src:'/visuals/'+TOKEN}]}};
+  const threads = threadsFake({bot:'ops', messages:[message]});
+  await page.route('**/*', async route => {
+    const url = new URL(route.request().url()), p = url.pathname;
+    const json = body => route.fulfill({contentType:'application/json', body:JSON.stringify(body)});
+    if (p.startsWith('/visuals/')) { reads.push(p); return route.fulfill({contentType:'text/html', body:'<p>Weekly</p>'}); }
+    if (p === '/') return route.fulfill({contentType:'text/html', body:html});
+    if (p.startsWith('/tico/ui/')) {
+      const file = uiFile(p.slice('/tico/ui/'.length));
+      if (fs.existsSync(file)) return route.fulfill({path:file});
+    }
+    if (p === '/api/me') return json({id:'ana', email:'ana@acme.example', role:'owner', cloud:true, config});
+    if (p === '/api/v2/config') return json(config);
+    if (p === '/api/employees') return json([{name:'ops', display_name:'Ops', status:'active', host:'keeper', can_chat:true}]);
+    if (p === '/api/humans') return json({people:[{id:'ana', name:'Ana'}], groups:[]});
+    if (p === '/api/status') return json({cloud:true, keeper_alive:true, health_issues:[]});
+    if (p === '/api/v2/status') return json({bots:[{bot:'ops', state:'idle', open_tasks:0}]});
+    if (p === '/api/v2/needs-you') return json({items:[]});
+    const answer = threads(p, url, route.request().method());
+    if (answer !== undefined) return json(answer);
+    return json(unrouted(p));
+  });
+  await page.goto('https://tico-ui.test/#/bot/ops/dm', {waitUntil:'domcontentloaded'});
+  await page.waitForFunction(() => window.__calls.length > 0);
+  await page.evaluate(() => window.__pending[0](false));
+  await page.waitForFunction(() => window.__calls.length > 1);
+  assert.deepEqual(await page.evaluate(() => window.__calls[1]), current ? {origin:'', files:FILES} : {origin:''},
+    current ? 'the shell hears the files address' : 'an older shell never hears a field it would refuse');
+  // ACK inside the UI's bridge wait (NATIVE_VISUAL_WAIT_MS): the thread renders cards only after it, and a timed-out
+  // wait queues a clear this fake shell would never answer. Before the ACK a same-origin page src is refused.
+  assert.equal(await page.evaluate(() => visualPageSrc('/visuals/' + 'YQ.' + 'a'.repeat(43))), null,
+    'no frame before the shell follows it');
+  await page.evaluate(accepted => window.__pending[1](accepted), current);
+  if (current) {
+    await page.locator('figure.vcard[data-state="ready"] iframe.vcard-frame[src]').waitFor();
+    assert.equal(await page.evaluate(() => NATIVE_VISUAL_FILES), FILES);
+    assert.ok(reads.length > 0);
+  } else {
+    await page.locator('figure.vcard[data-state="open"]').waitFor();
+    assert.equal(await page.locator('iframe.vcard-frame').count(), 0);
+    assert.equal(await page.evaluate(() => window.__calls.length), 2, 'an older shell gets no clear after a refused grant');
+    assert.deepEqual(reads, [], 'an older shell would open the redirect in the browser');
+  }
+  assert.deepEqual(errors, []);
+  await page.close();
+}
+
+// A promise the page never settles would otherwise hold the job until the runner's own timeout.
+const watchdog = setTimeout(() => { console.error('native window: timed out'); process.exit(1); }, 480000);
+let browser;
 (async () => {
-  const browser = await webkit.launch({headless:true});
+  browser = await webkit.launch({headless:true});
   const page = await browser.newPage({serviceWorkers:'block', viewport:{width:1240,height:820},
     userAgent:'Mozilla/5.0 AppleWebKit/605.1.15 TicoHub'});
   const errors = [], posted = [];
@@ -312,6 +391,9 @@ async function visualHandshake(browser) {
   assert.deepEqual(posted.filter(([name]) => name === 'visualOrigin'), [], 'older shells never receive the new command');
   assert.deepEqual(errors, []);
   await visualHandshake(browser);
+  await hostedHandshake(browser, true);
+  await hostedHandshake(browser, false);
   await browser.close();
+  clearTimeout(watchdog);
   console.log('native window: no rail mode; usable from 360px to 1240px');
-})().catch(error => { console.error(error); process.exit(1); });
+})().catch(async error => { console.error(error); await browser?.close().catch(() => {}); process.exit(1); });

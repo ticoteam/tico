@@ -15,6 +15,7 @@ use tokio::sync::Notify;
 
 use crate::client::{bearer, http_client, quote_plus, Client, CLIENT_VERSION};
 use crate::util::{diagnostic, log, mark};
+use crate::wire::{decode, ReadyFrame, RunnerFrame};
 
 pub const BACKUP_POLL_S: f64 = 300.0;
 pub const RECONNECT_MAX_S: f64 = 60.0;
@@ -34,7 +35,8 @@ pub fn channels(kind: &str) -> &'static [&'static str] {
         // A credential's value changed: the model keys from the app are asked for again at once (signin.rs).
         "credentials" => &["sync", "keys"],
         "config" => &["sync", "config"],
-        "worktrees" | "restart" | "performance" => &["heartbeat"],
+        "worktrees" | "restart" | "performance" | "browser_exit" => &["heartbeat"],
+        "capacity" => &["heartbeat"],
         "logins" => &["logins"],
         "harness_actions" => &["harness"],
         "credential_imports" => &["imports"],
@@ -215,15 +217,16 @@ impl Events {
         Ok(self.live())
     }
 
+    /// A frame this runner cannot read counts as one that says nothing: a `runner` frame then asks for everything.
     fn dispatch(&self, event: &str, ident: Option<String>, data: &Value, recovering: bool) {
         match event {
             "ready" => {
-                let release = data.get("release").cloned().unwrap_or(Value::Null);
+                let frame: ReadyFrame = decode(data.clone()).unwrap_or_default();
+                let release = frame.release.map(Value::String).unwrap_or(Value::Null);
                 {
                     let mut last = self.last_id.lock().unwrap();
                     if last.is_none() {
-                        let seq = crate::util::text_of(data.get("seq").unwrap_or(&Value::Null));
-                        *last = (!seq.is_empty()).then_some(seq);
+                        *last = frame.seq.map(|seq| seq.to_string());
                     }
                 }
                 let changed = self.release.lock().unwrap().as_ref().is_some_and(|r| *r != release);
@@ -239,7 +242,8 @@ impl Events {
                 self.wake.notify_one();
             }
             "runner" => {
-                let kind = data["kind"].as_str().unwrap_or_default();
+                let frame: RunnerFrame = decode(data.clone()).unwrap_or_default();
+                let kind = frame.kind.as_deref().unwrap_or_default();
                 if kind == "work" {
                     mark("heard", "-");
                 }
@@ -291,6 +295,7 @@ mod tests {
         assert_eq!(channels("work"), &["claim"]);
         assert_eq!(channels("config"), &["sync", "config"]);
         assert_eq!(channels("credentials"), &["sync", "keys"]);
+        assert_eq!(channels("capacity"), &["heartbeat"]);
         assert_eq!(channels("something new"), ALL);
         let e = Events::new();
         e.dispatch("ready", Some("7".into()), &serde_json::json!({"seq": 7, "release": "v1"}), true);

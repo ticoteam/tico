@@ -1,0 +1,594 @@
+Free Mutual NDA Template used by 2,000+ companies
+
+ Skip to content
+
+Substance over semantics: Do business faster and reduce risk with the Common Paper Standard Mutual NDA.
+
+Create your free NDA
+
+ All downloads and formats
+
+Streamline your full contract workflow
+
+Everything you need to get your agreement sent and signed today:
+
+Templates -> Proposals -> Negotiations -> Approvals -> Esignature -> Recordkeeping
+
+ Try it free
+
+A higher standard
+
+Common Paper agreements help you get on the same page, faster.
+
+Industry-standard terms
+
+Written by a committee of experienced attorneys to make negotiations simple and streamlined.
+
+Easy to negotiate
+
+No more endless pages of redlines. Key agreement terms live on a single, easy to adjust Cover Page.
+
+Free and open source
+
+Most companies don’t need a bespoke NDA. We cover the most common terms while allowing for your customization.
+
+ Using this agreement
+
+Common Paper agreements consist of a signed Cover Page and Standard Terms that are hosted online and incorporated by reference. Creating and executing an agreement is easy:
+
+Fill out your Cover Page
+
+This one-page document helps both parties define important agreement details. Just replace bracketed text with your agreed-upon terms and complete the signature block.
+
+Send for signature
+
+Once both parties have agreed on the terms, send the Cover Page for signature using your preferred method.
+
+ View the Standard Terms
+
+About the Common Paper Mutual NDA
+
+How was this agreement created?
+
+The Common Paper Mutual NDA was created by a committee of dozens of attorneys representing technology vendors, procurement teams, boutique firms, and Big Law.
+
+What makes this agreement a “mutual” NDA?
+
+A mutual nondisclosure agreement, also called a bilateral NDA, requires both parties to the NDA to protect the confidential information disclosed under the terms of the confidentiality agreement. In contrast, a unilateral NDA only protects the confidential information of one party. In B2B sales or partnerships, it’s more common to use a mutual NDA. Unilateral NDAs are often used in an HR context when an employee needs to get access to the company’s proprietary information in order to do their job.
+
+When might I need an NDA?
+
+NDAs are one of the most frequently used agreements in the early stages of a B2B sales cycle. Your prospect might require an NDA before they can share sensitive information that is necessary for you to quote them a price, or you might sign one with a potential partner in order to share customer lists. While other agreements, like a Cloud Service Agreement, include a confidentiality clause, using an NDA in your sales cycle establishes a confidential relationship earlier in the business relationship.
+
+How long does an NDA typically last?
+
+The Common Paper Mutual NDA has two options for confidentiality term: fixed length or unlimited. According to our most recent benchmark report, most NDAs (74%) have a fixed length confidentiality term. The most commonly used confidentiality term is two years.
+
+I see this agreement is hosted online. Does that mean it will change?
+
+Version 1 of this agreement will remain unchanged and hosted at commonpaper.com/standards/mutual-nda/1.0. Over time, we will create new versions to accommodate changes to the law and additional use cases. We expect future changes to occur infrequently, and they will be posted as a new version. However, any new versions will not change agreements that incorporate prior versions.
+
+How do I use this agreement?
+
+To execute an agreement using the Common Paper NDA, first download a copy of the Cover Page in your preferred format. Then finalize the terms of the agreement with your counterparty and input those terms into the corresponding bracketed section of the Cover Page. Finally, sign your Cover Page with your counterparty via the signing process of your choice. The Cover Page incorporates the Standard Terms by reference, completing the executed agreement.
+
+Do I have to incorporate the Standard Terms by reference?
+
+You can also download the two-page version of the agreement here and include the Standard Terms in the agreement itself.
+
+Can I customize the Cover Page?
+
+Yes, you can feel free to change the Cover Page any way you like. Many companies decide to add their company branding or logo and edit some of the text. The only thing you are required to keep is the license information and link to the Standard Terms. Common customizations, such as adding a residuals clause or using the Mutual NDA to share confidential information with affiliates, can be found in the Language Library.
+
+Can I customize the Standard Terms?
+
+All modifications to the Standard Terms should be made by addendum on the Cover Page. Incorporating the Standard Terms by reference from the Common Paper website gives both sides assurance that all key details and modifications are explicitly called out in the Cover Page.
+
+What license is this agreement released under?
+
+Common Paper agreements are free to use and modify under CC BY 4.0.
+
+Configuration Guide
+
+Available formats
+
+This agreement is free to use or modify under CC BY 4.0. The agreement is available in the following formats.
+
+Configuration guide
+
+Set up this agreement by answering a few questions.
+
+Standard Terms
+
+ Full text: 
+
+ Standard MNDA posted at 
+ commonpaper.com/standards/mutual-nda/1.0
+
+ Markdown:
+
+GitHub
+
+Cover Page
+
+PDF
+
+Word (DOCX)
+
+Cover Page & 
+Standard Terms
+
+PDF
+
+Word (DOCX)
+
+Optional info sheet
+
+ PDF
+
+ Word (DOCX)
+
+Current version: 1.0
+
+Streamline your full contract workflow
+
+Everything you need to get your agreement sent and signed today:
+
+Templates -> Proposals -> Negotiations -> Approvals -> Esignature -> Recordkeeping
+
+ Try it free
+
+Mutual Non-Disclosure Agreement
+
+ This Mutual Non-Disclosure Agreement (the “MNDA“) consists
+ of: (1)
+
+ this Cover Page (“Cover Page”)
+ and (2)
+ the Common Paper Mutual NDA Standard Terms Version 1.0 posted at
+ commonpaper.com/standards/mutual-nda/1.0 (“Standard Terms”). A copy of the Standard Terms is attached for convenience only. Any
+ modifications of the Standard Terms should be made on the Cover Page, which
+ will control over conflicts with the Standard Terms.
+
+ Purpose
+ How Confidential Information may be used
+
+ [Evaluating whether to enter into a business relationship with the
+ other party.]
+
+ Effective Date
+
+ [Date of last Cover Page signature]
+
+ MNDA Term
+ Period for sharing Confidential Information
+
+ [x]
+ Expires [1 year(s)] from Effective Date.
+
+ [ ]
+ Continues until terminated in accordance with the terms of the
+ MNDA.
+
+ Term of Confidentiality
+ How long Confidential Information is Protected
+
+ [x]
+ [1 year(s)] from [choose 1: Effective Date || the date of last disclosure],
+ but in the case of trade secrets, until Confidential Information is
+ no longer considered a trade secret under applicable laws.
+
+ [ ]
+ In perpetuity.
+
+ Governing Law
+
+ The laws of the State of [Delaware].
+
+ Jurisdiction
+
+ The state and federal courts located in [Delaware].
+
+ Changes to Standard Terms
+ List specific changes to the Standard Terms
+
+ [Fill in, if any.]
+
+ Neither party has changed the Standard Terms, except for the details on the
+ Cover Page above. By signing this Cover Page, each party agrees to enter into
+ this MNDA as of the Effective Date.
+
+PARTY 1
+
+PARTY 2
+
+ Signature
+
+ Print Name
+
+ Title
+
+ Notice Address
+ Use email or 
+
+postal address
+
+ Date
+
+Standard Terms
+
+ Introduction. This Mutual Non-Disclosure Agreement (which
+ incorporates these Standard Terms and the Cover Page (defined below))
+ (“MNDA”)
+ allows each party (“Disclosing Party”) to disclose or
+ make available information
+ in connection with the Purpose which
+ (1) the Disclosing Party identifies to the receiving party (“Receiving Party”) as “confidential”, “proprietary”, or the like or (2) should be
+ reasonably understood as confidential or proprietary due to its nature
+ and the circumstances of its disclosure (“Confidential Information”). Each party’s Confidential Information also includes the existence and
+ status of the parties’ discussions and information on the Cover Page.
+ Confidential Information includes technical or business information,
+ product designs or roadmaps, requirements, pricing, security and
+ compliance documentation, technology, inventions and know-how. To use this
+ MNDA, the parties must complete and sign a cover page incorporating these
+ Standard Terms (“Cover Page”). Each party is identified
+ on the Cover Page and capitalized terms have the meanings given herein or
+ on the Cover Page.
+
+ Use and Protection of Confidential Information. The
+ Receiving Party shall: (a) use Confidential Information solely for the
+ Purpose; (b)
+ not disclose Confidential Information to third parties without the
+ Disclosing Party’s prior written approval, except that the Receiving
+ Party may disclose Confidential Information to its employees, agents,
+ advisors, contractors and other representatives having a reasonable need
+ to know for the Purpose, provided these representatives
+ are bound by confidentiality obligations no less protective than the
+ applicable terms in this MNDA and the Receiving Party remains
+ responsible for their compliance with this MNDA; and (c) protect Confidential Information using at least the same
+ protections the Receiving Party uses for its own similar information but
+ no less than a reasonable standard of care.
+
+ Exceptions. The Receiving Party’s obligations in this
+ MNDA do not apply to information that it can demonstrate: (a) is or
+ becomes publicly available through no fault of the Receiving Party; (b) it
+ rightfully knew or possessed prior to receipt from the Disclosing Party
+ without confidentiality restrictions; (c) it rightfully obtained from a
+ third party without confidentiality restrictions; or (d) it independently
+ developed without using or referencing the Confidential Information.
+
+ Disclosures Required by Law. The Receiving Party may
+ disclose Confidential Information to the extent required by law,
+ regulation or regulatory authority, subpoena or court order, provided (to
+ the extent legally permitted) it provides the Disclosing Party reasonable
+ advance notice of the required disclosure and reasonably cooperates, at
+ the Disclosing Party’s expense, with the Disclosing Party’s efforts to
+ obtain confidential treatment for the Confidential Information.
+
+ Term and Termination. This MNDA commences on the
+ Effective Date and expires at the end of the
+ MNDA Term. Either party may terminate this MNDA for any
+ or no reason upon written notice to the other party. The Receiving Party’s
+ obligations relating to Confidential Information will survive for the
+ Term of Confidentiality, despite any expiration or
+ termination of this MNDA.
+
+ Return or Destruction of Confidential Information. Upon
+ expiration or termination of this MNDA or upon the Disclosing Party’s
+ earlier request, the Receiving Party will: (a) cease using Confidential
+ Information; (b) promptly after the Disclosing Party’s written request,
+ destroy all Confidential Information in the Receiving Party’s possession
+ or control or return it to the Disclosing Party; and (c) if requested by
+ the Disclosing Party, confirm its compliance with these obligations in
+ writing. As an exception to subsection (b), the Receiving Party may retain
+ Confidential Information in accordance with its standard backup or record
+ retention policies or as required by law, but the terms of this MNDA will
+ continue to apply to the retained Confidential Information.
+
+ Proprietary Rights. The Disclosing Party retains all of
+ its intellectual property and other rights in its Confidential Information
+ and its disclosure to the Receiving Party grants no license under such
+ rights.
+
+ Disclaimer. ALL CONFIDENTIAL INFORMATION IS PROVIDED “AS IS”, WITH ALL FAULTS, AND
+ WITHOUT WARRANTIES, INCLUDING THE IMPLIED WARRANTIES OF TITLE,
+ MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+
+ Governing Law and Jurisdiction. This MNDA and all matters relating hereto are governed by, and
+ construed in accordance with, the laws of the State of
+ Governing Law, without regard to the conflict of laws
+ provisions of such Governing Law. Any legal suit, action,
+ or proceeding relating to this MNDA must be instituted in the federal or
+ state courts located in Jurisdiction. Each party
+ irrevocably submits to the exclusive jurisdiction of such
+ Jurisdiction in any such suit, action, or proceeding.
+
+ Equitable Relief. A breach of this MNDA may cause
+ irreparable harm for which monetary damages are an insufficient remedy.
+ Upon a breach of this MNDA, the Disclosing Party is entitled to seek
+ appropriate equitable relief, including an injunction, in addition to its
+ other remedies.
+
+ General. Neither party has an obligation under this MNDA
+ to disclose Confidential Information to the other or proceed with any
+ proposed transaction.
+ Neither party may assign this MNDA without the prior written consent of
+ the other party, except that either party may assign this MNDA in
+ connection with a merger, reorganization, acquisition or other transfer
+ of all or substantially all its assets or voting securities. Any assignment in violation of this Section is null and void. This MNDA
+ will bind and inure to the benefit of each party’s permitted successors
+ and assigns. Waivers must be signed by the waiving party’s authorized
+ representative and cannot be implied from conduct. If any provision of
+ this MNDA is held unenforceable, it will be limited to the minimum extent
+ necessary so the rest of this MNDA remains in effect. This MNDA (including
+ the Cover Page) constitutes the entire agreement of the parties with
+ respect to its subject matter, and supersedes all prior and
+ contemporaneous understandings, agreements, representations, and
+ warranties, whether written or oral, regarding such subject matter. This
+ MNDA may only be amended, modified, waived, or supplemented by an
+ agreement in writing signed by both parties. Notices, requests and
+ approvals under this MNDA must be sent in writing to the email or postal
+ addresses on the Cover Page and are deemed delivered on receipt. This MNDA
+ may be executed in counterparts, including electronic copies, each of
+ which is deemed an original and which together form the same agreement.
+
+ Common Paper Mutual Non-Disclosure Agreement (Version 1.0)
+ free to use under CC BY 4.0.
+
+The Mutual NDA, annotated
+
+This Cover Page (“Cover Page”)
+
+ The Cover Page contains the details of each specific contract. It also
+ includes variables that you can customize from deal to deal.
+
+ More information about how the Cover Page and variables work is available
+ here.
+
+ The Common Paper Mutual NDA Standard Terms Version 1.0 posted at
+ commonpaper.com/standards/mutual-nda/1.0
+ (“Standard Terms”)
+
+ The NDA incorporates the Standard Terms by reference, with a link to
+
+ commonpaper.com/standards/mutual-nda/1.0. Each version of the Standard Terms will remain unchanged and posted our
+ website, and updates will get posted as new versions.
+
+Purpose
+
+ The Purpose sets the parameters for why each party is sharing Confidential
+ Information. The NDA limits use of Confidential Information to the Purpose.
+
+ Evaluating whether to enter into a business relationship with the other
+ party.
+
+ Most NDAs have a broad purpose, such as “Evaluating whether to enter into a
+ business relationship with the other party.” However, it could also be
+ something more specific, like “Reviewing security documentation for
+ potential vendor approval.”
+
+Effective Date
+
+The Effective Date is when the NDA starts to apply.
+
+Date of last Cover Page signature
+
+ Generally, NDAs have an Effective Date as the date it was signed. Some
+ companies consider using a set date to know exactly when conversations can
+ start. Other times, companies will use a date in the past to protect
+ information that may have already been shared.
+
+MNDA Term
+
+ The MNDA Term is the length of time for which the contract is valid. Only
+ information shared during this time period will be protected by the NDA.
+
+One option should be chosen, but not both.
+
+Expires [1 year(s)] from Effective Date.
+
+ This choice creates a set time period for sharing information between the
+ parties.
+
+ From the
+ Benchmark: The majority of NDAs (74%) set a 1 year MNDA Term, while 15% use 2 years,
+ and only 5% set a 3 year term.
+
+[ ]
+
+ Parenthesis with blank space indicate a choice you need to make where one
+ option must be chosen, but not more than one should be selected.
+
+Continues until terminated in accordance with the terms of the MNDA.
+
+ This choice creates an indefinite period for sharing information. However,
+ the NDA permits either party to terminate the NDA upon notice (Section 5).
+
+Term of Confidentiality
+
+ Term of Confidentiality refers to how long the parties are subject to
+ confidentiality obligations and must protect confidential information.
+
+One option should be chosen, but not both.
+
+ Note: Early termination of the NDA does not shorten the Term of
+ Confidentiality. While related, the two time periods are distinct from each
+ other and measured independently.
+
+ From the
+ Benchmark: The most common Term of Confidentiality is a set period of 2 years.
+
+[x]
+
+ Choices pre-marked with an “x” show the default selection. You can use the
+ “x” to mark off your choice, or keep the text for your choice and delete the
+ text for the other options.
+
+1 year(s)
+
+ This sets the overall length of the Term of Confidentiality. However, when
+ this time period begins may change based on the other configurations within
+ this variable.
+
+ From the
+ Benchmark: The majority of NDAs (74%) set a fixed time period (as opposed to the
+ other option, in perpetuity) for the Term of Confidentiality.
+
+Choose 1: Effective Date || the date of last disclosure
+
+This sets when the Term of Confidentiality will start being measured.
+
+ Selecting “Effective Date” is a static start date and begins measuring the
+ time period as of the Effective Date.
+
+ Selecting “the date of last disclosure” is a dynamic date and will change
+ the point at which the Term of Confidentiality will begin counting down to
+ be the most recent sharing of information.
+
+ But in the case of trade secrets, until Confidential Information is no
+ longer considered a trade secret under applicable laws.
+
+ Some information may have value as a trade secret that could continue for a
+ significant length of time and that may be cut short if the Term of
+ Confidentiality ends too soon or there is not an explicit indefinite time
+ period created for trade secrets.
+
+In Perpetuity
+
+ Setting the Term of Confidentiality to “In perpetuity” means that the
+ Confidential Information shared under the NDA will be protected by the
+ confidentiality obligations indefinitely.
+
+ From the
+ Benchmark: Only 26% of NDAs use this option.
+
+Governing Law
+
+ Governing Law identifies the set of laws under which the contract will be
+ interpreted.
+
+Delaware
+
+ Fill in which state’s laws you would like to apply to contract
+ interpretation and disputes.
+
+ From the
+ Benchmark: the most commonly chosen states for Governing Law are:
+
+– Delaware: 63%
+
+– California: 16%
+
+– New York: 10%
+
+Jurisdiction
+
+ Jurisdiction identifies where a lawsuit related to the contract can be filed
+ in the event of a dispute.
+
+Delaware
+
+ Fill in where you would like lawsuits related to the contract to be heard.
+
+ From the
+ Benchmark: the most commonly chosen states for Jurisdiction are:
+
+– Delaware: 64%
+
+– California: 16%
+
+– New York: 9%
+
+Changes to Standard Terms
+
+ This is an optional field. Use it to customize or add to the Standard Terms.
+ If there are no changes to the Standard Terms, delete this entire row.
+
+Fill in, if any.
+
+ Examples of how to use this section can be found in the
+ Language Library.
+
+ Allows each party (“Disclosing Party”) to disclose or make available
+ information
+
+ This does not cover information shared before the Effective Date. To protect
+ information shared before the Effective Date, you could use the Changes to
+ the Standard Terms section on the Cover Page and make the following
+ edit: “Add after the first sentence of Section 1: Confidential Information
+ includes any such information disclosed or made available before or after
+ the Effective Date.”
+
+ (1) the Disclosing Party identifies to the receiving party (“Receiving
+ Party”) as “confidential”, “proprietary”, or the like or (2) should be
+ reasonably understood as confidential or proprietary due to its nature and
+ the circumstances of its disclosure (“Confidential Information”)
+
+ Confidential Information can either be marked as confidential, or of a
+ nature where it should be understood as confidential. This works for many
+ b2b companies because it facilitates easier conversations without creating
+ arbitrary steps to confirm whether something was marked as confidential.
+
+ However, some companies have a hard time tracking what is someone else’s
+ confidential information. As a result, some companies require all
+ Confidential Information to be marked as “confidential” or “proprietary” so
+ that there is no ambiguity.
+
+ To add a requirement for all Confidential Information to be marked as
+ “confidential” or “proprietary”, you could use the Changes to the Standard
+ Terms section on the Cover Page and make the following
+ edit:
+
+ “Remove ‘[. . .] or (2) should be reasonably understood as confidential or
+ proprietary due to its nature and the circumstances of its disclosure [. .
+ .]’ from the first sentence of Section 1.”
+
+ Not disclose Confidential Information to third parties without the
+ Disclosing Party’s prior written approval, except that the Receiving Party
+ may disclose Confidential Information to its employees, agents, advisors,
+ contractors and other representatives having a reasonable need to know for
+ the Purpose, provided these representatives are bound by confidentiality
+ obligations no less protective than the applicable terms in this MNDA and
+ the Receiving Party remains responsible for their compliance with this MNDA
+
+ This does not include disclosures to sister entities or affiliates. To share
+ information with corporate affiliates, you could use the Changes to the
+ Standard Terms section on the Cover Page and make the following
+ edit: “Modify Section 2 to add that representatives of a Receiving Party may
+ include its affiliates that are controlled by or under common control with
+ the Receiving Party.”
+
+Disclaimer
+
+ The nature of the NDA is to facilitate preliminary discussions, not actually
+ allow the use of a product. As a result, this NDA doesn’t include any
+ representations or warranties about the information that’s being provided.
+
+Governing Law and Jurisdiction
+
+ Common Paper standard agreements were created with the laws of the United
+ States in mind by a committee of US-based attorneys.
+
+Governing Law and Jurisdiction
+
+ This permits either party to assign the NDA for an M&A or similar
+ transaction. However, some companies may not want their Confidential
+ Information to be transferred, even in the context of of an M&A transaction.
+ To prevent all assignments, you could use the Changes to the Standard Terms
+ section on the Cover Page and make the following
+ edit:
+
+ “Replace the second sentence of Section 11 with: Neither party may assign
+ this MNDA without the prior written consent of the other party.”
+
+Free to use under CC BY 4.0
+
+ All Common Paper agreements are released under the
+ Creative Commons CC BY 4.0
+
+ license, which enables you to use the agreements any way, as long as you
+ leave in the attribution.
+
+ Newsletter signup
+
+Subscribe for updates

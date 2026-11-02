@@ -25,7 +25,8 @@ ALLOWED = {
     "backend/openapi_v2.py",          # API schema; its `cursor` is a page cursor
 }
 ALLOWED_LINES = (re.compile(r"=> Host::"), re.compile(r"\bconst HOSTS\b"), re.compile(r"limitId"),
-                 re.compile(r"\bCLI_SETTINGS\s*="), re.compile(r"\bHARNESS_WORDS\s*="))
+                 re.compile(r"\bCLI_SETTINGS\s*="), re.compile(r"\bHARNESS_WORDS\s*="),
+                 re.compile(r'"cursor": \{"type": "integer"'))   # a page cursor in a tool's schema
 
 
 def sources():

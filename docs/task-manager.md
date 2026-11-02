@@ -15,11 +15,11 @@ Once an hour on weekdays, 08:00 to 18:00 in the team's time zone, the server loo
 
 | Item | What it means |
 |---|---|
-| Quiet task | Nothing has moved it for an hour and it waits on nothing. Where Decide read its last messages ([quiet task triage](tasks.md)) and could not tell, or found it stuck, the line says `class: unsure` or `class: stuck`. |
+| Stalled task | Nothing has moved it for an hour and it waits on nothing. Where Decide read its last messages ([stalled task check](tasks.md)) and could not tell, or found it stuck, the line says `class: unsure` or `class: stuck`. |
 | Overdue ask | A question to a person is past its deadline, or has gone a business day unanswered. |
 | Review or QA ticket without a PR | A review or QA child of a ticket has no linked pull request, or a second one is open for the same parent and step. |
 | Merged or shipped, step unmoved | A ticket's pull request merged or its release shipped, but the ticket did not move. |
-| Blocked by its own subtasks | A task waits only on its own quiet subtasks. |
+| Blocked by its own subtasks | A task waits only on its own stalled subtasks. |
 | Held bot | A bot is held by back-off or a turn budget. Skipped on an install without the hold columns. |
 | Owner review waiting | A bot's interrupted runs have waited more than an hour for its owner. |
 | Duplicate titles | Two open tasks share a title, requester and owner. |

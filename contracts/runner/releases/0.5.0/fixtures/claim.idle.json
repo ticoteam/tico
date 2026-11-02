@@ -1,0 +1,13 @@
+{
+ "answer": {
+  "attempt": null
+ },
+ "endpoint": "claim",
+ "request": {
+  "busy_bots": [],
+  "busy_lanes": [],
+  "next_run": true,
+  "start_places": true
+ },
+ "status": 200
+}

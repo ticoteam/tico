@@ -1,6 +1,6 @@
 // The Assistant page (ui/app/assistant-page.js): its own chat at #/assistant with the bot chat's thread and composer,
-// reached from your own person page's Assistant tab (absent from anyone else's) and from "Ask the Assistant…" in
-// search (⌘K) with your words in the box. An empty chat offers suggestions, a lookup answers at once with in-app
+// reached from your own person page's Assistant tab (absent from anyone else's); search
+// (⌘K) does not offer it. An empty chat offers suggestions, a lookup answers at once with in-app
 // links, a proposal is a Confirm / Cancel card that only your click runs, and it all fits a phone. Fixtures only.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -10,7 +10,7 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
 const now = new Date().toISOString();
-const msg = (id, from, body, refs = {}) => ({id, from_actor: from, body, refs, created: now, kind: 'say'});
+const msg = (id, from, body, refs = {}) => ({id, sender_id: from, body, refs, created_at: now, kind: 'say'});
 
 async function open(browser, viewport, state) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport.width < 760});
@@ -47,10 +47,10 @@ async function open(browser, viewport, state) {
     if (p === '/api/v2/assistant/actions/act3' && method === 'GET') return json({action: state.enrol});
     if (act) {
       const card = {act2: state.bulk, act3: state.enrol}[act[1]] || state.card;
-      state.decided.push([act[1], act[2]]); card.status = act[2] === 'confirm' ? 'done' : 'cancelled';
+      state.decided.push([act[1], act[2]]); card.status = act[2] === 'confirm' ? 'done' : 'canceled';
       if (act[1] === 'act2') card.result = {status_code: 200, error: '1 of 3 did not go through: Task not found'};
       // A new computer's code comes back to the person who tapped, in this answer only.
-      if (act[1] === 'act3') return json({action: card, shown_once: {code: 'ONE-TIME-CODE-1234', expires: new Date(Date.now() + 9e5).toISOString(), operator: 'ana'}});
+      if (act[1] === 'act3') return json({action: card, shown_once: {code: 'ONE-TIME-CODE-1234', expires_at: new Date(Date.now() + 9e5).toISOString(), owner_id: 'ana'}});
       return json({action: card});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -93,16 +93,17 @@ function fixture() {
       await page.locator('#ptabs button').first().waitFor();
       assert.deepEqual(await page.locator('#ptabs button').allInnerTexts(), ['Profile', 'Slack'], tag + ': no Assistant on another person\'s page');
       await page.goto('https://tico-ui.test/#/person/ana');
+      await page.waitForFunction(() => S.route === '#/person/ana');   // a page change draws a frame later (its fade)
       await page.locator('#ptabs button').first().waitFor();
       assert.deepEqual(await page.locator('#ptabs button').allInnerTexts(), ['Assistant', 'Profile', 'Slack'], tag + ': Assistant is first on your own page');
       await page.locator('#ptabs [data-pt="assistant"]').click();
       await page.waitForURL(/#\/assistant$/);
 
-      // A page of its own: one header line, no person header or tabs, the bot chat's composer, no attach.
+      // A page of its own: one header line, no person header or tabs, the bot chat's composer with its clip.
       await box.waitFor();
       assert.equal(await page.locator('#main .asst-top h1').innerText(), 'Assistant', tag + ': the header is the name');
       assert.equal(await page.locator('#ptabs, .bothead').count(), 0, tag + ': no person header or tabs');
-      assert.equal(await page.locator('#chat-composer .p-attach').count(), 0, tag + ': text only');
+      assert.equal(await page.locator('#chat-composer .p-attach').count(), 1, tag + ': files attach');
       // Empty: suggestions as chips, and one tap asks it.
       const hints = page.locator('#conv-thread .asst-hints button');
       assert.equal(await hints.first().innerText(), "What's waiting on me?", tag + ': suggestions in the empty chat');
@@ -113,16 +114,17 @@ function fixture() {
       assert.equal(await page.locator('#conv-thread .asst-hints').count(), 0, tag + ': no suggestions once it has messages');
       assert.equal(await page.locator('#conv-thread .thinking').count(), 0, tag + ': a fast answer has no thinking state');
 
-      // The old link and search both land here; search puts your words in the box.
+      // The old link lands here; search no longer offers the Assistant (Ask does, on every page).
       await page.goto('https://tico-ui.test/#/person/ana/assistant');
       await page.waitForURL(/#\/assistant$/);
       await page.keyboard.press('Control+k');
       await page.locator('#search-input').fill('find the launch plan');
-      const ask = page.locator('#search-results li[data-ask]');
-      await ask.waitFor();
-      assert.match(await ask.innerText(), /Ask the Assistant…/, tag + ': search offers the Assistant');
-      await page.keyboard.press('Enter');
-      await page.waitForFunction(() => document.querySelector('#chat-composer .p-text')?.value === 'find the launch plan');
+      await page.locator('#search-results li').first().waitFor();
+      assert.doesNotMatch(await page.locator('#search-results').innerText(), /Ask the Assistant/, tag + ': search does not offer the Assistant');
+      await page.locator('#search-close').click();
+      await page.locator('#search-modal').waitFor({state: 'hidden'});
+      await box.fill('find the launch plan');
+      await page.waitForFunction(() => !document.querySelector('#chat-composer .p-send')?.classList.contains('p-off'));
       await page.locator('#chat-composer .p-send').click();
       await page.waitForFunction(() => document.querySelectorAll('#conv-thread .conv-run.chat').length === 4);
       assert.deepEqual(state.sent.at(-1), 'find the launch plan', tag + ': sent');

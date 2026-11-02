@@ -234,7 +234,8 @@ def test_tico_models_are_on_only_while_a_key_is_set(api, monkeypatch):
         put(api, "providers", {"enabled": ["anthropic"], "model": "tico-general-medium-1.0", "expected_revision": view["revision"]})
         view = get(api, "providers")
         assert view["default"] == {"runtime": "pi", "model": "tico-general-medium-1.0"} and "tico" in view["enabled"]
-        rows = {m["id"]: m for m in get(api, "models")["models"] if m["provider"] == "tico" and not m.get("deprecated")}
+        rows = {m["id"]: m for m in get(api, "models")["models"] if m["provider"] == "tico" and not m.get("deprecated")
+                and not m.get("meeting")}
         assert len(rows) == 60 and all(m.endswith("-1.0") for m in rows)
         assert (rows["tico-general-medium-1.0"]["label"], rows["tico-general-medium-1.0"]["description"]) == (
             "General · Medium 1.0", "Claude Sonnet 5.5 underneath")
@@ -243,7 +244,7 @@ def test_tico_models_are_on_only_while_a_key_is_set(api, monkeypatch):
         delete(api, "providers/gateway")
         assert "tico" not in get(api, "providers")["enabled"]
         with api.app.state.store.read() as c:
-            stored = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='providers'").fetchone()[0])
+            stored = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='providers'").fetchone()[0])
         assert "tico" not in stored["enabled"]
 
 
@@ -265,8 +266,8 @@ def test_the_old_lineup_is_retired_but_a_default_or_bot_already_on_it_keeps_it(a
         # A default saved as Cheap 1.0 before 1.1 shipped.
         put(api, "providers", {"enabled": ["anthropic"], "model": "tico-general-medium-1.0", "expected_revision": view["revision"]})
         with api.app.state.store.transaction() as c:
-            stored = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='providers'").fetchone()[0])
-            c.execute("UPDATE registry_metadata SET value_json=? WHERE key='providers'",
+            stored = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='providers'").fetchone()[0])
+            c.execute("UPDATE registry_metadata SET value=? WHERE key='providers'",
                       (json.dumps({**stored, "runtime": "pi", "model": "tico-cheap-1.0"}),))
         # Saving something else keeps it, and a bot that names no model is made on it.
         view = get(api, "providers")
@@ -275,7 +276,7 @@ def test_the_old_lineup_is_retired_but_a_default_or_bot_already_on_it_keeps_it(a
         assert get(api, "providers")["default"] == {"runtime": "pi", "model": "tico-cheap-1.0"}
         new_bot(api, "scout")
         with api.app.state.store.read() as c:
-            assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='scout'").fetchone()[0])[
+            assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (H.resolve_bot(c, "scout")["id"],)).fetchone()[0])[
                 "model"] == "tico-cheap-1.0"
         # Choosing it fresh is refused: for a new bot, and as a default once the company has moved off it.
         new_bot(api, "scribe", expected=422, model="tico-cheap-1.0", harness="pi", effort="low")
@@ -489,8 +490,8 @@ def test_a_plain_http_check_to_this_computer_never_goes_through_a_proxy(monkeypa
 
 def put_bot_on(api, bot, model):
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?",
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        c.execute("UPDATE bot_config SET config=? WHERE bot=?",
                   (json.dumps({**config, "runtime": "pi", "harness": "pi", "model": model}), bot))
 
 
@@ -539,8 +540,8 @@ def test_the_key_goes_to_the_runner_alone_never_to_the_run(api, monkeypatch, on)
         put_bot_on(api, "ops", "tico-mid-1.0")
         if on == "claude_with_a_tico_fallback":
             with api.app.state.store.transaction() as c:
-                config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
-                c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps({
+                config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+                c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps({
                     **config, "runtime": "claude", "harness": "claude", "model": "opus-5-5",
                     "fallback": {"harness": "pi", "model": "tico-mid-1.0"}}),))
         machine, stranger = runner(api), runner(api, label="Other Mac")
@@ -575,8 +576,8 @@ def test_the_key_follows_what_the_run_was_handed_not_a_later_setting(api, monkey
     put_bot_on(api, "ops", "tico-mid-1.0" if started_on_tico else "kimi-k3")
     if change == "default_to_tico":
         with api.app.state.store.transaction() as c:
-            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
+            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+            c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
                       (json.dumps({k: v for k, v in config.items() if k not in ("runtime", "harness", "model")}),))
         record = get(api, "providers")
         put(api, "providers", {"enabled": ["openrouter"], "runtime": "pi", "model": "kimi-k3",
@@ -639,7 +640,16 @@ def finish(api, machine, attempt, error, **result):
          machine["token"])
 
 
-def test_at_the_cap_the_bot_says_gateway_cap_reached(api, monkeypatch):
+@pytest.mark.parametrize("at, retry_after", [
+    # Mid-month: the cap lifts at the next month's start, far beyond the 30-minute minimum wait.
+    ("2026-10-15T12:00:00.000000Z", "2026-11-01 00:00 UTC"),
+    # Last minutes of the month: the next month's start is 10 minutes off, so the minimum wait (LIMIT_COOLDOWN,
+    # 30 minutes, execution.reset_cooldown) is what holds the bot, and the retry lands at 00:20.
+    ("2026-10-31T23:50:00.000000Z", "2026-11-01 00:20 UTC"),
+])
+def test_at_the_cap_the_bot_says_gateway_cap_reached(api, monkeypatch, at, retry_after):
+    # The clock is pinned so the retry time does not depend on when the suite runs.
+    monkeypatch.setattr(H, "now", lambda: at)
     setup(api, monkeypatch)
     put_bot_on(api, "ops", "tico-mid-1.0")
     machine = runner(api)
@@ -655,9 +665,8 @@ def test_at_the_cap_the_bot_says_gateway_cap_reached(api, monkeypatch):
         status = H.status(c, "ops")
     assert status["state"] == "limited" and status["focus"].startswith("Gateway cap reached at ")
     assert "usage limit" not in status["focus"]
-    # No retry this UTC month: the bot waits for the next one.
-    month = G.month_after(H.parse_ts(H.now()))
-    assert status["focus"].endswith(f"retrying after {month:%Y-%m-%d} 00:00 UTC"), status["focus"]
+    # No retry this UTC month: the bot waits for the next one, or the minimum wait if that is sooner.
+    assert status["focus"].endswith(f"retrying after {retry_after}"), status["focus"]
     assert claim(api, machine, "ops") is None
 
 
@@ -743,7 +752,7 @@ def test_out_of_credit_is_the_gateways_wait_and_tico_models_are_back_within_a_mi
     assert "{" not in status["focus"] and "usage limit" not in status["focus"] and "cap" not in status["focus"]
     with api.app.state.store.read() as c:
         # The Tico login waits only the Gateway's minute, never the 30-minute backoff.
-        holds = [json.loads(r[0]) for r in c.execute("SELECT value_json FROM registry_metadata WHERE key LIKE 'login-hold:%'")]
+        holds = [json.loads(r[0]) for r in c.execute("SELECT value FROM registry_metadata WHERE key LIKE 'login-hold:%'")]
         assert all(hold["until"] <= H.shift(at, seconds=G.OUT_OF_CREDIT_WAIT + 1) for hold in holds), holds
         assert G.OUT_OF_CREDIT_WAIT <= limit_cooldown(c, "ops") <= G.OUT_OF_CREDIT_WAIT + 1
         # Not an API key's plan or billing: Health doesn't send the person to check one.
@@ -752,7 +761,7 @@ def test_out_of_credit_is_the_gateways_wait_and_tico_models_are_back_within_a_mi
     at = H.shift(at, seconds=G.OUT_OF_CREDIT_WAIT + 2)
     with api.app.state.store.transaction() as c:
         # The computer has been reporting in all along, not waking from a silence.
-        c.execute("UPDATE runners SET last_seen=?,awake_since=NULL", (at,))
+        c.execute("UPDATE runners SET last_seen_at=?,awake_since=NULL", (at,))
     ready(api, machine, ["ops"])
     retried = claim(api, machine, "ops")
     assert retried and retried["job_id"] == attempt["job_id"] and retried["config"]["model"] == "tico-mid-1.0"
@@ -774,11 +783,11 @@ def test_a_rate_limited_bot_its_fallback_finished_for_is_back_on_tico_models_aft
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 2, "text": "Done.",
                                                      "fallback": "codex", "primary_limited": True}, machine["token"])
     with api.app.state.store.read() as c:
-        holds = [json.loads(r[0]) for r in c.execute("SELECT value_json FROM registry_metadata WHERE key LIKE 'login-hold:%'")]
+        holds = [json.loads(r[0]) for r in c.execute("SELECT value FROM registry_metadata WHERE key LIKE 'login-hold:%'")]
     assert holds and all(hold["until"] <= H.shift(at, seconds=G.GATEWAY_WAIT + 1) for hold in holds), holds
     at = H.shift(at, seconds=G.GATEWAY_WAIT + 2)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen=?,awake_since=NULL", (at,))
+        c.execute("UPDATE runners SET last_seen_at=?,awake_since=NULL", (at,))
     post(api, "chat/ops", {"text": "Use only the synthetic fixture again"})
     ready(api, machine, ["ops"])
     again = claim(api, machine, "ops")
@@ -831,7 +840,7 @@ def test_a_tico_model_on_a_runner_that_runs_bots_as_itself_says_so_once_and_is_n
     status, job = ended(api, attempt)
     assert status["focus"] == error.removesuffix(" (not_isolated)") + ". This run is saved for later", status["focus"]
     stop = get(api, "status?bot=ops")["status"]["last_stop"]
-    assert stop["attempt_id"] == attempt["id"] and stop["action"] == "review"
+    assert stop["run_id"] == attempt["id"] and stop["action"] == "review"
     assert "never started" in stop["text"] and "changed something" not in stop["reason"]
     assert "pick another model or move the bot" in stop["reason"]
     assert job == "uncertain" and claim(api, machine, "ops") is None
@@ -843,7 +852,7 @@ def test_a_tico_model_on_a_runner_that_runs_bots_as_itself_says_so_once_and_is_n
     monkeypatch.setattr(execution, "reports_tools", lambda *_: True)
     for _ in range(2):
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE attempts SET finished=? WHERE id=?", (H.shift(H.now(), seconds=-STALL_MAX - 1),
+            c.execute("UPDATE attempts SET finished_at=? WHERE id=?", (H.shift(H.now(), seconds=-STALL_MAX - 1),
                                                                      attempt["id"]))
             assert api.app.state.execution.auto_reconcile(c) == []
         assert ended(api, attempt)[1] == "uncertain" and claim(api, machine, "ops") is None
@@ -923,7 +932,7 @@ def test_a_gateway_outage_retries_a_run_a_few_times_each_later_then_ends_it(api,
             wait = metadata(c, execution.GATEWAY_WAIT + "ops")
             waits.append((H.parse_ts(wait["until"]) - H.parse_ts(wait["since"])).total_seconds())
             # The wait has passed.
-            c.execute("UPDATE registry_metadata SET value_json=? WHERE key=?",
+            c.execute("UPDATE registry_metadata SET value=? WHERE key=?",
                       (json.dumps({**wait, "until": H.shift(H.now(), seconds=-1)}), execution.GATEWAY_WAIT + "ops"))
         attempt = claim(api, machine, "ops")
         assert attempt, "after the wait the run is tried again"
@@ -948,8 +957,8 @@ def test_a_tico_fallback_the_gateway_refused_reads_as_the_gateway(api, monkeypat
     Gateway refused that, the run is the Gateway's, as on a Tico primary (and slow to fail is no reason to hold it)."""
     setup(api, monkeypatch)
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps({
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps({
             **config, "runtime": "claude", "harness": "claude", "model": "opus-5-5",
             "fallback": {"harness": "pi", "model": "tico-mid-1.0"}}),))
     machine = runner(api)
@@ -960,7 +969,7 @@ def test_a_tico_fallback_the_gateway_refused_reads_as_the_gateway(api, monkeypat
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "gateway"}, machine["token"])
     if slow:
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE attempts SET started=? WHERE id=?", (H.shift(H.now(), seconds=-600), attempt["id"]))
+            c.execute("UPDATE attempts SET started_at=? WHERE id=?", (H.shift(H.now(), seconds=-600), attempt["id"]))
     events = [{"seq": 1, "kind": "tool", "payload": {"name": "read"}}] if acted else []
     events.append({"seq": len(events) + 1, "kind": "error", "payload": {"error": error}})
     post(api, f"attempts/{attempt['id']}/events", {"events": events}, machine["token"])
@@ -984,7 +993,7 @@ def test_a_reply_the_gateway_cut_off_is_posted_with_what_happened(api, monkeypat
     status, job = ended(api, attempt)
     assert job == "completed" and status["state"] == "idle"
     with api.app.state.store.read() as c:
-        said = [r[0] for r in c.execute("SELECT body FROM messages WHERE from_actor='bot:ops'")]
+        said = [r[0] for r in c.execute("SELECT body FROM messages WHERE sender_id='bot:ops'")]
     assert any("cut this reply off" in body and body.startswith("Hello there") for body in said), said
 
 
@@ -1063,6 +1072,6 @@ def test_a_new_bot_on_the_gateway_default_takes_its_templates_level(api, monkeyp
         own = new_bot(api, "chosen", template="inbox", model="tico-general-high-1.0", harness="pi", effort="high")
         with api.app.state.store.read() as c:
             models = dict(c.execute("SELECT slug, model FROM bots WHERE slug IN ('mailwatch','plain','chosen')").fetchall())
-            stored = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='mailwatch'").fetchone()[0])
+            stored = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (H.resolve_bot(c, "mailwatch")["id"],)).fetchone()[0])
         assert models == {"mailwatch": "tico-general-low-1.0", "plain": "tico-general-medium-1.0", "chosen": "tico-general-high-1.0"}, (made, plain, own)
         assert stored["model"] == "tico-general-low-1.0" and stored["gateway"] == {"level": "low"}

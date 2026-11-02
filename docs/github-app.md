@@ -460,7 +460,7 @@ installed App's suite, such as a deploy or monitoring service with nothing to ru
 pending, so it never holds a green head. Checks that leave pending this way finish the head as a webhook's last
 check would: the ticket moves on, or the Builder is woken to merge, at most once per head.
 The grouping survives server restarts and keeps at most 50 distinct notice items per burst.
-Rules page (`hub rule list`) rows for `pr_checks_done` and `pr_review` change what these do.
+Wake rules for `pr_checks_done` and `pr_review` (in the **What wakes** automations on the Automations page) change what these do.
 
 A bot waiting on one result can arm a one-shot wake on a PR link: `hub task link <task> <pr url> --wake-once`
 (`wake_once: true` on `POST /api/v2/tasks/{id}/links` or `hub_task_link`; `--no-wake-once` disarms it). The
@@ -471,7 +471,7 @@ and status, with the checks link and commit; judged when a suite completes, or w
 pending finishes after one has; a run whose own suite is still running holds it), a review is submitted approving or requesting changes (with the reviewer and
 review link), or a release ships the merged PR. A PR merged in a repository other than the one Tico releases
 never ships, so its merge is the wake. The link disarms in the same write, so redelivered events never repeat
-it; the link's `detail_json.wake_once_fired` records what fired. Arming needs the connected App and is refused
+it; the link's `detail.wake_once_fired` records what fired. Arming needs the connected App and is refused
 on a closed or shipped PR, or one already merged outside the release repository; it is off unless armed,
 creates no task and never changes the task's status or step. While armed on an open or merged PR that the App
 has sent an event for, or in a repository it reaches, the task counts as waiting on GitHub, so a waiting task

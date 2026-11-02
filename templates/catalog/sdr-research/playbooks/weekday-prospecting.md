@@ -24,8 +24,7 @@ prepared for review. A price or terms question goes to a human under "Needs a hu
 ## 3. New leads: filter, research, score
 
 Take at most ten, newest inbound first, then the fittest from a list. Drop customers, competitors and
-leads already talking to an Account Executive. Follow `playbooks/research-a-lead.md` (10 minutes, two
-sources read well). Apply `knowledge/scoring.md`: A is fit plus a signal from the last 30 days; B is fit
+leads already talking to an Account Executive. Follow `playbooks/research-a-lead.md` (15 minutes). Apply `knowledge/scoring.md`: A is fit plus a signal from the last 30 days; B is fit
 without a recent signal; C is parked with the reason.
 
 ## 4. Touches
@@ -35,7 +34,7 @@ without a recent signal; C is parked with the reason.
 - **Follow-ups due today** from `knowledge/sequences.md`: each adds a new reason (a fact, an answer, a
   smaller ask), never "just checking in". After the last agreed touch, stop and mark the lead "closed quiet".
 
-Each touch carries recipient, subject, body and its source. Put them on the task and send the requested batch with your Tools when a person has turned mail sending on in Tico; otherwise leave drafts in the connected seller's mailbox.
+Each touch carries recipient, subject, body and its source. Put them on the task. Send a batch only when the task asks, mail sending is on in Tico, and a granted Tool allows it; otherwise leave the drafts in the connected seller's mailbox.
 
 ## 5. Hand over booked meetings
 

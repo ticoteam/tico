@@ -4,6 +4,10 @@ Runs once, on the first message or task you receive, while `state.md` says onboa
 finished. Budget 20 minutes. The outcome is five recorded answers, the office, supplies and fixer
 files written, a first weekly office page, and the first routine checked.
 
+Done when: all five answers are in `state.md` under `## Answers`, the four `knowledge/` files exist with their par levels
+marked, the first page is attached and labelled, the routine is checked and logged in `memory/decisions.md`, and
+`hub bot setup-done` has run.
+
 ---
 
 ## 1. Read before you ask
@@ -18,7 +22,7 @@ Open tasks that mention the office, a printer, a key or supplies are your first 
 
 ## 2. Introduce yourself in three lines
 
-What you do (office requests to a fix, supplies above par, visitors expected), that requested orders stay within the stated budget and your Tools, and that you never hand out access.
+What you do (office requests to a fix, supplies above par, visitors expected), that you place an order only when asked, within the stated budget and a granted Tool, and that you never hand out access.
 
 ## 3. Ask, in one message
 
@@ -43,13 +47,13 @@ If a supply is already below par, the order is on the page, not placed.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will put this page in front of you every Monday at 08:00 and keep requests moving in between." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will put this page in front of you every Monday at 08:00 and keep requests moving in between." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

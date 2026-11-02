@@ -19,14 +19,14 @@ def rows(api, token="ana-test"):
     return {job["key"]: job for job in data["jobs"]}, data
 
 
-def test_every_built_in_job_is_listed_with_its_group_word_and_six_are_marked_controllable(api):
+def test_every_built_in_job_is_listed_with_its_group_word_and_control_availability(api):
     jobs, data = rows(api, token="ben-test")     # a member, not only the owner, sees the list
     assert "groups" not in data, "one flat list; a group is a word search finds, not a heading"
     assert [j["key"] for j in data["jobs"]] == [job.key for job in SR.JOBS] + ["task-rule-close-after-done"]
     assert {k for k, j in jobs.items() if j["controllable"]} == {
         "stale_review", "still_wanted", "kpi_asks", "learnings", "health_scan", "ask_deadlines", "task_manager_report",
-        "propose_demotions", "stall_triage", "engineering_exceptions"}
-    assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "learnings", "stall_triage"}
+        "stall_triage", "engineering_exceptions", "bookkeeper_check", "memory_tidy"}
+    assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "learnings", "stall_triage", "thread_routing"}
     assert all(j["needed"] == (j["group"] == "housekeeping") for j in jobs.values())
     assert jobs["stale_review"]["schedule"] == "Hourly" and jobs["learnings"]["schedule"] == "Nightly at 03:00"
     for key in ("due_reminders", "ask_deadlines", "approval_expiry"):
@@ -41,7 +41,7 @@ def test_a_scheduler_tick_records_each_run_with_its_result_and_next_run(api):
     Scheduler(store, api.app.state.execution).tick(at)
     jobs, _ = rows(api)
     for key in ("still_wanted", "ask_deadlines", "approval_expiry", "stall_checks", "health_scan", "kpi_asks",
-                "due_reminders", "snooze_ends", "routine_timer", "cleanup"):
+                "due_reminders", "snooze_ends", "cleanup"):
         assert jobs[key]["last"] and jobs[key]["last"]["ok"], key
         assert jobs[key]["last"]["result"], key
     assert jobs["still_wanted"]["last"]["result"] == "No idle tasks"
@@ -178,8 +178,8 @@ def test_a_quiet_repeat_moves_its_row_after_a_minute_and_a_busy_run_starts_a_new
         rid = SR.save(c, first, finished=first.started)
         moved = SR.Run("snooze_ends").did("Nothing due", quiet=True)
         assert SR.save(c, moved) == rid
-        row = c.execute("SELECT runs,started FROM system_runs WHERE id=?", (rid,)).fetchone()
-        assert row["runs"] == 2 and row["started"] == moved.started, "folded and moved forward"
+        row = c.execute("SELECT runs,started_at FROM system_runs WHERE id=?", (rid,)).fetchone()
+        assert row["runs"] == 2 and row["started_at"] == moved.started, "folded and moved forward"
         busy = SR.Run("snooze_ends").did("1 snooze ended")
         assert SR.save(c, busy) != rid
         assert c.execute("SELECT count(*) FROM system_runs WHERE job='snooze_ends'").fetchone()[0] == 2
@@ -198,7 +198,7 @@ def test_each_wrapped_block_still_reports_its_old_failure_name(api, monkeypatch)
 
     def broken(*a, **k):
         raise RuntimeError("x")
-    for module, name in ((G, "refresh"), (goal_asks, "sync"), (health_monitor, "scan"), (go_live, "expire"),
+    for module, name in ((G, "refresh"), (goal_asks, "sync"), (health_monitor, "check"), (go_live, "expire"),
                          (ask_deadlines, "sweep"), (approval_expiry, "sweep"), (still_needed, "sweep"),
                          (billing_check, "read_later"), (still_wanted, "ask_idle")):
         monkeypatch.setattr(module, name, broken)

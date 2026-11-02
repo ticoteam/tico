@@ -22,6 +22,7 @@ import os
 import re
 import secrets
 import threading
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Literal
 
 import httpx
@@ -40,20 +41,29 @@ log = logging.getLogger("tico.support")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS support_tickets(
- id TEXT PRIMARY KEY, actor TEXT NOT NULL, created TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
- message TEXT NOT NULL, email TEXT NOT NULL DEFAULT '', sent_json TEXT NOT NULL DEFAULT '{}',
- hq_id TEXT NOT NULL, hq_secret TEXT NOT NULL, messages_json TEXT NOT NULL DEFAULT '[]',
- seen_id INTEGER NOT NULL DEFAULT 0, checked TEXT, request_key TEXT);
-CREATE INDEX IF NOT EXISTS support_tickets_actor ON support_tickets(actor, created);
+ id TEXT PRIMARY KEY, actor TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
+ message TEXT NOT NULL, email TEXT NOT NULL DEFAULT '', sent TEXT NOT NULL DEFAULT '{}',
+ hq_id TEXT NOT NULL, hq_secret TEXT NOT NULL, messages TEXT NOT NULL DEFAULT '[]',
+ seen_id INTEGER NOT NULL DEFAULT 0, checked_at TEXT, request_key TEXT);
+CREATE INDEX IF NOT EXISTS support_tickets_actor ON support_tickets(actor, created_at);
 """
 MAX_MESSAGE = 4000
 PER_DAY = 10                 # new tickets one person may file in a day; HQ limits the address as well
-FRESH_S = 30                 # an open ticket is asked about at most this often
+# How often a ticket is asked about, at most. HQ counts every ask from this install (one address) together, so a ticket
+# nobody has written on for an hour is asked about less often.
+FRESH_S = 30                 # a ticket written on (or filed) within ACTIVE_S, or the one in view
+QUIET_FRESH_S = 300          # an open or answered one with nothing new for longer
 CLOSED_FRESH_S = 6 * 3600    # a closed one, in case the team reopened it
+ACTIVE_S = 3600
+ASKED = 20                   # tickets asked about in one refresh, at most
+EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 LISTED = 50
 HQ_WAIT = 8
+# The sources this server names when it files (HQ's `source` field; HQ owns the full list and stores `unknown` for any
+# value it does not know): a person, a bot's report a person approved, BotOps, the Health Monitor.
+SOURCES = ("person", "bot_report", "botops", "health_monitor")
 TRANSPORT = None             # tests replace it with an httpx.MockTransport: nothing reaches the network
-CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f  ‪-‮⁦-⁩]")
+CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
 EMAIL = re.compile(r"[^@\s<>\",;()\[\]\\]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\.[A-Za-z]{2,24}")
 VERSION = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(?:-[0-9A-Za-z][0-9A-Za-z.-]{0,31})?")
 
@@ -67,6 +77,10 @@ class SupportTicket(Contract):
     diagnostics: str = Field(default="", max_length=64)     # the digest of the bundle the person previewed (backend/diagnostics.py)
     # What the person is asking for: help, help with setting up (backend/support_asks.py setup_snapshot), or feedback.
     kind: Literal["support", "setup", "feedback"] = "support"
+    # Who is filing, for HQ's queue (`source`; HQ owns the list): the person's own app sends nothing, so `person`; only
+    # BotOps' `hub support file` says `botops`, kept only when BotOps makes the request. It sorts tickets at HQ and
+    # grants nothing.
+    source: Literal["person", "botops"] = "person"
 
 
 class FeedbackAnswer(Contract):
@@ -76,6 +90,10 @@ class FeedbackAnswer(Contract):
 
 class SupportFromApproval(Contract):
     approval: str = Field(min_length=1, max_length=64)     # an approved `support` approval the caller asked for
+
+
+class SupportRefresh(Contract):
+    ticket: str = Field(default="", max_length=64)          # the ticket a person has in view: asked about first
 
 
 class SupportMessage(Contract):
@@ -217,22 +235,35 @@ def _answer(response, success):
 
 
 def _messages(value):
-    """HQ's message list cut down to the fields the page shows, whatever HQ sent."""
+    """HQ's message list cut down to the fields the page shows, whatever HQ sent. HQ calls a message's time `created`;
+    the hub keeps it as `created_at`."""
     out = []
     for item in (value if isinstance(value, list) else [])[:200]:
         if isinstance(item, dict) and isinstance(item.get("id"), int):
-            out.append({"id": item["id"], "created": str(item.get("created") or "")[:30],
+            out.append({"id": item["id"], "created_at": str(item.get("created") or item.get("created_at") or "")[:30],
                         "from": "person" if item.get("from") == "person" else "staff",
                         "body": str(item.get("body") or "")[:8000],
                         "has_diagnostics": item.get("has_diagnostics") is True})
     return out
 
 
+def _stored_messages(row):
+    """A ticket's stored messages; one stored before the time column renames has HQ's `created` instead of `created_at`."""
+    return [{**m, "created_at": m.get("created_at") or m.get("created") or ""} if "created" in m else m
+            for m in json.loads(row["messages"] or "[]")]
+
+
+def _last_activity(row):
+    """When the ticket was last written on, by either side, or filed: an aware datetime (the epoch when none reads)."""
+    times = [H.parse_ts(m.get("created_at")) for m in _stored_messages(row)] + [H.parse_ts(row["created_at"])]
+    return max((t for t in times if t and t.tzinfo), default=EPOCH)
+
+
 def view(row):
     """A ticket as the page sees it. The HQ secret and id are not in it."""
-    messages = json.loads(row["messages_json"] or "[]")
-    return {"id": row["id"], "created": row["created"], "status": row["status"], "message": row["message"],
-            "email": row["email"], "sent": json.loads(row["sent_json"] or "{}"), "messages": messages,
+    messages = _stored_messages(row)
+    return {"id": row["id"], "created_at": row["created_at"], "status": row["status"], "message": row["message"],
+            "email": row["email"], "sent": json.loads(row["sent"] or "{}"), "messages": messages,
             "unread": sum(1 for m in messages if m["from"] == "staff" and m["id"] > row["seen_id"])}
 
 
@@ -245,6 +276,9 @@ def seal_plaintext_secrets(store, vault):
     is left alone. Returns how many were sealed. Run on start; a vault that cannot be opened now (KMS unreachable)
     leaves them for the next start or the next use (`Support.secret`)."""
     with store.transaction() as c:
+        # The table is made by Store.initialize, which can run after this (a fresh database): no table, nothing stored yet.
+        if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='support_tickets'").fetchone():
+            return 0
         rows = c.execute("SELECT id,hq_secret FROM support_tickets WHERE substr(hq_secret,1,?)<>?",
                          (len(SEALED), SEALED)).fetchall()
         for row in rows:
@@ -312,7 +346,7 @@ class Support:
                 from .views import roster
                 people = roster(c).get("people") or []
                 redactor = diagnostics.Redactor(diagnostics._domains(self.settings, {"people": people}),
-                    [(b["slug"], [b.get("display_name")]) for b in H.bots(c)],
+                    [(b["slug"], [b.get("display_name"), b["id"]]) for b in H.bots(c)],
                     [(p.get("id", ""), [p.get("name"), p.get("email")]) for p in people])
             value = redactor.clean(diagnostics.allowed(value))
             value.setdefault("capture", {})["edited"] = True
@@ -330,9 +364,10 @@ class Support:
             raise Problem("diagnostics_stale", "This preview expired. Refresh diagnostics and review again.", 409)
         return bundle
 
-    def file(self, who, body, key="", on_filed=None):
+    def file(self, who, body, key="", on_filed=None, source=""):
         """Send the ticket to HQ, then keep HQ's id and secret. Nothing is kept when HQ refuses or cannot be reached.
-        `on_filed(c, ticket_id)` runs in the transaction that keeps it (an approval spent with it)."""
+        `on_filed(c, ticket_id)` runs in the transaction that keeps it (an approval spent with it). `source` is who
+        filed it, as HQ's queue sorts tickets (one of SOURCES; the body's own when not given)."""
         message, email = clean_message(body.message), clean_email(body.email)
         with self.store.read() as c:
             if key:
@@ -341,7 +376,7 @@ class Support:
                 if again:
                     return view(again)
             since = H.shift(H.now(), hours=-24)
-            recent = c.execute("SELECT count(*) FROM support_tickets WHERE actor=? AND created>?",
+            recent = c.execute("SELECT count(*) FROM support_tickets WHERE actor=? AND created_at>?",
                                (who.actor, since)).fetchone()[0]
         if recent >= PER_DAY:
             raise Problem("support_busy", "That is enough requests for today. Try again tomorrow.", 429)
@@ -350,7 +385,11 @@ class Support:
         # could not keep.
         with self.store.transaction() as c:
             self.vault.cipher.key(c)
-        sent, payload = {}, {"message": message}
+        # Only BotOps says botops: the same claim from a person's own app or the Assistant is the person's ticket.
+        source = source or ("person" if body.source == "botops" and who.via != "botops" else body.source)
+        if source not in SOURCES:
+            raise ValueError(f"not a support source: {source}")
+        sent, payload = {}, {"message": message, "source": source}
         if email:
             payload["email"] = email
         if body.include_ids:
@@ -364,6 +403,11 @@ class Support:
         if body.kind != "support":
             payload["kind"] = sent["kind"] = body.kind
         answer = _ask_hq("POST", "/v1/support", body=payload)
+        if answer.status_code == 422 and _refused_field(answer) == "fields":
+            # An HQ from before source refuses it as an unknown field: the ticket goes again without it, keeping the
+            # rest (BotOps' and the Health Monitor's messages start with their name, which is how such an HQ reads it).
+            payload.pop("source")
+            answer = _ask_hq("POST", "/v1/support", body=payload)
         if answer.status_code == 422 and {"app_version", "kind"} & set(payload) and _refused_field(answer) == "fields":
             # An HQ from before app_version or kind refuses unknown fields; the ticket still goes without them, and
             # names its kind in the message instead.
@@ -384,7 +428,7 @@ class Support:
             raise Problem("support_unreachable", "Could not reach Tico support. Try again in a moment.", 502, retryable=True)
         ticket_id = "sup_" + secrets.token_hex(6)
         with self.store.transaction() as c:
-            c.execute("INSERT INTO support_tickets(id,actor,created,status,message,email,sent_json,hq_id,hq_secret,"
+            c.execute("INSERT INTO support_tickets(id,actor,created_at,status,message,email,sent,hq_id,hq_secret,"
                       "request_key) VALUES(?,?,?,?,?,?,?,?,?,?)",
                       (ticket_id, who.actor, H.now(), "open", message, email, encode(sent), hq_id,
                        self.vault.cipher.seal(c, _context(ticket_id), hq_secret), key or None))
@@ -405,7 +449,7 @@ class Support:
                 quarantined = H.is_bot(who.actor) and (H.bot(c, H.actor_id(who.actor)) or {}).get("state") == "quarantined"
             if not row:
                 raise Problem("not_found", "Approval not found", 404)
-            if row["requested_by"] != who.actor:
+            if row["requested_by_id"] != who.actor:
                 raise Problem("forbidden", "Only whoever asked for this approval may send it.", 403)
             if quarantined:
                 raise Problem("forbidden", "A quarantined bot sends nothing until a person clears it.", 403)
@@ -417,8 +461,12 @@ class Support:
             payload = row["payload"] or {}
             if H.lint_support(payload) or not H.support_text_matches(payload):
                 raise Problem("approval", "The approved message no longer matches its hash; nothing was sent.", 409)
-            person = Identity(row["decided_by"], "human")
+            person = Identity(row["decided_by_id"], "human")
             key = "approval:" + approval_id
+            with self.store.read() as c:      # a Health Monitor report a person approved is still the Health Monitor's
+                health = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='health_reports'").fetchone() \
+                    and c.execute("SELECT 1 FROM health_reports WHERE approval_id=?", (approval_id,)).fetchone()
+            source = "health_monitor" if health else "bot_report"
             if row["consumed_at"]:
                 with self.store.read() as c:
                     done = c.execute("SELECT * FROM support_tickets WHERE actor=? AND request_key=?",
@@ -435,7 +483,7 @@ class Support:
 
             ticket = self.file(person, SupportTicket(message=payload["message"],
                                                      include_ids=payload.get("include_ids", True) is not False),
-                               key, on_filed=spend)
+                               key, on_filed=spend, source=source)
             with self.store.transaction() as c:      # a ticket kept before its approval was spent (an older crash)
                 spend(c)
             return {"ticket": ticket, "approval": approval_id, "filed_as": person.actor, "again": False}
@@ -453,6 +501,14 @@ class Support:
         _answer(answer, (201, 200))
         self._pull(row)
         return self.one(who, ticket_id)
+
+    def note(self, row, text):
+        """Tell HQ that a ticket this install filed has changed, such as a request withdrawn (backend/cloud_agents.py). It
+        goes with the ticket's own secret, not as a person's words; a ticket HQ already deleted has no one to hear it."""
+        answer = _ask_hq("POST", f"/v1/support/{row['hq_id']}/messages", body={"message": clean_message(text)},
+                         secret=self.secret(row))
+        if answer.status_code != 404:
+            _answer(answer, (201, 200))
 
     def remove(self, who, ticket_id):
         """Delete the ticket at HQ, then here."""
@@ -478,7 +534,7 @@ class Support:
 
     def listing(self, who):
         with self.store.read() as c:
-            rows = c.execute("SELECT * FROM support_tickets WHERE actor=? ORDER BY created DESC, id DESC LIMIT ?",
+            rows = c.execute("SELECT * FROM support_tickets WHERE actor=? ORDER BY created_at DESC, id DESC LIMIT ?",
                              (who.actor, LISTED)).fetchall()
         tickets = [view(r) for r in rows]
         return {"enabled": True, "tickets": tickets, "unread": sum(t["unread"] for t in tickets)}
@@ -501,31 +557,41 @@ class Support:
         else:
             return False
         with self.store.transaction() as c:
-            c.execute("UPDATE support_tickets SET status=?, messages_json=COALESCE(?,messages_json), checked=? WHERE id=?",
+            c.execute("UPDATE support_tickets SET status=?, messages=COALESCE(?,messages), checked_at=? WHERE id=?",
                       (status, encode(messages) if messages is not None else None, H.now(), row["id"]))
         return True
 
-    def refresh(self, who):
-        """Ask HQ about the caller's tickets that are due, then list them. HQ being down keeps what was known."""
+    def refresh(self, who, ticket=""):
+        """Ask HQ about the caller's tickets that are due, the most recently written on first, then list them. `ticket`
+        is the one a person has in view: it is due every FRESH_S whatever its pace. HQ being down, or asking us to slow
+        down (429), ends the round and keeps what was known."""
         now = H.now()
         with self.store.read() as c:
             rows = c.execute("SELECT * FROM support_tickets WHERE actor=? AND status!='gone' "
-                             "ORDER BY created DESC LIMIT 20", (who.actor,)).fetchall()
-        failed = False
+                             "ORDER BY created_at DESC LIMIT ?", (who.actor, LISTED)).fetchall()
+        active_since = H.parse_ts(now) - timedelta(seconds=ACTIVE_S)
+        rows = sorted(rows, key=lambda r: (r["id"] == ticket, _last_activity(r)), reverse=True)
+        failed, asked = False, 0
         for row in rows:
-            wait = CLOSED_FRESH_S if row["status"] == "closed" else FRESH_S
-            if row["checked"] and row["checked"] > H.shift(now, seconds=-wait):
+            if row["id"] == ticket or (row["status"] != "closed" and _last_activity(row) > active_since):
+                wait = FRESH_S
+            else:
+                wait = CLOSED_FRESH_S if row["status"] == "closed" else QUIET_FRESH_S
+            if row["checked_at"] and row["checked_at"] > H.shift(now, seconds=-wait):
                 continue
+            if asked == ASKED:
+                break
+            asked += 1
             if not self._pull(row):
                 failed = True
-                break                                  # HQ is down: do not ask again for every ticket
+                break                                  # HQ is down or busy: do not ask again for every ticket
         result = self.listing(who)
         result["refresh_failed"] = failed
         return result
 
     def read(self, who, ticket_id):
         row = self._own(who, ticket_id)
-        newest = max([m["id"] for m in json.loads(row["messages_json"] or "[]")] or [0])
+        newest = max([m["id"] for m in json.loads(row["messages"] or "[]")] or [0])
         with self.store.transaction() as c:
             c.execute("UPDATE support_tickets SET seen_id=MAX(seen_id,?) WHERE id=?", (newest, ticket_id))
         return self.one(who, ticket_id)
@@ -619,10 +685,10 @@ def install(app, store, settings, census):
         return support.file_approved(request.state.identity, body.approval)
 
     @app.post("/api/v2/support/tickets/refresh")
-    def support_refresh(request: Request):
+    def support_refresh(request: Request, body: SupportRefresh | None = None):
         who = person(request)
         require_on(settings)
-        return support.refresh(who)
+        return support.refresh(who, body.ticket if body else "")
 
     @app.post("/api/v2/support/tickets/{ticket_id}/messages")
     def support_write(request: Request, ticket_id: str, body: SupportMessage):

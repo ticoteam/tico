@@ -120,7 +120,7 @@ pub fn argv(program: &str, model: Option<&str>, effort: Option<&str>) -> Vec<Str
 }
 
 /// The answer to `session/request_permission`: Grok runs with --always-approve, so an allow option is chosen;
-/// an unknown option shape is cancelled rather than guessed.
+/// an unknown option shape is canceled rather than guessed.
 pub fn permission(params: &Value) -> Value {
     let options = params["options"].as_array().cloned().unwrap_or_default();
     let chosen = ["allow_always", "allow_once"].iter().find_map(|kind| options.iter().find(|o| o["kind"] == *kind));
@@ -192,6 +192,7 @@ impl GrokHost {
         let mut full = env.clone();
         full.extend(NO_OPERATOR_MCP.iter().map(|(k, v)| (k.to_string(), v.to_string())));
         command.args(&cmd[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).env_clear().envs(&full);
+        super::new_group(&mut command);
         let mut child = command.spawn().map_err(|e| failed(format!("could not start grok agent: {e}")))?;
         let _stderr = crate::run_diagnostics::Stderr::capture(&mut child, self.0.tx.clone(), &full);
         let stdout = child.stdout.take().ok_or_else(|| failed("grok agent has no stdout"))?;

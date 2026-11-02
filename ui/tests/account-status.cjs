@@ -94,8 +94,8 @@ const ALL_CLEAR = {audience: 'owner', checks: [{id: 'computers', label: 'Compute
     const text = (await page.locator('#account-menu .account-status').innerText());
     assert.doesNotMatch(text, /Writer|health_issues|uncertain_work|\bbad\b|\bwarn\b/, 'no internal words, nothing that clears itself');
     await lines.nth(1).locator('a').click();
-    // Credentials lives on the Tools page: the link lands there.
-    await page.waitForFunction(() => ['#/credentials', '#/integrations'].includes(location.hash));
+    // Credentials live in Library › Tools: the link lands there.
+    await page.waitForFunction(() => location.hash.startsWith('#/library/tools'));
     assert.equal(await page.locator('#account-menu').isHidden(), true, 'a fix closes the menu');
 
     // Hovering the dot (desktop) shows the same lines without opening the menu.

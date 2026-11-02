@@ -35,7 +35,7 @@ class Granola(Importer):
     private_by_default = True       # a person's notes stay theirs until the file says otherwise
     pace = 0.25                     # the API allows 5 calls a second sustained
 
-    def get(self, key, path, **query):
+    def get(self, key, path, /, **query):
         url = API + path + ("?" + urllib.parse.urlencode({k: v for k, v in query.items() if v}) if query else "")
         return self.send("GET", url, headers={"Authorization": "Bearer " + key})
 

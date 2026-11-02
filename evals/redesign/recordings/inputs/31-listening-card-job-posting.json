@@ -1,0 +1,15 @@
+{
+  "id": "31-listening-card-job-posting",
+  "kind": "listening",
+  "questions": "listening-card",
+  "level": "low",
+  "state": {
+    "source": "job board",
+    "about": "project tracking",
+    "title": "Senior sales engineer, project tracking platform (remote)",
+    "snippet": "Join our growing team selling to small businesses. Quota-carrying role, five years in SaaS.",
+    "date": "2026-10-24",
+    "url": "https://jobs.example/listing/5510"
+  },
+  "note": "A job posting: noise, not a lead."
+}

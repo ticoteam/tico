@@ -12,7 +12,7 @@ Sample output for Acme, a fictional studio-software team. Nothing has been publi
 |---|---|---|---|
 | 2026-09-28 | Why classes have empty spots after cancellations | How do I stop losing revenue to late cancels? | Drafted |
 | 2026-10-05 | A studio owner's checklist for reminder texts | What should reminders say? | Outlined |
-| 2026-10-12 | What we learned from 40 studio onboardings [gap: needs evidence that these numbers may be shared] | What do good studios do first? | Idea |
+| 2026-10-12 | What we learned from 40 studio onboardings (needs the owner's permission to share the numbers) | What do good studios do first? | Idea |
 
 ## Draft ready: "Why classes have empty spots after cancellations"
 Folder `reports/2026-09-28-empty-spots/`: `post.md` (620 words), a 60-word social version, a 3-line newsletter blurb.

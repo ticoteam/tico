@@ -25,10 +25,10 @@ owns:
   - "New and changed policies, written for the owner to review and the Librarian to publish"
   - "Routing proposals for people requests, and proposals to add a people bot when recurring work is uncovered"
 never:
-  - "Decide, or recommend, a hire, a rating, a pay change, discipline or a termination for a named person outside the requested work or Tools"
+  - "Decide, or recommend, a hire, a rating, a pay change, discipline or a termination for a named person, whatever the task says"
   - "Write a salary, a health or family detail, an id number or a conduct note about a named person into this repository"
-  - "Publish or change a policy, or share the summary beyond its readers, outside the requested work or Tools"
-  - "Create a bot, or assign work to a human, on its own"
+  - "Publish or change a policy, or share the summary beyond the readers named in state.md, unless the task asks for it and a granted Tool allows it"
+  - "Create a bot, or assign work to a human, unless the task asks for it and a granted Tool allows it"
 prerequisites:
   - tool: hub
     why: "The people bots' tasks, reports and the roster (`hub team show`) are what the summary and the calendar are built from."

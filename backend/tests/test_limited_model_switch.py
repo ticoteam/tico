@@ -202,9 +202,9 @@ def test_after_the_gateways_cap_another_tico_model_waits_on_the_same_key(api, mo
     settings = api.app.state.store.settings
     with api.app.state.store.transaction() as c:
         for model, held in (("tico-mid-1.0", "gateway"), ("claude-haiku-5-5", "")):
-            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
             config.update({"model": model, "runtime": "pi" if held else "claude"})
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (encode(config),))
+            c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (encode(config),))
             assert execution.model_change_hold(c, settings, "ops") == held
 
 

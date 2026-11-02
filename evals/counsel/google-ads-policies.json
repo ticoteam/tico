@@ -1,0 +1,35 @@
+{
+  "expected": [
+    {
+      "text": "Gambling ads must target approved countries, show responsible-gambling information, and never target minors.",
+      "quote": "Gambling ads must target approved countries, have a landing page that displays information about responsible gambling, and never target minors.",
+      "section": "Gambling",
+      "who_hint": "marketing"
+    },
+    {
+      "text": "For financial products, comply with the state and local rules where the ads run, with the disclosures local law requires.",
+      "quote": "When promoting financial products and services, you must comply with state and local regulations for any location that your ads target.",
+      "section": "Financial products",
+      "who_hint": "marketing"
+    },
+    {
+      "text": "For cryptocurrency promotion, comply with the rules for each place the ads run.",
+      "quote": "When promoting cryptocurrencies and related products, you must comply with",
+      "section": "Cryptocurrency",
+      "who_hint": "marketing"
+    },
+    {
+      "text": "Most advertisers must be certified by Google.",
+      "quote": "While most advertisers must be certified by Google, there may be limited circumstances where certification is not required.",
+      "section": "Certification",
+      "who_hint": "marketing"
+    }
+  ],
+  "url": "https://support.google.com/adspolicy/answer/6008942",
+  "fetched_at": "2026-10-30T23:39:38Z",
+  "from": {
+    "name": "Google Ads Policies",
+    "kind": "vendor"
+  },
+  "truncated": false
+}

@@ -51,7 +51,7 @@ def _timed_steps(c):
     if not step_flow._ready(c):
         return {}
     return {s["id"]: step_flow.of(s) for s in H._rows(c.execute(
-        "SELECT id, flow_json FROM task_steps WHERE flow_json LIKE '%status_hours%' OR flow_json LIKE '%late_hours%'"))}
+        "SELECT id, flow FROM task_steps WHERE flow LIKE '%status_hours%' OR flow LIKE '%late_hours%'"))}
 
 
 def limits(c, row, timed=None):
@@ -74,9 +74,9 @@ def since_map(c, rows):
         return {}
     ids = [r["id"] for r in rows]
     found = dict(c.execute(
-        f"SELECT task_id, max(ts) FROM task_events WHERE task_id IN ({','.join('?' * len(ids))}) "
+        f"SELECT task_id, max(created_at) FROM task_events WHERE task_id IN ({','.join('?' * len(ids))}) "
         "AND field IN ('step','status') GROUP BY task_id", ids).fetchall())
-    return {r["id"]: found.get(r["id"]) or r.get("created") for r in rows}
+    return {r["id"]: found.get(r["id"]) or r.get("created_at") for r in rows}
 
 
 def _working(c):
@@ -84,32 +84,35 @@ def _working(c):
     return H._rows(c.execute(
         "SELECT t.* FROM tasks t JOIN task_types y ON y.id=t.type_id WHERE (y.role=? AND t.status=?) "
         f"OR (t.step_id IN ({','.join('?' * len(timed))}) AND t.status NOT IN ('done','closed','declined')) "
-        "ORDER BY t.updated", (ENGINEERING, WORKING, *timed)))
+        "ORDER BY t.updated_at", (ENGINEERING, WORKING, *timed)))
 
 
 def _activity(c, row):
     """The last time anyone but Tico touched the ticket: its update, its checkpoint, a message in its room."""
-    said = c.execute("SELECT max(created) FROM messages WHERE conversation_id=? AND from_actor<>? AND deleted_at IS NULL",
+    said = c.execute("SELECT max(created_at) FROM messages WHERE conversation_id=? AND sender_id<>? AND deleted_at IS NULL",
                      (row.get("conversation_id") or "", H.KEEPER)).fetchone()[0]
-    return max(x for x in (row.get("updated"), row.get("checkpoint_at"), said) if x)
+    return max(x for x in (row.get("updated_at"), row.get("checkpoint_at"), said) if x)
 
 
 def _seen_by(c, row, who, at):
     """Whether `who` wrote in the ticket's room or changed it in the last SEEN_HOURS: they know how it stands."""
     since = H.shift(at, seconds=-SEEN_HOURS * 3600)
-    return bool(c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created>? "
+    return bool(c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>? "
                           "AND deleted_at IS NULL UNION ALL SELECT 1 FROM task_events WHERE task_id=? AND actor=? "
-                          "AND ts>? LIMIT 1", (row.get("conversation_id") or "", who, since, row["id"], who,
+                          "AND created_at>? LIMIT 1", (row.get("conversation_id") or "", who, since, row["id"], who,
                                                since)).fetchone())
 
 
 def _done(c, action, row, since):
-    return bool(c.execute(f"SELECT 1 FROM events WHERE action=? AND target=? AND json_extract(detail_json,'$.since')=? "
+    return bool(c.execute(f"SELECT 1 FROM events WHERE action=? AND target=? AND json_extract(detail,'$.since')=? "
                           "LIMIT 1", (action, row["id"], since)).fetchone())
 
 
 def _hours(at, since):
-    return (H.parse_ts(at) - H.parse_ts(since)).total_seconds() / 3600
+    now, then = H.parse_ts(at), H.parse_ts(since)
+    if now is None or then is None:
+        raise ValueError(f"unreadable step time: {at!r}, {since!r}")
+    return (now - then).total_seconds() / 3600
 
 
 def _name(c, row):
@@ -121,7 +124,7 @@ def _name(c, row):
 def _manager(c, row):
     """Who hears that a ticket runs late: the bot that manages its type, else the owner's manager. Never the owner."""
     from .lifecycle import _manager_actor
-    owner = row.get("owner") or ""
+    owner = row.get("owner_id") or ""
     typed = H.type_manager(c, row)
     for who in ((H.bot_actor(typed) if typed else ""), _manager_actor(c, H.actor_id(owner)) if H.is_bot(owner) else ""):
         if who and who != owner:
@@ -134,7 +137,7 @@ def _row(c, row, start, at, parked, timed=None):
     "asked" for a status wake, "late" for a notice sent to its manager, "untold" when no manager could read it."""
     landed = []
     name, step = _name(c, row)
-    owner = row.get("owner") or ""
+    owner = row.get("owner_id") or ""
     status_hours, late_hours = limits(c, row, timed)
     if (status_hours and H.is_bot(owner) and H.actor_id(owner) not in parked
             and _hours(at, _activity(c, row)) >= status_hours
@@ -155,7 +158,7 @@ def _row(c, row, start, at, parked, timed=None):
         if to and _seen_by(c, row, to, at):
             return landed   # the manager has just been at it: a later sweep tells them if it stays late
         hours = int(_hours(at, start))
-        sent = (H._wake(c, row, to, f"Late: {name} has been at {step} for {hours} h (owner {H.actor_id(owner)}). "
+        sent = (H._wake(c, row, to, f"Late: {name} has been at {step} for {hours} h (owner {H.actor_name(c, owner)}). "
                       "Unblock it, reroute it to another builder, or tell the owner what it waits on.",
                       {"wake": "blocker", "step_late": True}, trigger="stall_check") if to else None)
         if sent is None:
@@ -197,11 +200,11 @@ def _turn_items(c):
     from .check_pools import is_check_title
     rows = H._rows(c.execute(
         "SELECT t.* FROM tasks t JOIN task_types y ON y.id=t.type_id WHERE y.role=? AND t.status=? "
-        "AND t.owner LIKE 'bot:%' ORDER BY t.updated", (ENGINEERING, WORKING)))
+        "AND t.owner_id LIKE 'bot:%' ORDER BY t.updated_at", (ENGINEERING, WORKING)))
     rows += [r for r in H._rows(c.execute(
         "SELECT t.*, p.type_id AS parent_type FROM tasks t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
         "JOIN tasks p ON p.id=r.to_task JOIN task_types y ON y.id=p.type_id WHERE y.role=? AND t.status=? "
-        "AND t.owner LIKE 'bot:%' ORDER BY t.updated", (ENGINEERING, WORKING)))
+        "AND t.owner_id LIKE 'bot:%' ORDER BY t.updated_at", (ENGINEERING, WORKING)))
         if is_check_title(c, {"type_id": r.pop("parent_type")}, r.get("title"))]
     return rows
 
@@ -219,20 +222,20 @@ def turn_ended(c, at=None):
     ids = [r["id"] for r in rows]
     for part in H.chunks(ids):
         starts.update(dict(c.execute(
-            f"SELECT task_id, max(ts) FROM task_events WHERE task_id IN ({','.join('?' * len(part))}) "
+            f"SELECT task_id, max(created_at) FROM task_events WHERE task_id IN ({','.join('?' * len(part))}) "
             "AND field IN ('step','status') GROUP BY task_id", part).fetchall()))
     parked = H.parked_bots(c)
     cutoff = H.shift(at, minutes=-TURN_IDLE_MINUTES)
     woke = []
     for row in rows:
-        start = starts.get(row["id"]) or row.get("created")
-        owner = row["owner"]
+        start = starts.get(row["id"]) or row.get("created_at")
+        owner = row["owner_id"]
         if H.actor_id(owner) in parked or (H.bot(c, H.actor_id(owner)) or {}).get("state") != "active":
             continue
         live, finished, jobs = _runs(c, row)
         if live or jobs or not finished:
             continue
-        ended = finished[0]["finished"] or finished[0]["created"]
+        ended = finished[0]["finished_at"] or finished[0]["created_at"]
         if ended < start or ended > cutoff or _done(c, TURN_EVENT, row, start) or _waits(c, row, at):
             continue
         with isolated(c, "turn_ended", row["id"]):

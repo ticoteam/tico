@@ -39,7 +39,6 @@
   {"team": "support", "template": "onboarding-specialist"},
   {"team": "support", "template": "technical-support"},
   {"team": "finance", "template": "finance-lead"},
-  {"team": "finance", "template": "bookkeeping"},
   {"team": "finance", "template": "billing"},
   {"team": "finance", "template": "ar-followup"},
   {"team": "finance", "template": "payroll"},

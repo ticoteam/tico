@@ -1,0 +1,14 @@
+{
+ "answer": {
+  "attempt": null,
+  "paused": "This computer runs Tico 0.0.9, which this server (dev) cannot work with; it needs 0.4.0 or later. Its bots are paused until it updates."
+ },
+ "endpoint": "claim",
+ "request": {
+  "busy_bots": [],
+  "busy_lanes": [],
+  "next_run": true,
+  "start_places": true
+ },
+ "status": 200
+}

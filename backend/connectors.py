@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 
 from . import models as M
-from . import google_connect, routines
+from . import google_connect, reconnects, routines
 from .store import H, P, Problem, encode
 
 
@@ -142,10 +142,10 @@ def calendar_action(row, *, connector=False):
         "id": row["id"], "requested_by": row["requested_by"],
         "calendar": row["calendar_email"], "title": row["summary"],
         "start": row["start"], "end": row["end"],
-        "attendees": json.loads(row["attendees_json"] or "[]"),
+        "attendees": json.loads(row["attendees"] or "[]"),
         "add_meet": bool(row["add_meet"]), "status": row["status"],
-        "result": json.loads(row["result_json"] or "{}"),
-        "error": row["error"], "created": row["created"], "updated": row["updated"],
+        "result": json.loads(row["result"] or "{}"),
+        "error": row["error"], "created_at": row["created_at"], "updated_at": row["updated_at"],
     }
     if connector:
         out["description"] = row["description"]
@@ -285,7 +285,7 @@ def human_of(c, address):
 def install_connectors(app, store, execution, mutate):
     def publisher(c, who):
         runner = execution.runner(c, who)
-        if runner["operator"] not in (store.settings.processing_operators
+        if runner["owner_id"] not in (store.settings.processing_operators
                                       or (execution.auth.owner_id(c),)):
             raise Problem("forbidden", "This machine is not assigned the private app-connector capability", 403)
         return runner
@@ -297,12 +297,12 @@ def install_connectors(app, store, execution, mutate):
         or where a person's Connect Google waits to be finished."""
         with store.read() as c:
             runner = execution.runner(c, request.state.identity)
-            named = runner["operator"] in store.settings.processing_operators
+            named = runner["owner_id"] in store.settings.processing_operators
             if named:
                 return {"connectors": ["mail", "calendar"]}
             # A person's Connect Google waits for a computer that has no key or grant yet: the one that may publish
             # mail (the owner's, when no operator is named) runs the job so it can take the grant.
-            eligible = not store.settings.processing_operators and runner["operator"] == execution.auth.owner_id(c)
+            eligible = not store.settings.processing_operators and runner["owner_id"] == execution.auth.owner_id(c)
             return {"connectors": ["mail"] if eligible and google_connect.pending(c, runner["id"]) else []}
 
     google_connect.install(app, store, publisher, mutate)
@@ -332,14 +332,15 @@ def install_connectors(app, store, execution, mutate):
                     raise Problem("not_found", "Calendar target is not on the "
                                   + store.settings.app_name + " roster", 404)
                 payload = {"events": [event.model_dump() for event in snapshot.events]}
-                c.execute("INSERT INTO connector_snapshots(kind,owner,version,payload_json,updated,runner_id) "
+                c.execute("INSERT INTO connector_snapshots(kind,owner,version,payload,updated_at,runner_id) "
                           "VALUES('calendar',?,1,?,?,?) ON CONFLICT(kind,owner) DO UPDATE SET "
-                          "version=connector_snapshots.version+1,payload_json=excluded.payload_json,"
-                          "updated=excluded.updated,runner_id=excluded.runner_id",
+                          "version=connector_snapshots.version+1,payload=excluded.payload,"
+                          "updated_at=excluded.updated_at,runner_id=excluded.runner_id",
                           (person["id"], encode(payload), H.now(), runner["id"]))
-            c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,NULL,?) "
-                      "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=NULL,detail_json=excluded.detail_json",
+            c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,NULL,?) "
+                      "ON CONFLICT(service) DO UPDATE SET last_succeeded_at=excluded.last_succeeded_at,last_error=NULL,detail=excluded.detail",
                       ("connector:calendar", H.now(), encode({"runner_id": runner["id"], "snapshots": len(seen)})))
+            reconnects.google_good(c, "calendar", seen)      # a published calendar is that account working
             return {"ok": True, "snapshots": len(seen)}
         return mutate(request, body, work)
 
@@ -351,21 +352,25 @@ def install_connectors(app, store, execution, mutate):
             runner = publisher(c, request.state.identity)
             service = "connector:" + body.service
             if not body.failing:
-                c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,NULL,?) "
-                          "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=NULL,"
-                          "detail_json=excluded.detail_json", (service, H.now(), encode({"runner_id": runner["id"]})))
+                c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,NULL,?) "
+                          "ON CONFLICT(service) DO UPDATE SET last_succeeded_at=excluded.last_succeeded_at,last_error=NULL,"
+                          "detail=excluded.detail", (service, H.now(), encode({"runner_id": runner["id"]})))
+                reconnects.google_report(c, body.service, [])
                 return {"ok": True}
             label = "Calendar" if body.service == "calendar" else "Mail"
             error = "; ".join(
                 f"{label} can't refresh for {f.account}: "
                 + CONNECTOR_REASON[f.reason].format(domain=f.account.rpartition("@")[2]) for f in body.failing)
             signin = any(f.reason == "signin" for f in body.failing)
-            detail = {"runner_id": runner["id"], "needs_person": signin,
-                      **({"action": "Reconnect the Google account for " + ", ".join(
-                          f.account for f in body.failing if f.reason == "signin")} if signin else {})}
-            c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,NULL,?,?) "
-                      "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail_json=excluded.detail_json",
+            refused = [f.account for f in body.failing if f.reason == "signin"]
+            detail = {"runner_id": runner["id"], "needs_person": signin, "signin": refused,
+                      **({"action": "Reconnect the Google account for " + ", ".join(refused)} if signin else {})}
+            c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,NULL,?,?) "
+                      "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail=excluded.detail",
                       (service, error[:1000], encode(detail)))
+            # The tasks a refused sign-in stops get a card for the mailbox's person; an account this service no longer
+            # lists works again for it (backend/reconnects.py).
+            reconnects.google_report(c, body.service, refused, [f.account for f in body.failing])
             return {"ok": False}
         return mutate(request, body, work)
 
@@ -377,19 +382,19 @@ def install_connectors(app, store, execution, mutate):
             cutoff = H.shift(H.now(), minutes=-5)
             stale = c.execute(
                 "SELECT id,requested_by FROM calendar_actions WHERE status='running' "
-                "AND started<?", (cutoff,)).fetchall()
+                "AND started_at<?", (cutoff,)).fetchall()
             for row in stale:
                 now = H.now()
-                c.execute("UPDATE calendar_actions SET status='unknown',error=?,updated=?,finished=? "
+                c.execute("UPDATE calendar_actions SET status='unknown',error=?,updated_at=?,finished_at=? "
                           "WHERE id=? AND status='running'",
                           ("The connector did not confirm the provider result", now, now, row["id"]))
                 H.event(c, row["requested_by"], "calendar.schedule.unknown", row["id"], {})
             row = c.execute("SELECT * FROM calendar_actions WHERE status='pending' "
-                            "ORDER BY created,id LIMIT 1").fetchone()
+                            "ORDER BY created_at,id LIMIT 1").fetchone()
             if not row:
                 return {"action": None}
             now = H.now()
-            c.execute("UPDATE calendar_actions SET status='running',runner_id=?,started=?,updated=? "
+            c.execute("UPDATE calendar_actions SET status='running',runner_id=?,started_at=?,updated_at=? "
                       "WHERE id=?", (runner["id"], now, now, row["id"]))
             row = c.execute("SELECT * FROM calendar_actions WHERE id=?", (row["id"],)).fetchone()
             return {"action": calendar_action(row, connector=True)}
@@ -409,7 +414,7 @@ def install_connectors(app, store, execution, mutate):
                 raise Problem("state", "Calendar action is not running", 409)
             result = {"event_id": body.event_id, "meeting_url": body.meeting_url}
             now = H.now()
-            c.execute("UPDATE calendar_actions SET status=?,result_json=?,error=?,updated=?,finished=? "
+            c.execute("UPDATE calendar_actions SET status=?,result=?,error=?,updated_at=?,finished_at=? "
                       "WHERE id=?", (body.status, encode(result), body.error, now, now, action_id))
             H.event(c, row["requested_by"], "calendar.schedule." + body.status, action_id,
                     {"calendar": row["calendar_email"], "event_id": body.event_id})
@@ -441,7 +446,7 @@ def install_connectors(app, store, execution, mutate):
             if address in visible_addresses(c, who):
                 return
         elif who.role == "bot":
-            row = c.execute("SELECT h.email FROM bot_config b JOIN humans h ON h.id=b.operator WHERE b.bot=?",
+            row = c.execute("SELECT h.email FROM bot_config b JOIN humans h ON h.id=b.owner_id WHERE b.bot=?",
                             (H.actor_id(who.actor),)).fetchone()
             named = {store.settings.owner_email, str(row["email"] if row else "").lower()} - {""}
             if address in named or (str(person["email"] or "").lower() if person else "") in named:
@@ -462,10 +467,10 @@ def install_connectors(app, store, execution, mutate):
         with store.transaction() as c:
             H.event(c, who.actor, "calendar.read", address, {})
         if not row:
-            return {"calendar": address, "events": [], "updated": None, "stale": True}
-        payload = json.loads(row["payload_json"])
-        stale = row["updated"] < H.shift(H.now(), seconds=-180)
-        return {"calendar": address, "events": payload["events"], "updated": row["updated"],
+            return {"calendar": address, "events": [], "updated_at": None, "stale": True}
+        payload = json.loads(row["payload"])
+        stale = row["updated_at"] < H.shift(H.now(), seconds=-180)
+        return {"calendar": address, "events": payload["events"], "updated_at": row["updated_at"],
                 "version": row["version"], "stale": stale}
 
     @app.post("/api/v2/calendar/appointments")
@@ -484,9 +489,9 @@ def install_connectors(app, store, execution, mutate):
             outside = [address for address in body.attendees if address.lower() not in known]
             if outside:
                 # An invitation outside the company is a send, which stays the owner's whatever this install allows
-                # other bots (backend/ceo_acts.py).
-                from . import ceo_acts
-                ceo_acts.gate(c, who.actor, "send", f"invite {', '.join(outside[:3])} to \"{body.title}\"")
+                # other bots (backend/strategy_acts.py).
+                from . import strategy_acts
+                strategy_acts.gate(c, who.actor, "send", f"invite {', '.join(outside[:3])} to \"{body.title}\"")
             if who.role == "bot" and store.settings.block_external_invites:
                 # TICO_BLOCK_EXTERNAL_INVITES=1: an invitation is an email from the company's calendar, so a
                 # bot may invite only the people on the roster; anyone else is a person's act.
@@ -495,7 +500,7 @@ def install_connectors(app, store, execution, mutate):
                                   + ", ".join(outside[:3]) + " is not. Put the time in a draft for a person to send", 403)
             action_id, now = H.new_id(), H.now()
             c.execute("INSERT INTO calendar_actions(id,requested_by,calendar_email,summary,start,end,"
-                      "attendees_json,description,add_meet,status,result_json,error,created,updated) "
+                      "attendees,description,add_meet,status,result,error,created_at,updated_at) "
                       "VALUES(?,?,?,?,?,?,?,?,?,'pending','{}','',?,?)",
                       (action_id, who.actor, address, body.title, body.start, body.end,
                        encode(body.attendees), body.description, 1 if body.add_meet else 0, now, now))
@@ -552,21 +557,25 @@ def install_connectors(app, store, execution, mutate):
                 raise Problem("not_found", "Mail target is not on the "
                               + store.settings.app_name + " roster", 404)
             now = H.now()
+            from . import automations
             for message in body.messages:
+                # A message seen for the first time is what a mail automation hears (backend/automations.py).
+                fresh = not c.execute("SELECT 1 FROM mail_messages WHERE mailbox=? AND msg_id=?",
+                                                    (body.mailbox, message.msg_id)).fetchone()
                 c.execute(
                     "INSERT INTO mail_messages(mailbox,msg_id,thread_id,epoch,date,from_addr,from_header,"
-                    "to_json,cc_json,subject,snippet,labels_json,body,body_truncated,attachments_json,"
-                    "list_id,is_internal,has_unsubscribe,rule_hits_json,updated,deleted_at) "
+                    "to_addresses,cc,subject,snippet,labels,body,body_truncated,attachments,"
+                    "list_id,is_internal,has_unsubscribe,rule_hits,updated_at,deleted_at) "
                     "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL) "
                     "ON CONFLICT(mailbox,msg_id) DO UPDATE SET "
                     "thread_id=excluded.thread_id,epoch=excluded.epoch,date=excluded.date,"
                     "from_addr=excluded.from_addr,from_header=excluded.from_header,"
-                    "to_json=excluded.to_json,cc_json=excluded.cc_json,subject=excluded.subject,"
-                    "snippet=excluded.snippet,labels_json=excluded.labels_json,body=excluded.body,"
-                    "body_truncated=excluded.body_truncated,attachments_json=excluded.attachments_json,"
+                    "to_addresses=excluded.to_addresses,cc=excluded.cc,subject=excluded.subject,"
+                    "snippet=excluded.snippet,labels=excluded.labels,body=excluded.body,"
+                    "body_truncated=excluded.body_truncated,attachments=excluded.attachments,"
                     "list_id=excluded.list_id,is_internal=excluded.is_internal,"
-                    "has_unsubscribe=excluded.has_unsubscribe,rule_hits_json=excluded.rule_hits_json,"
-                    "updated=excluded.updated,deleted_at=NULL",
+                    "has_unsubscribe=excluded.has_unsubscribe,rule_hits=excluded.rule_hits,"
+                    "updated_at=excluded.updated_at,deleted_at=NULL",
                     (body.mailbox, message.msg_id, message.thread_id, message.epoch, message.date,
                      message.from_addr, message.from_header, encode(message.to), encode(message.cc),
                      message.subject, message.snippet, encode(message.labels), message.body,
@@ -575,18 +584,20 @@ def install_connectors(app, store, execution, mutate):
                      encode(message.rule_hits), now))
                 _mail_fts(c, body.mailbox, message.msg_id, message.subject, message.body,
                           message.from_addr, " ".join(message.to))
+                if fresh:
+                    automations.on_mail(c, body.mailbox, message)
             for msg_id in body.deleted:
                 existing = c.execute("SELECT epoch FROM mail_messages WHERE mailbox=? AND msg_id=?",
                                      (body.mailbox, msg_id)).fetchone()
                 epoch = existing["epoch"] if existing and existing["epoch"] else int(instant(body.synced_at).timestamp())
                 if existing:
-                    c.execute("UPDATE mail_messages SET deleted_at=?, updated=? WHERE mailbox=? AND msg_id=?",
+                    c.execute("UPDATE mail_messages SET deleted_at=?, updated_at=? WHERE mailbox=? AND msg_id=?",
                               (now, now, body.mailbox, msg_id))
                 else:
                     c.execute(
                         "INSERT INTO mail_messages(mailbox,msg_id,thread_id,epoch,date,from_addr,from_header,"
-                        "to_json,cc_json,subject,snippet,labels_json,body,body_truncated,attachments_json,"
-                        "list_id,is_internal,has_unsubscribe,rule_hits_json,updated,deleted_at) "
+                        "to_addresses,cc,subject,snippet,labels,body,body_truncated,attachments,"
+                        "list_id,is_internal,has_unsubscribe,rule_hits,updated_at,deleted_at) "
                         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (body.mailbox, msg_id, "", epoch, "", "", "", "[]", "[]", "", "", "[]", "",
                          0, "[]", "", 0, 0, "[]", now, now))
@@ -596,9 +607,10 @@ def install_connectors(app, store, execution, mutate):
             detail = {"runner_id": runner["id"], "mailbox": body.mailbox, "accepted": accepted}
             if body.history_id:
                 detail["history_id"] = body.history_id
-            c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,NULL,?) "
-                      "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=NULL,detail_json=excluded.detail_json",
+            c.execute("INSERT INTO service_health(service,last_succeeded_at,last_error,detail) VALUES(?,?,NULL,?) "
+                      "ON CONFLICT(service) DO UPDATE SET last_succeeded_at=excluded.last_succeeded_at,last_error=NULL,detail=excluded.detail",
                       ("connector:mail", now, encode(detail)))
+            reconnects.google_good(c, "mail", [body.mailbox])  # a synced mailbox is that account working
             return {"accepted": accepted}
         return mutate(request, body, work)
 
@@ -611,10 +623,10 @@ def install_connectors(app, store, execution, mutate):
             row = c.execute("SELECT * FROM connector_snapshots WHERE kind='calendar' AND owner=?",
                             (person["id"],)).fetchone()
             if not row:
-                return {"events": [], "updated": None, "stale": True}
-            payload = json.loads(row["payload_json"])
-            stale = row["updated"] < H.shift(H.now(), seconds=-180)
-            return {"events": payload["events"], "updated": row["updated"],
+                return {"events": [], "updated_at": None, "stale": True}
+            payload = json.loads(row["payload"])
+            stale = row["updated_at"] < H.shift(H.now(), seconds=-180)
+            return {"events": payload["events"], "updated_at": row["updated_at"],
                     "version": row["version"], "stale": stale}
 
     app.get("/api/v2/calendar/upcoming")(upcoming)

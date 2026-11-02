@@ -25,9 +25,9 @@ def repos(api):
     api.app.state.store.settings.github_owner = "Acme"
     with api.app.state.store.transaction() as c:
         for name in ("Acme/product", "Acme/docs", "Acme/site"):
-            c.execute("INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?)", (H.new_id(), name, H.now()))
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0] or "{}")
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
+            c.execute("INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?)", (H.new_id(), name, H.now()))
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0] or "{}")
+        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
                   (json.dumps({**config, "repo_access_mode": "chosen"}),))
         for name in ("Acme/product", "Acme/docs"):
             c.execute("INSERT INTO bot_repo_access VALUES('ops',?,'write')", (name,))
@@ -40,12 +40,12 @@ def ticks(api, bot="ops"):
 
 def history(api):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM settings_changes WHERE field='run_workflows' ORDER BY created")]
+        return [dict(r) for r in c.execute("SELECT * FROM settings_changes WHERE field='run_workflows' ORDER BY created_at")]
 
 
 def last_from(api, actor):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT id,conversation_id FROM messages WHERE from_actor=? ORDER BY created DESC, rowid DESC "
+        return c.execute("SELECT id,conversation_id FROM messages WHERE sender_id=? ORDER BY created_at DESC, rowid DESC "
                          "LIMIT 1", (actor,)).fetchone()
 
 
@@ -83,7 +83,7 @@ def test_botops_turns_it_on_for_one_repository_on_the_persons_yes_and_history_na
     # both messages; Settings history shows it for the bot.
     rows = history(api)
     assert len(rows) == 1
-    row, after = rows[0], json.loads(rows[0]["after_json"])
+    row, after = rows[0], json.loads(rows[0]["after"])
     assert (row["bot"], row["actor"], row["via"]) == ("ops", "human:ana", "botops")
     assert after["repository"] == "Acme/product" and after["on"] is True and after["carrier"] == "botops"
     assert (after["read_back_message"], after["yes_message"]) == (back, yes) and after["conversation_id"]
@@ -183,7 +183,7 @@ def test_already_on_changes_nothing_and_off_takes_only_that_repository(api, boto
     then, back, yes = asked(api, botops, "ana-test", on=False)
     assert change(api, then, back, yes, on=False).json()["changed"] is True
     assert ticks(api) == ["Acme/docs"]
-    last = json.loads(history(api)[-1]["after_json"])
+    last = json.loads(history(api)[-1]["after"])
     assert (last["repository"], last["on"], len(history(api))) == ("Acme/product", False, entries + 1)
 
 
@@ -205,8 +205,8 @@ def test_refusals_say_why_in_plain_words(api, botops, repos):
 
 def test_all_ticked_repos_ticks_the_one_repository_and_keeps_the_mode(api, botops, repos):
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
                   (json.dumps({**config, "repo_access_mode": "all", "repo_all_access": "write"}),))
     then, back, yes = asked(api, botops, "ana-test")
     assert change(api, then, back, yes).json()["changed"] is True
@@ -220,10 +220,10 @@ def test_the_assistant_carries_it_the_same_way(api):
     # Test 12: the person's Assistant, in their own chat; the history names it as the carrier.
     api.app.state.store.settings.github_owner = "Acme"
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?)", (H.new_id(), "Acme/product",
+        c.execute("INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?)", (H.new_id(), "Acme/product",
                                                                                             H.now()))
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0] or "{}")
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps({**config, "repo_access_mode": "chosen"}),))
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0] or "{}")
+        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps({**config, "repo_access_mode": "chosen"}),))
         c.execute("INSERT INTO bot_repo_access VALUES('ops','Acme/product','write')")
     r, first = assistant_turn(api, "ana-test", "Turn on Run workflows for ops on product")
     call = lambda attempt, path, body: api.post("/api/v2/" + path, json=body, headers=headers(attempt["token"]))
@@ -239,7 +239,7 @@ def test_the_assistant_carries_it_the_same_way(api):
     done = call(then, ROUTE, {"repository": "product", "on": True, "read_back": back.json()["message_id"], "yes": yes})
     assert done.status_code == 200 and done.json()["changed"] is True, done.text
     row = history(api)[-1]
-    assert (row["actor"], row["via"], json.loads(row["after_json"])["carrier"]) == ("human:ana", "assistant", "assistant")
+    assert (row["actor"], row["via"], json.loads(row["after"])["carrier"]) == ("human:ana", "assistant", "assistant")
 
 
 def test_a_word_from_the_person_between_the_read_back_and_the_yes_voids_it(api, botops, repos):

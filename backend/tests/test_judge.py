@@ -35,8 +35,8 @@ def fake(api):
 
 def events(api, actor):
     with api.app.state.store.read() as c:
-        return [(r["target"], json.loads(r["detail_json"])) for r in c.execute(
-            "SELECT target, detail_json FROM events WHERE action='judge.call' AND actor=? ORDER BY ts", (actor,))]
+        return [(r["target"], json.loads(r["detail"])) for r in c.execute(
+            "SELECT target, detail FROM events WHERE action='judge.call' AND actor=? ORDER BY created_at", (actor,))]
 
 
 def test_a_person_or_a_bot_judges_and_the_audit_keeps_the_answers_not_the_state(api):
@@ -105,6 +105,26 @@ def test_the_server_asks_typesafe_once_and_briefly():
     except J.JudgeError as exc:
         assert exc.retryable
     assert seen == [B.JEV_TIMEOUT] and B.JEV_TIMEOUT <= 10
+
+
+def test_a_callers_level_reaches_the_steps_that_take_one_and_prices_their_model():
+    from clients import judge as J
+    seen = []
+
+    def gateway(state, questions, label=None, level=None):
+        seen.append(("gateway", level))
+        raise J.JudgeError("down", "Gateway down", retryable=True)
+    gateway.current_model, gateway.level = (lambda: J.decide_model("low")), (lambda: "low")
+
+    def company(state, questions, label=None):   # takes no level: asked as before
+        seen.append(("company", None))
+        return {"answers": {}}
+
+    chain = B.ordered([gateway, company])
+    chain({"team": "Acme"}, QUESTIONS, level="high")
+    assert seen == [("gateway", "high"), ("company", None)]
+    assert B.step_models([gateway, company], level="high")[0] == J.decide_model("high")
+    assert B.step_models([gateway, company])[0] == J.decide_model("low")
 
 
 def test_the_daily_cap_is_a_setting_per_role(api):
@@ -182,6 +202,6 @@ def test_a_caller_records_one_outcome_for_its_own_decision_call(api):
     # Another caller cannot write an outcome onto the bot's call.
     assert api.post("/api/v2/decisions/outcome", json=said, headers=headers()).status_code == 404
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT actor, target, detail_json FROM events WHERE action='decision.outcome'").fetchall()
+        rows = c.execute("SELECT actor, target, detail FROM events WHERE action='decision.outcome'").fetchall()
     assert [(a, t, json.loads(d)) for a, t, d in rows] == [
         ("bot:ops", asked["ref"], {"label": "mail-triage@1", "verdict": "reply 0.8", "action": "replied"})]

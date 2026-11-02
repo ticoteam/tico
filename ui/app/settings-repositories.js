@@ -53,7 +53,7 @@ async function renderSettingsRepos(fresh) {
   if (!$('#set-repos')) return;
   const admin = settingsIsAdmin(), dis = admin ? '' : ` disabled title="${REPO_LOCKED}"`;
   if (!REPOS.github_connected) {
-    host.innerHTML = `<header><h2>Repositories</h2></header><p class="repos-line">The GitHub App is not connected; bots use their computers' own GitHub sign-in.${S.me?.role === 'owner' ? ` <a href="${INTEGRATIONS}" data-repos-connect>Connect GitHub</a>`
+    host.innerHTML = `<header><h2>Repositories</h2></header><p class="repos-line">The GitHub App is not connected; bots use their computers' own GitHub sign-in.${S.me?.role === 'owner' ? ` <a href="${INTEGRATIONS}/github" data-repos-connect>Connect GitHub</a>`
       : ` <span data-repos-ask>Ask ${esc(settingsOwnerName() || 'the owner')} to connect GitHub.</span>`}</p>`;
     return;
   }
@@ -258,7 +258,7 @@ async function botReposMount(host, slug) {
     const pick = pickable();
     host.innerHTML = `<legend class="brepo-h">Repositories</legend><span class="muted brepo-status" data-brepo-status role="status"></span>
       <label class="repo-name"><input type="checkbox" data-brepo-create${state.create_repositories ? ' checked' : ''}${!admin || slug === 'botops' ? ' disabled' : ''}>Create bot repositories</label>
-      <p class="muted">Private bot repositories in the connected organization. GitHub App permission is also required. Otherwise, ask BotOps.</p>
+      <p class="muted">Private bot repositories in the connected organization. GitHub App permission is also required. Otherwise, ask your Assistant.</p>
       <label class="repo-name"><input type="checkbox" data-brepo-product${state.create_product_repositories ? ' checked' : ''}${owner || admin && state.create_product_repositories ? '' : ' disabled'}>Create product repositories</label>
       <p class="muted">Private repositories with any other name in the connected organization; the bot gets write to each one it makes and you are told. On for every bot unless switched off; only the Owner switches it back on.</p>
       ${repoSegHTML(`${id}-mode`, 'Repository access', BOT_REPO_MODES, state.mode, !admin, ' brepo-mode')}

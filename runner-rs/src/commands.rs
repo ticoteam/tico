@@ -101,7 +101,7 @@ pub async fn doctor(config: &Config, client: &Client) -> Result<(Value, bool), R
     if let Some(tools) = crate::harness_tools::shared() {
         let runtimes = crate::relays::harness_runtimes(&assignments);
         let company = client.get("config").await.unwrap_or(Value::Null);
-        let default = crate::relays::harness_defaults(&runtimes, &company, crate::isolation::enabled());
+        let default = crate::relays::harness_defaults(&runtimes, &company, crate::gateway_relay::runs_gateway());
         let runtimes: Vec<String> = runtimes.into_iter().collect();
         tools.lock().unwrap().want(&runtimes, &default);
     }
@@ -112,7 +112,7 @@ pub async fn doctor(config: &Config, client: &Client) -> Result<(Value, bool), R
     let computer_logins = crate::fallback::server_uses_computer_logins()
         && candidates.iter().all(|entry| entry["computer_logins_v1"] == true);
     let runtimes = crate::readiness::runtime_report(config, &sign, client, &candidates, computer_logins).await;
-    let mut checks = crate::readiness::preflight(config, &candidates, &runtimes, computer_logins).await;
+    let mut checks = crate::readiness::preflight(config, &sign, &candidates, &runtimes, computer_logins).await;
     crate::perbot::PerBot::default().decorate(config, &mut checks, &candidates);
     let ready = checks.iter().all(|row| row["ready"] == true);
     let mut readiness = crate::readiness::document(&runtimes, &checks, &config.state_dir());

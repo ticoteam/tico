@@ -26,9 +26,9 @@ const {unrouted} = require('./support/routes.cjs');
       harnesses: [{id: 'codex', label: 'Codex (OpenAI)', runtime: 'codex'}, {id: 'claude', label: 'Claude Code (Anthropic)', runtime: 'claude'}],
       default: {runtime: 'claude', model: 'claude-sonnet-5-5'},
     };
-    const helper = {name: 'helper', display_name: 'Helper', description: '', status: 'active', operator: 'ana', repo: 'bot-helper',
+    const helper = {name: 'helper', display_name: 'Helper', description: '', status: 'active', owner_id: 'ana', repo: 'bot-helper',
       can_manage: true, users: [], bot_owners: [], revision: 4, model: 'claude-sonnet-5-5', harness: 'claude', reasoning_effort: 'high',
-      keep_tasks_going: null, task_flow: {going: 2, waiting: 5}, task_model: null, thread_mode: 'personal', bot_contact: 'open', machine: {runner_id: 'r1', label: 'Box', operator: 'ana', generation: 7}};
+      keep_tasks_going: null, task_flow: {going: 2, waiting: 5}, task_model: null, thread_mode: 'personal', bot_contact: 'open', machine: {runner_id: 'r1', label: 'Box', owner_id: 'ana', generation: 7}};
     const bots = [helper];
     const WARNING = 'This bot sends messages for you. Haiku 5.5 is a cheaper model than its own Sonnet 5.5, and may word things badly. It still saves, and its tasks run on it.';
     let calls = [];
@@ -60,6 +60,10 @@ const {unrouted} = require('./support/routes.cjs');
           helper.keep_tasks_going = body.keep_tasks_going;
           return json({bot: 'helper', keep_tasks_going: body.keep_tasks_going, revision: ++helper.revision});
         }
+        if (what === 'turns-at-once') {
+          helper.turns_at_once = body.turns_at_once;
+          return json({bot: 'helper', turns_at_once: body.turns_at_once, revision: ++helper.revision});
+        }
         if (what === 'definition') {
           Object.assign(helper, {display_name: body.display_name, description: body.description});
           return json({name: 'helper', display_name: helper.display_name, revision: ++helper.revision});
@@ -71,7 +75,7 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: []});
       if (p === '/api/v2/status') return json({bots: []});
-      if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', operator: 'ana', bots: ['helper']}], services: []});
+      if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', owner_id: 'ana', bots: ['helper']}], services: []});
       if (p === '/api/v2/models') return json({...catalog, enabled_providers: ['openai', 'anthropic']});
       if (p === '/api/v2/providers') return json({enabled: ['openai', 'anthropic'], default: catalog.default, revision: 1,
         providers: [{id: 'openai', label: 'OpenAI'}, {id: 'anthropic', label: 'Anthropic'}]});
@@ -274,6 +278,35 @@ const {unrouted} = require('./support/routes.cjs');
         assert.deepEqual(calls.map(c => c.what), ['definition', 'keep-tasks-going']);
         assert.deepEqual(calls[1].body, {keep_tasks_going: stored, expected_revision: before + 1});
         assert.equal(helper.keep_tasks_going, stored);
+        await openEditor();
+      }
+      // Turns at once saves the same way; a value out of range or not a whole number is named under its row
+      // and not sent.
+      const turns = editor.locator('[data-bot-turns-at-once]');
+      for (const [value, stored] of [['5', 5], ['', null]]) {
+        const before = helper.revision;
+        calls = [];
+        await turns.fill(value);
+        await turns.dispatchEvent('change');
+        await page.waitForTimeout(100);
+        assert.deepEqual(calls, [], 'held until Save bot');
+        await editor.locator('button[type=submit]').click();
+        await loaded(before + 2);
+        assert.deepEqual(calls.map(c => c.what), ['definition', 'turns-at-once']);
+        assert.deepEqual(calls[1].body, {turns_at_once: stored, expected_revision: before + 1});
+        assert.equal(helper.turns_at_once, stored);
+        await openEditor();
+      }
+      for (const value of ['300', '2.5']) {
+        calls = [];
+        await turns.fill(value);
+        await turns.dispatchEvent('change');
+        await editor.locator('[data-field-err]').first().waitFor();
+        await page.waitForTimeout(100);
+        assert.deepEqual(calls, [], `${value} is not posted`);
+        await turns.fill('');
+        await turns.dispatchEvent('change');
+        assert.equal(await editor.locator('[data-field-err]').count(), 0, 'the line clears once the value is valid');
         await openEditor();
       }
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);

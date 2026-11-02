@@ -26,3 +26,7 @@ evals/replay/cases/*
 /previous-timings/
 tools/release-command/target/
 .remote-runs/
+.ruff_cache/
+
+# Local type-check environment (scripts/check_types.sh).
+.venv-pyright/

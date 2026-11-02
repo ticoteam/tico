@@ -7,11 +7,17 @@ ui/vendor/fonts/icons.txt and downloads a woff2 that holds just those glyphs fro
 after adding an icon or a template:
 
     python3 scripts/build-icon-font.py          # rescan and download
-    python3 scripts/build-icon-font.py --check  # rescan only; exit 1 if icons.txt is stale
+    python3 scripts/build-icon-font.py --stamp  # only put the font's hash in its URLs
+    python3 scripts/build-icon-font.py --check  # rescan only; exit 1 if icons.txt or the font's URL is stale
 
 The font is a ligature font: an icon missing from it shows as its raw name. The axes match the
-CSS in ui/styles/ (FILL 0, wght 200, GRAD 0, opsz 24).
+CSS in ui/styles/ (FILL 0, wght 300, GRAD 0, opsz 24).
+
+Every URL of the font carries `?v=<hash of the font>`, rewritten here with each new font. A browser, a desktop app's web
+view or a proxy that kept the old subset would otherwise serve it under the same URL after an update, and an icon the
+update added (Automations' `bolt`) would read as its name.
 """
+import hashlib
 import re
 import sys
 import urllib.request
@@ -22,7 +28,7 @@ UI = ROOT / "ui"
 FONT_DIR = UI / "vendor" / "fonts"
 MANIFEST = FONT_DIR / "icons.txt"
 FONT = FONT_DIR / "material-symbols-outlined.woff2"
-AXES = "opsz,wght,FILL,GRAD@24,200,0,0"
+AXES = "opsz,wght,FILL,GRAD@24,300,0,0"
 USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 
@@ -91,6 +97,34 @@ def fetch(url):
         return resp.read()
 
 
+# The files that name the font's URL: the page's preload, the @font-face rule and the Overview's own FontFace.
+FONT_URL_FILES = [UI / "index.html", UI / "styles" / "tokens.css", UI / "overview" / "building.js"]
+FONT_URL = re.compile(r"(?<![\w/])/vendor/fonts/material-symbols-outlined\.woff2(?:\?v=[0-9a-f]*)?")
+
+
+def font_version():
+    return hashlib.sha256(FONT.read_bytes()).hexdigest()[:12]
+
+
+def font_url():
+    return "/vendor/fonts/material-symbols-outlined.woff2?v=" + font_version()
+
+
+def stale_font_urls():
+    """The files whose font URL is not this font's, by path relative to the repo."""
+    want = font_url()
+    return [str(f.relative_to(ROOT)) for f in FONT_URL_FILES
+            if any(m.group(0) != want for m in FONT_URL.finditer(f.read_text(encoding="utf-8")))
+            or not FONT_URL.search(f.read_text(encoding="utf-8"))]
+
+
+def stamp_font_urls():
+    want = font_url()
+    for f in FONT_URL_FILES:
+        text = f.read_text(encoding="utf-8")
+        f.write_text(FONT_URL.sub(want, text), encoding="utf-8")
+
+
 def read_manifest():
     if not MANIFEST.is_file():
         return []
@@ -103,6 +137,12 @@ def main(argv):
         if read_manifest() != icons:
             print("icons.txt is stale; run scripts/build-icon-font.py", file=sys.stderr)
             return 1
+        if stale_font_urls():
+            print("the font's URL is stale in %s; run scripts/build-icon-font.py --stamp" % ", ".join(stale_font_urls()), file=sys.stderr)
+            return 1
+        return 0
+    if "--stamp" in argv:           # the URLs only, for the font as it is (no download)
+        stamp_font_urls()
         return 0
     MANIFEST.write_text("\n".join(icons) + "\n")
     css = fetch(css_url(icons)).decode()
@@ -110,6 +150,7 @@ def main(argv):
     if len(urls) != 1:
         sys.exit("expected one woff2 url in the Google Fonts CSS, got:\n" + css)
     FONT.write_bytes(fetch(urls[0]))
+    stamp_font_urls()
     print("%d icons, %d bytes -> %s" % (len(icons), FONT.stat().st_size, FONT.relative_to(ROOT)))
     return 0
 

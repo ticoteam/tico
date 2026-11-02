@@ -22,9 +22,11 @@ UI_MAP = {"ui/app/chat.js": ["chat", "imported-history"],
 CONFORMANCE = "runner/tests/test_conformance.py"
 # Each crate's `cargo test --locked` runs in the conformance job when any of its test inputs change:
 # runner-rs tests read runner/ (harnesses, fixtures and the Python runner they compare against) and the
-# backend's gateway enroll contract fixture, which gateway_relay's tests check the runner against.
+# backend's gateway enroll contract fixture, which gateway_relay's tests check the runner against, and the runner wire
+# contract's recorded answers (runner-rs/src/wire.rs).
 RUST_INPUTS = {"relay-rs": ("relay-rs/",),
-               "runner-rs": ("runner-rs/", "runner/", "backend/tests/fixtures/gateway_enroll_contract.json")}
+               "runner-rs": ("runner-rs/", "runner/", "backend/tests/fixtures/gateway_enroll_contract.json",
+                             "contracts/runner/")}
 CHANGELOG_REFUSAL = ("No PR edits CHANGELOG.md; the Technical Writer writes notes at the release cut. "
                      "Remove your CHANGELOG.md changes.")
 RELEASE_TRAILER = re.compile(r"^Changelog-Release:[ \t]*v?(\d+\.\d+\.\d+)[ \t]*$", re.M)

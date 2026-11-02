@@ -48,3 +48,8 @@ update <id> --status done --note`: the headline, the path, the sources you could
 
 Name it and what is therefore unknown, and keep going. A deadline you could not confirm is listed as
 "date not confirmed", never dropped.
+
+## Done when
+- Every open request in `knowledge/requests.md` has a status, an owner and a sourced deadline, or "not confirmed".
+- The summary's first line gives the count of open requests and the decisions that are the owner's.
+- The report is published, the task is closed with the headline and the path, and the sources you could not read are named.

@@ -6,8 +6,7 @@ from backend.tests.test_member_bots import botops, turn  # noqa: F401
 from backend.tests.test_mcp import call, rpc
 from clients import hubtools
 
-BOTOPS_ONLY = {"hub_credential_request", "hub_credential_set", "hub_message_redact",
-               "hub_support_file"}
+BOTOPS_ONLY = {"hub_credential_set", "hub_message_redact", "hub_support_file"}
 HUMANS_ONLY = {"hub_brief", "hub_bot_recent", "hub_needs_you_start", "hub_needs_you_commit", "hub_proposal_decide",
                "hub_update_reply", "hub_assistant_read", "hub_assistant_send", "hub_changelog_list", "hub_changelog_mark_read"}
 BOTS_ONLY = {"hub_update_create", "hub_file_publish", "hub_file_link"}
@@ -43,6 +42,9 @@ def test_each_caller_is_offered_only_the_tools_it_can_use(api, botops):
     assert all("hub_repo_product_create" in lists[who] for who in ("owner", "bot", "botops"))
     assert all("hub_repo_product_create" not in lists[who] for who in ("admin", "member", "agent"))
     assert {"hub_api", "hub_bot_update"} <= lists["member"]
+    # A bot asks for its own credential (a card in its chat or task thread); people store one in Credentials.
+    assert all("hub_credential_request" in lists[who] for who in ("bot", "botops"))
+    assert all("hub_credential_request" not in lists[who] for who in ("owner", "admin", "member", "agent"))
     assert BOTOPS_ONLY <= lists["botops"] and BOTS_ONLY <= lists["botops"] and not HUMANS_ONLY & lists["botops"]
     assert lists["bot"] < lists["owner"] | lists["bot"] and len(lists["bot"]) < len(lists["botops"])
 

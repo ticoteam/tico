@@ -1,0 +1,615 @@
+Business Policy | WhatsApp for Business
+
+ Did we select the right country/region?
+
+Skip to content
+
+WhatsApp Business Messaging Policy
+
+Last updated: September 23, 2026
+
+Overview
+
+WhatsApp for Business, enables rich, conversational experiences between businesses and WhatsApp users. Creating valuable experiences for users relies on the compliance of businesses with the WhatsApp Business Messaging Policy below. By using our products, businesses agree to this WhatsApp Business Messaging Policy, the WhatsApp Messaging Guidelines, the WhatsApp Brand Guidelines, and the WhatsApp Intellectual Property Policy.
+
+This WhatsApp Business Messaging Policy defines what is and isn’t allowed when using WhatsApp for Business. If content or actions violate our terms or policies, we may limit or remove your access to our services.
+
+This policy, along with the policies and guidelines referenced above, govern your use of the WhatsApp for Business services including those listed below:
+
+The WhatsApp Business App
+
+The WhatsApp Business Platform
+
+Other WhatsApp for Business offerings or features that we may provide to you in the future.
+
+1. Create a Quality Experience
+
+Follow any guidelines and instructions in technical and product documentation.
+
+Maintain a WhatsApp Business profile with customer support contact information and one or more of the following: email address, website address, and/or telephone number. Keep all information accurate and up-to-date. You must not impersonate another business or otherwise mislead customers as to the nature of your business.
+
+Do not impersonate another business or otherwise mislead customers as to the nature of your business.
+
+You may not use WhatsApp for Business to impersonate another business or entity, misrepresent your affiliation with a business or entity or otherwise mislead customers as to the nature of your business or activity on our products. We may consider your account to be violating this Business Messaging Policy, the WhatsApp Messaging Guidelines, our terms of service if you pretend to take on someone else’s name, brand, or speak in the voice of another business or entity without permission.
+
+You may only contact people on WhatsApp if: (a) they have given you their mobile phone number or username; and (b) you have received opt-in permission from the recipient confirming that they wish to receive subsequent messages or calls from you.
+
+You are solely responsible for determining the method of opt-in, that you have obtained opt-in in a manner that complies with laws applicable to your communications, and that you have otherwise provided notices and obtained permissions that are required under applicable law. To help ensure a strong user experience, review the best practices suggested below.
+
+You must respect all requests (either on or off WhatsApp) by a person to block, discontinue, or otherwise opt out of communications from you via WhatsApp, including removing that person from your contacts list. Do not confuse, deceive, defraud, mislead, spam, or surprise people with your communications.
+
+If you believe a WhatsApp account is infringing your intellectual property rights, please consult this page.
+
+2. WhatsApp Business Platform Specific Terms
+
+You may only initiate conversations using an approved Message Template (as defined in our documentation). Any Message Template must comply with our terms and these policies, and only be used for its designated purpose. We have the right to review, approve, pause and reject any Message Template at any time.
+
+You may reply to a user message without use of a Message Template as long as it’s within the 24-hour customer service window, which opens and resets with each user message. Outside the 24-hour customer service window, you may only send messages via approved Message Templates.
+
+Messages are priced according to our pricing policy.
+
+You may use automation when responding during the 24-hour window, but must also have available prompt, clear, and direct escalation paths. These escalation paths include:
+
+In-Chat Human Agent transfer
+
+Phone number
+
+Email
+
+Web support (on the business website)
+
+In-store visits (ex: visit retail store, bank branch), or
+
+Support form
+
+3. Protect Data and Comply with Law
+
+You are responsible for and must secure all necessary notices, permissions, and consents to collect, use, and share people’s content and information, including maintaining a published privacy policy, and otherwise complying with applicable law.
+
+Don’t use any data obtained from us about a person you message within WhatsApp, other than the content of message threads, for any purpose other than as reasonably necessary to support messaging with that person.
+
+Don’t share or ask people to share full length individual payment card numbers, financial account numbers, personal ID card numbers, or other sensitive identifiers.
+
+Don’t use WhatsApp for telemedicine or to send or request any health related information, if applicable regulations prohibit distribution of such information to systems that do not meet heightened requirements to handle health related information.
+
+You must ensure – through technical and organizational measures – that messages are gated per legal age, geographic requirements, and comply with all applicable local laws, required or established industry codes, guidelines, licenses, age, privacy and safety country and regulatory requirements.
+
+You may not forward or otherwise share information from a customer chat with any other customer.
+
+4. Prohibited Organizations and Restrictions on Use
+
+We prohibit organizations and/or individuals who have been deemed to be engaged in terrorist or organized criminal activity from using WhatsApp for Business.
+
+We prohibit the use of WhatsApp for Business to facilitate or organize criminal activity, including exploiting or causing physical, financial, or other harm to people, businesses, or animals.
+
+We prohibit the use of WhatsApp for Business for operating, buying, selling, promoting, or otherwise facilitating the exchange of illegal products or services.
+
+We prohibit use of WhatsApp for Business for buying, selling, promoting, or otherwise facilitating the exchange of certain regulated or restricted goods and services listed below, as determined in our sole discretion. Please refer to Section 5 Further Guidance on Regulated Verticals for limited exceptions, subject to specific requirements, for promoting specific regulated or restricted goods and services (“Regulated Verticals”).
+
+ Firearms
+
+ Alcohol and tobacco
+
+ Drugs, whether prescription, recreational, or otherwise
+
+ Medical and healthcare products
+
+ Endangered species (wildlife and plants)
+
+ Live non-endangered animals excluding livestock
+
+ Hazardous goods and materials
+
+ Real, virtual, or fake currency, including ICOs and binary options
+
+ Body parts or fluids
+
+ Business models, goods, items, or services that we determine may be or are fraudulent, misleading, offensive, or deceptive, or may be or are exploitative, inappropriate, or exert undue pressure on targeted groups
+
+ Real Money Gambling and Gaming (Online Gambling and Gaming is a subset of Real Money Gambling and Gaming. See Section 5 and Section 6 for limited exceptions.)
+
+ Adult products and services
+
+ Dating services
+
+ Multi-level marketing
+
+ Payday loans, paycheck advances, peer-to-peer lending, debt collection, and bail bonds
+
+These prohibitions apply irrespective of the global or local licenses, registrations, or other approvals your business may hold.
+
+Organizations must not wrongfully discriminate or suggest a preference for or against people because of a personal characteristic, included but not limited to, race, ethnicity, color, national origin, citizenship, religion, age, sex, sexual orientation, gender identity, family status, marital status, disability, or medical or genetic condition. Organizations must comply with all applicable laws prohibiting discrimination.
+
+Messages must not contain offensive content, for example sexually explicit materials or nudity, determined at our sole discretion.
+
+Organizations that primarily publish news content must be registered as a News Page through Facebook.
+
+If you use Catalogs, or provide any other commerce experiences to sell or otherwise facilitate the exchange of goods or services prohibited by the Meta Commerce Policy, then we may prohibit you from using some or all of WhatsApp for Business.
+
+5. Further Guidance on Regulated Verticals
+
+We allow the use of the WhatsApp Business Platform, for messaging about the Regulated Verticals listed below in this Section 5, in limited countries, and pursuant to applicable law. The drop-down charts below indicate the specific countries in which you may message about each Regulated Verticals.
+
+Additional Requirements for messaging about Regulated Verticals on the WhatsApp Business Platform:
+
+You are prohibited from messaging about any Regulated Verticals on the WhatsApp Business App.
+
+You are prohibited from providing any commerce experiences to buy or sell goods or services that are Regulated Verticals (see Policy for WhatsApp Commerce Features below).
+
+You must ensure – through technical and organizational measures – that messages are gated per legal age, geographic requirements, and comply with all applicable local laws, required or established industry codes, guidelines, licenses, age, privacy and safety regulatory requirements.
+
+You must comply with all applicable laws, including but not limited to local laws and industry codes.
+
+You must not use the WhatsApp Business Platform to send messages about Regulated Verticals outside of the allowed countries.
+
+You must ensure that you have all required licenses, notices, permits and registrations.
+
+You must immediately stop sending messages to users in the allowed country if your required license expires, is modified, or is terminated.
+
+Messaging about any Regulated Vertical using the WhatsApp Business Platform may not be sent to people under 18 years of age.
+
+Within Real Money Gambling and Gaming, if your country/region prohibits certain activities such as gambling, games of chance/skill, and/or any other related activities, then your use of business messaging should not include such prohibited activities and should only include those activities which are lawful.
+
+Exceptions to Regulated Verticals – Allowed Countries
+
+WhatsApp Business messaging that promotes online gambling and gaming must comply with all applicable local laws, required or established industry codes, guidelines, licenses and must comply with age and country requirements consistent with applicable local laws. Messaging may not be sent to people under 18 years of age.
+
+Australia
+
+Japan
+
+Colombia
+
+Mexico
+
+Peru
+
+WhatsApp Business messaging that promotes over-the-counter drugs must comply with all applicable local laws, required or established industry codes, guidelines, licenses and must comply with age and country requirements consistent with applicable local laws. Messaging may not be sent to people under 18 years of age.
+
+American Samoa
+
+Anguilla
+
+Antigua
+
+Argentina
+
+Aruba
+
+Australia
+
+Bangladesh
+
+Barbados
+
+Belize
+
+Bermuda
+
+Bhutan
+
+Bolivia
+
+Brazil
+
+British Virgin Islands
+
+Brunei
+
+Cambodia
+
+Cayman Islands
+
+Chile
+
+China
+
+Colombia
+
+Costa Rica
+
+Curacao
+
+Dominica
+
+Dominican Republic
+
+Ecuador
+
+El Salvador
+
+Falkland Islands
+
+Federated States of Micronesia
+
+Fiji
+
+French Guiana
+
+French Polynesia
+
+Grenada
+
+Guadeloupe
+
+Guam
+
+Guatemala
+
+Guyana
+
+Haiti
+
+Honduras
+
+Hong Kong
+
+India
+
+Indonesia
+
+Jamaica
+
+Japan
+
+Kiribati
+
+Laos
+
+Macau
+
+Malaysia
+
+Maldives
+
+Marshall Islands
+
+Martinique
+
+Mexico
+
+Mongolia
+
+Myanmar
+
+Nauru
+
+Nepal
+
+New Caledonia
+
+New Zealand
+
+Nicaragua
+
+Northern Mariana Islands
+
+Palau
+
+Panama
+
+Papua New Guinea
+
+Paraguay
+
+Peru
+
+Philippines
+
+Puerto Rico
+
+Saint Kitts and Nevis
+
+Saint Vincent and the Grenadines
+
+Samoa
+
+Singapore
+
+Solomon Islands
+
+South Korea
+
+Sri Lanka
+
+St. Lucia
+
+Suriname
+
+Thailand
+
+The Bahamas
+
+Timor-Leste
+
+Tonga
+
+Trinidad and Tobago
+
+Turks and Caicos Islands
+
+Tuvalu
+
+Uruguay
+
+US Virgin Islands
+
+Vanuatu
+
+Venezuela
+
+Vietnam
+
+WhatsApp Business messaging that promotes alcohol must comply with all applicable local laws, required or established industry codes, guidelines, licenses and must comply with age and country requirements consistent with applicable local laws. Messaging may not be sent to people under 18 years of age.
+
+American Samoa
+
+Anguilla
+
+Antigua
+
+Argentina
+
+Aruba
+
+Australia
+
+Barbados
+
+Belize
+
+Bermuda
+
+Bhutan
+
+Bolivia
+
+Brazil
+
+British Virgin Islands
+
+Cambodia
+
+Cayman Islands
+
+Chile
+
+China
+
+Colombia
+
+Costa Rica
+
+Curacao
+
+Dominica
+
+Dominican Republic
+
+Ecuador
+
+El Salvador
+
+Falkland Islands
+
+Federated States of Micronesia
+
+Fiji
+
+French Guiana
+
+French Polynesia
+
+Grenada
+
+Guadeloupe
+
+Guam
+
+Guatemala
+
+Guyana
+
+Haiti
+
+Honduras
+
+Hong Kong
+
+Indonesia
+
+Jamaica
+
+Japan
+
+Kiribati
+
+Laos
+
+Macau
+
+Malaysia
+
+Maldives
+
+Marshall Islands
+
+Martinique
+
+Mexico
+
+Mongolia
+
+Myanmar
+
+Nauru
+
+New Caledonia
+
+New Zealand
+
+Nicaragua
+
+Northern Mariana Islands
+
+Palau
+
+Panama
+
+Papua New Guinea
+
+Paraguay
+
+Peru
+
+Philippines
+
+Puerto Rico
+
+Saint Kitts and Nevis
+
+Saint Vincent and the Grenadines
+
+Samoa
+
+Singapore
+
+Solomon Islands
+
+South Korea
+
+Sri Lanka
+
+St. Lucia
+
+Suriname
+
+The Bahamas
+
+Timor-Leste
+
+Tonga
+
+Trinidad and Tobago
+
+Turks and Caicos Islands
+
+Tuvalu
+
+Uruguay
+
+US Virgin Islands
+
+Vanuatu
+
+Venezuela
+
+Vietnam
+
+6. Additional Requirements for Messages Promoting Online Gambling and Gaming using the WhatsApp Business Platform
+
+To message users to promote online gambling and gaming (a subset of real money gambling and gaming), organizations will need to:
+
+Request permission from Meta Platforms, Inc. using this application form. Note that businesses can only apply to message people in certain countries.
+
+Provide evidence that the online gambling and gaming activities are appropriately licensed by a regulator, or otherwise established as lawful in the countries listed in Section 5 that the business wants to send messages to.
+
+We define online gambling and gaming as any product or service where anything of monetary value is included as part of entry or prize. Monetary value includes, but is not limited to, cash or digital currencies like Bitcoin.
+
+Online gambling and gaming activities include:
+
+All forms of online gambling. Some common types of gambling include betting, lotteries, raffles, casino games, fantasy sports, bingo, poker, skill game tournaments, and sweepstakes.
+
+Games where anything of monetary value is part of entry, and games where anything of monetary value is part of the prize. This includes games that require purchases to continue gameplay or to provide an advantage in winning prizes (in cases where the prize is of monetary value).
+
+Promotions for online gambling or games, even if there is no opportunity to gamble or game directly within the WhatsApp chat.
+
+The following activities do not require permission from Meta to message on the WhatsApp Business Platform. However, organizations engaged in these activities must comply with all applicable local laws.
+
+Physical, real money gambling activity, or establishments like “brick and mortar” casinos, entertainment events at casinos, or the streaming of offline poker tournaments.
+
+State or government lotteries, as long as the business is directly or exclusively responsible for running the lottery.
+
+Prize promotions that involve purchasing a product at the usual retail price, so long as online gambling isn’t the primary business model of the business or any featured brand.
+
+Entirely free-to-play games.
+
+7. Enforcement and Updates
+
+We may limit or remove your access to or use of WhatsApp for Business, or limit your ability to send messages, if you receive significant amounts of negative feedback, cause harm to WhatsApp or our users, violate or encourage others to violate our terms or policies, or to maintain a high quality experience on WhatsApp, as determined by us in our sole discretion.
+
+Driving high quality conversations between people and businesses is a top priority. Users can block or report businesses. Our systems may limit the amount of messages a business can send or calls a business can initiate, based on this user feedback.
+
+If you use or operate a service which utilizes WhatsApp in violation of our terms or policies, such as messaging people at scale in an unauthorized manner, we have the right to limit or remove your access to WhatsApp for Business.
+
+WhatsApp may update this WhatsApp Business Messaging Policy (“Change”) without notice (unless such notice is required by law); by continuing to use WhatsApp for Business after such Change, you consent to such Change.
+
+If we terminate your account for violations of our terms of service, the Business Messaging Policy, or the WhatsApp Messaging Guidelines, we may prohibit you and your organization from all future use of WhatsApp products and services.
+
+WhatsApp may use both automated processing techniques and human review teams to detect and review information available to us including account, group, business profile information as well as reported messages for potential violations of this policy.
+
+Additional information about how we detect violations of our terms and policies is available in the WhatsApp Messaging Guidelines.
+
+To learn more on our Platform Enforcement processes, please visit the WhatsApp Business Platform Policy Enforcement.
+
+Best Practices
+
+Best Practices for Opt-In
+
+Users should expect the messages and calls they receive. You can set this expectation by:
+
+Obtaining an opt-in that encompasses the different categories of messages that you will send (ex: order updates, relevant offers, product recommendations, etc.)
+
+Obtaining a separate opt-in to initiate a call to a user.
+
+Obtaining separate opt-in by specific message category.
+
+This mitigates the risk that users will block your business because they receive unsolicited messages.
+
+Provide clear instructions for how people can opt out of receiving specific categories of messages or calls, and honor these requests.
+
+Ensure your opt-in and opt-out flows are clear and intuitive for users.
+
+Clearly communicate the value of receiving this information.
+
+We may also reactively evaluate a business’ opt-in flows, including review of user feedback, to flag policy violations and develop additional types of enforcement over time. Learn more about opt-in.
+
+Steps to Take if Your Account is Suspended or Terminated
+
+To maintain high quality conversations on WhatsApp, we enforce on WhatsApp Business Accounts that violate the WhatsApp Business Messaging Policy, WhatsApp Messaging Guidelines, or our terms of service.
+
+If you believe your account has not violated our policies or terms, please consult the following resources for more information on how to appeal:
+
+For more information on enforcement for the WhatsApp Business App, including how to appeal, please review the Business Help Center page.
+
+For more information on enforcement for the WhatsApp Business Platform, including how to appeal, please review Policy Enforcement – WhatsApp Business Platform.
+
+For more information on banned accounts, please refer to this article in our Help Center.
+
+Policy for WhatsApp Commerce Features (including offering goods or services for sale)
+
+The Commerce Policy is used to govern whether businesses can sell their products and services using WhatsApp for Business, such as WhatsApp commerce product features like catalog and payments.
+
+If you use Catalogs, or provide any other commerce experiences to sell goods or services, you must comply with the policies and prohibitions listed in the Meta Commerce Policy as well as all applicable terms, laws and regulations.
+
+You are solely responsible for your transactions and providing any sales terms, privacy terms or other terms applicable to your interactions with users.
+
+We are not responsible for processing, paying for, or fulfilling any sales relating to your transactions.
+
+You are solely responsible for determining, collecting, withholding, reporting, and remitting all applicable taxes, duties, fees and additional charges for sales relating to your transactions.
+
+Policy on Government and Political Use
+
+The following area provides policy guidance on government and political use of the WhatsApp Business Platform.
+
+We permit the use of the WhatsApp Business Platform for government entities and require access through a Solution Provider (formerly known as Business Service Provider).
+
+We prohibit the use of the WhatsApp Business Platform by Political Parties, Politicians, Political Candidates, and Political Campaigns.
+
+We prohibit the use of the WhatsApp Business Platform by Law Enforcement Agencies, Military Services, National Security and Intelligence Agencies.
+
+We prohibit the use of the WhatsApp Business Platform by entities that offer services related to politics, political candidates, political campaign strategy, political campaigning services, private companies that provide voting solutions and systems for elections, and exclusive government service providers.
+
+For more information on government and political use, please visit our Building Community on WhatsApp page. For more information on how to use WhatsApp responsibly please visit our WhatsApp and elections page.
+
+To help personalize content, tailor and measure ads, and provide a safer experience, we use cookies. By clicking or navigating the site, you agree to allow our collection of information on and off Meta through cookies. Learn more, including about available controls: Cookie Policy

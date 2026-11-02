@@ -64,8 +64,9 @@ function hlCheckHtml(check) {
   const checkButton = owner
     ? `<button class="ghost" type="button" data-hl-check-updates${HL_CHECKING ? ' disabled' : ''}>${HL_CHECKING ? 'Checking…' : 'Check for updates'}</button>` : '';
   // Update now beside the check when a newer release is out: the same update the sidebar's New version starts (notices.js).
+  // None when Tico runs this server's updates (`managed`).
   const u = S.config?.update, busy = typeof nvBusy !== 'undefined' && nvBusy;
-  const update = owner && u?.available && u.latest && typeof nvStart === 'function'
+  const update = owner && u?.available && u.latest && !u.managed && typeof nvStart === 'function'
     ? `<button class="primary" type="button" data-hl-update${busy ? ' disabled' : ''}>Update now</button>` : '';
   const result = (owner && HL_CHECK_MSG
     ? `<p class="hl-check-result${HL_CHECK_MSG.error ? ' err' : ''}" role="status">${esc(HL_CHECK_MSG.text)}</p>` : '')
@@ -96,8 +97,8 @@ function hlComputerHtml(machine) {
     return `<li data-ready="${row.ready}"${bad ? ' class="hl-model-bad"' : ''}>${esc(harnessWords(row.name))}: ${state}${login}</li>`;
   }).join('');
   return `<li class="hl-computer" data-online="${machine.online}"><span class="hl-dot ${machine.online ? 'on' : 'off'}" aria-hidden="true"></span>
-    <div><strong>${esc(machine.label)}</strong> <span class="muted">${machine.online ? 'online' : 'offline'}${machine.last_seen ? ', last seen ' + esc(ago(machine.last_seen)) : ', never seen'}</span>
-    ${window.runnerUpdateHtml?.(machine.update, machine.version) || ''}
+    <div><strong>${esc(machine.label)}</strong> <span class="muted">${machine.online ? 'online' : 'offline'}${machine.last_seen_at ? ', last seen ' + esc(ago(machine.last_seen_at)) : ', never seen'}</span>
+    ${window.runnerUpdateHtml?.(machine.update, machine.release || machine.update?.release || machine.version) || ''}
     <ul class="hl-models">${models || '<li class="muted">No models reported</li>'}</ul></div></li>`;
 }
 
@@ -121,20 +122,24 @@ function hlStorageHtml(st) {
 // How often the hourly scan has seen a finding, and when it last did: seeing it again counts and wakes nobody.
 function hlSeen(f) {
   const n = Number(f.occurrences) || 1;
-  return `seen ${n.toLocaleString()} time${n === 1 ? '' : 's'}, last ${ago(f.last_seen)}`;
+  return `seen ${n.toLocaleString()} time${n === 1 ? '' : 's'}, last ${ago(f.last_seen_at)}`;
 }
 
 // The owner: the optional Health Monitor (backend/health_monitor.py). One switch turns it on or off; the second is the team
 // rule that lets it file Tico bug reports without a Needs you card.
 function hlMonitorHtml(m) {
   if (!m) return '';
-  // A stopped bot's finding (run_hold:<bot>, turn_budget:<bot>) carries the same Release as the bot's page.
-  const stopped = f => { const m = /^(?:run_hold|turn_budget):(.+)$/.exec(f.key || ''); return m && typeof botReleaseButton === 'function' ? botReleaseButton(m[1], 'ghost') : ''; };
+  // A stopped bot's finding (run_hold:<bot>, turn_budget:<bot>) carries the same Release as the bot's page. So does
+  // one for queued runs it could not start (claim_failed:<bot>), which the bot's page does not show.
+  const stopped = f => {
+    const m = /^(?:run_hold|turn_budget|claim_failed):(.+)$/.exec(f.key || '');
+    return m && typeof botReleaseButton === 'function' ? botReleaseButton(m[1], 'ghost') : '';
+  };
   const found = (m.findings || []).slice(0, 8).map(f => `<li data-hl-finding="${esc(f.key)}"><strong>${esc(f.title)}</strong>
-    <span class="muted">${f.kind === 'setup' ? 'BotOps fixes it' : f.ticket_id ? 'reported to Tico' : f.approval_id ? 'report waiting in Needs you' : 'Tico bug'} · since ${esc(ago(f.first_seen))} · ${esc(hlSeen(f))}</span>${stopped(f)}</li>`).join('');
+    <span class="muted">${f.kind === 'setup' ? 'being fixed' : f.ticket_id ? 'reported to Tico' : f.approval_id ? 'report waiting in Needs you' : 'Tico bug'} · since ${esc(ago(f.first_seen_at))} · ${esc(hlSeen(f))}</span>${stopped(f)}</li>`).join('');
   return `<section class="hl-monitor" data-hl-monitor="${m.on ? 'on' : 'off'}">
     <label class="hl-monitor-row"><input type="checkbox" role="switch" data-hl-monitor-switch${m.on ? ' checked' : ''}>
-      <span><strong>Health Monitor</strong> <span class="muted">checks this install every hour, has BotOps fix setup problems and reports Tico bugs to the Tico team. It wakes a model only when it finds something new or worse; seeing a problem again only adds to its count.</span></span></label>
+      <span><strong>Health Monitor</strong> <span class="muted">checks this install every hour, gets setup problems fixed and reports Tico bugs to the Tico team. It wakes a model only when it finds something new or worse; seeing a problem again only adds to its count.</span></span></label>
     <label class="hl-monitor-row"><input type="checkbox" role="switch" data-hl-monitor-rule${m.reports_without_asking ? ' checked' : ''}${m.on ? '' : ' disabled'}>
       <span>Health Monitor may file Tico bug reports without asking <span class="muted">(only the finding and the redacted diagnostics, never task or message text)</span></span></label>
     ${m.on && found ? `<ul class="hl-bots">${found}</ul>` : ''}</section>`;
@@ -164,13 +169,13 @@ window.hlStuckHtml = function hlStuckHtml(rows) {
     // Refused words are manager-only context, not support diagnostics.
     const reportWhy = row.reason === 'quarantined' ? 'Quarantined: queued work waits for the quarantine to clear.' : row.why;
     return `<li class="hl-stuck" data-stuck="${esc(row.bot)}" data-reason="${esc(row.reason)}">
-    <a href="#/bot/${esc(row.bot)}">${esc(row.name)}</a> <span class="muted">${esc(row.why)}${row.reason === 'slow' && row.oldest ? ' · ' + esc(ago(row.oldest)) : ''}${hlQueueWords(row).map(words => ' · ' + words).join('')}</span>
+    <a href="#/bot/${esc(encodeURIComponent(row.bot))}">${esc(row.name)}</a> <span class="muted">${esc(row.why)}${row.reason === 'slow' && row.oldest ? ' · ' + esc(ago(row.oldest)) : ''}${hlQueueWords(row).map(words => ' · ' + words).join('')}</span>
     ${row.fix ? hlFixHtml(row.fix) : ''}${['run_hold', 'budget'].includes(row.reason) && typeof botReleaseButton === 'function' ? botReleaseButton(row.bot, 'ghost') : ''}${hlReportHtml({kind: 'stuck', title: `${row.name}: ${reportWhy}`, detail: reportWhy, ref: row.bot, group: 'stuck:' + row.reason})}</li>`;
   }).join('');
 };
 
 async function hlStuckMove(button) {
-  const e = (S.emps || []).find(row => row.name === button.dataset.stuckMove);
+  const e = botRow(button.dataset.stuckMove);
   if (!e) { toast('Open Settings > Bots to move this bot', true); return; }
   if (!await settingsConfirmTransition(e, 'machine', button.dataset.machine)) return;
   await settingsBeginTransition(button, e, {kind: 'machine', runner_id: button.dataset.runner,
@@ -184,7 +189,7 @@ async function hlStuckFinish(button) {
   button.disabled = true; button.textContent = 'Finishing…';
   try {
     const result = await post(`/v2/bots/${encodeURIComponent(slug)}/onboarded`, {});
-    const bot = (S.emps || []).find(e => e.name === slug);
+    const bot = botRow(slug);
     if (bot) bot.onboarding_state = result.onboarding_state;
     toast(`${botDisplayName(slug)} finished onboarding`);
     void hlRefresh();
@@ -198,7 +203,7 @@ function hlPageDraw() {
   const host = $('#hl-page');
   if (!host) return;
   if (!HL) { host.innerHTML = '<div class="empty">Nothing to show yet.</div>'; return; }
-  const bots = list => list.map(row => `<li><a href="#/bot/${esc(row.bot)}">${esc(row.name)}</a> <span class="muted">${row.reason === 'no_computer' ? 'no computer is online' : row.reason === 'computer_offline' ? esc(row.computer) + ' is offline' : 'waiting since ' + esc(ago(row.oldest))}${hlQueueWords(row).map(words => ', ' + words).join('')}</span></li>`).join('');
+  const bots = list => list.map(row => `<li><a href="#/bot/${esc(encodeURIComponent(row.bot))}">${esc(row.name)}</a> <span class="muted">${row.reason === 'no_computer' ? 'no computer is online' : row.reason === 'computer_offline' ? esc(row.computer) + ' is offline' : 'waiting since ' + esc(ago(row.oldest))}${hlQueueWords(row).map(words => ', ' + words).join('')}</span></li>`).join('');
   // A stuck bot is listed once, with its reason; "waiting" keeps only the offline ones with nothing queued.
   const stuck = HL.stuck || [], idle = (HL.waiting || []).filter(row => !stuck.some(s => s.bot === row.bot));
   // Settings' own checks that need nobody (ui/app/settings.js shows only the ones that do).
@@ -244,7 +249,7 @@ function hlMetricsHtml(m) {
     <td class="tnum">${r.n.toLocaleString()}</td><td class="tnum">${hlMs(r.p95)}</td><td class="tnum">${hlMs(r.total_ms)}</td></tr>`);
   const sql = (m.sql?.queries || []).slice(0, 8).map(q => `<tr><td class="hl-code" title="${esc(q.sql)}">${esc(q.sql)}</td>
     <td class="tnum">${q.n.toLocaleString()}</td><td class="tnum">${hlMs(q.p95)}</td><td class="tnum">${hlMs(q.total_ms)}</td></tr>`);
-  const slow = (m.slow || []).slice(0, 5).map(r => `<li><span class="hl-code">${esc(r.route)}</span> <span class="tnum">${hlMs(r.ms)}</span> <span class="muted">${esc(r.caller)} · ${esc(hlAt(r.ts))}</span></li>`).join('');
+  const slow = (m.slow || []).slice(0, 5).map(r => `<li><span class="hl-code">${esc(r.route)}</span> <span class="tnum">${hlMs(r.ms)}</span> <span class="muted">${esc(r.caller)} · ${esc(hlAt(r.created_at))}</span></li>`).join('');
   const stall = stalls.slice(0, 3).map(e => {
     const loop = (e.threads?.busy || []).find(t => t.loop);
     return `<li><details><summary><span class="err">Stalled ${esc(String(e.stalled_s))} s</span> <span class="muted">${esc(hlAt(e.at))}</span></summary>

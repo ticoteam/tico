@@ -134,8 +134,8 @@ function ssBetHTML(state, b, n) {
       <div class="strat-bet-top"><span class="strat-bet-n tnum" aria-hidden="true">${n + 1}</span><span class="strat-bet-st">${name}</span>${kept ? '<span class="pill ok">Kept</span>' : ''}</div>
       <div class="strat-bet-lines">
         ${stratText(b.why) ? line('Why', esc(b.why)) : ''}
-        ${line('Rules out', stratText(b.rules_out) ? esc(b.rules_out) : '<span class="muted">Not set</span>')}
-        ${line('Wrong if', strategyWrongIfHtml(b.wrong_if))}
+        ${stratText(b.rules_out) ? line('Rules out', esc(b.rules_out)) : ''}
+        ${stratWrongSet(b.wrong_if) ? line('Wrong if', strategyWrongIfHtml(b.wrong_if)) : ''}
       </div>
       <div class="ss-bet-actions">${kept ? '' : `<button class="ghost strat-mini" type="button" data-ss-keep aria-label="Keep: ${name}">Keep</button>`}
         <button class="ghost strat-mini" type="button" data-ss-edit aria-label="Edit: ${name}">Edit</button>
@@ -150,7 +150,7 @@ function ssSideHTML(state) {
   return `<p class="ss-side-head"><b>Draft</b> <span class="muted">· not published</span></p>
     ${block(STRAT_SECTIONS[0].title, text('serve'))}${block(STRAT_SECTIONS[1].title, text('sell'))}
     ${block(label, kept.length ? `<ol class="ss-side-bets">${kept.map(b => `<li>${esc(b.statement)}</li>`).join('')}</ol>` : '<p class="muted strat-empty">None kept yet</p>')}
-    ${block(STRAT_SECTIONS[3].title, not ? `<p class="strat-text">${esc(not)}</p>` : none)}`;
+    ${block(STRAT_SECTIONS.find(sec => sec.key === 'not').title, not ? `<p class="strat-text">${esc(not)}</p>` : none)}`;
 }
 
 // Entering the step reads the draft and the newest run, then polls a run still going.
@@ -262,13 +262,13 @@ function ssBind(state) {
     const id = li.dataset.ssBet, bet = ssLive(state).find(b => b.id === id);
     if (!bet) continue;
     const keep = li.querySelector('[data-ss-keep]'), edit = li.querySelector('[data-ss-edit]'), strike = li.querySelector('[data-ss-strike]');
-    // Keep makes it active; one missing Rules out or Wrong if opens its form, set to Active, saying what is missing.
+    // Keep makes it active; past the most that can be active, its form opens saying so.
     if (keep) keep.onclick = () => {
       const refusal = stratActiveRefusal(bet, data.bets, one);
       if (refusal) {
         Object.assign(state.strat, {edit: id, keep: id, say: refusal});
         ssDraw(state, true);
-        focus(`[data-bet-form="${CSS.escape(id)}"] [name="${stratText(bet.rules_out) ? 'wrong_text' : 'rules_out'}"]`);
+        focus(`[data-bet-form="${CSS.escape(id)}"] [name="status"]`);
         return;
       }
       keep.disabled = true;
@@ -309,8 +309,8 @@ function ssBind(state) {
       wrong_if: stratText(bet.wrong_if) ? {kind: 'text', text: stratText(bet.wrong_if), check_by} : null}));
   }
 }
-// The Strategy page's form (strategyBetFormHtml) with the same rule: Active needs Rules out and Wrong if. Here the
-// choice stays as picked and the form says what is missing.
+// The bet form (strategyBetFormHtml) with the Strategy page's rule: at most so many active. Here the choice stays as
+// picked and the form says why not.
 function ssBindForm(state, form) {
   const id = form.dataset.betForm, el = form.elements, data = state.strat.data, {one} = ssLabel(data);
   const whyNot = form.querySelector('[data-bet-why-not]');

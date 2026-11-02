@@ -113,7 +113,7 @@ def refused(kind, mailbox, error=""):
     if kind == "admin_policy":
         return SignInFailed(kind, *policy_message(mailbox))
     if kind == "declined":
-        return SignInFailed(kind, f"Google did not grant access to {mailbox}: the request was cancelled or not approved",
+        return SignInFailed(kind, f"Google did not grant access to {mailbox}: the request was canceled or not approved",
                             "Try again and choose Allow. If Google said the app is blocked or unverified, it is a "
                             "Google policy, not something you missed: tell Tico's support.")
     if kind == "app_unavailable":

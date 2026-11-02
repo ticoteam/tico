@@ -171,7 +171,7 @@ function updOrder(state, fresh) {
   const list = state.data?.updates || [];
   if (fresh || !state.order) {
     if (state.order && state.ordered) return;             // keep this visit's order once it is set
-    const sorted = [...list].sort((a, b) => (a.read - b.read) || String(b.created).localeCompare(String(a.created)));
+    const sorted = [...list].sort((a, b) => (a.read - b.read) || String(b.created_at).localeCompare(String(a.created_at)));
     state.order = new Map(sorted.map((u, i) => [u.id, i]));
     state.ordered = !!state.data && !state.fromCache;
     return;
@@ -181,7 +181,8 @@ function updOrder(state, fresh) {
 }
 function updBadge(n) {
   S.updUnread = n;
-  for (const el of document.querySelectorAll('[data-upd-badge]')) { el.textContent = n > 99 ? '99+' : String(n || ''); el.hidden = !n; }
+  // A new number ticks in (countSet, ui/app/motion.js).
+  for (const el of document.querySelectorAll('[data-upd-badge]')) { el.hidden = !n; countSet(el, n > 99 ? '99+' : String(n || '')); }
   // In the tree the badge also counts direct reports' updates from other days: the button follows it both ways.
   const allRead = $('#upd-allread');
   if (allRead && UPD && updIsTree(UPD)) allRead.hidden = !(n > 0) && !(UPD.list || []).some(u => !u.read && !u.quiet);
@@ -237,15 +238,15 @@ function updCard(u, i, state, kids = '') {
     <div class="upd-main">
       <div class="upd-meta"><a href="${who.href}" class="upd-name" data-upd-bot>${who.name}</a>
         ${u.kind === 'weekly' ? '<span class="upd-pill">Week in review</span>' : ''}${updDraftPill(u)}
-        <span class="muted">· ${esc(ago(u.updated || u.created))}</span>${alert ? '<span class="upd-dot" aria-label="Unread"></span>' : ''}</div>
+        <span class="muted">· ${esc(ago(u.updated_at || u.created_at))}</span>${alert ? '<span class="upd-dot" aria-label="Unread"></span>' : ''}</div>
       ${u.slides ? updDeck(u, state) : body ? `<div class="upd-body md">${safeMd(body, {shortLinks: true})}</div>` : ''}
       ${updFrom(u)}
       <div class="upd-actions">
         ${who.person ? '' : updReplyBtn(u)}${u.own && updCanWrite(state) ? updWriteBtn(u) : ''}${updReadBtn(u.read)}${updArchiveBtn(state.view === 'archive', state.archivePending.has(u.id))}${kids}
       </div>
-      ${open ? `<div class="upd-thread">${thread ? thread.map(m => `<div class="upd-msg${String(m.from_actor).startsWith('bot:') ? ' bot' : ''}${m.pending ? ' pending' : ''}">
-          <b>${esc(actorLabel(m.from_actor))}</b> ${String(m.from_actor).startsWith('bot:') ? `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>` : esc(String(m.body || '').replace(/^Re your update "[^"]*": /, ''))}
-          <span class="muted">${m.pending ? 'sending…' : esc(ago(m.created))}</span></div>`).join('') : (u.replies ? '<div class="muted">Loading replies…</div>' : '')}
+      ${open ? `<div class="upd-thread">${thread ? thread.map(m => `<div class="upd-msg${String(m.sender_id).startsWith('bot:') ? ' bot' : ''}${m.pending ? ' pending' : ''}">
+          <b>${esc(actorLabel(m.sender_id))}</b> ${String(m.sender_id).startsWith('bot:') ? `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>` : esc(String(m.body || '').replace(/^Re your update "[^"]*": /, ''))}
+          <span class="muted">${m.pending ? 'sending…' : esc(ago(m.created_at))}</span></div>`).join('') : (u.replies ? '<div class="muted">Loading replies…</div>' : '')}
         <form class="upd-reply" data-upd-form><textarea rows="1" placeholder="Reply to ${esc(who.label)}…" aria-label="Reply">${esc(UPD_DRAFTS.get(u.id) || '')}</textarea>
           <button class="primary" type="submit" aria-label="Send">Send</button></form>
         <div class="muted upd-hint">Goes to ${esc(who.label)}'s chat too.</div></div>` : ''}
@@ -308,6 +309,8 @@ function updDecksBind(state) {
     const track = deck.querySelector('.upd-track');
     const at = state.slide?.[deck.closest('[data-upd]').dataset.upd];
     if (at) track.scrollLeft = at * track.clientWidth;      // a re-render keeps the slide you were on
+    if (track.updBound) continue;               // a card kept by a redraw (patchHTML) keeps its listener
+    track.updBound = true;
     let t = null;
     track.addEventListener('scroll', () => { clearTimeout(t); t = setTimeout(() => updDeckMark(deck, state), 60); }, {passive: true});
   }
@@ -342,7 +345,7 @@ function updTreeHTML(state) {
     // "8" and a chevron at the right of the card open its reports' cards (the chevron turns when they are open).
     const label = `${open ? 'Hide' : 'Show'} ${kids.count} report${kids.count === 1 ? '' : 's'}${kids.unread ? ', unread' : ''}`;
     const toggle = kids.count ? `<button type="button" class="upd-act upd-kids" data-upd-kids="${esc(n.key)}" aria-expanded="${open}" aria-label="${label}" title="${label}">
-        <span class="upd-n">${kids.count}</span><span class="nav-icon" aria-hidden="true">expand_more</span>${kids.unread ? '<span class="upd-dot" aria-hidden="true"></span>' : ''}</button>` : '';
+        <span class="upd-n">${kids.count}</span><span class="nav-icon" aria-hidden="true">chevron_right</span>${kids.unread ? '<span class="upd-dot" aria-hidden="true"></span>' : ''}</button>` : '';
     let card;
     if (own && state.editing) card = updEditor(u?.day === updToday() ? u : null, n, state, toggle);
     else if (u) { card = updCard(u, items.length, state, toggle); items.push(u); }
@@ -503,9 +506,11 @@ function updRender(state) {
   const feed = $('#upd-feed'); if (!feed || UPD !== state) return;
   updSaveDrafts();
   const data = state.data;
-  if (!data) { feed.innerHTML = '<div class="upd-skel"></div><div class="upd-skel"></div><div class="upd-skel"></div>'; return; }
+  if (!data) { feed.innerHTML = '<div class="skel-block upd-skel"></div>'.repeat(3); return; }
+  // Every load draws the feed again (a visit paints the kept copy, then the server's answer): only cards that changed
+  // are replaced (patchHTML), so an unchanged answer moves nothing.
   if (data.tree && updIsTree(state)) {
-    feed.innerHTML = updTreeHTML(state);
+    patchHTML(feed, updTreeHTML(state));
     updDecksBind(state);
     // The badge also counts direct reports' updates from other days, which this day's tree does not show.
     const allRead = $('#upd-allread'); if (allRead) allRead.hidden = !(S.updUnread > 0) && !state.list.some(u => !u.read && !u.quiet);
@@ -513,7 +518,7 @@ function updRender(state) {
     return;
   }
   const meId = S.me?.id;
-  const isMine = slug => { const e = S.emps.find(x => x.name === slug); return !e || e.operator === meId || (!e.operator && S.me?.role === 'owner'); };
+  const isMine = slug => { const e = botRow(slug); return !e || e.owner_id === meId || (!e.owner_id && S.me?.role === 'owner'); };
   // Unread first, then newest to oldest; the order is set when the page opens
   // (updOrder) and never moves while you read and scroll, only on the next visit.
   const rank = state.order || new Map();
@@ -526,9 +531,9 @@ function updRender(state) {
   let html = items.map((u, i) => updCard(u, i, state)).join('');
   if (!items.length) html += state.view === 'archive'
     ? '<div class="upd-empty"><span class="nav-icon" aria-hidden="true">archive</span><b>No archived updates.</b></div>'
-    : '<div class="upd-empty"><span class="nav-icon" aria-hidden="true">dynamic_feed</span><b>No updates yet.</b><span class="muted">The bots report in one at a time each morning.</span>' + (window.talkLineHTML?.() || '') + '</div>';
+    : '<div class="upd-empty"><span class="nav-icon" aria-hidden="true">dynamic_feed</span><b>No updates yet.</b></div>';
   if (data.next_before) html += '<button type="button" class="ghost upd-more" data-upd-more>Load older</button>';
-  feed.innerHTML = html;
+  patchHTML(feed, html);
   updDecksBind(state);
   const allRead = $('#upd-allread'); if (allRead) allRead.hidden = state.view === 'archive' || !items.some(u => !u.read);   // nothing to mark, no button
   updWatch(state);
@@ -580,7 +585,7 @@ async function updOpen(state, id, focusReply) {
 }
 async function updReply(state, id, text) {
   const u = state.data.updates.find(x => x.id === id); if (!u || !text.trim()) return;
-  const mine = {from_actor: myActor() || 'human:me', body: text, pending: true, created: new Date().toISOString()};
+  const mine = {from_actor: myActor() || 'human:me', body: text, pending: true, created_at: new Date().toISOString()};
   state.threads[id] = [...(state.threads[id] || []), mine];
   u.replies = (u.replies || 0) + 1; u.read = true;
   updRender(state);
@@ -780,7 +785,7 @@ async function botLatestUpdate(slug) {
   if (!u) { host.hidden = true; host.innerHTML = ''; return; }
   const all = isKeeper(slug) ? `<a class="rail-ico" href="#/bot/${encodeURIComponent(slug)}/history" aria-label="All updates" title="All updates"><span class="nav-icon" aria-hidden="true">dynamic_feed</span></a>` : '';
   host.innerHTML = `<header class="rail-head"><h2 class="rail-h">Updates</h2>
-      <span class="rail-age" title="${esc(fmt(u.updated || u.created))}">${esc(ago(u.updated || u.created))}</span>${u.read ? '' : '<span class="upd-dot" role="img" aria-label="Unread"></span>'}
+      <span class="rail-age" title="${esc(fmt(u.updated_at || u.created_at))}">${esc(ago(u.updated_at || u.created_at))}</span>${u.read ? '' : '<span class="upd-dot" role="img" aria-label="Unread"></span>'}
       <span class="spacer"></span>${all}</header>
     <div class="upd-body md">${safeMd(u.body || '', {shortLinks: true})}</div>
     <button type="button" class="rail-more" data-latest-more hidden>More</button>`;
@@ -813,7 +818,7 @@ async function botHistoryLoad(slug, before) {
       <div class="upd-body md">${safeMd(u.body || '', {shortLinks: true})}</div></article>`).join('');
   const more = r.next_before ? `<button type="button" class="ghost upd-more" data-bot-history-more="${esc(r.next_before)}">Load older</button>` : '';
   if (before) { host.querySelector('[data-bot-history-more]')?.remove(); host.insertAdjacentHTML('beforeend', html + more); }
-  else host.innerHTML = (html || '<div class="empty">No updates yet. It reports in each morning.</div>') + more;
+  else host.innerHTML = (html || '<div class="empty">No updates yet.</div>') + more;
   host.onclick = ev => { const b = ev.target.closest('[data-bot-history-more]'); if (b) void botHistoryLoad(slug, b.dataset.botHistoryMore); };
   const unread = items.filter(u => !u.read).map(u => u.id);
   if (unread.length) {

@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash(git *)",
+      "Bash(hub *)",
+      "Bash(python3 software/pipeline.py *)",
+      "Bash(node software/video/*)",
+      "Bash(ffmpeg *)",
+      "Bash(ffprobe *)"
+    ],
+    "deny": [
+      "Bash(gh *)",
+      "Bash(git push --force*)"
+    ]
+  }
+}

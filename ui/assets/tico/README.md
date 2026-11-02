@@ -9,6 +9,8 @@ generated from them.
   backgrounds and off-white for dark ones. The first-run setup and the sign-in pages show it while the
   app is still called Tico (the UI swaps in the reversed one in dark mode); a company that names its app
   sees the name as text instead.
+- The dot over the "i" is the Liquid Dot's jade, flat: `#4f9c71` on light, `#56a578` reversed and on the tile.
+  In the app the live dot is CSS (`ui/styles/liquid-dot.css`).
 - `tico-glyph.svg`: the "ti" and dot in black, no tile. It is the assistant's avatar (a CSS mask, drawn
   white on a dark disc) and the macOS menu bar template image.
 

@@ -86,10 +86,11 @@ def link_file(domain: str):
     return state.home() / domain / "owner-link.txt"
 
 
-def new_link(s: Settings) -> str:
-    """A new link in its 0600 file; returns the hash the server is given. Nothing here prints it."""
+def new_link(s: Settings, path=None) -> str:
+    """A new link in its 0600 file (link_file, or `path`: a cell company's folder); returns the hash the server is
+    given. Nothing here prints it."""
     token = secrets.token_urlsafe(32)
-    state.write_private(link_file(s.domain), f"https://{s.domain}{contract.OWNER_LINK_PATH}#{token}\n")
+    state.write_private(path or link_file(s.domain), f"https://{s.domain}{contract.OWNER_LINK_PATH}#{token}\n")
     return hashlib.sha256(token.encode()).hexdigest()
 
 

@@ -43,9 +43,9 @@ def test_watchers_receive_only_live_grants_for_active_bots_on_their_computer(api
     assert get(api, path, other["token"], expected=403)["error"]["code"] == "forbidden"
     assert get(api, path, "ana-test", expected=403)["error"]["code"] == "forbidden"
     with api.app.state.store.read() as c:
-        event = c.execute("SELECT actor,detail_json FROM events WHERE action='credential.sent_to_computer'").fetchone()
-        assert event["actor"] == "runner:" + computer["runner_id"] and '"use": "watcher"' in event["detail_json"]
-        assert JIRA not in event["detail_json"]
+        event = c.execute("SELECT actor,detail FROM events WHERE action='credential.sent_to_computer'").fetchone()
+        assert event["actor"] == "runner:" + computer["runner_id"] and '"use": "watcher"' in event["detail"]
+        assert JIRA not in event["detail"]
     post(api, f"credentials/{row['id']}/grants/{grant['id']}/revoke", {})
     assert get(api, path, computer["token"])["credentials"] == []
     post(api, f"credentials/{row['id']}/grants", {"subject": "bot:finance"})
@@ -53,6 +53,36 @@ def test_watchers_receive_only_live_grants_for_active_bots_on_their_computer(api
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='quarantined' WHERE slug='ops'")
     assert get(api, path, computer["token"], expected=403)["error"]["code"] == "forbidden"
+
+
+def test_a_watcher_with_nothing_to_send_answers_from_a_read_while_the_write_lock_is_held(api):
+    # TK-INSRN53V: this poll waited up to 11 s behind a claim's write. It writes only to record a value it sends.
+    import sqlite3
+    from concurrent.futures import ThreadPoolExecutor
+    from backend.tests.test_api import headers
+    local(api)
+    computer = runner(api)
+    assign(api, computer, "ops")
+    row = jira(api)
+    post(api, f"credentials/{row['id']}/grants", {"subject": "bot:finance"})
+    holder = sqlite3.connect(api.app.state.store.settings.db_path, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(api.get, "/api/v2/runner-watcher-credentials?bot=ops",
+                                  headers=headers(computer["token"]))
+            try:
+                answer = pending.result(timeout=2)
+            finally:
+                holder.rollback()
+    finally:
+        holder.close()
+    assert answer.status_code == 200 and answer.json() == {"credentials": []}
+    # A grant arriving makes the same poll send the value, and record that it did.
+    post(api, f"credentials/{row['id']}/grants", {"subject": "bot:ops"})
+    assert get(api, "runner-watcher-credentials?bot=ops", computer["token"])["credentials"][0]["value"] == JIRA
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE action='credential.sent_to_computer'").fetchone()[0] == 1
 
 
 # ------------------------------------------------------------------ a vault with no KMS key
@@ -119,8 +149,8 @@ def test_botops_grants_a_bot_at_once_for_an_admin_and_refuses_a_member_without_a
     assert done.status_code == 200, done.text
     assert "needs_confirm" not in done.json() and done.json()["credential"] == "Jira" and done.json()["env"] == "JIRA_BASIC_AUTH"
     with api.app.state.store.read() as c:
-        event = c.execute("SELECT actor,detail_json FROM events WHERE action='credential.granted'").fetchone()
-        assert event["actor"] == "human:ana" and '"via": "botops"' in event["detail_json"]       # hers, via BotOps
+        event = c.execute("SELECT actor,detail FROM events WHERE action='credential.granted'").fetchone()
+        assert event["actor"] == "human:ana" and '"via": "botops"' in event["detail"]       # hers, via BotOps
         assert c.execute("SELECT count(*) FROM assistant_actions").fetchone()[0] == 0
     assert act(api, ana, "POST", f"credentials/{row['id']}/grants", {"subject": "bot:ops"}).json()["id"] == done.json()["id"]
     # A grant to a person (or to every computer) is the administrator's own tap: a card, and no grant until it.
@@ -133,7 +163,7 @@ def test_botops_grants_a_bot_at_once_for_an_admin_and_refuses_a_member_without_a
             post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token=ana["token"], expected=403)
             assert post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token="ana-test")["action"]["status"] == "done"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM credential_grants WHERE subject='human:cara' AND revoked IS NULL").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM credential_grants WHERE subject='human:cara' AND revoked_at IS NULL").fetchone()[0] == 1
     finish(api, botops, ana)
     # A member is refused, in words that say who to ask, and no card is left behind.
     cara = turn(api, botops, person="cara-test", text="Grant ops the Jira credential")
@@ -149,11 +179,11 @@ def test_botops_grants_a_bot_at_once_for_an_admin_and_refuses_a_member_without_a
     ben = turn(api, botops, person="ben-test", text="Take Jira away from ops")
     assert act(api, ben, "POST", f"credentials/{row['id']}/grants/{done.json()['id']}/revoke", {}).status_code == 200
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM credential_grants WHERE subject='bot:ops' AND revoked IS NULL").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM credential_grants WHERE subject='bot:ops' AND revoked_at IS NULL").fetchone()[0] == 0
     finish(api, botops, ben)
     # A member who stored a credential for their bot shares it with their other bot through BotOps, at once, and nobody else's.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET operator='cara' WHERE bot IN ('finance','cpo')")
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot IN ('finance','cpo')")
     mine = post(api, "credential-set", {"env": "SENTRY_TOKEN", "for_bot": "cpo", "value": JIRA, "name": "Sentry"}, "cara-test")["id"]
     cara = turn(api, botops, person="cara-test", text="Give finance my Sentry token")
     given = act(api, cara, "POST", f"credentials/{mine}/grants", {"subject": "bot:finance"})
@@ -235,8 +265,8 @@ def test_the_import_tool_asks_as_the_requester_and_waits_for_the_computer(api, b
     listing = get(api, "credentials")["credentials"]
     assert [g["subject"] for g in listing[0]["grants"]] == ["bot:finance"]
     with api.app.state.store.read() as c:
-        event = c.execute("SELECT actor,detail_json FROM events WHERE action='credential.import_requested'").fetchone()
-        assert event["actor"] == "human:ana" and '"via": "botops"' in event["detail_json"]
+        event = c.execute("SELECT actor,detail FROM events WHERE action='credential.import_requested'").fetchone()
+        assert event["actor"] == "human:ana" and '"via": "botops"' in event["detail"]
     # A variable that is not in the file is a plain failure the tool reports, not a wait.
     err, still = mcp(api, "hub_credential_import", {"env": "MISSING_KEY", "from_bot": "finance", "wait": 0}, token=ana["token"])
     assert not err and still["state"] == "waiting"

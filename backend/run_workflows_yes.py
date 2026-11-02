@@ -149,9 +149,9 @@ def the_yes(c, who, read_back_id, yes_id, bot, repository, on):
     after it, with nothing from anyone else in between and nothing more from them since; and it was not used before."""
     from .assistant import AFFIRM
     back = H.message(c, read_back_id) or {}
-    named = c.execute("SELECT detail_json FROM events WHERE action=? AND target=?", (READ_BACK, read_back_id)).fetchone()
-    named = json.loads(named["detail_json"]) if named else {}
-    if not back or back.get("from_actor") != who.task_actor or back.get("to_actor") != who.actor or not named:
+    named = c.execute("SELECT detail FROM events WHERE action=? AND target=?", (READ_BACK, read_back_id)).fetchone()
+    named = json.loads(named["detail"]) if named else {}
+    if not back or back.get("sender_id") != who.task_actor or back.get("recipient_id") != who.actor or not named:
         raise Problem("no_yes", "That is not a read-back you wrote for this person: read the change back first "
                       "(POST /api/v2/bots/{bot}/repositories/run-workflows/read-back)", 403)
     if (named.get("bot"), str(named.get("repository") or "").lower(), named.get("on")) != (
@@ -159,26 +159,26 @@ def the_yes(c, who, read_back_id, yes_id, bot, repository, on):
         raise Problem("no_yes", f"That read-back asked about Run workflows {'on' if named.get('on') else 'off'} for "
                       f"{named.get('bot')} on {named.get('repository')}, not this change: read this one back", 403)
     yes = H.message(c, yes_id) or {}
-    room, at = back.get("conversation_id"), str(back.get("created") or "")
+    room, at = back.get("conversation_id"), str(back.get("created_at") or "")
     words = str(yes.get("body") or "").strip()
-    if yes.get("from_actor") != who.actor:
+    if yes.get("sender_id") != who.actor:
         raise Problem("no_yes", "That message is not the person's own: only their yes in this conversation counts", 403)
     if yes.get("conversation_id") != room:
         raise Problem("no_yes", "That yes is from another conversation: ask again here", 403)
-    if str(yes.get("created") or "") <= at:
+    if str(yes.get("created_at") or "") <= at:
         raise Problem("no_yes", "That message came before the read-back: only a yes to it counts", 403)
     # Between the two, only the carrier's own closing words may come: nothing from the person or anyone else, and no
     # other read-back, so the yes answers this one.
-    between = c.execute("SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.created>? AND m.created<? "
-                        "AND m.id NOT IN (?,?) AND m.deleted_at IS NULL AND (m.from_actor<>? OR EXISTS("
+    between = c.execute("SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.created_at>? AND m.created_at<? "
+                        "AND m.id NOT IN (?,?) AND m.deleted_at IS NULL AND (m.sender_id<>? OR EXISTS("
                         "SELECT 1 FROM events e WHERE e.action=? AND e.target=m.id)) LIMIT 1",
-                        (room, at, yes["created"], read_back_id, yes_id, who.task_actor, READ_BACK)).fetchone()
-    later = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created>? AND id<>? "
-                      "AND deleted_at IS NULL LIMIT 1", (room, who.actor, yes["created"], yes_id)).fetchone()
+                        (room, at, yes["created_at"], read_back_id, yes_id, who.task_actor, READ_BACK)).fetchone()
+    later = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>? AND id<>? "
+                      "AND deleted_at IS NULL LIMIT 1", (room, who.actor, yes["created_at"], yes_id)).fetchone()
     if between or later or len(words) > 60 or not AFFIRM.fullmatch(words):
         raise Problem("no_yes", "The person's reply to the read-back was not a plain yes (or more was said around "
                       "it), so nothing changes: read it back again and wait for their yes", 403)
-    used = c.execute("SELECT 1 FROM settings_changes WHERE field=? AND json_extract(after_json,'$.yes_message')=?",
+    used = c.execute("SELECT 1 FROM settings_changes WHERE field=? AND json_extract(after,'$.yes_message')=?",
                      (FIELD, yes_id)).fetchone()
     if used:
         raise Problem("no_yes", "That yes was already used for a change: each change needs its own yes", 403)
@@ -243,7 +243,7 @@ def change(c, auth, who, bot, org, repository, on, read_back_id=None, yes_id=Non
     after = {"repository": repo["full_name"], "on": bool(on), "approver": live.actor, "carrier": carrier or None,
              **({k: yes[k] for k in ("conversation_id", "read_back_message", "yes_message")} if yes else {})}
     change_id = H.new_id()
-    c.execute("INSERT INTO settings_changes(id,bot,field,before_json,after_json,actor,transition_id,created,via) "
+    c.execute("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created_at,via) "
               "VALUES(?,?,?,?,?,?,?,?,?)", (change_id, bot, FIELD, json.dumps(before), json.dumps(after), live.actor,
                                             None, H.now(), carrier or H.VIA.get() or None))
     H.event(c, live.actor, "bot.run_workflows", bot, {**after, "change": change_id})

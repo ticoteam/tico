@@ -146,6 +146,7 @@ SENDS = re.compile(r"urllib\.request|httpx|\brequests\.|aiohttp|http\.client")
 HQ_CLIENTS = {
     "backend/company_server.py": '"User-Agent": user_agent()',
     "backend/inbound.py": '"User-Agent": user_agent()',
+    "backend/postal_mail.py": '"User-Agent": user_agent()',
     "backend/recruit.py": '"User-Agent": "tico"',
     "backend/billing_check.py": '"User-Agent": "tico-billing-check"',
     "backend/releases.py": '"User-Agent": "tico-update-check"',
@@ -154,6 +155,7 @@ HQ_CLIENTS = {
     "clients/gateway.py": "branded_opener(*handlers).open(",
     "clients/judge.py": "G.branded_opener(*handlers).open(",
     "setup/support.py": '"User-Agent": "tico-setup"',
+    "setup/cell_stats.py": '"User-Agent": "tico-cell-stats"',
 }
 
 

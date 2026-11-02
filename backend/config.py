@@ -196,6 +196,11 @@ class Settings:
     # visual page sits apart from the app's cookies. Empty: the fallback (backend/visuals.py mode), where the app's
     # own address serves pictures, video and audio as media only and pages and SVG open in the file viewer.
     visual_origin: str = ""
+    # The Company page's own address and the folder its public files are written to (backend/company_page).
+    reader_origin: str = ""
+    # The domain a page's own address sits under when the install has no reader origin of its own: <slug>.<page domain>.
+    page_domain: str = ""
+    company_page_dir: str = ""
     runner_url: str = ""
     screen_relay_url: str = ""
     screen_relay_key: str = field(default="", repr=False)
@@ -308,6 +313,13 @@ class Settings:
     # TypeSafe's published price, output free. Both 0 is unknown: the call's tokens are kept, its cost not counted.
     decisions_jev_usd_per_mtok_input: float = 0.042
     decisions_jev_usd_per_mtok_output: float = 0.0
+    # Org rule checks (backend/org_rule_check.py): their own monthly USD cap, apart from Decide's, so checks and
+    # screening never spend each other's; the Decide level they ask at; how many `hub rules check` drafts one bot
+    # may check in a UTC day; and how many checks run at once (past that, an output goes through unchecked, `busy`).
+    rules_monthly_usd: float = 50.0
+    rule_check_level: str = "medium"
+    rules_check_daily_drafts: int = 200
+    rule_check_concurrency: int = 8
     # Idea triage on the public roadmap's suggestion form (backend/idea_triage.py, questions/idea-triage.json): off by
     # default; when on, a confident bug or small change goes to Head of Engineering, everything else to product as before.
     decisions_idea_triage: bool = False
@@ -355,6 +367,9 @@ class Settings:
     # leaves the server: no scheduler, directory sync, backups, release check, usage count, support or HQ calls,
     # GitHub or Slack, telemetry or updater (docs/install.md, "Rehearse a migration"). Migrations run as usual.
     rehearsal: bool = False
+    # This install's routines and rules move to Automations at this start, once (backend/redesign_migration.py
+    # `cutover`). On by default: once the move is done the cutover returns at once, so later starts do nothing.
+    migrate_to_automations: bool = True
 
     def __post_init__(self):
         self.hosted = self.hosted.strip()
@@ -376,6 +391,9 @@ class Settings:
         self.public_url = self.public_url.rstrip("/")
         from .visuals import check_origin
         self.visual_origin = check_origin(self)
+        if self.reader_origin:          # most installs have none, and this import brings the whole sign-in stack
+            from .company_page.reader_app import check_origin as check_reader_origin
+            self.reader_origin = check_reader_origin(self)
         self.auth_proxy = self.auth_proxy.strip().lower()
         from . import cors
         self.cors_origins = cors.parse(self.cors_origins)
@@ -485,6 +503,9 @@ class Settings:
             public_url=(os.environ.get("TICO_PUBLIC_URL") or
                         "http://127.0.0.1:" + os.environ.get("TICO_PORT", "8765")).rstrip("/"),
             visual_origin=os.environ.get("TICO_VISUAL_ORIGIN", "").strip(),
+            reader_origin=os.environ.get("TICO_READER_ORIGIN", "").strip(),
+            page_domain=os.environ.get("TICO_PAGE_DOMAIN", "").strip().strip("."),
+            company_page_dir=os.environ.get("TICO_COMPANY_PAGE_DIR", "").strip(),
             owner_name=os.environ.get("TICO_OWNER_NAME", "").strip(),
             compose_project=os.environ.get("TICO_COMPOSE_PROJECT", "tico"),
             server_network=os.environ.get("TICO_SERVER_NETWORK", "tico_default"),
@@ -558,6 +579,11 @@ class Settings:
             decisions_monthly_usd=max(0.0, float(os.environ.get("TICO_DECISIONS_MONTHLY_USD", "") or 50.0)),
             decisions_jev_usd_per_mtok_input=max(0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_INPUT", "") or 0.042)),
             decisions_jev_usd_per_mtok_output=max(0.0, float(os.environ.get("TICO_DECISIONS_JEV_USD_PER_MTOK_OUTPUT", "") or 0)),
+            rules_monthly_usd=max(0.0, float(os.environ.get("TICO_RULES_MONTHLY_USD", "") or 50.0)),
+            rule_check_level=(os.environ.get("TICO_RULE_CHECK_LEVEL", "").strip().lower() or "medium")
+            if os.environ.get("TICO_RULE_CHECK_LEVEL", "").strip().lower() in ("", "low", "medium", "high") else "medium",
+            rules_check_daily_drafts=max(0, int(os.environ.get("TICO_RULES_CHECK_DAILY", "") or 200)),
+            rule_check_concurrency=max(1, int(os.environ.get("TICO_RULE_CHECK_CONCURRENCY", "") or 8)),
             decisions_idea_triage=not rehearsal and os.environ.get("TICO_DECISIONS_IDEA_TRIAGE", "0") == "1",
             sample_company=not rehearsal and os.environ.get("TICO_SAMPLE_COMPANY", "").strip().lower() == "on",
             **_company_file_fields(rehearsal),

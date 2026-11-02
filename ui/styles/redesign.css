@@ -1,0 +1,56 @@
+/* The app's shell (ui/app/redesign.js, ui/app/strategy-budget.js): what keys off html.redesign (set at boot) or a class
+   only that code adds. */
+
+/* Sidebar: what moved out of the rail. Library's pages sit under it. */
+html.redesign #nav-inboxes-section{display:none!important}
+.rd-lib{display:flex;flex-direction:column}
+.rd-lib[hidden]{display:none}
+/* Library folds: the Team section's chevron, on a small square beside the link (the sidebar's other row buttons). */
+.rd-lib-toggle{flex:none;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer}
+.rd-lib-toggle:hover{background:var(--surface2);color:var(--ink)}
+.rd-lib-toggle:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.rd-lib-toggle .section-chev{margin:0}
+.rd-lib-toggle[aria-expanded="false"] .section-chev{transform:none}
+body.in-setup .rd-lib{display:none}
+@media (max-width:760px){.rd-lib-toggle{width:40px;height:40px}}
+.rd-lib .nav-link{padding-left:calc(10px + 20px + var(--s2));color:var(--muted)}
+.rd-lib .nav-link .nav-icon{display:none}
+.rd-lib .nav-link.cur,.rd-lib .nav-link:hover{color:var(--ink)}
+@media (max-width:760px){.rd-lib .nav-link{padding-left:46px}}
+
+/* "?" help: one per panel, on hover, focus or tap. */
+.rd-help{position:relative;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;margin-left:4px;border-radius:50%;border:1px solid var(--line);color:var(--muted);font-size:var(--t-2xs);line-height:var(--lh-none);cursor:help;vertical-align:middle}
+.rd-help:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.rd-help-pop{display:none;position:absolute;z-index:30;left:50%;bottom:calc(100% + 6px);transform:translateX(-50%);width:max-content;max-width:min(260px,70vw);padding:6px 9px;border-radius:7px;background:var(--raised,var(--surface2));border:1px solid var(--line);color:var(--ink);font-size:var(--t-sm);font-weight:400;line-height:var(--lh);text-align:left;white-space:normal;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+.rd-help:hover .rd-help-pop,.rd-help:focus .rd-help-pop{display:block}
+
+/* Strategy tabs: one row, scrolling sideways inside itself on a phone, never the page. */
+.rd-strat-head .strat-tabs{overflow-x:auto;scrollbar-width:none;max-width:100%}
+.rd-strat-head .strat-tabs::-webkit-scrollbar{display:none}
+.rd-strat-head .strat-tabs a{white-space:nowrap}
+.strat-sub{font-size:var(--t-sm);color:var(--muted)}
+.strat-sub:hover{color:var(--ink)}
+@media (max-width:760px){.rd-strat-head h1{flex-basis:100%}.rd-strat-head .strat-tabs{order:2;flex-basis:100%}
+  .rd-strat-head>.spacer{display:none}.rd-strat-head .strat-sub,.rd-strat-head .strat-actions{order:3}
+  .rd-strat-head .strat-sub+.strat-actions{flex:1 1 0;min-width:0}}
+
+/* Goals as a tab: the tree takes the page's width. */
+#main.rd-goals{display:block}
+#main.rd-goals .goals-main{max-width:none}
+
+/* An empty Strategy view: one line. */
+.rd-empty{margin:12px 0}
+
+/* The editors' one-line fields (Org's sheet; Budget's rows are ui/styles/strategy-budget.css). */
+.bd-fields{display:grid;gap:8px}
+.bd-field{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:40px}
+.bd-field input:not([type=checkbox]),.bd-field select{width:min(180px,50vw);text-align:right}
+.bd-field select{text-align:left}
+.bd-money{display:inline-flex;align-items:center;gap:4px;color:var(--muted)}
+.bd-field .bd-money input{width:80px;font-variant-numeric:tabular-nums}
+.bd-money input:disabled{opacity:.45}
+.use-dialog label.bd-field,.use-dialog .bd-field{flex-direction:row;align-items:center;color:var(--ink)}
+/* Editors are sheets on a phone. */
+@media (max-width:760px){
+  dialog.rd-sheet{margin:auto 0 0;width:100vw;max-width:100vw;border-radius:16px 16px 0 0;padding-bottom:env(safe-area-inset-bottom)}
+}

@@ -2,8 +2,9 @@
 
 All notable changes to Tico are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
-[Semantic Versioning](https://semver.org/). Each release is also published on
-[GitHub](https://github.com/ticoteam/tico/releases) with its section below as the notes.
+[Semantic Versioning](https://semver.org/). Each release is published on
+[GitHub](https://github.com/ticoteam/tico/releases), and its GitHub release page carries the section
+below word for word as its notes.
 
 ## [Unreleased]
 
@@ -12,6 +13,59 @@ All notable changes to Tico are recorded here. The format follows
 ### Fixed
 - **SQL queries run at normal speed again.** In v0.4.14, `hub sql` and the SQL API could take many minutes and slow every other request. This release restores the earlier query path and reverts the v0.4.14 change to message searches. Results and access rules are unchanged ([Querying Tico with SQL](docs/hub-sql.md)).
 - **Desktop app sign-in shows its instructions.** On macOS, the model sign-in dialog could open with an empty body, hiding the provider link and code, so Claude Code and Codex could not sign in from the desktop app. The instructions now show ([Add a connection](docs/computers.md#add-one)).
+
+## [0.4.14] - 2026-10-26
+
+Desktop app: the 0.4.3 build, unchanged in this release.
+
+### Added
+- **Change many tasks at once.** Select tasks on a board or list, or target them with a filter, then update their status, owner, tags or closed state in one action. A dry run shows the counts before you apply changes ([Changing many tasks at once](docs/tasks.md#changing-many-tasks-at-once)).
+- **Rules can assign tasks and change tags.** A task rule can assign a task to a person or bot, add a tag or remove a tag ([Task rules](docs/tasks.md)).
+
+### Changed
+- **Route checks to available reviewers.** Configure a pool for each review and QA step. Tico assigns each check to the least busy eligible checker and waits when none is available ([Task check pools](docs/tasks.md#check-pools-who-takes-a-tickets-check)).
+- **Set task flow rules for each step.** Configure status durations and backlog warnings on individual steps, and use verdict rules to choose where a ticket goes next ([Task flow](docs/tasks.md#step-flow-what-a-step-does-with-a-ticket)).
+- **Restarted runs resume in the same provider session.** If a run used an approval or named an outside action, Tico holds it for review. Saved choices apply when the work lane is free ([Interrupted runs](docs/how-it-works.md)).
+- **Health separates queued and held work.** Health shows jobs waiting behind an interrupted run and jobs held on purpose. Held work no longer makes a bot look stuck ([Health Monitor](docs/health-monitor.md)).
+
+### Fixed
+- **Owners can return tasks to Open and reopen Done.** Dev tickets return to On Deck; if a blocker remains, they stay Blocked with On Deck saved as their next step ([Reopen a task](docs/tasks.md)).
+- **A check verdict takes effect after a hold clears.** A review or QA result advances its task after a person finishes the blocking subtask or answers the blocking ask. The task returns to the step it left ([Task holds and checks](docs/tasks.md)).
+- **Computer busy checks use CPU usage.** Network waits no longer make a computer look overloaded when its CPU has room ([Computer status](docs/computers.md)).
+- **Gateway address changes ask the owner first.** BotOps waits for the owner's confirmation before applying a new address ([AI Gateway](docs/ai-gateway.md)).
+- **GitHub rate limits retry quietly.** A rate-limited 403 is treated as temporary; other 403 responses still report an access problem ([Task review gates](docs/tasks.md)).
+- **Private tasks stay with an owner who can read them.** Check routing skips candidates without access, and check timeouts no longer close an ordinary subtask. Rules use the access of the person who last saved the action ([Task permissions and rules](docs/tasks.md)).
+- **Renamed review steps still check GitHub.** A custom gated step gets the fresh check read before Tico moves its task ([Task flow](docs/software-factory.md)).
+- **Message searches avoid repeat privacy checks.** Tico skips recursive checks for rows the existing SQL gate already allows; access rules and response shape stay the same ([Querying Tico with SQL](docs/hub-sql.md)).
+
+## [0.4.13] - 2026-10-26
+
+Desktop app: the 0.4.3 build, unchanged in this release.
+
+### Added
+- **Post an update on a goal.** Add a check-in to a live goal from its owner's Goals panel. Its colour follows the goal's measures when they set one, while your words stay with the goal ([Goals](docs/goals-and-kpis.md)).
+- **See task automation in Settings.** Settings > Tasks groups automatic actions by task stage and type, with each rule's scope, wake behavior, state and recent usage. Edit a rule or switch it on from the list ([Tasks](docs/tasks.md#task-settings)).
+
+### Changed
+- **Managers can work on their reports' tasks.** Task access follows the current org chart, including managers above a report and department groups. Private person-only tasks and approval, verdict, comment and publishing rights keep their own rules ([Tasks](docs/tasks.md)).
+- **Sub-goals get colours from their measures.** A sub-goal can receive an automatic colour without a person setting one first; personal colours and existing checks still take precedence ([Goals](docs/goals-and-kpis.md)).
+- **Archived measures remain visible on linked goals.** Goal panels show archived KPIs as muted links and explain what they no longer count toward. Restoring or archiving a KPI recalculates linked goals ([Goals](docs/goals-and-kpis.md)).
+- **A person can waive a Dev ticket's QA step.** The ticket owner or a manager can record a reasoned waiver for one exact pull-request revision. The waiver does not count as a QA pass ([Tasks](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
+- **Held and dismissed runs show their decision.** The run page and Pipeline identify who made the decision, when and why ([Sessions](docs/sessions.md#why-a-run-stopped-or-stalled)).
+- **Quarantine stops a running turn with its reason.** Its jobs stay owned and can resume when the bot is active again ([How it works](docs/how-it-works.md)).
+- **Reviewers prefer another model family when available.** If no other provider or family can run, a review can use the author's provider instead of waiting ([Tasks](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
+- **Recruit links to LinkedBots and names rehearsal mode.** The third-party options link opens LinkedBots, and the builder explains when `TICO_REHEARSAL=1` turns off HQ suggestions ([Recruit a bot](docs/onboarding.md)).
+
+### Fixed
+- **Blocked checks now explain the task hold.** A Review or QA check that waits or is blocked by another task puts its Dev ticket in Blocked with the reason. A matching open blocker ask is reused instead of sending another request ([Blocked tasks](docs/tasks.md#numbers-and-the-order-within-a-step)).
+- **Green checks clear review holds.** Fresh all-green pull-request checks can satisfy Review questions and clear a review-gate hold ([Review handoffs](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
+- **Review moves retry on the right board.** A refused cross-board move retries on its destination board, and an expired hold clears when no retry can resolve it ([Review handoffs](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
+- **Actionable notices release stale task deferrals.** Due, snooze, resume and completed-check notices can restart an Open task held only by an outdated next-run deferral; real waits still hold it ([Picking work back up](docs/tasks.md#picking-work-back-up)).
+- **Subtask results reach a Waiting parent sooner.** An unrelated open subtask no longer delays a result the parent is waiting for; other waits still apply ([Subtasks and PRs](docs/tasks.md#subtasks-and-prs)).
+- **Review results survive varied note formats.** Valid verdicts in notes, comments and final replies are recognized for the current review cycle. A person can also finish their own check-titled child task without a review verdict ([Review handoffs](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
+- **Status pages skip finished company tasks.** They continue to include live tasks and private tasks while avoiding unnecessary reads of old completed work ([Status](docs/health-monitor.md)).
+- **Health's queue counts match Pipeline.** Health and `hub pipeline` count a bot's queued jobs the same way. Jobs behind an interrupted run awaiting review and jobs held on purpose are named separately, not shown as queued ([Health](docs/health-monitor.md)).
+- **Late Dev-ticket notices are reliable.** A notice is recorded only after a manager who can read the ticket receives it, so a ticket with no readable manager is told on a later pass. One ticket that fails no longer stops the rest of the sweep ([Waiting work](docs/tasks.md#work-that-is-waiting)).
 
 ## [0.4.12] - 2026-10-26
 
@@ -53,6 +107,47 @@ All notable changes to Tico are recorded here. The format follows
 ### Known issues
 - Saving a bot's task effort without a task model returns a 422 error for bots on the company default model. Not fixed in 0.4.12.
 - Compact-first is tracked per conversation. A session shared across conversations can miss one compaction. Not fixed in 0.4.12.
+
+## [0.4.11] - 2026-10-25
+
+Desktop app: the 0.4.3 build, unchanged in this release.
+
+### Added
+- **Gateway picks by department and level.** The AI Gateway lineup offers department, level and Fast picks, with model versions ([AI Gateway](docs/ai-gateway.md)).
+- **Strategy lenses and market monitors.** Strategy adds lenses, market views by spend, market lenses, and monitors with briefings ([Strategy](docs/strategy.md)).
+- **Send images to Gateway models that read them.** Models that can read images receive the pictures attached to a message ([AI Gateway](docs/ai-gateway.md)).
+- **Fetch a page through the Gateway.** A bot can fetch a web page through the AI Gateway ([AI Gateway](docs/ai-gateway.md)).
+- **Webhooks gain outgoing endpoints and rule actions.** Incoming webhooks have a v2 API, outgoing endpoints can be set up, and rules can act on webhook events ([Webhooks](docs/webhooks.md)).
+- **Setup imports strategy.** A company file from tico.dev/setup brings its strategy with it ([Strategy](docs/strategy.md#setup)).
+
+### Changed
+- **Release now asks even with nothing pending.** A person's note on a release request is passed to the Release Manager even when no ticket is at Pending Release ([Releasing](docs/releasing.md)).
+- **Status pages read less.** The status page batches per-bot reads and no longer loads task bodies ([Health Monitor](docs/health-monitor.md)).
+- **Company link works for a local install without a public address.** A local install links to its Tico company with no public address ([Install Tico](docs/install.md#sign-in)).
+- **Remove a person who left.** A person with no history can be removed from People ([Humans and access](docs/people.md)).
+- **Hosted servers update when idle.** Hosted servers take the release Tico supports, when they are idle ([Updates](docs/updates.md)).
+- **Support access sits under its request.** The button and log appear under the request, with one session ID shared with HQ ([Support](docs/support.md)).
+- **The webhook relay takes the short address.** `hooks.tico.dev` works as a relay address ([Webhooks](docs/webhooks.md)).
+- **Gateway shows Coming soon for services not live yet.** A service that is not live yet is labelled as such instead of failing ([AI Gateway](docs/ai-gateway.md)).
+
+### Fixed
+- **A raw page change no longer trips a bet.** A raw change on a monitored page does not count toward a strategy bet ([Strategy](docs/strategy.md)).
+- **A task a Lead was handed starts.** Pulls no longer block the wake that starts it ([Tasks](docs/tasks.md)).
+
+## [0.4.10] - 2026-10-25
+
+Desktop app: the 0.4.3 build, unchanged in this release.
+
+### Added
+- **Create a teammate's password.** **Create password** in People makes a Tico account and shows its password once ([Humans and access](docs/people.md)).
+
+### Changed
+- **Self-run servers get their AI Gateway key from their company link.** The key comes from the company link rather than being entered by hand ([AI Gateway](docs/ai-gateway.md)).
+- **The company heartbeat reports a new version within the hour.** A changed version is sent to Tico within an hour of the change ([Updates](docs/updates.md)).
+- **Clearer wording for adding people and triage.** Add-human copy and triage wording are clearer, and "just now" shows for changes under a minute ([Humans and access](docs/people.md)).
+
+### Fixed
+- **People and Support pages show correct times and counts.** The invited time, Support count and rows, the access-off message and classification wording are corrected ([Humans and access](docs/people.md)).
 
 ## [0.4.9] - 2026-10-25
 
@@ -120,6 +215,142 @@ All notable changes to Tico are recorded here. The format follows
 - **Batched notices no longer block immediate work.** A notice waiting for its batch no longer makes **Run now**, resumed work, meeting turns, update requests or automatic task starts look as though a run already waits. ([Wakes](docs/creating-bots.md#7-harness-model-effort-and-fallback)).
 - **BotOps actions for a person wake bots immediately.** When BotOps acts with a person's delegated rights, notices of the action count as that person's action. They no longer wait in a wake-preset batch ([Wakes](docs/creating-bots.md#7-harness-model-effort-and-fallback)).
 - **Update snapshot cleanup handles disappearing temporary files.** If SQLite removes a temporary journal during cleanup, the updater skips the missing file. An unfinished snapshot reports that it did not finish instead of failing with a traceback; the next attempt still clears leftover partial copies ([Releasing](docs/releasing.md)).
+
+## [0.4.6] - 2026-10-24
+
+Desktop app: the 0.4.3 build, unchanged in this release.
+
+### Added
+- **Decision outcomes are logged.** Ad-hoc decisions and a bot's task results record their outcome, for the decision readout ([Learnings](docs/learnings.md)).
+
+### Changed
+- **Company stop counts only turns holding a place.** A turn still waiting for its place no longer counts toward the company stop level ([Health Monitor](docs/health-monitor.md)).
+- **Needs you loads a page at a time.** Long lists of items load in pages instead of all at once ([Tasks](docs/tasks.md)).
+- **The company card rereads credit at most once a minute.** A self-run server's company card no longer rereads its credit on every view ([Install Tico](docs/install.md#sign-in)).
+
+### Security
+- **Runner and relay use the system trust store.** They verify TLS with the operating system's certificates first, with the bundled list as a fallback ([Updates](docs/updates.md)).
+
+## [0.4.5] - 2026-10-24
+
+Desktop app: the 0.4.3 build, unchanged in this release.
+
+### Added
+- **The CEO Bot logs its task decisions with Undo.** At **Acts on its own**, its decisions on bot tasks are logged, and the owner can Undo them. Work reserved for the owner stays a proposal ([The CEO Bot log](docs/ceo-bot.md#the-ceo-bot-log)).
+
+### Changed
+- **Busy-turn warnings and stops apply per person.** A person's bots get a warning at 40 busy turns and a stop at 100, counted across the org. The old "no more slots" alert is gone; an admin setting controls the levels ([Health Monitor](docs/health-monitor.md)).
+
+### Fixed
+- **Messages from bots to a held bot stay bounded.** Bot-origin messages waiting for a held recipient are kept in a bounded queue ([How it works](docs/how-it-works.md)).
+- **Grok sign-in status is read safely.** The Grok auth status is read without following links, and its folder ownership check is bounded ([Computers](docs/computers.md)).
+
+## [0.4.4] - 2026-10-24
+
+Desktop app: the 0.4.3 build, unchanged in this release.
+
+### Changed
+- **Task-list links carry fewer fields.** Task lists and live task events omit empty link fields and link update timestamps. API clients that need the full link record should read the task detail or its links endpoint ([Build your own frontend on Tico](docs/custom-frontend.md#key-endpoints)).
+- **Bot inboxes return bounded batches.** The messages inbox returns at most 100 readable messages and 100 readable tasks. API, CLI and MCP callers can use `more_messages` and `more_tasks` to tell when more are waiting ([The Tico API](docs/api.md#rate-limits-and-size-limits)).
+- **Runner updates hand back waiting work sooner.** Turns waiting for a login, usage allowance, turn share or checkout return to the queue. Active turns have five minutes by default to finish before resumable work is saved and requeued ([Updates](docs/updates.md#a-docker-runner)).
+- **Unchanged tasks get fewer stall checks.** Checks back off from 30 minutes to eight hours while a task stays unchanged. Changes to its state, owner, waiting person or relations restart the interval ([System routines](docs/system-routines.md#the-jobs)).
+- **Custom frontends can narrow live task events.** Filter the event stream by task, or by the person or bot who owns or requested it. Streams reconnect after about fifteen minutes ([Build your own frontend on Tico](docs/custom-frontend.md#live-events)).
+- **Old streamed reply fragments are cleaned up.** The hourly cleanup removes text-piece events for runs finished more than fourteen days ago. Saved messages and thought events remain ([Build your own frontend on Tico](docs/custom-frontend.md#live-events)).
+- **Decision readouts retain more answers.** Stale ticket reviews, nightly learning routing and Slack routing record answer labels, values and confidence ([Learnings](docs/learnings.md#nightly-learning-run)).
+- **Hosting help explains changed stop times.** The account and billing guides cover owner notices, updated grace deadlines and renewed reminders ([Your Tico account](docs/account.md#hosting-grace-and-retained-data)).
+- **Chat pictures leave room for the reply.** Picture thumbnails use about a quarter of the message column. Open a picture fitted to the viewer, then zoom or pan ([Visuals in replies](docs/visuals.md#in-a-chat-or-task-conversation)).
+- **Search and change both bot models.** One search replaces the Computer, Model and Effort filters in **Settings → Bots**. Bulk **Change model** offers **Bot model**, **Task model** or **Both models** ([Harnesses](docs/harnesses.md#run-a-bots-tasks-on-another-model)).
+
+### Added
+- **Ask about updates beside the feed.** Updates includes your existing Assistant chat, or the CEO Bot for the owner ([The Assistant](docs/assistant.md#on-the-updates-page)).
+- **Task rules join Routines.** Create and edit rules in **Settings → Routines**, with department permissions and saved on or off controls. The default **Close 24h after done** rule closes eligible, untouched done tasks; reopening undoes a close ([System routines](docs/system-routines.md#task-rules)).
+- **Setup lays out Recruiting seats.** Your chosen chart creates seats with job descriptions and reporting lines, ready for recruitment. Failed chart imports show a reason instead of a sample company ([Finish setup](docs/onboarding.md#the-team-builder)).
+- **Invite people through Tico accounts.** Owners and admins can use **Send invite** on a person's roster row ([Humans and access](docs/people.md#invites)).
+- **Compare your team with starter charts.** Ask the CEO Bot to propose Recruiting seats from Tico's published charts. One confirmation adds the proposed seats ([Finish setup](docs/onboarding.md#re-org-suggestions)).
+- **Self-install setup carries full company charts.** AWS, SSH and local setup support charts up to 300 seats without a separate in-app import. Saved charts survive retries ([Advanced installs](docs/install-advanced.md#the-aws-server)).
+- **Link a self-run server to its Tico company.** The **Tico company** card in **Settings → General** lets an owner or admin connect a server, with credit information and a daily version heartbeat ([Install Tico](docs/install.md#sign-in)).
+- **Hosted pages and SVG can open inline.** When Tico file hosting is configured, cleaned copies of pages and SVG open inline from the company's file address. Access checks still apply ([Files](docs/files.md#tico-file-hosting)).
+- **Hosted visuals gain an installation check.** Operators can apply and verify visual-origin configuration on an existing hosted installation ([Advanced installs](docs/install-advanced.md#apply-hosted-visual-configuration-on-the-same-installation)).
+
+### Fixed
+- **Sent chat drafts stay cleared after sign-in.** After a successful resend, the composer drops the saved draft, so sent text does not reappear ([Using Tico](docs/using-tico.md)).
+- **Send clicks survive chat redraws.** A redraw between pressing and releasing Send no longer discards the click, including in task chat ([Using Tico](docs/using-tico.md)).
+- **New bots show why their login is queued.** A bot waiting before its first turn shows the login wait reason ([Computers](docs/computers.md)).
+- **Returning task models receive fallback progress.** A task model resuming its older provider thread also receives the latest completed task checkpoint ([Harnesses](docs/harnesses.md#run-a-bots-tasks-on-another-model)).
+- **Busy bots can settle unrelated stopped work.** An active run no longer prevents recovery of stopped work on another task ([How it works](docs/how-it-works.md#what-happens-when)).
+- **Stopped-run decisions stay visible and take effect.** **Try again** and **Don't retry** choices made while the related run is active are saved and applied when it ends ([How it works](docs/how-it-works.md#what-happens-when)).
+- **Grok sign-in repairs its folder permissions.** The isolated Docker computer repairs ownership of Grok's default folder before sign-in, keeping the login location and file modes ([Computers](docs/computers.md#signing-out-and-switching-accounts)).
+- **Long goals leave room for the bot name.** A wide desktop header gives up space before the bot name, so long goals truncate less ([Team chart](docs/org-chart.md)).
+- **Task headers wrap when controls do not fit.** Search, task types and **New task** no longer overlap at desktop widths ([Task types and steps](docs/tasks.md)).
+- **Large update snapshots share one time budget.** The Docker updater bounds the snapshot copy and the check together ([Updates](docs/updates.md#the-servers-own-updater)).
+- **Task pages make fewer repeated database reads.** Task details, lists, status and Needs you batch repeated lookups within one read snapshot; visibility checks stay in place ([Task types and steps](docs/tasks.md)).
+- **SQL history reads reuse permission checks.** Related task, message, run and meeting checks share request-local results within the existing time budget ([Querying Tico with SQL](docs/hub-sql.md)).
+- **Busy database writes return a retry response.** A lock timeout returns `503 busy` with `Retry-After: 2`. Custom clients should wait and retry with the same `Idempotency-Key` ([Build your own frontend on Tico](docs/custom-frontend.md#errors)).
+- **Idle tabs and unchanged pages do less work.** More pages pause polling while hidden, and image thumbnails load near the viewport ([Using Tico](docs/using-tico.md)).
+- **Unsupported previews avoid unnecessary file delivery.** The media worker skips a version it cannot derive a preview for, such as an SVG. Missing preview tools still do not fail uploads ([Files](docs/files.md)).
+- **Review refusals explain what could not be verified.** A blocked review move names the failed GitHub or check condition and asks you to retry the move ([Task types and steps](docs/tasks.md#task-types-and-steps)).
+
+## [0.4.3] - 2026-10-24
+
+Desktop app: the 0.4.3 build, released with this version.
+
+### Added
+- **Five more roles can become bots.** Recruit an **Equity Manager**, **Fundraising Manager**, **Controller**, **Scheduling & Bookings** or **Quality & Inspections** bot from the catalog ([Starter bots](docs/starter-bots.md)).
+- **Edit what your Assistant has learned.** **What it has learned** lists your saved preferences under **About you**. Edit or delete a line there. This layer is private to you ([The Assistant](docs/assistant.md#what-it-has-learned)).
+- **Teach the CEO Bot about the company.** Owners also get **About the company** on **What it has learned**: the vision, company goals and lessons taught in chat. Only the owner reads and changes it ([Your CEO Bot](docs/ceo-bot.md#what-it-has-learned)).
+- **Drag tasks between board steps.** On desktop, drag a card to change its step or its order within a step. On phones, change the task's **Step** instead ([Task types and steps](docs/tasks.md)).
+- **Change a task's owner from its card.** If you can edit the task, choose its owner to find and assign a person or bot.
+- **See a teammate's plate.** Use the person picker on **Tasks** to see what waits on a teammate, what they own and what they asked others to do ([Task types and steps](docs/tasks.md)).
+- **Task stats show trends over time.** Choose day, week or month bars with a moving average and a person filter. Date ranges extend to one year.
+- **Customize a bot's sidebar.** If you manage the bot, use the pencil to reorder, hide and resize sections and to add or edit task-filter tabs ([Using Tico](docs/using-tico.md)).
+- **Limit a bot to one task.** People who manage a bot can use `hub bot scope` to restrict its claims to one task and its direct subtasks. Other work stays queued ([Who can see, read and write to a bot](docs/permissions.md)).
+- **Read pipeline counts in one request.** `hub pipeline`, the matching MCP tool and the pipeline API report step counts, time in step, waits, open pull requests, bot queues and failures ([Task types and steps](docs/tasks.md)).
+- **Grant bots aggregate outcome statistics.** The signed-in owner can let a bot read weekly proposal outcomes and MCP tool statistics. These totals expose no proposal text or person's identity ([Querying Tico with SQL](docs/hub-sql.md#the-useful-tables)).
+- **Set up Docs with the Librarian.** On an empty Docs page, answer **Where are your docs?** to register sources for the Librarian to map ([The Librarian](docs/librarian.md#first-run-setup)).
+- **Guide the Librarian's market research.** Owners answer four questions about the business, buyers, competitors and what to watch. The finished research sets what Market tracks ([The Librarian](docs/librarian.md#first-run-setup)).
+- **Tico file storage for provisioned companies.** When HQ has provisioned file hosting, new uploads can use Tico storage. Owners can move existing versions with checked copies, or move them back ([Files](docs/files.md#tico-file-hosting)).
+- **Reviewer bots can use a separate GitHub identity.** Operators can configure a second GitHub App for reviewers. Reviews name the exact commit reviewed ([GitHub App](docs/github-app.md#separate-identity-for-reviewers)).
+- **Review handoffs check current test evidence.** Engineering review handoffs check CI and a test receipt for the current pull-request head before waking a reviewer. Failing checks, or missing, stale or failed receipts, refuse the handoff ([Task types and steps](docs/tasks.md#software-review-handoffs-and-qa-defaults)).
+
+### Changed
+- **A person completes bot onboarding.** New bots learn and prepare in **Onboarding**, then report that they are ready. A person above them on the org chart marks onboarding complete. Onboarding bots cannot take tasks, run routines, send email or post to Slack ([Finish setup](docs/onboarding.md#a-bots-stages)).
+- **Boards keep working steps in view.** **Waiting** becomes a tag on the current step. Declined tasks go to **Closed**; finished work sits under **Done** and **Closed** ([Task types and steps](docs/tasks.md)).
+- **Recruit a role before creating its bot.** **Team → Add bot** creates a **Recruiting** seat. Pick from up to three candidates, one recommended; your pick creates the bot in **Onboarding** ([Finish setup](docs/onboarding.md#recruiting-a-seat)).
+- **Owners chat with the CEO Bot.** The owner's chat and menu replace the Assistant with the CEO Bot. Everyone else keeps their Assistant, and earlier Assistant chats stay readable ([Your CEO Bot](docs/ceo-bot.md#your-chat-with-it)).
+- **Eligible assigned tasks start on free turns.** Tico starts the highest-ranked eligible task when a bot has room. **Keep N tasks going** sets a task cap; **0** disables automatic starts ([Task types and steps](docs/tasks.md#automatic-starts)).
+- **Waiting turns free computer capacity.** Computers and Health distinguish **Running**, **Starting**, **Waiting** and **Queued**. Update the runner to get these rules; older runners keep their existing leases ([Computers](docs/computers.md#turn-counts)).
+- **Overloaded computers hold new starts.** Sustained CPU or memory above 90% for five minutes holds new starts. Running turns continue, and starts resume when the overload clears ([Computers](docs/computers.md#turn-counts)).
+- **Account status explains each problem.** One dot beside your name shows the most serious status. Open the account menu for plain-language problems and a **Fix** action for each.
+
+### Fixed
+- **Scoped SQL history avoids scanning every past run.** Small and time-bounded run-history queries resolve only the runs they need. Queries past their deadline return a timeout that says how to narrow them ([Querying Tico with SQL](docs/hub-sql.md)).
+- **Gemini works on isolated Docker runners again.** Turns that stopped with "could not write the Gemini settings" can start. Update the runner to get the fix ([Harnesses](docs/harnesses.md)).
+- **Chat shows sending progress and uncertain delivery.** **Send** stays busy, then shows **Still sending…** on slow sends. A send that is not confirmed keeps the draft; Retry reuses its original identity for 48 hours in the same tab ([Using Tico](docs/using-tico.md)).
+- **Disabled send controls explain why.** Empty Send controls say what to enter, and phone users see the busy reason below the composer.
+- **Failed runs say what ended them.** Run details record the limit reason, runtime, login and model. A turn that never started returns to the queue with a backoff instead of appearing as a crash.
+- **Changing a connection rechecks usage holds.** Switching a bot's connection or login rechecks the hold against its current connection.
+- **Fallbacks skip the same exhausted login.** A fallback that uses the limited primary login is skipped; Tico tries an eligible alternative or holds for the reset ([How it works](docs/how-it-works.md#what-happens-when)).
+- **Task-model fallbacks use the latest checkpoint.** If a task model cannot run, the bot's model starts a fresh session from the task checkpoint rather than resuming incomplete history ([Harnesses](docs/harnesses.md#run-a-bots-tasks-on-another-model)).
+- **Missing Claude sessions recover with follow-ups.** When a saved Claude conversation is missing before any event, the runner starts a fresh session and carries follow-ups into it.
+- **Session rotation keeps the previous thread until ready.** The runner saves a replacement thread only after its host confirms the new session, so a failed start no longer discards the previous thread. Update the server and runner for this confirmation.
+- **Login warnings identify affected bot connections.** Computers warn when bots use an API-key login, whose billing is separate from subscription allowances. Health also flags missing or rejected logins ([Computers](docs/computers.md#connections)).
+- **Missing cost data stays missing.** API cost totals and bot cost readings show no reading when relevant runs lack usage or a known price. A measured zero still shows **$0.00** ([Usage](docs/usage.md)).
+- **People can close typed tasks.** A person can close any task, including tasks on boards with required steps.
+- **Finished task lists load reliably.** Unfolded finished board columns load their tasks when restored, and a task that appears in both open and finished reads shows once.
+- **Boards and desktop windows avoid idle redraws.** Unchanged live events no longer rebuild the board or the open task. Hidden windows pause animations, and repeated polls reuse unchanged responses.
+- **Large viewer files stay visible.** Opening a file larger than the cache budget no longer revokes its address before display. The fix also applies to chat pictures ([Visuals](docs/visuals.md)).
+- **Visual links survive delegated reads and first startup.** Visual addresses are signed for one reader while keeping delegated access checks. Concurrent first requests can no longer read a partly written visual secret ([Visuals](docs/visuals.md)).
+- **Comment results distinguish delivery from a bot wake.** API responses set `woke` only when a bot job was queued. The additive `delivered` field identifies comments delivered to a person ([The Tico API](docs/api.md)).
+- **Slack task replies include their context.** A bot's reply about a task names it and links to it. Private tasks stay out of Slack ([Tico in Slack](docs/slack-gateway.md)).
+- **Dependent worktrees start after their blocker merges.** A dependent task gets its checkout once its blocker reaches the merged-code cutoff ([Task worktrees](docs/worktrees.md)).
+- **Finished tasks shed rebuildable scratch.** After a closed task's worktree is removed, cleanup can remove its unused build caches and environments. Unsaved or unpushed work, notes and logs stay ([Task worktrees](docs/worktrees.md)).
+- **Busy servers do less blocking write work.** Runner polling, scheduler work and meeting-provenance reads avoid repeated work and long write holds.
+
+### Security
+- **Send approvals cover the approved text.** A Tico email send approval includes the draft's text hash. Changing the text requires a new approval ([Message bots](docs/mail.md)).
+- **Investor messages require a person's approval.** The Fundraising Manager template requires a separate yes for every investor message, including replies, forwards and invitations, even when sending is enabled.
+- **Assistant task actions stay within your tasks.** A request authorizes a task change, comment or link only when you own, requested or hold a role on that task. The owner's CEO Bot chat uses the same rule ([The Assistant](docs/assistant.md#private-to-you)).
+- **Bundled libraries and trust roots are refreshed.** DOMPurify, the PDF parser and the bundled TLS trust lists are updated.
 
 ## [0.4.2] - 2026-10-23
 
@@ -4461,11 +4692,20 @@ First public release.
 - Hosting: local only on a Mac, or self-hosted, including a reference AWS stack under `infra/ec2/`
   with Litestream backups.
 
-[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.12...HEAD
+[Unreleased]: https://github.com/ticoteam/tico/compare/v0.4.15...HEAD
+[0.4.15]: https://github.com/ticoteam/tico/compare/v0.4.14...v0.4.15
+[0.4.14]: https://github.com/ticoteam/tico/compare/v0.4.13...v0.4.14
+[0.4.13]: https://github.com/ticoteam/tico/compare/v0.4.12...v0.4.13
 [0.4.12]: https://github.com/ticoteam/tico/compare/v0.4.11...v0.4.12
+[0.4.11]: https://github.com/ticoteam/tico/compare/v0.4.10...v0.4.11
+[0.4.10]: https://github.com/ticoteam/tico/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/ticoteam/tico/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/ticoteam/tico/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/ticoteam/tico/compare/v0.4.6...v0.4.7
+[0.4.6]: https://github.com/ticoteam/tico/compare/v0.4.5...v0.4.6
+[0.4.5]: https://github.com/ticoteam/tico/compare/v0.4.4...v0.4.5
+[0.4.4]: https://github.com/ticoteam/tico/compare/v0.4.3...v0.4.4
+[0.4.3]: https://github.com/ticoteam/tico/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/ticoteam/tico/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/ticoteam/tico/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/ticoteam/tico/compare/v0.3.75...v0.4.0
