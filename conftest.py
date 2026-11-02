@@ -152,3 +152,5 @@ def api_database(tmp_path_factory, request):
             source.backup(target)
     snapshot.with_suffix(".building").replace(snapshot)
     return snapshot
+import _scan_rows  # noqa
+_scan_rows.patch()
