@@ -316,7 +316,7 @@ async function restrictPerson(hub) {
 
       // On the bot's own page the same editor opens in place: there the page scrolls, and Save still comes clear of the bottom nav.
       await page.goto(hub.url + `/#/bot/${BOT}/settings`);
-      await page.locator('#bot-access-card [data-edit-access]').first().click();
+      await page.locator('#bot-editor [data-edit-access]').first().click();
       await page.locator('#access-editor.bot-settings-panel [name="preset"][value="custom"]').check();
       const inPlace = await page.evaluate(() => {
         const b = document.querySelector('#access-editor.bot-settings-panel [type=submit]');
