@@ -418,3 +418,29 @@ def test_a_grant_its_manager_loses_with_the_team_lead_is_suspended_by_the_roster
         doc["org_groups"]["web"].pop("lead")
         A.save_roster(c, doc)
         assert SA.grant(c, gid).status == "suspended"
+
+
+def test_a_bot_moved_to_another_team_leaves_the_team_grant_at_once(books):
+    """A bot is a member of its team's grant (spec 7.5: a team's grant covers its members). Moving it to another team
+    through the groups write takes it off the grant there and then, not at the next Finance write."""
+    from backend import groups
+    with books.transaction() as c:
+        grant = act(c, OWNER, "view_grant", {"subject_kind": "team", "subject": "web", "what": "expenses",
+                                             "whose": "company"})
+        assert grant.status == "committed", grant
+        gid = str(grant.result["grant_id"])
+        assert "bot:coder" in SA.grant(c, gid).members
+        groups._set_bot(c, "coder", "sales")
+        assert "bot:coder" not in SA.grant(c, gid).members
+
+
+def test_a_bot_given_a_new_manager_hands_the_org_change_to_finance(books, monkeypatch):
+    """A bot's manager is part of the org chart Finance's grants follow (spec 7.5), so the reparenting write runs the
+    same revalidation an action does, in the same transaction."""
+    from backend import settings_admin
+    from backend.finance import actions as FA
+    seen = []
+    monkeypatch.setattr(FA, "revalidate_org", lambda c, at=None: seen.append(c))
+    with books.transaction() as c:
+        settings_admin._set_parent(c, "human:ana", "coder", "human:dan", AT)
+        assert len(seen) == 1 and seen[0] is c

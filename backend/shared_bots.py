@@ -160,6 +160,8 @@ def add_copy(c, who, source, runner_id, settings_admin, execution, github_owner)
              config["reports_to"], repo, "personal", now, who.actor))
         from .report_order import arrive
         arrive(c, "bot:" + slug, config["reports_to"])     # a new bot goes last among its manager's reports
+        from .finance import actions as FA
+        FA.revalidate_org(c)                 # a new bot joins the org chart Finance's grants follow (spec 7.5)
         c.execute("UPDATE bot_config SET bot_owners_json=? WHERE bot=?", (encode([person]), slug))
         H.event(c, who.actor, "bot.shared_copy_added", slug, {"source": source, "runner": runner_id})
     assignment = c.execute("SELECT * FROM assignments WHERE bot=?", (slug,)).fetchone()

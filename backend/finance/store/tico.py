@@ -94,6 +94,8 @@ def org(c: sqlite3.Connection, owner: str) -> Org:
     for person in cast(list[dict[str, Any]], roster.get("people") or []):
         actor = "human:" + str(person.get("id") or "")
         humans.add(actor)
+        if person.get("hidden"):      # left the company (access.leave): on no team and reporting to no one (spec 7.5)
+            continue
         if person.get("team") in teams:
             team_of[actor] = str(person["team"])
         if person.get("reports_to"):

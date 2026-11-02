@@ -544,3 +544,24 @@ def test_a_csv_export_is_recorded_for_whoever_it_was_made_for(api):
     with store.read() as c:
         rows = c.execute("SELECT actor, target FROM events WHERE action='finance.export'").fetchall()
     assert [tuple(x) for x in rows] == [("human:ana", "sales-tax")]
+
+
+def test_a_person_who_leaves_on_the_people_route_leaves_their_team_grant_at_once(api):
+    """Spec 7.5: grants follow the org chart and membership. The people route writes the roster itself, not through the
+    roster save, so it runs Finance's revalidation too: the team grant forgets the leaver at once."""
+    from backend.finance import actions as FA
+    from backend.finance.store import access as SA
+    from backend.tests.test_finance_fixtures import _seed
+    store = api.app.state.store
+    with store.transaction() as c:
+        _seed(c)
+        assert FA.ensure_setup(c, store.settings.owner_email)
+        grant = act(c, OWNER, "view_grant", {"subject_kind": "team", "subject": "web", "what": "expenses",
+                                             "whose": "company"})
+        assert grant.status == "committed", grant
+        gid = str(grant.result["grant_id"])
+        assert "human:eve" in SA.grant(c, gid).members
+    r = api.post("/api/v2/people/eve", json={"left": True}, headers=headers("ana-test"))
+    assert r.status_code == 200, r.text
+    with store.read() as c:
+        assert "human:eve" not in SA.grant(c, gid).members

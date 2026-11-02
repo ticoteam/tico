@@ -739,6 +739,8 @@ def onboard(c, who, onboarding, row, card, slug, *, name, description, instructi
         c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.session','task') WHERE bot=?", (slug,))
     if row["team"]:
         c.execute("UPDATE bot_config SET team=? WHERE bot=?", (row["team"], slug))
+        from .finance import actions as FA
+        FA.revalidate_org(c)                 # the seat's team is part of the org chart Finance's grants follow (spec 7.5)
     declared = onboarding._declared(c, slug)
     declared.update(template=card["template"], instructions=instructions, template_version=releases.version(),
                     recruited_from=row["id"])

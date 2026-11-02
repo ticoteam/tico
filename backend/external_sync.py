@@ -445,6 +445,8 @@ def sync(c, auth, settings_admin, who, body, images=None):
         if group and "team" not in config:      # never set, so not moved since: in its human's group
             config["team"] = group
             c.execute("UPDATE bot_config SET team=? WHERE bot=?", (group, slug))
+            from .finance import actions as FA
+            FA.revalidate_org(c)             # the bot's team is part of the org chart Finance's grants follow (spec 7.5)
         c.execute("UPDATE bot_config SET config_json=?,description=? WHERE bot=?",
                   (encode(config), item.description if "description" in item.model_fields_set else row["description"], slug))
         c.execute("UPDATE bots SET display_name=? WHERE slug=?", (name, slug))
