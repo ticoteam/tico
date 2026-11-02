@@ -545,7 +545,8 @@ FOCUS = {"coo": "Routing requests", "botops": "Checking both computers", "ops-ma
          "bookkeeper": "October books", "ar-followup": "Overdue shop invoices", "spend-watcher": "Daily ad budget",
          "tax": "October sales tax", "accounts-payable": "Holding the freight bill",
          "pricing": "Home Pro December price", "recruiter": "Crew lead interviews",
-         "legal-review": "Homeworks clause", "librarian": "Watching Lumenhaus"}
+         "legal-review": "Homeworks clause", "librarian": "Watching Lumenhaus",
+         "goal-manager": "Q4 bookings goal", "task-manager": "Open tasks by owner", "tico-counsel": "Larkford bid terms"}
 
 # (slug, title, body, owner, requester, final status, days ago created, days ago last change, note, parent key)
 # Human-owned titles start with a verb because a person reads them. A parent key makes a subtask.

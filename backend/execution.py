@@ -1794,11 +1794,12 @@ def finance_run_hold(c, bot, job_id):
 
 
 def finance_run_ended(c, job_id, turn_id):
-    """Settle the job's run hold at the run's priced Gateway cost, or release it when nothing was Gateway-billed."""
+    """Settle the job's run hold at the run's priced Gateway cost, or release it when nothing was Gateway-billed. Stamped
+    with the hub's clock, as the claim's hold is (its own `at`), not the wall clock."""
     from .finance import actions as finance
     c.execute("SAVEPOINT finance_settle")
     try:
-        finance.run_ended(c, job_id, turn_id)
+        finance.run_ended(c, job_id, turn_id, H.now())
     except (*FINANCE_FAULTS, finance.FinanceError) as exc:
         c.execute("ROLLBACK TO finance_settle")
         c.execute("RELEASE finance_settle")
