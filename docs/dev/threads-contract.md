@@ -419,10 +419,12 @@ outside a members thread are not asked.
 
 A note copied from a message (a bot's plain mention held for the bot's next run, or a mention deferred at the cap) goes
 only into a session inside its source's boundary (`threads.note_fits_run`): a private source's note goes into a private
-session of the same root, or the run started for that message. A note with no source, a public source, or a source in a
-direct room of bots only goes with any run. A run that leaves notes writes one keeper notice per root (`refs.wake:
-"thread_notes"`, `refs.carries`: the oldest note's message; never folded into a running turn), so the bot's next run
-starts at most one more in each such thread, in its own session, and the notes wait until then. `GET /api/v2/notes` shows
+session of the same root. A note with no source, a public source, or a source in a direct room of bots only goes with
+any run. A run that leaves notes writes one keeper notice per root (`refs.wake: "thread_notes"`, `refs.carries`: the
+oldest note's message; never folded into a running turn), so the bot's next run starts at most one more in each such
+thread, and the notes wait until then. That run's session is always private, even in a public thread. A notice refused
+or dropped because its message is gone or closed to the bot is replaced, anchored to a note the bot still reads
+(`threads.replace_note_wake`), so the others keep their run; each refusal takes back the note it was for. `GET /api/v2/notes` shows
 a note's words only to who may read the source (`threads.note_source_shown`): a person and an external agent by their own
 rights, a bot's run by what its session holds.
 

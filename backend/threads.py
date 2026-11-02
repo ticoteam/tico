@@ -1638,6 +1638,29 @@ def still_addressed(c, message, bot):
     return audience_has(c, thread, bot)
 
 
+def note_wake(message):
+    """Whether a message is the keeper's notice that starts a run for a thread's waiting private notes."""
+    message = message or {}
+    refs = message.get("refs") or H._json(message.get("refs_json"), {}) or {}
+    return bool(isinstance(refs, dict) and refs.get("wake") == NOTE_WAKE and message.get("from_actor") == H.KEEPER)
+
+
+def replace_note_wake(c, message, bot):
+    """A wake refused at its claim was one run for all its thread's notes, anchored to one of them. The anchor gone or
+    unreadable leaves the others with no run, so this writes another, anchored to one the bot still reads: the claim asks
+    what `_carrier` just asked, so it cannot be refused the same way, and each refusal takes back the note it was for."""
+    if not note_wake(message):
+        return None
+    thread = thread_row(c, message.get("conversation_id"))
+    root = root_of(c, thread) if thread is not None else None
+    if not root:
+        return None
+    rows = c.execute(f"SELECT n.* FROM notes n JOIN messages m ON m.id=n.message_id JOIN conversations t ON t.id=m.conversation_id "
+                     f"WHERE n.to_actor=? AND coalesce(t.root_id,t.id)=? AND {H.NOTE_WAITING_SQL} ORDER BY n.created,n.rowid LIMIT ?",
+                     (bot, root["id"], NOTES_READ)).fetchall()
+    return wake_note_threads(c, bot, revalidate_notes(c, bot, [dict(r) for r in rows]))
+
+
 def _notes_wait_in(c, message, bot):
     """Whether any note still waits in a notice's thread tree: another run there may have carried them first, and a run
     with nothing to carry costs a turn for nothing."""
@@ -1710,27 +1733,24 @@ def _source_private(c, source, thread, root):
     return any(private_task_thread(c, row) or audience_class(row) == "private" for row in (thread, root))
 
 
-def note_fits_run(c, note, conv, message, run_class):
+def note_fits_run(c, note, conv, run_class):
     """Whether a waiting note may enter this run's prompt. A run's session outlives the run and answers whoever reads its
-    thread, so a note copied from a private message goes only into a private session of the same thread tree, or a run
-    started for that message. A note with no source, or a public source, goes with any run: what a company thread says
-    takes nothing from a session that reads less or more."""
+    thread, so a note copied from a private message goes only into a private session of the same thread tree, whatever
+    started the run. A note with no source, or a public source, goes with any run: what a company thread says takes
+    nothing from a session that reads less or more."""
     source, thread, root = _note_source(c, note)
     if source is None or not _source_private(c, source, thread, root):
-        return True
-    refs = (message or {}).get("refs") or {}
-    if isinstance(refs, dict) and refs.get("carries") == source["id"] and message.get("from_actor") == H.KEEPER:
         return True
     return run_class == "private" and root["id"] == (conv.get("root_id") or conv["id"])
 
 
-def notes_for_run(c, bot, conv, message, run_class):
+def notes_for_run(c, bot, conv, run_class):
     """(the notes this run carries, the notes it leaves for their own threads) of `bot`, oldest first, each one checked
     against its source first (revalidate_notes). Reads past a run's own batch, so private notes that wait for their own
     thread's turn never hide the ones this run may carry."""
     fits, left = [], []
     for item in revalidate_notes(c, bot, H.notes_waiting(c, H.actor_id(bot), limit=NOTES_READ)):
-        if not note_fits_run(c, item, conv, message, run_class):
+        if not note_fits_run(c, item, conv, run_class):
             left.append(item)
         elif len(fits) < NOTES_PER_RUN:
             fits.append(item)

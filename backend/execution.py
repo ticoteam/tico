@@ -1322,14 +1322,16 @@ def source_continuation(c, job_id):
 
 def thread_payload(c, conv, msg):
     """The claim's conversation, with what keys the turn's session: its root (`root_id`) and whether the thread is
-    private or public (`audience_class`, backend/threads.py). A private thread's session never serves a public one."""
+    private or public (`audience_class`, backend/threads.py). A private thread's session never serves a public one, and
+    a run started for a thread's private notes has a private session even when the thread is public: its notes are narrower."""
     if not conv:
         return conv
     from . import threads
     # A carrier's turn is classed by the message it carries (reply_source): legacy-audience history stays private.
     source = (reply_source(c, msg) if msg else None) or msg
+    private = threads.private_task_thread(c, conv) or threads.note_wake(msg)
     return {**conv, "root_id": conv.get("root_id") or conv.get("id"),
-            "audience_class": "private" if threads.private_task_thread(c, conv) else threads.audience_class(conv, source)}
+            "audience_class": "private" if private else threads.audience_class(conv, source)}
 
 
 def continuation_thread(c, job_id):
@@ -3517,6 +3519,7 @@ class Execution:
                 or not threads.still_addressed(c, msg, "bot:" + row["bot"])):
             c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (row["id"],))
             threads.moot_delivery(c, msg, "bot:" + row["bot"])
+            threads.replace_note_wake(c, msg, "bot:" + row["bot"])
             H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
             return {"attempt": None}
         # The bot's budget and back-off: an error in them passes the bot over, and holds no run.
@@ -3767,8 +3770,7 @@ class Execution:
             from . import threads
             # A deferred thread note goes only while the bot still reads its source (a lost one is cancelled here), and
             # only into a session inside its source's boundary: one that does not fit waits, and its own thread gets a run.
-            waiting, left = threads.notes_for_run(c, "bot:" + row["bot"], conv, msg,
-                                                  (conversation or {}).get("audience_class"))
+            waiting, left = threads.notes_for_run(c, "bot:" + row["bot"], conv, (conversation or {}).get("audience_class"))
             threads.wake_note_threads(c, "bot:" + row["bot"], left)
             for item in waiting:
                 c.execute("UPDATE notes SET carried_by=? WHERE id=?", (aid, item["id"]))
@@ -5698,6 +5700,8 @@ class Execution:
                 if privacy.message_readable(c, "bot:" + row["bot"], H.message(c, row["message_id"])):
                     continue
                 c.execute("UPDATE jobs SET state='cancelled' WHERE id=? AND state='queued'", (row["id"],))
+                from . import threads
+                threads.replace_note_wake(c, H.message(c, row["message_id"]), "bot:" + row["bot"])
                 H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "unreadable"})
                 dropped.append(row["id"])
         return dropped
