@@ -172,8 +172,8 @@ def _feed_row(ctx: Ctx, r: Any, money: Mapping[str, Any], lines: Mapping[str, li
     return {"kind": "feed", "id": str(r["id"]), "date": str(r["txn_date"]), "amount": int(r["amount"]),
             "currency": str(r["currency"]), "counterparty": str(r["counterparty"]),
             "description": str(r["description"]), "status": str(r["status"]), "pending": bool(r["pending"]),
-            "provider_kind": str(r["kind"] or ""), "card_id": r["card_id"], "entry_id": r["entry_id"],
-            "reconciled": bool(r["reconciliation_id"]),
+            "provider_status": str(r["provider_status"] or ""), "provider_kind": str(r["kind"] or ""),
+            "card_id": r["card_id"], "entry_id": r["entry_id"], "reconciled": bool(r["reconciliation_id"]),
             "money_account": {"id": str(m["id"]), "name": str(m["name"]), "last4": m["last4"]} if m else None,
             "lines": lines.get(str(r["entry_id"] or ""), [])}
 
@@ -386,15 +386,16 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
     """Feed rows and entries as plain rows, newest first. A feed row shows to whoever sees its money account or
     follows its card (with the lines of its posted entry they see); an entry shows as the P&L lines the viewer sees,
     unless a feed row they see stands for it. A feed row standing for a private line the viewer has no full detail for
-    is left out whole (`private_feed`). Filter by money account, status (feed rows), line, dates, a search and `org`
-    (keeps a line's team and teammate); `next` is the cursor for the following page."""
+    is left out whole (`private_feed`). Filter by money account, status (feed rows; "failed" is a row the bank ended,
+    left out of the rest), line, dates, a search and `org` (keeps a line's team and teammate); `next` is the cursor for
+    the following page."""
     ctx = load(c, at)
     from .tab_ap import vendor_labels
     view = ctx.view(viewer)
     if source not in ("all", "feed", "entry"):
         raise invalid("source is all|feed|entry")
-    if status and status not in ("new", "matched", "posted", "ignored", "pending"):
-        raise invalid("status is new|matched|posted|ignored|pending")
+    if status and status not in ("new", "matched", "posted", "ignored", "pending", "failed"):
+        raise invalid("status is new|matched|posted|ignored|pending|failed")
     most = page_size(limit)
     start_day = dates.day(start).isoformat() if start else ""
     end_day = dates.day(end).isoformat() if end else ""

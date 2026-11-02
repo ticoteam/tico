@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, cast
 
+from ..core.feeds import GONE
 from .ledger import new_id
 
 TABLES = frozenset({"fin_connections", "fin_money_accounts", "fin_feed_txns", "fin_statements", "fin_reconciliations",
@@ -184,7 +185,8 @@ def feed_by_request(c: sqlite3.Connection, request_id: str) -> Any:
 def feed_page(c: sqlite3.Connection, *, before: tuple[str, str] | None, most: int, money_account_ids: Sequence[str],
               status: str = "", start: str = "", end: str = "", q: str = "", card_ids: Sequence[str] | None = None,
               entry_ids: Sequence[str] | None = None) -> list[Any]:
-    """Feed rows newest first, keyset-paged on (txn_date, id), on these money accounts (or cards, or entries)."""
+    """Feed rows newest first, keyset-paged on (txn_date, id), on these money accounts (or cards, or entries). Rows the
+    bank failed, canceled or returned show only as status "failed"; "ignored" is a person's ignore."""
     where: list[str] = ["1=1"]
     args: list[object] = []
     scopes: list[str] = []
@@ -200,11 +202,18 @@ def feed_page(c: sqlite3.Connection, *, before: tuple[str, str] | None, most: in
     if not scopes:
         return []
     where.append("(" + " OR ".join(scopes) + ")")
+    gone = f"(status='ignored' AND provider_status IN ({_marks(GONE)}))"
     if status == "pending":
         where.append("pending=1")
-    elif status:
-        where.append("status=?")
-        args.append(status)
+    elif status == "failed":
+        where.append(gone)
+        args += list(GONE)
+    else:
+        if status:
+            where.append("status=?")
+            args.append(status)
+        where.append(f"NOT {gone}")
+        args += list(GONE)
     if start:
         where.append("txn_date>=?")
         args.append(start)

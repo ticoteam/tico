@@ -167,8 +167,10 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             bank = by_code(ctx, BANK)
             used = bank is not None and any(str(r["account_id"]) == bank.id for r in SK.money_accounts(ctx.c,
                                                                                                         ctx.book.id))
+            four = str(a.get("last4") or "")[-4:]
+            named = F.bare_name(a.get("name") or "Mercury", four)
             gl = bank if bank is not None and not used else new_account(
-                ctx, BANK, f"{a.get('name') or 'Mercury'} ••{a.get('last4') or ''}", "asset", "bank", who)
+                ctx, BANK, f"{named} ••{four}" if four else named, "asset", "bank", who)
             mapped.append(_money(ctx, cid, a, "bank", subtype, gl, who))
         for a in credit:
             if str(a.get("status") or "active") not in ("active", "pending"):
@@ -210,7 +212,8 @@ def _reuse(ctx: Ctx, cid: str, a: Mapping[str, object]) -> Result | None:
 def _money(ctx: Ctx, cid: str, a: Mapping[str, object], kind: str, subtype: str, gl: L.Account, who: str) -> Result:
     current, available = a.get("current"), a.get("available")
     mid = SK.insert(ctx.c, "fin_money_accounts", {
-        "book_id": ctx.book.id, "kind": kind, "subtype": subtype, "name": str(a.get("name") or "Mercury")[:120],
+        "book_id": ctx.book.id, "kind": kind, "subtype": subtype,
+        "name": F.bare_name(a.get("name") or "Mercury", str(a.get("last4") or "")[-4:])[:120],
         "provider": "mercury", "connection_id": cid, "account_id": gl.id, "provider_account_id": str(a.get("id")),
         "last4": str(a.get("last4") or "")[-4:] or None,
         "holds_cash": 0 if kind == "card_program" and subtype == "credit" else 1,  # a credit program holds no cash

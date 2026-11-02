@@ -16241,7 +16241,8 @@
                     "matched",
                     "posted",
                     "ignored",
-                    "pending"
+                    "pending",
+                    "failed"
                   ],
                   "type": "string"
                 },

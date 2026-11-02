@@ -658,6 +658,36 @@ def test_a_backfill_posts_the_opening_balance_so_the_first_reconcile_is_done_wit
         assert next(r for r in sheet["assets"] if r["code"] == "1000")["balance"] == 12_525_050
 
 
+def test_an_unfinished_backfill_goes_on_at_once_and_then_polls(books, monkeypatch):
+    """A first backfill that needs more steps is due again at once and rings the worker, so the books do not sit a
+    poll (15 minutes) with part of the history and no opening; once it ends the next pass is a poll away."""
+    fake = FakeMercury()
+    for i in range(3):
+        fake.txns[f"txn-{i}"] = _txn(f"txn-{i}", "acct-chk", -10.0, "wireFee", day=f"2026-09-0{i + 1}")
+    paged = fake.transactions
+    monkeypatch.setattr(fake, "transactions", lambda start_after, limit=500: paged(start_after, 1))
+    monkeypatch.setattr(sync, "BACKFILL_PAGES", 1)
+    connect(books, fake)
+
+    def state():
+        with books.read() as c:
+            r = c.execute("SELECT settings, next_sync_at FROM fin_connections").fetchone()
+            return bool(json.loads(r[0] or "{}").get("backfilled")), str(r[1])
+
+    rung = sync.BELL.rung
+    sync_once(books, fake)
+    assert state() == (False, AT) and sync.BELL.rung > rung
+    for _ in range(4):
+        if state()[0]:
+            break
+        sync_once(books, fake)
+    backfilled, due = state()
+    assert backfilled and due > AT
+    with books.read() as c:
+        assert c.execute("SELECT count(*) FROM fin_feed_txns WHERE provider_id LIKE 'txn-%'").fetchone()[0] == 3
+        assert len(_opening(c)) == 2
+
+
 def test_a_closed_month_correction_reconciles_that_month_at_the_new_amount(books):
     """Round 3 #2: Sept posts 100.00, Sept closes, Mercury corrects it to 120.00 (reversal and repost land in
     October): reconciling Sept to 120.00 is done, the original still in Sept's rollup notwithstanding."""
@@ -971,3 +1001,47 @@ def test_a_person_ignored_row_is_carried_by_the_opening_so_the_bank_line_is_the_
 
 def _checking(c) -> int:
     return next(r["balance"] for r in FR.balance_sheet(c, OWNER, at=AT)["assets"] if r["code"] == "1000")
+
+
+# ------------------------------------------------------------------------------------------------ live Mercury fixes
+def test_an_account_name_that_ends_in_its_last_four_keeps_them_once(books):
+    assert F.bare_name("Acme Checking ••2222", "2222") == "Acme Checking"
+    assert F.bare_name("Acme Checking •• 2222", "2222") == "Acme Checking"
+    assert F.bare_name("Acme Checking ...2222", "2222") == "Acme Checking"
+    assert F.bare_name("Acme Checking (2222)", "2222") == "Acme Checking"
+    assert F.bare_name("Acme Checking ••9999", "2222") == "Acme Checking ••9999"     # another number stays
+    assert F.bare_name("Acme 12222", "2222") == "Acme 12222"                          # part of a longer number
+    assert F.bare_name("••2222", "2222") == "••2222" and F.bare_name("Acme", "") == "Acme"
+    fake = FakeMercury()
+    chk, sav = MERCURY["accounts"]["accounts"][:2]
+    fake.queue["accounts"] = [{"accounts": [{**chk, "name": "Acme Checking ••2222"},
+                                            {**sav, "nickname": "Reserve ••4444"}]}]
+    connect(books, fake)
+    with books.read() as c:
+        names = {str(r[0]): (str(r[1]), str(r[2])) for r in c.execute(
+            "SELECT m.provider_account_id, m.name, a.name FROM fin_money_accounts m "
+            "JOIN fin_accounts a ON a.id=m.account_id WHERE m.kind='bank'")}
+    assert names["acct-chk"][0] == "Acme Checking" and names["acct-sav"] == ("Reserve", "Reserve ••4444")
+
+
+def test_a_row_the_bank_failed_shows_only_under_failed_and_a_person_ignored_row_stays(books):
+    """A declined charge retried is several rows Mercury failed: out of the default transactions list, listed (with
+    Mercury's status) under failed. A row a person ignored is still in the default list."""
+    fake = FakeMercury()
+    connect(books, fake)
+    for i, status in enumerate(("failed", "blocked", "cancelled", "reversed")):
+        fake.txns[f"txn-x{i}"] = _txn(f"txn-x{i}", "acct-chk", -40.0, "debitCardTransaction", status=status,
+                                      counterpartyName="Acme Ads")
+    fake.txns["txn-fee"] = dict(MERCURY["txn_bank_fee"])
+    sync_once(books, fake)
+    with books.transaction() as c:
+        fee = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id='txn-fee'").fetchone()[0])
+        assert act(c, OWNER, "categorize", {"feed_id": fee, "ignore": True}).status == "committed"
+    with books.read() as c:
+        listed = FR.transactions(c, OWNER, source="feed", at=LATER)["rows"]
+        assert [(r["counterparty"], r["status"]) for r in listed] == [("Mercury", "ignored")]
+        failed = FR.transactions(c, OWNER, status="failed", at=LATER)["rows"]
+        assert sorted(r["provider_status"] for r in failed) == ["blocked", "cancelled", "failed", "reversed"]
+        assert all(r["status"] == "ignored" for r in failed)
+        assert [r["id"] for r in FR.transactions(c, OWNER, status="ignored", at=LATER)["rows"]] == [fee]
+        assert FR.transactions(c, OWNER, q="acme ads", at=LATER)["rows"] == []
