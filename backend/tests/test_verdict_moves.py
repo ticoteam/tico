@@ -913,3 +913,18 @@ def test_a_dropped_failing_check_that_later_passes_reads_green_only_after_a_fres
     G.refresh_pending_checks(service)
     assert _link(api, task)["checks"] == "passing"
     assert [m["refs"]["pr_head"] for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"] == [HEAD]
+
+
+def test_a_push_after_a_marked_head_clears_the_dropped_marker_with_its_checks(api):
+    """A push drops the old head's stored copy and its dropped-check marker: the new head's own green reads passing."""
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    with api.app.state.store.transaction() as c:
+        G.apply_checks(c, _link(api, task)["id"], HEAD, _all_non_passing("failing"))
+    assert H._json(_link(api, task)["detail_json"], {})["checks_dropped"] == "failing"
+    hook(api, "pull_request", pr_event("synchronize", head={"sha": NEW}))
+    _suite(api, "github-actions", "completed", "success", sha=NEW)
+    link = _link(api, task)
+    assert H._json(link["detail_json"], {})["head_sha"] == NEW
+    assert link["checks"] == "passing"
+    assert "checks_dropped" not in H._json(link["detail_json"], {})
