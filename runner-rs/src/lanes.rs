@@ -20,6 +20,8 @@ pub const CAPABILITIES: &[&str] = &[
     "model_subscriptions_v1",
     // Turns of a bot with a browser exit go through it (browser_exit.rs); the server hands them to no other runner.
     "browser_exit_v1",
+    // Chats of a bot keep their own provider threads: a public thread never resumes a direct message's (execute.rs session_key).
+    "threads_v1",
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 

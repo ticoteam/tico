@@ -186,9 +186,11 @@ def assign(api, r, bot, generation=0, operator="ana-test"):
                 "expected_generation": generation}, token=operator)
 
 
-def ready(api, r, bots):
-    return post(api, "runners/heartbeat", {"version": "test", "platform": "test",
-                "readiness": {bot: True for bot in bots}}, token=r["token"])
+def ready(api, r, bots, capabilities=()):
+    body = {"version": "test", "platform": "test", "readiness": {bot: True for bot in bots}}
+    if capabilities:
+        body["capabilities"] = list(capabilities)
+    return post(api, "runners/heartbeat", body, token=r["token"])
 
 
 def claim(api, r, bot=None, key=None):
