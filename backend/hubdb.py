@@ -3,8 +3,8 @@
 
 The contract is `docs/history/hub-v2.md` §0-§5. This module is the whole database layer: the cloud
 service (`backend/store.py` and everything behind it) goes through it and nowhere else. Pure
-stdlib, one file. It grew up under the local keeper; the `host` column's `dispatcher` default and
-the token helpers are that history, kept because rows and callers still carry them.
+stdlib, one file. It grew up under the local keeper; the `dispatcher` host default in the bot
+config is that history, kept because configs and callers still carry it.
 
 Shape of every write:
 
@@ -18,17 +18,15 @@ withdrawn text in the audit trail.
 
     conn = connect()                         # <projects>/runtime/hub.db, or $HUB_DB
     sync_registry(conn, employees, people)   # bots and humans from the registry
-    token = issue_token(conn, "cmo")         # the keeper hands this to the turn
-    verify_bot(conn, "cmo", token)           # hubdb checks before any bot write
 
 ## Deviations from docs/history/hub-v2.md (also listed in that file's "Deviations" section)
 
 1. **`conn` first.** §4 writes the signature as `say(actor, ...)`. There is no ambient
    connection, so every function is `say(conn, actor, ...)`; `actor` is still the first
-   argument the caller thinks about, and `issue_token(conn, slug)` in §1 already puts `conn`
-   first. Read helpers are `tasks(conn, owner=...)` and so on.
-2. **`verify_bot` raises.** It returns the bot row and raises `Refused("identity")` on a bad
-   or missing token, so a caller cannot forget to check a boolean.
+   argument the caller thinks about, and every other call in §1 puts `conn` first too. Read
+   helpers are `tasks(conn, owner=...)` and so on.
+2. **No token helpers here.** The §1 `issue_token` and `verify_bot` are not in this module. A
+   bot's token hash lives on its `agents` row (`backend/agents.py`), where auth reads it.
 3. **Lint (rule 7) applies to unsolicited human items.** A bot's `say`/`notice` to a human is
    linted only when rule 4 counts it as unsolicited; a reply to the human's own message,
    a reply inside a conversation the human started, and `answer`, are exempt. Every task with
@@ -68,7 +66,6 @@ import json
 import logging
 import os
 import re
-import secrets
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -84,7 +81,6 @@ from . import task_roles as TRo
 from . import task_snooze as TS
 from . import run_triggers as RT
 from . import status_values as SV
-from clients.manifest import repo_dir
 from backend.chat_goals_schema import SCHEMA as CHAT_GOALS_SCHEMA
 from backend.repositories_schema import SCHEMA as REPOSITORIES_SCHEMA
 from backend.subscriptions_schema import SCHEMA as SUBSCRIPTIONS_SCHEMA
@@ -294,8 +290,9 @@ ALTER TABLE tasks ADD COLUMN goal_id TEXT;
 # no longer belongs to one goal: `goal_kpis` links a goal to a KPI and holds the target (an improvement
 # from a baseline to a value by a deadline, or a range to stay inside). Readings keep the business time
 # (`period_start`/`period_end`) apart from `collected_at`, and a correction is a new reading that
-# `supersedes` the old one. The old `kpis.goal_id` and `kpis.target` stay for the rows that had them; a
-# new KPI stores '' in `goal_id`. Rows that existed before this migration are recognised by `owner IS NULL`.
+# `supersedes` the old one. The old `kpis.goal_id` and `kpis.target` are copied into `goal_kpis` here; migration 0042
+# drops `goal_id` (`target` stays, read by nothing). Rows that existed before this migration are recognised by
+# `owner_id IS NULL`.
 KPIS_SCHEMA = """
 ALTER TABLE kpis ADD COLUMN slug TEXT;
 ALTER TABLE kpis ADD COLUMN definition TEXT NOT NULL DEFAULT '';
@@ -1051,8 +1048,6 @@ def payload_hash(payload):
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def token_hash(token):
-    return hashlib.sha256(str(token).encode()).hexdigest()
 
 
 # ----------------------------------------------------------------------------- connection
@@ -1263,15 +1258,7 @@ def migrate(conn, adopt_legacy=False):
     from . import migrations
     migrations.apply(conn)
     ensure_market_reads(conn)
-    # Cloud added explicit room scopes after the original local schema. Keep old local
-    # databases usable without relying on SQLite's unsupported ADD COLUMN IF NOT EXISTS.
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(conversations)")}
-    if "scope" not in columns:
-        conn.execute("ALTER TABLE conversations ADD COLUMN scope TEXT NOT NULL DEFAULT 'direct'")
-    if "owner_id" not in columns:
-        conn.execute("ALTER TABLE conversations ADD COLUMN owner_id TEXT")
-    if "room_key" not in columns:
-        conn.execute("ALTER TABLE conversations ADD COLUMN room_key TEXT")
+    # conversations.scope, owner_id and room_key (cloud room scopes) and their two room indexes are migration 0036's.
     # Deleted tasks wait here until restored or purged (backend/task_delete.py).
     from .task_delete import ensure as ensure_task_trash
     ensure_task_trash(conn)
@@ -1287,10 +1274,6 @@ def migrate(conn, adopt_legacy=False):
     # Hourly and weekly spend limits, and limits on a group's or the whole team's combined spend (backend/usage_limits.py).
     from .usage_limits import ensure as ensure_usage_limits
     ensure_usage_limits(conn)
-    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_personal_room "
-                 "ON conversations(owner_id,room_key) WHERE scope='personal' AND closed_at IS NULL")
-    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_shared_room "
-                 "ON conversations(room_key) WHERE scope='shared' AND closed_at IS NULL")
     # What every bot may do with a type's tasks (TYPE_BOTS); NULL keeps them to the parties.
     add_column(conn, "task_types", "bots", "TEXT")
     # The tasks board columns. The cloud store backfills rank
@@ -1326,12 +1309,10 @@ def migrate(conn, adopt_legacy=False):
     task_columns = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
     if "private" in task_columns:
         if "guest" in task_columns:
-            # The few private tasks, which every privacy-checked read loads (backend/privacy_index.py). The predicate
-            # matches privacy_index's query word for word and the index holds only these columns, so no body is read.
-            conn.execute("CREATE INDEX IF NOT EXISTS tasks_private_parties ON tasks("
-                         "id, requester_id, owner_id, guest, private) WHERE private IS NOT 0")
-            # A bot's private tasks for its status rows (task_privacy.status_tasks_sql) with the two columns it reads
-            # beyond the parties: each private row was a body-page read before this.
+            # The few private tasks: their parties, which every privacy-checked read loads (backend/row_clock.py PARTIES,
+            # backend/privacy_index.py), and a bot's private tasks for its status rows (task_privacy.status_tasks_sql)
+            # with the two columns those read beyond the parties. The predicate matches both queries word for word and
+            # the index holds every column they read, so no body is read.
             conn.execute("CREATE INDEX IF NOT EXISTS tasks_private_status ON tasks("
                          "id, requester_id, owner_id, guest, private, status, waiting_on) WHERE private IS NOT 0")
             # A task list's visibility and queue order, and a bot's status rows (task_privacy.status_tasks_sql), each
@@ -2602,30 +2583,6 @@ def quarantine_lifted_note(conn, slug):
 
 
 # ----------------------------------------------------------------------------- identity
-def issue_token(conn, slug):
-    """A fresh per-thread token for a bot; only its sha256 is stored. Returns the token."""
-    row = bot(conn, slug)
-    if not row:
-        raise Refused("not-found", f"no bot {slug}")
-    token = secrets.token_urlsafe(32)
-    conn.execute("UPDATE bots SET token_hash=? WHERE id=?", (token_hash(token), row["id"]))
-    event(conn, KEEPER, "token.issue", bot_actor(slug))
-    return token
-
-
-def verify_bot(conn, slug, token):
-    """The bot row when the token matches what the keeper issued; else `Refused("identity")`.
-
-    Raises rather than returning False so a caller cannot forget to check (deviation 2).
-    """
-    row = bot(conn, slug)
-    if not row or not row.get("token_hash"):
-        raise Refused("identity", f"no live token for {slug}")
-    if not secrets.compare_digest(str(row["token_hash"]), token_hash(token or "")):
-        raise Refused("identity", f"the token for {slug} does not match")
-    return row
-
-
 def _actor_exists(conn, actor):
     kind = actor_kind(actor)
     if kind == KEEPER:
@@ -2839,7 +2796,7 @@ def sync_registry(conn, employees, people):
     """Bring `bots` and `humans` up to date with the registry. Nothing is ever deleted.
 
     `employees` is `{slug: entry}` as the registry merge returns it (defaults
-    merged, `dir` set); `host` defaults to `dispatcher`. `people` is `registry/people.yaml`
+    merged); `people` is `registry/people.yaml`
     as a parsed document, or the list of person rows inside it.
     """
     ts = now()
@@ -2848,27 +2805,22 @@ def sync_registry(conn, employees, people):
         state = str(e.get("status") or "active").strip() or "active"
         if state not in BOT_STATES:
             state = "active"
+        # The runtime, model and host are the entry's own, in bot_config (the seed writes the whole entry there).
         row = {"slug": slug,
                "display_name": str(e.get("display_name") or slug),
-               "runtime": str(e.get("runtime") or ""),
-               "model": str(e.get("model") or ""),
                "effort": str(e.get("reasoning_effort") or e.get("effort") or ""),
-               "cwd": str(e.get("dir") or e.get("cwd") or repo_dir(ROOT, slug)),
-               "host": str(e.get("host") or "dispatcher"),
                "state": state, "created_at": ts}
         have = resolve_bot(conn, slug)
         if have is None:
             # a registry bot's id is its slug: its actor string is the one the code already builds from it
             row["id"] = slug
-            conn.execute(
-                "INSERT INTO bots (id, slug, display_name, runtime, model, effort, cwd, host, state, created_at) "
-                "VALUES (:id, :slug, :display_name, :runtime, :model, :effort, :cwd, :host, :state, :created_at)", row)
+            conn.execute("INSERT INTO bots (id, slug, display_name, effort, state, created_at) "
+                         "VALUES (:id, :slug, :display_name, :effort, :state, :created_at)", row)
         else:
-            # never lower a state a human set, and never touch the token or the thread
+            # never lower a state a human set
             row["id"] = have["id"]
             row["state"] = "quarantined" if have.get("state") == "quarantined" else state
-            conn.execute("UPDATE bots SET display_name=:display_name, runtime=:runtime, model=:model, "
-                         "effort=:effort, cwd=:cwd, host=:host, state=:state WHERE id=:id", row)
+            conn.execute("UPDATE bots SET display_name=:display_name, effort=:effort, state=:state WHERE id=:id", row)
     doc = people if isinstance(people, dict) else {"people": people or []}
     for p in (doc.get("people") or []):
         p = p if isinstance(p, dict) else {}
@@ -9244,12 +9196,9 @@ def rename_bot(conn, bot_id, new_slug):
     return bot(conn, row["id"])
 
 
-def bots(conn, host=None, state=None):
+def bots(conn, state=None):
     sql, args = "SELECT * FROM bots", []
     where = []
-    if host:
-        where.append("host=?")
-        args.append(host)
     if state:
         where.append("state=?")
         args.append(state)

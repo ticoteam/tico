@@ -28,18 +28,9 @@ MAX_UNREAD = 999          # the issuer's limit on a count
 WINDOW = 1000             # the newest unread messages of a thread that one run reads; a bigger backlog counts as this
 FALLBACK_TITLE = "Untitled thread"
 THREAD_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
-SCHEMA = [
-    "CREATE TABLE IF NOT EXISTS thread_digests (thread_id TEXT NOT NULL, actor TEXT NOT NULL, "
-    "emailed_seq INTEGER NOT NULL DEFAULT 0, emailed_at TEXT, PRIMARY KEY (thread_id, actor))",
-]
 # A thread this person follows on digest that has a message past their read mark and past the last digest.
 _BEHIND = ("f.actor=? AND f.following=1 AND f.notify='digest' AND conv.archived_at IS NULL "
            "AND conv.last_unread_seq > MAX(f.last_read_seq, COALESCE(td.emailed_seq, 0))")
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
 
 
 def candidates(c):

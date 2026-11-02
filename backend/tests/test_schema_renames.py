@@ -68,11 +68,15 @@ def restore(path):
     return before
 
 
+# Dropped as redundant by backend/migrations/0040_prune_redundant_indexes.sql; kpis_goal goes with kpis.goal_id (0042).
+DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "kpis_goal", "tasks_private_parties"}
 # Dropped by backend/migrations/0035_growth_rethink.py after the renames ran on them.
 # Objects a later migration drops on purpose: 0051 replaced the queue trigger with backend/enqueue.py.
 DROPPED = {"queue_bot_message"}
 RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",
-           "gtm_versions", "gtm_drafts"}
+           "gtm_versions", "gtm_drafts",
+           # 0091 moves the operation bindings into `idempotency` and drops these.
+           "invite_sends", "github_product_repo_operations", "github_review_operations"}
 
 
 @pytest.fixture(scope="module")
@@ -126,10 +130,10 @@ def test_indexes_triggers_and_views_survive_and_name_no_old_column(upgraded):
     _store, conn, before = upgraded
     for kind in ("index", "trigger", "view"):
         now = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type=?", (kind,))}
-        # The tables 0035_growth_rethink retires take their indexes with them.
+        # The tables 0035_growth_rethink retires take their indexes with them; later migrations drop DROPPED_INDEXES.
         kept = {name for name in before[kind + "es" if kind == "index" else kind + "s"]
                 if not any(table in name for table in RETIRED) and not name.startswith("growth_idea")
-                and name not in DROPPED}
+                and name not in DROPPED and name not in DROPPED_INDEXES}
         assert kept <= now, kind
     # An old name may live on as a column elsewhere (or as another rename's new name), so look only for names
     # that no table has any more, outside string literals.

@@ -129,11 +129,50 @@ def test_an_existing_database_loses_the_redundant_task_indexes_once(tmp_path):
     with sqlite3.connect(path) as c:
         indexes = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
         assert not {"tasks_owner_status", "tasks_requester_status", "tasks_private"} & indexes
-        assert {"tasks_owner_status_cover", "tasks_requester_status_cover", "tasks_private_parties"} <= indexes
+        assert {"tasks_owner_status_cover", "tasks_requester_status_cover", "tasks_private_status"} <= indexes
     first = snapshot(path)
     boot(path)
     assert snapshot(path) == first
 
+
+def test_an_existing_database_loses_the_two_duplicate_indexes_once(tmp_path):
+    """Migration 0040 drops invariants_lease (a prefix of attempts_live_lease) and invariants_open_approvals (a copy of
+    approvals_open_created); the indexes that serve the same reads stay, and booting again changes nothing."""
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("CREATE INDEX invariants_lease ON attempts(lease_until) WHERE state IN ('leased','running')")
+        c.execute("CREATE INDEX invariants_open_approvals ON approvals(created_at) WHERE decision IS NULL")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0040' AND version NOT LIKE 'legacy_%'")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        indexes = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        assert not {"invariants_lease", "invariants_open_approvals"} & indexes
+        assert {"attempts_live_lease", "approvals_open_created"} <= indexes
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
+
+def test_an_existing_database_loses_the_private_parties_index_and_the_parties_read_stays_covered(tmp_path):
+    """Migration 0043 drops tasks_private_parties, a prefix of tasks_private_status under the same WHERE. The private
+    tasks' parties read (row_clock.PARTIES) names tasks_private_status and reads the index alone; booting again changes
+    nothing."""
+    from backend import row_clock
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("CREATE INDEX tasks_private_parties ON tasks(id, requester_id, owner_id, guest, private) "
+                  "WHERE private IS NOT 0")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0043' AND version NOT LIKE 'legacy_%'")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        indexes = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        plan = " ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + row_clock.PARTIES))
+    assert "tasks_private_parties" not in indexes and "tasks_private_status" in indexes
+    assert "COVERING INDEX tasks_private_status" in plan, plan
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
 
 FAMILY = ("CREATE TABLE parent(id TEXT PRIMARY KEY, name TEXT);\n"
           "CREATE TABLE child(id TEXT PRIMARY KEY, parent_id TEXT REFERENCES parent(id) ON DELETE CASCADE);\n"
@@ -362,6 +401,78 @@ def test_a_populated_legacy_database_moves_each_row_and_keeps_its_behaviour(tmp_
             "actor", "operation", "key", "request_hash", "response", "created_at", "updated_at", "binding", "subject",
             "state", "error_code", "error_detail", "error_status"]
         assert "idempotency_answers_by_created" in {r[1] for r in c.execute("PRAGMA index_list(idempotency)")}
+
+
+def _back_to_before(path, version):
+    """The file as it was before `version` ran: the migration rows from it on are forgotten, so the next boot runs them."""
+    with sqlite3.connect(path) as c:
+        c.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy_%'", (version,))
+
+
+def test_an_existing_bots_runtime_model_and_host_move_into_its_config_then_the_columns_go(tmp_path):
+    """Migration 0041: a runtime, model or host the config lacks is copied into it (the config keeps what it has), and
+    the six legacy columns are dropped. cwd, thread_id and token_hash have nothing to move."""
+    path = fresh(tmp_path)
+    slug = "acme-bot"
+    with sqlite3.connect(path) as c:
+        for column in ("runtime", "model", "host", "cwd", "thread_id", "token_hash"):
+            c.execute(f"ALTER TABLE bots ADD COLUMN {column} TEXT")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES(?,?,'Acme Bot','low','active','2026-01-01T00:00:00Z')", (slug, slug))
+        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'human:ana')",
+                  (slug, '{"name":"x","reasoning_effort":"low","model":"kept-in-config"}'))
+        c.execute("UPDATE bots SET runtime='codex', model='column-model', host='keeper', cwd='/work/x', "
+                  "thread_id='t1', token_hash='h' WHERE id=?", (slug,))
+    _back_to_before(path, "0041")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        columns = {row[1] for row in c.execute("PRAGMA table_info(bots)")}
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+    assert not {"runtime", "model", "host", "cwd", "thread_id", "token_hash"} & columns
+    assert {"id", "slug", "effort", "state"} <= columns
+    # boot adds its own defaults to every config (profile, wake_preset, ...); only the three keys this moves are checked
+    assert {k: config.get(k) for k in ("name", "reasoning_effort", "model", "runtime", "host")} == {
+        "name": "x", "reasoning_effort": "low", "model": "kept-in-config", "runtime": "codex", "host": "keeper"}
+
+
+def _old_kpis(c):
+    """kpis as a database before 0042 has it: goal_id (NOT NULL, '' for none), target and the kpis_goal index."""
+    c.execute("ALTER TABLE kpis ADD COLUMN goal_id TEXT NOT NULL DEFAULT ''")
+    c.execute("CREATE INDEX kpis_goal ON kpis(goal_id)")
+
+
+def _old_kpi(c, kid, goal, target):
+    c.execute("INSERT INTO kpis(id,slug,name,unit,target,goal_id,owner_id,direction,cadence,created_at,created_by_id,"
+              "definition_version,updated_at) VALUES(?,?,?,'',?,?,'company','up','weekly','2026-01-01T00:00:00Z',"
+              "'human:ana',1,'2026-01-01T00:00:00Z')", (kid, kid, kid.title(), target, goal))
+
+
+def test_an_existing_kpi_goal_becomes_a_goal_link_holding_its_target_then_goal_id_goes(tmp_path):
+    """Migration 0042: a KPI with a goal but no link to it gets one, holding its target as an improvement; a link
+    already made keeps its own target; then kpis.goal_id and its index are dropped. kpis.target stays."""
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        for goal in ("g-old", "g-linked"):
+            c.execute("INSERT INTO goals(id,title,owner_id,created_at,created_by_id,updated_at) VALUES(?,'Grow revenue',"
+                      "'company','2026-01-01T00:00:00Z','human:ana','2026-01-01T00:00:00Z')", (goal,))
+        _old_kpis(c)
+        _old_kpi(c, "k-old", "g-old", 7.5)
+        _old_kpi(c, "k-plain", "g-old", None)
+        _old_kpi(c, "k-linked", "g-linked", 4)
+        c.execute("INSERT INTO goal_kpis(id,goal_id,kpi_id,kind,target,deadline,created_at,created_by_id,updated_at,"
+                  "updated_by_id) VALUES('k-linked','g-linked','k-linked','improve',9,'2026-12-31','2026-01-01T00:00:00Z',"
+                  "'human:ana','2026-01-01T00:00:00Z','human:ana')")
+    _back_to_before(path, "0042")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        columns = {row[1] for row in c.execute("PRAGMA table_info(kpis)")}
+        links = {r[0]: r[1:] for r in c.execute("SELECT kpi_id, goal_id, kind, target FROM goal_kpis")}
+        indexes = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        targets = dict(c.execute("SELECT id, target FROM kpis"))
+    assert "goal_id" not in columns and "kpis_goal" not in indexes
+    assert links == {"k-old": ("g-old", "improve", 7.5), "k-plain": ("g-old", "none", None),
+                     "k-linked": ("g-linked", "improve", 9)}
+    assert targets == {"k-old": 7.5, "k-plain": None, "k-linked": 4}
     first = snapshot(path)
     boot(path)
     assert snapshot(path) == first
@@ -373,3 +484,61 @@ def test_the_idempotency_table_the_migration_builds_is_the_one_store_declares():
     built = importlib.import_module("backend.migrations.0091_idempotency_one_table").TABLE
     squash = lambda sql: re.sub(r"\s+", "", sql)
     assert declared and squash("CREATE TABLE " + declared.group(1)) == squash(built)
+
+
+def test_a_standalone_kpi_keeps_its_target_and_the_migration_runs(tmp_path):
+    """Migration 0042 does not stop on a KPI that has a target and no goal, nor on one whose goal is gone: each stays
+    a standalone KPI with its target on the KPI, and links to nothing."""
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        _old_kpis(c)
+        _old_kpi(c, "k-loose", "", 3)
+        _old_kpi(c, "k-orphan", "g-deleted", 5)
+    _back_to_before(path, "0042")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        columns = {row[1] for row in c.execute("PRAGMA table_info(kpis)")}
+        targets = dict(c.execute("SELECT id, target FROM kpis"))
+        links = c.execute("SELECT count(*) FROM goal_kpis WHERE kpi_id IN ('k-loose','k-orphan')").fetchone()[0]
+    assert "goal_id" not in columns and "target" in columns
+    assert targets == {"k-loose": 3, "k-orphan": 5} and links == 0
+
+
+def _shape(path):
+    """Each table's columns (an added column sits last, so not the CREATE text) and every other object's SQL."""
+    with sqlite3.connect(path) as c:
+        tables = {name: sorted(tuple(row)[1:] for row in c.execute(f'PRAGMA table_info("{name}")'))
+                  for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        return tables, sorted(c.execute("SELECT type,name,sql FROM sqlite_master WHERE type<>'table'").fetchall())
+
+
+def test_an_older_threads_shape_gets_the_missing_columns_tables_triggers_and_search_index_once(tmp_path):
+    """Migration 0036: the threads schema the modules used to make on every start. A file missing some of it (columns
+    added later, a helper table, an older trigger, the search index) ends with the shape a new file has, the new search
+    index holds the messages already there, and a second boot changes nothing."""
+    path = fresh(tmp_path)
+    new = _shape(path)
+    with sqlite3.connect(path) as c:
+        for table, column in (("calls", "finalized_at"), ("federation_states", "company"), ("inbound_inboxes", "audience"),
+                              ("org_rules", "where_terms"), ("slack_posts", "recipient_actor")):
+            c.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+        c.execute("DROP TABLE thread_digests")
+        c.execute("DROP TRIGGER threads_revisions_deleted")
+        c.execute("CREATE TRIGGER threads_revisions_deleted AFTER UPDATE OF deleted_at ON messages BEGIN SELECT 1; END")
+        for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'message_search_%'"
+                                 ).fetchall():
+            c.execute(f"DROP TRIGGER {name}")
+        c.execute("DROP TABLE message_search")
+        c.execute("DROP TABLE message_search_keys")
+        c.execute("INSERT INTO conversations(id,kind,created_at) VALUES('c-acme','direct','2026-01-01T00:00:00Z')")
+        c.execute("INSERT INTO messages(id,conversation_id,sender_id,kind,body,created_at) "
+                  "VALUES('m-acme','c-acme','human:ana','say','Acme quarterly memo','2026-01-01T00:00:00Z')")
+    _back_to_before(path, "0036")
+    boot(path)
+    once = snapshot(path)
+    assert _shape(path) == new
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT k.message_id FROM message_search JOIN message_search_keys k ON k.id=message_search.rowid "
+                         "WHERE message_search MATCH 'quarterly'").fetchall() == [("m-acme",)]
+    boot(path)
+    assert snapshot(path) == once

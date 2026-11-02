@@ -3,6 +3,7 @@ straight through. The backfill commits in chunks with their progress, and every 
 resumed run neither skips a row nor stamps one twice. Spec section 4 (`_threads-plan.md`).
 """
 
+import importlib
 import random
 import shutil
 import sqlite3
@@ -11,6 +12,8 @@ import pytest
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import hubdb, threads
+
+SCHEMA = importlib.import_module("backend.migrations.0036_native_threads_schema")
 
 
 def raw(path):
@@ -109,14 +112,14 @@ def test_an_interrupted_migration_resumes_to_the_same_rows(tmp_path, small_chunk
 
 
 def test_message_indexes_wait_for_the_backfill(tmp_path, small_chunks):
-    """ensure runs before migrate on every start; the message indexes it would build over unstamped rows are left to
-    migrate, which builds them after the backfill."""
+    """The schema migration (0036) runs before threads.migrate; on a file not yet backfilled it leaves the message
+    indexes to migrate, which builds them after the backfill."""
     conn = pre_threads_hub(tmp_path / "c.db")
     conn.execute("DROP INDEX IF EXISTS messages_seq")
     conn.execute("DROP INDEX IF EXISTS messages_thread_seq")
     conn.execute("DROP INDEX IF EXISTS messages_origin")
     conn.execute("DROP INDEX IF EXISTS messages_legacy_audience")
-    threads.ensure(conn)
+    SCHEMA.threads_schema(conn)
     names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
     assert not names & {"messages_seq", "messages_thread_seq", "messages_origin", "messages_legacy_audience"}
     threads.migrate(conn)

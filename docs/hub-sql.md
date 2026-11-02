@@ -59,8 +59,8 @@ else. `SELECT * FROM messages` therefore means "the messages you may read". In p
   with that human's visibility. The one thing it cannot do is make or revoke tokens.
 
 Everyone may read `sqlite_master` (the schema) and use `json_each`/`json_tree` on JSON
-columns. Nobody may read the tables below, nor `attempts.token_hash`, `bots.token_hash`, `bots.cwd`,
-`bots.thread_id`, `task_requesters.token_hash` or `service_jobs.token_hash`; the columns simply do not exist in
+columns. Nobody may read the tables below, nor `attempts.token_hash`, `task_requesters.token_hash` or
+`service_jobs.token_hash`; the columns simply do not exist in
 the view (`no such column`). `bot_control.claim_task`, the one task a bot's claims are limited to, reads
 `''` when you may not read that task: you learn a limit is on, not which task. Writes, `PRAGMA`, `ATTACH`, transactions, `EXPLAIN` (plain) and
 multiple statements are refused; `EXPLAIN QUERY PLAN` is allowed.
@@ -134,7 +134,7 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 
 | Table | Columns worth knowing | Notes |
 |---|---|---|
-| `bots` | `id, slug, display_name, runtime, model, effort, state, created_at, last_turn_at` | `id` is the bot's permanent id, which actor strings and foreign keys use; `slug` is its name and can change. `state`: active, paused, planned, quarantined, archived |
+| `bots` | `id, slug, display_name, effort, state, created_at, last_turn_at` | `id` is the bot's permanent id, which actor strings and foreign keys use; `slug` is its name and can change. `state`: active, paused, planned, quarantined, archived; a bot's runtime, model and host are in its config (`bot_config.config`), not here |
 | `bot_config` | `bot, team, owner_id, description, reports_to, repo, thread_mode, revision` | the team chart |
 | `bot_status` | `bot, state, focus, task_id, changed_at, last_turn_at, last_result, next_due_at, open_tasks, needs_human` | live status; history in `bot_status_history(bot, state, focus, started_at, ended_at, reason, by)` |
 | `humans` | `id, name, email, slack_id, teams` | bots do not get `email` |
@@ -149,7 +149,7 @@ Timestamps are ISO-8601 UTC text (`2026-09-15T21:40:12.931675Z`); compare them w
 | `task_roles` | `task_id, role, actor, added_by, created_at` | who is on a task, by role (a short name the team chooses: `developer`, `reviewer`, `qa` ...); one actor may hold several roles on a task |
 | `goals` | `id, title, owner_id, parent_id, body, status, status_note, status_by_id, status_at, status_source, suggest_status, suggest_note, suggest_at, rank, last_read_at, last_read_by_id, created_at, created_by_id, updated_at` | what every human and bot is for; `status`: red, yellow, green, gray (no data), done, dropped, or NULL while not yet scored; `status_source`: `auto` (the Strategy Bot's arithmetic) or `person` (set by hand, sticks until handed back); `suggest_*` is what the arithmetic says over a human's colour; `parent_id` is the goal it supports (optional); `owner` is `bot:x`, `human:x` or `company`; `tasks.goal_id` names the goal a task serves |
 | `goal_events` | `goal_id, created_at, actor, field, old, new, note, status_by, status_source` | every change to a goal; a `status` row says who set it and how |
-| `kpis` | `id, slug, name, definition, unit, direction, cadence, owner_id, source_note, definition_version, created_at, created_by_id, updated_at` (`goal_id` and `target` are kept for the rows that had them) | a measure that stands on its own; `direction`: up, down, range; `cadence`: daily, weekly, monthly |
+| `kpis` | `id, slug, name, definition, unit, direction, cadence, owner_id, source_note, definition_version, created_at, created_by_id, updated_at` (`target` is the one target a KPI had before goal links, kept as it was and read by nothing; a KPI's targets are on its goal links) | a measure that stands on its own; `direction`: up, down, range; `cadence`: daily, weekly, monthly |
 | `goal_kpis` | `goal_id, kpi_id, kind, baseline, baseline_at, target, deadline, min, max, created_at, created_by_id, updated_at, updated_by_id` | the link between a goal and a KPI, holding the target: `kind` is `improve` (baseline, target, deadline), `maintain` (min, max) or `none`; `kpi_id` may be `auto:<bot>:<metric>` |
 | `kpi_readings` | `kpi_id, measured_at, value, actor_id, source, note, created_at, period_start, period_end, collected_at, evidence, quality, definition_version, supersedes` | appended, never edited; `period_start` and `period_end` are the business time the value describes (`measured_at` equals `period_end`), `collected_at` when it was collected; `quality`: measured, estimate, partial; a correction is a new row whose `supersedes` names the old one |
 | `kpi_definitions` | `kpi_id, version, created_at, actor, name, definition, unit, direction, cadence, source_note` | every version of a KPI's definition |

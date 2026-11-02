@@ -5,8 +5,8 @@ track builds against this page. Owner: `threads/core`. A change here is announce
 ("contract:"), and additive changes are preferred over renames.
 
 Terms in UI and docs: **Thread, Home, DM, Sub-thread, Call**. Internally the table stays `conversations` and a
-thread id **is** a conversation id. `bots.thread_id` and `turns.thread_id` are provider sessions: never read or
-reuse them as thread ids.
+thread id **is** a conversation id. `turns.thread_id` (like `bot_sessions`) is a provider session: never read or
+reuse it as a thread id.
 
 ## 0. Files core owns
 
@@ -14,7 +14,7 @@ Don't edit these except where your brief says so; ask core in your report.
 
 | File | What core owns |
 |---|---|
-| `backend/threads.py` (new) | everything: schema `ensure`, C1-C5, `post`, `create`, read state, edit/delete, migration |
+| `backend/threads.py` (new) | everything: C1-C5, `post`, `create`, read state, edit/delete, migration |
 | `backend/hubdb.py` | the conversation and message write paths: `open_conversation`, `say`, `_write_message`, `answer`, `notice`, `mark_delivered`, `mark_read`, `task_comment*`, `inbox*`, `undelivered`, the conversation/message columns in `migrate` |
 | `backend/auth.py` | `Auth.conversation`, `Auth.run_conversation`, `Auth.tico_principal`, `_own_ask_to_a_person` (~lines 940-1060) |
 | `backend/events.py` | `_Viewer`, `_messages`, `_readable_before_deletion`, the `messages`/`threads` entries of `TRIGGERS`, the one `threads` hook line in `read()` |
@@ -25,9 +25,11 @@ Don't edit these except where your brief says so; ask core in your report.
 
 ## 1. Schema
 
-All columns are added with `H.add_column` on every start (`threads.ensure(c)`, called from `hubdb.migrate` and from
-the cloud store's unversioned boot list), the pattern the latest releases use. The one-time data migration (§7) is
-recorded under `registry_metadata` key `threads-migration` and runs inside one transaction.
+The columns, tables, triggers and indexes below are migration `backend/migrations/0036_native_threads_schema.py`, which
+also makes the search index and the tables of the thread helpers, the Slack bridge, Tico Meet calls and federation. It
+runs once; a change to any of that SQL is a new migration. The five message indexes are built by `threads.migrate` after
+its backfill. The one-time data migration (§7) is recorded under `registry_metadata` key `threads-migration` and runs
+in chunks that each commit with their progress.
 
 ### 1.1 `conversations` (a thread)
 

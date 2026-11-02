@@ -23,11 +23,18 @@ WORKFLOW = 'remote-run.yml'
 TAIL = 200
 
 
-def gh(*args, capture=True):
-    result = subprocess.run(['gh', *args], cwd=ROOT, capture_output=capture, text=True)
-    if result.returncode != 0:
-        raise SystemExit(f'remote: gh {" ".join(args[:2])} failed: {(result.stderr or "").strip()}')
-    return result.stdout
+def gh(*args, capture=True, patient=False):
+    """`gh ARGS`' output. `patient` waits out GitHub's rate limit (many agents share one account) for up to an hour,
+    retrying each minute, instead of giving up on a run that is still going."""
+    for _ in range(60 if patient else 1):
+        result = subprocess.run(['gh', *args], cwd=ROOT, capture_output=capture, text=True)
+        if result.returncode == 0:
+            return result.stdout
+        if not (patient and 'rate limit' in (result.stderr or '').lower()):
+            break
+        print('remote: GitHub rate limit; retrying in a minute', file=sys.stderr, flush=True)
+        time.sleep(60)
+    raise SystemExit(f'remote: gh {" ".join(args[:2])} failed: {(result.stderr or "").strip()}')
 
 
 def git(*args):
@@ -78,7 +85,7 @@ def find_run(run_id, deadline):
     title = f'Remote run {run_id}'
     while time.monotonic() < deadline:
         runs = json.loads(gh('run', 'list', '--workflow', WORKFLOW, '--event', 'workflow_dispatch', '--limit', '30',
-                             '--json', 'databaseId,displayTitle,url'))
+                             '--json', 'databaseId,displayTitle,url', patient=True))
         for run in runs:
             if run['displayTitle'] == title:
                 return run
@@ -89,7 +96,7 @@ def find_run(run_id, deadline):
 def wait(run):
     last = None
     while True:
-        view = json.loads(gh('run', 'view', str(run['databaseId']), '--json', 'status,conclusion'))
+        view = json.loads(gh('run', 'view', str(run['databaseId']), '--json', 'status,conclusion', patient=True))
         if view['status'] != last:
             print(f'remote: {view["status"]}', file=sys.stderr, flush=True)
             last = view['status']
@@ -113,15 +120,18 @@ def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
     # The workflow comes from main, so a branch can't change what a remote run is allowed to do.
     gh('workflow', 'run', WORKFLOW, '--ref', 'main', '-f', f'id={run_id}', '-f', f'ref={ref}',
        '-f', f'command={shlex.join(command)}', '-f', f'setup={setup}', '-f', f'cpus={cpus}',
-       '-f', f'minutes={minutes}')
+       '-f', f'minutes={minutes}', patient=True)   # a refused dispatch started nothing, so it is safe to retry
     found = find_run(run_id, time.monotonic() + 120)
     print(f'remote: {found["url"]}', file=sys.stderr, flush=True)
     conclusion = wait(found)
     logs = ROOT / '.remote-runs' / run_id
     logs.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as scratch:
-        fetched = subprocess.run(['gh', 'run', 'download', str(found['databaseId']), '-n', f'remote-run-{run_id}',
-                                  '-D', scratch], cwd=ROOT, capture_output=True, text=True).returncode == 0
+        try:
+            gh('run', 'download', str(found['databaseId']), '-n', f'remote-run-{run_id}', '-D', scratch, patient=True)
+            fetched = True
+        except SystemExit:
+            fetched = False
         for name in ('command', 'output.log', 'exit-code'):
             if (Path(scratch) / name).is_file():
                 (logs / name).write_bytes((Path(scratch) / name).read_bytes())

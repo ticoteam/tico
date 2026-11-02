@@ -4,6 +4,7 @@ Every test runs against a fresh database in a temp directory with a small fake r
 nothing here reads `registry/` or the real `runtime/hub.db`.
 """
 import hashlib
+import importlib
 import json
 import re
 import sqlite3
@@ -183,14 +184,23 @@ ALTER TABLE growth_settings ADD COLUMN verdict_win_pct REAL NOT NULL DEFAULT 60;
 
     def before_rethink(self):
         """The file as the release before the rethink left it: every migration before it (none after it: a later file
-        makes the runner refuse the rethink as out of order), the retired tables and columns that release had, and the
-        strategy tables store.py makes at startup."""
+        makes the runner refuse the rethink as out of order), the retired tables and columns that release had, the
+        threads schema that release's modules made after the migrations (0036 makes it now, unrecorded here so the
+        full migrate still runs it), and the strategy tables store.py makes at startup."""
         conn = sqlite3.connect(self.path, isolation_level=None)
         conn.row_factory = sqlite3.Row
         self.addCleanup(conn.close)
         every = migrations.files()
+        apply = migrations.apply
+        threads = importlib.import_module("backend.migrations.0036_native_threads_schema")
+
+        def apply_then_threads(conn, directory=None):
+            apply(conn, directory)
+            threads.up(conn)
+
         with unittest.mock.patch.object(migrations, "files",
-                                        lambda directory=None: [m for m in every if m.version < "0035_growth_rethink"]):
+                                        lambda directory=None: [m for m in every if m.version < "0035_growth_rethink"]), \
+                unittest.mock.patch.object(migrations, "apply", apply_then_threads):
             H.migrate(conn)
         for statement in migrations.statements(self.BEFORE):
             conn.execute(statement)
@@ -309,25 +319,13 @@ ALTER TABLE growth_settings ADD COLUMN verdict_win_pct REAL NOT NULL DEFAULT 60;
 
 
 class RegistrySync(HubCase):
-    def test_sync_is_idempotent_and_keeps_tokens_threads_and_quarantine(self):
-        token = H.issue_token(self.conn, "cmo")
-        self.conn.execute("UPDATE bots SET thread_id='t-1' WHERE slug='cmo'")
+    def test_sync_is_idempotent_and_keeps_quarantine(self):
         H.quarantine(self.conn, "seo", "test")
         H.sync_registry(self.conn, EMPLOYEES, PEOPLE)
         H.sync_registry(self.conn, EMPLOYEES, PEOPLE)
         self.assertEqual(len(H.bots(self.conn)), len(EMPLOYEES))
         self.assertEqual(len(H.humans(self.conn)), len(PEOPLE["people"]))
-        self.assertEqual(H.bot(self.conn, "cmo")["thread_id"], "t-1")
-        self.assertEqual(H.verify_bot(self.conn, "cmo", token)["slug"], "cmo")
         self.assertEqual(H.bot(self.conn, "seo")["state"], "quarantined")
-
-class Tokens(HubCase):
-    def test_a_wrong_or_rotated_token_is_refused(self):
-        first = H.issue_token(self.conn, "cmo")
-        self.refused("identity", H.verify_bot, self.conn, "cmo", "nope")
-        H.issue_token(self.conn, "cmo")                     # the keeper rotates on resume
-        self.refused("identity", H.verify_bot, self.conn, "cmo", first)
-        self.refused("identity", H.verify_bot, self.conn, "seo", first)   # never issued one
 
 
 # ----------------------------------------------------------------------------- rule 1
