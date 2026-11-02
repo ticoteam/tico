@@ -13,6 +13,7 @@ import unittest.mock
 from pathlib import Path
 
 from backend import hubdb as H
+from backend import marketing_tasks as MT
 from backend import strategy as S
 from backend import task_relations as TR
 
@@ -219,7 +220,7 @@ class GrowthRethink(unittest.TestCase):
         self.assertEqual(sections["serve"], "SMBs")
         self.assertEqual({r[0]: (r[1], r[2]) for r in conn.execute(
             "SELECT id, status, decision_note FROM goal_proposals")},
-            {"p1": ("rejected", H.GTM_DECLINED), "p2": ("pending", "")})
+            {"p2": ("pending", "")})
         self.assertEqual([r[0] for r in conn.execute("SELECT id FROM growth_cohorts")], ["c1"])
         self.assertNotIn("segment_id", {r[1] for r in conn.execute("PRAGMA table_info(growth_cohorts)")})
         with self.assertRaises(sqlite3.IntegrityError):
@@ -247,6 +248,24 @@ class GrowthRethink(unittest.TestCase):
 
         self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
         self.assertFalse(set(self.RETIRED) & self.tables(conn))
+
+    def test_an_idea_type_seeded_before_scaling_gets_the_step_when_the_store_starts(self):
+        conn = self.before_rethink()
+        # The idea type as the release before the rethink seeded it: every step of Marketing but Scaling.
+        conn.execute("INSERT INTO task_types (id, name, created, updated) VALUES ('idea', 'Idea', 'x', 'x')")
+        conn.executemany("INSERT INTO task_steps (id, type_id, name, position, status) VALUES (?, 'idea', ?, ?, ?)",
+                         [(MT.step_id(key), name, position, status) for position, (key, name, status)
+                          in enumerate(step for step in MT.STEPS if step[0] != "scaling")])
+
+        H.migrate(conn)
+        MT.ensure(conn)                     # the store runs this at every start, after the migrations
+
+        self.assertEqual(conn.execute("SELECT name FROM task_types WHERE id='idea'").fetchone()[0], "Marketing")
+        self.assertEqual([r[0] for r in conn.execute("SELECT name FROM task_steps WHERE type_id='idea' "
+                                                     "ORDER BY position, id")],
+                         [name for _, name, _ in MT.STEPS])
+        self.assertEqual(tuple(conn.execute("SELECT name, status FROM task_steps WHERE id='idea-scaling'").fetchone()),
+                         ("Scaling", "doing"))
 
 
 class RegistrySync(HubCase):

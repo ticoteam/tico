@@ -3447,6 +3447,7 @@ RENAMED.sort(key=lambda rule: -len(rule[0]))
 NOTICE_COMMANDS = ("list",)                             # the subcommands `hub notice` has now
 
 
+MARKETING_TYPE = "idea"     # the marketing task type's id (backend/marketing_tasks.py TYPE_ID); its name is a team's to set
 LEGACY_IDEA_FLAGS = ("--title", "--hypothesis", "--prediction", "--bet", "--kpi", "--segment", "--source-kind",
                      "--source-ref", "--i", "--c", "--e", "--follow-up-of", "--assignee", "--body", "--status", "--q",
                      "--limit", "--result", "--learning", "--bet-effect", "--confidence")
@@ -3454,9 +3455,10 @@ LEGACY_IDEA_FLAGS = ("--title", "--hypothesis", "--prediction", "--bet", "--kpi"
 
 def legacy_idea(argv):
     """The old `hub growth idea create|list|verdict` lines as the task commands they are now, run in order, with the
-    notice to print; None for any other line. Ideas are Marketing tasks: a channel is its label, a verdict moves the task
-    to its step, and what the verdict found is left as a comment. The ICE scores, segments and the idea's source have no
-    task field and are read and dropped; the bet and the KPI stay as lines in the body."""
+    notice to print; None for any other line. Ideas are tasks of the idea type (id, not name: a team's own Marketing type
+    does not change where they go): a channel is its label, a verdict moves the task to its step with what it found as
+    the note. The ICE scores, segments and the idea's source have no task field and are read and dropped; the bet and
+    the KPI stay as lines in the body."""
     if argv[:2] != ["growth", "idea"] or argv[2:3] not in (["create"], ["list"], ["verdict"]):
         return None
     p = argparse.ArgumentParser(prog="hub growth idea", allow_abbrev=False)
@@ -3468,33 +3470,34 @@ def legacy_idea(argv):
     old, _ = p.parse_known_args(argv[2:])
     json_out = ["--json"] if "--json" in argv else []
     if old.verb == "create":
+        # A task needs a body, so an idea given only a title uses the title as its body.
         body = "\n".join(line for line in (
             f"Hypothesis: {old.hypothesis}" if old.hypothesis else "",
             f"Prediction: {old.prediction}" if old.prediction else "",
             f"Bet: {old.bet}" if old.bet else "",
             f"KPI: {old.kpi}" if old.kpi else "",
-            old.body or "") if line)
-        line = ["task", "create", "--type", "Marketing", "--owner", old.assignee or "me", "--title", old.title or "",
+            old.body or "") if line) or old.title or ""
+        line = ["task", "create", "--type", MARKETING_TYPE, "--owner", old.assignee or "me", "--title", old.title or "",
                 "--body", body]
         for channel in old.channel or []:
             line += ["--label", f"channel:{channel}"]
-        return '"hub growth idea create" is now "hub task create --type Marketing"', [line + json_out]
+        return f'"hub growth idea create" is now "hub task create --type {MARKETING_TYPE}"', [line + json_out]
     if old.verb == "list":
-        line = ["task", "list", "--type", "Marketing"]
+        line = ["task", "list", "--type", MARKETING_TYPE]
         if old.status:
             line += ["--step", old.status.capitalize()]
         if old.channel:
             line += ["--label", f"channel:{old.channel[0]}"]
-        return '"hub growth idea list" is now "hub task list --type Marketing"', [line + json_out]
+        return f'"hub growth idea list" is now "hub task list --type {MARKETING_TYPE}"', [line + json_out]
     if not old.status:
         p.error("verdict needs --status won|lost|inconclusive|dropped|paused")
     if not old.id:
         p.error("verdict needs the idea's task id")
-    lines = [["task", "update", old.id, "--step", old.status.capitalize()] + json_out]
+    update = ["task", "update", old.id, "--step", old.status.capitalize()]
     found = "\n".join(f"{label}: {value}" for label, value in (("Result", old.result), ("Learning", old.learning)) if value)
     if found:
-        lines.append(["task", "comment", old.id, found])
-    return ('"hub growth idea verdict" is now "hub task update --step" and "hub task comment"', lines)
+        update += ["--note", found]     # a pause needs a note, and the verdict's words are the note of every outcome
+    return ('"hub growth idea verdict" is now "hub task update --step --note"', [update + json_out])
 
 
 def parse(p, argv):
