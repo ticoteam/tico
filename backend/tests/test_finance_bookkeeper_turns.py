@@ -396,14 +396,28 @@ def test_bookkeeper_is_refused_what_it_may_never_do(api):
 
 
 # ----------------------------------------------------------------------------- gaps in what the tools can read
-@pytest.mark.xfail(strict=True, reason="GAP: the Books check lists 'unreconciled' and 'bill_email' items, but "
-                   "hub_finance_inbox's kind enum has neither (clients/hubtools.py FINANCE_INBOX), so the bot cannot page "
-                   "them with its tools.")
 def test_gap_books_check_kinds_can_be_paged(api):
+    """The Books check lists books not reconciled for over a month and emailed bills Finance did not take. Each is a
+    kind of hub_finance_inbox, paged like the others: one page of bill_email holds one bill, and next_cursor goes on."""
+    store = api.app.state.store
     token = hire(api)
-    for kind in ("unreconciled", "bill_email"):
-        err, out = call(api, "hub_finance_inbox", {"kind": kind}, token=token)
-        assert not err, (kind, out)
+    fake = FakeMercury()
+    connect(store, fake)
+    fake.txns["txn-old"] = dict(MERCURY["txn_deposit"], id="txn-old", createdAt="2026-08-01T12:00:00Z",
+                                postedAt="2026-08-01T12:00:00Z")
+    sync_once(store, fake)                  # the first settled row is in August: the account has never been reconciled
+    with store.transaction() as c:
+        for n, received in ((1, "2026-10-14T09:00:00Z"), (2, "2026-10-15T09:00:00Z")):
+            c.execute("INSERT INTO bills_inbound(id,delivery,received_at,sender,subject,name,mime,sha256,state,code,"
+                      "updated_at) VALUES(?,'dlv_1',?,'Acme Supplies','Invoice 88','invoice.pdf','application/pdf',?,"
+                      "'needs_entry','',?)", (f"bin_{n}", received, "a" * 64, received))
+    err, late = call(api, "hub_finance_inbox", {"kind": "unreconciled"}, token=token)
+    assert not err and [(i["kind"], i["id"]) for i in late["items"]] == [("unreconciled", "books")], late
+    err, first = call(api, "hub_finance_inbox", {"kind": "bill_email", "limit": 1}, token=token)
+    assert not err and [i["id"] for i in first["items"]] == ["bin_1"] and first["next_cursor"], first
+    err, second = call(api, "hub_finance_inbox", {"kind": "bill_email", "limit": 1, "cursor": first["next_cursor"]},
+                       token=token)
+    assert not err and [i["id"] for i in second["items"]] == ["bin_2"] and second["next_cursor"] is None, second
 
 
 @pytest.mark.xfail(strict=True, reason="GAP: categorize, bill_create and rule_create need account ids, and no hub tool lists "

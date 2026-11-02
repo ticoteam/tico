@@ -44,7 +44,6 @@ RULES_DAYS = 7
 VIEW_TITLE = "Let the Bookkeeper see the books"
 REPEAT_HOURS = 24           # an item already listed is not news for this long, unless its facts changed
 KEEP_DAYS = 7               # the ledger forgets an item this long after it was last seen
-STATEMENT_DAYS = 35         # a money account reconciled longer ago than a statement month and its arrival is listed
 PER_KIND = 25               # lines one kind contributes to the body; the rest are counted
 BODY_BYTES = 12000          # the body is cut here
 INBOX_PAGES = 10            # pages of 200 read per kind of the Finance queue per check (its own query, past the 200)
@@ -173,7 +172,6 @@ def collect(c):
             cursor = page.get("next_cursor")
             if not cursor:
                 break
-    emailed = bills_address.for_bookkeeper(c)
     names = bills_address.labels(c, [str(row.get("file_id") or "") for row in queue
                                      if row.get("kind") == "unmatched_receipt"])
     for row in queue:
@@ -184,20 +182,6 @@ def collect(c):
             row = {**row, "label": f"{names.get(file_id) or row.get('label') or 'Receipt'} (file {file_id})"}
         items.append({"kind": row["kind"], "id": str(row.get("id") or ""), "label": str(row.get("label") or ""),
                       "stamp": _stamp(row)})
-    try:
-        days = FR.metric(c, ACTOR, "unreconciled_days").get("value")
-    except FA.FinanceError:
-        days = None
-    if isinstance(days, int) and days > STATEMENT_DAYS:
-        counts["unreconciled"] = 1
-        items.append({"kind": "unreconciled", "id": "books", "label": f"{days} days since the books were reconciled",
-                      "stamp": str(days // 7)})
-    counts["bill_email"] = len(emailed)
-    for row in emailed:
-        label = f"{row['sender'] or 'Unknown sender'}: {row['subject'] or row['name']}"[:160]
-        items.append({"kind": "bill_email", "id": row["id"], "label": label + (f" (file {row['file_id']})"
-                                                                              if row["file_id"] else ""),
-                      "stamp": row["state"] + (row["code"] or "")})
     for item in items:
         item["key"] = f"{item['kind']}:{item['id']}"
     items.sort(key=lambda item: ORDER.index(item["kind"]) if item["kind"] in ORDER else len(ORDER))

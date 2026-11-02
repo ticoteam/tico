@@ -1762,7 +1762,7 @@ SCHEMAS.update({
         required=["id", "name", "kind", "active"])), "next_cursor": "n", "view_version": "i"}),
     "FinanceInbox": obj({"items": items(obj({"kind": {"type": "string", "enum": [
         "uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
-        "budget_near_limit", "sync_failed", "period_ready"]}, "id": "s", "label": "s"})),
+        "budget_near_limit", "sync_failed", "period_ready", "unreconciled", "bill_email"]}, "id": "s", "label": "s"})),
         "counts": {"type": "object", "additionalProperties": {"type": "integer"}}, "more": items({"type": "string"}),
         "next_cursor": "n", "currency": "s", "view_version": "i"}),
     "FinanceReportOf": obj({"kind": {"type": "string", "enum": ["pnl", "pnl_by", "balance_sheet", "cash_flow",

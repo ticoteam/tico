@@ -1147,6 +1147,20 @@ WATCH_LABELS = 10           # the Watch findings a metric names (its count is th
 RUNWAY_MONTHS = 3           # runway divides cash by the average burn of this many full months
 
 
+def _worst_gap(s: _Seen, money_ids: Sequence[str]) -> int | None:
+    """Days since the oldest reconciliation among these money accounts; None when none has a feed yet."""
+    today = dates.day(s.ctx.today)
+    worst: int | None = None
+    for m in money_ids:
+        through = SK.locked_through(s.ctx.c, m)
+        first = SK.first_feed_day(s.ctx.c, m)
+        if not first:
+            continue
+        gap = max(0, (today - dates.day(through)).days) if through else (today - dates.day(first)).days
+        worst = gap if worst is None else max(worst, gap)
+    return worst
+
+
 def _data_as_of(s: _Seen, money_ids: Sequence[str]) -> tuple[str | None, bool]:
     """When the bank and card data these numbers rest on was last synced (the oldest of the connections behind the
     viewer's money accounts), and whether that is stale: older than a day, never synced, or a connection in error."""
@@ -1250,16 +1264,8 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
         return {**base, "value": len(rows), "more": more, "unit": "count", "data_as_of": data_as_of, "stale": stale}
     if name == "unreconciled_days":
         money_ids, _ = tab.feed_scope(s.ctx, s.view)
-        worst: int | None = None
-        for m in money_ids:
-            through = SK.locked_through(c, m)
-            first = SK.first_feed_day(c, m)
-            if not first:
-                continue
-            gap = max(0, (today - dates.day(through)).days) if through else (today - dates.day(first)).days
-            worst = gap if worst is None else max(worst, gap)
         data_as_of, stale = _data_as_of(s, money_ids)
-        return {**base, "value": worst or 0, "unit": "days", "data_as_of": data_as_of, "stale": stale}
+        return {**base, "value": _worst_gap(s, money_ids) or 0, "unit": "days", "data_as_of": data_as_of, "stale": stale}
     if name in ("duplicate_charges", "price_increases"):
         # The same Watch checks the daily Watch runs (watch_findings), read as a count with the first few labels; plain
         # code over the viewer's posted debits, no model call.
@@ -1603,9 +1609,10 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
 
 # ------------------------------------------------------------------------------------------------ inbox
 INBOX_KINDS = ("uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due",
-               "invoice_overdue", "budget_near_limit", "sync_failed", "period_ready")
+               "invoice_overdue", "budget_near_limit", "sync_failed", "period_ready", "unreconciled", "bill_email")
 INBOX_EACH = 200            # items one kind contributes before its count says "more"
 RECEIPT_DAYS = 90
+STATEMENT_DAYS = 35         # a money account reconciled longer ago than a statement month is an unreconciled item
 
 
 def _money(amount: int) -> str:
@@ -1616,7 +1623,8 @@ def inbox(c: sqlite3.Connection, viewer: str, *, limit: int = 50, cursor: str | 
           at: str | None = None) -> Row:
     """The viewer's Finance work queue (§7.1): uncategorized rows, bills to enter (drafts, e.g. from the bills
     address), unmatched and missing receipts, bills due within a week, overdue invoices, budgets near their limit,
-    failed syncs and months ready to close. Each item has its ids and a short label; `counts` covers every kind
+    failed syncs, months ready to close, books not reconciled for over a month, and emailed bills Finance did not take
+    (bill_email). Each item has its ids and a short label; `counts` covers every kind
     (`more` when a kind has over 200). With `kind`, that kind alone, paged from its own query past the 200 (to
     INBOX_DEEP), so a reader that follows `next_cursor` reaches every item."""
     s = _open(c, viewer, at)
@@ -1729,6 +1737,24 @@ def _inbox_kind(s: _Seen, kind: str, n: int, skip: int = 0) -> tuple[list[Row], 
                    "label": f"{x['name'] or x['provider']}: {str(x['last_error'] or 'sync failed')[:120]}"}
                   for x in SK.connections(c) if str(x["status"]) == "error"]
         return failed[skip:skip + n], len(failed) > skip + n
+    if kind == "unreconciled":
+        if not R.has(ctx.org, s.view.viewer, R.BOOK, held):
+            return None
+        money_ids, _ = tab.feed_scope(ctx, view)
+        days = _worst_gap(s, money_ids)
+        late: list[Row] = ([{"id": "books", "days": days, "label": f"{days} days since the books were reconciled"}]
+                           if days is not None and days > STATEMENT_DAYS else [])
+        return late[skip:skip + n], len(late) > skip + n
+    if kind == "bill_email":                 # a bill to enter (bill_create needs AP): by the right, not the view
+        if not R.has(ctx.org, s.view.viewer, R.AP, held):
+            return None
+        from .. import bills_address       # the emailed bills keep their own rows, outside the fin_ tables
+        emailed = bills_address.for_bookkeeper(c, skip + n + 1)
+        return [{"id": str(r["id"]), "file_id": str(r["file_id"] or ""), "date": str(r["received_at"] or "")[:10],
+                 "status": str(r["state"]) + str(r["code"] or ""),
+                 "label": (f"{r['sender'] or 'Unknown sender'}: {r['subject'] or r['name']}"[:160]
+                           + (f" (file {r['file_id']})" if r["file_id"] else ""))}
+                for r in emailed[skip:skip + n]], len(emailed) > skip + n
     if not R.has(ctx.org, s.view.viewer, R.BOOK, held):      # period_ready
         return None
     ready: list[Row] = [{"id": p, "month": p, "label": f"{p} is ready to close"} for p in _closable(c, ctx)

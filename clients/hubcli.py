@@ -3413,7 +3413,8 @@ def parser():
     s.set_defaults(fn="finance action")
     s = fin.add_parser("inbox", help="your Finance work queue")
     s.add_argument("--kind", choices=["uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due",
-                                      "invoice_overdue", "budget_near_limit", "sync_failed", "period_ready"],
+                                      "invoice_overdue", "budget_near_limit", "sync_failed", "period_ready",
+                                      "unreconciled", "bill_email"],
                    help="only this kind, paged on with --cursor past its first 200")
     s.add_argument("--cursor"); s.add_argument("--limit", type=int)
     s.set_defaults(fn="finance inbox")

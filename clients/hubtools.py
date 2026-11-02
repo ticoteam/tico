@@ -6442,7 +6442,7 @@ FINANCE_METRICS = ["cash", "burn", "runway_months", "revenue", "spend", "budget_
                    "ar_overdue", "uncategorized_count", "unreconciled_days", "duplicate_charges", "price_increases"]
 FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card"]
 FINANCE_INBOX = ["uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
-                 "budget_near_limit", "sync_failed", "period_ready"]
+                 "budget_near_limit", "sync_failed", "period_ready", "unreconciled", "bill_email"]
 FIN_DAY = {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "YYYY-MM-DD"}
 # Whole-number fields an "Other · n" row does not add up: they describe one row, not an amount.
 _FIN_NOT_ADDED = {"pct", "days_late", "priority", "depth", "level", "version", "revision", "view_version"}
@@ -6723,7 +6723,8 @@ def finance_action(api, args):
 
 
 @tool("hub_finance_inbox", "Your Finance work queue: uncategorized rows, bills to enter, receipts, bills due, overdue "
-      "invoices, budgets near limit, failed syncs, months ready to close; with counts per kind. Name a kind to page "
+      "invoices, budgets near limit, failed syncs, months ready to close, books not reconciled for over a month "
+      "(unreconciled), emailed bills Finance did not take (bill_email); with counts per kind. Name a kind to page "
       "through that kind alone, past its first 200.",
       {"kind": _s("Only this kind of work, paged on with cursor", enum=FINANCE_INBOX),
        "cursor": _s("next_cursor from the last page (same kind)"),

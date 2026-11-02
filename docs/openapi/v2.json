@@ -41537,7 +41537,9 @@
                     "invoice_overdue",
                     "budget_near_limit",
                     "sync_failed",
-                    "period_ready"
+                    "period_ready",
+                    "unreconciled",
+                    "bill_email"
                   ]
                 },
                 "id": {

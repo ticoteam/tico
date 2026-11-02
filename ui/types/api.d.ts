@@ -1577,7 +1577,7 @@ export type FinanceInbox = {
   currency: string;
   items: Array<{
   id: string;
-  kind: "uncategorized" | "bill_to_enter" | "unmatched_receipt" | "missing_receipt" | "bill_due" | "invoice_overdue" | "budget_near_limit" | "sync_failed" | "period_ready";
+  kind: "uncategorized" | "bill_to_enter" | "unmatched_receipt" | "missing_receipt" | "bill_due" | "invoice_overdue" | "budget_near_limit" | "sync_failed" | "period_ready" | "unreconciled" | "bill_email";
   label: string;
 }>;
   more: Array<string>;
