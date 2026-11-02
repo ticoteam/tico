@@ -222,8 +222,11 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "right_grant": (("teammate", "str", ""), ("right", "str", "finance.book|ap|ar|pay|cards|budgets|rules|admin"),
                     ("expires_at?", "str", "")),
     "right_revoke": (("teammate", "str", ""), ("right", "str", "")),
-    "reconcile": (("money_account_id", "str", ""), ("statement_end", "day", ""), ("statement_balance", "minor", ""),
-                  ("cleared", "list[str]", "feed row ids"), ("opening_balance?", "minor", "")),
+    "reconcile": (("money_account_id", "str", ""), ("statement_end", "day", "the statement's last day"),
+                  ("statement_balance?", "minor", "the bank's ending balance in cents: typed when no bank statement "
+                                                  "ends on statement_end"),
+                  ("cleared?", "list[str]", "feed row ids; default: every settled row through that day not yet cleared"),
+                  ("opening_balance?", "minor", "")),
     "reconcile_undo": (("reconciliation_id", "str", ""),),
     "connection_create": (("provider", "mercury|stripe", ""), ("credential_id", "str", ""), ("name?", "str", ""),
                           ("probe?", "bool", ""), ("approver_email?", "str", ""), ("token_creator_email?", "str", ""),
