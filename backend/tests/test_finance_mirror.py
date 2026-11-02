@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from backend import hook_relay
+from backend.finance import actions as FA
 from backend.finance import books_link, books_sync, documents, mirror
 from backend.finance import reads as FR
 from backend.finance.context import load
@@ -29,7 +30,7 @@ from backend.tests.test_finance_ap import _ingest, _txn
 from backend.tests.test_finance_ap import _vendor as _native_vendor
 from backend.tests.test_finance_books_link import COMPANY, LINK, HQ, tokens
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, OWNER, FakeMercury, account, act, books, connect, finance_template, store)
+    AT, OWNER, FakeMercury, account, act, books, budget, connect, finance_template, store)
 from backend.tests.test_finance_payments import _checking
 
 LATER = "2026-10-15T13:00:00.000000Z"
@@ -736,6 +737,50 @@ def _bill_key(books, fake: FakeBooks, cid: str) -> str:
         assert made.status == "committed", made
     with books.read() as c:
         return str(c.execute("SELECT idempotency_key FROM fin_outbox WHERE op='bill.create'").fetchone()[0])
+
+
+def _queued_bill_on_software(books, fake: FakeBooks) -> str:
+    """A 1500 bill on Software made here, budget set first, and its connection mirrored. Returns the connection id."""
+    _chart(fake)
+    _vendor(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        assert act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 5_000,
+                                               "effective_from": "2026-10-01"}).status == "committed"
+        made = act(c, OWNER, "bill_create", {
+            "vendor_id": _local(c, "Vendor:9", "fin_contacts"), "number": "B-78", "bill_date": "2026-10-05",
+            "due_date": "2026-11-05", "lines": [{"account_id": account(c, "6100"), "amount": 1500,
+                                                 "description": "seats"}]})
+        assert made.status == "committed", made
+    return cid
+
+
+def _software_held_and_actual(books) -> tuple[int, int]:
+    with books.read() as c:
+        state = FA.budget_state(c, budget(c, "Software"), AT)
+    return state.held, state.actual
+
+
+def test_a_mirrored_bill_holds_its_budget_while_queued_and_becomes_actual_when_the_provider_confirms(books):
+    """§4.4: a bill queued for the provider holds its expense lines on their budget, as a native draft does, so the room
+    is taken while the write is on its way. The hold becomes the bill's actual when the provider confirms it."""
+    fake = FakeBooks()
+    cid = _queued_bill_on_software(books, fake)
+    assert _software_held_and_actual(books) == (1500, 0)
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert _software_held_and_actual(books) == (0, 1500)
+
+
+def test_a_mirrored_bill_the_provider_refuses_for_good_gives_its_budget_back(books):
+    """§4.4: a queued bill that is refused for good releases the hold it placed, and the books never took the bill."""
+    fake = FakeBooks()
+    cid = _queued_bill_on_software(books, fake)
+    assert _software_held_and_actual(books) == (1500, 0)
+    fake.replies.append(mirror.Sent(False, error="Bad request: the vendor is inactive", final=True))
+    assert _drain(books, fake, cid, now=LATER) == ["bill.create: Bad request: the vendor is inactive"]
+    assert _software_held_and_actual(books) == (0, 0)
 
 
 def test_a_create_cut_off_after_the_provider_took_it_is_found_and_not_sent_again(books):

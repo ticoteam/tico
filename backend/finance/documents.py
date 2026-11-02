@@ -354,6 +354,26 @@ def _holds(ctx: Ctx, bill_id: str, count: int) -> list[str]:
     return [str(h["id"]) for h in found if h is not None]
 
 
+def hold_queued_bill(ctx: Ctx, hold_key: str, vendor_id: str, lines: Sequence[AP.DocLine], who: str) -> list[str]:
+    """A mirrored bill's holds while it waits for the provider. It has no local id until the provider confirms it, so its
+    holds are keyed by a hold key made with the write; take_queued_bill_holds and release_queued_bill_holds find them."""
+    return _hold(ctx, hold_key, vendor_id, lines, who)
+
+
+def take_queued_bill_holds(ctx: Ctx, hold_key: str, count: int, entry_id: str | None) -> None:
+    """The provider confirmed the bill, booked as entry_id: its holds become actual on that entry, as a native post takes
+    them (posting.post_entry). A hold already settled or released is left as it is."""
+    for n in range(count):
+        row = SB.hold_for_source(ctx.c, "bill", f"{hold_key}:{n}")
+        if row is not None and row["status"] == "held":
+            SB.settle(ctx.c, str(row["id"]), int(row["amount"]), entry_id, ctx.at)
+
+
+def release_queued_bill_holds(ctx: Ctx, hold_key: str, count: int) -> None:
+    """A queued bill the provider refused for good: the holds it placed go back to their budgets."""
+    _unhold(ctx, hold_key, count)
+
+
 def _attach_files(p: V.Payload) -> list[str]:
     files = V.texts(p, "attachments", 50) if p.get("attachments") not in (None, []) else []
     if any(len(f) > 80 for f in files):

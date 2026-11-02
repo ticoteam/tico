@@ -2008,6 +2008,13 @@ def _link_order_lines(c: sqlite3.Connection, ctx: Ctx, doc_id: str, lines: Seque
         PU.sync_orders(ctx, SYSTEM, orders)
 
 
+def _bill_entry(c: sqlite3.Connection, cid: str, ext: M.Ext) -> str:
+    """The entry a confirmed bill is booked as, "" when the books hold no such bill."""
+    row = SX.ref(c, cid, "fin_bills", ext.key)
+    bill = SAP.get(c, "fin_bills", str(row["local_id"])) if row is not None and row["local_id"] else None
+    return str(bill["entry_id"] or "") if bill is not None else ""
+
+
 def _confirm_void(c: sqlite3.Connection, cid: str, table: str, local: Mapping[str, Any], sent: Sent, now: str) -> None:
     """The provider voided a bill or invoice Tico voided: its entry is reversed, and its ref takes the revision the void
     left, so the change feed's echo of that void is the same record and brings nothing new."""
@@ -2090,6 +2097,9 @@ def _confirm(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any],
             _retire(c, load(c, now), cid, entry, str(local["ext"]), now)
     elif op in ("bill.create", "invoice.create"):
         _confirm_document(c, cid, sent, local, now)
+        if op == "bill.create" and local.get("holds"):
+            documents.take_queued_bill_holds(load(c, now), str(local["holds"]), len(local["lines"]),
+                                             _bill_entry(c, cid, ext) or None)
         if local.get("estimate_id"):
             _claim_estimate(c, cid, sent, local, now)
     elif op in ORDER_TABLES:
@@ -2145,6 +2155,10 @@ def _record(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], p
         SK.update(c, "fin_outbox", oid, {"status": "failed", "attempts": attempts, "claimed_at": None,
                                          "last_error": sent.error[:300], "unknown": int(sent.unknown),
                                          "updated_at": now})
+        if kind == "bill" and not sent.unknown and local.get("holds"):
+            # Refused for good and never booked: the budget its lines held goes back (spec 4.4). An unknown one may still
+            # land, so its holds stay until the provider says which.
+            documents.release_queued_bill_holds(load(c, now), str(local["holds"]), len(local["lines"]))
         if kind in RECORD_KINDS:
             # The local record never changed: the owner sees why the provider refused it.
             tico.needs_you(c, SX.connection_owner(c, cid), f"QuickBooks refused the {RECORD_KINDS[kind][2]} write",
@@ -2548,15 +2562,22 @@ def _create_planner(kind: str) -> handlers.Planner:
             raw, _ = PU.link_bill_lines(ctx, who, str(contact["id"]), raw)
         lines, _ = documents.resolve_lines(ctx, who, kind, contact, raw)
         total = sum(x.amount for x in lines)
+        hold_key = SL.new_id() if kind == "bill" else ""     # keys the bill's holds before the provider gives it an id
         body = {"party": str(contact["id"]), "number": number, "day": day, "due": due or "",
-                "memo": V.opt_text(p, "memo", 500) or "",
+                "memo": V.opt_text(p, "memo", 500) or "", "holds": hold_key,
                 "lines": [{"account_id": x.account_id, "amount": x.amount, "description": x.description,
                            "item_id": x.item_id, "tags": dict(x.tags), "po_line_id": x.po_line_id or None}
                           for x in lines]}
 
         def apply(aid: str) -> handlers.Result:
             oid = _queue(ctx.c, cid, f"{kind}.create", body, by=who, action_id=aid, at=ctx.at)
-            return {"outbox_id": oid, "status": "queued", "total": total}
+            out: handlers.Result = {"outbox_id": oid, "status": "queued", "total": total}
+            if kind == "bill":
+                # Its expense lines hold their budgets while the write is on its way, as a native draft's do (spec 4.4).
+                refused = documents.hold_queued_bill(ctx, hold_key, str(contact["id"]), lines, who)
+                if refused:
+                    out["not_held"] = refused
+            return out
         return handlers.Plan(K.default_gate(ctx.org, who, f"{kind}_create"),
                              f"Send a {documents.money_of(total)} {ctx.book.base_currency} {kind} for {contact['name']}",
                              apply, facts=documents.doc_facts(kind, contact, lines, ctx))
