@@ -6,6 +6,8 @@ from backend.finance import reads as FR
 from backend.finance.store import banking as SK
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, MERCURY, OWNER, FakeMercury, account, act, books, close_month, connect, finance_template, store, sync_once)
+from backend.tests.test_finance_banking import _card_for_eve, _card_use
+from backend.tests.test_finance_banking import _txn as _card_txn
 from backend.tests.test_finance_payments import _checking
 
 LATER = "2026-10-15T12:30:00.000000Z"
@@ -155,3 +157,30 @@ def test_a_refund_of_a_charge_in_a_closed_month_keeps_the_charge_date_in_its_mem
         assert day == "2026-10-05"                               # an open period
         assert "2026-09-20" in memo                              # the charge's own date
         assert _balance(c, "6900") == 0
+
+
+def _card_arrives(fake, raw_id: str, amount: float, day: str) -> None:
+    """A charge or refund on the card Tico issued to eve (Mercury's card-eve), and an event says so."""
+    fake.txns[raw_id] = _card_txn(raw_id, "credit-io", amount, "creditCardTransaction", day=day, cardId="card-eve")
+    fake.events_list.append({"id": f"evt-{raw_id}", "resourceType": "transaction", "resourceId": raw_id,
+                             "operationType": "create", "resourceVersion": 1})
+
+
+def test_a_card_refund_reverses_its_charge_on_the_card_budget_and_gives_the_use_back(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    _, card_id = _card_for_eve(books, fake)
+    sync_once(books, fake)                                       # the card is made at Mercury
+    _card_arrives(fake, "txn-card-buy", -45.0, "2026-10-16")
+    sync_once(books, fake, LATER)
+    with books.read() as c:
+        buy = _fid(c, "txn-card-buy")
+        assert _row(c, "txn-card-buy") == ("posted", True, None)
+        assert _balance(c, "6100") == 4_500                     # the charge lands on the card's budget line
+        assert _card_use(c, card_id, "2026-10") == 4_500
+    _card_arrives(fake, "txn-card-back", 45.0, "2026-10-17")
+    sync_once(books, fake, NEXT_DAY)
+    with books.read() as c:
+        assert _row(c, "txn-card-back") == ("posted", True, buy)
+        assert _balance(c, "6100") == 0                         # the budget line is back to nothing
+        assert _card_use(c, card_id, "2026-10") == 0            # and the card has its use back
