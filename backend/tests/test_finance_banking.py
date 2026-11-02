@@ -688,6 +688,31 @@ def test_an_unfinished_backfill_goes_on_at_once_and_then_polls(books, monkeypatc
         assert len(_opening(c)) == 2
 
 
+def test_a_backfill_ends_when_mercury_keeps_naming_a_next_page(books):
+    """A list whose last page still names a next page that leads back to rows already taken in: the backfill ends
+    there, posts the opening balance, and Sources says the history is done (importing until then)."""
+    fake = FakeMercury()
+    for i in range(3):
+        fake.txns[f"txn-{i}"] = _txn(f"txn-{i}", "acct-chk", -10.0, "wireFee", day=f"2026-09-0{i + 1}")
+    rows = list(fake.txns.values())
+
+    def endless(start_after, limit=500):
+        ids = [str(t["id"]) for t in rows]
+        start = ids.index(start_after) + 1 if start_after in ids else 0
+        chunk = rows[start:start + 2] or rows[-2:]        # past the end: the last page again, never an empty one
+        return fake._answer("transactions", start_after, {"transactions": chunk, "page": {"nextPage": "txn-1"}})
+
+    fake.transactions = endless
+    connect(books, fake)
+    with books.read() as c:
+        assert FR.sources(c, OWNER)["groups"][0]["rows"][0]["sync"]["history"] == "importing"
+    sync_once(books, fake)
+    with books.read() as c:
+        assert json.loads(c.execute("SELECT settings FROM fin_connections").fetchone()[0]).get("backfilled")
+        assert len(_opening(c)) == 2
+        assert FR.sources(c, OWNER)["groups"][0]["rows"][0]["sync"]["history"] == "done"
+
+
 def test_a_closed_month_correction_reconciles_that_month_at_the_new_amount(books):
     """Round 3 #2: Sept posts 100.00, Sept closes, Mercury corrects it to 120.00 (reversal and repost land in
     October): reconciling Sept to 120.00 is done, the original still in Sept's rollup notwithstanding."""
