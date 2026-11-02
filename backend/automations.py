@@ -1215,9 +1215,11 @@ def on_event(c, type_, subject, data, actor):
 
 def _received_task(task, owner):
     """The task as a `task_received` automation hears it, keyed by the names its flow reads. The row's columns are read
-    under this code's names, so a column renamed since the row was read still fills its field."""
-    fields = ("id", "title", "body", "status", "requester", "step_id", "type")
-    return {**{k: task.get(renames.current_column("tasks", k)) for k in fields}, "owner": owner}
+    under this code's names, so a column renamed since the row was read still fills its field. A task made without a type
+    keeps a NULL type_id; hubdb reads that as the general type, so the trigger does too."""
+    fields = ("id", "title", "body", "status", "requester", "step_id")
+    return {**{k: task.get(renames.current_column("tasks", k)) for k in fields},
+            "type_id": task.get("type_id") or H.GENERAL_TYPE, "owner": owner}
 
 
 def on_mail(c, mailbox, message):

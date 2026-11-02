@@ -215,9 +215,9 @@ def request(c, actor, *, source, note=""):
     if actor == H.KEEPER:
         who = "The daily release time came."
     else:
-        who = f"Asked by {H.actor_id(actor)}" + (f": {note}" if note else ".")
+        who = f"Asked by {H.actor_name(c, actor)}" + (f": {note}" if note else ".")
     title = (f"{TITLE}{len(tickets)} ticket{'s' if len(tickets) != 1 else ''} at Pending Release" if tickets
-             else f"{TITLE}requested by {H.actor_id(actor)}")
+             else f"{TITLE}requested by {H.actor_name(c, actor)}")
     body = _task_body(c, tickets, who)
     open_task = _unfinished(c, owner)
     if open_task:

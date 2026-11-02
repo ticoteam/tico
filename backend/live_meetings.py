@@ -26,6 +26,11 @@ from .views import human_only
 EVENT_POLL_SECONDS = 1
 
 
+def bot_name_sql(bot_column):
+    """SQL for a bot's name as people read it (display name, else slug, else the id), for a row LEFT JOINed to `bots b`."""
+    return f"COALESCE(NULLIF(b.display_name,''), b.slug, {bot_column})"
+
+
 class Connect(Contract):
     title: str = Field(default="Live meeting", min_length=1, max_length=200)
     client_id: str | None = Field(default=None, min_length=1, max_length=120,
@@ -203,7 +208,10 @@ def _view(c, auth, who, rid):
     chat = [dict(r) for r in c.execute(
         "SELECT id,actor,role,text,at_ms,transcript_seq,created_at FROM live_meeting_chat WHERE meeting_id=? ORDER BY created_at,id",
         (rid,))]
-    bots = [dict(r) for r in c.execute("SELECT bot,joined_by,joined_at FROM live_meeting_bots WHERE meeting_id=? ORDER BY bot", (rid,))]
+    # `bot` is the bot's id; `name` is what people read for it (display name, else slug), as bot-candidates names it.
+    bots = [dict(r) for r in c.execute(
+        "SELECT m.bot," + bot_name_sql("m.bot") + " AS name,m.joined_by,m.joined_at FROM live_meeting_bots m "
+        "LEFT JOIN bots b ON b.id=m.bot WHERE m.meeting_id=? ORDER BY m.bot", (rid,))]
     humans = []
     for r in c.execute("SELECT actor,joined_at FROM live_meeting_humans WHERE meeting_id=? ORDER BY joined_at,actor", (rid,)):
         person = H.human(c, H.actor_id(r["actor"]))
@@ -221,8 +229,9 @@ def _view(c, auth, who, rid):
     for route in chat_routes:
         route["trace"] = json.loads(route.pop("trace"))
     pending_turns = [dict(r) for r in c.execute(
-        "SELECT id,bot,window_index,source_key,transcript_seq,status,skip_reason,created_at FROM live_meeting_turns "
-        "WHERE meeting_id=? ORDER BY created_at,id", (rid,))]
+        "SELECT t.id,t.bot," + bot_name_sql("t.bot") + " AS name,t.window_index,t.source_key,t.transcript_seq,t.status,t.skip_reason,"
+        "t.created_at FROM live_meeting_turns t LEFT JOIN bots b ON b.id=t.bot "
+        "WHERE t.meeting_id=? ORDER BY t.created_at,t.id", (rid,))]
     bypasses = []
     for event in c.execute("SELECT event_id,created_at,payload FROM live_meeting_events "
                             "WHERE meeting_id=? AND type='meeting.router' ORDER BY event_id", (rid,)):

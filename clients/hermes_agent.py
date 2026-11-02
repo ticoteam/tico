@@ -912,7 +912,7 @@ def cmd_heartbeat(args):
         print(f"Bot {config.get('slug') or config.get('bot', '')} answers again: heartbeat back to every {EVERY_SECONDS} s")
     save_config(args.key, config)
     waiting = reply.get("waiting", {})
-    print(f"{reply.get('server_time', '')} {reply.get('bot', '')}: {waiting.get('messages', 0)} message(s), "
+    print(f"{reply.get('server_time', '')} {config.get('slug') or config.get('bot', '')}: {waiting.get('messages', 0)} message(s), "
           f"{waiting.get('tasks', 0)} task(s) waiting")
     return 0
 
