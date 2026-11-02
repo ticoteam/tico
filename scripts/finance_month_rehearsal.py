@@ -235,7 +235,7 @@ PAST_MONTH = "2026-10"                 # the month this rehearsal closes (today 
 EXPECTED_RULES = ("floor:budget-cutoff-freeze", "rule:new-recipient", "rule:payment-over-1000",
                   "rule:bot-card-single-use-over-200", "rule:bot-card-standing", "rule:bot-books-over-5000",
                   "rule:bot-new-account", "rule:close-reopen-owner")
-BOOKKEEPER_RIGHTS = {"finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards"}
+BOOKKEEPER_RIGHTS = {"finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards", "finance.rules"}
 CARD_VENDORS = ["FIGMA", "SLACK", "OPENROUTER", "ADOBE", "NOTION", "ZOOM", "GITHUB", "LINEAR", "CANVA", "DROPBOX",
                 "ZAPIER", "AWS"]
 
@@ -630,6 +630,8 @@ def run_step4(ctx: Context) -> None:
     vendor = by_field(api.get("finance/contacts", q="REH Vendor Hosting Co"), "name", "REH Vendor Hosting Co")
     rec = api.act("recipient_add", {"name": "REH Vendor Hosting Co", "method": "ach", "contact_id": vendor,
                                     "money_account_id": chk, "email": "ap@vendor.example",
+                                    "address": {"address1": "1 Hosting Way", "city": "Austin", "region": "TX",
+                                                "postalCode": "78701", "country": "US"},
                                     "account_number": "000123456789", "routing_number": "021000021"})
     ctx.check(step, "the vendor's bank details are saved as a recipient", committed(rec), describe(rec))
     recipients = api.get("finance/recipients")
@@ -896,8 +898,26 @@ def run_step8(ctx: Context) -> None:
                                 "statement_balance": statement, "cleared": [r["id"] for r in feed],
                                 "opening_balance": 0})
     ctx.check(step, "October's bank rows reconcile to the statement balance", committed(rec), describe(rec))
+    # The close needs every active money account with October rows reconciled (reads.py _checklist), not only Acme's.
+    others = sorted({account_of(r) for r in feed_all if account_of(r) and account_of(r) != chk})
+    for other in others:
+        rows = [r for r in feed_all if account_of(r) == other and str(r.get("date") or "") <= f"{PAST_MONTH}-31"]
+        if not rows:
+            continue
+        total = sum(int(r.get("amount") or 0) for r in rows)
+        more = api.act("reconcile", {"money_account_id": other, "statement_end": f"{PAST_MONTH}-31",
+                                     "statement_balance": total, "cleared": [r["id"] for r in rows],
+                                     "opening_balance": 0})
+        ctx.check(step, f"October's bank rows for the money account {other[:8]} reconcile to the statement balance",
+                  committed(more), describe(more))
     closed = api.act("close_period", {"month": PAST_MONTH})
-    ctx.check(step, "October closes", committed(closed), describe(closed))
+    behind = []
+    if not committed(closed):
+        checklist = api.get(f"finance/close/{PAST_MONTH}")
+        for item in checklist.get("checks") or []:
+            if item.get("key") == "reconciled":
+                behind = [a.get("name") for a in item.get("accounts") or []]
+    ctx.check(step, "October closes", committed(closed), describe(closed) + (f" | still behind: {behind}" if behind else ""))
     late_entry = {"date": f"{PAST_MONTH}-15", "memo": "REH late entry",
                   "lines": [{"account_id": acct["Software"], "amount": 1000},
                             {"account_id": acct["Revenue"], "amount": -1000}]}
