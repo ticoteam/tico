@@ -49,11 +49,7 @@ def _nice(amount):
 def _near(spent, floors):
     """{period_usd: cap} at about CONTENT["near"] of the longest window with real spend, or None when even the day has
     none (a build just after midnight UTC)."""
-    for name, label, floor in floors:
-        if spent[label] >= floor:
-            break
-    else:
-        name, label = "daily", "day"
+    name, label = next(((name, label) for name, label, floor in floors if spent[label] >= floor), ("daily", "day"))
     if spent[label] <= 0:
         return None
     cap = spent[label] / CONTENT["near"]

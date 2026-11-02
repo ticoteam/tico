@@ -15,7 +15,7 @@
 #   BLE001     131   owner: engineering
 #   DTZ005       2   owner: engineering
 #   DTZ007       2   owner: engineering
-#   DTZ011       6   owner: engineering
+#   DTZ011       5   owner: engineering
 #   F401        30   owner: engineering
 #   F402         1   owner: engineering
 #   F541         6   owner: engineering
@@ -127,7 +127,6 @@
 "backend/stale_review.py" = ["BLE001"]
 "backend/stall_triage.py" = ["B007", "F401", "S110"]
 "backend/step_age.py" = ["F541"]
-"backend/strategy.py" = ["DTZ011"]
 "backend/strategy_setup.py" = ["B018", "BLE001", "DTZ011"]
 "backend/strategy_suggest.py" = ["B023"]
 "backend/support.py" = ["BLE001"]
