@@ -125,7 +125,7 @@ def test_a_long_dm_list_pages_on_its_own_and_a_page_reads_each_list_once(acme):
             threads.sidebar(c, v, limit=2)
         finally:
             c.set_trace_callback(None)
-    assert len([s for s in statements if "ORDER BY place, activity DESC" in s]) == 2
+    assert len([s for s in statements if "ORDER BY rank, activity DESC" in s]) == 2
 
 
 def test_a_cursor_from_one_merged_page_still_reads_and_a_bad_one_is_refused(api):

@@ -1282,6 +1282,11 @@ def _threads(view, rows):
                                  "last_unread_seq": found.get("last_unread_seq") or 0}
         elif kind in ("attention", "unsent"):
             pass        # the reader's needs-you set moved: the client re-reads it, nothing else is sent
+        elif kind == "ranked":
+            # Its Important level moved (backend/thread_rank.py): the list is read again. Not to someone who reads only
+            # a migrated Home's old history, whose row nothing new may move.
+            if threads.legacy_reader_only(view.c, view.reader, found):
+                continue
         elif kind == "capped":
             entry["capped"] = view.c.execute("SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND state='capped'",
                                              (tid,)).fetchone()[0]

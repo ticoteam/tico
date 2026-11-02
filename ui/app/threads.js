@@ -1,4 +1,4 @@
-/* ui/app/threads.js — Threads in the sidebar: Threads (Needs attention, then unread, then recent) and DMs, live from
+/* ui/app/threads.js — Threads in the sidebar: Threads (Needs attention, then Important or Recent) and DMs, live from
    the `threads` topic of GET /api/v2/events. Shared helpers for thread titles, marks and actors live here too; the
    timeline is ui/app/thread-view.js and the Threads page, new thread and Make task are ui/app/threads-page.js.
    Shapes: docs/dev/threads-contract.md §9 and §10.
@@ -10,6 +10,21 @@ const THREADS_ROUTE = '#/threads', THREAD_ROUTE = '#/thread/';
 const THREADS_SIDE_MAX = 10;
 // `on`: null until the server answered GET /v2/threads once; false when it has no threads (an older server).
 const THREADS = {on: null, attention: [], threads: [], dms: [], loading: null, wired: false};
+// The list's order, the viewer's choice kept in this browser: Important (each thread's 1-10 level, then newest, noise
+// left out; the default) or Recent (newest first). GET /v2/threads?sort=.
+const THREADS_SORTS = [['important', 'Important'], ['recent', 'Recent']];
+const THREADS_SORT_KEY = 'tico.threads.sort';
+function threadsSort() {
+  let v = '';
+  try { v = localStorage.getItem(THREADS_SORT_KEY) || ''; } catch { /* storage blocked: the default */ }
+  return THREADS_SORTS.some(([k]) => k === v) ? v : 'important';
+}
+function threadsSortSet(v) {
+  try { localStorage.setItem(THREADS_SORT_KEY, v); } catch { /* storage blocked: this page only */ }
+}
+// Important / Recent, for the Threads page header.
+const threadsSortHTML = cur => `<div class="tabs slim thp-sort" role="tablist" aria-label="Order">${THREADS_SORTS.map(([k, label]) =>
+  `<button type="button" role="tab" data-th-sort="${k}" aria-selected="${k === cur}"${k === cur ? ' class="cur"' : ''}>${label}</button>`).join('')}</div>`;
 
 const threadHref = t => THREAD_ROUTE + encodeURIComponent(typeof t === 'string' ? t : t?.id || '');
 // Other pages link a thread by this (a top-level const is not a window property; the dashboard's cards look for it there).
@@ -30,14 +45,18 @@ function actorAvatar(a, size = 22) {
   if (pid) return personAvatar((S.people || []).find(p => p.id === pid) || {id: pid, name: personDisplay(pid)}, size);
   return personCircle(actorName(a), size);
 }
+// A DM is named by who else is in it ("Chat with BotOps" and "Private … room" titles from before threads read as
+// "BotOps"); any other thread by its title.
 function threadTitle(t) {
   if (!t) return '';
-  if (String(t.title || '').trim()) return String(t.title).trim();
-  if (t.audience === 'home' && t.home?.actor) return actorName(t.home.actor);
   const others = threadOthers(t), total = Number(t.dm_with_count) || others.length;
   // The server's name, for someone in this DM the viewer's people list leaves out.
   const name = a => t.dm_with?.find(m => m.actor === a)?.name || actorName(a);
-  if (others.length) return others.slice(0, 3).map(name).join(', ') + (total > 3 ? ` +${total - 3}` : '');
+  const people = others.length ? others.slice(0, 3).map(name).join(', ') + (total > 3 ? ` +${total - 3}` : '') : '';
+  if (threadIsDm(t) && !t.parent_id && people) return people;
+  if (String(t.title || '').trim()) return String(t.title).trim();
+  if (t.audience === 'home' && t.home?.actor) return actorName(t.home.actor);
+  if (people) return people;
   return t.parent_id ? 'Sub-thread' : threadIsDm(t) ? 'Direct message' : 'Untitled';
 }
 // Where a row opens: its root, or the sub-thread holding what is new (a reply there may be pages up the root's timeline).
@@ -55,10 +74,13 @@ const threadUnread = t => Number(t?.me?.unread) || 0;
 const threadActivity = t => !threadUnread(t) && !!t?.me?.activity;
 // A root row speaks for its sub-threads: the newest message anywhere under it.
 const threadSeq = t => Number(t?.activity_seq ?? t?.last_seq) || 0;
-// Unread first, then the most recent; a thread already listed above is left out.
-function threadsOrder(list, skip = new Set()) {
+// A row's level; one the server has not ranked (a thread that just arrived on the stream) reads as the middle.
+const threadImportance = t => Number(t?.importance ?? 5);
+// The server's order kept as rows change live: Important by level, then the most recent; Recent by the most recent. A
+// thread already listed above is left out.
+function threadsOrder(list, skip = new Set(), sort = threadsSort()) {
   return list.filter(t => t && !skip.has(t.id) && !t.archived_at)
-    .sort((a, b) => (threadUnread(b) > 0) - (threadUnread(a) > 0) || threadSeq(b) - threadSeq(a));
+    .sort((a, b) => (sort === 'important' ? threadImportance(b) - threadImportance(a) : 0) || threadSeq(b) - threadSeq(a));
 }
 function threadRowHTML(t, {attention = false} = {}) {
   const n = threadUnread(t), cur = S.route === threadHref(t) || S.route.startsWith(threadHref(t) + '?');
@@ -71,10 +93,14 @@ function threadRowHTML(t, {attention = false} = {}) {
 
 // ----------------------------------------------------------------- loading and the sidebar
 async function threadsLoad() {
-  if (THREADS.loading) return THREADS.loading;
+  const sort = threadsSort();
+  // A read still out for the other order is followed by one for this order, not taken for it.
+  if (THREADS.loading) return THREADS.loadingSort === sort ? THREADS.loading : THREADS.loading.then(() => threadsLoad());
+  THREADS.loadingSort = sort;
   THREADS.loading = (async () => {
     try {
-      const r = await get('/v2/threads?limit=50', {fresh: true});
+      const r = await get('/v2/threads?limit=50&sort=' + sort, {fresh: true});
+      if (sort !== threadsSort()) return;     // the order changed meanwhile: read again below, this answer is dropped
       // Only a real list turns Threads on; any other answer is a server without them.
       if (!Array.isArray(r?.threads)) { if (THREADS.on !== true) THREADS.on = false; return; }
       Object.assign(THREADS, {on: true, attention: r.attention || [], threads: r.threads, dms: r.dms || []});
@@ -85,7 +111,8 @@ async function threadsLoad() {
     } finally { THREADS.loading = null; }
     threadsSideRender();
   })();
-  return THREADS.loading;
+  const loading = THREADS.loading;
+  return loading.then(() => sort !== threadsSort() ? threadsLoad() : undefined);
 }
 function threadsSideRender() {
   const on = THREADS.on === true;

@@ -182,6 +182,16 @@ class MemoryTidyPassRow(TypedDict):
     cost_usd: float
 
 
+class ThreadRankingRow(TypedDict):
+    """A root thread's Important level (backend/thread_rank.py); `score` is None until a call answers."""
+    thread_id: str
+    score: int | None
+    ranked_seq: int
+    tried_at: str
+    created_at: str
+    updated_at: str
+
+
 class MemoryTidyPacketRow(TypedDict):
     """Trusted runner custody for one editing and verification attempt."""
     attempt_id: str

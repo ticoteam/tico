@@ -25,6 +25,8 @@
 .threads-head .spacer{flex:1}
 .thp-search .nav-icon{color:inherit}
 .thp-filter{margin:0 0 var(--s3)}
+.threads-head .tabs.thp-sort{margin:0 0 0 var(--s2);flex-wrap:nowrap}
+.thp-sort button{white-space:nowrap}
 .thp-sec{margin:0 0 var(--s4)}
 .thp-sec h2{margin:0 0 var(--s1);padding:0 10px;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase}
 .thp-list .th-row{padding:8px 10px}
@@ -201,6 +203,10 @@ a.th-who:hover{text-decoration:underline}
   .th-fold{padding-left:calc(4px + var(--d) * 16px)}
   .th-reply{padding-left:calc(4px + var(--d) * 16px)}
   .threads-head h1{font-size:var(--t-lg)}
+  /* Important / Recent on a row of its own under the title and actions */
+  .threads-head{flex-wrap:wrap}
+  .threads-head .tabs.thp-sort{order:1;flex:0 0 100%;margin:0}
+  .thp-list .th-row{padding:11px 10px}
 }
 
 /* calls: Start call / Join in the header, and the bar while in a call */
