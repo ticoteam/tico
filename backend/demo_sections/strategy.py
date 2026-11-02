@@ -1,8 +1,9 @@
 """Strategy: the vision, three bets and a market briefing.
 
-Version 1 is published a few days before version 2, which adds a third bet and a new summary, so the history has a
-change to show. The Strategy Bot's one pending proposal sharpens a bet's wrong-if, and this week's briefing is the
-Librarian's. Every row goes through the API as Ana, or through the domain function a real install runs.
+Version 1 is the home business: two bets and the sections for homeowners. Version 2 is published a few days later and
+adds the business bet, a new summary and the business sections, so the history has a change to show. The Strategy
+Bot's one pending proposal is a bet the team has not written down yet, from this week's briefing, and this week's
+briefing is the Librarian's. Every row goes through the API as Ana, or through the domain function a real install runs.
 """
 
 from datetime import timedelta
@@ -14,126 +15,157 @@ from .. import strategy_bot
 from ..auth import Identity
 
 CONTENT = {
-    "vision": "Every short-term rental host runs their homes from one calendar and one inbox, with cleaners and repairs "
-              "sorted before the guest asks.",
-    "summary_v1": "Acme runs cleanings, repairs and guest messages for 400 short-term rental hosts, on its own booking "
-                  "software. Hosts with several listings are the market, and guest messaging is how we reach them.",
-    "summary_v2": "Acme runs cleanings, repairs and guest messages for 400 short-term rental hosts, on its own booking "
-                  "software. Hosts with several listings are the market. Guest messaging brings them in, cleanings "
-                  "follow, and our booking software keeps one calendar for all their channels.",
+    "vision": "Any building can be a light show, set up in ten minutes.",
+    "summary_v1": "Acme Lights sells holiday projectors that turn a home's facade into a light show. Home Starter and "
+                  "Home Pro are aimed and calibrated in one pass with our app, and the Scene Library adds new shows each "
+                  "season. Homes are the volume and the brand.",
+    "summary_v2": "Acme Lights sells holiday projectors that turn a building's facade into a light show. Homes are the "
+                  "volume and the brand, with the Scene Library for new shows each season. Business installs are the "
+                  "margin: storefronts, hotels, towns and HOAs, with a survey, a partner crew and a yearly scene license.",
     "sections": {
-        "serve": "Hosts with five or more short-term rentals. They clean every week, track it in a spreadsheet and text "
-                 "a cleaning company by hand. Today they do it themselves on weekends.\n\n"
-                 "We turned down single-listing hosts. They book a cleaner a few times a year and leave when the season "
-                 "ends.",
-        "sell": "Guest messaging and our booking software, billed per listing each month. Cleanings and repairs are "
-                "dispatched through Acme and billed per visit.\n\n"
-                "The price that breaks: a per-listing fee above what a host pays a cleaner for one turnaround a month "
-                "sends multi-listing hosts back to a spreadsheet. Halving it gives away the margin our cleaners need.",
-        "know": "A cleaning turnaround is a booking problem, not a cleaning problem. A checkout, a cleaner and the next "
-                "check-in land in the same few hours, and the messages between guests and cleaners are where that "
-                "gets lost. We see the thread, so we can move the cleaning before the guest asks. Most competitors "
-                "sell a calendar or a cleaner. Few sell both in one place.",
-        "how": "Self-serve sign-up for a single host. An account manager for hosts with five or more listings, who "
-               "walks them through one calendar across every channel on the first call.\n\n"
-               "Local partners who already visit hosts' homes, such as key-box and laundry companies, refer them for a "
-               "referral fee. Two weeks free on the multi-listing plan.",
-        "not": "- We won't sell a sales call to a single-listing host.\n"
-               "- We won't resell another company's channel manager or calendar.\n"
-               "- We won't take a cleaning booking that no cleaner can do on the day.\n"
-               "- We won't cut the per-listing price for a year to win a host.",
+        "serve": "Homeowners who want the house to be the light show on the street, set up themselves over one weekend.\n\n"
+                 "We do not sell to a house with no outdoor power on the wall the projector faces. That is a job for an "
+                 "electrician first.",
+        "sell": "Home Starter at $299 for one unit, and Home Pro at $449 for two. Both kits are sold on their own.\n\n"
+                "The Scene Library is sold on top: $4.99 a month, or $29 for a season.\n\n"
+                "The price that breaks: a kit that needs a second visit to calibrate costs us a return and a trip. A "
+                "lower price does not fix that, so we fix the calibration first.",
+        "know": "A projector is only as good as its first night. A scene that lands crooked gets the kit returned, and "
+                "the owner never buys a second scene. Calibration decides both, and it is where other kits ask for a "
+                "second visit or a manual setup. We map the facade in one pass, so the first night is the one people keep.",
+        "how": "Our online store, the bigmarket.example marketplace and homeworks.example retail shelves. Creators and "
+               "social posts bring the first look, and email brings the renewal.\n\n"
+               "Only our store sells the Scene Library, so the store is where we see the customer and offer the renewal.",
+        "not": "- We won't sell a kit that needs a second calibration visit to be right.\n"
+               "- We won't put the Scene Library on a marketplace or a shelf.\n"
+               "- We won't cut the kit price below a retail partner's shelf price.\n"
+               "- We won't ship a scene that has not run on a real facade.",
     },
-    "notes": {"v1": "First strategy: two bets from the setup answers.",
-              "v2": "Booking software is a bet now; the summary names the calendar."},
+    # Version 2 changes these four sections for the business branch; "know" stays as it was.
+    "sections_v2": {
+        "serve": "Homeowners who want the house to be the light show on the street, set up themselves over one weekend.\n\n"
+                 "Shops and hotels that want a storefront or a lobby lit for the season. Towns and HOAs that want a street "
+                 "or a facade done once, after a survey. Business sites renew their scene license each year.\n\n"
+                 "We do not sell to a house with no outdoor power on the wall the projector faces. That is a job for an "
+                 "electrician first.",
+        "sell": "Home Starter at $299 for one unit, and Home Pro at $449 for two. The Scene Library is sold on top: $4.99 "
+                "a month, or $29 for a season.\n\n"
+                "Storefront at $1,200 with a yearly scene license, for shops and hotels. Facade is a per-site quote after "
+                "a survey, with a partner crew, for malls, towns and HOAs. Renewals are the yearly license and the next "
+                "season's scene set.\n\n"
+                "The price that breaks: a facade quote below the crew's cost loses money on every site. We quote from the "
+                "survey, not from the size of the wall.",
+        "how": "Home kits go through the store, the marketplace and retail, as before.\n\n"
+               "Business goes through direct sales for shops, hotels and towns, and through installer and event partners "
+               "who run the survey and the crew. Towns and HOAs put their holiday contracts out to public bid, and we bid "
+               "when the scope is clear. The account owner sells renewals.",
+        "not": "- We won't sell a Storefront or Facade job to a site we have not surveyed.\n"
+               "- We won't quote a facade below the crew's cost to win a town.\n"
+               "- We won't put the Scene Library on a marketplace or a shelf.\n"
+               "- We won't cut the kit price below a retail partner's shelf price.",
+    },
+    "notes": {"v1": "First strategy: two home bets from the setup answers.",
+              "v2": "Business installs are a bet now; the summary and the sections name them."},
     # Goals are read from the core seed by owner: the company's top goal, support's and sales' goals.
     "bets": [
-        {"key": "market", "rank": 0, "goal": "company", "version": 1,
-         "statement": "Hosts with 5 or more listings are our market; single-listing hosts churn.",
-         "why": "Hosts with five or more listings run cleanings every week, so a missed turnaround costs them money and "
-                "they keep paying us. Single-listing hosts book a cleaner a few times a year. Most of our cancellations "
-                "come from them.",
-         "rules_out": "A free plan for single-listing hosts, and a sales call for any host with fewer than five listings.",
-         "wrong_if": "Single-listing hosts churn at or below the rate of five-listing hosts for two quarters running.",
-         "check_days": 180},
-        {"key": "wedge", "rank": 1, "goal": "support", "version": 1,
-         "statement": "Guest messaging is the wedge; cleanings follow.",
-         "why": "Hosts open the guest inbox every day, so it is the first thing they let us run. Once a thread shows a "
-                "checkout and a check-in on the same day, the cleaning is one tap away. Cleanings sold alone, without "
-                "messaging, did not stick.",
-         "rules_out": "Selling cleanings alone, and a messaging tool with no calendar behind it.",
-         "wrong_if": "Hosts who use guest messaging do not start booking cleanings with us.",
-         "check_days": 90},
-        {"key": "calendar", "rank": 2, "goal": "sales", "version": 2,
-         "statement": "Our own booking software replaces the channel calendar for hosts with 5 or more listings.",
-         "why": "Multi-listing hosts keep one calendar per booking channel and double-book when a stay changes. Our "
-                "booking software holds one calendar and tells the cleaner the same hour. No channel manager sells that "
-                "with a cleaning attached.",
-         "rules_out": "Reselling another company's channel manager, and building for hosts with a single channel.",
-         "wrong_if": "Hosts who move to our booking software still double-book more than once a month after 60 days.",
-         "check_days": 150},
+        {"key": "calibration", "rank": 0, "goal": "support", "version": 1,
+         "statement": "Calibration that works first try is the product; everything else follows.",
+         "why": "A homeowner gives the kit one night. If the scene lands crooked, the kit goes back, and a second visit "
+                "costs us more than the sale. A kit that maps the facade in one pass is what earns the review and the "
+                "next season's scene set. The Scene Library and the bigger kits sell to people who had a good first night.",
+         "rules_out": "A kit that needs a second visit to calibrate, and a Scene Library launch before first-night "
+                      "calibration is reliable.",
+         "wrong_if": "Homes that needed a second calibration renew the Scene Library no less often than homes that got it "
+                     "right the first time, over two seasons.",
+         "check_days": 240},
+        {"key": "business", "rank": 1, "goal": "sales", "version": 2,
+         "statement": "Business installs are the margin; homes are the volume and the brand.",
+         "why": "One storefront or facade job is worth many home kits, and business sites renew their scene license every "
+                "year. Our direct sales team and installer partners can run the survey and the crew, so each site adds "
+                "margin without a new team.",
+         "rules_out": "A quote for a facade we have not surveyed, and a storefront with no yearly scene license attached.",
+         "wrong_if": "Business sites renew their scene license at less than one in two after the first season, over two "
+                     "seasons running.",
+         "check_days": 300},
+        {"key": "marketplace", "rank": 2, "goal": "company", "version": 1,
+         "statement": "Marketplace and retail for reach; our own store for the Scene Library subscription.",
+         "why": "Most first-time buyers find a projector on a marketplace or on a shelf, not on our site, so those channels "
+                "bring the volume. The subscription is sold only on our store, where we see the customer and can offer the "
+                "renewal. The store is where the margin is.",
+         "rules_out": "Selling the Scene Library through a marketplace or a retailer, and a marketplace price below the "
+                      "shelf price our retail partners pay.",
+         "wrong_if": "Marketplace buyers subscribe to the Scene Library at least as often as store buyers, after one season.",
+         "check_days": 210},
     ],
-    # The Strategy Bot's proposal after the briefing: a number for bet 2's wrong-if. Waiting for Ana.
+    # The Strategy Bot's proposal after the briefing: a bet the team has not written down yet. Waiting for Ana.
     "proposal": {
-        "wrong_if": "Fewer than one in three hosts who message through us book a cleaning within 60 days of their first "
-                    "message.",
-        "check_days": 120,
-        "reason": "This week's briefing: a booking-channel vendor made guest messaging free on its base plan. Bet 2 "
-                  "still holds, but its wrong-if has no number. Proposed one.",
+        "statement": "Public bids from towns and HOAs are a motion of their own, with a survey and a fixed date.",
+        "why": "A public bid has a published scope and a deadline, so our survey and crew can price it in a week. A town "
+               "that renews gives us the next contract without a campaign.",
+        "rules_out": "Bidding on a scope we cannot survey before the deadline, and a bid below the crew's cost.",
+        "wrong_if": "Fewer than three public bids for holiday lights come up in our market in a season, for two seasons.",
+        "check_days": 180,
+        "reason": "This week's briefing: two towns put their holiday light contracts out to public bid. Bids have a fixed "
+                  "scope and a date, which fits our survey and crew. Proposed a bet for them.",
     },
     # Published briefing for this week, by the Librarian.
     "briefing": {
-        "title": "Rental market this week",
+        "title": "Holiday projector market this week",
         "items": [
-            ("change", "A booking-channel vendor made guest messaging free on its base plan."),
-            ("theme", "Five support tickets this week asked for one calendar across channels."),
-            ("signal", "Two multi-listing hosts moved a channel after a double booking."),
+            ("change", "Glimmerco cut its two-unit kit to $399 on the bigmarket.example marketplace, $50 under Home Pro."),
+            ("theme", "Calibration came up in seven of this week's twelve support tickets, most asking for a second try."),
+            ("signal", "Two towns put their holiday light contracts out to public bid, with the scope and the deadline "
+                       "published."),
         ],
-        "body": "# Rental market this week\n\n"
-                "Guest messaging just got cheaper for hosts. Our bets still hold, with one change proposed.\n\n"
+        "body": "# Holiday projector market this week\n\n"
+                "Two things moved: a competitor priced against our two-unit kit, and towns started buying through public "
+                "bid. Our bets still hold, with one proposal for Ana to decide.\n\n"
                 "## What moved\n\n"
-                "- A booking-channel vendor made guest messaging free on its base plan. Some hosts on our plan may ask "
-                "why they pay us.\n"
-                "- Five support tickets asked for one calendar across channels. Most came from hosts with five or more "
-                "listings.\n"
-                "- Two multi-listing hosts moved a channel after a double booking.\n\n"
+                "- Glimmerco (glimmerco.example) cut its two-unit kit to $399 on bigmarket.example, $50 under Home Pro.\n"
+                "- Frostlamp (frostlamp.example) added a visit from a partner crew to its Storefront kit.\n"
+                "- Calibration came up in seven of this week's twelve support tickets. Most asked for a second try on the "
+                "first night.\n"
+                "- Two towns put their holiday light contracts out to public bid, with the scope and the deadline "
+                "published.\n\n"
                 "## What it means for our bets\n\n"
-                "- **Guest messaging is the wedge.** Still right, but free messaging makes it easier to copy. The "
-                "Strategy Bot proposed a number for its wrong-if, for Ana to decide.\n"
-                "- **Our booking software.** The calendar tickets point at bet 3, which is active now.\n\n"
+                "- **Calibration that works first try.** The support tickets point here. The second-visit tickets are how "
+                "we will know whether the bet holds.\n"
+                "- **Business installs.** The two towns are the first public bids this season. The Strategy Bot proposed "
+                "a bet for them, for Ana to decide.\n"
+                "- **Marketplace and retail.** Glimmerco's price cut is on the marketplace, so the price gap there is the "
+                "risk. The bet says only our store sells the subscription, and that still holds.\n\n"
                 "## Not known yet\n\n"
-                "- Whether free messaging changes how many hosts book a cleaning with us.\n",
+                "- Whether Glimmerco's price cut moves our share of kit sales on bigmarket.example.\n"
+                "- Whether the towns' bids stay open to a regional crew, or go to one contractor.\n",
     },
     # Days ago, most first: when each step happened.
-    "days": {"setup": 5.7, "version_1": 5.5, "bet_3": 2.4, "version_2": 2.2, "briefing": 0.3, "proposal": 0.2},
+    "days": {"setup": 5.7, "version_1": 5.5, "business": 2.4, "version_2": 2.2, "briefing": 0.3, "proposal": 0.2},
 }
 
 
 def seed(b):
     goals = _goals(b)
     days = CONTENT["days"]
-    bets = {}
     b.at(days=days["setup"])
     _draft(b, summary=CONTENT["summary_v1"], vision=CONTENT["vision"], sections=CONTENT["sections"])
     for spec in CONTENT["bets"]:
         if spec["version"] == 1:
-            bets[spec["key"]] = _bet(b, spec)
-            _link(b, goals, spec, bets[spec["key"]])
+            _link(b, goals, spec, _bet(b, spec))
     b.at(days=days["version_1"])
     _publish(b, CONTENT["notes"]["v1"])
 
-    b.at(days=days["bet_3"])
+    b.at(days=days["business"])
     for spec in CONTENT["bets"]:
         if spec["version"] == 2:
-            bets[spec["key"]] = _bet(b, spec)
-            _link(b, goals, spec, bets[spec["key"]])
+            _link(b, goals, spec, _bet(b, spec))
     b.at(days=days["version_2"])
-    _draft(b, summary=CONTENT["summary_v2"])
+    _draft(b, summary=CONTENT["summary_v2"], sections=CONTENT["sections_v2"])
     _publish(b, CONTENT["notes"]["v2"])
 
     b.at(days=days["briefing"])
     _briefing(b)
     b.at(days=days["proposal"])
-    _proposal(b, bets["wedge"])
+    _proposal(b)
 
 
 def _goals(b):
@@ -187,11 +219,14 @@ def _briefing(b):
     b.write(work)
 
 
-def _proposal(b, bet_id):
-    """The Strategy Bot's proposal to sharpen a bet's wrong-if. The owner confirms or rejects it; nothing is published."""
-    wrong = {"kind": "text", "text": CONTENT["proposal"]["wrong_if"], "check_by": _day(b, CONTENT["proposal"]["check_days"])}
-    payload = {"bets": [{"id": bet_id, "wrong_if": wrong}]}
+def _proposal(b):
+    """The Strategy Bot's proposal: a new bet, from this week's briefing, in the proposed status. The owner confirms or
+    rejects it; nothing is published."""
+    spec = CONTENT["proposal"]
+    bet = {"statement": spec["statement"], "why": spec["why"], "rules_out": spec["rules_out"], "status": "proposed",
+           "wrong_if": {"kind": "text", "text": spec["wrong_if"], "check_by": _day(b, spec["check_days"])}}
+    payload = {"bets": [bet], "source": "briefing"}
 
     def work(c):
-        G.propose(c, "bot:" + strategy_bot.SLUG, "strategy_draft", payload=payload, reason=CONTENT["proposal"]["reason"])
+        G.propose(c, "bot:" + strategy_bot.SLUG, "strategy_draft", payload=payload, reason=spec["reason"])
     b.write(work)

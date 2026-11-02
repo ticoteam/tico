@@ -47,9 +47,10 @@ def test_an_earlier_version_and_a_diff_show_the_change(built):
         versions = api.get("/api/v2/strategy/versions").json()
         diff = api.get("/api/v2/strategy/diff?from=1&to=2").json()
     assert [v["n"] for v in versions] == [2, 1]
-    assert [field["key"] for field in diff["fields"]] == ["summary"]
+    assert [field["key"] for field in diff["fields"]] == [
+        "summary", "sections.serve", "sections.sell", "sections.how", "sections.not"]
     assert [bet["statement"] for bet in diff["bets"]["added"]] == [
-        "Our own booking software replaces the channel calendar for hosts with 5 or more listings."]
+        "Business installs are the margin; homes are the volume and the brand."]
 
 
 def test_bets_serve_the_goals_the_core_seed_made(built):
@@ -66,12 +67,17 @@ def test_the_strategy_bot_proposal_waits_for_the_owner(built):
     with signed_in(built) as api:
         strategy = api.get("/api/v2/strategy").json()
         pending = api.get("/api/v2/goal-proposals?status=pending").json()["proposals"]
-    wedge = next(bet for bet in strategy["bets"] if bet["statement"] == "Guest messaging is the wedge; cleanings follow.")
     assert len(pending) == 1
     proposal = pending[0]
     assert proposal["kind"] == "strategy_draft"
     assert proposal["proposed_by"] == "bot:goal-manager"
-    assert proposal["payload"]["bets"][0]["id"] == wedge["id"]
+    assert proposal["payload"]["source"] == "briefing"
+    bet = proposal["payload"]["bets"][0]
+    assert "id" not in bet and bet["status"] == "proposed"
+    assert bet["statement"] == ("Public bids from towns and HOAs are a motion of their own, with a survey and a fixed "
+                                "date.")
+    assert bet["wrong_if"]["kind"] == "text" and bet["wrong_if"]["check_by"] > NOW.date().isoformat()
+    assert not [b for b in strategy["bets"] if b["status"] == "proposed"]      # nothing is written until the owner confirms
 
 
 def test_this_weeks_briefing_is_posted_by_the_librarian(built):
