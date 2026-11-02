@@ -1,6 +1,7 @@
 """Spreadsheet history as raw totals (spec §4.1): each month posts balanced against Opening balance equity and the
 reads show it, the same file posts nothing twice, an unmapped line is refused and named, a closed month waits for the
 owner, a bot's import waits for the owner's approval, and reversed months post the file again once all are reversed."""
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from backend.finance.core import raw_totals as RT
 from backend.finance.core.errors import CONFLICT, DENIED, INVALID, PERIOD_CLOSED, FinanceError
 from backend.finance.core.ledger import name_key
 from backend.finance.raw_totals import OUTSIDE
+from backend.finance.store import schema as SCH
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
 
@@ -454,3 +456,49 @@ def test_the_first_reconcile_to_the_latest_raw_month_end_is_done_with_no_differe
                                            "statement_balance": held + 40_000})
         assert (done.result["status"], done.result["difference"], done.result["book_difference"]) == ("done", 0, 0)
         assert line == held, (line, held)
+
+
+def test_migration_78_widens_the_feed_status_keeps_its_rows_and_runs_twice(books):
+    """Migration 78 on an install whose fin_feed_txns predates the covered status (its CHECK has no 'covered'): the
+    rebuild keeps every row and its entry_line_id, the table's triggers come back, 'covered' is accepted afterwards, and
+    a second run changes nothing. Other statuses stay refused."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        money = c.execute("SELECT id FROM fin_money_accounts ORDER BY id LIMIT 1").fetchone()[0]
+
+        def triggers() -> list[str]:
+            return sorted(r[0] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='fin_feed_txns'"))
+
+        def sql() -> str:
+            return str(c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='fin_feed_txns'").fetchone()[0])
+
+        def state() -> list[tuple]:
+            return c.execute("SELECT id, status, amount, entry_line_id FROM fin_feed_txns ORDER BY id").fetchall()
+
+        before_triggers = triggers()
+        # The table as migration 77 left it: the same columns, and a status CHECK without 'covered'.
+        current = sql()
+        c.execute("DROP TABLE fin_feed_txns")
+        c.execute(current.replace("'ignored','covered'", "'ignored'"))
+        assert "'covered'" not in sql() and "entry_line_id" in sql()
+        c.executemany("INSERT INTO fin_feed_txns(id, money_account_id, provider_id, txn_date, amount, currency, status, "
+                      "created_at, created_by, entry_line_id) VALUES(?,?,?,?,?,?,?,'2026-02-10T00:00:00Z','bot',?)",
+                      [("f1", money, "p1", "2026-02-10", -1_500, "USD", "posted", "L1"),
+                       ("f2", money, "p2", "2026-02-11", 900, "USD", "new", None)])
+        rows = state()
+
+        SCH.covered_history(c)
+        assert state() == rows
+        assert "entry_line_id" in [r[1] for r in c.execute("PRAGMA table_info(fin_feed_txns)")]
+        assert triggers() == before_triggers
+        with pytest.raises(sqlite3.IntegrityError):
+            c.execute("UPDATE fin_feed_txns SET status='bogus' WHERE id='f2'")
+        c.execute("UPDATE fin_feed_txns SET status='covered' WHERE id='f2'")
+        rows = state()
+        table = sql()
+
+        SCH.covered_history(c)
+        assert state() == rows and sql() == table
+        assert triggers() == before_triggers
