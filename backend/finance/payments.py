@@ -794,7 +794,8 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         at = dates.day(ctx.today)
         chain = B.chain(ctx.budgets(), str(hold["budget_id"]))
         for b in chain:
-            s = budgeting.state(ctx, b.id, at)       # its own hold is already in `held`: counted once
+            # Remaining decides (reserves included, §4.4): its own hold is already in `held`, so it is counted once.
+            s = budgeting.state(ctx, b.id, at)
             if s.amount is None or s.remaining is None or s.remaining >= 0 or b.at_limit == "warn":
                 continue
             if b.at_limit == "decline":
