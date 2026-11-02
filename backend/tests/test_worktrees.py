@@ -825,7 +825,7 @@ def test_a_computer_reads_the_status_only_of_tasks_it_ran_that_bots_session_for(
     response = post(api, path, asked, 'runner-test')
     assert response.status_code == 200, response.text
     # Another bot's lane, another computer's turn and an unknown task are left out, not refused.
-    assert response.json() == {'sessions': [{'bot_id': 'cmo', 'task': tid, 'status': 'done'}]}
+    assert response.json() == {'sessions': [{'bot': 'cmo', 'task': tid, 'status': 'done'}]}
     assert post(api, path, asked, 'bot-test').status_code == 403
     assert post(api, path, {'sessions': [{'bot': 'cmo', 'task': tid}] * 501}, 'runner-test').status_code == 422
 
