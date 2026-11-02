@@ -232,7 +232,13 @@ function finDialog(title, body, saveLabel, onSave) {
   dlg.onclose = () => dlg.remove();
   const form = dlg.querySelector('form'), err = dlg.querySelector('[data-error]'), save = dlg.querySelector('[type=submit]');
   // While a save runs the button says so (a Mercury connect tests the token and maps accounts, which takes seconds).
-  const busy = on => { save.disabled = on; save.setAttribute('aria-busy', on ? 'true' : 'false'); save.textContent = on ? `${saveLabel}…` : saveLabel; };
+  // A save that relabels the button (Preview → Import, Send, Done) keeps its label: only the busy text is put back.
+  let idle = '';
+  const busy = on => {
+    save.disabled = on; save.setAttribute('aria-busy', on ? 'true' : 'false');
+    if (on) { idle = save.textContent; save.textContent = `${idle}…`; }
+    else if (save.textContent === `${idle}…`) save.textContent = idle;
+  };
   form.onsubmit = async ev => {
     ev.preventDefault(); err.hidden = true; busy(true);
     try { if (await onSave(form) === false) busy(false); else dlg.close(); }
