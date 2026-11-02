@@ -659,3 +659,7 @@ def test_a_bad_debt_item_that_is_inactive_is_found_and_not_made_a_second_time():
     wire = Wire(QC.Reply(200, {"QueryResponse": {}}), QC.Reply(200, {"Item": {"Id": "99", "SyncToken": "0"}}))
     assert _client(wire)._write_off_item("Account:12", "creditmemo:key") == "99"
     assert "Active IN (true,false)" in urllib.parse.unquote_plus(wire.sent[0][1])
+
+
+def test_a_change_feed_read_from_scratch_starts_inside_quickbooks_thirty_days_not_on_its_edge():
+    assert M.cdc_since(None, "2026-10-30T12:00:00Z") == "2026-10-01T12:00:00Z"
