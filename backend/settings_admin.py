@@ -252,7 +252,7 @@ class SettingsAdmin:
                 "shared_from": shared_bots.source_of(_json(config["config"], {})),
                 "temp": bool((_json(config["config"], {}) or {}).get("temp")),
                 "operator": config["operator"], "revision": config["revision"],
-                "model": effective.get("model") or row["model"], "runtime": effective.get("runtime") or row["runtime"],
+                "model": effective.get("model") or "", "runtime": effective.get("runtime") or "",
                 "effort": effective.get("reasoning_effort") or row["effort"],
                 "compact_at": compact_at(effective),
                 # The bot's own, never its original's: a branch's queue is its own (backend/wake_presets.py).
@@ -270,7 +270,7 @@ class SettingsAdmin:
                 "capture_stream": (_json(config["config"], {}) or {}).get("capture_stream"),
                 "update_subscriptions": update_feeds.chosen(_json(config["config"], {}) or {}),
                 "update_feeds": update_feeds.status(),
-                "harness": resolve_harness(effective, effective.get("runtime") or row.get("runtime")),
+                "harness": resolve_harness(effective, effective.get("runtime")),
                 "fallback": normalize_fallback(effective.get("fallback")),
                 "app_delivery": app_delivery.view(c, _json(config["config"], {}) or {})}
 
@@ -327,7 +327,7 @@ class SettingsAdmin:
             return
         effort = self._effort(choice, None, config.get("reasoning_effort"))
         config.update(model=model, reasoning_effort=effort)
-        c.execute("UPDATE bots SET model=?,effort=? WHERE id=?", (model, effort, slug))
+        c.execute("UPDATE bots SET effort=? WHERE id=?", (effort, slug))
         c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(config), slug))
 
     def pick_slug(self, c, name, fallback="bot"):
@@ -496,10 +496,8 @@ class SettingsAdmin:
                 config.update(self.template_repo_defaults(body.template))
         team = self._team(c, bot_id, config)
         now = H.now()
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES(?,?,?,?,?,?,'','keeper',?,?)",
-                  (bot_id, body.slug, body.display_name, runtime_of(harness) or choice["runtime"],
-                   choice["id"], effort, body.status, now))
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) VALUES(?,?,?,?,?,?)",
+                  (bot_id, body.slug, body.display_name, effort, body.status, now))
         c.execute(
             "INSERT INTO bot_config(bot,config,team,operator,owner_ids,description,reports_to,"
             "repo,thread_mode,definition_updated_at,definition_updated_by,bot_owners,created_by) "
@@ -875,8 +873,8 @@ class SettingsAdmin:
             return BA.owner_ids(config["bot_owners"])
         if field == "model":
             declared, row = _json(config["config"], {}), H.bot(c, bot)
-            runtime = declared.get("runtime") or row.get("runtime") or ""
-            return {"model": declared.get("model") or row.get("model") or "",
+            runtime = declared.get("runtime") or ""
+            return {"model": declared.get("model") or "",
                     "runtime": runtime, "harness": resolve_harness(declared, runtime),
                     "effort": declared.get("reasoning_effort") or row.get("effort") or ""}
         if field == report_managers.LIFECYCLE:
@@ -1059,8 +1057,7 @@ class SettingsAdmin:
                                  "reasoning_effort": target["effort"],
                                  "model_managed_by": "cloud"})
                 c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
-                c.execute("UPDATE bots SET model=?,runtime=?,effort=? WHERE id=?",
-                          (target["model"], target["runtime"], target["effort"], bot))
+                c.execute("UPDATE bots SET effort=? WHERE id=?", (target["effort"], bot))
                 from .model_login import hold_removals
                 hold_removals(c, self.settings)
                 # The limit was the old model's: the new one starts on the queued work now, unless it waits on the

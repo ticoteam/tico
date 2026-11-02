@@ -91,7 +91,7 @@ def test_confirmed_pilot_defaults_use_exact_slugs_low_effort_and_preserve_everyd
     store = api.app.state.store
     with store.transaction() as c:
         for p in tidy.DEFAULT_PILOTS:
-            c.execute("INSERT INTO bots(id,slug,model,effort) VALUES(?,?,?,?)", ('id-' + p['bot'], p['bot'], 'claude-haiku-5-5', 'high'))
+            c.execute("INSERT INTO bots(id,slug,effort) VALUES(?,?,?)", ('id-' + p['bot'], p['bot'], 'high'))
             c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,?,'ana')", ('id-' + p['bot'], json.dumps(
                 {'model': 'claude-haiku-5-5', 'task_model': {'model': 'gpt-6-luna'}})))
         before = [tuple(r) for r in c.execute("SELECT bot,config FROM bot_config ORDER BY bot")]
@@ -101,7 +101,8 @@ def test_confirmed_pilot_defaults_use_exact_slugs_low_effort_and_preserve_everyd
     assert put(api, PATH, {'pilots': tidy.DEFAULT_PILOTS})['job']['pilots'] == by_id
     with store.read() as c:
         assert [tuple(r) for r in c.execute("SELECT bot,config FROM bot_config ORDER BY bot")] == before
-        assert c.execute("SELECT model,effort FROM bots WHERE slug='botops'").fetchone()[:] == ('claude-haiku-5-5', 'high')
+        assert c.execute("SELECT effort FROM bots WHERE slug='botops'").fetchone()[0] == 'high'
+        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='id-botops'").fetchone()[0])['model'] == 'claude-haiku-5-5'
     put(api, PATH, {'pilots': []})
     assert job(api)['pilots'] == []
 

@@ -190,9 +190,10 @@ def test_archive_restore_preserves_kpi_history_and_marks_it_on_goals(api):
 
 def add_strategy_bot(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES('goal-manager','goal-manager','Goal Manager','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('goal-manager','goal-manager','Goal Manager','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('goal-manager',?,NULL,'ana')",
+                  ('{"runtime":"fake","host":"keeper"}',))
 
 
 def owners_chat(api):

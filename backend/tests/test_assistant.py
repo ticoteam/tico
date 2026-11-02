@@ -172,9 +172,9 @@ def test_a_proposal_cannot_smuggle_a_route_and_never_stores_an_answer(api):
 
 def test_an_assistant_message_never_lends_the_persons_authority_to_botops(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES('botops','botops','BotOps','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('botops','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('botops','botops','BotOps','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('botops','{\"runtime\":\"fake\",\"host\":\"keeper\"}',NULL,'ana')")
         H.VIA.set("assistant")
         via = H.say(c, "human:ana", "bot:botops", "Rename the Ops bot to Operations", kind="say")
         H.VIA.set("")

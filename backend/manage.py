@@ -72,9 +72,8 @@ def migrate_legacy(source, destination, runtime, projects, *, queue_backlog=Fals
     if not seeded:
         store.seed(entries=entries)
     with store.transaction() as c:
-        # Legacy bot tokens, machine paths, runtime hosts and provider sessions
-        # are local capabilities/history, never cloud execution credentials.
-        c.execute("UPDATE bots SET token_hash=NULL,thread_id=NULL,cwd='',host='remote'")
+        # Legacy provider sessions are local history, never cloud execution credentials. The bot's machine path,
+        # its host and any token are no longer stored on bots at all (migration 0041).
         c.execute("DELETE FROM rate_limits")
         H.event(c, H.KEEPER, "legacy.execution_fenced", "database",
                 {"source_sha256": source_report["sha256"]})
@@ -96,10 +95,8 @@ def migrate_legacy(source, destination, runtime, projects, *, queue_backlog=Fals
                  "queued_jobs": c.execute("SELECT count(*) FROM jobs WHERE state='queued'").fetchone()[0],
                  "assignments": c.execute("SELECT count(*) FROM assignments").fetchone()[0],
                  "runners": c.execute("SELECT count(*) FROM runners").fetchone()[0],
-                 "legacy_tokens": c.execute("SELECT count(*) FROM bots WHERE token_hash IS NOT NULL").fetchone()[0],
-                 "legacy_paths": c.execute("SELECT count(*) FROM bots WHERE cwd<>'' OR host<>'remote'").fetchone()[0],
                  "bots_by_operator": bots_by_operator(c)}
-        if state["assignments"] or state["runners"] or state["legacy_tokens"] or state["legacy_paths"]:
+        if state["assignments"] or state["runners"]:
             raise RuntimeError("Legacy execution authority was not fully fenced")
         manifest = {"format": "tico-legacy-import-v1", "source": str(source),
                     "source_sha256": source_report["sha256"], "history": counts,

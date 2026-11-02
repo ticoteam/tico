@@ -121,7 +121,9 @@ def test_the_owner_starts_the_sample_company_and_every_bot_has_its_model_goal_an
     providers = api.get("/api/v2/providers", headers=signed_in()).json()
     assert providers["enabled"] == ["anthropic", "openai"] and providers["default"]["runtime"] == "claude"
 
-    bots = {row["slug"]: row for row in rows(api, "SELECT slug,display_name,runtime,model,state FROM bots")}
+    bots = {row["slug"]: row for row in rows(
+        api, "SELECT b.slug,b.display_name,b.state,json_extract(bc.config,'$.runtime') AS runtime,"
+             "json_extract(bc.config,'$.model') AS model FROM bots b LEFT JOIN bot_config bc ON bc.bot=b.id")}
     assert {"coo", "botops", *ROLE_BOTS} <= set(bots)
     assert {slug: bots[slug]["runtime"] for slug in ROLE_BOTS} == ROLE_BOTS          # spread over both subscriptions
     assert bots["builder"]["display_name"] == "Builder"
@@ -169,7 +171,8 @@ def test_a_company_with_its_own_provider_keeps_it(environment):
     assert start(api).status_code == 200
     providers = api.get("/api/v2/providers", headers=signed_in()).json()
     assert providers["enabled"] == ["openai"]
-    bots = {row["slug"]: row["runtime"] for row in rows(api, "SELECT slug,runtime FROM bots")}
+    bots = {row["slug"]: row["runtime"] for row in rows(
+        api, "SELECT b.slug,json_extract(bc.config,'$.runtime') AS runtime FROM bots b LEFT JOIN bot_config bc ON bc.bot=b.id")}
     # Claude is off here, so the Claude bots run on the company's own default, as a wizard pick would.
     assert bots["builder"] == "codex" and bots["head-of-product"] == "codex"
 

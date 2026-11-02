@@ -82,9 +82,8 @@ def _unique(used, base):
 def _model_tool(c, settings, bot, config, readiness, label):
     row = H.bot(c, bot) or {}
     runtime, model = providers.bot_choice(c, settings, config)
-    runtime = runtime or row.get("runtime") or ""
+    runtime, model = runtime or "", model or ""
     harness = resolve_harness(config, runtime)
-    model = model or row.get("model") or ""
     catalog = providers.MODEL_BY_ID.get(model) or {}
     provider = catalog.get("provider") or ""
     scope = {}

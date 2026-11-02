@@ -57,8 +57,8 @@ def model_settings(c, settings_admin, settings, bot, config):
     """(choice, effort, harness) for the copy: the original's where it is a model the company still offers and runs, else the company's
     default. A bot run by an external agent (a Hermes profile) has no model of its own to copy."""
     company = providers.load(c, settings)
-    choice = settings_admin.models.get(bot.get("model") or config.get("model"))
-    harness = resolve_harness(config, bot.get("runtime"))
+    choice = settings_admin.models.get(config.get("model"))
+    harness = resolve_harness(config, None)
     effort = bot.get("effort") or config.get("reasoning_effort")
     if not choice or choice.get("deprecated") or harness in EXTERNAL_HARNESSES or (
             company["enabled"] and not providers.runtime_enabled(choice["runtime"], company["enabled"], choice)):

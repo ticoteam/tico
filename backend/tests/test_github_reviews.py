@@ -210,7 +210,8 @@ def test_github_refusing_a_review_403_files_one_devops_task_not_the_type_manager
     from backend import hubdb as H
     settings, seen = configured(api, gh, tmp_path, monkeypatch)
     with api.app_state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id, slug, display_name, runtime, state) VALUES('devops-engineer','devops-engineer','DevOps','fake','active')")
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('devops-engineer','devops-engineer','DevOps','active')")
+        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('devops-engineer','{\"runtime\":\"fake\"}','ana')")
     seen["refusal"] = 403
     for key in ("first", "again"):
         assert submit(api, key=key).status_code == 409
@@ -224,7 +225,8 @@ def test_github_rate_limiting_a_review_403_files_no_task(api, gh, tmp_path, monk
     from backend import hubdb as H
     settings, seen = configured(api, gh, tmp_path, monkeypatch)
     with api.app_state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id, slug, display_name, runtime, state) VALUES('devops-engineer','devops-engineer','DevOps','fake','active')")
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('devops-engineer','devops-engineer','DevOps','active')")
+        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('devops-engineer','{\"runtime\":\"fake\"}','ana')")
     seen["refusal"] = 403
     seen["refusal_message"] = "You have exceeded a secondary rate limit. Please wait a few minutes before you try again."
     assert submit(api, key="throttled").status_code == 409

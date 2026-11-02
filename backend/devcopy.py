@@ -9,7 +9,7 @@ added after this list, is emptied and named in the output: a new table is safe u
 
 Runs stay for realism: finished attempts in the window keep their events, conversations and inputs (inputs are
 message links, no text, and decide who may see a run). Unfinished jobs and attempts go. The tokens on kept rows are
-replaced by values no token hashes to: bots, external agents, runners (also revoked) and attempts (lease ended).
+replaced by values no token hashes to: external agents, runners (also revoked) and attempts (lease ended).
 The key files that sit beside a database (backup.KEY_FILES) are never copied, so a credential row missed here still
 opens nothing. Beside the copy go a `server.env` with TICO_REHEARSAL=1 (nothing runs on a timer, nothing leaves the
 server, and runners are refused), a fresh local sign-in token, and empty registry and attachment folders.
@@ -332,8 +332,6 @@ def prune(c, days, keep_automations=False):
                 for child, col, key in refs)
             delete(table, where, (cutoff,))
     # Kept rows keep no way in: a value no token hashes to (the columns are NOT NULL UNIQUE where not nullable).
-    if "bots" in present:
-        c.execute("UPDATE bots SET token_hash=NULL")
     if "agents" in present:
         c.execute("UPDATE agents SET token_hash='devcopy-revoked:'||bot, revoked_at=coalesce(revoked_at,?), "
                   "revoked_by=coalesce(revoked_by,'devcopy')", (stamp,))

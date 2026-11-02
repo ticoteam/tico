@@ -149,25 +149,13 @@ class Schema(HubCase):
         self.assertIn("COVERING INDEX bot_file_versions_blob_media", plan)
 
 class RegistrySync(HubCase):
-    def test_sync_is_idempotent_and_keeps_tokens_threads_and_quarantine(self):
-        token = H.issue_token(self.conn, "cmo")
-        self.conn.execute("UPDATE bots SET thread_id='t-1' WHERE slug='cmo'")
+    def test_sync_is_idempotent_and_keeps_quarantine(self):
         H.quarantine(self.conn, "seo", "test")
         H.sync_registry(self.conn, EMPLOYEES, PEOPLE)
         H.sync_registry(self.conn, EMPLOYEES, PEOPLE)
         self.assertEqual(len(H.bots(self.conn)), len(EMPLOYEES))
         self.assertEqual(len(H.humans(self.conn)), len(PEOPLE["people"]))
-        self.assertEqual(H.bot(self.conn, "cmo")["thread_id"], "t-1")
-        self.assertEqual(H.verify_bot(self.conn, "cmo", token)["slug"], "cmo")
         self.assertEqual(H.bot(self.conn, "seo")["state"], "quarantined")
-
-class Tokens(HubCase):
-    def test_a_wrong_or_rotated_token_is_refused(self):
-        first = H.issue_token(self.conn, "cmo")
-        self.refused("identity", H.verify_bot, self.conn, "cmo", "nope")
-        H.issue_token(self.conn, "cmo")                     # the keeper rotates on resume
-        self.refused("identity", H.verify_bot, self.conn, "cmo", first)
-        self.refused("identity", H.verify_bot, self.conn, "seo", first)   # never issued one
 
 
 # ----------------------------------------------------------------------------- rule 1

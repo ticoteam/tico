@@ -17,9 +17,9 @@ def goal_manager(api, level=1):
     """The Strategy Bot at `level`, chosen by the owner (Passive unless asked otherwise); None leaves it as built, at
     the default level."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES('goal-manager','goal-manager','Strategy Bot','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('goal-manager','goal-manager','Strategy Bot','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('goal-manager','{\"runtime\":\"fake\",\"host\":\"keeper\"}',NULL,'ana')")
     raise_level(api, level)
 
 

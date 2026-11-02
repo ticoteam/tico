@@ -447,7 +447,7 @@ def install(app, store, auth, mutate):
             done = finance.act(c, who.actor, "connection_create", payload, key)
             return {"action_id": done.action_id, "kind": done.kind, "status": done.status, "code": done.code,
                     "reason": done.reason, "approver": done.approver, "result": dict(done.result)}
-        saved = mutate(request, body, work)
+        saved = mutate(request, body, work, durable=True)     # a bank connection: its commit is synced (store.transaction)
         if saved.get("status") == "committed":
             finance.banking_ring()                     # after the commit: the worker's first sync starts now
         return saved
@@ -569,7 +569,7 @@ def install(app, store, auth, mutate):
             # number is not kept either: the receipt says it was refused (store.mutate hashes what it is given).
             with store.transaction() as c:
                 receipt = body.model_copy(update={"payload": finance.receipt_payload(c, body.kind, body.payload)})
-        saved = mutate(request, receipt, work)
+        saved = mutate(request, receipt, work, durable=True)  # money moves on this commit: synchronous=FULL
         if body.kind == "connection_sync" and saved.get("status") == "committed":
             finance.banking_ring()                     # after the commit: the worker syncs it now
         done = first.get("result")

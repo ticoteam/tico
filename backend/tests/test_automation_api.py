@@ -48,8 +48,9 @@ def as_bot(api, slug):
         found = H.resolve_bot(c, slug)
         bot_id = found["id"] if found else slug
         if not found:
-            c.execute("INSERT INTO bots(id,slug,display_name,runtime,created_at) VALUES(?,?,?,'fake',?)",
+            c.execute("INSERT INTO bots(id,slug,display_name,created_at) VALUES(?,?,?,?)",
                       (bot_id, slug, slug, H.now()))
+            c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,?,'ana')", (bot_id, '{"runtime":"fake"}'))
         c.execute("INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
                   (bot_id, "test", "x-" + bot_id, H.now(), "human:ana"))
     api.app.state.auth.settings.test_identities[slug + "-test"] = Identity(H.bot_actor(bot_id), "bot", agent="test")

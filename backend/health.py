@@ -850,7 +850,8 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
     if not rows:
         return []
     computers = _movable(c, who, online_ids) if full else []
-    configured = {r["id"]: r["runtime"] or "" for r in c.execute("SELECT id,runtime FROM bots")}
+    # Each stuck bot's runtime as its config declares it (filled below with the config it reads).
+    configured = {}
     # Each offline computer's last check-in, read once for every bot waiting on one (not one read per bot).
     offline = sorted({row["runner_id"] for row in rows if row["reason"] == "computer_offline"})
     seen_at = {r["id"]: r["last_seen_at"] for r in c.execute(
@@ -867,6 +868,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
             f"SELECT bot,config,operator FROM bot_config WHERE bot IN ({marks})", part)}
         prime(c, readiness.CONFIG_SQL, {(s,): found.get(s) for s in part})
         prime(c, OPERATOR_SQL, {(s,): found.get(s) for s in part})
+        configured.update({bot: (H._json(r["config"], {}) or {}).get("runtime") or "" for bot, r in found.items()})
     out = []
     for row in rows:
         label, reason = row["computer"], row["reason"]

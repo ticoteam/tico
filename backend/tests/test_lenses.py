@@ -64,9 +64,9 @@ def run_row(api, run_id):
 
 def librarian(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES('librarian','librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('librarian','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('librarian','librarian','Librarian','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('librarian','{\"runtime\":\"fake\",\"host\":\"keeper\"}',NULL,'ana')")
     return bot(api, "librarian")
 
 

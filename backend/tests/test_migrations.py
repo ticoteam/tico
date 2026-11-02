@@ -3,6 +3,7 @@ migration rolls back its DDL and its row and runs again once fixed, an applied f
 code must not open is refused before anything is written to it."""
 import gzip
 import hashlib
+import json
 import re
 import shutil
 import sqlite3
@@ -250,3 +251,76 @@ def test_a_database_below_the_bridge_is_refused_before_anything_is_written(tmp_p
 def test_cloud_version_is_the_newest_cloud_step_store_writes():
     newest = max(int(n) for n in re.findall(r"INSERT INTO cloud_migrations VALUES\((\d+),", STORE_SOURCE.read_text()))
     assert migrations.CLOUD_VERSION == newest
+
+
+def _back_to_before(path, version):
+    """The file as it was before `version` ran: the migration rows from it on are forgotten, so the next boot runs them."""
+    with sqlite3.connect(path) as c:
+        c.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy_%'", (version,))
+
+
+def test_an_existing_bots_runtime_model_and_host_move_into_its_config_then_the_columns_go(tmp_path):
+    """Migration 0041: a runtime, model or host the config lacks is copied into it (the config keeps what it has), and
+    the six legacy columns are dropped. cwd, thread_id and token_hash have nothing to move."""
+    path = fresh(tmp_path)
+    slug = "acme-bot"
+    with sqlite3.connect(path) as c:
+        for column in ("runtime", "model", "host", "cwd", "thread_id", "token_hash"):
+            c.execute(f"ALTER TABLE bots ADD COLUMN {column} TEXT")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES(?,?,'Acme Bot','low','active','2026-01-01T00:00:00Z')", (slug, slug))
+        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,?,'human:ana')",
+                  (slug, '{"name":"x","reasoning_effort":"low","model":"kept-in-config"}'))
+        c.execute("UPDATE bots SET runtime='codex', model='column-model', host='keeper', cwd='/work/x', "
+                  "thread_id='t1', token_hash='h' WHERE id=?", (slug,))
+    _back_to_before(path, "0041")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        columns = {row[1] for row in c.execute("PRAGMA table_info(bots)")}
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+    assert not {"runtime", "model", "host", "cwd", "thread_id", "token_hash"} & columns
+    assert {"id", "slug", "effort", "state"} <= columns
+    # boot adds its own defaults to every config (profile, wake_preset, ...); only the three keys this moves are checked
+    assert {k: config.get(k) for k in ("name", "reasoning_effort", "model", "runtime", "host")} == {
+        "name": "x", "reasoning_effort": "low", "model": "kept-in-config", "runtime": "codex", "host": "keeper"}
+
+
+def test_an_existing_kpi_goal_and_target_become_a_goal_link_then_the_columns_go(tmp_path):
+    """Migration 0042: a KPI with a goal but no link to it gets one, holding its target as an improvement; then the
+    kpis columns goal_id and target are dropped."""
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        goal = "g-old"
+        c.execute("INSERT INTO goals(id,title,owner,created_at,created_by,updated_at) "
+                  "VALUES(?,'Grow revenue','company','2026-01-01T00:00:00Z','human:ana','2026-01-01T00:00:00Z')", (goal,))
+        c.execute("ALTER TABLE kpis ADD COLUMN goal_id TEXT NOT NULL DEFAULT ''")
+        c.execute("ALTER TABLE kpis ADD COLUMN target REAL")
+        c.execute("CREATE INDEX kpis_goal ON kpis(goal_id)")
+        c.execute("INSERT INTO kpis(id,slug,name,unit,target,goal_id,owner,direction,cadence,created_at,created_by,"
+                  "definition_version,updated_at) VALUES('k-old','old-measure','Old measure','',7.5,?,'company','up',"
+                  "'weekly','2026-01-01T00:00:00Z','human:ana',1,'2026-01-01T00:00:00Z')", (goal,))
+    _back_to_before(path, "0042")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        columns = {row[1] for row in c.execute("PRAGMA table_info(kpis)")}
+        link = c.execute("SELECT goal_id, kind, target FROM goal_kpis WHERE kpi_id='k-old'").fetchall()
+    assert not {"goal_id", "target"} & columns
+    assert link == [(goal, "improve", 7.5)]
+
+
+def test_a_standalone_kpi_with_a_target_stops_the_migration_and_nothing_is_dropped(tmp_path):
+    """Migration 0042 refuses a KPI that has a target and no goal: that target would have nowhere to go."""
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("ALTER TABLE kpis ADD COLUMN goal_id TEXT NOT NULL DEFAULT ''")
+        c.execute("ALTER TABLE kpis ADD COLUMN target REAL")
+        c.execute("INSERT INTO kpis(id,slug,name,unit,target,goal_id,owner,direction,cadence,created_at,created_by,"
+                  "definition_version,updated_at) VALUES('k-loose','loose-measure','Loose','',3,'','company','up',"
+                  "'weekly','2026-01-01T00:00:00Z','human:ana',1,'2026-01-01T00:00:00Z')")
+    _back_to_before(path, "0042")
+    with pytest.raises(RuntimeError, match="have a target and no goal"):
+        boot(path)
+    with sqlite3.connect(path) as c:
+        columns = {row[1] for row in c.execute("PRAGMA table_info(kpis)")}
+    assert {"goal_id", "target"} <= columns
+

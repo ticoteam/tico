@@ -15,7 +15,7 @@ def queued_fleet(api, machine, start, stop):
     with store.transaction() as c:
         for i in range(start, stop):
             bot = f"queued-{i}"
-            c.execute("INSERT INTO bots(id,slug,runtime,state,created_at) VALUES(?,?,'fake','active',?)", (bot, bot, H.now()))
+            c.execute("INSERT INTO bots(id,slug,state,created_at) VALUES(?,?,'active',?)", (bot, bot, H.now()))
             c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,?,'ana')",
                       (bot, encode({'name': bot, 'runtime': 'fake'})))
             c.execute("INSERT INTO assignments VALUES(?,?,1,?,'human:ana')", (bot, machine['runner_id'], H.now()))

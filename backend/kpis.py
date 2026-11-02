@@ -500,14 +500,14 @@ def create(conn, actor, owner, fields, kid=None):
     if not values.get("name"):
         raise ValueError("name the measure, in words: what is counted, per what")
     ts = H.now()
-    row = {"id": kid or H.new_id(), "goal_id": "", "name": values["name"], "unit": values.get("unit", ""), "target": None,
+    row = {"id": kid or H.new_id(), "name": values["name"], "unit": values.get("unit", ""),
            "created_at": ts, "created_by": actor, "slug": _unique_slug(conn, values["name"]),
            "definition": values.get("definition", ""), "direction": values.get("direction", "up"),
            "cadence": values.get("cadence", "weekly"), "owner": owner, "source_note": values.get("source_note", ""),
            "definition_version": 1, "updated_at": ts}
-    conn.execute("INSERT INTO kpis (id, goal_id, name, unit, target, created_at, created_by, slug, definition, direction, "
-                 "cadence, owner, source_note, definition_version, updated_at) VALUES (:id, :goal_id, :name, :unit, "
-                 ":target, :created_at, :created_by, :slug, :definition, :direction, :cadence, :owner, :source_note, "
+    conn.execute("INSERT INTO kpis (id, name, unit, created_at, created_by, slug, definition, direction, "
+                 "cadence, owner, source_note, definition_version, updated_at) VALUES (:id, :name, :unit, "
+                 ":created_at, :created_by, :slug, :definition, :direction, :cadence, :owner, :source_note, "
                  ":definition_version, :updated_at)", row)
     _version(conn, row, actor, ts)
     return kpi(conn, row["id"])

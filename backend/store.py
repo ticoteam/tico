@@ -1347,14 +1347,15 @@ class Store:
                         if name not in columns:
                             c.execute(f"ALTER TABLE bot_config ADD COLUMN {name} {declaration}")
                     for row in c.execute(
-                            "SELECT bc.bot,bc.config,b.model,b.effort FROM bot_config bc "
+                            "SELECT bc.bot,bc.config,b.effort FROM bot_config bc "
                             "JOIN bots b ON b.slug=bc.bot").fetchall():
                         config = json.loads(row["config"] or "{}")
                         # A model decision moves the previously seeded Grok
                         # workers from medium to high. Do this once for an existing cloud DB;
                         # subsequent choices remain backend-managed and are never reconciled
-                        # from the bootstrap YAML.
-                        if ((config.get("model") or row["model"]) == "grok-4.6"
+                        # from the bootstrap YAML. (The model is read from config: migration 0041 copied
+                        # the old bots.model into it where config had none.)
+                        if (config.get("model") == "grok-4.6"
                                 and (config.get("reasoning_effort") or row["effort"]) == "medium"):
                             config["reasoning_effort"] = "high"
                             c.execute("UPDATE bots SET effort='high' WHERE slug=?", (row["bot"],))
@@ -1455,10 +1456,9 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=16").fetchone():
                     from .harnesses import backfill_config
                     for row in c.execute(
-                            "SELECT bc.bot,bc.config,b.runtime FROM bot_config bc "
+                            "SELECT bc.bot,bc.config FROM bot_config bc "
                             "JOIN bots b ON b.slug=bc.bot").fetchall():
-                        config, changed = backfill_config(json.loads(row["config"] or "{}"),
-                                                          slug=row["bot"], runtime=row["runtime"])
+                        config, changed = backfill_config(json.loads(row["config"] or "{}"), slug=row["bot"])
                         if changed:
                             c.execute("UPDATE bot_config SET config=? WHERE bot=?",
                                       (encode(config), row["bot"]))
@@ -2296,13 +2296,15 @@ class Store:
             "SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
             (self._principal(identity), operation, key)).fetchone() is not None
 
-    def mutate(self, identity, operation, key, body, fn, check=None):
+    def mutate(self, identity, operation, key, body, fn, check=None, durable=False):
+        """A keyed write: its receipt is saved in the same transaction as its change. `durable` is for a write that
+        moves money (finance's actions): its commit reaches the disk before the answer goes out (transaction)."""
         if not key or len(key) > 200:
             raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
         hashed = digest(encode(body))
         principal = self._principal(identity)
         refusal = logged = None
-        with self.transaction() as c:
+        with self.transaction(durable=durable) as c:
             # Authenticate leases again under the same write lock as the mutation.
             from .auth import validate_identity
             validate_identity(c, identity)

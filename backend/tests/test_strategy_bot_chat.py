@@ -16,9 +16,10 @@ from backend.tests.test_assistant import asked, say, turn_message
 def strategy_bot(api):
     """The Strategy Bot every set-up install has."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES('goal-manager','goal-manager','Strategy Bot','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('goal-manager','goal-manager','Strategy Bot','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('goal-manager',?,NULL,'ana')",
+                  ('{"runtime":"fake","host":"keeper"}',))
 
 
 def personal(api, pid):
@@ -42,9 +43,10 @@ def turn(api, bot, person, text):
 def helper(api, slug, name):
     """Another built-in helper bot (the Librarian), active."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES(?,?,?,'fake','','','','keeper','active',?)", (slug, slug, name, H.now()))
-        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,'{}',NULL,'ana')", (slug,))
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES(?,?,?,'','active',?)", (slug, slug, name, H.now()))
+        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,NULL,'ana')",
+                  (slug, '{"runtime":"fake","host":"keeper"}'))
 
 
 def earlier_chat(api, owner="human:ana", said=("Grow revenue 20% this year", "Here is a plan for that.")):

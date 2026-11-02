@@ -22,7 +22,9 @@ SEE_ONLY = ("slug", "display_name", "state", "description", "team", "operator", 
 
 def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registry_entries, who):
     """The bot list's row as it was read before backend/bot_rows.py: one bot at a time."""
-    row = {k: v for k, v in bot.items() if k not in ("token_hash", "cwd", "thread_id")}
+    row = dict(bot)
+    # runtime, model and host are the bot's config (bot_config.config), as backend/app.py bot_view reads them.
+    row.update({"model": "", "runtime": "", "host": "dispatcher"})
     config = c.execute("SELECT team,operator,owner_ids,revision,description,reports_to,repo,"
                        "thread_mode,config,onboarding_state FROM bot_config WHERE bot=?", (bot["slug"],)).fetchone()
     assignment = c.execute("SELECT a.bot,a.runner_id,a.generation,r.label,r.operator,r.last_seen_at,"
@@ -41,6 +43,8 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
         repo = config["repo"] or ("emp-" + bot["slug"])
         from backend.shared_bots import follow
         declared = follow(c, bot["slug"], json.loads(config["config"]) if config["config"] else {})
+        row.update({"model": declared.get("model") or "", "runtime": declared.get("runtime") or "",
+                    "host": declared.get("host") or "dispatcher"})
         if declared.get("shared_from"):
             repo = declared.get("repo") or repo
             row.update({"model": declared.get("model") or "", "runtime": declared.get("runtime") or "",

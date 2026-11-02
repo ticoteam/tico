@@ -23,7 +23,7 @@ def source_db(tmp_path):
     now = H.now()
     with store.transaction() as c:
         c.execute("INSERT INTO humans(id,name,email) VALUES('morgan','Morgan','morgan@acme.example')")
-        c.execute("INSERT INTO bots(id,slug,token_hash,state) VALUES('sales','sales','botsecret','active')")
+        c.execute("INSERT INTO bots(id,slug,state) VALUES('sales','sales','active')")
         c.execute("INSERT INTO runners(id,label,operator,token_hash,created_at) VALUES('r1','mac','morgan','rh',?)", (now,))
         c.execute("INSERT INTO enrollments(code_hash,operator,expires_at) VALUES('ch','morgan',?)", (now,))
         c.execute("INSERT INTO conversations(id) VALUES('cv')")
@@ -67,7 +67,6 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
     with closing(sqlite3.connect(dest)) as c:
         for table in devcopy.emptied(c):
             assert c.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0, table
-        assert c.execute("SELECT token_hash FROM bots").fetchall() == [(None,)]
         assert c.execute("SELECT id FROM messages ORDER BY id").fetchall() == [("new",), ("ran",)]
         # The finished run stays, with its steps and inputs, and no way back in.
         assert c.execute("SELECT id,token_hash,lease_until=finished_at FROM attempts").fetchall() == [

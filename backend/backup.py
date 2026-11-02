@@ -444,7 +444,6 @@ def restore_snapshot(source, destination):
         c.execute("UPDATE assignments SET generation=generation+1,updated_at=?,updated_by='keeper'", (now,))
         c.execute("UPDATE runners SET revoked_at=coalesce(revoked_at,?)", (now,))
         c.execute("UPDATE enrollments SET expires_at=?", (now,))
-        c.execute("UPDATE bots SET token_hash=NULL")
         # An old backup must not resurrect a credential grant revoked after it was taken.
         c.execute("UPDATE credential_grants SET revoked=coalesce(revoked,?),revoked_by='recovery'", (now,))
         c.execute("UPDATE service_jobs SET state='queued',runner_id=NULL,token_hash=NULL,lease_until=NULL,updated_at=? WHERE state='running'", (now,))

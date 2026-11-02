@@ -152,10 +152,8 @@ def add_copy(c, who, source, runner_id, settings_admin, execution, github_owner)
         config.update({key: value for key, value in _as_followed(original).items() if key in FOLLOWED})
         team = settings_admin._team(c, bot_id, config)
         now = H.now()
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES(?,?,?,?,?,?,'','keeper',?,?)",
-                  (bot_id, slug, original_bot["display_name"], original_bot["runtime"], original_bot["model"],
-                   original_bot["effort"], status, now))
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) VALUES(?,?,?,?,?,?)",
+                  (bot_id, slug, original_bot["display_name"], original_bot["effort"], status, now))
         c.execute(
             "INSERT INTO bot_config(bot,config,team,operator,owner_ids,description,reports_to,"
             "repo,thread_mode,definition_updated_at,definition_updated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
