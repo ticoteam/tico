@@ -1,19 +1,27 @@
 """`hub bot check-names <bot>`: the names a bot's own checkout still uses from before the renames.
 
-The map is clients/renames.json (written by scripts/cleanup/export_names.py): the column renames that have shipped,
-the API fields that moved, and the hub CLI commands that were renamed or removed. The command runs on this computer,
-beside the bot's files: no Tico server, no credential, nothing is sent.
+The map is clients/renames.json (written by scripts/cleanup/export_names.py): the column renames that have shipped, with
+the tables each one moved on and the tables that keep the old name, the API fields that moved, and the hub CLI commands
+that were renamed or removed. The command runs on this computer, beside the bot's files: no Tico server, no credential,
+nothing is sent.
 
-Only code is read, and only three things in it: the SQL of a `hub sql` call (a quoted argument, a heredoc or the rest of
-the line), a key read from an API answer or a stored document (`row["refs_json"]`, `.get("attempt_id")`,
-`row.refs_json`), and a `hub` command in a code span, a fenced block, a shell line or a quoted argument. Prose outside
-code spans is never changed, so an English "owner", "created" or "the hub status page" stays as it is. Names from waves
-that have not shipped are not in the map and are not looked for.
+Only code is read, and only four things in it: the SQL of a `hub sql` call (a quoted argument, a heredoc or the rest of
+the line), other SQL-looking text (a quoted statement, or a statement that starts a line in a code span or fenced block),
+a key read from an API answer or a stored document (`row["refs_json"]`, `.get("attempt_id")`, `row.refs_json`), and a
+`hub` command in a code span, a fenced block, a shell line or a quoted argument. Prose outside code spans is never
+changed, so an English "owner", "created" or "the hub status page" stays as it is. Names from waves that have not
+shipped are not in the map and are not looked for.
+
+A column renamed on some tables only counts where its table shows: `SELECT owner FROM tasks` is a finding and names
+tasks, `SELECT owner FROM meetings` is not. As a key, a word many tables use (`owner`, `state`, `at`) counts only when
+the receiver is named after a table it moved on, in a file that talks to the hub (`task["owner"]`), or when it is a row
+(`row["owner"]`) and the file's own SQL reads such a table. A key only a few tables keep (`from_actor`) counts anywhere.
 
 --fix rewrites the findings marked fixable. A finding is not fixable when its new spelling needs other arguments, when
 the name is a SQL alias (`AS created`), when the key is a word other code uses too (`attempt`), when the field changed
-shape (`snoozed_until` is now part of `holds`), or when the file is under memory/: a bot's notes are reported, never
-rewritten.
+shape (`snoozed_until` is now part of `holds`), when the name has more than one new spelling or a table keeps it
+(`owner`), when a key was only recognised from its surroundings, when SQL is not in a `hub sql` call (it may be the bot's
+own database), or when the file is under memory/: a bot's notes are reported, never rewritten.
 """
 import json
 import os
@@ -44,6 +52,26 @@ SQL_IDENT = re.compile(r"'(?:[^']|'')*'|(?<![\w:@$])([A-Za-z_]\w*)")
 HEREDOC = re.compile(r"[ \t]*-?[ \t]*<<-?[ \t]*['\"]?(\w+)['\"]?[^\n]*\n")
 SEP = re.compile(r"[ \t]*,?[ \t]*")
 
+_STATEMENT = r"(?:SELECT|WITH|UPDATE|INSERT|DELETE)\b"
+QUOTED_SQL = re.compile(r"(\"\"\"|'''|[\"'`])\s*(?=" + _STATEMENT + ")", re.I)
+LINE_SQL = re.compile(r"^[ \t]*(?=" + _STATEMENT + ")", re.I | re.M)
+LINE_SQL_END = re.compile(r";|\n[ \t]*\n")
+SQL_STRING = re.compile(r"'(?:[^']|'')*'")
+_NAME = r"[\"`]?([A-Za-z_]\w*)[\"`]?(?:\s+(?:AS\s+)?([A-Za-z_]\w*))?"
+TABLE_REF = re.compile(r"\b(?:FROM|JOIN|UPDATE|INTO)\s+(?:OR\s+\w+\s+)?" + _NAME, re.I)
+MORE_TABLES = re.compile(r"\s*,\s*" + _NAME)
+OUTPUT_ALIAS = re.compile(r"\bAS\s+([A-Za-z_]\w*)", re.I)
+QUALIFIER = re.compile(r"([A-Za-z_]\w*)\.$")
+NOT_AN_ALIAS = {"as", "cross", "default", "except", "full", "group", "having", "inner", "intersect", "join", "left",
+                "limit", "natural", "on", "order", "outer", "returning", "right", "select", "set", "union", "using",
+                "values", "where", "window"}
+KEY_READ = re.compile(r"\b(?P<recv>[A-Za-z_]\w*)(?:\[\s*[\"'](?P<a>\w+)[\"']\s*\]|\.get\(\s*[\"'](?P<b>\w+)[\"']"
+                      r"|\.(?P<c>[a-z_]\w*)\b(?!\s*\())")
+ROW_RECEIVERS = {"row", "r", "rec", "record", "item", "result"}
+RECEIVER_TABLES = {"msg": "messages"}
+TALKS_TO_HUB = re.compile(r"/api/v2/|\bHUB_[A-Z_]+\b|[\"'`$(;&|][ \t]*hub[ \t]|^[ \t]*hub[ \t]|\[[ \t\n]*[\"']hub[\"']", re.M)
+MOST_KEPT_FOR_A_KEY = 2     # a name most of the schema keeps proves nothing as a key: `created_by` needs its table in view
+
 
 @dataclass
 class Finding:
@@ -56,11 +84,13 @@ class Finding:
     start: int = 0       # offsets in the file's text
     end: int = 0
     replacement: str = ""
+    tables: tuple = ()   # the hub tables the rename applies to here, when it is not every table with that name
     expect: str = field(default="", repr=False)   # the text at start:end when it was read; --fix checks it first
 
     def text(self):
+        where = f", on {', '.join(self.tables)}" if self.tables else ""
         hint = "" if self.fixable else ", change it by hand"
-        return f"{self.path}:{self.line}: {self.old} -> {self.new} ({self.kind}{hint})"
+        return f"{self.path}:{self.line}: {self.old} -> {self.new} ({self.kind}{where}{hint})"
 
 
 class Names:
@@ -68,8 +98,15 @@ class Names:
 
     def __init__(self, data):
         self.columns = dict(data.get("columns") or {})
+        self.tables = dict(data.get("table_columns") or {})
+        self.api_kept = set(data.get("api_kept") or [])
         self.keys = {**{k: v for k, v in self.columns.items() if k.endswith("_json")}, **(data.get("api_fields") or {})}
         self.removed_keys = dict(data.get("api_fields_removed") or {})
+        # The table-specific keys that are safe to read anywhere: they are compound names few tables keep.
+        self.scoped_keys = {old for old, entry in self.tables.items()
+                            if old not in self.columns and old not in self.keys and old not in self.removed_keys
+                            and old not in self.api_kept and "_" in old and len(entry["kept_in"]) <= MOST_KEPT_FOR_A_KEY}
+        self.keys.update({old: " or ".join(self.tables[old]["renames"]) for old in self.scoped_keys})
         rules = [(tuple(r["old"]), tuple(r["new"]), bool(r["fixable"]), False) for r in data.get("commands") or []]
         rules += [(tuple(r["old"]), tuple(r["new"]), False, True) for r in data.get("commands_removed") or []]
         self.commands = sorted(rules, key=lambda rule: -len(rule[0]))
@@ -78,6 +115,18 @@ class Names:
         dotted = "|".join(re.escape(k) for k in sorted(self.keys, key=len, reverse=True) if k not in AMBIGUOUS_KEYS)
         self.quoted_key = re.compile(r"(?P<pre>\[\s*|\.get\(\s*|[{,]\s*)(?P<q>[\"'])(?P<name>" + alt + r")(?P=q)\s*(?=[\]:),}])")
         self.dotted_key = re.compile(r"\.(?P<name>" + dotted + r")\b(?!\s*\()")
+
+
+    def one_spelling(self, name):
+        """--fix may rewrite this name: it has one new spelling everywhere and no table keeps it."""
+        entry = self.tables.get(name)
+        return not entry or (len(entry["renames"]) == 1 and not entry["kept_in"])
+
+    def renamed_on(self, name, tables):
+        """{new: [tables]} for the tables among `tables` where this name moved."""
+        renames = self.tables[name]["renames"]
+        hits = {new: [t for t in moved if t in tables] for new, moved in renames.items()}
+        return {new: moved for new, moved in hits.items() if moved}
 
 
 def load_names(path=MAP):
@@ -125,12 +174,107 @@ def _commands(s, line_start):
         yield words, False
 
 
-def _sql_findings(s, base, names, out, line_start):
+def _hub_sql_bodies(s, line_start):
+    """(start, end) of the SQL of each `hub sql` call in s."""
     for words, shell in _commands(s, line_start):
-        if words[0][0] != "sql":
+        if words[0][0] == "sql":
+            yield _sql_body(s, words[0][2] + (0 if shell else 1))   # after the word `sql`, and its closing quote in argv form
+
+
+def _sql_strings(s, sql_lines):
+    """(start, end) of text that reads as SQL: a quoted statement (Python's adjacent strings count as one), and in a code
+    span, a fenced block or a .sql file a statement that starts a line."""
+    pos = 0
+    while True:
+        m = QUOTED_SQL.search(s, pos)
+        if not m:
+            break
+        quote, end = m.group(1), s.find(m.group(1), m.end())
+        if end < 0:
+            pos = m.end()
             continue
-        pos = words[0][2] + (0 if shell else 1)    # after the word `sql`, and after its closing quote in argv form
-        a, b = _sql_body(s, pos)
+        while len(quote) == 1:
+            more = re.compile(r"\s*" + re.escape(quote)).match(s, end + 1)
+            close = s.find(quote, more.end()) if more else -1
+            if close < 0:
+                break
+            end = close
+        yield m.end(), end
+        pos = end + len(quote)
+    if sql_lines:
+        for m in LINE_SQL.finditer(s):
+            stop = LINE_SQL_END.search(s, m.end())
+            yield m.end(), stop.start() if stop else len(s)
+
+
+def _statements(body):
+    """(offset, text) of each statement in body, with its string literals blanked so they read as nothing."""
+    blank = SQL_STRING.sub(lambda m: " " * len(m.group(0)), body)
+    pos = 0
+    for part in blank.split(";"):
+        yield pos, part
+        pos += len(part) + 1
+
+
+def _statement_tables(stmt):
+    """({table or alias: table}, offsets of the names in table position) of one statement."""
+    tables, spots = {}, set()
+
+    def take(m):
+        tables[m.group(1)] = m.group(1)
+        spots.add(m.start(1))
+        if m.group(2) and m.group(2).lower() not in NOT_AN_ALIAS:
+            tables[m.group(2)] = m.group(1)
+            spots.add(m.start(2))
+            return True
+        return not m.group(2)
+
+    for m in TABLE_REF.finditer(stmt):
+        if m.group(1).lower() in NOT_AN_ALIAS:    # ON CONFLICT DO UPDATE SET names no table
+            continue
+        more = m if take(m) else None
+        while more:
+            more = MORE_TABLES.match(stmt, more.end())
+            if more and not take(more):
+                break
+    return tables, spots
+
+
+def _table_scoped_findings(body, base, names, out, in_hub_sql):
+    """Each renamed name a statement uses on a table it moved on. In a `hub sql` body the names renamed on every table
+    were already read, without needing their table; elsewhere the SQL may be the bot's own database, so it is reported."""
+    for offset, stmt in _statements(body):
+        tables, spots = _statement_tables(stmt)
+        if not tables:
+            continue
+        aliases = set(OUTPUT_ALIAS.findall(stmt))
+        for m in SQL_IDENT.finditer(stmt):
+            name = m.group(1)
+            if name not in names.tables or m.start(1) in spots or stmt[m.end():m.end() + 1] == "(":
+                continue
+            if in_hub_sql and name in names.columns:
+                continue
+            qualifier = QUALIFIER.search(stmt[max(0, m.start() - 64):m.start()])
+            if qualifier and qualifier.group(1).lower() != "excluded":
+                if qualifier.group(1) not in tables:
+                    continue
+                on = {tables[qualifier.group(1)]}
+            elif name in aliases:
+                continue
+            else:
+                on = set(tables.values())
+            hits = names.renamed_on(name, on)
+            if not hits:
+                continue
+            new = " or ".join(hits)
+            start = base + offset + m.start(1)
+            out.append(Finding(old=name, new=new, kind="sql", fixable=in_hub_sql and names.one_spelling(name),
+                               start=start, end=start + len(name), replacement=new,
+                               tables=tuple(t for moved in hits.values() for t in moved)))
+
+
+def _sql_findings(s, base, names, out, line_start, sql_lines):
+    for a, b in _hub_sql_bodies(s, line_start):
         body = s[a:b]
         for m in SQL_IDENT.finditer(body):
             name = m.group(1)
@@ -139,6 +283,9 @@ def _sql_findings(s, base, names, out, line_start):
             alias = bool(re.search(r"\bAS\s+$", body[:m.start()], re.I))
             out.append(Finding(old=name, new=names.columns[name], kind="sql", fixable=not alias,
                                start=base + a + m.start(1), end=base + a + m.end(1), replacement=names.columns[name]))
+        _table_scoped_findings(body, base + a, names, out, True)
+    for a, b in _sql_strings(s, sql_lines):
+        _table_scoped_findings(s[a:b], base + a, names, out, False)
 
 
 def _command_findings(s, base, names, out, line_start):
@@ -169,24 +316,64 @@ def _key_findings(s, base, names, out):
         if name in names.removed_keys:
             out.append(Finding(old=name, new=names.removed_keys[name], kind="removed", start=start, end=end))
         else:
-            out.append(Finding(old=name, new=names.keys[name], kind="key", fixable=name not in AMBIGUOUS_KEYS,
-                               start=start, end=end, replacement=names.keys[name]))
+            out.append(_key_finding(name, names, start, end, name not in AMBIGUOUS_KEYS))
     for m in names.dotted_key.finditer(s):
-        name = m.group("name")
-        out.append(Finding(old=name, new=names.keys[name], kind="key", fixable=True,
-                           start=base + m.start("name"), end=base + m.end("name"), replacement=names.keys[name]))
+        out.append(_key_finding(m.group("name"), names, base + m.start("name"), base + m.end("name"), True))
+
+
+def _key_finding(name, names, start, end, fixable):
+    scoped = name in names.scoped_keys
+    tables = tuple(t for moved in names.tables[name]["renames"].values() for t in moved) if scoped else ()
+    return Finding(old=name, new=names.keys[name], kind="key", fixable=fixable and (not scoped or names.one_spelling(name)),
+                   start=start, end=end, replacement=names.keys[name], tables=tables)
+
+
+def _receiver_table(receiver):
+    """The table a variable is named after, as its singular or its plural: task and tasks both mean tasks."""
+    return RECEIVER_TABLES.get(receiver) or receiver
+
+
+def _context_key_findings(s, base, names, out, talks_to_hub, file_tables):
+    """A common word read as a key counts only with its table in view; it is reported, never rewritten, since the same
+    word may be the bot's own field."""
+    for m in KEY_READ.finditer(s):
+        name = m.group("a") or m.group("b") or m.group("c")
+        if name not in names.tables or name in names.keys or name in names.removed_keys:
+            continue
+        receiver = m.group("recv")
+        if receiver in ROW_RECEIVERS:
+            on = file_tables
+        elif talks_to_hub and name not in names.api_kept:
+            table = _receiver_table(receiver)
+            on = {table, table + "s"}
+        else:
+            continue
+        hits = names.renamed_on(name, on)
+        if not hits:
+            continue
+        group = "a" if m.group("a") else "b" if m.group("b") else "c"
+        out.append(Finding(old=name, new=" or ".join(hits), kind="key", start=base + m.start(group), end=base + m.end(group),
+                           tables=tuple(t for moved in hits.values() for t in moved)))
 
 
 def scan_text(rel, text, names):
     """Every finding in one file, with its line and the text it would replace."""
     suffix = Path(rel).suffix.lower()
     found = []
-    for a, b, shell_line in _regions(text, suffix in PROSE_SUFFIXES):
+    regions = [(a, b, shell_line or suffix in SHELL_SUFFIXES, shell_line or suffix == ".sql")
+               for a, b, shell_line in _regions(text, suffix in PROSE_SUFFIXES)]
+    file_tables, talks_to_hub = set(), bool(TALKS_TO_HUB.search(text))
+    for a, b, line_start, sql_lines in regions:
         s = text[a:b]
-        line_start = shell_line or suffix in SHELL_SUFFIXES
-        _sql_findings(s, a, names, found, line_start)
+        for x, y in [*_hub_sql_bodies(s, line_start), *_sql_strings(s, sql_lines)]:
+            for _offset, stmt in _statements(s[x:y]):
+                file_tables.update(_statement_tables(stmt)[0].values())
+    for a, b, line_start, sql_lines in regions:
+        s = text[a:b]
+        _sql_findings(s, a, names, found, line_start, sql_lines)
         _command_findings(s, a, names, found, line_start)
         _key_findings(s, a, names, found)
+        _context_key_findings(s, a, names, found, talks_to_hub, file_tables)
     found.sort(key=lambda f: (f.start, -(f.end - f.start)))
     out, last = [], -1
     for f in found:

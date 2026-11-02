@@ -46,7 +46,8 @@ names:
   ui/tests/settings-billing.cjs: [expires]
   ui/app/meetings-granola.js: [last_sync]   # Granola's sync status: a stored document's field, not a column
   ui/tests/meetings-granola.cjs: [last_sync]
-  examples/custom-frontend/app.js: [next]   # the login page's next= URL parameter, not a column
+  # next: the login page's next= parameter; bot: its own chat state and kind literal; state: Execution.state; actor: Me.actor.
+  examples/custom-frontend/app.js: [next, bot, state, actor]
 keys:
   backend/strategy_setup.py: [started, finished]
   clients/hubtools.py: [owner, requester, due, from_actor, at]   # a tool's input takes a name or an id
