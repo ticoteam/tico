@@ -3,6 +3,8 @@
 The app keeps its ordinary proxy. A separately opted-in visual site accepts only
 unambiguous signed-token reads; the backend still verifies every token and reader.
 No credentials or signing keys are written into this configuration.
+The Company page's reader origin (TICO_READER_ORIGIN, docs/company-page.md) is one more host of its own,
+with five paths and the reader's cookie; it is served whether or not the visual site is.
 
 Both proxies hold a request while the server restarts (an update, a deploy), the policy of
 setup/cell.py's router: a dial that fails is tried again every HOLD_EVERY for up to HOLD_FOR,
@@ -29,6 +31,14 @@ MARKER_PREFIX = "tico-caddy-generation:"
 TOKEN_PATH = r"^/visuals/[A-Za-z0-9_-]+[.][A-Za-z0-9_-]{43}$"
 RAW_TOKEN_PATH = r"^/visuals/[A-Za-z0-9_-]+[.][A-Za-z0-9_-]+$"
 AUTH_HEADERS = ["Cookie", "Authorization", "Proxy-Authorization", "Cf-Access-*", "X-Amzn-Oidc-*", "X-Tico-*"]
+# The Company page's own origin (docs/company-page.md) is a reader's site: it keeps the reader's cookie, the only one
+# it is for, and only these paths reach the server (the paths backend/company_page/reader_app.py answers). Everything
+# else on it is a 404, never the app. The page's own CSP is a meta tag; this header only stops framing, and it keeps
+# the base-uri rule reader_app.py sends too.
+READER_PATHS = ["/", "/data.json", "/feed.xml", "/assets/*", "/auth/*", "/sign-in", "/sign-out", "/reply", "/can-help",
+                "/unsubscribe", "/invite/*"]
+READER_STRIP = ["Authorization", "Proxy-Authorization", "Cf-Access-*", "X-Amzn-Oidc-*", "X-Tico-*"]
+READER_CSP = "frame-ancestors 'none'; base-uri 'none'"
 LOG = logging.getLogger("tico.caddy")
 HOLD_FOR, HOLD_EVERY = "30s", "250ms"
 HOLD_BODY = "Tico is starting. Try again in a few seconds."
@@ -49,36 +59,42 @@ def _hostname(value, *, allow_ip=False):
     raise ValueError("hostname_is_ip")
 
 
-def _visual_host(origin, app, runner):
-    """Optional input fails closed, without reflecting a URL into diagnostics."""
+def _origin_host(origin, label, taken):
+    """An optional https origin's DNS host, failing closed without reflecting the URL into diagnostics.
+
+    `label` prefixes the reason ("visual_origin_...", "reader_origin_..."); `taken` are the hosts it may not be."""
     if not isinstance(origin, str) or not origin.strip():
-        return "", "visual_origin_missing"
+        return "", f"{label}_origin_missing"
     value = origin.strip()  # Match existing settings' outer-whitespace normalization.
     if any(ord(char) <= 32 or ord(char) == 127 for char in value):
-        return "", "visual_origin_control"
+        return "", f"{label}_origin_control"
     try:
         parsed = urlsplit(value)
         host = _hostname(parsed.hostname)
         if "." not in host:
-            return "", "visual_origin_not_dns_host"
+            return "", f"{label}_origin_not_dns_host"
         if (parsed.scheme != "https" or parsed.username is not None or parsed.password is not None
                 or parsed.port not in (None, 443) or parsed.path not in ("", "/")
                 or parsed.query or parsed.fragment or "?" in value or "#" in value
                 or parsed.netloc.lower() not in (host, host + ":443")):
-            return "", "visual_origin_not_https_origin"
+            return "", f"{label}_origin_not_https_origin"
     except (ValueError, TypeError):
-        return "", "visual_origin_invalid"
-    if host in (app, runner):
-        return "", "visual_origin_host_collision"
+        return "", f"{label}_origin_invalid"
+    if host in taken:
+        return "", f"{label}_origin_host_collision"
     return host, None
+
+
+def _visual_host(origin, app, runner):
+    return _origin_host(origin, "visual", (app, runner))
 
 
 def _encoded(config):
     return json.dumps(config, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
 
 
-def _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals):
-    if type(serve_visuals) is not bool:
+def _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals, reader_origin="", serve_reader=False):
+    if type(serve_visuals) is not bool or type(serve_reader) is not bool:
         raise ValueError("serve_visuals_invalid")
     app = _hostname(app_hostname, allow_ip=True) if app_hostname else ""
     runner = _hostname(runner_hostname) if runner_hostname else ""
@@ -87,6 +103,15 @@ def _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals):
     if serve_visuals and not app:
         raise ValueError("app_hostname_required")
     visual, reason = _visual_host(visual_origin, app, runner) if serve_visuals else ("", None)
+    # The reader origin may be neither the app, the runner nor the visual origin, even one that is not served now:
+    # a host with two routes would send the second one's requests to the first.
+    visual_name, _ = _visual_host(visual_origin, app, runner)
+    reader, reader_reason = "", None
+    if serve_reader:
+        if not app:
+            reader_reason = "reader_app_required"
+        else:
+            reader, reader_reason = _origin_host(reader_origin, "reader", (app, runner, visual_name))
     # Caddy's HTTP error logger includes request.uri even without access logs.
     # Remove the whole request object: headers can contain token-bearing Referer
     # values as well. Keep structured fault diagnostics at INFO and above.
@@ -109,6 +134,14 @@ def _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals):
                 "expression": "{http.request.orig_uri}.matches('" + RAW_TOKEN_PATH
                               + "') && {http.request.orig_uri} == {http.request.uri.path}"}],
                 "handle": [asset_proxy], "terminal": True})
+        if reader:
+            # The reader's paths only, exact: a decoded path that cleaning changed (`/%2e/`) is refused, not served as `/`.
+            reader_proxy = {"handler": "reverse_proxy", "upstreams": [{"dial": "server:8765"}], "load_balancing": dict(hold),
+                            "headers": {"request": {"delete": list(READER_STRIP)},
+                                        "response": {"set": {"Content-Security-Policy": [READER_CSP]}}}}
+            routes.append({"match": [{"host": [reader], "path": list(READER_PATHS),
+                                      "expression": "{http.request.orig_uri.path} == {http.request.uri.path}"}],
+                           "handle": [reader_proxy], "terminal": True})
         routes.append({"handle": [{"handler": "static_response", "status_code": 404}], "terminal": True})
         config["apps"]["http"]["servers"]["tico"] = {
             "listen": [":443"], "tls_connection_policies": [{}], "routes": routes,
@@ -124,17 +157,19 @@ def _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals):
              "handle": [{"handler": "static_response", "status_code": 200,
                          "body": MARKER_PREFIX + generation}], "terminal": True},
             {"handle": [{"handler": "static_response", "status_code": 404}], "terminal": True}]}
-    return config, generation, bool(visual), reason
+    return config, generation, bool(visual), reason, bool(reader), reader_reason
 
 
-def render(app_hostname, visual_origin="", runner_hostname="", *, serve_visuals=False):
+def render(app_hostname, visual_origin="", runner_hostname="", *, serve_visuals=False, reader_origin="", serve_reader=False):
     """Return deterministic JSON data; an empty app while off removes public sites.
 
     Invalid required app/runner names raise reason-only ValueError. An invalid
     optional visual origin produces app-only configuration, never an old site.
     External visual origins have no local effect unless serve_visuals is True.
+    The reader origin is served only when serve_reader is True and it is a valid
+    host of its own; otherwise the reader site is absent.
     """
-    return _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals)[0]
+    return _configuration(app_hostname, visual_origin, runner_hostname, serve_visuals, reader_origin, serve_reader)[0]
 
 
 def _runner_host(value, app):
@@ -192,7 +227,8 @@ def prepare(environ=os.environ):
     """
     directory = Path(environ.get("TICO_CADDY_DIR", "/caddy-generated"))
     enabled = environ.get("TICO_CADDY_VISUALS") == "1"
-    inert = {"written": False, "path": None, "generation": None, "serve_visuals": False, "reason": None}
+    inert = {"written": False, "path": None, "generation": None, "serve_visuals": False, "reason": None,
+             "serve_reader": False}
     if not _present(directory):
         if enabled:
             raise ValueError("caddy_config_directory_missing")
@@ -208,17 +244,23 @@ def prepare(environ=os.environ):
     app = _hostname(app_value, allow_ip=True) if app_value else ""
     if enabled and not app:
         raise ValueError("app_hostname_required")
+    # The runner is read for the reader origin's collision check too; an unreadable one leaves the reader site off.
+    reader_origin = environ.get("TICO_READER_ORIGIN", "")
     runner, runner_reason = "", None
-    if enabled:
+    if enabled or reader_origin.strip():
         try:
             runner = _runner_host(environ.get("TICO_RUNNER_URL", ""), app)
         except ValueError:
             runner_reason = "runner_url_invalid"
-    config, generation, serving, reason = _configuration(
-        app, environ.get("TICO_VISUAL_ORIGIN", ""), runner, enabled and runner_reason is None)
-    reason = runner_reason or reason
+    config, generation, serving, reason, reading, reader_reason = _configuration(
+        app, environ.get("TICO_VISUAL_ORIGIN", ""), runner if runner_reason is None else "",
+        enabled and runner_reason is None, reader_origin, serve_reader=bool(reader_origin.strip()) and runner_reason is None)
+    if enabled:
+        reason = runner_reason or reason
     if reason:
         LOG.warning("Caddy visual serving disabled: %s", reason)
+    if reader_origin.strip() and (reader_reason or runner_reason):
+        LOG.warning("Caddy reader site disabled: %s", reader_reason or runner_reason)
     temporary = None
     try:
         fd, temporary = tempfile.mkstemp(prefix=".caddy-", suffix=".json", dir=directory)
@@ -243,4 +285,4 @@ def prepare(environ=os.environ):
             except FileNotFoundError:
                 pass
     return {"written": True, "path": str(path), "generation": generation,
-            "serve_visuals": serving, "reason": reason}
+            "serve_visuals": serving, "reason": reason, "serve_reader": reading}

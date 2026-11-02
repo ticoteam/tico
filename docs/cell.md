@@ -56,6 +56,10 @@ python3 -m setup cell init --tunnel-token-file /root/tunnel-token --domain tico.
    ([Sleep, wake and the hold](#sleep-wake-and-the-hold)), running `python3 -m setup.cell_wake` from this checkout on
    `127.0.0.1:8082`. It is restarted and started the same way as the updater.
 
+`--page-domain DOMAIN` (for example `tico.page`, not the cell's domain) sets the domain the companies' page hosts sit under.
+`init` then adds one tunnel route, `*.<page-domain>`, beside the cell's own. `--page-domain ""` removes it. In Cloudflare,
+the page domain needs the same wildcard record as the cell's, a CNAME to the tunnel, in its own zone.
+
 In Cloudflare, give the tunnel a wildcard DNS record `*.<domain>` (a CNAME to the tunnel). Set no Public Hostnames
 of its own on the tunnel: cloudflared prefers routes held in the dashboard over the file `init` writes. Names that
 already have their own DNS record, such as `hub` and `accounts`, are not affected.
@@ -68,7 +72,7 @@ python3 -m setup cell add --company boatyard --domain boatyard.tico.team --owner
   [--gateway-invite-file F] [--backup-url s3://bucket/prefix --backup-region us-west-2 --backup-credentials-file F] \
   [--company-file tico.company.yaml] [--company-name "Boatyard"] [--memory 2g] [--version vX.Y.Z] \
   [--hosted own|invited] [--signin-label "Tico account"] [--timeout 300] \
-  [--own-domain] [--alias HOST]... [--env-file F] [--import-data FILE] [--sleep-minutes N] --json
+  [--own-domain] [--alias HOST]... [--page-host HOST] [--env-file F] [--import-data FILE] [--sleep-minutes N] --json
 python3 -m setup cell list --json
 python3 -m setup cell status --company boatyard --json
 python3 -m setup cell stop|start --company boatyard --json
@@ -274,6 +278,15 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   in its own zone if it has one (`hub.ticofiles.com`). A host under the wildcard that has a DNS record of its own
   (`hub.tico.team` and `runner.tico.team` point at the old instance today) must be changed to that CNAME or deleted.
   Cloudflare's universal certificate covers one label below the zone, so a deeper name needs a certificate of its own.
+- **`--page-host HOST`** (for example `acme.tico.page`): the company's [Company page](company-page.md) host. The cell
+  serves its files from `pages/<slug>/current` in the company's folder, without waking the company: the home page,
+  `data.json`, `feed.xml` and `/assets/*`, for GET and HEAD only, and never with a reader's cookie or a query string.
+  Every other request on that host goes to the company's server, as for its domain. The host is refused with
+  `bad_domain` when it is the company's own domain or an alias, and with `domain_taken` when another company has it.
+  Leaving the flag
+  out keeps the host; `--page-host ""` clears it and keeps the folder. `remove` deletes the folder unless
+  `--keep-data` is given. `list` and `status` show `page_host` and `page_url` when one is set.
+  A host under the page domain needs no route of its own; any other host gets one, as an alias does.
 - **`--env-file F`** (0600, `KEY=VALUE` lines, keys `[A-Z][A-Z0-9_]*`, values on one line): settings the cell does not
   write, such as `TICO_RUNNER_URL`, `TICO_VISUAL_ORIGIN`, `TICO_BLOB_BUCKET`, `TICO_BLOB_REGION`, `TICO_INBOUND_KEY`,
   `TYPESAFE_API_KEY`, `TICO_STALE_REVIEW`, `TICO_SUPPORT_ACCESS`, `TICO_OIDC_ALLOWED_DOMAINS`. They are kept in
@@ -282,7 +295,8 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   invite, owner link, backup, company file), its sign-in, network, preset and support keys, and the ones that belong
   to a single-company install: `CLOUDFLARE_TUNNEL_TOKEN`, `COMPOSE_PROFILES`, `COMPOSE_PROJECT_NAME`,
   `TICO_UPDATER_URL`, `TICO_UPDATES`, `TICO_CELL`, `TICO_TAG`, `TICO_PORT`, `TICO_EXPECTED_AWS_ACCOUNT`,
-  `TICO_EXPECTED_AWS_ROLE`, and `TICO_CADDY*` and `TICO_TUNNEL*`. So pass the team name and sign-in button as `--company-name` and `--signin-label`,
+  `TICO_EXPECTED_AWS_ROLE`, `TICO_CADDY*`, `TICO_TUNNEL*`, and the page's `TICO_READER_ORIGIN` and
+  `TICO_COMPANY_PAGE_DIR`. So pass the team name and sign-in button as `--company-name` and `--signin-label`,
   not in the file. The values are secrets: never printed, masked in every detail. Passing `--env-file` again replaces
   `extra.env`; leaving it out keeps it.
 - **`--import-data FILE`** (a `.tar` or `.tar.gz` of the contents of the install's `/data`: `hub.sqlite` and its
