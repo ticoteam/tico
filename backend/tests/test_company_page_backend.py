@@ -1,5 +1,6 @@
 """The Company page's backend seams: what the mission discloses, the edge's route allowlist, and the switch's side effects.
 Acme is the fictional company. Each test stands for a way something could leave the install that the owner did not allow."""
+import html as htmllib
 import json
 import re
 from datetime import datetime, timezone
@@ -136,6 +137,12 @@ JPEG = b"\xff\xd8\xff\xe0" + b"\0" * 64
 WEBP = b"RIFF\0\0\0\0WEBP" + b"\0" * 64
 
 
+def meta_policy(page_html):
+    """The policy the page's own meta tag sets, unescaped: the browser enforces it alongside the response header's."""
+    found = re.search(r'http-equiv="Content-Security-Policy" content="([^"]*)"', page_html)
+    return htmllib.unescape(found.group(1))
+
+
 def test_the_preview_is_the_page_s_own_view_so_pnl_lines_and_the_logo_show_as_they_do_there(books, monkeypatch):  # noqa: F811
     """The owner's preview is built the way the page is: a P&L line sits in the table, and the logo is there (inline, as the
     preview can load nothing from a release folder)."""
@@ -151,8 +158,16 @@ def test_the_preview_is_the_page_s_own_view_so_pnl_lines_and_the_logo_show_as_th
         view = preview_view(c, books.settings, A.get(c, "investors"), "2026-10-15")
     assert [s["group"] for s in view["stats"] if s["label"] == "Subscriptions"] == ["pnl"]
     assert view["company"]["logo_url"].startswith("data:image/png;base64,")
-    assert 'src="data:image/png;base64,' in render.page(view, inline_logo=True)
-    assert 'src="data:' not in render.page(view)     # a release page never carries an inline logo
+    preview = render.page(view, preview=True)
+    assert 'src="data:image/png;base64,' in preview and "url(data:font/woff2;base64," in preview
+    assert "assets/fonts/" not in preview
+    # The document's own policy is what the browser enforces, so it must allow what the preview loads, and only that.
+    directives = dict(part.split(" ", 1) for part in meta_policy(preview).split("; ") if " " in part)
+    assert "data:" in directives["img-src"] and directives["font-src"] == "data:"
+    release_page = render.page(view)
+    assert 'src="data:' not in release_page and "url(data:font" not in release_page
+    release_policy = dict(part.split(" ", 1) for part in meta_policy(release_page).split("; ") if " " in part)
+    assert release_policy["img-src"] == "'self'" and release_policy["font-src"] == "'self'"
 
 
 def upload(api, data, token="ana-test", expected=200):

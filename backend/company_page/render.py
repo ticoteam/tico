@@ -21,6 +21,15 @@ from xml.sax.saxutils import escape as xml_escape
 TEMPLATE_DIR = Path(__file__).parent / "template"
 # Copied into each release as assets/fonts; the CSS asks for them relatively, and a missing font falls back to the stack.
 FONT_DIR = TEMPLATE_DIR / "fonts"
+_FONT_URL = re.compile(r"url\(assets/fonts/([A-Za-z0-9._-]+\.woff2)\)")
+
+
+def _inline_fonts(css):
+    """The owner's preview has no release folder, and its sandbox origin can't load a file from the app: the fonts ride in
+    the stylesheet instead, as data."""
+    def data(match):
+        return "url(data:font/woff2;base64," + base64.b64encode((FONT_DIR / match.group(1)).read_bytes()).decode() + ")"
+    return _FONT_URL.sub(data, css)
 
 # Reader routes this template links to; reader_app.py answers them.
 SIGN_IN_PATH = "/sign-in"
@@ -493,13 +502,17 @@ def _hash(text):
     return "'sha256-" + base64.b64encode(hashlib.sha256(text.encode("utf-8")).digest()).decode() + "'"
 
 
-def _document(view, body, title, description, canonical=""):
+def _document(view, body, title, description, canonical="", preview=False):
     company = _map(view.get("company"))
     accent = accent_of(company.get("accent"))
     theme = f":root{{--accent:{accent};--on-accent:{_on_accent(accent)}}}"
     css, script = _template("page.css"), _template("page.js")
+    # The preview's images and fonts are inline (see _inline_fonts and logo_of); a release's come from its own folder.
+    if preview:
+        css = _inline_fonts(css)
+    img, font = ("'self' data:", "data:") if preview else ("'self'", "'self'")
     policy = ("default-src 'none'; "
-              f"style-src {_hash(theme)} {_hash(css)}; script-src {_hash(script)}; img-src 'self'; font-src 'self'; "
+              f"style-src {_hash(theme)} {_hash(css)}; script-src {_hash(script)}; img-src {img}; font-src {font}; "
               "connect-src 'self'; form-action 'self'; base-uri 'none'")
     public = _is_public(view)
     robots = "" if public else '<meta name="robots" content="noindex,nofollow,noarchive">'
@@ -514,9 +527,9 @@ def _document(view, body, title, description, canonical=""):
             f'<style>{theme}</style><style>{css}</style></head><body>{body}<script>{script}</script></body></html>')
 
 
-def _brand(company, inline_logo=False):
+def _brand(company, preview=False):
     name = _text(company.get("name"))
-    logo = logo_of(company.get("logo_url"), inline_logo)
+    logo = logo_of(company.get("logo_url"), preview)
     mark = (f'<img class="logo" src="{_e(logo)}" alt="" width="36" height="36">' if logo
             else f'<div class="logo" aria-hidden="true">{_e(name[:1].upper())}</div>')
     return f'<div class="brand">{mark}<div class="name">{_e(name)}</div></div>'
@@ -535,9 +548,9 @@ def _url(company):
     return text.rstrip("/") + "/"
 
 
-def page(view, inline_logo=False):
+def page(view, preview=False):
     """The whole page. Stats sit above updates; the newest update is open, and it reads with no script at all. The owner's
-    preview passes `inline_logo`: its logo arrives as a data URI, which a release never carries."""
+    preview passes `preview`: its logo and fonts arrive as data URIs, which a release never carries."""
     view = _map(view)
     company = _map(view.get("company"))
     updated = _date(company.get("updated_at"))
@@ -554,12 +567,12 @@ def page(view, inline_logo=False):
     mark = ('<i aria-hidden="true"></i>' if public else
             '<svg aria-hidden="true" viewBox="0 0 16 16" width="13" height="13"><rect x="3" y="7" width="10" height="7" rx="1.5"></rect><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"></path></svg>')
     stamp = _day(company.get("updated_at"))
-    header = (f'<header><div class="top">{_brand(company, inline_logo)}<div class="tools">{tools}</div></div>'
+    header = (f'<header><div class="top">{_brand(company, preview)}<div class="tools">{tools}</div></div>'
               f'<h1>{_e(mission or "Company updates")}</h1><div class="meta"><span class="badge">{mark}{_e(badge_label(view))}</span>'
               + (f'<span>Updated {_e(stamp)}</span>' if stamp else "") + "</div></header>")
     body = f'<div class="wrap">{header}{_stats(view, year)}{_updates(view, year)}{_footer()}</div>'
     title = f"{name}: {mission}" if name and mission else (name or mission)
-    return _document(view, body, title, mission or name, _url(company))
+    return _document(view, body, title, mission or name, _url(company), preview=preview)
 
 
 def signed_out(view):

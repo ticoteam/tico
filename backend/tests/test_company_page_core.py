@@ -940,5 +940,6 @@ def test_routes_owners_and_admins_write_bots_and_members_dont(api, monkeypatch, 
     r = api.get("/api/v2/company-page/preview?audience=investors", headers=headers("ben-test"))
     assert r.status_code == 200 and r.text.startswith("<!doctype html>")
     assert "sandbox" in r.headers["content-security-policy"] and "no-store" in r.headers["cache-control"]
+    assert "font-src data:" in r.headers["content-security-policy"]     # the fonts ride in the page, as its logo does
     assert seen["audience"] == {"kind": "investors", "name": "Investors"}
     assert api.get("/api/v2/company-page/preview?audience=nobody", headers=headers()).status_code == 404

@@ -23,7 +23,7 @@ from . import stats as ST
 PAGE_BYTES = 256 * 1024
 PAGE_MOST = 200
 # The preview is served on the app's own origin, so it runs sandboxed: an opaque origin can't touch the app's session.
-PREVIEW_POLICY = ("default-src 'none'; img-src data: https:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+PREVIEW_POLICY = ("default-src 'none'; img-src data: https:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
                   "base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts")
 
 
@@ -259,7 +259,7 @@ def register(app, store, auth, mutate, settings):
             found = A.get(c, audience)
             if not found:
                 raise Problem("not_found", "No such audience", 404)
-            html = render.page(preview_view(c, settings, found, H.now()), inline_logo=True)
+            html = render.page(preview_view(c, settings, found, H.now()), preview=True)
         return HTMLResponse(html, headers={"Content-Security-Policy": PREVIEW_POLICY, "Cache-Control": "no-store"})
 
     # ------------------------------------------------------------------ audiences
