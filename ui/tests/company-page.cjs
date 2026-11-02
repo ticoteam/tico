@@ -63,7 +63,7 @@ const AVAILABLE = [{source_kind: 'kpi', ref_id: 'k1', label: 'Active homes'}, {s
 
 function fakeHub(opts) {
   const domain = opts.noDomain ? '' : 'pages.acme.example', origin = opts.noSlug || opts.noDomain ? '' : 'https://open.acme.example';
-  const hub = {settings: {transparency: 'closed', slug: opts.noSlug || opts.noDomain ? null : 'acme', accent: null, logo_file_id: null, company_name: 'Acme', reader_origin: origin, page_domain: domain, address: origin},
+  const hub = {settings: {transparency: 'closed', slug: opts.noSlug || opts.noDomain ? null : 'acme', accent: null, logo_file_id: null, company_name: 'Acme', reader_origin: origin, page_domain: domain, address: origin, public_live: false},
     emailAvailable: opts.noEmail !== true, scheduleProblems: opts.scheduleProblems || [], releaseFails: !!opts.releaseFails, tightenedCount: opts.tightened || 0,
     signIn: opts.privateOn === false ? {available: false, reason: 'No sign-in provider is set up (OIDC), so private audiences are off'} : {available: true, reason: ''},
     editions: opts.noEditions ? [] : EDITIONS(), audiences: structuredClone(AUDIENCES), stats: opts.noEditions ? [] : structuredClone(STATS),
@@ -236,6 +236,17 @@ async function shotPart(page, id, name) {
     assert.deepEqual(hub.writes.at(-1), ['PATCH', '/api/v2/company-page', {transparency: 'open'}]);
     assert.equal(await level('open').getAttribute('aria-checked'), 'true');
     assert.match(await page.locator('.cp-address').innerText(), /open\.acme\.example/);
+    // Open with nothing approved answers not found, so the address isn't a link until the server says the page is up.
+    assert.equal(await page.locator('[data-cp-not-live]').count(), 1);
+    assert.equal(await page.locator('a.cp-address').count(), 0);
+    await shot(page, 'transparency-open-not-live-1280');
+    hub.settings.public_live = true;
+    await page.reload();
+    await page.locator('a.cp-address').waitFor();
+    assert.equal(await page.locator('[data-cp-not-live]').count(), 0);
+    hub.settings.public_live = false;
+    await page.reload();
+    await page.locator('[data-cp-not-live]').waitFor();
     // Taking something away says what stops being visible, first.
     await level('private').click();
     assert.match(await page.locator('dialog.cp-dlg').innerText(), /public page comes down/);

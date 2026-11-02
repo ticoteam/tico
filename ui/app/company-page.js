@@ -284,7 +284,11 @@ function cpTransparency() {
   const seg = `<div class="theme-seg cp-seg" role="radiogroup" aria-label="Transparency" data-cp-level>${CP_LEVELS.map(([v, l]) =>
     `<button type="button" role="radio" data-v="${v}" aria-checked="${v === level}"${v !== 'closed' && noWhere || v === 'private' && !privateOn ? ' disabled' : ''}>${l}</button>`).join('')}</div>`;
   const url = s.address || '';
-  const address = level !== 'closed' && url ? `<a class="cp-address" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url.replace(/^https?:\/\//, ''))}<span class="nav-icon" aria-hidden="true">open_in_new</span></a>` : '';
+  const shown = esc(url.replace(/^https?:\/\//, ''));
+  // Open with nothing approved to show answers not found: the address isn't offered as a link until it reaches a page.
+  const address = level === 'closed' || !url ? ''
+    : level === 'open' && s.public_live !== true ? `<span class="cp-address" data-cp-not-live>${shown}</span><span class="cp-level-note">Nothing public yet</span>`
+    : `<a class="cp-address" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${shown}<span class="nav-icon" aria-hidden="true">open_in_new</span></a>`;
   // An install with its own reader address has nothing to set here. With a page domain, the address is what Open needs first.
   const set = !s.reader_origin && s.page_domain ? cpBtn('data-cp-address', s.slug ? 'Change address' : 'Set address') : '';
   const note = noWhere ? '<p class="cp-note" data-cp-no-address>This install has no page address (TICO_READER_ORIGIN)</p>' : privateOn ? '' : cpPrivateOff();
