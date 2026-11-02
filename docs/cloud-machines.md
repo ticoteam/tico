@@ -106,6 +106,9 @@ The base step (below) installs these, so every machine made from the snapshot ha
 - **Google Chrome stable**, headed (x86_64; arm64 gets the distro's Chromium, since Google ships no Linux arm64 Chrome).
 - **Xvfb, x11vnc and matchbox-window-manager**: the same packages as the computer screen (`scripts/tico screen on`),
   so Chrome can run headed on a virtual display. The runner picks the display (`:99` and up); nothing to configure.
+  The screen is on by default on a cloud machine, so bots get a display, and the computer's operator and admins can
+  open it in Settings > Computers. Screen Off there stops people opening it; the display stays up for bots.
+  `scripts/tico screen off` takes the display down.
   A bot whose browser should come from a home connection sets **Browse through** to a computer that shares its internet
   ([Share internet with bots](computers.md#share-internet-with-bots)).
 - **Fonts** (`fonts-liberation`, `fonts-noto-color-emoji`).

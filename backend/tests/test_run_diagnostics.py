@@ -3,6 +3,7 @@ import json
 
 import pytest
 
+from backend import run_diagnostics
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
 
@@ -152,3 +153,107 @@ def test_failed_reply_text_never_becomes_list_reason(api):
     post(api, f"attempts/{a['id']}/complete",
          {'outcome': 'failed', 'last_seq': 0, 'text': 'private reply text'}, machine['token'])
     assert listed(api, a['id'])['end_reason'] == 'Process failed (no exit status reported)'
+
+
+def silent_since(api, aid, started):
+    """A run started at `started`, with no heartbeat and no event since: its computer went quiet at that moment."""
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE attempts SET started=?,created=?,lease_until=? WHERE id=?',
+                  (started, started, H.shift(H.now(), hours=2), aid))
+        c.execute('UPDATE attempt_diagnostics SET heartbeat_at=NULL,last_event_at=? WHERE attempt_id=?', (started, aid))
+
+
+def tick(api, at):
+    """One scheduler pass at `at`, by a server that has been listening since long before the silences these tests set up."""
+    from backend.scheduler import Scheduler
+    scheduler = Scheduler(api.app.state.store, api.app.state.execution)
+    scheduler.listening_since = H.shift(H.now(), days=-1)
+    scheduler.tick(H.parse_ts(at))
+
+
+def test_silent_run_is_marked_stalled_then_ended_by_the_server_at_its_limit_plus_grace(api):
+    """No heartbeat, no events, no computer answer: the server marks it stalled, and ends it at max_run_minutes (60)
+    plus the five-minute grace, on its own clock. The computer never reports."""
+    machine, _, a = start(api)
+    t0 = H.now()
+    silent_since(api, a['id'], t0)
+    tick(api, H.shift(t0, minutes=6))
+    row = listed(api, a['id'])
+    assert row['stalled'] and row['stall_minutes'] == 5
+    tick(api, H.shift(t0, minutes=64))
+    assert listed(api, a['id'])['stalled']
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM attempts WHERE id=?', (a['id'],)).fetchone()[0] == 'running'
+    tick(api, H.shift(t0, minutes=66))
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM attempts WHERE id=?', (a['id'],)).fetchone()[0] == 'expired'
+    row = listed(api, a['id'])
+    assert row['end_reason'].startswith('Ended by the server: no heartbeat for 5 minutes')
+    assert 'max_run_minutes (60 minutes)' in row['end_reason']
+
+
+def test_server_outage_is_not_the_computers_silence_for_the_cap(api):
+    """A run past its limit with no heartbeat since before a server outage is not capped until the server has been
+    listening for longer than STALL_MINUTES: the outage is not the computer's silence."""
+    machine, _, a = start(api)
+    t0 = H.now()
+    silent_since(api, a['id'], H.shift(t0, minutes=-70))
+
+    def capped():
+        with api.app.state.store.read() as c:
+            return c.execute('SELECT 1 FROM events WHERE target=? AND action=?',
+                             (a['id'], run_diagnostics.CAP_EVENT)).fetchone()
+
+    with api.app.state.store.transaction() as c:
+        run_diagnostics.cap(c, t0, H.shift(t0, minutes=-(run_diagnostics.STALL_MINUTES - 2)))
+    assert not capped()
+    with api.app.state.store.transaction() as c:
+        run_diagnostics.cap(c, t0, H.shift(t0, minutes=-(run_diagnostics.STALL_MINUTES + 1)))
+    assert capped()
+
+
+def test_capped_run_is_not_extended_by_stall_grace_or_a_call_in_flight(api, monkeypatch):
+    """The server's cap ends the run through expiry: neither the lease grace from a server stall nor a call from the
+    computer still in flight extends it."""
+    machine, _, a = start(api)
+    t0 = H.now()
+    silent_since(api, a['id'], H.shift(t0, minutes=-70))
+    far = H.shift(t0, hours=3)
+    monkeypatch.setattr(api.app.state.execution, 'stall_recovery', lambda now: ((now, now, far),))
+    api.app.state.execution.calls[a['id']] = {object(): (machine['runner_id'], H.now())}
+    tick(api, t0)
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM attempts WHERE id=?', (a['id'],)).fetchone()[0] == 'expired'
+    assert listed(api, a['id'])['end_reason'].startswith('Ended by the server')
+
+
+def test_a_run_still_heartbeating_past_its_limit_is_left_to_the_runner(api):
+    machine, _, a = start(api)
+    t0 = H.now()
+    silent_since(api, a['id'], H.shift(t0, minutes=-70))
+    post(api, f"attempts/{a['id']}/renew", {}, machine['token'])
+    tick(api, H.now())
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM attempts WHERE id=?', (a['id'],)).fetchone()[0] == 'running'
+    assert not listed(api, a['id'])['stalled']
+
+
+def test_a_server_capped_run_does_not_come_back_on_renewal_and_its_late_result_is_still_filed(api):
+    """The computer comes back after the cap with the same assignment: its renewal is refused, the run stays ended,
+    and a late result from the turn is still filed as the turn's outcome."""
+    machine, _, a = start(api)
+    post(api, f"attempts/{a['id']}/events", {'events': [
+        {'seq': 1, 'kind': 'tool', 'payload': {'tool': 'exec_command', 'status': 'started'}}]}, machine['token'])
+    t0 = H.now()
+    silent_since(api, a['id'], H.shift(t0, minutes=-70))
+    tick(api, t0)
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM attempts WHERE id=?', (a['id'],)).fetchone()[0] == 'expired'
+    renewal = api.post(f"/api/v2/attempts/{a['id']}/renew", json={}, headers=headers(machine['token']))
+    assert renewal.status_code == 409
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT state FROM attempts WHERE id=?', (a['id'],)).fetchone()[0] == 'expired'
+    late = api.post(f"/api/v2/attempts/{a['id']}/complete", json={'outcome': 'completed', 'last_seq': 1},
+                    headers=headers(machine['token']))
+    assert late.status_code == 200
+    assert listed(api, a['id'])['end_reason'] == 'Finished'

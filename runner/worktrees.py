@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import threading
 from urllib.parse import quote
 import uuid
@@ -55,11 +56,11 @@ def disk_floor(workspace):
         raise ValueError(f'Not enough disk to create worktree: {usage.free / repositories.GB:.1f} GB free, needs {floor / repositories.GB:g} GB. Free space on this volume')
 
 
-def git(path, *args, env=None, check=True):
+def git(path, *args, env=None, check=True, errors='strict'):
     if args[:2] == ('worktree', 'prune') and (Path(path) / '.git' / 'worktrees').is_symlink():
         raise ValueError('Worktree registrations point outside the base clone; left as they are')
     done = isolation.run([*safe_git.prefix(path), '-C', str(path), *args], env=safe_git.environment(env), capture_output=True, text=True,
-                         stdin=subprocess.DEVNULL, timeout=120)
+                         errors=errors, stdin=subprocess.DEVNULL, timeout=120)
     if check and done.returncode:
         error = ValueError(f'Git {args[0]} failed (exit {done.returncode}); check access, network, disk space and repository state')
         if args[0] in ('push', 'fetch', 'ls-remote'):
@@ -906,6 +907,88 @@ def build_file(name):
 
 _SECRET = ('.env*', '*.pem', '*.key', 'id_rsa*', 'credentials*', '*.p12')
 
+# Conflict markers with their labels dropped, so git's text and the file compare equal whatever the labels say.
+_MARKER_LABEL = re.compile(rb'^(<{7}|\|{7}|>{7})(?: .*)?$', re.M)
+
+
+def _untouched_conflict(path, gitdir, name, env):
+    """True when a conflicted file is still exactly git's own conflicted text for its stages: nothing resolved or edited,
+    line endings included. Bytes throughout, so no text decoding or newline translation can make two files look alike."""
+    try:
+        data = (path / name).read_bytes()
+        data.decode('utf-8')  # a conflicted file that is not text is not git's own text here: keep it
+    except (OSError, UnicodeDecodeError):
+        return False
+    stages = {}
+    for stage in ('1', '2', '3'):
+        shown = isolation.run([*safe_git.prefix(path), '-C', str(path), 'show', f':{stage}:{name}'],
+                              env=safe_git.environment(env), capture_output=True, stdin=subprocess.DEVNULL, timeout=120)
+        if shown.returncode == 0:
+            stages[stage] = shown.stdout
+    if '2' not in stages or '3' not in stages:
+        return False
+    with tempfile.TemporaryDirectory(dir=gitdir) as scratch:
+        files = {}
+        for stage in ('1', '2', '3'):
+            files[stage] = Path(scratch) / ('stage' + stage)
+            files[stage].write_bytes(stages.get(stage, b''))
+        shaped = _MARKER_LABEL.sub(rb'\1', data)
+        for flags in ([], ['--diff3']):
+            merged = isolation.run([*safe_git.prefix(path), '-C', str(path), 'merge-file', '-p', *flags,
+                                    str(files['2']), str(files['1']), str(files['3'])],
+                                   env=safe_git.environment(env), capture_output=True, stdin=subprocess.DEVNULL, timeout=120)
+            if 1 <= merged.returncode <= 127 and _MARKER_LABEL.sub(rb'\1', merged.stdout) == shaped:
+                return True
+    return False
+
+
+def _merge_result_tree(merged):
+    """The tree git's own merge of HEAD and MERGE_HEAD writes, from `git merge-tree --write-tree` output; '' when the
+    output is not one (an older git refuses the option, which keeps the worktree)."""
+    tree = merged.stdout.split('\n', 1)[0].strip() if merged.returncode in (0, 1) else ''
+    return tree if re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', tree) else ''
+
+
+def _clear_merge(path, row, env):
+    """Abort a merge this removal finds abandoned in its own tree, before any switch, add or commit. Only the removal
+    calls it. Anything not provably abandoned is kept untouched: a release tree, another operation in progress, a
+    conflict resolved or edited by hand, or a staged change that is not main's."""
+    gitdir = Path(git(path, 'rev-parse', '--path-format=absolute', '--git-dir', env=env).stdout.strip())
+    if not (gitdir / 'MERGE_HEAD').exists():
+        return
+    if row.get('release'):
+        raise ValueError('kept: merge in progress; finish or abort it to free this worktree')
+    unresolved = 'kept: merge in progress with resolved or unrecognised conflicts; commit or abort it to free this worktree'
+    if any((gitdir / name).exists() for name in ('CHERRY_PICK_HEAD', 'REVERT_HEAD', 'rebase-merge', 'rebase-apply')):
+        raise ValueError(unresolved)
+    listed = git(path, 'ls-files', '-u', '-z', env=env).stdout.split('\0')
+    unmerged = {entry.split('\t', 1)[1] for entry in listed if '\t' in entry}
+    if not unmerged or not all(_untouched_conflict(path, gitdir, name, env) for name in unmerged):
+        raise ValueError(unresolved)
+    tree = _merge_result_tree(git(path, 'merge-tree', '--write-tree', 'HEAD', 'MERGE_HEAD', env=env, check=False))
+    if not tree:
+        raise ValueError(unresolved)
+    # Renames off: a staged deletion paired with an identical addition must still be listed as a deletion.
+    touched = set(filter(None, git(path, 'diff', '--no-renames', '--name-only', '-z', 'HEAD', 'MERGE_HEAD', env=env).stdout.split('\0')))
+    touched |= set(filter(None, git(path, 'diff', '--no-renames', '--cached', '--name-only', '-z', env=env).stdout.split('\0')))
+    if any('\ufffd' in name for name in touched | unmerged):
+        raise ValueError(unresolved)
+    # The abort refuses an unstaged edit to a path the merge itself changed, so keep that case with the same error.
+    changed = set(filter(None, git(path, 'diff', '--no-renames', '--name-only', '-z', 'HEAD', tree, env=env).stdout.split('\0')))
+    edited = set(filter(None, git(path, 'diff', '--no-renames', '--name-only', '-z', env=env).stdout.split('\0')))
+    if (edited & changed) - unmerged:
+        raise ValueError(unresolved)
+    # The index must hold git's own merge result for every path the merge touched, conflicts aside. Any other entry is
+    # a resolution, which the abort would discard. Equal blobs prove nothing: a resolution can select either side.
+    for name in touched - unmerged:
+        # Mode and blob both: a staged mode change on a path the merge touched would otherwise be reset by the abort.
+        # Literal name: a pathspec would read `[`, `*` or `?` as patterns and match a sibling file's entry.
+        ours = git(path, '--literal-pathspecs', 'ls-files', '-s', '--', name, env=env, check=False).stdout.split()[:2]
+        expected = git(path, '--literal-pathspecs', 'ls-tree', tree, '--', name, env=env, check=False).stdout.split()[:3:2]
+        if ours != expected:
+            raise ValueError(unresolved)
+    git(path, 'merge', '--abort', env=env)
+
 
 def _act(workspace, row, action, env, vault_values=(), before_remove=lambda: True):
     env = safe_git.environment(env)
@@ -939,6 +1022,10 @@ def _act(workspace, row, action, env, vault_values=(), before_remove=lambda: Tru
         if not defaults:
             raise ValueError('Repository default branch is unknown; refresh Repositories before cleanup')
         git(base, 'worktree', 'prune', '--expire', 'now', env=env)
+        try:
+            _clear_merge(path, row, env)
+        except UnicodeDecodeError:
+            raise ValueError('kept: merge in progress with resolved or unrecognised conflicts; commit or abort it to free this worktree') from None
         ignored = git(path, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z', env=env).stdout.split('\0')
         if any(name and not build_file(name) for name in ignored):
             raise ValueError('kept: ignored files')
@@ -967,7 +1054,9 @@ def _act(workspace, row, action, env, vault_values=(), before_remove=lambda: Tru
             if exists and git(path, 'merge-base', '--is-ancestor', branch, 'HEAD', env=env, check=False).returncode:
                 raise ValueError('Task branch has separate history; kept worktree to preserve unpushed commits')
             from . import redact
-            patch = git(path, 'diff', '--no-ext-diff', '--no-textconv', 'HEAD', env=env).stdout
+            # The secret scan reads the patch leniently: a byte that is not text must not stop the save, which commits
+            # the bytes as they are.
+            patch = git(path, 'diff', '--no-ext-diff', '--no-textconv', 'HEAD', env=env, errors='replace').stdout
             patch += ''.join((path / name).read_text(errors='replace') for name in names if name and (path / name).is_file())
             known = redact.for_turn(env, vault_values)
             possible_secret = re.search(r'-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----|(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|sk-(?:proj-|ant-)?[A-Za-z0-9_-]{24,}', patch)

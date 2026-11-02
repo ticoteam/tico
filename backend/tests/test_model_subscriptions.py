@@ -189,6 +189,46 @@ def test_an_older_computer_runs_on_its_own_login_as_before(api):
     assert "subscriptions" not in get(api, "credential-runtime", turn["token"])
 
 
+def test_handing_a_turn_its_subscription_is_not_a_write(api):
+    """The hub sending the run its sign-in is what the computer's own login gets too: the run has written nothing."""
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    sid = add(api)["id"]
+    m = machine(api, signed_in=True)
+    give(api, m, "claude", sid)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-sub"}, m["token"])
+    assert get(api, "credential-runtime", turn["token"])["subscriptions"][0]["id"] == sid
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT coalesce(writes,0) FROM turns WHERE id=?", (turn["id"],)).fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM events WHERE action='subscription.sent_to_computer' AND target=?",
+                         (sid,)).fetchone()[0] == 1
+
+
+def test_a_subscription_turn_that_only_reports_a_busy_model_is_retried_not_held(api):
+    """Its sign-in was handed, but the run did nothing but say the model was busy: that is no work to hold for review."""
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    sid = add(api)["id"]
+    m = machine(api, signed_in=True)
+    give(api, m, "claude", sid)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-busy"}, m["token"])
+    get(api, "credential-runtime", turn["token"])
+    notice = "Selected model is at capacity. Please try a different model."
+    post(api, f"attempts/{turn['id']}/events", {"events": [
+        {"seq": 1, "kind": "status", "payload": {"state": "active", "tool_events": True}},
+        {"seq": 2, "kind": "message", "payload": {"text": notice, "final": False}},
+        {"seq": 3, "kind": "error", "payload": {"error": notice, "limit": True}}]}, m["token"])
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "failed", "last_seq": 3, "text": notice}, m["token"])
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (turn["job_id"],)).fetchone()[0] == "queued"
+
+
 def test_a_limit_met_on_a_subscription_holds_every_computer_given_it(api):
     setup(api)
     company(api)

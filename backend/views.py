@@ -840,7 +840,7 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     """(label, readiness_reason) for a bot's queued work: what it is waiting for, in a person's words. `human`: a
     person's message; `behind`: the bot is still answering earlier work in this same conversation; `queued`: it was
     sent with queue, so it waits for that turn to end rather than steering into it (backend/delivery.py)."""
-    from .performance import load_status
+    from .start_places import computer_hold
     from . import org_turns
     bot_state = H.bot(c, bot)["state"]
     label, readiness_reason = "Saved — queued", ""
@@ -867,10 +867,10 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     elif settings and org_turns.admission(c)['at_stop']:
         # Admission only: queued labels must not classify every bot's readiness and spend on each chat/status poll.
         label = 'Saved — ' + org_turns.REASON
-    elif not human and (location.get("machine") or {}).get("runner_id") and load_status(
-            c, location["machine"]["runner_id"])["overloaded"]:
+    elif not human and (location.get("machine") or {}).get("runner_id") and (
+            hold := computer_hold(c, location["machine"]["runner_id"])):
         # A person's own message still starts on a busy computer (start_places.from_person); it may wait for a turn.
-        label = "Saved — waiting: computer busy"
+        label = "Saved — waiting: " + hold[1]
     elif not location["ready"]:
         problems = (location.get("readiness") or {}).get("problems") or []
         if any(str(p).startswith("No AI provider is chosen") for p in problems):

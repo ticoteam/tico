@@ -2830,20 +2830,23 @@ class Execution:
         overdue = set(start_places.overdue(c))
         # The existing indexed event is committed atomically with its extension, so rollback
         # cannot consume grace and a later contact cohort cannot extend the same attempt twice.
+        from .run_diagnostics import CAP_EVENT
         rows = c.execute("SELECT a.*,EXISTS(SELECT 1 FROM events e WHERE e.target=a.id "
-                         "AND e.action='attempt.lease-grace') AS already_graced "
+                         "AND e.action='attempt.lease-grace') AS already_graced,"
+                         "EXISTS(SELECT 1 FROM events e WHERE e.target=a.id AND e.action=?) AS capped "
                          "FROM attempts a WHERE state IN ('leased','running') AND (lease_until<=?" +
                          (" OR id IN (" + ','.join('?' * len(overdue)) + ")" if overdue else "") + ")" +
                          (" AND id IN (" + ','.join('?' * len(attempt_ids)) + ")" if attempt_ids else "") +
                          " ORDER BY lease_until,id" + (" LIMIT ?" if limit is not None else ""),
-                         (now, *overdue, *(attempt_ids or ()), *((limit,) if limit is not None else ()))).fetchall()
+                         (CAP_EVENT, now, *overdue, *(attempt_ids or ()), *((limit,) if limit is not None else ()))).fetchall()
         # Contact alone does not enroll future work in a grace cohort: expiration must
         # first observe overdue leases, as it did before maintenance was chunked.
         graces = self.stall_recovery(now) if any(row["id"] not in overdue for row in rows) else ()
         for row in rows:
             with isolated(c, "expire", row["id"]):
                 # Its runner's call arrived and waits for the lock: the lease lapsed on our side, not the runner's.
-                heard = None if row["id"] in overdue else self.still_calling(row, now)
+                # A run the server capped is not extended by a call in flight or by stall grace (run_diagnostics.cap).
+                heard = None if row["id"] in overdue or row["capped"] else self.still_calling(row, now)
                 if heard:
                     until = H.shift(heard, seconds=self.store.settings.lease_seconds)
                     c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, row["id"]))
@@ -2851,7 +2854,7 @@ class Execution:
                             {"bot": row["bot"], "lapsed": row["lease_until"], "heard_at": heard, "lease_until": until})
                     continue
                 grace = next((g for g in graces if row["lease_until"] <= g[1]), None)
-                if grace and not row["already_graced"] and row["id"] not in overdue:
+                if grace and not row["already_graced"] and row["id"] not in overdue and not row["capped"]:
                     served_at, _, until = grace
                     c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, row["id"]))
                     H.event(c, H.KEEPER, "attempt.lease-grace", row["id"],
@@ -3168,17 +3171,16 @@ class Execution:
 
     @staticmethod
     def held_answer(c, runner_id):
-        from .performance import load_status
-        if load_status(c, runner_id)["overloaded"]:
-            return {"attempt": None, "waiting": "computer busy"}
+        hold = start_places.computer_hold(c, runner_id)
+        if hold:
+            return {"attempt": None, "waiting": hold[1]}
         return {"attempt": None}
 
     def held_starts(self, c, runner_id):
-        """(people_only, answer) for a computer that holds new starts: overloaded, or with turns already waiting
+        """(people_only, answer) for a computer that holds new starts: overloaded, not reporting, memory high, or with turns already waiting
         to start there. Only a person's own message is handed out then (start_places.from_person); with none queued,
         `answer` is the claim's answer at once. Capacity still applies to that message."""
-        from .performance import load_status
-        if not load_status(c, runner_id)["overloaded"] and not start_places.ready_waiting(c, runner_id):
+        if not start_places.computer_hold(c, runner_id) and not start_places.ready_waiting(c, runner_id):
             return False, None
         return True, (None if start_places.person_queued(c, runner_id) else self.held_answer(c, runner_id))
 
@@ -3883,6 +3885,7 @@ class Execution:
         Mac never stopped, so its result is worth more than a review of a phantom interruption. Neither the computer's
         capacity nor the bot's Turns at once is checked: refusing would not stop the turn on the Mac, only discard
         its result, so a turn claimed while this one lapsed briefly runs beside it."""
+        from .run_diagnostics import CAP_EVENT
         now = H.now()
         job = c.execute("SELECT state,message_id FROM jobs WHERE id=? AND attempt_id=?", (row["job_id"], row["id"])).fetchone()
         if (not row["finished"] or row["finished"] <= H.shift(now, seconds=-STALL_MAX)
@@ -3890,6 +3893,8 @@ class Execution:
                 # A Stop recorded after the lease lapsed stands over whatever the turn reports next: nothing brings
                 # it back, and `complete` files its result.
                 or row["stop_requested"]
+                # The server ended this run past its limit (run_diagnostics.cap): a renewal does not bring it back.
+                or c.execute("SELECT 1 FROM events WHERE target=? AND action=? LIMIT 1", (row["id"], CAP_EVENT)).fetchone()
                 or c.execute("SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=?", (row["job_id"], row["id"])).fetchone()
                 or c.execute("SELECT 1 FROM attempts WHERE bot=? AND lane=? AND state IN ('leased','running')",
                              (row["bot"], row["lane"])).fetchone()):

@@ -1516,10 +1516,14 @@ mod tests {
         // The enforced switches come first, so nothing the caller passes (a bare `--` included) can follow them.
         let (ok, args) = run(&["--new-window"], Some(proxy));
         assert!(ok);
-        assert_eq!(args, ["--tico-browser-exit=ops", flag.as_str(), webrtc, own.as_str(), "--new-window"]);
+        let quiet = "--disable-features=OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationGuideOnDeviceModel";
+        assert_eq!(
+            args,
+            ["--tico-browser-exit=ops", flag.as_str(), webrtc, "--disable-component-update", quiet, own.as_str(), "--new-window"]
+        );
         // One profile, always the bot's: naming it again is fine, any other is refused.
         let (ok, args) = run(&[&own, "--proxy-bypass-list=<-loopback>", flag.as_str()], Some(proxy));
-        assert!(ok && args[3] == own, "{args:?}");
+        assert!(ok && args[5] == own, "{args:?}");
         let theirs = format!("--user-data-dir={}", root.join("kept").display());
         assert!(!run(&[&theirs], Some(proxy)).0);
         assert!(!run(&["-user-data-dir=/tmp/x", "-new-window"], Some(proxy)).0, "a single-dash profile is read too");
@@ -1581,6 +1585,43 @@ mod tests {
         std::fs::remove_file(&lock).unwrap();
         symlink(format!("{}-{}", host.trim(), gone), &lock).unwrap();
         assert!(run(&[], Some(proxy)).0, "a lock left by a browser that exited is stale");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The wrapper's launch turns off Chrome's background model and component downloads, and a caller's own
+    /// `--disable-features` is folded into the one enforced switch: Chrome keeps only the last occurrence of a switch.
+    #[cfg(unix)]
+    #[test]
+    fn the_browser_wrapper_quiets_chromes_background_downloads_and_keeps_a_callers_disable_features() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::Command;
+        let root = std::env::temp_dir().join(format!("tico-exit-quiet-{}", uuid::Uuid::new_v4()));
+        let (bin, home) = (root.join("bin"), root.join("home"));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let fake = bin.join("google-chrome");
+        std::fs::write(&fake, "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done\n").unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let shims = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/browser-exit");
+        let out = Command::new(shims.join("google-chrome"))
+            .args(["--disable-features=Foo,Bar", "--new-window"])
+            .env("PATH", format!("{}:{}:/usr/bin:/bin", shims.display(), bin.display()))
+            .env("HOME", &home)
+            .env("HUB_BOT", "ops")
+            .env("TICO_BROWSER_PROXY", "http://127.0.0.1:21001")
+            .env("CHROMIUM_FLAGS", "--disable-features=FromEnv")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let args: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().map(String::from).collect();
+        assert!(args.iter().any(|a| a == "--disable-component-update"), "{args:?}");
+        assert!(args.iter().any(|a| a == "--new-window"), "{args:?}");
+        let features: Vec<&str> = args.iter().filter_map(|a| a.strip_prefix("--disable-features=")).collect();
+        assert_eq!(
+            features,
+            ["OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationGuideOnDeviceModel,FromEnv,Foo,Bar"],
+            "one switch, the caller's features included: {args:?}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

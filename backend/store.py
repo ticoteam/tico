@@ -1249,6 +1249,12 @@ class Store:
                 H.add_column(c, "runners", "screen_default_pending", "INTEGER NOT NULL DEFAULT 0")
                 # Performance diagnostics: on unless a person turns them off (backend/performance.py).
                 H.add_column(c, "runners", "performance", "TEXT NOT NULL DEFAULT 'on'")
+                # Memory hold on a computer: its newest sample at 85% or more sets it, below 80% clears it
+                # (backend/performance.py ingest; backend/start_places.py computer_hold).
+                H.add_column(c, "runners", "memory_hold", "INTEGER NOT NULL DEFAULT 0")
+                # The newest sample's time, kept with the computer: sample retention drops old rows, not this mark.
+                H.add_column(c, "runners", "last_sampled_at", "INTEGER")
+                _performance.backfill_last_sampled(c)
                 # When a computer said it is restarting after a person pressed Restart, from its heartbeat; NULL once
                 # a heartbeat no longer says so (backend/health.py `restarting`).
                 H.add_column(c, "runners", "restart_since", "TEXT")
