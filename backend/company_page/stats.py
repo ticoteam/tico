@@ -269,6 +269,13 @@ class _Books:
         read = self._read_pnl("accrual", FINANCE_MONTHS)
         return {a for a, (actual, _) in read["rows"].items() if any(actual)}
 
+    def active_by_period(self, quarterly):
+        """P&L accounts with anything posted in each disclosed period, in order: a month, or a whole quarter. A total is
+        the sum of what is posted within its period, so the window's active accounts don't say what one period shows."""
+        read = self._read_pnl("accrual", QUARTERLY_MONTHS if quarterly else FINANCE_MONTHS)
+        return [{a for a, (actual, _) in read["rows"].items() if any(actual[i] for i in idx if i < len(actual))}
+                for idx, _, _ in self._groups(read, quarterly)]
+
     def is_private(self, account_id):
         return account_id in self.private
 
@@ -469,14 +476,25 @@ class _Check:
                 self.hold((change,), f"{self._label(change)} gives exact differences of {self._label(level)}, which "
                                      f"is {kept['mode']}.")
 
+    def _private_alone_in_a_period(self, total, accounts):
+        """Whether a period the total is shown for has a private account as its only active part, at the period lengths
+        its shown stats use."""
+        for quarterly in {D.parse_rounding(r["rounding"]).quarterly for _, _, r in self.shown[total]}:
+            for active in self.books.active_by_period(quarterly):
+                parts = active & accounts
+                if len(parts) == 1 and self.books.is_private(next(iter(parts))):
+                    return True
+        return False
+
     def _sum(self, total, accounts, name):
         """A total and its parts, by account. A line stat covers everything under it in the chart. A total shown with no
         line beside it is the sum of its active accounts: when that is one private account, the total is its figure."""
         from ..finance.core.ledger import descendants
         lines = ["line:" + a for a in accounts if "line:" + a in self.shown and "line:" + a != total]
         if not lines:
-            if total in self.shown and len(accounts) == 1 and self.books.is_private(next(iter(accounts))):
-                self.hold((total,), f"{self._label(total)} is the only active line under {name}, which is private.")
+            if total in self.shown and self._private_alone_in_a_period(total, accounts):
+                self.hold((total,), f"{self._label(total)} is the only active line under {name} in a period shown, "
+                                    f"which is private.")
             return
         covered = set().union(*(descendants(self.books.accounts, q[5:]) for q in lines))
         uncovered = [a for a in accounts if a not in covered and "line:" + a != total]

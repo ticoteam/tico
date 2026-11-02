@@ -511,6 +511,19 @@ def test_a_total_of_several_active_accounts_is_not_held_for_one_private_part(boo
     assert held_labels(result) == set() and by_label(result)["Spend"]["display"] == "$14,000"
 
 
+def test_a_total_is_held_when_one_month_is_only_a_private_account_though_the_window_has_others(books):
+    """Rent is the only spend in August and Payroll the only spend in September. Over the window two accounts are
+    active, but September's total is Payroll alone, so it is the private figure and is held."""
+    setup(books, shown("pnl_line"), shown("burn"))
+    with books.transaction() as c:
+        spend(c, "6000", 4_000_00, day="2026-08-10")
+        _private_payroll(c, 10_000_00)
+        ST.create_stat(c, OWNER, "finance_metric", "spend")
+        result = ST.project(c, "investors", "2026-10-15")
+    assert held_labels(result) == {"Spend"} and "only active line under total spend" in result["held"][0]["reason"]
+    assert "10,000" not in json.dumps(result)
+
+
 def test_a_shown_total_is_held_when_the_books_cannot_be_read(books):
     """The check can't tell what a total would give away, so the totals shown are held."""
     setup(books, shown("pnl_line"), shown("burn"))
