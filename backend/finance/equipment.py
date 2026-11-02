@@ -28,13 +28,13 @@ WARRANTY_LEAD = 60
 PHOTO_GATE = K.Gate("needs_approval", "owner", "default:bot-equipment-photo")
 # Whether an actor may read a Library file by its id: Library's own check (files.readable_by), which needs the sign-in's
 # Auth, so the app installs it once (finance_routes.install). Until then a photo is refused, never taken unchecked.
-FILE_READABLE: Callable[[sqlite3.Connection, str, str], bool] | None = None
+file_readable: Callable[[sqlite3.Connection, str, str], bool] | None = None
 
 
 def set_file_check(check: Callable[[sqlite3.Connection, str, str], bool]) -> None:
     """Install the photo read check: (connection, actor, file id) -> readable."""
-    global FILE_READABLE
-    FILE_READABLE = check
+    global file_readable
+    file_readable = check
 
 
 def _shape(build: Callable[[], dict[str, object]]) -> dict[str, object]:
@@ -45,9 +45,9 @@ def _shape(build: Callable[[], dict[str, object]]) -> dict[str, object]:
 
 
 def _photo_readable(ctx: Ctx, who: str, photo: str) -> bool:
-    if FILE_READABLE is None:
+    if file_readable is None:
         raise FinanceError(NOT_AVAILABLE, "photos can't be checked on this install")
-    return FILE_READABLE(ctx.c, who, photo)
+    return file_readable(ctx.c, who, photo)
 
 
 def _fields(ctx: Ctx, who: str, p: V.Payload, create: bool) -> dict[str, object]:
