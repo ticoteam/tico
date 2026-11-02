@@ -1178,7 +1178,7 @@ fn merge_tree_oid(out: &Out) -> Option<String> {
 
 /// Aborts a merge this removal finds abandoned in its own tree, before any switch, add or commit: the rules of
 /// runner/worktrees.py `_clear_merge`. Anything not provably abandoned is kept, untouched.
-async fn clear_merge(path: &Path, release: bool, env: &Env) -> R<()> {
+async fn clear_merge(path: &Path, link: &str, release: bool, env: &Env) -> R<()> {
     let gitdir = PathBuf::from(git(path, env, &["rev-parse", "--path-format=absolute", "--git-dir"], true).await?.stdout.trim());
     if !gitdir.join("MERGE_HEAD").exists() {
         return Ok(());
@@ -1212,6 +1212,10 @@ async fn clear_merge(path: &Path, release: bool, env: &Env) -> R<()> {
     ] {
         touched.extend(listing.split('\0').filter(|name| !name.is_empty()).map(str::to_string));
     }
+    // Git's output is read as text here, so a name that is not text shows up as the replacement character: keep it.
+    if touched.iter().chain(unmerged.iter()).any(|name| name.contains('\u{FFFD}')) {
+        return Err(WtErr::msg(UNRESOLVED));
+    }
     // The abort refuses an unstaged edit to a path the merge itself changed, so keep that case with the same error.
     let changed: BTreeSet<String> = git(path, env, &["diff", "--no-renames", "--name-only", "-z", "HEAD", &tree], true).await?.stdout
         .split('\0').filter(|name| !name.is_empty()).map(str::to_string).collect();
@@ -1232,6 +1236,11 @@ async fn clear_merge(path: &Path, release: bool, env: &Env) -> R<()> {
         }
     }
     git(path, env, &["merge", "--abort"], true).await?;
+    // The removal leaves no row note: the server's worktree link has no field for one, so the abort is recorded here.
+    let mut record = Map::new();
+    record.insert("link".into(), json!(link));
+    record.insert("conflicted_paths".into(), json!(unmerged.len()));
+    crate::flight::emit("worktree_merge_aborted", record);
     Ok(())
 }
 
@@ -1294,7 +1303,7 @@ where
             return Err(WtErr::msg("Repository default branch is unknown; refresh Repositories before cleanup"));
         }
         git(&base, env, &["worktree", "prune", "--expire", "now"], true).await?;
-        clear_merge(&path, crate::util::truthy(row.get("release")), env).await?;
+        clear_merge(&path, &own(row, "id"), crate::util::truthy(row.get("release")), env).await?;
         let ignored = git(&path, env, &["ls-files", "--others", "--ignored", "--exclude-standard", "-z"], true).await?.stdout;
         if ignored.split('\0').any(|n| !n.is_empty() && !build_file(n)) {
             return Err(WtErr::msg("kept: ignored files"));
@@ -2210,5 +2219,15 @@ mod tests {
         assert_eq!(err.text(), UNRESOLVED);
         sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
         assert_eq!(sh(&m.path, &["show", ":x[1].txt"]), "two");
+    }
+
+
+    #[tokio::test]
+    async fn a_merged_path_name_that_is_not_text_is_kept() {
+        let folder = temp_folder("not-text-name");
+        let mut m = merge_in_progress_with(&folder.0, &["file"], &[], &[], &["caf\u{FFFD}.txt"]);
+        let err = act(&m.workspace, &mut m.row, "remove", &test_env(), &[], || async { true }).await.unwrap_err();
+        assert_eq!(err.text(), UNRESOLVED);
+        sh(&m.path, &["rev-parse", "--verify", "MERGE_HEAD"]);
     }
 }

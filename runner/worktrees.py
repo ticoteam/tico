@@ -916,7 +916,8 @@ def _untouched_conflict(path, gitdir, name, env):
     line endings included. Bytes throughout, so no text decoding or newline translation can make two files look alike."""
     try:
         data = (path / name).read_bytes()
-    except OSError:
+        data.decode('utf-8')  # a conflicted file that is not text is not git's own text here: keep it
+    except (OSError, UnicodeDecodeError):
         return False
     stages = {}
     for stage in ('1', '2', '3'):
@@ -970,6 +971,8 @@ def _clear_merge(path, row, env):
     # Renames off: a staged deletion paired with an identical addition must still be listed as a deletion.
     touched = set(filter(None, git(path, 'diff', '--no-renames', '--name-only', '-z', 'HEAD', 'MERGE_HEAD', env=env).stdout.split('\0')))
     touched |= set(filter(None, git(path, 'diff', '--no-renames', '--cached', '--name-only', '-z', env=env).stdout.split('\0')))
+    if any('\ufffd' in name for name in touched | unmerged):
+        raise ValueError(unresolved)
     # The abort refuses an unstaged edit to a path the merge itself changed, so keep that case with the same error.
     changed = set(filter(None, git(path, 'diff', '--no-renames', '--name-only', '-z', 'HEAD', tree, env=env).stdout.split('\0')))
     edited = set(filter(None, git(path, 'diff', '--no-renames', '--name-only', '-z', env=env).stdout.split('\0')))
@@ -1019,7 +1022,10 @@ def _act(workspace, row, action, env, vault_values=(), before_remove=lambda: Tru
         if not defaults:
             raise ValueError('Repository default branch is unknown; refresh Repositories before cleanup')
         git(base, 'worktree', 'prune', '--expire', 'now', env=env)
-        _clear_merge(path, row, env)
+        try:
+            _clear_merge(path, row, env)
+        except UnicodeDecodeError:
+            raise ValueError('kept: merge in progress with resolved or unrecognised conflicts; commit or abort it to free this worktree') from None
         ignored = git(path, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z', env=env).stdout.split('\0')
         if any(name and not build_file(name) for name in ignored):
             raise ValueError('kept: ignored files')

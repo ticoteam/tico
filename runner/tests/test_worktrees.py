@@ -1379,7 +1379,7 @@ def test_the_advertised_retry_resumes_an_expired_setup_in_place(trees, phase):
     assert git(path, 'symbolic-ref', '--short', 'HEAD') == row['branch']
 
 
-def _merge_in_progress(trees, tmp_path, *, conflicts=('file',), deleted=(), copies=(), adds=()):
+def _merge_in_progress(trees, tmp_path, *, conflicts=('file',), deleted=(), copies=(), adds=(), raw=False):
     """A task worktree whose merge of main is left in progress. Main changes each `conflicts` name and adds a clean
     file, `mainonly`; main deletes each `deleted` name and adds each `copies` name with the content of `other`. The
     task's own commit is pushed, so nothing is unpushed."""
@@ -1389,7 +1389,7 @@ def _merge_in_progress(trees, tmp_path, *, conflicts=('file',), deleted=(), copi
     identity = ['-c', 'user.name=Sam', '-c', 'user.email=sam@example.com']
     subprocess.run(['git', 'clone', '-q', str(remote), str(clone)], check=True, capture_output=True)
     for name in conflicts:
-        (clone / name).write_text('base ' + name)
+        (clone / name).write_text('base ' + name)  # the base is text: the bytes only differ on the two sides
     subprocess.run(['git', '-C', str(clone), 'add', '.'], check=True)
     subprocess.run(['git', '-C', str(clone), *identity, 'commit', '-qm', 'Base'], check=True)
     subprocess.run(['git', '-C', str(clone), 'push', '-q', 'origin', 'main'], check=True, capture_output=True)
@@ -1398,13 +1398,19 @@ def _merge_in_progress(trees, tmp_path, *, conflicts=('file',), deleted=(), copi
     path.parent.mkdir(parents=True)
     git(base, 'worktree', 'add', '-b', row['branch'], str(path), 'origin/main')
     for name in (*conflicts, *deleted):
-        (path / name).write_text('task ' + name)
+        if raw:
+            (path / name).write_bytes(b'task \xff\n')
+        else:
+            (path / name).write_text('task ' + name)
     (path / 'other').write_text('other')
     git(path, 'add', '-A')
     subprocess.run(['git', '-C', str(path), *identity, 'commit', '-qm', 'Task'], check=True)
     git(path, 'push', 'origin', row['branch'])
     for name in conflicts:
-        (clone / name).write_text('main ' + name)
+        if raw:
+            (clone / name).write_bytes(b'main \xfe\n')
+        else:
+            (clone / name).write_text('main ' + name)
     for name in deleted:
         (clone / name).unlink()
     (clone / 'mainonly').write_text('main only')
@@ -1608,3 +1614,21 @@ def test_a_resolution_of_a_bracketed_name_beside_a_sibling_is_kept(trees, tmp_pa
     git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
     assert (path / 'x[1].txt').read_text() == 'two'
     assert 'two' == git(path, 'show', ':x[1].txt')
+
+
+def test_a_conflicted_file_that_is_not_utf8_is_kept(trees, tmp_path):
+    """Both sides hold non-UTF-8 bytes and the file is still git's own text: a byte comparison would abort it."""
+    workspace, base, remote, row, client = trees
+    path = _merge_in_progress(trees, tmp_path, raw=True)
+    assert b'\xff' in (path / 'file').read_bytes()
+    with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
+        W.act(workspace, row, 'remove', os.environ.copy())
+    git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
+
+
+def test_a_merged_path_name_that_is_not_utf8_is_kept(trees, tmp_path):
+    workspace, base, remote, row, client = trees
+    path = _merge_in_progress(trees, tmp_path, adds=('caf\udce9.txt',))
+    with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
+        W.act(workspace, row, 'remove', os.environ.copy())
+    git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
