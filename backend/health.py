@@ -1926,15 +1926,19 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check("computers", "Computers", "ok", f"{_plural(len(online), 'computer')} online."))
 
     from .performance import load_statuses, recent_overloads
+    from .start_places import NOT_REPORTING, computer_hold
     loads = load_statuses(c, [computer["id"] for computer in computers])     # one read for every computer
     for computer in computers:
         if full or kind == "bot":
             checks.append(_check("turns:" + computer["id"], "Turns", "ok", computer["label"] + ": " + computer["turn_summary"],
                                  [_fix("Open Computers", "#/settings", "devices")] if full else []))
-        load = loads[computer["id"]]
-        if load["overloaded"]:
+        hold = computer_hold(c, computer["id"], status=loads[computer["id"]])
+        if hold:
+            words = ("overloaded now (CPU or memory above 90% for five minutes)." if hold[0] == "computer busy"
+                     else "not reporting: its last sample is over two minutes old." if hold[0] == NOT_REPORTING
+                     else f"{hold[1]}: new starts wait until it is below 80%.")
             checks.append(_check("runner_load:" + computer["id"], "Load", "warn",
-                                 f"{computer['label']}: overloaded now (CPU or memory above 90% for five minutes).",
+                                 f"{computer['label']}: {words}",
                                  [_fix("Open Computers", "#/settings", "devices")]))
 
     if full:

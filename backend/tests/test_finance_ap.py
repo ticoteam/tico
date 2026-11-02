@@ -81,6 +81,12 @@ def test_every_new_read_answers_on_empty_books_and_refuses_what_the_viewer_canno
         assert FA.help("bill_create")["fields"][0]["name"] == "vendor_id"
         codes = {a["number"] for a in FR.chart(c, OWNER, for_="bill")["accounts"]}
         assert "6100" in codes and "2000" not in codes and "4000" not in codes
+        # A bill line never posts to a bank account, Gateway credit or a group of lines; other assets it may.
+        assert not {"1000", "1100", "5000", "6000"} & codes
+        act(c, OWNER, "account_create", {"code": "1500", "name": "Equipment", "type": "asset"})
+        codes = {a["number"] for a in FR.chart(c, OWNER, for_="bill")["accounts"]}
+        assert "1500" in codes
+        assert "1000" in {a["number"] for a in FR.chart(c, OWNER, for_="journal")["accounts"]}
     with books.transaction() as c:
         FA.set_bills_email(c, "bills@acme.example")
         assert FR.bills(c, OWNER)["bills_email"] == "bills@acme.example"

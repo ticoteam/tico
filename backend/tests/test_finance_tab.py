@@ -121,6 +121,36 @@ def test_transactions_and_cards_follow_the_lines_each_viewer_sees(books):
         assert [r["amount"] for r in _all(c, OWNER, status="new")] == [-500]
 
 
+def test_an_entry_with_only_balance_sheet_lines_shows_in_transactions(books):
+    with books.transaction() as c:
+        _bank(c)
+        loan = str(act(c, OWNER, "account_create", {"code": "2500", "name": "Loan", "type": "liability"})
+                   .result["account_id"])
+        act(c, OWNER, "journal", {"date": "2026-10-12", "memo": "Loan drawn", "lines": [
+            {"account_id": account(c, "1000"), "amount": 90_000}, {"account_id": loan, "amount": -90_000}]})
+        rows = [r for r in _all(c, OWNER) if r.get("memo") == "Loan drawn"]
+        assert {r["amount"] for r in rows} == {90_000, -90_000}
+        # A viewer with no balance sheet doesn't see it, and asked for by line it shows too.
+        assert not [r for r in _all(c, "human:eve") if r.get("memo") == "Loan drawn"]
+        assert [r["amount"] for r in _all(c, OWNER, account_id=loan)] == [-90_000]
+        # Entries with an income or expense line still show by that line alone.
+        spent = [r for r in _all(c, OWNER) if r["kind"] == "entry" and r["account"] == "Credit cards"]
+        assert not spent
+
+
+def test_a_budget_a_card_draws_on_says_so_until_the_card_is_cancelled(books):
+    with books.transaction() as c:
+        ids = _bank(c)
+        bid = str(act(c, OWNER, "budget_create", {"name": "Tools", "period": "month", "account_id": account(c, "6900"),
+                                                  "amount": 10_000}).result["budget_id"])
+        flag = lambda: next(b["card_limits"] for b in FR.budgets(c, OWNER, at=AT)["budgets"] if b["id"] == bid)
+        assert flag() is False
+        c.execute("UPDATE fin_cards SET budget_id=? WHERE id=?", (bid, ids["eve"]))
+        assert flag() is True
+        c.execute("UPDATE fin_cards SET status='cancelled' WHERE id=?", (ids["eve"],))
+        assert flag() is False
+
+
 def test_the_transactions_cursor_pages_without_gaps_or_repeats(books):
     with books.transaction() as c:
         _bank(c)
@@ -180,9 +210,9 @@ def test_access_shows_each_viewer_their_part_and_only_the_owner_views_as(books):
         assert [m["teammate"] for m in eve["teammates"]] == ["human:eve"] and not eve["can_view_as"]
         assert [g["subject"] for g in eve["teammates"][0]["grants"]] == ["human:eve"]
         assert act(c, OWNER, "right_grant", {"teammate": "human:fay", "right": "finance.admin"}).status == "committed"
-        fay = {m["teammate"] for m in FR.access(c, "human:fay", at=AT)["teammates"]}
+        fay = [m["teammate"] for m in FR.access(c, "human:fay", at=AT)["teammates"]]
         owner = {m["teammate"] for m in FR.access(c, OWNER, at=AT)["teammates"]}
-        assert fay == owner and {"human:ana", "human:gus", "bot:coder"} <= fay   # a finance admin sees the whole roster
+        assert fay == ["human:fay"] and {"human:ana", "human:gus", "bot:coder"} <= owner   # finance.admin adds no view
         assert FR.view_as(c, OWNER, "human:cara", at=AT) == "human:cara"
         with pytest.raises(FinanceError):
             FR.view_as(c, "human:ben", "human:cara", at=AT)
@@ -267,9 +297,9 @@ def test_tab_routes_answer_in_the_callers_view(api):
 
 
 def test_access_over_http_is_the_roster_for_admins_and_each_managers_own_teams_otherwise(api):
-    """The access read over HTTP: owner and finance admins see everyone (with rights and private lines); a manager sees
-    their own row and the teammates in the teams they manage, nested, but no rights and no private lines; anyone else
-    sees only their own row."""
+    """The access read over HTTP: the owner sees everyone (with rights and private lines); a manager sees their own row
+    and the teammates in the teams they manage, nested, but no rights and no private lines; anyone else, a finance
+    admin included, sees only their own row."""
     store = api.app.state.store
     with store.transaction() as c:
         _seed(c)                                    # the Acme org chart, as the finance fixtures have it
@@ -292,9 +322,9 @@ def test_access_over_http_is_the_roster_for_admins_and_each_managers_own_teams_o
     # Eve is a plain teammate: her own row only.
     eve = get(api, "finance/access", token="eve-test")
     assert [m["teammate"] for m in eve["teammates"]] == ["human:eve"] and eve["private_lines"] == []
-    # A finance admin sees the whole roster, rights included.
+    # A finance admin adds no view: Fay still sees her own row, with her own rights and no private lines.
     with store.transaction() as c:
         assert act(c, OWNER, "right_grant", {"teammate": "human:fay", "right": "finance.admin"}).status == "committed"
     fay = get(api, "finance/access", token="fay-test")
-    assert {m["teammate"] for m in fay["teammates"]} == everyone and fay["private_lines"]
-    assert all(m["rights"] is not None for m in fay["teammates"])
+    assert [m["teammate"] for m in fay["teammates"]] == ["human:fay"] and fay["private_lines"] == []
+    assert fay["teammates"][0]["rights"] is not None

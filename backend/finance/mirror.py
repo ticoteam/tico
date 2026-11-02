@@ -16,6 +16,7 @@ from ..records import core as RC
 from ..records import reads as RR
 from ..records import store as RS
 from . import banking, documents, handlers, posting
+from . import closing as CL
 from . import purchasing as PU
 from .context import Ctx, load
 from .core import ap as AP
@@ -731,6 +732,7 @@ def _restate(c: sqlite3.Connection, ctx: Ctx, day: str, change: str, entry_id: s
     period = SL.period(c, ctx.book.id, day)
     SX.restatement_insert(c, book_id=ctx.book.id, period_id=str(period["id"]), day=day, change=change,
                           entry_id=entry_id, reversal_id=reversal_id, cid=cid, external_id=key, at=at, by=SYSTEM)
+    CL.flag(c, ctx.book.id, day[:7], SYSTEM, at, change)     # the close snapshot carries the flag too (spec 10)
 
 
 def _unsettle_entry(c: sqlite3.Connection, ctx: Ctx, entry_id: str, *, keep_credit: bool = False) -> list[Any]:

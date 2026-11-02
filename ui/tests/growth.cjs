@@ -234,6 +234,13 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   assert.equal(await page.locator(`#gr-body ${phone ? '.gr-pbet' : '.gr-grid tbody tr'}`).count(), 3, `${tag}: two bets and No bet`);
   await flat(page, `${tag}: Ideas`);
   await snap(page, `${tag}-05-ideas`);
+  // Past six channels the grid shows only the ones with ideas; up to six, every one.
+  const cols = await page.evaluate(() => {
+    const chans = n => Array.from({length: n}, (_, k) => ({slug: `c${k}`, name: `C${k}`}));
+    const ideas = [{channels: ['c1'], bet_id: 'b'}];
+    return [6, 7].map(n => grAxes({channels: chans(n), bets: [{id: 'b', n: 1, statement: 'B'}], ideas}).cols.length);
+  });
+  assert.deepEqual(cols, [6, 1], `${tag}: columns follow the rule`);
   // With a marketing lead, + Idea can ask them to propose ideas instead: a task for them, and the dialog closes.
   await page.evaluate(() => { S.emps.find(e => e.name === 'engineering-lead').template = 'marketing-lead'; });
   await page.locator('#strat-actions [data-gr-new]').click();
@@ -380,9 +387,15 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await ok(page, 'POST', 'growth/ideas', {title: 'Referral flyers', bet_id: judged.bet_id || judged.idea?.bet_id, channels: ['referrals']});
   await go(page, '#/growth');
   const wonIdea = page.locator(`#gr-body ${IDEA}[data-idea="${ideaId}"]`);
-  await wonIdea.waitFor({timeout: t(10000)});
+  await wonIdea.waitFor({state: 'attached', timeout: t(10000)});
   assert.match(await wonIdea.getAttribute('class'), /gr-is-won/, `${tag}: the result's class`);
-  assert.ok(await wonIdea.evaluate((el, sel) => el.previousElementSibling?.matches(sel) && !el.nextElementSibling, IDEA), `${tag}: the result comes last`);
+  // A result folds under the open ideas, and opens to show.
+  const fold = wonIdea.locator('xpath=ancestor::details[contains(@class,"gr-done")]');
+  assert.equal((await fold.locator('summary').innerText()).trim(), '1 result', `${tag}: the result is folded`);
+  assert.ok(await fold.evaluate((el, sel) => el.previousElementSibling?.matches(sel) && !el.nextElementSibling, IDEA), `${tag}: the fold comes last`);
+  await fold.locator('summary').click();
+  await wonIdea.waitFor({state: 'visible', timeout: t(5000)});
+  if (!phone) assert.equal(await page.locator('.gr-grid tbody th').first().evaluate(el => getComputedStyle(el).position), 'sticky', `${tag}: the bet stays in view`);
   await snap(page, `${tag}-13-ideas-result`);
 
   // The brain opens Learning, with the go-to-market's versions.

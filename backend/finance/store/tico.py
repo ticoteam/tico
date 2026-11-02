@@ -94,6 +94,8 @@ def org(c: sqlite3.Connection, owner: str) -> Org:
     for person in cast(list[dict[str, Any]], roster.get("people") or []):
         actor = "human:" + str(person.get("id") or "")
         humans.add(actor)
+        if person.get("hidden"):      # left the company (access.leave): on no team and reporting to no one (spec 7.5)
+            continue
         if person.get("team") in teams:
             team_of[actor] = str(person["team"])
         if person.get("reports_to"):
@@ -243,9 +245,11 @@ def run_gateway_cost(c: sqlite3.Connection, turn_id: str) -> str | None:
 
 
 def bot_average_run(c: sqlite3.Connection, bot: str, since: str, most: int) -> str | None:
-    """A bot's average Gateway-billed cost per run over its last `most` such runs started since `since`, or None."""
+    """A bot's average token-priced cost per run over its last `most` such runs started since `since`, or None. Runs
+    count whichever key paid for them (the Gateway or the bot's own key); a flat subscription's run never does (§9)."""
     row = c.execute(f"SELECT count(*), printf('%.9f', avg(cost)) FROM (SELECT id, sum(coalesce(est_cost_usd, 0)) AS cost "
-                    f"FROM {_runs()} WHERE bot=? AND started >= ? AND finished IS NOT NULL AND {_GATEWAY} GROUP BY id "
+                    f"FROM {_runs()} WHERE bot=? AND started >= ? AND finished IS NOT NULL "
+                    "AND coalesce(billing, 'api') != 'subscription' GROUP BY id "
                     "ORDER BY max(started) DESC LIMIT ?)", (bot, since, most)).fetchone()
     return str(row[1]) if row and int(row[0]) else None
 

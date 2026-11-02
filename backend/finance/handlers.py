@@ -414,6 +414,25 @@ def _effective(ctx: Ctx, b: B.Budget, raw: str | None) -> str:
     return B.period_of(b, at, ctx.book.fiscal_year_start, [])[0].isoformat()
 
 
+def _period_start(ctx: Ctx, b: B.Budget, at: date) -> date:
+    return at if b.period == "once" else B.period_of(b, at, ctx.book.fiscal_year_start, [])[0]
+
+
+def _no_past_period(ctx: Ctx, b: B.Budget, effective: str) -> None:
+    """An amount takes effect from the current period or a later one: a past period is closed (§12, only future
+    periods are editable). A once budget takes its amount from today or later."""
+    if dates.day(effective) < _period_start(ctx, b, dates.day(ctx.today)):
+        raise invalid("a past period's budget is closed: set it from this period or later")
+
+
+def _current_raise(ctx: Ctx, b: B.Budget, effective: str, amount: int | None) -> bool:
+    """Whether a change raises the amount in force in the current period (§4.4: that raise asks the budget owner)."""
+    if amount is None or dates.day(effective) != _period_start(ctx, b, dates.day(ctx.today)):
+        return False
+    versions = SB.versions(ctx.c, [b.id])[b.id] if b.id else []
+    return amount > (B.amount_at(versions, dates.day(effective)) or 0)
+
+
 @dataclass(frozen=True)
 class _Route:
     """A change that would pass its parent (§4.4). The parent's owner decides it, and approval raises the parent to
@@ -520,6 +539,11 @@ def _raise_check(ctx: Ctx, raise_to: int | None) -> str | None:
 
 def _budget_owner_gate(route: _Route) -> K.Gate:
     return K.Gate("needs_approval", "budget_owner", "default:budget-parent", person=route.owner)
+
+
+def _raise_gate(owner: str) -> K.Gate:
+    """A raise in the current period goes to the budget's owner (§4.4), whoever asks."""
+    return K.Gate("needs_approval", "budget_owner", "default:budget-raise", person=owner)
 
 
 def _mine(ctx: Ctx, b: B.Budget, effective: str, amount: int) -> list[B.Version]:
@@ -782,6 +806,8 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if amount is not None and amount < 0:
         raise invalid("a budget amount is 0 or more")
     effective = _effective(ctx, new, V.opt_day(p, "effective_from"))
+    if amount is not None:
+        _no_past_period(ctx, new, effective)
     # The fit reads the parent's figures from `effective` on: a reader whose figure is not the true one gets the owner's
     # decision and no amount, before any fit runs (figure_route).
     hide = figure_route(ctx, who, new.parent_id, effective=effective) if amount is not None and new.parent_id else ""
@@ -833,6 +859,9 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if amount is not None and amount < 0:
         raise invalid("a budget amount is 0 or more")
     effective = _effective(ctx, old, V.opt_day(p, "effective_from"))
+    if amount is not None:
+        _no_past_period(ctx, old, effective)
+    raise_now = _current_raise(ctx, old, effective, amount)
     if amount == 0 and dates.day(effective) > dates.day(ctx.today):
         raise invalid("a pause takes effect now: leave effective_from out")
     reactivates = new.active and not old.active
@@ -874,10 +903,12 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         return {"budget_id": old.id, "version": version}
     if hidden:
         gate = HIDDEN_GATE if hide == "hidden" else REQUEST_GATE
-    elif route is None:
-        gate = K.default_gate(ctx.org, who, "budget_update")
-    else:
+    elif route is not None:
         gate = _budget_owner_gate(route)
+    elif raise_now:
+        gate = _raise_gate(old.owner)
+    else:
+        gate = K.default_gate(ctx.org, who, "budget_update")
     head = f"Change budget {old.name}" + \
         (f" to {amount / 100:.2f} {ctx.book.base_currency} from {effective}" if amount is not None else "")
     return Plan(gate, head + words,
@@ -1185,7 +1216,12 @@ def right_revoke(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def suspend_unstanding(ctx: Ctx) -> list[str]:
     """Write down what view resolution already does: grants their grantor could no longer make are suspended, with a
-    view version bump and an audit row, so the owner can see them (spec §7.5)."""
+    view version bump and an audit row, so the owner can see them (spec §7.5). A team grant also forgets the members
+    who have left its team, so that rejoining does not bring the grant back."""
+    for g in SA.grants(ctx.c, "active") + SA.grants(ctx.c, "suspended"):
+        left = VW.left_team(ctx.org, g)
+        if left:
+            SA.set_members(ctx.c, g.id, g.members - left)
     bad = VW.unstanding(ctx.org, SA.grants(ctx.c), SA.defaults(ctx.c), ctx.accounts)
     for gid in bad:
         SA.set_grant_status(ctx.c, gid, "suspended", SYSTEM, ctx.at)

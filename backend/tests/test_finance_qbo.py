@@ -230,7 +230,7 @@ def test_disconnect_drops_the_vault_rows_only_after_hq_confirms(books, monkeypat
                                    claim_id="clm_3", name="Acme books", by=OWNER, now=AT)
     with books.read() as c:
         before = dict(SX.books_settings(c, cid))
-    books_link.disconnect_books(books, vault, _link(), cid, "quickbooks", now=AT)
+    books_link.drop(books, vault, _link(), cid, by=OWNER)
     assert hq.calls[1]["path"] == "oauth/quickbooks/disconnect"
     with books.read() as c:
         assert not T.credential_exists(c, str(before["access"]))

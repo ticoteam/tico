@@ -5,7 +5,9 @@ P&L's revenue sign."""
 import json
 import random
 
+from backend import access as A
 from backend.finance import actions as FA
+from backend.finance.store import access as SA
 from backend.finance import reads as FR
 from backend.finance import tab as FT
 from backend.tests.test_finance_fixtures import (AT, GROUPS, OWNER, PEOPLE, account, act, books,  # noqa: F401
@@ -353,3 +355,92 @@ def test_access_says_where_the_viewer_may_grant(books):
         assert not any(may("human:cara").values())
         assert act(c, "human:cara", "view_grant", {"subject": "human:eve", "what": "expenses", "whose": "own"}).code \
             == "denied"
+
+
+def _on_team(person: str, team: str) -> list[dict[str, object]]:
+    return [{**p, "team": team} if p["id"] == person.removeprefix("human:") else p for p in PEOPLE]
+
+
+def test_a_team_grant_ends_at_once_for_a_member_who_leaves_the_team(books):
+    """A team grant reaches the people on the team when it was made (spec §7.5). Someone who moves to another team
+    loses it at once, and someone who joins later does not get it unless the grant says new_members."""
+    with books.transaction() as c:
+        spend(c, "6100", 1_000, team="web", teammate="human:eve")
+        spend(c, "6100", 2_000, team="sales", teammate="human:dan")
+        grant = act(c, OWNER, "view_grant", {"subject_kind": "team", "subject": "web", "what": "expenses",
+                                             "whose": "company"})
+        assert grant.status == "committed"
+        assert FR.expenses(c, "human:eve", by="team", at=AT)["total"] == 3_000
+        _org(c, _on_team("eve", "sales"), GROUPS)
+        assert FR.expenses(c, "human:eve", by="team", at=AT)["total"] == 1_000          # her own line only
+        _org(c, _on_team("dan", "web"), GROUPS)
+        assert FR.expenses(c, "human:dan", by="team", at=AT)["total"] == 2_000          # a later joiner: own only
+
+
+def _roster(c) -> dict:
+    return json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+
+
+def _move_on_roster(c, person: str, team: str) -> None:
+    """Move a person to another team through Tico's roster save, as the people pages do."""
+    doc = _roster(c)
+    doc["people"] = [{**p, "team": team} if p["id"] == person else p for p in doc["people"]]
+    A.save_roster(c, doc)
+
+
+def test_a_team_grant_forgets_a_member_who_left_so_rejoining_does_not_bring_it_back(books):
+    """Leaving the team ends a team grant's reach at once (spec §7.5), and the grant forgets the leaver, so rejoining
+    the team does not restore it: the grant reaches the people it was made for."""
+    with books.transaction() as c:
+        spend(c, "6100", 1_000, team="web", teammate="human:eve")
+        spend(c, "6100", 2_000, team="sales", teammate="human:dan")
+        grant = act(c, OWNER, "view_grant", {"subject_kind": "team", "subject": "web", "what": "expenses",
+                                             "whose": "company"})
+        assert grant.status == "committed", grant
+        gid = str(grant.result["grant_id"])
+        _move_on_roster(c, "eve", "sales")
+        assert "human:eve" not in SA.grant(c, gid).members
+        assert FR.expenses(c, "human:eve", by="team", at=AT)["total"] == 1_000          # her own line only
+        _move_on_roster(c, "eve", "web")
+        assert FR.expenses(c, "human:eve", by="team", at=AT)["total"] == 1_000          # not restored on rejoining
+
+
+def test_a_grant_its_manager_loses_with_the_team_lead_is_suspended_by_the_roster_save(books):
+    """A manager grants a team's expenses only while they lead that team (spec §7.5). Taking the lead off the team on
+    Tico's roster suspends the grant there and then, not at the next Finance write."""
+    with books.transaction() as c:
+        spend(c, "6100", 1_000, team="web", teammate="human:eve")
+        made = act(c, "human:cara", "view_grant", {"subject": "human:eve", "what": "expenses", "whose": "team",
+                                                   "whose_team": "web"})
+        assert made.status == "committed", made
+        gid = str(made.result["grant_id"])
+        doc = _roster(c)
+        doc["org_groups"]["web"].pop("lead")
+        A.save_roster(c, doc)
+        assert SA.grant(c, gid).status == "suspended"
+
+
+def test_a_bot_moved_to_another_team_leaves_the_team_grant_at_once(books):
+    """A bot is a member of its team's grant (spec 7.5: a team's grant covers its members). Moving it to another team
+    through the groups write takes it off the grant there and then, not at the next Finance write."""
+    from backend import groups
+    with books.transaction() as c:
+        grant = act(c, OWNER, "view_grant", {"subject_kind": "team", "subject": "web", "what": "expenses",
+                                             "whose": "company"})
+        assert grant.status == "committed", grant
+        gid = str(grant.result["grant_id"])
+        assert "bot:coder" in SA.grant(c, gid).members
+        groups._set_bot(c, "coder", "sales")
+        assert "bot:coder" not in SA.grant(c, gid).members
+
+
+def test_a_bot_given_a_new_manager_hands_the_org_change_to_finance(books, monkeypatch):
+    """A bot's manager is part of the org chart Finance's grants follow (spec 7.5), so the reparenting write runs the
+    same revalidation an action does, in the same transaction."""
+    from backend import settings_admin
+    from backend.finance import actions as FA
+    seen = []
+    monkeypatch.setattr(FA, "revalidate_org", lambda c, at=None: seen.append(c))
+    with books.transaction() as c:
+        settings_admin._set_parent(c, "human:ana", "coder", "human:dan", AT)
+        assert len(seen) == 1 and seen[0] is c

@@ -78,6 +78,11 @@ def insert_grant(c: sqlite3.Connection, g: Grant, by: str, at: str) -> None:
                json.dumps(sorted(g.account_ids)), g.whose, g.whose_team, g.granted_by, g.expires_at or None, at, by))
 
 
+def set_members(c: sqlite3.Connection, grant_id: str, members: Iterable[str]) -> int:
+    return c.execute("UPDATE fin_view_grants SET members_json=? WHERE id=?",
+                     (json.dumps(sorted(members)), grant_id)).rowcount
+
+
 def set_grant_status(c: sqlite3.Connection, grant_id: str, status: str, by: str, at: str, reason: str = "") -> int:
     if status == "revoked":
         return c.execute("UPDATE fin_view_grants SET status='revoked', revoked_at=?, revoked_by=? WHERE id=? "

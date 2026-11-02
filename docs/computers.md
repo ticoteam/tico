@@ -71,8 +71,13 @@ its work returns to the queue without changing the task. After 10 missed starts 
 started, Tico reports a pre-start failure instead of retrying forever. Check the computer named in the failure.
 
 CPU or memory strictly above **90% for 5 minutes** holds new starts on that computer with **waiting: computer busy**.
+Memory at **85% or more** holds them too, with **waiting: computer busy: memory N%**; they start again once memory is
+below **80%**, so the queue does not flap. A computer whose last sample is more than **2 minutes** old holds new starts
+with **waiting: computer not reporting**, because a computer that stops reporting may be frozen. A computer that has
+never reported is not held. The server also ends a run that has gone silent (no heartbeat or event for 5 minutes)
+once it is past its bot's max_run_minutes plus 5 minutes, without waiting for the computer.
 This includes turns with a reservation that have not started yet. Running turns continue. New starts resume when
-the sustained overload clears. A person's own message to a bot (a chat, a message in its task) still starts, ahead of
+the hold clears. A person's own message to a bot (a chat, a message in its task) still starts, ahead of
 the waiting turns, when the computer has a free turn; Tico's notices and messages between bots wait. This brake does
 not change your account, model or computer size.
 

@@ -11,7 +11,6 @@ from typing import Any, cast
 from . import closing as CL
 from .context import Ctx, load
 from .core import dates
-from .core import rights as R
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, Account, Book, descendants
@@ -443,12 +442,16 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
         return out
 
     hidden = set(private_cut(ctx, view))
-    line_ids = [a.id for a in ctx.accounts.values() if a.type in PNL_TYPES and view.sees_account(a) and
-                (not wanted or a.id in wanted) and a.id not in hidden]
+    seen_lines = [a for a in ctx.accounts.values() if view.sees_account(a) and (not wanted or a.id in wanted) and
+                  a.id not in hidden]
+    # Every entry shows (§12): by its income and expense lines, or by its balance sheet lines when it has no others.
+    # Asked for by line, a balance sheet line shows all of its own.
+    line_ids = [a.id for a in seen_lines if wanted or a.type in PNL_TYPES]
+    balance_ids = [a.id for a in seen_lines if not wanted and a.type not in PNL_TYPES]
 
     def fetch_lines(mark: tuple[str, str] | None, n: int) -> list[Any]:
         return SK.lines_page(c, ctx.book.id, account_ids=line_ids, before=mark, most=n, start=start_day, end=end_day,
-                             q=text)
+                             q=text, balance_only_ids=balance_ids)
 
     def show_lines(batch: list[Any]) -> list[tuple[tuple[str, str], Row]]:
         tags = SL.line_tags(c, [str(r["line_id"]) for r in batch])
@@ -769,13 +772,14 @@ def _grant_row(g: VW.Grant, ctx: Ctx) -> Row:
 
 def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
     """Who can see what in Finance (spec §7.5): the org chart with each teammate's default and grants, private lines
-    and the defaults. Owner and finance admins (`finance.admin`) see everyone, with rights and private lines. A manager
-    sees their own row, the teammates in the teams they manage (nested) and everyone who reports to them, with defaults
-    and grants but no rights and no private lines. Anyone else sees only their own row. The owner may view as anyone."""
+    and the defaults. The owner, or anyone granted everything, sees everyone, with rights and private lines; a finance
+    admin (`finance.admin`) adds no view. A manager sees their own row, the teammates in the teams they manage (nested)
+    and everyone who reports to them, with defaults and grants but no rights and no private lines. Anyone else sees
+    only their own row. The owner may view as anyone."""
     ctx = load(c, at)
     org = ctx.org
     owner = bool(org.owner) and viewer == org.owner
-    admin = owner or R.is_admin(org, viewer, ctx.rights(viewer))
+    admin = ctx.view(viewer).everything
     led = frozenset[str]().union(*(org.below(t) for t in org.led_by(viewer)))
     if admin:
         shown = sorted(org.humans | org.bots)
@@ -809,7 +813,8 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
     return {"teams": teams, "teammates": teammates, "private_lines": private,
             "defaults": {"manager": defaults.manager, "member": defaults.member,
                          "manager_payroll": defaults.manager_payroll},
-            "can_view_as": owner, "can_edit_defaults": owner, "view_version": ctx.view(viewer).version}
+            "can_view_as": owner, "can_edit_defaults": owner, "view_version": ctx.view(viewer).version,
+            "finance_approver": (ctx.approver_setting() or None) if owner else None}
 
 
 def _may_grant(ctx: Ctx, viewer: str, subject: str, defaults: VW.Defaults) -> bool:
