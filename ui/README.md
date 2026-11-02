@@ -67,6 +67,7 @@ Every file in `app/` and every feature file starts with `'use strict'`, as the o
 | meetings, mail, messaging, credentials, sql, integrations, help, computer-screen, computer-performance | one page each (computer-screen loads noVNC from `vendor/novnc/` with `import()`) |
 | settings, settings-*, subscriptions, vault, catalog | Settings: shell, one file per tab, the bot editor, access editor, subscriptions (computers, groups, a bot's), credential vault, template cards |
 | welcome, updates, goals, overview | setup, Updates, Goals, and the optional building overview |
+| company-page | the Company page for owners and admins: transparency, editions and approvals, audiences, disclosure, the stats board, readers, previews (`styles/company-page.css`; the reader's page itself is rendered by `backend/company_page/render.py`) |
 | router, drawer, search, org-fan, nav-events, viewport, refresh, native, boot | `route()`, account menu and phone drawer, search, mobile team switcher, keyboard viewport, the refresh loop, the desktop bridge, startup |
 
 Files under about 1,500 lines; split a file along its section comments when it grows past that.

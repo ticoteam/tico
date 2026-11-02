@@ -15,6 +15,8 @@ const CP_PARTS = [['transparency', 'Transparency'], ['editions', 'Editions'], ['
 const CP_LEVELS = [['closed', 'Closed'], ['private', 'Private'], ['open', 'Open']];
 const CP_STATUS = {drafting: ['Drafting', ''], held: ['Held', 'blocked'], ready: ['Ready', 'ready'], awaiting_approval: ['Awaiting approval', 'waiting'],
   published: ['Published', 'ok'], superseded: ['Superseded', ''], retracted: ['Retracted', '']};
+// An edition out for approval, by where the approval stands: the word in its pill.
+const CP_ASKED = {approved: ['Approved', 'ok'], declined: ['Declined', 'blocked'], lapsed: ['Ask again', 'blocked'], stale: ['Ask again', 'blocked'], spent: ['Ask again', 'blocked']};
 // The queue: what needs someone first.
 const CP_QUEUE = ['held', 'awaiting_approval', 'ready', 'drafting', 'published', 'retracted'];
 const CP_TEXT = [['highlights', 'Highlights'], ['lowlights', 'Lowlights'], ['numbers', 'Numbers'], ['asks', 'Asks'], ['next', 'Next']];
@@ -23,6 +25,10 @@ const CP_PRESETS = [['radical', 'Radical'], ['standard', 'Standard'], ['quiet', 
 const CP_CHARTS = [['number', 'Number'], ['line', 'Line'], ['bars', 'Bars']];
 const CP_CADENCE = [['monthly', 'Monthly'], ['quarterly', 'Quarterly']];
 const CP_DUE = [['business_day', 'Business day of the month'], ['days_after_period_end', 'Days after period end']];
+const CP_ACCENT = '#1e4fd8';    // the page's own default (render.DEFAULT_ACCENT), shown until one is chosen
+const CP_LOGO_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+const CP_LOGO_MAX = 2 * 1024 * 1024;
+const CP_RELEASE_FAILED = 'Published, but the page failed to rebuild and is down. The daily refresh tries again.';
 const CP_CHECKS = {leak: 'Leak check', rules: 'Rules', draft: 'Draft'};
 // A check's reason from the server, in words. Anything not listed reads as held.
 const CP_HELD = {leak: 'May say something this audience can\'t see', broken: 'Breaks a rule', empty: 'Nothing in it yet', facts: 'Couldn\'t read the numbers',
@@ -35,8 +41,6 @@ const CP_CLASSES = [['revenue', 'Revenue'], ['growth', 'Growth'], ['gross_margin
   ['ai_spend', 'AI spend'], ['pnl_line', 'All P&L lines'], ['headcount', 'Headcount'], ['customers', 'Customers'], ['customer_names', 'Customer names'], ['pipeline', 'Pipeline'],
   ['kpi', 'All KPIs'], ['product', 'Product and roadmap'], ['people', 'People'], ['legal', 'Legal'], ['security', 'Security incidents'], ['mission', 'Mission']];
 const CP_GROUPS = {kpi: 'KPIs', pnl_line: 'P&L lines'};
-// What a stat can come from without a list from the server: Finance's own numbers (stats.METRIC_LABEL).
-const CP_METRICS = [['revenue', 'Revenue'], ['spend', 'Spend'], ['burn', 'Burn'], ['cash', 'Cash'], ['runway_months', 'Runway'], ['gross_margin', 'Gross margin']];
 
 // ----------------------------------------------------------------- who sees it
 const cpAllowed = () => S.me?.role === 'owner' || S.me?.bot_admin === true;
@@ -70,6 +74,10 @@ function cpWho(ref) {
   return botDisplayName(s.startsWith('bot:') ? s.slice(4) : s);
 }
 const cpPill = status => { const [label, cls] = CP_STATUS[status] || [status, '']; return `<span class="pill ${cls}">${esc(label)}</span>`; };
+function cpEditionPill(e) {
+  const asked = e.status === 'awaiting_approval' && CP_ASKED[e.approval?.state];
+  return asked ? `<span class="pill ${asked[1]}">${esc(asked[0])}</span>` : cpPill(e.status);
+}
 // A whole month reads "Oct 2026"; anything else as its two dates.
 function cpPeriod(start, end) {
   if (!start && !end) return '';
@@ -121,7 +129,7 @@ function pageCompanyPage() {
   const head = '<div class="strat-head rd-strat-head cp-head"><h1>Company page</h1></div>';
   if (!cpAllowed()) { main.innerHTML = head + cpEmpty('Owners and admins only'); return; }
   const state = CP = {err: {}, pick: {}, groups: {}, audiences: null, disclosure: {}, editions: null, editionsNext: null, readers: null, readersNext: null,
-    stats: null, available: [], projection: {}, invites: {}, settings: null, timer: null, mq: matchMedia(PHONE), onMq: null};
+    stats: null, available: [], projection: {}, invites: {}, settings: null, scheduleProblems: [], emailAvailable: true, releaseFailed: null, timer: null, mq: matchMedia(PHONE), onMq: null};
   main.innerHTML = head + `<div id="cp-page" class="cp-page">${CP_PARTS.map(([id]) => `<section class="card cp-sec" id="cp-${id}">${cpSection(id, '', skelRows(2, {dot: false}))}</section>`).join('')}</div>`;
   state.onMq = () => { if (CP === state) cpDraw('disclosure'); };
   state.mq.addEventListener('change', state.onMq);
@@ -141,6 +149,8 @@ function cpTeardown() {
 function companyPageStop() { if (CP && !rdUnder(S.route || '', CP_ROUTE)) cpTeardown(); }
 
 // One part's read: its failure stays in that part, with Retry. A 403 on the settings means the whole page is not theirs.
+// The queue can narrow to one audience's published updates: where a tightened rule's line leads.
+const cpEditionsQuery = (s, joiner = '?') => s.pick.editions ? `${joiner}audience=${cpId(s.pick.editions)}&status=published` : '';
 const CP_LOAD = {
   transparency: async s => { s.settings = await get('/v2/company-page', {fresh: true}); },
   audiences: async s => {
@@ -152,8 +162,8 @@ const CP_LOAD = {
     s.pick.invites = cpAud(s.pick.invites)?.id || cpPrivateAudiences()[0]?.id || '';
   },
   editions: async s => {
-    const r = await get('/v2/editions', {fresh: true});
-    s.editions = cpList(r, 'editions'); s.editionsNext = cpNextQuery(r);
+    const r = await get('/v2/editions' + cpEditionsQuery(s), {fresh: true});
+    s.editions = cpList(r, 'editions'); s.editionsNext = cpNextQuery(r); s.scheduleProblems = cpList(r?.schedule_problems, 'schedule_problems');
     cpWatchDrafts(s);
   },
   disclosure: async s => {
@@ -169,7 +179,7 @@ const CP_LOAD = {
   },
   readers: async s => {
     const r = await get('/v2/readers', {fresh: true});
-    s.readers = cpList(r, 'readers'); s.readersNext = cpNextQuery(r); s.signIn = r?.sign_in || null;
+    s.readers = cpList(r, 'readers'); s.readersNext = cpNextQuery(r); s.signIn = r?.sign_in || null; s.emailAvailable = r?.email_available !== false;
     if (s.pick.invites) s.invites[s.pick.invites] = cpList(await get(`/v2/audiences/${cpId(s.pick.invites)}/invites`, {fresh: true}), 'invites');
   },
 };
@@ -214,20 +224,25 @@ function cpClick(ev) {
   const d = b.dataset;
   if (d.cpRetry) return void (d.cpRetry === 'audiences' ? cpLoadAudienceParts(CP) : cpLoad(CP, d.cpRetry));
   if (d.v && b.closest('[data-cp-level]')) return cpChooseLevel(d.v);
-  if ('cpAddress' in d) return cpEditAddress();
+  if ('cpAddress' in d) return void cpEditAddress();
   if (d.cpEdition) return void cpOpenEdition(d.cpEdition);
   if ('cpDraft' in d) return cpDraftNow();
   if ('cpEditionsMore' in d) return void cpMore('editions');
+  if (d.cpEditionsOf !== undefined) return void cpEditionsOf(d.cpEditionsOf);
   if (d.cpAudience !== undefined) return cpAudienceEdit(cpAud(d.cpAudience));
   if (d.cpGroup) { CP.groups[d.cpGroup] = !CP.groups[d.cpGroup]; return cpDraw('disclosure'); }
   if ('cpAddStat' in d) return void cpAddStat();
   if (d.cpStatRemove) return cpStatRemove(d.cpStatRemove);
   if (d.cpStatMove) return void cpStatMove(d.cpStatMove, Number(d.dir));
   if ('cpStatsRequest' in d) return void cpStatsRequest();
-  if (d.cpStatsApprove) return void cpStatsDecide(d.cpStatsApprove);
+  if (d.cpStatsApprove) return void cpStatsDecide(d.cpStatsApprove, 'approved');
+  if (d.cpStatsDecline) return void cpStatsDecide(d.cpStatsDecline, 'declined');
+  if ('cpLogo' in d) return b.parentElement.querySelector('[data-cp-logo-file]').click();
+  if ('cpLogoRemove' in d) return cpLogoRemove();
   if ('cpAddReader' in d) return cpAddReader();
   if ('cpImport' in d) return cpImportReaders();
   if ('cpReadersMore' in d) return void cpMore('readers');
+  if (d.cpReaderEdit) return cpEditReader(d.cpReaderEdit);
   if (d.cpReaderRemove) return cpRemoveReader(d.cpReaderRemove);
   if ('cpNewInvite' in d) return void cpNewInvite();
   if (d.cpInviteRevoke) return cpRevokeInvite(d.cpInviteRevoke);
@@ -239,14 +254,16 @@ function cpChange(ev) {
   if (d.cpMode !== undefined) return void cpSetMode(el);
   if (d.cpLag !== undefined) return void cpSetLag(el);
   if (d.cpStatChart) return void cpStatChart(d.cpStatChart, el.value);
+  if ('cpAccent' in d) return void cpSetAccent(el.value);
+  if ('cpLogoFile' in d) return void cpLogoUpload(el);
 }
-// A part's "next page": the list grows in place. Editions page by date, readers by offset.
-const cpNextQuery = r => r?.next_before ? `before=${encodeURIComponent(r.next_before)}` : r?.next != null ? `offset=${encodeURIComponent(r.next)}` : '';
+// A part's "next page": the list grows in place. Editions page by date, readers by the server's cursor.
+const cpNextQuery = r => r?.next_before ? `before=${encodeURIComponent(r.next_before)}` : r?.next != null ? `cursor=${encodeURIComponent(r.next)}` : '';
 async function cpMore(id) {
   const state = CP, editions = id === 'editions', next = editions ? state.editionsNext : state.readersNext;
   if (!next) return;
   try {
-    const r = await get(`/v2/${id}?${next}`, {fresh: true});
+    const r = await get(`/v2/${id}?${next}${editions ? cpEditionsQuery(state, '&') : ''}`, {fresh: true});
     if (CP !== state) return;
     if (editions) { state.editions.push(...cpList(r, 'editions')); state.editionsNext = cpNextQuery(r); }
     else { state.readers.push(...cpList(r, 'readers')); state.readersNext = cpNextQuery(r); }
@@ -263,23 +280,68 @@ async function cpPick(what, id) {
 // ----------------------------------------------------------------- 1. Transparency
 function cpTransparency() {
   const s = CP.settings || {}, level = s.transparency || 'closed', privateOn = cpPrivateOn();
+  // Neither a reader origin nor a page domain: nowhere to publish to, so there is nothing to turn on.
+  const noWhere = !s.reader_origin && !s.page_domain;
   const seg = `<div class="theme-seg cp-seg" role="radiogroup" aria-label="Transparency" data-cp-level>${CP_LEVELS.map(([v, l]) =>
-    `<button type="button" role="radio" data-v="${v}" aria-checked="${v === level}"${v === 'private' && !privateOn ? ' disabled' : ''}>${l}</button>`).join('')}</div>`;
-  const url = cpAddress(s);
-  const address = level !== 'closed' && url ? `<a class="cp-address" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url.replace(/^https?:\/\//, ''))}<span class="nav-icon" aria-hidden="true">open_in_new</span></a>` : '';
-  // An install with its own reader address has nothing to set here. Without one, the address is what Open needs first.
-  const set = s.reader_origin ? '' : cpBtn('data-cp-address', s.slug ? 'Change address' : 'Set address');
-  return cpSection('transparency', '', `<div class="cp-level">${seg}${address}${set}</div>${privateOn ? '' : cpPrivateOff()}`);
+    `<button type="button" role="radio" data-v="${v}" aria-checked="${v === level}"${v !== 'closed' && noWhere || v === 'private' && !privateOn ? ' disabled' : ''}>${l}</button>`).join('')}</div>`;
+  const url = s.address || '';
+  const shown = esc(url.replace(/^https?:\/\//, ''));
+  // Open with nothing approved to show answers not found: the address isn't offered as a link until it reaches a page.
+  const address = level === 'closed' || !url ? ''
+    : level === 'open' && s.public_live !== true ? `<span class="cp-address" data-cp-not-live>${shown}</span><span class="cp-level-note">Nothing public yet</span>`
+    : `<a class="cp-address" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${shown}<span class="nav-icon" aria-hidden="true">open_in_new</span></a>`;
+  // An install with its own reader address has nothing to set here. With a page domain, the address is what Open needs first.
+  const set = !s.reader_origin && s.page_domain ? cpBtn('data-cp-address', s.slug ? 'Change address' : 'Set address') : '';
+  const note = noWhere ? '<p class="cp-note" data-cp-no-address>This install has no page address (TICO_READER_ORIGIN)</p>' : privateOn ? '' : cpPrivateOff();
+  return cpSection('transparency', '', `<div class="cp-level">${seg}${address}${set}</div>${note}${cpLook(s)}`);
 }
-const cpAddress = s => s.reader_origin || (s.slug ? `https://${s.slug}.tico.page` : '');
-function cpEditAddress() {
+// The page's accent and logo. An accent is hex only; a logo is a png, jpeg or webp, read and checked by the server.
+function cpLook(s) {
+  const accent = /^#[0-9a-f]{6}$/i.test(s.accent || '') ? s.accent : '';
+  const logo = s.logo_file_id ? `<img class="cp-logo" src="${API}/v2/company-page/logo?v=${esc(s.logo_file_id)}" alt="Logo">` : '';
+  return `<div class="cp-look"><label class="cp-pick">Accent<input type="color" data-cp-accent aria-label="Accent colour" value="${esc(accent || CP_ACCENT)}"><input data-cp-accent aria-label="Accent, hex" maxlength="7" spellcheck="false" autocomplete="off" placeholder="${CP_ACCENT}" value="${esc(accent)}"></label>
+    <span class="cp-pick"><span>Logo</span>${logo}${cpBtn('data-cp-logo', logo ? 'Replace' : 'Upload')}${logo ? cpBtn('data-cp-logo-remove', 'Remove') : ''}<input type="file" data-cp-logo-file accept="image/png,image/jpeg,image/webp" aria-label="Logo file" hidden></span></div>`;
+}
+// Empty goes back to the default. Anything else is sent only once it reads as a colour.
+async function cpSetAccent(value) {
+  const state = CP, accent = value.trim().toLowerCase();
+  if (accent && !/^#[0-9a-f]{6}$/.test(accent)) { toast('An accent is a colour like #2255aa', true); return cpDraw('transparency'); }
+  if ((state.settings?.accent || '') === accent) return cpDraw('transparency');
+  try { state.settings = {...state.settings, ...await patch('/v2/company-page', {accent: accent || null})}; }
+  catch (e) { toast(e.message, true); }
+  if (CP === state) cpDraw('transparency');
+}
+async function cpLogoUpload(input) {
+  const state = CP, file = input.files?.[0];
+  if (!file) return;
+  if (!CP_LOGO_TYPES.includes(file.type)) { toast('A logo is a PNG, JPEG or WebP', true); return cpDraw('transparency'); }
+  if (file.size > CP_LOGO_MAX) { toast('A logo is 2 MB at most', true); return cpDraw('transparency'); }
+  try {
+    const response = await formFetch(API + '/v2/company-page/logo', file);
+    const result = await response.json().catch(() => ({}));
+    if (signInRedirect(response, result)) return;
+    if (!response.ok) throw apiFailure(result, response);
+    state.settings = {...state.settings, ...result};
+  } catch (e) { toast(e.message, true); }
+  if (CP === state) cpDraw('transparency');
+}
+function cpLogoRemove() {
+  cpConfirm('Remove the logo?', 'It comes off the page now.', 'Remove', async () => {
+    const r = await patch('/v2/company-page', {logo_file_id: null});
+    CP.settings = {...CP.settings, ...r};
+    cpDraw('transparency');
+  });
+}
+// Saving can be the step before turning the page on: `after` runs once there is an address to publish to.
+function cpEditAddress(after) {
   const s = CP.settings || {}, live = s.slug && s.transparency !== 'closed';
-  cpDialog('Address', `${live ? '<p class="cp-line">Links to the old address stop working.</p>' : ''}<label>Address<span class="cp-slug"><input name="slug" value="${esc(s.slug || '')}" maxlength="63" autocomplete="off" spellcheck="false"><span class="muted">.tico.page</span></span></label>`, 'Save', async form => {
+  cpDialog('Page address', `${live ? '<p class="cp-line">Links to the old address stop working.</p>' : ''}<label>Address<span class="cp-slug"><input name="slug" value="${esc(s.slug || '')}" maxlength="63" autocomplete="off" spellcheck="false"><span class="muted">.${esc(s.page_domain || '')}</span></span></label>`, 'Save', async form => {
     const slug = form.slug.value.trim();
     if (!slug) throw new Error('Enter an address');
     const r = await patch('/v2/company-page', {slug});
     CP.settings = {...CP.settings, ...r};
     cpDraw('transparency');
+    if (after) setTimeout(after);
   });
 }
 // What a change takes away, in one line, before it runs. Going to Open warns that it is the public internet. Closed to
@@ -287,6 +349,7 @@ function cpEditAddress() {
 function cpChooseLevel(to) {
   const from = CP.settings?.transparency || 'closed';
   if (to === from) return;
+  if (to !== 'closed' && !CP.settings?.address) return cpEditAddress(() => cpChooseLevel(to));
   const run = () => cpSetLevel(to);
   const kept = 'Feed readers and search engines may keep what they fetched.';
   if (to === 'open') return void cpConfirm('Go public?', 'Anyone on the public internet can read this page, and search engines can index it.', 'Go public', run, {danger: false});
@@ -307,26 +370,47 @@ async function cpSetLevel(to) {
 // ----------------------------------------------------------------- 2. Editions: the queue
 const cpMine = approval => !!approval?.to && approval.to === myActor();
 const cpApprover = approval => approval?.to_name || cpWho(approval?.to);
-// Why an edition is held, from its last check. A failed draft has no check yet: its dialog says why.
-const cpHeldWhy = e => e.status === 'held' && e.last_check?.outcome === 'held' ? (e.last_check.reasons || []).map(cpHeldWord).join(' · ') : '';
+// A draft that failed is held with no check run and nothing to check: it needs drafting again, not overriding.
+const cpDraftFailed = e => e.status === 'held' && !e.last_check;
+// Why an edition is held, from its last check.
+const cpHeldWhy = e => cpDraftFailed(e) ? 'Draft failed' : e.status === 'held' && e.last_check?.outcome === 'held' ? (e.last_check.reasons || []).map(cpHeldWord).join(' · ') : '';
+// Where an approval stands, in the words for a row.
+function cpAskedWord(a) {
+  if (!a) return '';
+  return {pending: cpMine(a) ? 'Waiting on you' : `Waiting on ${cpApprover(a)}`, approved: 'Publish next', declined: `Declined by ${cpApprover(a)}`,
+    lapsed: 'Approval lapsed', stale: 'Changed since asked', spent: 'Approval used'}[a.state] || '';
+}
 function cpQueue(editions) {
   const rank = e => { const i = CP_QUEUE.indexOf(e.status); return i < 0 ? 99 : i; };
-  // Stable: within a status the server's order stands, and an approval waiting on the viewer comes first.
+  // Stable: within a status the server's order stands. Out for approval, what is ready to publish comes first, then what waits on the viewer.
+  const next = e => e.approval?.state === 'approved' ? 0 : e.approval?.state === 'pending' && cpMine(e.approval) ? 1 : 2;
   return editions.filter(e => e.status !== 'superseded')
-    .map((e, i) => [e, i]).sort(([a, i], [b, j]) => rank(a) - rank(b) || Number(cpMine(b.approval)) - Number(cpMine(a.approval)) || i - j).map(([e]) => e);
+    .map((e, i) => [e, i]).sort(([a, i], [b, j]) => rank(a) - rank(b) || next(a) - next(b) || i - j).map(([e]) => e);
 }
 function cpEditionRow(e) {
-  const state = e.status === 'awaiting_approval' ? e.approval?.state : '';
-  const where = {pending: cpMine(e.approval) ? 'Waiting on you' : `Waiting on ${cpApprover(e.approval)}`, approved: 'Approved', declined: 'Declined', lapsed: 'Approval lapsed', stale: 'Approval out of date'}[state] || '';
+  const where = e.status === 'awaiting_approval' ? cpAskedWord(e.approval) : '';
   const meta = [cpAudName(e.audience_id), cpPeriod(e.period_start, e.period_end), e.author?.kind === 'company' ? '' : e.author?.name, where].filter(Boolean).join(' · ');
   const reason = cpHeldWhy(e), why = reason ? `<span class="cp-why">${esc(reason)}</span>` : '';
-  return `<button type="button" class="cp-ed-row" data-cp-edition="${esc(e.id)}">${cpPill(e.status)}<span class="cp-ed-t"><b>${esc(e.title || 'Untitled')}</b><span class="muted">${esc(meta)}</span>${why}</span><span class="nav-icon cp-chev" aria-hidden="true">chevron_right</span></button>`;
+  return `<button type="button" class="cp-ed-row" data-cp-edition="${esc(e.id)}">${cpEditionPill(e)}<span class="cp-ed-t"><b>${esc(e.title || 'Untitled')}</b><span class="muted">${esc(meta)}</span>${why}</span><span class="nav-icon cp-chev" aria-hidden="true">chevron_right</span></button>`;
+}
+// What the owner has to know before the queue: a schedule that stopped, a publish the page didn't take.
+function cpEditionsNotes() {
+  const stopped = (CP.scheduleProblems || []).map(p => `<p class="cp-alert" data-cp-stopped="${esc(p.audience_id)}"><span>${esc(`${p.name}: schedule stopped, its ${p.problem === 'cadence' ? 'cadence' : 'due date'} isn't valid`)}</span>${cpBtn(`data-cp-audience="${esc(p.audience_id)}"`, 'Fix')}</p>`).join('');
+  const failed = CP.releaseFailed ? `<p class="cp-alert" data-cp-release-failed><span>${esc(CP_RELEASE_FAILED)}</span></p>` : '';
+  return failed + stopped;
+}
+async function cpEditionsOf(audienceId) {
+  const state = CP;
+  state.pick.editions = audienceId;
+  await cpLoad(state, 'editions');
+  if (CP === state && audienceId) document.getElementById('cp-editions')?.scrollIntoView({block: 'start'});
 }
 function cpEditions() {
   const list = cpQueue(CP.editions || []), draft = cpBtn('data-cp-draft', 'Draft now', 'primary small');
   if (CP.editions === null) return cpSection('editions', '', skelRows(3, {dot: false}));
-  if (!list.length) return cpSection('editions', '', cpEmpty('No editions yet', draft));
-  return cpSection('editions', draft, `<div class="cp-queue">${list.map(cpEditionRow).join('')}</div>${CP.editionsNext ? cpBtn('data-cp-editions-more', 'Show more', 'ghost small cp-more') : ''}`);
+  const only = CP.pick.editions ? `<p class="cp-alert cp-only"><span>${esc(`Published to ${cpAudName(CP.pick.editions)}`)}</span>${cpBtn('data-cp-editions-of=""', 'Show all')}</p>` : '';
+  if (!list.length) return cpSection('editions', '', only + cpEditionsNotes() + cpEmpty('No editions yet', draft));
+  return cpSection('editions', draft, `${only}${cpEditionsNotes()}<div class="cp-queue">${list.map(cpEditionRow).join('')}</div>${CP.editionsNext ? cpBtn('data-cp-editions-more', 'Show more', 'ghost small cp-more') : ''}`);
 }
 // A draft is one server call and takes a moment: the queue reads again until none is left drafting.
 function cpWatchDrafts(state) {
@@ -334,16 +418,13 @@ function cpWatchDrafts(state) {
   if (!(state.editions || []).some(e => e.status === 'drafting')) return;
   state.timer = setTimeout(() => { if (CP === state) void cpLoad(state, 'editions'); }, 5000);
 }
-// Draft now: an out-of-cycle edition for last month by default.
+// Draft now: an out-of-cycle edition for last month by default, from a source the audience has. The server refuses any other.
+const cpSourceWord = x => cpWho(x.author);
 function cpDraftNow() {
-  const auds = (CP.audiences || []).filter(a => a.enabled !== 0 && a.enabled !== false);
-  const all = auds.length ? auds : CP.audiences || [];
-  if (!all.length) return void toast('Add an audience first', true);
+  const all = (CP.audiences || []).filter(a => a.enabled !== 0 && a.enabled !== false && a.sources?.length);
+  if (!all.length) return void toast('Turn on an audience with a source first', true);
   const now = new Date(), first = new Date(now.getFullYear(), now.getMonth() - 1, 1), last = new Date(now.getFullYear(), now.getMonth(), 0);
-  const sourceOptions = id => {
-    const sources = cpAud(id)?.sources || [];
-    return cpOptions(sources.length ? sources.map(x => [x.author, x.name || cpWho(x.author)]) : [['company', 'Company']]);
-  };
+  const sourceOptions = id => cpOptions(cpAud(id).sources.map(x => [x.author, cpSourceWord(x)]));
   const dlg = cpDialog('Draft now', `<label>Audience<select name="audience">${cpAudOptions(all, all[0].id)}</select></label>
     <label>Source<select name="author">${sourceOptions(all[0].id)}</select></label>
     <div class="cp-two"><label>From<input type="date" name="start" value="${finIso(first)}"></label><label>To<input type="date" name="end" value="${finIso(last)}"></label></div>`, 'Draft', async form => {
@@ -389,7 +470,7 @@ function cpChecksHtml(e) {
 function cpSourcesHtml(e) {
   const sources = cpList(e.sources, 'sources');
   if (!sources.length) return '<p class="muted cp-small">None</p>';
-  return sources.map((x, i) => `<details class="cp-source"><summary>${esc(`Update ${i + 1}`)}</summary><div class="cp-source-t">${safeMd(x.body)}</div></details>`).join('');
+  return sources.map((x, i) => `<details class="cp-source"><summary>${esc(x.author_name || `Update ${i + 1}`)}</summary><div class="cp-source-t">${safeMd(x.body)}</div></details>`).join('');
 }
 // Page views of a private edition; a public page has no reader to name.
 function cpSeenHtml(e) {
@@ -399,35 +480,53 @@ function cpSeenHtml(e) {
   return `<h4 class="label cp-h">Seen by${count ? ` <span class="tnum">${count}</span>` : ''}</h4>${seen.length
     ? `<ul class="cp-seen">${seen.map(x => `<li><span>${esc(x.name || x.email || '')}</span><span class="muted">${esc(finDayLabel(x.viewed_at))}</span></li>`).join('')}</ul>` : '<p class="muted cp-small">Nobody yet</p>'}`;
 }
+// What became of the readers' emails: only the counts that aren't zero.
+function cpNoticesHtml(e) {
+  const n = e.notices;
+  if (!n) return '';
+  if (n.email_available === false) return '<h4 class="label cp-h">Emails</h4><p class="muted cp-small">Email is off on this install</p>';
+  const r = n.readers || {}, i = n.issuer || {};
+  const words = [[r.sent, 'sent'], [r.pending, 'waiting'], [r.failed, 'failed'], [r.unavailable, 'could not send'], [r.cancelled, 'cancelled'], [i.limited, 'over the send limit']]
+    .filter(([count]) => count > 0).map(([count, word]) => `${count} ${word}`);
+  return `<h4 class="label cp-h">Emails</h4><p class="muted cp-small" data-cp-notices>${esc(words.join(' · ') || 'None')}</p>`;
+}
 // What can be done from here. Approve and Decline only for the person it is addressed to; the server checks that too.
 function cpEdActions(e) {
   const a = e.approval, btn = (act, label, cls = 'ghost') => `<button type="button" class="${cls}" data-act="${act}">${esc(label)}</button>`;
   if (e.status === 'published') return btn('correct', 'Correct') + btn('retract', 'Retract', 'ghost danger');
+  // A correction is the way back for one that went out and was retracted. One discarded before it went out has none.
+  if (e.status === 'retracted' && e.published_at) return btn('correct', 'Correct');
   if (e.status === 'retracted' || e.status === 'superseded' || e.status === 'drafting') return '';
-  const out = [btn('edit', 'Edit'), btn('check', 'Check'), btn('discard', 'Discard', 'ghost danger')];
+  if (cpDraftFailed(e)) return btn('edit', 'Edit') + btn('discard', 'Discard', 'ghost danger') + btn('redraft', 'Draft again', 'primary');
+  const out = [btn('edit', 'Edit'), btn('discard', 'Discard', 'ghost danger')];
+  if (e.status === 'awaiting_approval' && a?.state === 'approved') return out.join('') + btn('publish', 'Publish', 'primary');
+  out.splice(1, 0, btn('check', 'Check'));
   if (e.status === 'held') out.push(btn('override', 'Override'));
   if (e.status === 'ready') out.push(btn('request', 'Request approval', 'primary'));
   if (e.status !== 'awaiting_approval') return out.join('');
-  if (a?.state === 'approved') out.push(btn('publish', 'Publish', 'primary'));
-  else if (a?.state === 'pending') { if (cpMine(a)) out.push(btn('decline', 'Decline'), btn('approve', 'Approve', 'primary')); }
-  else out.push(btn('request', 'Request approval', 'primary'));
+  if (a?.state === 'pending') { if (cpMine(a)) out.push(btn('decline', 'Decline'), btn('approve', 'Approve', 'primary')); }
+  else out.push(btn('request', 'Ask again', 'primary'));
   return out.join('');
 }
 function cpEdNotes(e) {
   const a = e.status === 'awaiting_approval' ? e.approval : null, notes = [];
+  if (CP.releaseFailed?.id === e.id) notes.push(CP_RELEASE_FAILED);
+  if (cpDraftFailed(e)) notes.push('The draft failed. See Checks below.');
   if (a?.state === 'lapsed') notes.push('Approval lapsed. Ask again.');
   else if (a?.state === 'stale') notes.push('The text, disclosure or rules changed after this was asked. Ask again.');
-  else if (a?.state === 'declined') notes.push(`Declined by ${cpApprover(a)}`);
+  else if (a?.state === 'spent') notes.push('That approval was already used. Ask again.');
+  else if (a?.state === 'declined') notes.push(`Declined by ${cpApprover(a)}${a.note ? `: ${a.note}` : ''}`);
   else if (a?.state === 'pending' && !cpMine(a)) notes.push(`Waiting on ${cpApprover(a)}`);
-  else if (a?.state === 'approved') notes.push(`Approved by ${cpApprover(a)}`);
-  if (e.checks_current === false && (e.status === 'ready' || e.status === 'held') && e.last_check) notes.push('Something changed since the last check.');
+  else if (a?.state === 'approved') notes.push(`Approved by ${cpApprover(a)}${a.note ? `: ${a.note}` : ''}. Publish is next.`);
+  // `checks_current` is false on any held edition, moved or not: only on a ready one does it mean something moved.
+  if (e.checks_current === false && e.status === 'ready') notes.push('Something changed since the last check.');
   if (e.override_note) notes.push(`Override: ${e.override_note}`);
   if (e.retraction_note) notes.push(`Retracted: ${e.retraction_note}`);
   return notes.map(n => `<p class="cp-note">${esc(n)}</p>`).join('');
 }
 function cpEdDraw(dlg, e) {
   dlg.dataset.edition = e.id;
-  dlg.querySelector('[data-ed-pill]').innerHTML = cpPill(e.status);
+  dlg.querySelector('[data-ed-pill]').innerHTML = cpEditionPill(e);
   const meta = [cpAudName(e.audience_id), cpPeriod(e.period_start, e.period_end), e.version > 1 ? `v${e.version}` : '', e.author?.name].filter(Boolean).join(' · ');
   const actions = cpEdActions(e);
   dlg.querySelector('[data-ed-body]').innerHTML = `<p class="muted cp-small">${esc(meta)}</p>${cpEdNotes(e)}
@@ -435,8 +534,15 @@ function cpEdDraw(dlg, e) {
     ${cpReadHtml(e)}
     <h4 class="label cp-h">Checks</h4>${cpChecksHtml(e)}
     <h4 class="label cp-h">Sources</h4>${cpSourcesHtml(e)}
+    ${cpNoticesHtml(e)}
     ${cpSeenHtml(e)}`;
   dlg.querySelectorAll('[data-act]').forEach(b => { b.onclick = () => cpEdAct(dlg, e, b.dataset.act); });
+}
+// An edition, and for one that went out to readers, what became of their emails. That second read can't stop the first.
+async function cpEdRead(id) {
+  const e = await get(`/v2/editions/${cpId(id)}`, {fresh: true});
+  if ((e.status === 'published' || e.status === 'retracted') && cpAud(e.audience_id)?.kind !== 'public') e.notices = await get(`/v2/editions/${cpId(id)}/notices`, {fresh: true}).catch(() => null);
+  return e;
 }
 async function cpOpenEdition(id) {
   const state = CP;
@@ -451,7 +557,7 @@ async function cpOpenEdition(id) {
   dlg.onclose = () => dlg.remove();
   dlg.showModal();
   try {
-    const e = await get(`/v2/editions/${cpId(id)}`, {fresh: true});
+    const e = await cpEdRead(id);
     if (CP === state && dlg.isConnected) cpEdDraw(dlg, e);
   } catch (e) {
     if (dlg.isConnected) dlg.querySelector('[data-ed-body]').innerHTML = `<p class="muted">${esc(e.status === 403 ? 'Owners and admins only' : e.status === 404 ? 'Edition not found' : e.message)}</p>`;
@@ -462,7 +568,7 @@ async function cpEdRefresh(dlg, id) {
   const state = CP;
   await cpReload('editions');
   if (CP !== state || !dlg.isConnected) return;
-  cpEdDraw(dlg, await get(`/v2/editions/${cpId(id)}`, {fresh: true}));
+  cpEdDraw(dlg, await cpEdRead(id));
 }
 // One button: runs, says so, and shows what the server now holds. Failure stays on this dialog.
 async function cpEdRun(dlg, e, work, done) {
@@ -474,17 +580,25 @@ async function cpEdRun(dlg, e, work, done) {
   }
 }
 function cpEdAct(dlg, e, act) {
-  const api = `/v2/editions/${cpId(e.id)}`, name = cpAudName(e.audience_id), isPublic = cpAud(e.audience_id)?.kind === 'public';
+  const api = `/v2/editions/${cpId(e.id)}`, name = cpAudName(e.audience_id), isPublic = cpAud(e.audience_id)?.kind === 'public', level = CP.settings?.transparency || 'closed';
   if (act === 'edit') return cpEdEdit(dlg, e);
   if (act === 'correct') return cpEdCorrect(dlg, e);
   if (act === 'check') return void cpEdRun(dlg, e, () => post(api + '/check', {}), 'Checked');
   if (act === 'request') return void cpEdRun(dlg, e, () => post(api + '/approval', {}), 'Approval requested');
+  // A failed draft runs again on the same row: same audience, source and period.
+  if (act === 'redraft') return void cpEdRun(dlg, e, () => post('/v2/editions', {audience_id: e.audience_id, author: e.author?.id, period_start: e.period_start, period_end: e.period_end}), 'Drafted');
   // The person's own click on the text above, through the approvals API. No token or Assistant decides this one.
   if (act === 'approve') return void cpEdRun(dlg, e, () => post(`/v2/approvals/${cpId(e.approval.id)}`, {decision: 'approved'}), 'Approved');
-  if (act === 'decline') return void cpEdRun(dlg, e, () => post(`/v2/approvals/${cpId(e.approval.id)}`, {decision: 'declined'}), 'Declined');
-  if (act === 'publish') return void cpConfirm(`Publish to ${name}?`, isPublic ? 'It goes on the public page now.' : 'Readers can see it now, and get an email with a link.', 'Publish', async () => {
-    await post(api + '/publish', {approval_id: e.approval?.id});
-    toast('Published', false, null, {host: dlg});
+  if (act === 'decline') return void cpDialog('Decline?', '<label>Note<textarea name="note" rows="2" maxlength="2000"></textarea></label>', 'Decline', async form => {
+    await post(`/v2/approvals/${cpId(e.approval.id)}`, {decision: 'declined', note: form.note.value.trim()});
+    toast('Declined', false, null, {host: dlg});
+    await cpEdRefresh(dlg, e.id);
+  }, {danger: true});
+  if (act === 'publish') return void cpConfirm(`Publish to ${name}?`, cpPublishLine(isPublic, level), 'Publish', async () => {
+    const r = await post(api + '/publish', {approval_id: e.approval?.id});
+    CP.releaseFailed = r?.release_failed ? {id: e.id} : null;
+    if (r?.release_failed) toast(CP_RELEASE_FAILED, true, null, {host: dlg});
+    else toast('Published', false, null, {host: dlg});
     await cpEdRefresh(dlg, e.id);
   }, {danger: false});
   if (act === 'retract') return void cpDialog('Retract this edition?', `<p class="cp-line">${esc(isPublic ? 'It comes off the public page now. Feed readers and search engines may keep what they fetched.' : 'Readers can\'t open it after this. Emails already sent can\'t be recalled.')}</p>
@@ -512,6 +626,12 @@ function cpEdAct(dlg, e, act) {
     toast('Overridden', false, null, {host: dlg});
     await cpEdRefresh(dlg, e.id);
   }, {danger: true});
+}
+// What publishing does at the page's level now. On a Closed page nobody sees it, and nothing is emailed.
+function cpPublishLine(isPublic, level) {
+  if (isPublic) return level === 'open' ? 'It goes on the public page now.' : 'Nobody sees it until the page is Open.';
+  if (level === 'closed') return 'Nobody sees it until the page is Private or Open. No email goes out.';
+  return CP.emailAvailable ? 'Readers can see it now, and get an email with a link.' : 'Readers can see it now. No email goes out: email is off on this install.';
 }
 // The text as one box per section, one item a line (an item is one short plain line on the server). An item whose words
 // stay keeps its ask, so a reader's reply still points at it.
@@ -560,11 +680,11 @@ function cpDueText(a) {
 }
 function cpAudienceRow(a) {
   const on = a.enabled !== 0 && a.enabled !== false;
-  const sources = (a.sources || []).map(x => x.name || cpWho(x.author)).join(', ');
+  const sources = (a.sources || []).map(cpSourceWord).join(', ');
   const cadence = CP_CADENCE.find(c => c[0] === a.cadence)?.[1] || a.cadence || '';
   const facts = [['Approver', a.approver ? cpWho(a.approver) : 'Owner'], ['Sources', sources || 'None'], ['Due', [cadence, cpDueText(a)].filter(Boolean).join(', ')]];
   if (a.next_due && on) facts.push(['Next', finDayLabel(a.next_due)]);
-  return `<div class="cp-aud" data-cp-aud="${esc(a.id)}"><div class="cp-aud-t"><b>${esc(a.name)}</b>${a.kind === 'custom' ? '' : ' <span class="pill">Built in</span>'}${on ? '' : ' <span class="pill">Off</span>'}<span class="spacer"></span>${cpBtn(`data-cp-audience="${esc(a.id)}"`, 'Edit')}</div>
+  return `<div class="cp-aud" data-cp-aud="${esc(a.id)}"><div class="cp-aud-t"><b>${esc(a.name)}</b>${a.built_in ? ' <span class="pill">Built in</span>' : ''}${on ? '' : ' <span class="pill">Off</span>'}<span class="spacer"></span>${cpBtn(`data-cp-audience="${esc(a.id)}"`, 'Edit')}</div>
     <dl class="cp-facts">${facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl></div>`;
 }
 function cpAudiences() {
@@ -580,7 +700,7 @@ function cpSourceChoices() {
   return [['company', 'Company'], ...people, ...bots];
 }
 function cpAudienceEdit(a) {
-  const isNew = !a, custom = isNew || a.kind === 'custom', on = isNew ? true : a.enabled !== 0 && a.enabled !== false;
+  const isNew = !a, custom = isNew || !a.built_in, on = isNew ? true : a.enabled !== 0 && a.enabled !== false;
   let rule = a?.due_rule;
   if (typeof rule === 'string') { try { rule = JSON.parse(rule); } catch { rule = {}; } }
   const had = new Map((a?.sources || []).map(x => [x.author, x.id]));
@@ -593,13 +713,15 @@ function cpAudienceEdit(a) {
     <label>Approver<select name="approver">${cpOptions(people, a?.approver || '')}</select></label>
     <div class="cp-two"><label>Cadence<select name="cadence">${cpOptions(CP_CADENCE, a?.cadence || 'monthly')}</select></label>
       <label>Due<select name="due_kind">${cpOptions(CP_DUE, rule?.kind || 'business_day')}</select></label>
-      <label>Day<input type="number" name="due_n" min="0" max="365" value="${esc(rule?.n || 5)}"></label></div>
+      <label>Day<input type="number" name="due_n" min="1" max="365" value="${esc(rule?.n || 5)}"></label></div>
     <fieldset class="cp-picks"><legend>Sources</legend>${choices.map(([v, l]) => `<label class="cp-check-l"><input type="checkbox" name="source" value="${esc(v)}"${had.has(v) ? ' checked' : ''}>${esc(l)}</label>`).join('')}</fieldset>
     ${!isNew && custom ? cpBtn('data-delete', 'Delete audience', 'ghost small danger cp-del') : ''}`, 'Save', async form => {
     const name = form.name.value.trim();
     if (custom && !name) throw new Error('Name it');
+    const day = Math.round(Number(form.due_n.value));
+    if (!(day >= 1)) throw new Error('Enter a day, 1 or later');
     const fields = {enabled: form.enabled.checked, approver: form.approver.value || null, cadence: form.cadence.value,
-      due_rule: {kind: form.due_kind.value, n: Math.round(Number(form.due_n.value)) || 0}};
+      due_rule: {kind: form.due_kind.value, n: day}};
     const saved = isNew ? await post('/v2/audiences', {name, ...fields}) : await patch(`/v2/audiences/${cpId(a.id)}`, custom ? {name, ...fields} : fields);
     const id = a?.id || saved?.id;
     if (id) {
@@ -608,6 +730,7 @@ function cpAudienceEdit(a) {
         ...[...had].filter(([v]) => !want.has(v)).map(([, sid]) => writeRequest('DELETE', `/v2/audiences/${cpId(id)}/sources/${cpId(sid)}`))]);
     }
     await cpLoadAudienceParts(CP);
+    await cpReload('editions');    // a fixed schedule leaves the list of stopped ones
   }, {wide: true});
   const box = dlg.querySelector('[name=enabled]'), note = dlg.querySelector('[data-off-note]');
   box.onchange = () => { note.hidden = box.checked || !on; };
@@ -661,7 +784,18 @@ function cpDisclosure() {
   }).join('');
   const presets = `<tr class="cp-presets"><th scope="row">Preset</th>${shown.map(a => `<td><select data-cp-preset="${esc(a.id)}" aria-label="Preset, ${esc(a.name)}"><option value="">Choose</option>${cpOptions(CP_PRESETS)}</select></td>`).join('')}</tr>`;
   const headRow = phone ? '' : `<thead><tr><th></th>${shown.map(a => `<th scope="col">${esc(a.name)}</th>`).join('')}</tr></thead>`;
-  return cpSection('disclosure', '', `${pick}<div class="${phone ? 'cp-grid-one' : 'cp-grid scroll'}"><table class="cp-table">${headRow}<tbody>${presets}${base.map(row).join('')}</tbody>${folds}</table></div>`);
+  return cpSection('disclosure', '', `${pick}<div data-cp-tightened>${cpTightenedLine()}</div><div class="${phone ? 'cp-grid-one' : 'cp-grid scroll'}"><table class="cp-table">${headRow}<tbody>${presets}${base.map(row).join('')}</tbody>${folds}</table></div>`);
+}
+// A rule that was tightened can't reach what already went out: one line says how much did, and leads to it.
+function cpTightenedLine() {
+  const t = CP?.tightened;
+  if (!t?.count) return '';
+  return `<p class="cp-alert"><span>${esc(`${t.count} published ${t.count === 1 ? 'update' : 'updates'} may mention this`)}</span>${cpBtn(`data-cp-editions-of="${esc(t.audience)}"`, `See ${cpAudName(t.audience)}'s`)}</p>`;
+}
+function cpNoteTightened(state, audience, answer) {
+  state.tightened = {audience, count: Number(answer?.published_editions) || 0};
+  const slot = document.querySelector('#cp-disclosure [data-cp-tightened]');
+  if (slot) slot.innerHTML = cpTightenedLine();
 }
 // One cell: send it and keep the choice; if the server refuses, the cell goes back to what it holds.
 async function cpSaveRule(el, mode, lag, rounding) {
@@ -670,6 +804,7 @@ async function cpSaveRule(el, mode, lag, rounding) {
   const r = await put(`/v2/audiences/${cpId(aud)}/disclosure`, {rules: [rule]});
   if (CP !== state) return;
   state.disclosure[aud] = r;
+  cpNoteTightened(state, aud, r);
   if (aud === state.pick.stats) void cpLoad(state, 'stats');   // the projection follows the rule
 }
 const cpCellOf = el => ({data_class: el.dataset.class, ref_id: el.dataset.ref, parent: el.dataset.parent});
@@ -691,8 +826,9 @@ async function cpSetLag(el) {
 function cpPreset(audId, name) {
   const label = CP_PRESETS.find(p => p[0] === name)?.[1] || name;
   cpConfirm(`Apply ${label} to ${cpAudName(audId)}?`, 'Replaces every rule for this audience. Anything it loosens needs a new stats approval.', 'Apply', async () => {
-    await post(`/v2/audiences/${cpId(audId)}/disclosure/preset`, {name});
+    const r = await post(`/v2/audiences/${cpId(audId)}/disclosure/preset`, {name});
     await cpReload('disclosure', 'stats');
+    cpNoteTightened(CP, audId, r);
   });
 }
 
@@ -700,7 +836,7 @@ function cpPreset(audId, name) {
 function cpBoardRow(x, i, n) {
   const up = i > 0 ? cpBtn(`data-cp-stat-move="${esc(x.id)}" data-dir="-1" aria-label="Move ${esc(x.label)} up"`, '↑', 'ghost small cp-icon') : '<span class="cp-icon-gap"></span>';
   const down = i < n - 1 ? cpBtn(`data-cp-stat-move="${esc(x.id)}" data-dir="1" aria-label="Move ${esc(x.label)} down"`, '↓', 'ghost small cp-icon') : '<span class="cp-icon-gap"></span>';
-  return `<li class="cp-board-row" data-cp-stat="${esc(x.id)}"><span class="cp-board-l">${esc(x.label || x.ref_id)}</span><select data-cp-stat-chart="${esc(x.id)}" aria-label="Chart, ${esc(x.label || '')}">${cpOptions(CP_CHARTS, x.chart || 'number')}</select>${up}${down}${cpBtn(`data-cp-stat-remove="${esc(x.id)}" aria-label="Remove ${esc(x.label || '')}"`, '✕', 'ghost small cp-icon')}</li>`;
+  return `<li class="cp-board-row" data-cp-stat="${esc(x.id)}"><span class="cp-board-l">${esc(x.label || x.ref_id)}${x.source_kind === 'finance_line' ? ' <span class="muted cp-small">P&amp;L</span>' : ''}</span><select data-cp-stat-chart="${esc(x.id)}" aria-label="Chart, ${esc(x.label || '')}">${cpOptions(CP_CHARTS, x.chart || 'number')}</select>${up}${down}${cpBtn(`data-cp-stat-remove="${esc(x.id)}" aria-label="Remove ${esc(x.label || '')}"`, '✕', 'ghost small cp-icon')}</li>`;
 }
 function cpTileChart(stat) {
   const values = (stat.series || []).map(p => p.value).filter(v => v != null).map(Number);
@@ -720,38 +856,33 @@ function cpBoardApproval(audId, p) {
   const a = p?.approval;
   if (p?.approved === true) return '<span class="pill ok">Approved</span>';
   if (a?.state === 'pending') return cpMine(a)
-    ? cpBtn(`data-cp-stats-approve="${esc(a.id)}"`, 'Approve stats', 'primary small')
+    ? cpBtn(`data-cp-stats-decline="${esc(a.id)}"`, 'Decline') + cpBtn(`data-cp-stats-approve="${esc(a.id)}"`, 'Approve stats', 'primary small')
     : `<span class="pill waiting">Waiting on ${esc(cpApprover(a))}</span>`;
-  return cpBtn('data-cp-stats-request', 'Request stats approval');
+  const word = {declined: `Declined by ${cpApprover(a)}${a?.note ? `: ${a.note}` : ''}`, lapsed: 'Approval lapsed', stale: 'Changed since approved', spent: 'Approval used'}[a?.state];
+  return (word ? `<span class="muted cp-small" data-cp-board-state>${esc(word)}</span>` : '') + cpBtn('data-cp-stats-request', word ? 'Ask again' : 'Request stats approval');
 }
 function cpStats() {
   if (CP.stats === null) return cpSection('stats', '', skelRows(3, {dot: false}));
   const auds = CP.audiences || [], add = cpBtn('data-cp-add-stat', '+ Stat');
   if (!CP.stats.length) return cpSection('stats', '', cpEmpty('No stats chosen', add));
   const n = CP.stats.length, id = CP.pick.stats, p = CP.projection[id];
-  const held = [...cpList(p?.held, 'held'), ...cpList(p?.absent, 'absent')], tiles = cpList(p?.stats, 'stats');
+  const held = cpList(p?.held, 'held'), absent = cpList(p?.absent, 'absent'), tiles = cpList(p?.stats, 'stats');
+  const whyList = (title, rows) => rows.length ? `<h4 class="label cp-h">${title}</h4><ul class="cp-held">${rows.map(x => `<li data-cp-held="${esc(x.id)}"><b>${esc(x.label)}${(CP.stats || []).find(b => b.id === x.id)?.source_kind === 'finance_line' ? ' · P&amp;L' : ''}</b><span>${esc(x.reason)}</span></li>`).join('')}</ul>` : '';
   const projection = !id ? '<p class="muted cp-small">Add an audience first</p>' : `<div class="cp-proj-bar"><label class="cp-pick">Audience<select data-cp-pick="stats">${cpAudOptions(auds, id)}</select></label><span class="spacer"></span>${cpBoardApproval(id, p)}</div>
     ${tiles.length ? `<div class="cp-tiles">${tiles.map(cpTile).join('')}</div>` : `<p class="muted cp-small">Nothing shows to ${esc(cpAudName(id))}</p>`}
-    ${held.length ? `<h4 class="label cp-h">Held</h4><ul class="cp-held">${held.map(x => `<li data-cp-held="${esc(x.id)}"><b>${esc(x.label)}</b><span>${esc(x.reason)}</span></li>`).join('')}</ul>` : ''}`;
+    ${whyList('Held', held)}${whyList('Not shown', absent)}`;
   return cpSection('stats', add, `<div class="cp-stats"><ul class="cp-board">${CP.stats.map((x, i) => cpBoardRow(x, i, n)).join('')}</ul><div class="cp-proj">${projection}</div></div>`);
 }
-// What can go on the board: the server's list if it sends one, else the KPIs this person can see and Finance's own numbers.
-async function cpStatChoices() {
-  if (CP.available?.length) return CP.available;
-  const kpis = cpList(await get('/v2/kpis', {fresh: true}).catch(() => null), 'kpis');
-  return [...kpis.map(k => ({source_kind: 'kpi', ref_id: k.id, label: k.name})), ...CP_METRICS.map(([ref_id, label]) => ({source_kind: 'finance_metric', ref_id, label}))];
-}
+// What can go on the board is the server's list: KPIs, Finance's own numbers and each P&L line.
 async function cpAddStat() {
-  const state = CP, choices = await cpStatChoices();
-  if (CP !== state) return;
   const taken = new Set((CP.stats || []).map(x => `${x.source_kind}|${x.ref_id}`));
-  const free = choices.filter(x => !taken.has(`${x.source_kind}|${x.ref_id}`));
+  const free = (CP.available || []).filter(x => !taken.has(`${x.source_kind}|${x.ref_id}`));
   if (!free.length) return void toast('Nothing left to add');
-  const group = (kinds, label) => {
-    const rows = free.filter(x => kinds.includes(x.source_kind));
+  const group = (kind, label) => {
+    const rows = free.filter(x => x.source_kind === kind);
     return rows.length ? `<optgroup label="${label}">${rows.map(x => `<option value="${esc(`${x.source_kind}|${x.ref_id}`)}">${esc(x.label)}</option>`).join('')}</optgroup>` : '';
   };
-  cpDialog('Add a stat', `<label>Stat<select name="stat">${group(['kpi'], 'KPIs')}${group(['finance_metric', 'finance_line'], 'Finance')}</select></label>
+  cpDialog('Add a stat', `<label>Stat<select name="stat">${group('kpi', 'KPIs')}${group('finance_metric', 'Finance')}${group('finance_line', 'P&amp;L lines')}</select></label>
     <label>Chart<select name="chart">${cpOptions(CP_CHARTS, 'number')}</select></label>`, 'Add', async form => {
     const pickd = free.find(x => `${x.source_kind}|${x.ref_id}` === form.stat.value);
     await post('/v2/company-page/stats', {source_kind: pickd.source_kind, ref_id: pickd.ref_id, chart: form.chart.value, position: CP.stats.length});
@@ -783,8 +914,8 @@ async function cpStatsRequest() {
   catch (e) { toast(e.message, true); }
   await cpReload('stats');
 }
-async function cpStatsDecide(approvalId) {
-  try { await post(`/v2/approvals/${cpId(approvalId)}`, {decision: 'approved'}); toast('Approved'); }
+async function cpStatsDecide(approvalId, decision) {
+  try { await post(`/v2/approvals/${cpId(approvalId)}`, {decision}); toast(decision === 'approved' ? 'Approved' : 'Declined'); }
   catch (e) { toast(e.message, true); }
   await cpReload('stats');
 }
@@ -792,7 +923,7 @@ async function cpStatsDecide(approvalId) {
 // ----------------------------------------------------------------- 6. Readers
 function cpReaderRow(r) {
   const auds = (r.audiences || []).map(x => x.name).filter(Boolean).join(', ');
-  return `<li class="cp-reader" data-cp-reader="${esc(r.id)}"><span class="cp-reader-t"><b>${esc(r.name || r.email)}</b><span class="muted">${esc([r.name ? r.email : '', auds].filter(Boolean).join(' · '))}</span></span>${cpBtn(`data-cp-reader-remove="${esc(r.id)}"`, 'Remove')}</li>`;
+  return `<li class="cp-reader" data-cp-reader="${esc(r.id)}"><span class="cp-reader-t"><b>${esc(r.name || r.email)}</b><span class="muted">${esc([r.name ? r.email : '', auds || 'No audience', r.notify === false ? 'Emails off' : ''].filter(Boolean).join(' · '))}</span></span>${cpBtn(`data-cp-reader-edit="${esc(r.id)}"`, 'Edit')}${cpBtn(`data-cp-reader-remove="${esc(r.id)}"`, 'Remove')}</li>`;
 }
 function cpInviteRow(x) {
   const state = {used: 'Used', expired: 'Expired', open: 'Open'}[x.state] || 'Expired';
@@ -809,15 +940,26 @@ function cpReaders() {
   const links = !auds.length ? '' : `<h4 class="label cp-h">Invite links</h4>
     <div class="cp-proj-bar"><label class="cp-pick">Audience<select data-cp-pick="invites">${cpAudOptions(auds, id)}</select></label><span class="spacer"></span>${cpBtn('data-cp-new-invite', 'New link')}</div>
     ${invites.length ? `<ul class="cp-readers">${invites.map(cpInviteRow).join('')}</ul>` : '<p class="muted cp-small">No links</p>'}`;
-  return cpSection('readers', CP.readers.length ? adds : '', people + links);
+  const email = CP.emailAvailable ? '' : '<p class="cp-note" data-cp-email-off>Email is off on this install. Readers see new editions on the page.</p>';
+  return cpSection('readers', CP.readers.length ? adds : '', email + people + links);
 }
-const cpAudienceChecks = (checked = '') => `<fieldset class="cp-picks"><legend>Audiences</legend>${cpPrivateAudiences().map(a => `<label class="cp-check-l"><input type="checkbox" name="audience" value="${esc(a.id)}"${a.id === checked ? ' checked' : ''}>${esc(a.name)}</label>`).join('')}</fieldset>`;
+const cpAudienceChecks = (checked = []) => `<fieldset class="cp-picks"><legend>Audiences</legend>${cpPrivateAudiences().map(a => `<label class="cp-check-l"><input type="checkbox" name="audience" value="${esc(a.id)}"${checked.includes(a.id) ? ' checked' : ''}>${esc(a.name)}</label>`).join('')}</fieldset>`;
 function cpAddReader() {
-  cpDialog('Add a reader', `<label>Email<input type="email" name="email" required autocomplete="off"></label><label>Name<input name="name" autocomplete="off"></label>${cpAudienceChecks(CP.pick.invites)}`, 'Add', async form => {
+  cpDialog('Add a reader', `<label>Email<input type="email" name="email" required autocomplete="off"></label><label>Name<input name="name" autocomplete="off"></label>${cpAudienceChecks([CP.pick.invites])}`, 'Add', async form => {
     const email = form.email.value.trim(), audience_ids = [...form.querySelectorAll('[name=audience]:checked')].map(i => i.value);
     if (!/^[^@\s]+@[^@\s]+$/.test(email)) throw new Error('Enter an email');
     if (!audience_ids.length) throw new Error('Choose an audience');
     await post('/v2/readers', {email, name: form.name.value.trim(), audience_ids});
+    await cpReload('readers');
+  });
+}
+// Out of one audience without losing the rest: the checked set replaces the old one, on their next request.
+function cpEditReader(id) {
+  const r = (CP.readers || []).find(x => x.id === id);
+  if (!r) return;
+  cpDialog(r.email, `<label>Name<input name="name" value="${esc(r.name || '')}" maxlength="200" autocomplete="off"></label>${cpAudienceChecks((r.audiences || []).map(a => a.id))}
+    <label class="cp-check-l"><input type="checkbox" name="notify"${r.notify === false ? '' : ' checked'}>Emails</label>`, 'Save', async form => {
+    await patch(`/v2/readers/${cpId(id)}`, {name: form.name.value.trim(), notify: form.notify.checked, audience_ids: [...form.querySelectorAll('[name=audience]:checked')].map(i => i.value)});
     await cpReload('readers');
   });
 }
@@ -830,11 +972,11 @@ function cpImportReaders() {
     if (!csv) throw new Error('Choose a file or paste the rows');
     const r = await post('/v2/readers/import', {csv, audience_id: form.audience.value});
     await cpReload('readers');
-    const errors = cpList(r?.invalid, 'invalid');
-    if (!r?.invalid_count) { toast(`${r?.added ?? 0} added`); return true; }
+    const errors = cpList(r?.errors, 'errors'), already = r?.existing ? `, ${r.existing} already here` : '';
+    if (!r?.invalid_count) { toast(`${r?.added ?? 0} added${already}`); return true; }
     // Some rows failed: stay here, say which, so they can be fixed and sent again.
     const out = form.querySelector('[data-result]');
-    out.textContent = `${r?.added ?? 0} added. Not added (${r.invalid_count}): ${errors.map(x => `line ${x.line}: ${x.reason}`).join('; ')}`;
+    out.textContent = `${r?.added ?? 0} added${already}. Not added (${r.invalid_count}): ${errors.map(x => `line ${x.line}: ${x.reason}`).join('; ')}`;
     out.hidden = false;
     form.csv.value = '';
     return false;
