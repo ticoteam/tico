@@ -11,6 +11,7 @@ computer.
 Slow: it builds the release binary once per session and starts runner processes.
 """
 
+import json
 import sqlite3
 import time
 
@@ -214,6 +215,7 @@ def test_a_public_turn_is_replayed_its_threads_public_history_and_no_direct_mess
     dm = ok(call(api, "POST", "threads", "ana-test", {"audience": "personal", "members": ["bot:ops"]}))
     say(api, "ana-test", dm["id"], "@ops DM-SECRET: the board deck is late")
     until(lambda: finished(computer) == 1, "the reply in the direct message")
+    seen = len(computer.calls())
     company = create_thread(api, title="Launch notes", audience="company", members=["bot:ops"])
     say(api, "ana-test", company["id"], "PUBLIC-ROOM note: launch is Tuesday")
     legacy = say(api, "ana-test", company["id"], "LEGACY-SECRET: the price is internal")
@@ -228,3 +230,6 @@ def test_a_public_turn_is_replayed_its_threads_public_history_and_no_direct_mess
     assert "PUBLIC-ROOM note: launch is Tuesday" in prompt, "a public turn is replayed its thread's public history"
     assert "DM-SECRET" not in prompt, "a direct message never reaches a public turn"
     assert "LEGACY-SECRET" not in prompt, "a legacy-audience message never reaches a public turn"
+    # Nothing the provider saw during the public turn, not only its prompt, carries the direct message's text.
+    leaked = [call_ for call_ in computer.calls()[seen:] if "DM-SECRET" in json.dumps(call_)]
+    assert not leaked, f"the direct message reached the provider in a public turn: {leaked}"

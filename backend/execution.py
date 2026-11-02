@@ -1,6 +1,7 @@
 """Durable delivery, runner enrollment, and transactionally fenced execution attempts."""
 
 import functools
+import hashlib
 import json
 import re
 import secrets
@@ -121,6 +122,11 @@ CAPACITY_CONTINUE = "capacity_continue_v1"
 PRIVATE_LANES = "private_lanes_v1"
 SOURCE_CONTINUE = "source_continue_v1"
 
+# A runner that advertises this keeps the threads of a bot's chats apart: a public thread's turn never resumes a direct
+# message's provider thread (runner-rs threads). Any other runner keys every chat turn of a bot on one shared provider
+# thread, so the server gives it a value that moves with every turn (old_runner_bot_epoch).
+THREADS = "threads_v1"
+
 
 def positive_effect(c, aid, body):
     """Evidence the turn did real work even when its event stream looks empty (sparse host telemetry).
@@ -236,6 +242,19 @@ def private_job(c, job):
 
 def roots_on(runner):
     return bool(runner) and ROOTS in _capability_set(runner["capabilities_json"])
+
+
+def threads_on(runner):
+    return bool(runner) and THREADS in _capability_set(runner["capabilities_json"])
+
+
+def old_runner_bot_epoch(aid, bot_epoch):
+    """The bot_session_epoch an older runner gets. It keys every bot-wide turn on one provider thread and resumes it
+    unless the epoch moved since that thread was saved, so a value unique to this turn starts the thread anew each
+    time: a direct message's text never reaches a public thread's turn, even one that overlaps it. Turns of a runner
+    that advertises threads_v1 keep the bot's real epoch (their session keys already separate the threads)."""
+    digest = hashlib.sha256(f"{aid}:{bot_epoch}".encode()).hexdigest()
+    return int(digest[:12], 16) or 1
 
 
 def task_goals_on(runner):
@@ -3828,7 +3847,8 @@ class Execution:
                             # a runner that sees it change starts a fresh provider thread (runner-rs/src/execute.rs).
                             "session_epoch": session_epoch["epoch"] if session_epoch else 0,
                             # Moved by any clear or reset of this bot: the runner starts the bot's shared thread anew.
-                            "bot_session_epoch": bot_epoch[0] if bot_epoch else 0}}
+                            "bot_session_epoch": (bot_epoch[0] if bot_epoch else 0) if threads_on(runner)
+                            else old_runner_bot_epoch(aid, bot_epoch[0] if bot_epoch else 0)}}
 
     @staticmethod
     def obsolete_notice(c, who, job_id, now):
