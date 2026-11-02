@@ -120,7 +120,7 @@ def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
     # The workflow comes from main, so a branch can't change what a remote run is allowed to do.
     gh('workflow', 'run', WORKFLOW, '--ref', 'main', '-f', f'id={run_id}', '-f', f'ref={ref}',
        '-f', f'command={shlex.join(command)}', '-f', f'setup={setup}', '-f', f'cpus={cpus}',
-       '-f', f'minutes={minutes}')
+       '-f', f'minutes={minutes}', patient=True)   # a refused dispatch started nothing, so it is safe to retry
     found = find_run(run_id, time.monotonic() + 120)
     print(f'remote: {found["url"]}', file=sys.stderr, flush=True)
     conclusion = wait(found)
