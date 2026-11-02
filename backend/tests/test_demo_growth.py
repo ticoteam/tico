@@ -93,12 +93,20 @@ def test_weekly_numbers_routine_is_an_automation_next_due_on_a_monday_with_eight
     with sqlite3.connect(built.db_path) as db:
         aid = db.execute("SELECT id FROM automations WHERE name='Weekly numbers'").fetchone()[0]
     with signed_in(built) as api:
+        assert api.get("/api/v2/me").json()["actor"] == "human:ana"
         automation = api.get(f"/api/v2/automations/{aid}")
-        runs = api.get(f"/api/v2/automations/{aid}/runs")
+        listing = api.get(f"/api/v2/automations/{aid}/runs").json()
     assert automation.status_code == 200 and automation.json()["next_run"] == "2026-09-28T14:00:00.000000Z"
-    assert runs.status_code == 200
-    assert len(runs.json()["runs"]) == 8
-    assert {run["status"] for run in runs.json()["runs"]} == {"ok"}
+    runs = listing["runs"]
+    assert len(runs) == 8 and {run["status"] for run in runs} == {"ok"}
+    assert sum(day["runs"] for day in listing["daily"]) == 8
+    for run in runs:
+        (step,) = run["steps"]
+        assert step["type"] == "bot_turn" and step["status"] == "ok"
+        assert run["cost"] == pytest.approx(step["cost"]) and run["cost"] > 0
+    with signed_in(built) as api:
+        task = api.get(f"/api/v2/tasks/{runs[0]['steps'][0]['outputs']['ref']}").json()["task"]
+    assert task["title"] == "Weekly numbers" and task["status"] == "done"
 
 
 def test_the_numbers_are_the_same_on_every_build(built, tmp_path_factory):
