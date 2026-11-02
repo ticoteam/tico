@@ -349,3 +349,26 @@ def test_a_location_detail_carries_its_next_due_day_as_its_list_does(books):
         assert due.status == "committed", due.reason
         assert FR.records(c, OWNER, kind="location", at=AT)["locations"][0]["next_due_on"] == "2026-11-05"
         assert FR.record(c, OWNER, kind="location", record_id=denver, at=AT)["location"]["next_due_on"] == "2026-11-05"
+
+
+def test_r1_the_pnl_by_location_shows_cost_of_goods_and_gross_margin_and_adds_up(books):
+    with books.transaction() as c:
+        ids = _records(c)
+        denver, office = ids["location"]["Denver"], ids["location"]["Office"]
+        _post(c, 1_000, {"location": denver}, "5100")          # AI services: under Cost of revenue
+        _post(c, 2_500, {"location": denver}, "6100")          # Software: an operating expense, not cost of goods
+        _post(c, 7_000, {"location": office}, "5200")          # Video production: under Cost of revenue
+        sale = act(c, OWNER, "journal", {"date": DAY, "memo": "Sale", "lines": [
+            {"account_id": account(c, "4000"), "amount": -9_000, "tags": {"location": denver}},
+            {"account_id": account(c, "1000"), "amount": 9_000}]})
+        assert sale.status == "committed", sale.reason
+        by_location = FR.pnl_by(c, OWNER, "location", *WINDOW, basis="accrual", top_n=50, at=AT)
+        assert (by_location["income"], by_location["expense"]) == (9_000, 10_500)
+        assert (by_location["cost_of_goods"], by_location["gross_margin"]) == (8_000, 1_000)
+        rows = {str(r["label"]): r for r in by_location["rows"]}
+        assert (rows["Denver"]["cost_of_goods"], rows["Denver"]["gross_margin"]) == (1_000, 8_000)
+        assert (rows["Office"]["cost_of_goods"], rows["Office"]["gross_margin"]) == (7_000, -7_000)
+        assert sum(int(r["cost_of_goods"]) for r in by_location["rows"]) == by_location["cost_of_goods"]
+        one = FR.report(c, OWNER, "pnl_by_account", start=WINDOW[0], end=WINDOW[1], by="location", record_id=denver,
+                        basis="accrual", at=AT)
+        assert (one["cost_of_goods"], one["gross_margin"]) == (1_000, 8_000)
