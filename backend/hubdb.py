@@ -3540,8 +3540,10 @@ def has_pick_options(msg):
     return any(q.get("options") for q in refs.get("questions", []))
 
 
-def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, comment_target=None, classify_text=None):
-    """Reply to an ask. A checked task comment may also answer a structured task ask."""
+def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, comment_target=None, classify_text=None,
+           turn_id=None):
+    """Reply to an ask. A checked task comment may also answer a structured task ask. `turn_id`: the run writing it, whose
+    private tasks and meetings it may draw on, so it stays readable only by who reads those (task_privacy.message_tasks)."""
     _writer(conn, actor)
     asked = message(conn, message_id)
     if not asked:
@@ -3556,6 +3558,8 @@ def answer(conn, actor, message_id, body, unknown=False, *, comment_refs=None, c
     refs = {"depth": (asked.get("refs") or {}).get("depth", 1), **(comment_refs or {})}
     if unknown:
         refs["unknown"] = True
+    if turn_id:
+        refs["turn_id"] = turn_id
     if has_pick_options(asked) and not refs.get("answer"):
         refs.update({"decision_open": True})
         about = message_task_id(asked, conversation(conn, asked["conversation_id"]))

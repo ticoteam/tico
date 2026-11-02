@@ -3651,7 +3651,8 @@ def create_app(settings=None):
         if H.has_pick_options(msg):
             from .task_review import answer_text
             return answer_text(c, auth, who, msg, text, unknown=unknown, warn=warn)
-        return H.answer(c, who.actor, mid, warn + "\n\n" + text if warn else text, unknown=unknown, classify_text=text)
+        return H.answer(c, who.actor, mid, warn + "\n\n" + text if warn else text, unknown=unknown, classify_text=text,
+                        turn_id=who.attempt_id)
 
     def answer_audience(c, who, mid):
         msg = H.message(c, mid)

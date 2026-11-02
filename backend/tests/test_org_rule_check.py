@@ -1237,6 +1237,18 @@ def test_send_anyway_runs_each_routes_privacy_checks_as_the_run(ruled):
     assert paths == [f"/api/v2/tasks/{task['id']}/comments", f"/api/v2/messages/{ask['id']}/answer"]
 
 
+def test_a_replayed_answer_keeps_the_run_it_came_from(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    r, msg, attempt = started_turn(api)
+    ask = post(api, "messages", {"to": "ops", "kind": "ask", "text": "Which color?",
+                                 "conversation_id": msg["conversation_id"]})
+    held = post(api, f"messages/{ask['id']}/answer", {"text": "Our favorite color is teal."}, token=attempt["token"])["held"]
+    send_anyway(api, held["id"])
+    answer = sql(api, "SELECT refs_json FROM messages WHERE body LIKE '%favorite color is teal%'")[0]
+    assert json.loads(answer["refs_json"])["turn_id"] == attempt["id"]
+
+
 def test_a_task_answer_replay_is_refused_once_the_run_turned_private(ruled):
     api, judge = ruled
     color_rule(api, if_broken="escalate", reviewer="ben")

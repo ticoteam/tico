@@ -309,6 +309,45 @@ def test_a_private_run_cannot_answer_a_company_question_with_private_words(api):
         assert c.execute("SELECT COUNT(*) FROM messages WHERE body LIKE 'Confidential%'").fetchone()[0] == 0
 
 
+def _dm_question(api, **refs):
+    asked = api.post("/api/v2/messages", json={"to": "bot:ops", "text": "Which launch date?", "kind": "ask", **refs},
+                     headers=headers("ben-test"))
+    assert asked.status_code == 200, asked.text
+    return asked.json()["id"]
+
+
+def _lose_the_task(api, row):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET requester='human:ana' WHERE id=?", (row["id"],))
+
+
+def test_a_private_runs_answer_in_a_dm_keeps_its_task_after_the_asker_loses_it(api):
+    """Everyone in Ben's DM reads the run's private task, so the run may answer his untagged question. The answer stays
+    tied to that task: once Ben loses the task, he no longer reads what the run told him from it."""
+    asked = _dm_question(api)
+    row, attempt = private_run(api)
+    answer = api.post(f"/api/v2/messages/{asked}/answer", json={"text": "Confidential launch plan"},
+                      headers=headers(attempt["token"]))
+    assert answer.status_code == 200, answer.text
+    aid = answer.json()["id"]
+    assert api.get(f"/api/v2/messages/{aid}", headers=headers("ben-test")).status_code == 200
+    _lose_the_task(api, row)
+    assert api.get(f"/api/v2/messages/{aid}", headers=headers("ben-test")).status_code == 404
+
+
+def test_a_private_runs_note_on_an_options_question_keeps_its_task_too(api):
+    with api.app.state.store.transaction() as c:
+        asked = H.say(c, "human:ben", "bot:ops", "Which launch date?", kind="ask",
+                      refs={"questions": [{"id": "q", "text": "Which?", "options": [{"label": "May"}, {"label": "June"}]}]})
+    row, attempt = private_run(api)
+    answer = api.post(f"/api/v2/messages/{asked['id']}/answer", json={"text": "Confidential launch plan"},
+                      headers=headers(attempt["token"]))
+    assert answer.status_code == 200, answer.text
+    aid = answer.json()["id"]
+    _lose_the_task(api, row)
+    assert api.get(f"/api/v2/messages/{aid}", headers=headers("ben-test")).status_code == 404
+
+
 def _route_context(api, attempt):
     """A company thread with the bot ops in it and a message the bot wrote there, for the route table below."""
     thread = company_thread_with_bot_and_ben(api)

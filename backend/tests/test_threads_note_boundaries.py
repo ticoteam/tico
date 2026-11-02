@@ -59,6 +59,12 @@ def job_count(api, bot="cpo"):
     return rows(api, "SELECT COUNT(*) AS n FROM jobs WHERE bot=?", bot)[0]["n"]
 
 
+def wakes(api, bot="cpo"):
+    """Wakes written so far, whatever came of them."""
+    return rows(api, "SELECT COUNT(*) AS n FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
+                     "AND json_extract(m.refs_json,'$.wake')='thread_notes'", bot)[0]["n"]
+
+
 def waiting(api, bot="bot:cpo"):
     return rows(api, f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {H.NOTE_WAITING_SQL} ORDER BY n.created", bot)
 
@@ -272,6 +278,193 @@ def test_a_run_for_a_threads_notes_ends_as_moot_when_another_run_there_carried_t
         c.execute("UPDATE notes SET settled_at=? WHERE message_id IS NOT NULL", (H.now(),))
     assert claim(api, r, "cpo") is None
     assert rows(api, "SELECT state FROM jobs WHERE state IN ('queued','leased')") == []
+
+
+# ----------------------------------------------------------------------------- the wake's own session and anchor
+def turn_task_private(api, tid):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (tid,))
+
+
+def task_about(api, requester="bot:cpo"):
+    """A task on a person, so no run of its own starts: `requester` is who keeps reading it once it is private."""
+    with api.app.state.store.transaction() as c:
+        return H.task_create(c, requester, "Launch plan", "Plan it.", "human:ben", lint=False)["id"]
+
+
+def test_the_wake_for_a_note_narrower_than_its_public_thread_runs_in_a_private_session(api):
+    r = bot_runner(api)
+    company, other = new_thread(api, audience="company", title="Launch"), new_thread(api, audience="company", title="Handbook")
+    tid = task_about(api)
+    bot_says(api, company, "@cpo Zebrawire", refs={"task": tid})
+    turn_task_private(api, tid)                     # cpo asked for the task, so it still reads the message
+    say(api, other, "@cpo work here")
+    public = claim(api, r, "cpo")
+    assert public["conversation"]["audience_class"] == "public" and public["notes"] == []
+    finish(api, r, public)
+    wake = claim(api, r, "cpo")
+    assert wake["conversation"]["audience_class"] == "private" and wake["conversation"]["root_id"] == company
+    assert ["Zebrawire" in n["text"] for n in wake["notes"]] == [True]
+    finish(api, r, wake)
+    assert waiting(api) == [] and claim(api, r, "cpo") is None
+
+
+def test_a_narrower_note_enters_only_a_private_session_of_its_own_thread(api):
+    r = bot_runner(api)
+    company = new_thread(api, audience="company", title="Launch")
+    tid = task_about(api)
+    posted = bot_says(api, company, "@cpo Zebrawire", refs={"task": tid})
+    turn_task_private(api, tid)
+    with api.app.state.store.transaction() as c:
+        conv = H.conversation(c, company)
+        note = dict(c.execute("SELECT * FROM notes WHERE message_id=?", (posted["id"],)).fetchone())
+        assert not threads.note_fits_run(c, note, conv, "public")
+        assert threads.note_fits_run(c, note, conv, "private")
+
+
+def session_class(api, thread_id, message_id):
+    from backend.execution import thread_payload
+    with api.app.state.store.read() as c:
+        return thread_payload(c, H.conversation(c, thread_id), H.message(c, message_id))["audience_class"]
+
+
+def test_a_carrier_for_a_message_narrower_than_its_company_thread_gets_a_private_session(api):
+    r = bot_runner(api)
+    company = new_thread(api, audience="company", title="Launch")
+    tid = task_about(api)
+    bot_says(api, company, "@cpo Zebrawire", bot="human:ben", refs={"task": tid})
+    turn_task_private(api, tid)                     # cpo asked for the task, so the claim still hands it out
+    attempt = claim(api, r, "cpo")
+    assert attempt["conversation"]["audience_class"] == "private" and attempt["conversation"]["root_id"] == company
+    assert "Zebrawire" in attempt["message"]["body"]
+
+
+def test_a_company_threads_ordinary_turns_keep_the_public_session(api):
+    r = bot_runner(api)
+    company = new_thread(api, audience="company", title="Launch")
+    say(api, company, "@cpo first")
+    first = claim(api, r, "cpo")
+    assert first["conversation"]["audience_class"] == "public"
+    finish(api, r, first, text="Our reply")
+    reply = rows(api, "SELECT * FROM messages WHERE body='Our reply'")[0]
+    assert reply["restricted"] == 1 and json.loads(reply["refs_json"])["turn_id"] == first["id"]
+    assert session_class(api, company, reply["id"]) == "public"     # flagged for its turn_id, and every reader reads it
+    bot_says(api, company, "@cpo about that", bot="human:ana", in_reply_to=reply["id"])
+    answered = claim(api, r, "cpo")
+    assert answered["conversation"]["audience_class"] == "public"
+    finish(api, r, answered)
+    bot_says(api, company, "@cpo on the plan", bot="human:ana", refs={"task": task_about(api)})   # a task all may read
+    tied = claim(api, r, "cpo")
+    assert tied["conversation"]["audience_class"] == "public"
+
+
+def test_a_private_runs_reply_is_narrower_than_its_company_thread(api):
+    r = bot_runner(api)
+    company = new_thread(api, audience="company", title="Launch")
+    say(api, company, "@cpo first")
+    first = claim(api, r, "cpo")
+    finish(api, r, first, text="Our reply")
+    reply = rows(api, "SELECT id FROM messages WHERE body='Our reply'")[0]["id"]
+    tid = task_about(api)
+    with api.app.state.store.transaction() as c:    # the run drew on a task that is private now
+        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (first["id"], tid))
+    turn_task_private(api, tid)
+    assert session_class(api, company, reply) == "private"
+
+
+def delete(api, message_id, author="bot:ops"):
+    with api.app.state.store.transaction() as c:
+        threads.delete_message(c, author, message_id)
+
+
+def sweep(api):
+    """The claim passes a wake it may not read over for good; the scheduler's minute drops it."""
+    with api.app.state.store.transaction() as c:
+        return api.app.state.execution.drop_unreadable(c)
+
+
+def two_notes_and_a_wake(api, r, refs=None):
+    """Notes A and B wait in one private thread; a public turn has written the one wake, anchored to A."""
+    private, public = new_thread(api), new_thread(api, audience="company", title="Handbook")
+    a = bot_says(api, private, "@cpo Zebrawire", **({"refs": refs} if refs else {}))
+    bot_says(api, private, "@cpo Quillframe")
+    say(api, public, "@cpo work here")
+    finish(api, r, claim(api, r, "cpo"))
+    assert wakes(api) == 1
+    return private, a
+
+
+def test_deleting_the_wakes_anchor_starts_a_new_wake_for_the_other_note(api):
+    r = bot_runner(api)
+    private, a = two_notes_and_a_wake(api, r)
+    delete(api, a["id"])
+    assert claim(api, r, "cpo") is None             # passed over, then dropped, and a new one is written for B
+    assert len(sweep(api)) == 1 and wakes(api) == 2
+    runs = drain(api, r)
+    assert [run["notes"] for run in runs] == [["@cpo Quillframe"]] and runs[0]["root"] == private
+    assert waiting(api) == [] and claim(api, r, "cpo") is None
+
+
+def test_the_wakes_anchor_turning_unreadable_starts_a_new_wake_for_the_other_note(api):
+    r = bot_runner(api)
+    tid = task_about(api, requester="human:ana")
+    private, _ = two_notes_and_a_wake(api, r, refs={"task": tid})
+    turn_task_private(api, tid)                     # cpo is no party to it: its note is taken back with the wake
+    assert claim(api, r, "cpo") is None
+    assert len(sweep(api)) == 1 and wakes(api) == 2
+    runs = drain(api, r)
+    assert [run["notes"] for run in runs] == [["@cpo Quillframe"]] and runs[0]["root"] == private
+    assert waiting(api) == [] and claim(api, r, "cpo") is None
+
+
+def test_a_notice_whose_message_was_deleted_stays_out_of_the_threads_next_run(api):
+    r = bot_runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["cpo", "ops"])
+    private = new_thread(api)
+    first = say(api, private, "@cpo @ops Zebrawire")
+    for bot in ("cpo", "ops"):
+        finish(api, r, claim(api, r, bot))
+    with api.app.state.store.transaction() as c:
+        threads.delete_message(c, "human:ana", first["id"])
+    say(api, private, "@cpo @ops next")
+    for bot in ("cpo", "ops"):
+        attempt = claim(api, r, bot)
+        assert "Zebrawire" not in json.dumps(attempt) and attempt["message"]["body"].endswith("next")
+        finish(api, r, attempt)
+
+
+def test_a_refused_wake_with_nothing_left_to_carry_starts_nothing(api):
+    r = bot_runner(api)
+    private, public = new_thread(api), new_thread(api, audience="company", title="Handbook")
+    a = bot_says(api, private, "@cpo Zebrawire")
+    say(api, public, "@cpo work here")
+    finish(api, r, claim(api, r, "cpo"))
+    delete(api, a["id"])
+    assert len(sweep(api)) == 1 and sweep(api) == []
+    assert claim(api, r, "cpo") is None and wakes(api) == 1 and waiting(api) == []
+
+
+def test_a_bot_removed_from_the_thread_gets_no_new_wake_and_loses_the_notes(api):
+    r = bot_runner(api)
+    private, _ = two_notes_and_a_wake(api, r)
+    remove(api, private)                            # the claim itself refuses this one
+    assert claim(api, r, "cpo") is None and claim(api, r, "cpo") is None
+    assert wakes(api) == 1 and waiting(api) == []
+
+
+def test_deleting_each_anchor_in_turn_ends_with_nothing_left_and_no_loop(api):
+    r = bot_runner(api)
+    private, a = two_notes_and_a_wake(api, r)
+    third = bot_says(api, private, "@cpo Larkspur")
+    delete(api, a["id"])
+    assert len(sweep(api)) == 1
+    b = rows(api, "SELECT message_id FROM notes WHERE body LIKE '%Quillframe%'")[0]["message_id"]
+    delete(api, b)
+    assert len(sweep(api)) == 1
+    delete(api, third["id"])
+    assert len(sweep(api)) == 1 and sweep(api) == []
+    assert claim(api, r, "cpo") is None and wakes(api) == 3 and waiting(api) == []
 
 
 # ----------------------------------------------------------------------------- a bot removed before its claim

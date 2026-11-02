@@ -453,6 +453,10 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
         if stored.get("deleted_at") or stored.get("deleted"):
             return False
         try:
+            # A carrier is read as the message it carries (message_readable): with that message gone or closed to this
+            # reader it leaves the page, and a run's claim, which checks every message it hands out, is not refused for it.
+            if '"carries"' in (stored.get("refs_json") or "") and not message_readable(c, reader, stored, current=True):
+                return False
             tasks = message_tasks(c, stored, current=True)
             if task_id and task_id not in tasks:
                 return False
