@@ -142,6 +142,11 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             if (kept := _reuse(ctx, cid, a)) is not None:
                 mapped.append(kept)
                 continue
+            if str(a.get("kind") or "").lower() == "debit":
+                # A debit card program spends cash it holds: an asset with its own account, no card liability (§8.1).
+                gl = new_account(ctx, BANK, f"{a.get('name') or 'Mercury'} debit card", "asset", "bank", who)
+                mapped.append(_money(ctx, cid, a, "card_program", "debit", gl, who))
+                continue
             cards = by_code(ctx, CARDS)
             gl = cards if cards is not None and not any(
                 str(r["account_id"]) == cards.id for r in SK.money_accounts(ctx.c, ctx.book.id)) else None
@@ -173,7 +178,8 @@ def _money(ctx: Ctx, cid: str, a: Mapping[str, object], kind: str, subtype: str,
     mid = SK.insert(ctx.c, "fin_money_accounts", {
         "book_id": ctx.book.id, "kind": kind, "subtype": subtype, "name": str(a.get("name") or "Mercury")[:120],
         "provider": "mercury", "connection_id": cid, "account_id": gl.id, "provider_account_id": str(a.get("id")),
-        "last4": str(a.get("last4") or "")[-4:] or None, "holds_cash": 0 if kind == "card_program" else 1,
+        "last4": str(a.get("last4") or "")[-4:] or None,
+        "holds_cash": 0 if kind == "card_program" and subtype == "credit" else 1,  # a credit program holds no cash
         "balance": current if isinstance(current, int) else None,
         "available_balance": available if isinstance(available, int) else None,
         "balance_currency": ctx.book.base_currency, "balance_as_of": ctx.at if isinstance(current, int) else None,

@@ -42,6 +42,21 @@ class _Opener:
         return response
 
 
+def test_a_debit_card_program_holds_cash_and_a_credit_program_is_a_liability_that_holds_none(books):
+    """§8.1: a debit card program holds against cash and creates no liability; a credit card program is a liability and
+    holds no cash. Each program's money account says which."""
+    fake = FakeMercury()
+    credit = MERCURY["credit"]["accounts"][0]
+    fake.queue["credit"] = [Answer(200, {"accounts": [
+        credit, {**credit, "id": "debit-1", "name": "Acme debit", "last4": "9876", "kind": "debit"}]})]
+    connect(books, fake)
+    with books.read() as c:
+        rows = {r[0]: tuple(r[1:]) for r in c.execute(
+            "SELECT m.provider_account_id, m.subtype, m.holds_cash, a.type FROM fin_money_accounts m "
+            "JOIN fin_accounts a ON a.id=m.account_id WHERE m.kind='card_program'")}
+    assert rows == {"credit-io": ("credit", 0, "liability"), "debit-1": ("debit", 1, "asset")}
+
+
 def test_the_adapter_reads_recorded_answers_waits_out_429_and_names_the_ip_allowlist():
     waits = []
     opener = _Opener((429, {}, {"Retry-After": "2"}), (200, MERCURY["accounts"], {}),

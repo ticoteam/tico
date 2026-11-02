@@ -75,7 +75,8 @@ def probe(provider: Provider) -> tuple[dict[str, object], str]:
                      "available": _cents(a.get("availableBalance"))})
     found: dict[str, object] = {"accounts": rows, "credit": [
         {"id": str(a.get("id")), "status": str(a.get("status") or "active"), "current": _cents(a.get("currentBalance")),
-         "available": _cents(a.get("availableBalance"))} for a in listed(credit, "accounts")] if credit.ok else []}
+         "available": _cents(a.get("availableBalance")), "kind": str(a.get("kind") or "")}
+        for a in listed(credit, "accounts")] if credit.ok else []}
     if users.ok:
         found["users"] = user_rows(users)
     return found, ""
