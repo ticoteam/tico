@@ -287,7 +287,8 @@ def test_shard_alone_runs_a_file_group_of_the_default_suite_pr_checks_run(monkey
         collect, test = commands
         assert collect[collect.index('pytest') + 1:] == ['--collect-only', '-q', '-n', '0']   # pytest.ini selects
         assert test[test.index('pytest') + 1:test.index('pytest') + 3] == ['-q', '-n']   # every core, not the ini cap
-        runs[index] = test[test.index('pytest') + 4:]   # then only files: no release marker or ignore
+        assert test[test.index('pytest') + 4] == '--api-database-snapshots'   # one schema build per worker
+        runs[index] = test[test.index('pytest') + 5:]   # then only files: no release marker or ignore
     files = sum(runs.values(), [])
     assert sorted(files) == ['a.py', 'b.py', 'c.py', 'd.py']   # every collected file, none dropped or doubled
     assert runs == {1: ['a.py'], 2: ['b.py'], 3: ['c.py', 'd.py']}   # 4, 2 and 2 of the 8 tests
