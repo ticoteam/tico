@@ -2304,7 +2304,8 @@ class Store:
         hashed = digest(encode(body))
         principal = self._principal(identity)
         refusal = logged = None
-        with self.transaction(durable=durable) as c:
+        # Only a money write asks for the durable commit; every other keyed write keeps the plain call.
+        with (self.transaction(durable=True) if durable else self.transaction()) as c:
             # Authenticate leases again under the same write lock as the mutation.
             from .auth import validate_identity
             validate_identity(c, identity)
