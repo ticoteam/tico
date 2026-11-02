@@ -7,7 +7,7 @@ description: "Files one proposal on a goal, KPI or strategy that the owner confi
 
 ## When to use
 
-- A goal is vague, duplicated, unmeasured or not tied to a bet.
+- A goal is vague, duplicated or not tied to a bet. A missing measure is optional: suggest one at most once.
 - A KPI definition or target is wrong or missing.
 - A bet or a strategy draft needs a change, or a red goal needs a recovery.
 
