@@ -912,6 +912,12 @@ def _evidence(c, item, published, today):
     return None
 
 
+def local_day():
+    """Today on this server's calendar, read from the hub clock. A check falls due on the day the owner reads on this
+    machine, so a server west of UTC does not trip a bet the evening before its date."""
+    return H.parse_ts(H.now()).astimezone().date().isoformat()
+
+
 def watch(c, kpi_id=None, market_id=None, today=None):
     """The fit check: each active bet of the published version against its wrong-if. `kpi_id` or `market_id` limits
     it to the bets that name that id (a reading, a market write); neither checks every bet (the KPI status pass).
@@ -932,7 +938,7 @@ def watch(c, kpi_id=None, market_id=None, today=None):
         return []
     done = {r[0] for r in c.execute("SELECT json_extract(payload,'$.bet_id') FROM strategy_events WHERE kind=? AND "
                                     "json_extract(payload,'$.n')=?", (TRIPPED, row["n"]))}
-    today = today or H.now()[:10]                        # the hub clock, so a demo build judges checks by its own day
+    today = today or local_day()                         # the hub clock on this server's calendar; a demo build uses its own
     tripped = []
     for number, item in enumerate(active, 1):
         wrong = item["wrong_if"]
