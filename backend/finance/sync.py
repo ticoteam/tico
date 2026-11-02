@@ -204,8 +204,9 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
         _failed(store, cid, "the Mercury token is missing; store it again in Settings", now)
         return "no_token"
     problems: list[str] = []
-    if due:
+    if due or inbox:       # balances come from webhooks (§9): an event waiting reads them now; the poll stays 15 minutes
         problems += balances(store, provider, cid, now)
+    if due:
         provider_users(store, provider, cid, now)
         problems += uncertain_cards(store, provider, cid, now)
         problems += backfill(store, provider, cid, now)
