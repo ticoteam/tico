@@ -2656,7 +2656,7 @@ def _writer(conn, actor):
     if not _actor_exists(conn, actor):
         refuse(conn, actor, "identity", f"{actor} is not on the roster")
     if is_bot(actor) and (bot(conn, actor_id(actor)) or {}).get("state") == "quarantined":
-        refuse(conn, actor, "quarantined", f"{actor_id(actor)} is quarantined; a human clears it")
+        refuse(conn, actor, "quarantined", f"{actor_name(conn, actor)} is quarantined; a human clears it")
     return actor
 
 
@@ -2700,7 +2700,7 @@ def back_when(conn, slug, state):
 def target_inactive(conn, slug, state):
     """The refusal text for a write to a bot that is not running: when it is back, and how little it counts
     against the sender, so the sender waits instead of retrying."""
-    return (f"{slug} {back_when(conn, slug, state)}. This refusal is not a repeat and opens no review of you; "
+    return (f"{actor_name(conn, bot_actor(slug))} {back_when(conn, slug, state)}. This refusal is not a repeat and opens no review of you; "
             "only the day's limit of 30 refusals counts it. Send it again once it is back")
 
 
@@ -2712,7 +2712,7 @@ def held_note(conn, target):
     state = (bot(conn, slug) or {}).get("state")
     if state not in HELD_STATES:
         return None
-    return f"{slug} {back_when(conn, slug, state)}. Your message is kept for when it is back; no need to resend it."
+    return f"{actor_name(conn, target)} {back_when(conn, slug, state)}. Your message is kept for when it is back; no need to resend it."
 
 
 def held_for(conn, actor, target):
@@ -2753,7 +2753,7 @@ def _reach(conn, actor, target, allow_planned=False, allow_held=False):
         if state != "active" and not (allow_planned and state == "planned") and not (allow_held and state in HELD_STATES):
             if state in INACTIVE_STATES:
                 refuse(conn, actor, "target_inactive", target_inactive(conn, slug, state))
-            refuse(conn, actor, "reach", f"{slug} is {state}, not active")
+            refuse(conn, actor, "reach", f"{actor_name(conn, resolved)} is {state}, not active")
     return resolved
 
 
@@ -3025,7 +3025,7 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
                 (actor, target, day)).fetchone()[0]
             if n >= UNSOLICITED_PER_DAY:
                 refuse(conn, actor, "unsolicited",
-                       f"{n} unsolicited messages to {actor_id(target)} today; the cap is "
+                       f"{n} unsolicited messages to {actor_name(conn, target)} today; the cap is "
                        f"{UNSOLICITED_PER_DAY}. File a task or an approval instead.", severity)
             warnings = style_problems(conn, actor, lint_human_item(body), severity)
             refs["unsolicited"] = True
@@ -3260,7 +3260,7 @@ def _held_queue_admit(conn, actor, target, body, refs_json, *, replacing=None):
     ):
         if used + charge > limit:
             refuse(conn, actor, "queue_full",
-                   f"{actor_id(target)} is {state}; its held queue is full ({label} limit {limit}). "
+                   f"{actor_name(conn, target)} is {state}; its held queue is full ({label} limit {limit}). "
                    "Already accepted items are kept. Wait until the recipient resumes before sending again. "
                    "Waiting does not count against the sender and does not release a quarantine.")
 
@@ -3630,8 +3630,8 @@ def task_reach_refusal(conn, actor, row, person):
     if not is_human(person) or not human(conn, who):
         return f"{person} is not a person on the team"
     if row.get("guest"):
-        return (f"This private task already reached {actor_id(row['guest'])}, its one guest, and {who} cannot read it: "
-                f"hand this to {actor_id(row['guest'])}, or ask a person on the task to make it company-visible")
+        return (f"This private task already reached {actor_name(conn, row['guest'])}, its one guest, and {who} cannot read it: "
+                f"hand this to {actor_name(conn, row['guest'])}, or ask a person on the task to make it company-visible")
     if not bot_only(row):
         return "Private task content stays with its requester and current owner"
     if not task_represents(conn, actor, row["owner"]):
@@ -4564,7 +4564,7 @@ def _label_writer(conn, actor, row, labels, approval_id=None):
     slug, teams = actor_id(actor), ", ".join(MOVER_TEAMS)
     if not task_participant(conn, actor, row) and type_manager(conn, row) != slug:
         refuse(conn, actor, "label",
-               f"{slug} changes labels only on a task it owns, asked for, whose party it manages or whose type it manages; labels on "
+               f"{actor_name(conn, actor)} changes labels only on a task it owns, asked for, whose party it manages or whose type it manages; labels on "
                f"{row['id']} are changed by a person on the {teams} teams", task=row["id"])
     settings = roadmap_settings(conn)
     public = [k for k in changed if k in settings["labels"]]
@@ -5871,7 +5871,7 @@ def _own_comment(conn, actor, task_id, message_id):
                                     "a notice or a chat message"
                                     + ("; settle your open question with hub task ask-resolve" if msg.get("kind") == "ask" else ""))
     if msg["from_actor"] != actor:
-        refuse(conn, actor, "identity", f"{actor_id(msg['from_actor'])} wrote this comment; only they change it")
+        refuse(conn, actor, "identity", f"{actor_name(conn, msg['from_actor'])} wrote this comment; only they change it")
     return msg
 
 
@@ -5955,7 +5955,7 @@ def task_ask_resolve(conn, actor, task_id, message_id, quote=None, *, relay=Fals
         refuse(conn, actor, "not-found", f"no question {message_id} on task {task_id}")
     asker, person = asked["from_actor"], asked["to_actor"]
     if quote is None and not task_represents(conn, actor, asker):
-        refuse(conn, actor, "identity", f"{actor_id(asker)} asked this question; only they or their managers withdraw it")
+        refuse(conn, actor, "identity", f"{actor_name(conn, asker)} asked this question; only they or their managers withdraw it")
     if (quote is not None and not task_represents(conn, actor, asker)
             and not (is_bot(row["owner"]) and task_represents(conn, actor, row["owner"])) and not relay):
         refuse(conn, actor, "identity", "only the question's asker, the task's owner bot or their managers record an answer given elsewhere")
@@ -6146,12 +6146,12 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                           (requester, target, parent_id or "", *ACTIVE_STATUSES), title, keep=same)
     if dup and task_private_readable(conn, actor, task(conn, dup["id"])) and (turn or deduplicate or actor != KEEPER):
         detail = ("An existing task already asks for this work" if VIA.get() and task_private(conn, task(conn, dup["id"]))
-                  else f"{dup['id']} already asks {actor_id(target)} for this")
+                  else f"{dup['id']} already asks {actor_name(conn, target)} for this")
         refuse(conn, actor, "duplicate", detail)
     if number is not None:
         if not (actor == KEEPER or mover or mover is None and can_move(conn, actor)):
             refuse(conn, actor, "identity", f"a task's number is given by a person on the "
-                                            f"{', '.join(MOVER_TEAMS)} teams, not by {actor_id(actor)}")
+                                            f"{', '.join(MOVER_TEAMS)} teams, not by {actor_name(conn, actor)}")
         number = _number_free(conn, actor, number)
     ts = now()
     dedicated = False
@@ -6344,7 +6344,7 @@ def _retitle(conn, actor, row, title, owner, type_id):
                       (row["id"], row["requester"], target, parent or "", *ACTIVE_STATUSES), title)
     if dup and task_private_readable(conn, actor, task(conn, dup["id"])):
         detail = ("An existing task already asks for this work" if VIA.get() and task_private(conn, task(conn, dup["id"]))
-                  else f"{dup['id']} already asks {actor_id(target)} for this")
+                  else f"{dup['id']} already asks {actor_name(conn, target)} for this")
         refuse(conn, actor, "duplicate", detail)
     plain = lint_title(title) if is_bot(actor) and TITLE_LINT != "off" and general else []
     if plain and TITLE_LINT == "refuse":
@@ -6520,12 +6520,12 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             and (status is not None and status != "closed" or note is not None and note != row.get("note")
                  or owner is not None)):
         refuse(conn, actor, "close",
-               f"{actor_id(closer)} closed this task, so it stays closed; {task_reopen_hint(actor, row)}; "
+               f"{actor_name(conn, closer)} closed this task, so it stays closed; {task_reopen_hint(actor, row)}; "
                "add anything new as a comment (hub task comment)")
     if (row["status"] == "closed" and is_human(actor) and status is not None and status != "closed" and not mover
             and not _task_close_party(conn, actor, row)):
         refuse(conn, actor, "close", f"Only someone who may close this task reopens it: its requester "
-                                     f"({actor_id(row['requester'])}), a person who owns it, their managers, "
+                                     f"({actor_name(conn, row['requester'])}), a person who owns it, their managers, "
                                      "or a person who moves tasks")
     if status is not None and not closing_step:
         if status not in TASK_STATUSES:
@@ -6582,7 +6582,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     if wanted and not mover:
         refuse(conn, actor, "identity",
                f"{', '.join(wanted)} on a task {'is' if len(wanted) == 1 else 'are'} changed by a person on "
-               f"the {', '.join(MOVER_TEAMS)} teams, not by {actor_id(actor)}")
+               f"the {', '.join(MOVER_TEAMS)} teams, not by {actor_name(conn, actor)}")
     approved = labels is not None and not mover and _label_writer(conn, actor, row, labels, approval_id)
     if lane is not None:
         lane = _lane_for(conn, lane, row["owner"], actor)    # a task moves only onto company
@@ -6953,6 +6953,17 @@ def person_name(conn, person):
     return (human(conn, person) or {}).get("name") or actor_id(person)
 
 
+def actor_name(conn, actor):
+    """What a person reads for an actor: a bot's display name (else its slug), or a person's name. A bot made since ids
+    has a UUID id, which means nothing to a person, so it is never written into text a person reads."""
+    key = actor_id(actor)
+    if not str(actor).startswith("human:"):
+        row = bot(conn, key)
+        if row:
+            return row.get("display_name") or row.get("slug") or key
+    return (human(conn, key) or {}).get("name") or key
+
+
 def _ask_title(ask):
     """A subtask's title from the ask: its first question, else its first sentence."""
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", str(ask).strip()) if s.strip()]
@@ -7212,7 +7223,7 @@ def _task_close_allowed(conn, actor, row, note, mover=None):
     if is_human(actor) and not _task_close_party(conn, actor, row) and row.get("waiting_on") != actor:
         if not (can_move(conn, actor) if mover is None else mover):
             refuse(conn, actor, "close", f"Only someone who can edit this task closes it: its requester "
-                                         f"({actor_id(row['requester'])}), its owner, the person it waits on, "
+                                         f"({actor_name(conn, row['requester'])}), its owner, the person it waits on, "
                                          "or a person who moves tasks")
     # A board's shipped column is ready; a bot that works the board (a deploy bot) closes what shipped.
     shipped = row["status"] == "ready" and type_bot_works(conn, actor, row)
@@ -7220,7 +7231,7 @@ def _task_close_allowed(conn, actor, row, note, mover=None):
     if actor == TASK_MANAGER and actor != row["requester"] and not (note or "").strip():
         refuse(conn, actor, "close", "The Task Manager closes a task only with a note saying why it is finished")
     if not task_represents(conn, actor, row["requester"]) and not is_human(actor) and actor != KEEPER and not shipped:
-        refuse(conn, actor, "close", f"{actor_id(row['requester'])} asked for this; only they or their managers close it")
+        refuse(conn, actor, "close", f"{actor_name(conn, row['requester'])} asked for this; only they or their managers close it")
     # A person closes without giving a reason; the requesting bot is still told it was closed (task_close wakes it).
 
 
@@ -7349,7 +7360,7 @@ def wait_detail(conn, row, *, children=True):
     if reconnect:
         return {"why": reconnect["why"], "on": reconnect["on"]}
     if row.get("waiting_on"):
-        return {"why": f"{actor_id(row['waiting_on'])} to act", "on": row["waiting_on"]}
+        return {"why": f"{actor_name(conn, row['waiting_on'])} to act", "on": row["waiting_on"]}
     from .worktree_waits import for_task as worktree_waits
     worktrees = worktree_waits(conn, row["id"])
     if worktrees:
@@ -8050,7 +8061,7 @@ def _escalate_stuck(conn, row, count):
     repair = task(conn, _json(previous["detail"], {}).get("recovery_task")) if previous else None
     if repair and (repair["owner"] != owner or repair["status"] not in ACTIVE_STATUSES):
         repair = None
-    title = f"Find why {actor_id(row['owner'])}'s task stays stuck: {row['title']}"
+    title = f"Find why {actor_name(conn, row['owner'])}'s task stays stuck: {row['title']}"
     repair = repair or task_create(conn, KEEPER, title[:150],
                 f"Task {row['id']} ({row['title'][:120]}) has been {row['status']} with nothing moving it; "
                 f"{count} wake-ups today did not move it. Fix the cause (routine, runner, instructions) "
@@ -8129,7 +8140,7 @@ def _hold_for_setup(conn, row):
     task_comment(conn, KEEPER, row["id"], f"Not started: {why}", wake=False)
     asker = row["requester"]
     if is_bot(asker) and asker != row["owner"] and actor_id(asker) not in parked_bots(conn):
-        _wake(conn, row, asker, f"Your task for {actor_id(row['owner'])} is not starting: {why} "
+        _wake(conn, row, asker, f"Your task for {actor_name(conn, row['owner'])} is not starting: {why} "
                                 "Move it to another bot if it can't wait.", {"setup_held": True}, trigger="stall_check")
     event(conn, KEEPER, "task.setup_held", row["id"], {"bot": actor_id(row["owner"]), "reminder": reminder["id"]})
     return True
@@ -8150,14 +8161,14 @@ def _no_diagnosis(conn, row, count):
     if _is_diagnostic(conn, row):
         return f"this diagnostic did not move after {count} wake-ups today"
     if task_private(conn, row):
-        return (f"{actor_id(row['owner'])} did not move it after {count} wake-ups today, "
+        return (f"{actor_name(conn, row['owner'])} did not move it after {count} wake-ups today, "
                 "and BotOps cannot read a private task")
     repair_bot = bot(conn, FLEET_MAINTAINER)
     if row["owner"] == bot_actor(FLEET_MAINTAINER):
         return f"BotOps's own task did not move after {count} wake-ups today, and BotOps cannot diagnose itself"
     if not repair_bot or repair_bot["state"] != "active":
         state = repair_bot["state"] if repair_bot else "not on this team"
-        return f"{actor_id(row['owner'])} did not move it after {count} wake-ups today, and BotOps is {state}"
+        return f"{actor_name(conn, row['owner'])} did not move it after {count} wake-ups today, and BotOps is {state}"
     return None
 
 
@@ -8516,7 +8527,7 @@ def note_cancel(conn, actor, note_id, human=False):
     if not row:
         refuse(conn, actor, "not-found", f"no note {note_id}")
     if actor != row["from_actor"] and not human and not is_human(actor):
-        refuse(conn, actor, "note", f"{actor_id(row['from_actor'])} left this note; only they or a person take it back")
+        refuse(conn, actor, "note", f"{actor_name(conn, row['from_actor'])} left this note; only they or a person take it back")
     if row["cancelled_at"]:
         return row
     if not note_waiting(conn, row):
@@ -8808,7 +8819,7 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
         refuse(conn, actor, "not-found", f"no bot {slug}")
     lifting = actor == bot_actor(FLEET_MAINTAINER) and state == "active"   # BotOps ending a quarantine
     if is_bot(actor) and actor_id(actor) != slug and not lifting:
-        refuse(conn, actor, "identity", f"{actor_id(actor)} may only set its own status")
+        refuse(conn, actor, "identity", f"{actor_name(conn, actor)} may only set its own status")
     if state is not None and state not in STATUS_STATES and state != "active":
         refuse(conn, actor, "kind", f"a state is {'|'.join(STATUS_STATES)}, not {state}")
     quarantined = (bot(conn, slug) or {}).get("state") == "quarantined"

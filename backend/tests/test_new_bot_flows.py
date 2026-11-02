@@ -319,3 +319,17 @@ def test_two_bots_with_one_folder_are_never_placed_on_one_computer(api, sales):
     assert column(api, "SELECT count(*) FROM assignments WHERE bot=?", newcomer) == [0]
     other = runner(api, label="Other Mac")
     assign(api, other, newcomer)                                        # another computer has its own folder
+
+
+# ----------------------------------------------------------------------------- held bots
+def test_a_paused_bot_is_named_by_its_name_when_a_task_is_refused_or_a_message_held(api, sales):
+    """The sender of a task to a paused bot reads the bot's name, never its UUIDv7 id, in the refusal and in the
+    note kept with a message."""
+    with api.app.state.store.read() as c:
+        revision = c.execute("SELECT revision FROM bot_config WHERE bot=?", (sales,)).fetchone()[0]
+    post(api, f"bots/{sales}/control", {"action": "pause", "expected_revision": revision})
+    refused = post(api, "tasks", {"owner": sales, "title": "Draft the quote", "body": "For Acme."}, expected=422)
+    assert refused["error"]["code"] == "target_inactive" and "Sales Helper" in refused["error"]["detail"]
+    assert sales not in json.dumps(refused)
+    held = post(api, "messages", {"to": "sales-helper", "text": "Ready when you are?"})
+    assert "Sales Helper" in held["warning"] and sales not in held["warning"]

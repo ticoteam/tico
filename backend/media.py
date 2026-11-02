@@ -32,7 +32,7 @@ class Note(M.Contract):
     text: M.Text
     title: str = Field(default="", max_length=300)
     calendar: dict | None = None
-    slug: str = Field(default="auto", max_length=200)
+    bot_id: str = Field(default="auto", max_length=200)
 
 
 class Edit(M.Contract):
@@ -43,7 +43,7 @@ class Edit(M.Contract):
 
 
 class Send(M.Contract):
-    slug: str = Field(default="auto", max_length=200)
+    bot_id: str = Field(default="auto", max_length=200)
     instructions: str = Field(default="", max_length=200_000)
 
 
@@ -351,7 +351,7 @@ def deliver(c, auth, who, rid, body, uploads):
     require_live(record)
     meta = record["metadata"]
     person = P.person(H.actor_id(who.actor), roster(c)) or {}
-    chosen = body.slug if body.slug != "auto" else person.get("bot") or default_bot(c, auth.settings)
+    chosen = body.bot_id if body.bot_id != "auto" else person.get("bot") or default_bot(c, auth.settings)
     slug = (H.resolve_bot(c, chosen) or {}).get("id", chosen)
     auth.target(c, who, slug, need="write")
     previous = record["delivery"]
@@ -1066,7 +1066,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         def work(c):
             meta = new_note(c, request.state.identity, body, uploads)
             if request.url.path == "/api/send":
-                return deliver(c, auth, request.state.identity, meta["id"], Send(slug=body.slug), [])
+                return deliver(c, auth, request.state.identity, meta["id"], Send(bot_id=body.bot_id), [])
             return view(c, request.state.identity, meta["id"])
         return await asyncio.to_thread(write, request, body, uploads, work)
 

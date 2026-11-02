@@ -163,8 +163,9 @@ function livePaintDetail(state, detail) {
   // A candidate's `id` is what the meeting's bots name; a server from before ids sent only `slug`, which held it.
   const candidates = state.candidates.map(bot => ({...bot, id: bot.id ?? bot.slug})).filter(bot => !(detail.bots || []).some(attached => attached.bot === bot.id));
   const chunks = detail.chunks || [], chat = detail.chat || [], notices = detail.notices || [], router = detail.router || {windows: [], turns: []};
-  const teammates = (detail.bots || []).map(attached => `<span class="live-teammate">${empName(attached.bot)}${me && active ?
-    ` <button class="ghost" type="button" data-live-bot-remove="${esc(attached.bot)}" aria-label="Remove ${empName(attached.bot)} from this meeting">Remove</button>` : ''}</span>`).join(' ');
+  // A teammate is named by the server (`name`); a bot the viewer's roster lacks would otherwise show its id.
+  const teammates = (detail.bots || []).map(attached => `<span class="live-teammate">${esc(attached.name)}${me && active ?
+    ` <button class="ghost" type="button" data-live-bot-remove="${esc(attached.bot)}" aria-label="Remove ${esc(attached.name)} from this meeting">Remove</button>` : ''}</span>`).join(' ');
   host.innerHTML = `<article class="live-card">
     <header class="live-card-head"><div><h2>${esc(detail.title)}</h2>${detail.client === 'tico-recorder' ? '<p class="muted">From Tico Recorder</p>' : ''}<span class="live-state ${esc(detail.state)}">${esc(detail.state)}</span></div>
       <div class="live-controls">${controls && detail.state === 'live' ? '<button class="ghost" data-live-control="pause">Pause</button><button class="ghost" data-live-control="disconnect">Disconnect</button>' : ''}
@@ -184,7 +185,7 @@ function livePaintDetail(state, detail) {
       <div class="live-router">${router.windows?.length ? router.windows.map(window => `<details><summary>Window ${window.window_index + 1}: ${esc(window.outcome)} <small>${window.start_ms}–${window.end_ms} ms · ${window.trace?.ms ?? '—'} ms</small></summary><pre>${esc(JSON.stringify(window.trace || {}, null, 2))}</pre></details>`).join('') : '<p class="muted">No routing windows yet.</p>'}
       ${router.chat_routes?.length ? `<div class="live-chat-routes"><b>Chat routing</b>${router.chat_routes.map(route => `<details><summary>${esc(route.outcome || route.status)} · ${esc(route.started_at || '')} · ${route.trace?.ms ?? '—'} ms</summary><pre>${esc(JSON.stringify(route.trace || {}, null, 2))}</pre></details>`).join('')}</div>` : ''}
       ${router.bypasses?.length ? `<div class="live-bypasses"><b>Named mentions</b>${router.bypasses.map(bypass => `<pre>${esc(JSON.stringify(bypass, null, 2))}</pre>`).join('')}</div>` : ''}</div>
-      ${router.turns?.length ? `<div class="live-turns"><b>Bot turns</b>${router.turns.map(turn => `<span>${empName(turn.bot)} · ${esc(turn.status)}${turn.skip_reason ? ' · ' + esc(turn.skip_reason) : ''}</span>`).join('')}</div>` : ''}</section>
+      ${router.turns?.length ? `<div class="live-turns"><b>Bot turns</b>${router.turns.map(turn => `<span>${esc(turn.name)} · ${esc(turn.status)}${turn.skip_reason ? ' · ' + esc(turn.skip_reason) : ''}</span>`).join('')}</div>` : ''}</section>
     ${detail.imported_meeting_id ? `<p class="live-finalized">Saved in Meetings: <a href="#/meetings?meeting=${encodeURIComponent(detail.imported_meeting_id)}">Open transcript</a></p>` : ''}
   </article>`;
   state.paintedId = detail.id;

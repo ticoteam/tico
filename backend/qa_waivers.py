@@ -168,7 +168,7 @@ def waive(c, actor, task_id, head, reason, step=None, snapshots=None, manager=Fa
     record = {"head": head, "step": current, "pr": pr["url"]}
     H._task_event(c, row["id"], actor, FIELD, None, json.dumps(record, sort_keys=True), reason)
     if row["owner"] != actor:
-        H._wake(c, row, row["owner"], f"{H.actor_id(actor)} waived QA for {pr['url']} at head {head}: {reason}\n\n"
+        H._wake(c, row, row["owner"], f"{H.actor_name(c, actor)} waived QA for {pr['url']} at head {head}: {reason}\n\n"
                 "This is a waiver, not a QA pass: no QA verdict was recorded. CI and both reviews stay required, "
                 "and the waiver covers this exact head only.", refs={"qa_waiver": head})
     return next(w for w in waivers(c, row) if w["head"] == head)

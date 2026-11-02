@@ -84,7 +84,9 @@ function liveTaskScope() {
   const r = typeof S !== 'undefined' && S.route || '';
   if (isTasksRoute(r) || r.startsWith('#/task/')) return {all: true};
   const open = typeof TASK_CHAT !== 'undefined' && TASK_CHAT?.id ? [String(TASK_CHAT.id)] : [];
-  const party = r.startsWith('#/bot/') ? 'bot:' + decodeURIComponent(r.slice(6).split(/[/?]/)[0])
+  // A bot's route may name it by slug (a link made from a label); its actor is its id.
+  const botRef = r.startsWith('#/bot/') ? decodeURIComponent(r.slice(6).split(/[/?]/)[0]) : '';
+  const party = botRef ? 'bot:' + (botByRef(botRef)?.id || botRef)
     : r.startsWith('#/person/') ? 'human:' + decodeURIComponent(r.slice(9).split(/[/?]/)[0]) : '';
   return {task: open, party: party ? [party] : []};
 }

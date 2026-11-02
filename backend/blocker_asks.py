@@ -87,7 +87,7 @@ def _loops(c, task_id, blocker_id):
 
 def joined_text(c, ask, blocker_key, task_id):
     owner = ask["owner"]
-    who = H.person_name(c, owner) if H.is_human(owner) else H.actor_id(owner)
+    who = H.actor_name(c, owner)
     return (f"Same blocker as open task {ask['id']} ({ask['title'][:120]}), already asked of {who}: {blocker_key}. "
             "This task is yours, blocked by that ask instead of a second ask, and wakes when it is done. "
             f"To ask separately, unlink it: hub task relate {task_id} {ask['id']} --kind blocked_by --remove")

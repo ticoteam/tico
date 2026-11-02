@@ -9,6 +9,7 @@ from backend.tests.test_api import api, as_member, get, headers, post, restrict,
 from backend.tests.test_mcp import call
 from backend.tests.test_member_bots import botops, turn  # noqa: F401
 from backend.tests.test_lifecycle import debrief
+from backend.tests.test_new_bot_flows import create_bot
 
 
 def imported(api, token='ben-test', **fields):
@@ -44,7 +45,7 @@ def test_pending_hidden_from_owner_participants_bots_search_sql_and_send(api):
     # Even the filed-for person's search/export waits until sharing; the queue is their read path.
     assert get(api, 'meetings/search', 'ben-test')['results'] == []
     assert queue(api, 'ana-test')['pending_count'] == 0
-    response = api.post('/api/meetings/' + rid + '/send', json={'slug': 'ops'}, headers=headers('ben-test'))
+    response = api.post('/api/meetings/' + rid + '/send', json={'bot_id': 'ops'}, headers=headers('ben-test'))
     assert response.status_code == 409
     assert post(api, 'sql', {'sql': "SELECT target FROM events WHERE action IN ('note.created','meeting.imported')"})['rows'] == []
 
@@ -180,3 +181,16 @@ def test_share_and_send_hands_the_shared_meeting_to_a_bot_once(api):
     assert task and approved['delivery']['destination'] == 'ops'
     # A repeat is harmless: the meeting stays live and keeps its one delivery.
     assert review(api, made['id'], send_to='ops')['delivery']['task_id'] == task
+
+
+def test_a_shared_meeting_goes_to_a_uuid_bot_by_id_or_slug_as_one_task(api):
+    """A bot made through the API has a UUIDv7 id. The send files its task for bot:<id>, and a repeat named by the
+    slug is the same single delivery."""
+    bot = create_bot(api, 'field-helper')
+    made = imported(api)
+    approved = review(api, made['id'], send_to=bot)
+    assert approved['review_state'] == 'live' and approved['delivery']['destination'] == bot
+    task = approved['delivery']['task_id']
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT owner FROM tasks WHERE id=?', (task,)).fetchone()[0] == 'bot:' + bot
+    assert review(api, made['id'], send_to='field-helper')['delivery']['task_id'] == task

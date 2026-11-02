@@ -485,7 +485,7 @@ def _apply_decide(c, auth, who, item, r):
         said = text or "Done."
         H.task_comment(c, who.actor, ident, said)
         c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (ident,))
-        return f"Told {H.actor_id(row['owner'])}: {_clip(said, 120)}"
+        return f"Told {H.actor_name(c, row['owner'])}: {_clip(said, 120)}"
     if decision in ("approve", "decline"):
         status = "done" if decision == "approve" else "declined"
         note = text or ("Approved." if decision == "approve" else "Declined.")
@@ -503,12 +503,12 @@ def _apply_decide(c, auth, who, item, r):
     ask = H.unanswered_ask(c, row, actor=privacy.actor(who))
     if ask and ask.get("to_actor") == who.actor:
         H.answer(c, who.actor, ask["id"], text)
-        return f"Answered {H.actor_id(ask['from_actor'])}: {_clip(text, 120)}"
+        return f"Answered {H.actor_name(c, ask['from_actor'])}: {_clip(text, 120)}"
     to = H.task_origin(c, row) or row.get("requester")
     if not to or to == who.actor:
         raise Problem("answer", f"{item['title']} has nobody to answer", 422)
     H.say(c, who.actor, to, text, conversation_id=row.get("conversation_id"))
-    return f"Answered {H.actor_id(to)}: {_clip(text, 120)}"
+    return f"Answered {H.actor_name(c, to)}: {_clip(text, 120)}"
 
 
 def signature(c, who):
@@ -543,11 +543,11 @@ def _comment_instead(c, who, to, lines, detail):
     for key, line in lines:
         kind, ident = key.split(":", 1)
         if kind != "task":
-            errors.append(f"{H.actor_id(to)} could not be told ({detail}): {line.splitlines()[0]}")
+            errors.append(f"{H.actor_name(c, to)} could not be told ({detail}): {line.splitlines()[0]}")
             continue
         try:
             H.task_comment(c, who.actor, ident, line.split("\n", 1)[-1])
-            applied.append(f"Commented on {line.splitlines()[0]} (could not message {H.actor_id(to)})")
+            applied.append(f"Commented on {line.splitlines()[0]} (could not message {H.actor_name(c, to)})")
         except Exception as e:  # a refusal is a line in the record, not an abort
             errors.append(f"{line.splitlines()[0]}: {_clip(str(e), 200)}")
     return applied, errors
@@ -602,8 +602,8 @@ def _deliver(c, who, batch_id, outbox, record, send):
             sent[to] = len(lines)
         if done:
             recorded[to] = len(done)
-        applied.append(f"Sent {len(lines)} to {H.actor_id(to)}" if lines
-                       else f"Recorded {len(done)} for {H.actor_id(to)}")
+        applied.append(f"Sent {len(lines)} to {H.actor_name(c, to)}" if lines
+                       else f"Recorded {len(done)} for {H.actor_name(c, to)}")
     return applied, errors, sent, recorded, first
 
 
@@ -637,7 +637,7 @@ def commit(c, auth, who, batch_id, send):
                     line = _apply_decide(c, auth, who, item, r)
                 elif r["kind"] == "rule":
                     H.event(c, who.actor, "batch.rule", key, {"text": r["text"], "bot": to, "batch": batch["id"], "item": key})
-                    applied.append(f"Rule for {H.actor_id(to)}: {_clip(r['text'], 120)}")
+                    applied.append(f"Rule for {H.actor_name(c, to)}: {_clip(r['text'], 120)}")
                     outbox.setdefault(to, []).append(
                         (key, f"[item {n}] {item['title']} ({item['kind']}, {key})\n"
                               f"{who.actor} sets a standing rule: {r['text']}"))

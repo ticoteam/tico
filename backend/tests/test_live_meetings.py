@@ -12,6 +12,7 @@ from backend import gateway_connection, providers, task_models
 from backend.auth import Identity
 from backend.store import H, digest, encode
 from backend.tests.test_api import api, assign, get, headers, post, restrict, runner  # noqa: F401
+from backend.tests.test_new_bot_flows import create_bot
 
 
 @pytest.fixture
@@ -409,6 +410,11 @@ def test_joined_human_can_attach_visible_bots_but_nonmember_cannot(live):
     assert attached["added"] == ["ops"]
     detail = get(live, f"live-meetings/{mid}")
     assert detail["bots"][0]["joined_by"] == "human:ben"
+    # A bot made since ids: its teammate name is its display name, not its UUID id.
+    field = create_bot(live, "field-helper", display_name="Field Helper")
+    assert attach(live, mid, "field-helper")["added"] == [field]
+    named = {bot["bot"]: bot["name"] for bot in get(live, f"live-meetings/{mid}")["bots"]}
+    assert named == {"ops": get(live, "bots/ops")["display_name"], field: "Field Helper"}
     control = live.post("/api/v2/live-meetings/" + mid + "/control", json={"action": "pause"},
                         headers=headers("ben-test"))
     assert control.status_code == 403

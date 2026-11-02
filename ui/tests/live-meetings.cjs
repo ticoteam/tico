@@ -10,7 +10,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
 const FINANCE = '0192f0c4-7b1e-7cc2-9d1a-3f5e8a6b2c10';
 const makeDetail = id => ({id, title: 'Weekly sync', state: 'live', owner_actor: 'human:ana', seq: 2, event_id: 5,
   window_ms: 30000, cooldown_ms: 60000, reply_cap: 3, imported_meeting_id: null,
-  humans: [{actor: 'human:ana', name: 'Ana'}], bots: [{bot: 'ops'}],
+  humans: [{actor: 'human:ana', name: 'Ana'}], bots: [{bot: 'ops', name: 'Operations'}],
   chunks: [{seq: 1, revision: 1, speaker: 'Ana', text: 'We should ship the new plan.'},
     {seq: 2, revision: 2, speaker: 'Ben', text: 'Ops, can you review?', start_ms: 30000}],
   chat: [{id: 'c1', actor: 'human:ana', role: 'human', text: 'Welcome', transcript_seq: 1, created_at: '2026-10-30T10:00:01.000000Z'}],
@@ -19,7 +19,7 @@ const makeDetail = id => ({id, title: 'Weekly sync', state: 'live', owner_actor:
     {event_id: 4, kind: 'deferred', bot: 'ops', reason: 'busy', behind: null, created_at: '2026-10-30T10:00:02.000000Z'},
     {event_id: 5, kind: 'failed', bot: 'ops', reason: 'private_checkout', detail: "ops can't answer in this private meeting: Test Mac couldn't make a private copy of its repository", created_at: '2026-10-30T10:00:03.000000Z'}],
   router: {windows: [{window_index: 0, start_ms: 0, end_ms: 30000, outcome: 'pass', trace: {reason: 'below threshold', answers: {ops: 0.2}}}],
-    turns: [{id: 't1', bot: 'ops', window_index: null, status: 'pending'}],
+    turns: [{id: 't1', bot: 'ops', name: 'Operations', window_index: null, status: 'pending'}],
     bypasses: [{event_id: 6, bypass: 'named', source_key: 'chunk:2', targets: ['ops'], skipped: []}]}});
 
 async function main() {
@@ -61,7 +61,8 @@ async function main() {
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}]});
-      if (p === '/api/employees') return json([{name: 'ops', display_name: 'Operations'}, {id: FINANCE, slug: 'finance', name: 'finance', display_name: 'Finance'}]);
+      // The viewer's roster lacks the attached UUID bot, so its teammate name can only come from the meeting's `bots`.
+      if (p === '/api/employees') return json([{name: 'ops', display_name: 'Operations'}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
       if (p === '/api/v2/status') return json({bots: []});
@@ -99,7 +100,7 @@ async function main() {
           return route.fulfill({status: 400, contentType: 'application/json', body: JSON.stringify({error: {detail: 'Chat rejected'}})});
         }
         if (operation === 'join') world.detail.humans.push({actor: 'human:ben', name: 'Ben'});
-        if (operation === 'bots') world.detail.bots.push({bot: body.bots[0]});
+        if (operation === 'bots') world.detail.bots.push({bot: body.bots[0], name: 'Finance'});
         if (operation === 'control') world.detail.state = body.action === 'end' ? 'ended' : body.action === 'resume' ? 'live' : 'paused';
         if (operation === 'finalize') world.detail.imported_meeting_id = 'meeting-imported';
         if (operation === 'chat') world.detail.chat.push({actor: 'human:ana', role: 'human', text: body.text});

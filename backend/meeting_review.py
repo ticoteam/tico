@@ -64,7 +64,7 @@ def install_meeting_review(app, store, auth, mutate):
             destination = meta.pop('review_send_to', None)
             if destination:
                 media.save(c, meta, readable=record['transcript_readable'])
-                media.deliver(c, auth, who, rid, media.Send(slug=destination), [])
+                media.deliver(c, auth, who, rid, media.Send(bot_id=destination), [])
         H.event(c, who.actor, 'meeting.reviewed', rid, {'action': action})
         return media.view(c, who, rid)
 

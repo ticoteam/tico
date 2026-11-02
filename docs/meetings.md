@@ -51,7 +51,7 @@ meeting has `review_state` (`pending`, `live` or `dismissed`). The rail's existi
 `GET /api/v2/meetings/{id}` opens a meeting under the same access rules as the older detail route.
 
 - `POST /api/v2/meetings/{id}/review {"action": "approve", "private": false}` shares a pending meeting.
-  `send_to` (a bot slug or `auto`) also hands it to that bot once shared, as Send does.
+  `send_to` (a bot's id or slug, or `auto`) also hands it to that bot once shared, as Send does.
   Omit `private` to keep its source default: Granola is private by default; other sources are team
   meetings unless their importer chose private. A team meeting with a transcript fires
   `meeting.ready` and the older `recording.ready` once. Repeating approval does not fire again.
@@ -105,7 +105,7 @@ and `participants` and `context` as JSON-encoded text fields). Only a transcript
 | `context` | A flat map of up to 20 short text fields the source wants kept (`lead_url`, `room`); keys are lower-case identifiers and `*_url` values must be `https` |
 | `private` | `true` narrows the meeting to its participants and its owner. Default: private for Granola; otherwise a team meeting, readable by everyone signed in after sharing |
 | `review` | `live` shares immediately when a human or their personal token imports. Otherwise the person's review setting applies; `pending` explicitly keeps it in their queue. Computers cannot request `live` |
-| `send_to` | A bot slug. Hands a live meeting to that bot as a task, exactly as **Send** does; a pending meeting waits until approval |
+| `send_to` | A bot's id or slug. Hands a live meeting to that bot as a task, exactly as **Send** does; a pending meeting waits until approval |
 | `owner_email` | Computers only: the roster human the meeting is filed for |
 
 A transcript is at most 1,000,000 characters and 10,000 segments. A file attached by multipart is at

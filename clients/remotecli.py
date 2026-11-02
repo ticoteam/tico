@@ -1320,7 +1320,7 @@ def main(args, who=None):
             print(result["text"])
         elif args.fn == "bot go-live" and isinstance(result, dict) and result.get("state") == "waiting_for_repository":
             # Not an error and nothing to retry: Tico finishes it when the computer reports the repository.
-            print(f"{result.get('bot')} is placed on {result.get('computer')} and waiting for it to get the repository. "
+            print(f"{args.bot} is placed on {result.get('computer')} and waiting for it to get the repository. "
                   "Tico finishes going live (turns it on and starts its setup) when "
                   f"{result.get('computer')} has the repository; nothing needs to run again.")
         else:
