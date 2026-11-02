@@ -2170,7 +2170,7 @@ mod tests {
     #[test]
     fn the_merge_result_tree_is_read_only_when_git_wrote_one() {
         let oid = "0123456789abcdef0123456789abcdef01234567";
-        let out = |code: i32, stdout: &str| Out { code, stdout: stdout.into(), stderr: String::new() };
+        let out = |code: i32, stdout: &str| Out { code, stdout: stdout.into(), raw: stdout.as_bytes().to_vec(), stderr: String::new() };
         assert_eq!(merge_tree_oid(&out(129, "usage: git merge-tree")), None);
         assert_eq!(merge_tree_oid(&out(0, "not a tree\n")), None);
         assert_eq!(merge_tree_oid(&out(0, &format!("{oid}\n"))).as_deref(), Some(oid));
