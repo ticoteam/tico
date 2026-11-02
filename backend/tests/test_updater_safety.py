@@ -40,10 +40,50 @@ def test_a_snapshot_is_taken_before_the_switch_and_left_alone_when_the_update_wo
     assert updater.status["state"] == "healthy" and updater.status["snapshot"].startswith("pre-update-v0.1.0-")
     verbs = docker.verbs()
     assert verbs.index("exec") < verbs.index("up") and "run" not in verbs and updater.status["restored"] is False
-    exec_call = next(a for a, _ in docker.calls if "exec" in a)
-    assert "/data/snapshots" in exec_call and "hub.sqlite" in updater.SNAPSHOT_SCRIPT and "backup(" in updater.SNAPSHOT_SCRIPT
-    assert 'target.execute("PRAGMA quick_check")' not in updater.SNAPSHOT_SCRIPT
-    assert 'target.execute("PRAGMA page_count")' in updater.SNAPSHOT_SCRIPT
+    exec_call = next(a for a, _ in docker.calls if "/data/snapshots" in a)
+    assert "hub.sqlite" in updater.SNAPSHOT_SCRIPT and "backup(" in updater.SNAPSHOT_SCRIPT
+
+
+def test_the_snapshot_allowance_scales_with_the_database_and_the_env_override_wins(monkeypatch, tmp_path):
+    gigabyte = 1024 ** 3
+    updater = load(monkeypatch, "", tmp_path)
+    assert updater.snapshot_seconds(None) == updater.SNAPSHOT_FLOOR_SECONDS
+    assert updater.snapshot_seconds(int(3.6 * gigabyte)) == updater.SNAPSHOT_FLOOR_SECONDS
+    assert updater.snapshot_seconds(10 * gigabyte) == 3000
+    monkeypatch.setenv("TICO_UPDATER_SNAPSHOT_SECONDS", "1800")
+    fixed = load(monkeypatch, "", tmp_path)
+    assert fixed.snapshot_seconds(10 * gigabyte) == fixed.snapshot_seconds(None) == 1800
+    monkeypatch.setenv("TICO_UPDATER_SNAPSHOT_SECONDS", "")
+    assert load(monkeypatch, "", tmp_path).snapshot_seconds(10 * gigabyte) == 10 * updater.SNAPSHOT_SECONDS_PER_GB
+
+
+def test_the_status_names_the_database_size_while_the_snapshot_runs(monkeypatch, tmp_path):
+    updater = load(monkeypatch, "", tmp_path)
+    Fake(updater, monkeypatch, [True])
+    monkeypatch.setattr(updater, "database_bytes", lambda: int(3.6 * 1024 ** 3))
+    seen, taken = [], updater.take_snapshot
+
+    def watched(previous, seconds):
+        seen.append((updater.status["state"], updater.status["message"], seconds))
+        return taken(previous, seconds)
+
+    monkeypatch.setattr(updater, "take_snapshot", watched)
+    updater.update("v0.2.0")
+    assert seen == [("snapshotting", "snapshotting, 3.6 GB", updater.SNAPSHOT_FLOOR_SECONDS)]
+    assert updater.status["state"] == "healthy"
+
+
+def test_the_full_quick_check_on_the_snapshot_runs_only_when_an_operator_opts_in(monkeypatch, tmp_path):
+    sent = []
+    updater = load(monkeypatch, "", tmp_path)
+    monkeypatch.setattr(updater, "compose", lambda *a, tag=None, **k: sent.append(a) or "")
+    updater.take_snapshot("v0.1.0", 1200)
+    assert sent[-1][-1] == "0"
+    monkeypatch.setenv("TICO_UPDATER_FULL_CHECK", "1")
+    opted = load(monkeypatch, "", tmp_path)
+    monkeypatch.setattr(opted, "compose", lambda *a, tag=None, **k: sent.append(a) or "")
+    opted.take_snapshot("v0.1.0", 1200)
+    assert sent[-1][-1] == "1"
 
 
 
@@ -440,3 +480,13 @@ def test_a_subnet_clash_names_the_settings_that_move_the_edge_network(monkeypatc
     assert message.startswith(stderr)
     assert ("TICO_EDGE_SUBNET" in message and "update again" in message) is hinted
     assert ("docker compose down, then docker compose up -d, then update again" in message) is hinted
+
+
+def test_compose_passes_the_snapshot_settings_from_env_to_the_updater():
+    import yaml
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    environment = yaml.safe_load((root / "compose.yaml").read_text())["services"]["updater"]["environment"]
+    # Empty when .env does not set them, so the updater scales its allowance and keeps the full check off.
+    assert environment["TICO_UPDATER_SNAPSHOT_SECONDS"] == "${TICO_UPDATER_SNAPSHOT_SECONDS:-}"
+    assert environment["TICO_UPDATER_FULL_CHECK"] == "${TICO_UPDATER_FULL_CHECK:-}"

@@ -272,14 +272,18 @@ refuses every update. A `cloudflared` command of its own should read `--config /
 COMPOSE_PROFILES=cloudflared,updater    # your existing profiles, plus updater
 TICO_UPDATER_URL=http://updater:8080
 TICO_TAG=vX.Y.Z                         # the release running now
-# TICO_UPDATER_SNAPSHOT_SECONDS=900     # optional; raise if a very large hub needs a longer pre-update copy
+# TICO_UPDATER_SNAPSHOT_SECONDS=1800    # optional; a fixed time for the pre-update copy (unset: it scales with hub.sqlite)
 ```
 
 and run `docker compose up -d`. From then on the updater moves `TICO_TAG`.
 
-Before switching images the updater copies `hub.sqlite` with SQLite's online backup API. That copy is checked by
-opening it and confirming it has pages; a full `PRAGMA quick_check` is not used, because on multi-gigabyte databases
-it can run longer than the update window.
+Before switching images the updater copies `hub.sqlite` with SQLite's online backup API, and the status shows
+`snapshotting, N GB` while it does. The copy is checked by opening it and counting its pages. A full
+`PRAGMA quick_check` is not run by default: on a multi-gigabyte database it can take longer than the update window.
+Set `TICO_UPDATER_FULL_CHECK=1` in `.env` to run it anyway.
+
+The time allowed for the copy scales with the database: at least 1200 seconds, and 300 seconds more per gigabyte.
+Set `TICO_UPDATER_SNAPSHOT_SECONDS` in `.env` to use a fixed number of seconds instead.
 
 ## The runner
 

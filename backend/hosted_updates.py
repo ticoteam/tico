@@ -49,7 +49,7 @@ MAX_ANSWER = 4096
 OPENER = None                # tests replace it with a function (request, timeout) -> response: nothing leaves the test
 REQUEST_ID = re.compile(r"hu_[0-9a-f]{16}")
 STABLE = re.compile(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}")
-UNDER_WAY = ("pulling", "restarting", "uncertain")
+UNDER_WAY = ("pulling", "snapshotting", "restarting", "uncertain")
 _ticking = threading.Lock()
 
 
