@@ -444,6 +444,29 @@ def _overall(checks):
     return "failing" if "failing" in checks.values() else "pending" if "pending" in checks.values() else "passing"
 
 
+CHECKS_KEPT = 100
+
+
+def _kept(checks):
+    """What a link stores of a head's checks: at most CHECKS_KEPT keys, every failing one first, then pending, then
+    the most recently added. A later webhook reads the stored copy back, so keeping the checks that decide the state
+    keeps `_overall` of the copy equal to the head's own state, even when an early failure or a running check is
+    among the older keys. That holds only while at most CHECKS_KEPT of a head's checks are not passing: past that
+    some are dropped, and a webhook that turns the kept ones green can read the head passing while a dropped one
+    still fails."""
+    if len(checks) <= CHECKS_KEPT:
+        return dict(checks)
+    keys = list(checks)
+    chosen = set()
+    for want in ("failing", "pending", None):
+        for k in reversed(keys):
+            if len(chosen) >= CHECKS_KEPT:
+                break
+            if want is None or checks[k] == want:
+                chosen.add(k)
+    return {k: checks[k] for k in keys if k in chosen}
+
+
 def _finish(c, task, link, detail, full, checks):
     """Every check on head `full` has finished: the head's one `pr_checks_done` per result. A redelivery or a re-run that
     ends the same way says nothing new, unless the bot armed the link again to hear that re-run. Returns (head, outcome)
@@ -570,11 +593,11 @@ def apply_checks(c, link_id, head, checks, since=None):
         return None
     if since is not None and link.get("updated") != since:
         return None
-    checks = dict(list(checks.items())[-100:])
-    state = _overall(checks)
-    if detail.get("checks") == checks and link.get("checks") == state:
+    # The state and the failures named come from the whole read; only the stored copy is cut.
+    state, kept = _overall(checks), _kept(checks)
+    if detail.get("checks") == kept and link.get("checks") == state:
         return state
-    detail["checks"] = checks
+    detail["checks"] = kept
     finished = state != "pending" and state != link.get("checks")
     finished_head = _finish(c, task, link, detail, head, checks) if finished else None
     record_health_wait({**link, "checks": state}, detail)
@@ -633,7 +656,7 @@ def pr_signal(c, event, payload):
                 # that is still going reopens it (a re-run keeps the suite id); a finished run delivered after its
                 # suite completed is a stale snapshot and does not.
                 checks[_suite_key(own, signal)] = "pending"
-            detail["checks"] = dict(list(checks.items())[-100:])
+            detail["checks"] = _kept(checks)
             fields["checks"] = _overall(checks)
             # One check finishing writes nothing (rule `pr_check`). A suite completes once all of its runs have; a
             # single run or commit status may be one of many. A run or status that finishes after a suite already has
