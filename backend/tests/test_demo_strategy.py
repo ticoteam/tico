@@ -1,5 +1,5 @@
-"""Demo mode's Strategy section: a published strategy with an earlier version to compare, three bets linked to goals, one
-Strategy Bot proposal waiting for the owner, and this week's briefing, the market map, listening news and the brand book.
+"""Demo mode's Strategy section: a published strategy with an earlier version to compare, three bets linked to goals, the
+Strategy Bot's one proposal already accepted into the draft, and this week's briefing, the market map, listening news and the brand book.
 Read as the owner, the way the page reads them."""
 
 import os
@@ -74,21 +74,24 @@ def test_bets_serve_the_goals_the_core_seed_made(built):
         assert all(goals[row["id"]]["bet_id"] == bet_id for row in rows)
 
 
-def test_the_strategy_bot_proposal_waits_for_the_owner(built):
+def test_the_strategy_bot_proposal_is_accepted_into_the_draft(built):
+    """The briefing's bet was proposed by the Strategy Bot and Ana said yes on her card: it sits in the draft as a
+    proposed bet, unpublished, and nothing waits on Goals."""
     with signed_in(built) as api:
         strategy = api.get("/api/v2/strategy").json()
         pending = api.get("/api/v2/goal-proposals?status=pending").json()["proposals"]
-    assert len(pending) == 1
-    proposal = pending[0]
-    assert proposal["kind"] == "strategy_draft"
-    assert proposal["proposed_by"] == "bot:goal-manager"
+        decided = api.get("/api/v2/goal-proposals?status=confirmed").json()["proposals"]
+        needs = api.get("/api/v2/goals/needs-you").json()
+    assert pending == []
+    [proposal] = [p for p in decided if p["kind"] == "strategy_draft"]
+    assert proposal["proposed_by"] == "bot:goal-manager" and proposal["decided_by"] == "human:ana"
     assert proposal["payload"]["source"] == "briefing"
-    bet = proposal["payload"]["bets"][0]
-    assert "id" not in bet and bet["status"] == "proposed"
-    assert bet["statement"] == ("Public bids from towns and HOAs are a motion of their own, with a survey and a fixed "
-                                "date.")
+    statement = "Public bids from towns and HOAs are a motion of their own, with a survey and a fixed date."
+    [bet] = [b for b in strategy["bets"] if b["statement"] == statement]
+    assert bet["status"] == "proposed"
     assert bet["wrong_if"]["kind"] == "text" and bet["wrong_if"]["check_by"] > NOW.date().isoformat()
-    assert not [b for b in strategy["bets"] if b["status"] == "proposed"]      # nothing is written until the owner confirms
+    assert statement not in str(strategy["current"])                            # in the draft, not published
+    assert not [item for item in needs["items"] if item["kind"] == "proposal"]
 
 
 def test_this_weeks_briefing_is_posted_by_the_librarian(built):
@@ -137,17 +140,20 @@ def test_a_check_day_is_the_servers_calendar_day(monkeypatch):
         time.tzset()
 
 
-def test_the_owners_card_for_the_proposal_is_dated_when_it_was_proposed(built):
+def test_the_owners_card_for_the_proposal_was_filed_when_it_was_proposed_and_closed_by_her_yes(built):
+    # Her yes settled the card (backend/strategy.py settle_card), which drops its goal_asks row: the task stays.
     with sqlite3.connect(built.db_path) as db:
         row = db.execute(
-            "SELECT t.owner_id, t.status, t.created_at, p.proposed_at FROM goal_asks g JOIN tasks t ON t.id = g.task_id "
-            "JOIN goal_proposals p ON p.id = g.ref WHERE g.kind = 'proposal' AND p.kind = 'strategy_draft' "
-            "AND p.status = 'pending'").fetchone()
+            "SELECT t.owner_id, t.status, t.created_at, p.proposed_at, p.decided_at FROM goal_proposals p "
+            "JOIN tasks t ON t.title = 'Decide a suggested change to your strategy' "
+            "AND t.body LIKE '%from this week''s market briefing%' "
+            "WHERE p.kind = 'strategy_draft' AND p.status = 'confirmed'").fetchone()
+        assert not db.execute("SELECT 1 FROM goal_asks WHERE kind = 'proposal'").fetchone()
     assert row is not None
-    owner, status, created, proposed = row
-    assert owner == "human:ana" and status in H.LIVE_STATUSES
+    owner, status, created, proposed, decided = row
+    assert owner == "human:ana" and status not in H.LIVE_STATUSES
     assert parse(proposed) <= parse(created) < parse(proposed) + timedelta(minutes=1)
-    assert parse(created) > NOW - timedelta(days=2)
+    assert parse(created) > NOW - timedelta(days=2) and parse(decided) > parse(created)
 
 
 def test_where_we_play_has_a_market_with_us_next_and_sized_segments(built):

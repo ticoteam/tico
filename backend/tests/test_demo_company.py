@@ -238,3 +238,39 @@ def test_the_team_has_closed_tasks_every_week_for_two_months(built):
 def test_the_same_date_builds_the_same_company(built):
     _first, rows, again = built
     assert again == rows
+
+
+def test_every_department_has_its_lead_and_answers_to_a_person(ana):
+    """The org chart reads groups and reporting lines: each department names its lead, and every bot in a group
+    reports, a step at a time, up to a person (so the chart hangs each department under its human head)."""
+    bots = ana.get("/api/v2/bots").json()
+    by_slug = {bot["slug"]: bot for bot in bots}
+    names = {bot.get("id"): bot["slug"] for bot in bots} | {slug: slug for slug in by_slug}
+    groups = {group["id"]: group for group in ana.get("/api/v2/groups").json()}
+    for gid, members, lead in D.GROUP_FIXES:
+        ref = groups[gid]["lead"]
+        kind, _, key = ref.partition(":")
+        assert (kind + ":" + names.get(key, key)) == lead, f"{gid} is led by {lead}"
+        assert set(members) <= set(groups[gid]["bot_slugs"]), f"{gid} holds {members}"
+    for group in groups.values():
+        for slug in group["bot_slugs"]:
+            seen, at = set(), slug                      # a bot's reports_to is a bot's slug or "human:<id>"
+            while at in by_slug and at not in seen:
+                seen.add(at)
+                at = by_slug[at]["reports_to"] or ""
+            assert at in PEOPLE, f"{slug} answers to a person ({at or 'nobody'})"
+
+
+def test_each_department_lead_has_a_goal_that_rolls_up_to_the_company_goal(ana):
+    goals = {goal["id"]: goal for goal in ana.get("/api/v2/goals?all=true").json()["goals"]}
+    [company] = [goal for goal in goals.values() if goal["owner_id"] == "company"]
+    for _gid, _members, lead in D.GROUP_FIXES:
+        if not lead.startswith("bot:"):
+            continue
+        mine = [goal for goal in goals.values() if goal["owner_id"] == lead and goal["status"] != "dropped"]
+        assert mine, f"{lead} has a goal"
+        for goal in mine:
+            at, steps = goal, 0
+            while at["parent_id"] and steps < 10:
+                at, steps = goals[at["parent_id"]], steps + 1
+            assert at["id"] == company["id"], f"{goal['title']} rolls up to the company goal"

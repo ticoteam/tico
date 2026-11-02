@@ -60,11 +60,73 @@ function orgGroupUnderStrategyBot(id) {
   for (let hops = 0; g?.parent && byId.has(g.parent) && hops < 20; hops++) g = byId.get(g.parent);
   return g?.org_parent === 'b:goal-manager';
 }
+// Who a group answers to, as a key (`p:<id>` or `b:<bot id>`): whoever its lead (`bot:<id>` or `person:<id>`) reports
+// to, else whoever most of the teammates at its top report to; up the reporting lines (`org_parent`) past anyone inside
+// the group or the groups in it, and past helpers. '' when nobody is above it. Reporting lines, not groups.
+function orgGroupHead(gid, lead = '') {
+  const groups = S.orgGroups || [], within = new Set([gid]);
+  for (let grew = true, hops = 0; grew && hops < 20; hops++) {
+    grew = false;
+    for (const g of groups) if (g.parent && within.has(g.parent) && !within.has(g.id)) { within.add(g.id); grew = true; }
+  }
+  const people = new Map((S.people || []).filter(p => !p.hidden).map(p => ['p:' + p.id, p]));
+  const bots = (S.emps || []).filter(e => !isHelperBot(e) && !['archived', 'retired'].includes(e.status));
+  const inside = new Set([...[...people].filter(([, p]) => within.has(p.team)).map(([k]) => k), ...bots.filter(e => within.has(e.team)).map(e => 'b:' + e.id)]);
+  const boss = key => key.startsWith('p:') ? orgBossKey({kind: 'person', person: people.get(key) || {}}) : orgBossKey({kind: 'bot', ...(botRow(key.slice(2)) || {})});
+  const helper = key => { if (!key.startsWith('b:')) return false; const e = botRow(key.slice(2)); return !e || isHelperBot(e); };
+  const headOf = key => {
+    let up = boss(key);
+    for (let hops = 0; up && (inside.has(up) || helper(up)) && hops < 20; hops++) up = boss(up);
+    return up && !inside.has(up) && !helper(up) ? up : '';
+  };
+  const ref = String(lead || ''), leadKey = ref.startsWith('person:') ? 'p:' + ref.slice(7) : ref.startsWith('bot:') ? 'b:' + ref.slice(4) : '';
+  if (leadKey && inside.has(leadKey)) return headOf(leadKey);
+  const top = [...[...people].filter(([, p]) => p.team === gid).map(([k]) => k), ...bots.filter(e => e.team === gid).map(e => 'b:' + e.id)]
+    .filter(k => !inside.has(boss(k)));
+  const votes = new Map();
+  for (const k of top) { const up = headOf(k); if (up) votes.set(up, (votes.get(up) || 0) + 1); }
+  return [...votes].sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+}
 // Where a group hangs: in its parent group, else at the top. The server hangs the top-level group of a Head it puts under
 // the Strategy Bot there too (`org_parent`, backend/strategy_bot.py), and the chart lifts it to the owner with the
 // Head.
 const orgGroupParent = (g, keys) => g.parent && keys.has('g:' + g.parent) ? 'g:' + g.parent
   : g.org_parent === 'b:goal-manager' && keys.has('b:goal-manager') ? 'b:goal-manager' : '';
+// The org chart's shape over a tree of nodes by parent key (`by`, changed in place): the top person (orgChartTop) at the
+// root, their own group dissolved into them, and every top-level group under the one it answers to (orgGroupHead), so
+// a department sits under the person who runs it. Org (redesign-org.js rdoTree) and Goals (goals-kpis.js) both draw it.
+function orgChartShape(by, keyOf, leadOf) {
+  const nodes = new Map(), parentOf = new Map();
+  for (const [k, kids] of Object.entries(by)) for (const n of kids) { nodes.set(keyOf(n), n); parentOf.set(keyOf(n), k); }
+  const take = key => { const p = parentOf.get(key); by[p] = (by[p] || []).filter(n => keyOf(n) !== key); parentOf.delete(key); };
+  const put = (parent, n) => { (by[parent] ||= []).push(n); parentOf.set(keyOf(n), parent); };
+  const person = orgChartTop(), topKey = person && nodes.has('p:' + person.id) ? 'p:' + person.id : '';
+  const home = topKey ? parentOf.get(topKey) : '';
+  if (topKey && home) {
+    take(topKey); put('', nodes.get(topKey));
+    if (home.startsWith('g:') && parentOf.get(home) === '') {
+      for (const n of by[home] || []) put(topKey, n);
+      delete by[home]; take(home); nodes.delete(home);
+    }
+  }
+  // Under its head unless the head sits inside it (a loop); else it stays at the top, under the top person.
+  const reaches = (from, to) => {
+    const seen = new Set(), walk = k => (by[k] || []).some(n => { const key = keyOf(n); if (key === to) return true; if (seen.has(key) || seen.size > 4000) return false; seen.add(key); return walk(key); });
+    return walk(from);
+  };
+  for (const g of (by[''] || []).filter(n => n.kind === 'group')) {
+    const head = orgGroupHead(g.id, leadOf(g.id)), key = 'g:' + g.id;
+    if (!head || head === topKey || !nodes.has(head) || reaches(key, head)) continue;
+    take(key); put(head, g);
+  }
+  return by;
+}
+// The owner when nobody is above them, else the one person nobody is above; with neither, the first person at the top.
+function orgChartTop() {
+  const tops = (S.people || []).filter(p => !p.hidden && !orgBossKey({kind: 'person', person: p}));
+  const owners = tops.filter(p => p.role === 'owner');
+  return tops.find(p => S.me?.owner_id && p.id === S.me.owner_id) || (owners.length === 1 ? owners[0] : null) || (tops.length === 1 ? tops[0] : null);
+}
 function orgGroupOf(people, bots, seats = []) {
   const groups = orgGroupIds(), out = {};
   for (const p of people) if (groups.has(p.team)) out['p:' + p.id] = p.team;

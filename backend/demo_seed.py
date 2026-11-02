@@ -145,6 +145,7 @@ class Builder:
         with TestClient(app) as api:
             self.api = api
             self.company()
+            self.org()
             self.computers()
             self.goals()
             self.docs()
@@ -191,6 +192,12 @@ class Builder:
             c.execute("INSERT INTO preferences VALUES('human:ana','onboarding.progress',?,?)",
                       (encode({"tour": True, "checklist": False, "skipped": []}), H.now()))
         self.write(record)
+
+    def org(self):
+        """The groups as an org chart reads them (D.GROUP_FIXES), through the groups API like an owner would."""
+        self.at(days=6.95)
+        for gid, bots, lead in D.GROUP_FIXES:
+            self.call("PATCH", f"groups/{gid}", {"add": {"bots": list(bots)}, "lead": lead})
 
     def computers(self):
         self.at(days=6.9)
