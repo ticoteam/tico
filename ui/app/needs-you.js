@@ -221,6 +221,16 @@ function approvalFacts(what, p, it = {}) {
     const m = /^(.*?) and raise (.+?)(?: to (-?[\d.,]+ [A-Z]{3}))? from (\d{4}-\d{2}-\d{2})$/.exec(text);
     rows = [['Change', m ? m[1] : text, 'approval-text']];
     if (m) rows.push(['Raises', `${m[2]}${m[3] ? ' to ' + m[3] : ''} from ${m[4]}`, 'approval-text']);
+    // A bot's equipment photo: the person compares the plate with the record before it saves (backend/finance/equipment.py).
+    const photo = /^equipment_(create|update)$/.test(String(p.kind)) ? p.payload?.photo_file_id : '';
+    if (photo) {
+      const href = `${API}/v2/files/${encodeURIComponent(photo)}`, link = document.createElement('a'), img = document.createElement('img');
+      link.href = href; link.target = '_blank'; link.rel = 'noopener'; link.className = 'approval-photo';
+      link.dataset.mi = '1';   // already a picture: the viewer's file-link thumbnail would show it twice
+      img.src = href; img.alt = 'Equipment photo'; img.loading = 'lazy';
+      link.append(img);
+      rows.push(['Photo', link]);
+    }
     named = ['what', 'source', 'action_id', 'kind', 'payload'];
   } else if (what === 'merge') {
     rows = [['Repository', shown(p.repo)], ['Pull request', plain(p.pr) && p.pr !== '' ? '#' + String(p.pr).replace(/^#/, '') : shown(p.pr)]];

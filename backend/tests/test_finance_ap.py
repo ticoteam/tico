@@ -434,6 +434,25 @@ def test_a_bill_line_naming_an_item_keeps_the_item_when_a_posting_rule_supplies_
         assert [(str(r[0]), str(r[1]), int(r[2])) for r in lines] == [(account(c, "6100"), item, 5000)]
 
 
+def test_a_split_rule_gives_each_part_the_purchase_order_line_its_bill_line_bills(books):
+    from backend.finance import documents
+    from backend.finance.context import load
+    from backend.finance.core import ap as AP
+    with books.transaction() as c:
+        split = {"kind": "posting", "name": "AI split", "when": {"counterparty": {"matches": "ANTHROPIC"}},
+                 "outcome": {"outcome": "post", "split": [
+                     {"account_id": account(c, "6100"), "share": 7_500},
+                     {"account_id": account(c, "6000"), "share": 2_500}]},
+                 "examples": [{"input": {"counterparty": "ANTHROPIC PBC"}, "expect": "post"}]}
+        assert act(c, OWNER, "rule_create", split).status == "committed"
+        vendor = _vendor(c, "ANTHROPIC PBC")
+        expense, other = account(c, "6100"), account(c, "6000")
+        ctx = load(c, AT)
+        lines, _ = documents.resolve_lines(ctx, OWNER, "bill", documents.contact_for(ctx, vendor, "bill"),
+                                           [AP.DocLine("", 1_000, "pens", {}, None, "", po_line_id="pol-1")])
+    assert [(x.account_id, x.amount, x.po_line_id) for x in lines] == [(expense, 750, "pol-1"), (other, 250, "pol-1")]
+
+
 def test_defaults_are_seeded_once_stay_as_edited_and_guard_bots(books):
     with books.transaction() as c:
         ids = [str(r[0]) for r in c.execute("SELECT id FROM fin_rules WHERE id LIKE 'rule:bot-%' ORDER BY id")]
@@ -448,7 +467,7 @@ def test_defaults_are_seeded_once_stay_as_edited_and_guard_bots(books):
         assert "1000000" in c.execute("SELECT when_json FROM fin_rules WHERE id='rule:bot-books-over-5000'"
                                       ).fetchone()[0]
         assert FA.grant_defaults(c, "bot:coder", at=AT) == ["finance.book", "finance.ap", "finance.ar", "finance.pay",
-                                                            "finance.cards"]
+                                                            "finance.cards", "finance.records"]
         assert FA.grant_defaults(c, "bot:coder", at=AT) == []
         entry = {"date": "2026-10-10", "lines": [{"account_id": account(c, "6100"), "amount": 900_000,
                                                   "tags": {"team": "web"}},

@@ -18,6 +18,7 @@ sending on in Tico. Once bought, the vendor passes to the Vendor Manager (`vendo
 renewals and reviews.
 
 ## Owns
+- `knowledge/records.md`: how the Operations records work (locations, products and services, projects, equipment, due dates) and how to read and change them through the Finance tools.
 - `reports/YYYY-MM-DD-purchase-digest.md`: the weekly digest of open requests.
 - `reports/R-<id>-comparison.md`: one comparison per purchase request.
 - `knowledge/criteria.md`: must-haves, criteria and weights, and the spending thresholds.
@@ -51,6 +52,8 @@ Always:
 - Never state a price, feature or compliance claim you did not read in a dated source, and never present a
   vendor's own claim as verified.
 - Never put a customer name, an internal number or another vendor's price in anything a vendor sees.
+- Never email a purchase order to a supplier without a send grant: the email is a draft for a person. `po_send`
+  only marks the order sent in Tico and emails nothing.
 
 ## Skills
 - `skills/price-the-whole-term/SKILL.md`: read before you state a total cost or compare two quotes.
@@ -85,6 +88,7 @@ Always:
    decide-by date), the report path, then what you could not read.
 
 ## Talking to {{app_name}}
+Before you read or change a location, product and service, project, piece of equipment or due date, read `knowledge/records.md`.
 Work arrives as tasks: `hub task show <id>`, `hub task list`. Where a mailbox is connected, quotes are read
 with `$HUB_DIR/scripts/mail.sh search "<vendor>"`; leave a draft only with `mail.sh draft`, never `send`. Ask
 the requester one question with `hub task ask <id>`. Something a human must decide is

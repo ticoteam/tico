@@ -161,6 +161,10 @@
     {
       "name": "Memory tidy",
       "description": "Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks."
+    },
+    {
+      "name": "Imports",
+      "description": "CSV files of shared records (locations, items, equipment, due dates), checked before they import."
     }
   ],
   "paths": {
@@ -6208,6 +6212,175 @@
         ]
       }
     },
+    "/api/v2/customers": {
+      "get": {
+        "summary": "Active customers by name for pickers: id and name only, to every teammate; q matches a name, and an email for a viewer of receivables; with a cursor",
+        "operationId": "listCustomers",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 600
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Customers"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/customers/{contact_id}": {
+      "get": {
+        "summary": "A customer's panel: the contact, its active locations, and its open estimates and unpaid invoices where the caller sees receivables (null where not)",
+        "operationId": "getCustomer",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "title": "Contact Id"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerPanel"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/deleted-tasks": {
       "get": {
         "summary": "Deleted tasks this person may restore, newest first",
@@ -7333,6 +7506,520 @@
         ]
       }
     },
+    "/api/v2/due-dates": {
+      "get": {
+        "summary": "Due dates by name: what each falls on, its repeat, the next day due and its teammate; q searches names, archived hides them (default), shows only them or both; subject_type with subject_id narrows to one record; with a cursor",
+        "operationId": "listDueDates",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "hide",
+                "only",
+                "all"
+              ],
+              "type": "string",
+              "default": "hide",
+              "title": "Archived"
+            }
+          },
+          {
+            "name": "subject_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "location",
+                    "equipment",
+                    "contact"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Type"
+            }
+          },
+          {
+            "name": "subject_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 600
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DueDates"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/due-dates/{due_date_id}": {
+      "get": {
+        "summary": "One due date, archived or not, with its days newest first and the task that carried each",
+        "operationId": "getDueDate",
+        "parameters": [
+          {
+            "name": "due_date_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "title": "Due Date Id"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DueDateOne"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/equipment": {
+      "get": {
+        "summary": "Equipment and vans by name, serial, make or model; kind, customer_id and location_id narrow it, warranty_ends_by keeps the warranties ending on or before a day; archived hides them (default), shows only them or both; with a cursor",
+        "operationId": "listEquipment",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
+            "name": "archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "hide",
+                "only",
+                "all"
+              ],
+              "type": "string",
+              "default": "hide",
+              "title": "Archived"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "owned",
+                    "customer"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "customer_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Customer Id"
+            }
+          },
+          {
+            "name": "location_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Location Id"
+            }
+          },
+          {
+            "name": "warranty_ends_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Warranty Ends By"
+            }
+          },
+          {
+            "name": "warranty",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "const": "ending",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Warranty"
+            }
+          },
+          {
+            "name": "due",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "soon",
+                    "overdue"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Due"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 600
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Equipments"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/equipment/{equipment_id}": {
+      "get": {
+        "summary": "One piece of equipment, archived or not",
+        "operationId": "getEquipment",
+        "parameters": [
+          {
+            "name": "equipment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "title": "Equipment Id"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EquipmentOne"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/estimates": {
       "get": {
         "summary": "Estimates the caller sees (receivables), newest first, by status, customer and a search over number, memo and customer name, with a cursor",
@@ -7410,6 +8097,40 @@
               "minimum": 1,
               "default": 50,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "location_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Location Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
             }
           },
           {
@@ -9783,6 +10504,76 @@
         ]
       }
     },
+    "/api/v2/finance/contacts/{contact_id}": {
+      "get": {
+        "summary": "One vendor or customer, active or not, to whoever sees its side",
+        "operationId": "getFinanceContact",
+        "parameters": [
+          {
+            "name": "contact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "title": "Contact Id"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceContact"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/expenses": {
       "get": {
         "summary": "Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line. The owner may pass view_as",
@@ -10278,6 +11069,40 @@
               "minimum": 1,
               "default": 50,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "location_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Location Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
             }
           },
           {
@@ -11399,7 +12224,7 @@
     },
     "/api/v2/finance/reports/{kind}": {
       "get": {
-        "summary": "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
+        "summary": "pnl (cash or accrual), pnl_by (income, expense, cost_of_goods and gross_margin per location, class or project), pnl_by_account (by=location|project and id: that record's row by account, with its cost_of_goods and gross_margin), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or revenue_by_item (posted invoices by the item each line names; receivables view), cut to the caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
         "operationId": "getFinanceReport",
         "parameters": [
           {
@@ -11410,12 +12235,14 @@
               "enum": [
                 "pnl",
                 "pnl_by",
+                "pnl_by_account",
                 "balance_sheet",
                 "cash_flow",
                 "budget_vs_actual",
                 "ap_aging",
                 "ar_aging",
-                "spend_by"
+                "spend_by",
+                "revenue_by_item"
               ],
               "type": "string",
               "title": "Kind"
@@ -11553,6 +12380,23 @@
             }
           },
           {
+            "name": "id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id"
+            }
+          },
+          {
             "name": "view_as",
             "in": "query",
             "required": false,
@@ -11668,7 +12512,7 @@
     },
     "/api/v2/finance/search": {
       "get": {
-        "summary": "Search entries, bank and card rows, bills, invoices, contacts and rules the caller sees; with kind it pages by cursor, without it returns the first few of each kind",
+        "summary": "Search entries, bank and card rows, bills, invoices, contacts, rules and equipment the caller sees; with kind it pages by cursor, without it returns the first few of each kind",
         "operationId": "searchFinance",
         "parameters": [
           {
@@ -11690,7 +12534,9 @@
                     "location",
                     "project",
                     "po",
-                    "estimate"
+                    "estimate",
+                    "equipment",
+                    "due_date"
                   ],
                   "type": "string"
                 },
@@ -11909,6 +12755,77 @@
                 }
               ],
               "title": "Rule Kind"
+            }
+          },
+          {
+            "name": "equipment_kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "owned",
+                    "customer"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Equipment Kind"
+            }
+          },
+          {
+            "name": "customer_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Customer Id"
+            }
+          },
+          {
+            "name": "location_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Location Id"
+            }
+          },
+          {
+            "name": "warranty_ends_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Warranty Ends By"
             }
           },
           {
@@ -14981,6 +15898,130 @@
         ]
       }
     },
+    "/api/v2/imports/commit": {
+      "post": {
+        "summary": "Import a CSV file of records: each new row is one Finance action, as hand entry is, so rights and approvals apply. A row already imported says already_there; a bad row is reported and the rest still import",
+        "operationId": "commitRecordsImport",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordsImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordsImport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Imports"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/imports/preview": {
+      "post": {
+        "summary": "Check a CSV file of records row by row and write nothing: what each row would create, what is already here, and each row's error. A row that looks like a record already held (the same address, SKU or serial) is flagged for a person to decide",
+        "operationId": "previewRecordsImport",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordsImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordsImport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Imports"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/inbound/company-connection": {
       "post": {
         "summary": "A direct human owner or admin previews and connects Inbox to a portal company",
@@ -16239,7 +17280,7 @@
     },
     "/api/v2/items": {
       "get": {
-        "summary": "Products and services by name or sku; q searches both, archived hides them (default), shows only them or both; with a cursor. An item's accounts show to viewers who see them; its price shows with its income account",
+        "summary": "Products and services by name or sku; q searches both, archived hides them (default), shows only them or both; kind narrows to one kind; with a cursor. An item's accounts show to viewers who see them; its price shows with its income account",
         "operationId": "listItems",
         "parameters": [
           {
@@ -16266,6 +17307,31 @@
               "type": "string",
               "default": "hide",
               "title": "Archived"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "service",
+                    "inventory",
+                    "non_inventory",
+                    "bundle",
+                    "category",
+                    "raw_material",
+                    "assembly"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
             }
           },
           {
@@ -17620,7 +18686,7 @@
     },
     "/api/v2/locations": {
       "get": {
-        "summary": "Locations by name; q searches names, archived hides them (default), shows only them or both; with a cursor",
+        "summary": "Locations by name; q searches names, archived hides them (default), shows only them or both; kind and customer_id narrow the list; each row's next_due_on is its earliest open due day or null; with a cursor",
         "operationId": "listLocations",
         "parameters": [
           {
@@ -17647,6 +18713,48 @@
               "type": "string",
               "default": "hide",
               "title": "Archived"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "store",
+                    "office",
+                    "warehouse",
+                    "plant",
+                    "customer_site",
+                    "vehicle",
+                    "other"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "customer_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Customer Id"
             }
           },
           {
@@ -21249,7 +22357,7 @@
     },
     "/api/v2/projects": {
       "get": {
-        "summary": "Projects by name; q searches names, archived hides them (default), shows only them or both; with a cursor",
+        "summary": "Projects by name; q searches names, archived hides them (default), shows only them or both; status and customer_id narrow the list; with a cursor",
         "operationId": "listProjects",
         "parameters": [
           {
@@ -21276,6 +22384,43 @@
               "type": "string",
               "default": "hide",
               "title": "Archived"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "open",
+                    "closed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "customer_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Customer Id"
             }
           },
           {
@@ -21798,6 +22943,40 @@
             }
           },
           {
+            "name": "location_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Location Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          },
+          {
             "name": "view_as",
             "in": "query",
             "required": false,
@@ -21853,7 +23032,7 @@
     },
     "/api/v2/purchase-orders/{po_id}": {
       "get": {
-        "summary": "One purchase order with its lines and what each line has billed",
+        "summary": "One purchase order with its lines, what each line has billed, the bills on it and the approvals asked",
         "operationId": "getPurchaseOrder",
         "parameters": [
           {
@@ -38139,6 +39318,23 @@
             "type": "string",
             "description": "Signed-in callers: the Tico file hosting origin pages and SVG show from when there is no visual address, else empty; grants no native IPC permission."
           },
+          "business_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The company's business type (field_service, restaurant, retail, manufacturer, construction, multi_location_services, software, other), or null until one is set."
+          },
+          "hidden_sections": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Sidebar sections and Operations tabs the company hides; null when nothing is stored (distinct from [], which shows everything). Display only: data, rights and the API are unchanged."
+          },
           "s3_view_urls": {
             "type": "object",
             "additionalProperties": {
@@ -38266,6 +39462,88 @@
         "required": [
           "actor",
           "conversations"
+        ],
+        "additionalProperties": true
+      },
+      "CustomerPanel": {
+        "type": "object",
+        "properties": {
+          "contact": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "additionalProperties": true
+          },
+          "locations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Location"
+            }
+          },
+          "estimates": {
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "invoices": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "contact",
+          "estimates",
+          "invoices",
+          "locations"
+        ],
+        "additionalProperties": true
+      },
+      "Customers": {
+        "type": "object",
+        "properties": {
+          "customers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "customers",
+          "next_cursor"
         ],
         "additionalProperties": true
       },
@@ -38937,6 +40215,144 @@
         ],
         "title": "DueAdd"
       },
+      "DueDate": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "subject_type": {
+            "type": "string"
+          },
+          "subject_id": {
+            "type": "string"
+          },
+          "subject_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repeats": {
+            "type": "string"
+          },
+          "every_count": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "starts_on": {
+            "type": "string"
+          },
+          "next_due_on": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lead_days": {
+            "type": "integer"
+          },
+          "assignee_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "archived_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DueDay"
+            }
+          }
+        },
+        "required": [
+          "assignee_id",
+          "id",
+          "lead_days",
+          "name",
+          "repeats",
+          "starts_on",
+          "status",
+          "subject_id",
+          "subject_type"
+        ],
+        "additionalProperties": true
+      },
+      "DueDateOne": {
+        "type": "object",
+        "properties": {
+          "due_date": {
+            "$ref": "#/components/schemas/DueDate"
+          }
+        },
+        "required": [
+          "due_date"
+        ],
+        "additionalProperties": true
+      },
+      "DueDates": {
+        "type": "object",
+        "properties": {
+          "due_dates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DueDate"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "due_dates",
+          "next_cursor"
+        ],
+        "additionalProperties": true
+      },
+      "DueDay": {
+        "type": "object",
+        "properties": {
+          "due_on": {
+            "type": "string"
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completed_by_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "due_on"
+        ],
+        "additionalProperties": true
+      },
       "DueEdit": {
         "properties": {
           "first_due": {
@@ -39037,6 +40453,172 @@
         "type": "object",
         "title": "Empty"
       },
+      "Equipment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "owned",
+              "customer"
+            ]
+          },
+          "location_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "customer_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "make": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "serial": {
+            "type": "string"
+          },
+          "installed_on": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warranty_ends_on": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "photo_file_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "archived_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "location_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_due_on": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_due_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "file_id": {
+                  "type": "string"
+                },
+                "added_at": {
+                  "type": "string"
+                },
+                "added_by_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "added_at",
+                "added_by_id",
+                "file_id",
+                "id"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "files_more": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "make",
+          "model",
+          "name",
+          "serial"
+        ],
+        "additionalProperties": true
+      },
+      "EquipmentOne": {
+        "type": "object",
+        "properties": {
+          "equipment": {
+            "$ref": "#/components/schemas/Equipment"
+          }
+        },
+        "required": [
+          "equipment"
+        ],
+        "additionalProperties": true
+      },
+      "Equipments": {
+        "type": "object",
+        "properties": {
+          "equipment": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Equipment"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "equipment",
+          "next_cursor"
+        ],
+        "additionalProperties": true
+      },
       "Estimate": {
         "allOf": [
           {
@@ -39066,6 +40648,13 @@
               },
               "view_version": {
                 "type": "integer"
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
               }
             },
             "required": [
@@ -40696,12 +42285,32 @@
           "more": {
             "type": "boolean"
           },
+          "classes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
           "view_version": {
             "type": "integer"
           }
         },
         "required": [
           "accounts",
+          "classes",
           "more",
           "view_version"
         ],
@@ -40871,6 +42480,139 @@
         "required": [
           "kind",
           "status"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceContact": {
+        "type": "object",
+        "properties": {
+          "contact": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "vendor",
+                  "customer",
+                  "both"
+                ]
+              },
+              "emails": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "default_account": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": true
+              },
+              "is_1099": {
+                "type": "boolean"
+              },
+              "has_tax_id": {
+                "type": "boolean"
+              },
+              "tax_id_last4": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "recipient_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "owed": {
+                "type": "object",
+                "properties": {
+                  "bills": {
+                    "type": "integer"
+                  },
+                  "invoices": {
+                    "type": "integer"
+                  }
+                },
+                "required": [],
+                "additionalProperties": true
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "as_of": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "stale": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "active",
+              "id",
+              "kind",
+              "name"
+            ],
+            "additionalProperties": true
+          },
+          "view_version": {
+            "type": "integer"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "file_id": {
+                  "type": "string"
+                },
+                "added_at": {
+                  "type": "string"
+                },
+                "added_by_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "added_at",
+                "added_by_id",
+                "file_id",
+                "id"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "files_more": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "contact",
+          "files",
+          "files_more",
+          "view_version"
         ],
         "additionalProperties": true
       },
@@ -41173,6 +42915,19 @@
                 "type": [
                   "integer",
                   "null"
+                ]
+              },
+              "purchase_order_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "book_mode": {
+                "type": "string",
+                "enum": [
+                  "native",
+                  "mirror"
                 ]
               },
               "schedule": {
@@ -41803,6 +43558,50 @@
           },
           "memo": {
             "type": "string"
+          },
+          "billed": {
+            "type": "integer"
+          },
+          "held": {
+            "type": "integer"
+          },
+          "locations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": true
+            }
           }
         },
         "required": [
@@ -42432,12 +44231,14 @@
             "enum": [
               "pnl",
               "pnl_by",
+              "pnl_by_account",
               "balance_sheet",
               "cash_flow",
               "budget_vs_actual",
               "ap_aging",
               "ar_aging",
-              "spend_by"
+              "spend_by",
+              "revenue_by_item"
             ]
           },
           "prior": {
@@ -42634,7 +44435,8 @@
                     "card",
                     "item",
                     "location",
-                    "project"
+                    "project",
+                    "equipment"
                   ]
                 },
                 "id": {
@@ -42642,6 +44444,18 @@
                 },
                 "label": {
                   "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "as_of": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "stale": {
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -46043,7 +47857,9 @@
               "inventory",
               "non_inventory",
               "bundle",
-              "category"
+              "category",
+              "raw_material",
+              "assembly"
             ]
           },
           "unit": {
@@ -46081,6 +47897,60 @@
               "string",
               "null"
             ]
+          },
+          "quantity_on_hand": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "quantity_synced_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "file_id": {
+                  "type": "string"
+                },
+                "added_at": {
+                  "type": "string"
+                },
+                "added_by_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "added_at",
+                "added_by_id",
+                "file_id",
+                "id"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "files_more": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -47659,6 +49529,81 @@
               "string",
               "null"
             ]
+          },
+          "customer_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_due_on": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_due_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "in_books": {
+            "type": "boolean"
+          },
+          "parent_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "file_id": {
+                  "type": "string"
+                },
+                "added_at": {
+                  "type": "string"
+                },
+                "added_by_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "added_at",
+                "added_by_id",
+                "file_id",
+                "id"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "files_more": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -49840,6 +51785,12 @@
               "null"
             ]
           },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -49852,6 +51803,18 @@
               "string",
               "null"
             ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stale": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -50200,6 +52163,80 @@
               },
               "view_version": {
                 "type": "integer"
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "bills": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "vendor": {
+                      "type": "string"
+                    },
+                    "date": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "on_order": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "on_order",
+                    "total"
+                  ],
+                  "additionalProperties": true
+                }
+              },
+              "linked_bills": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "vendor": {
+                      "type": "string"
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "total"
+                  ],
+                  "additionalProperties": true
+                }
+              },
+              "linked_bills_more": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -50414,6 +52451,141 @@
           "since"
         ],
         "additionalProperties": true
+      },
+      "RecordsImport": {
+        "type": "object",
+        "properties": {
+          "record_type": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "integer"
+          },
+          "summary": {
+            "type": "object"
+          },
+          "new_customers": {
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "ignored_columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "report_csv": {
+            "type": "string"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "line": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "record_id": {
+                  "type": "string"
+                },
+                "matches": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "approval_id": {
+                  "type": "string"
+                },
+                "new_customer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "line",
+                "name",
+                "status"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "ignored_columns",
+          "kind",
+          "lines",
+          "new_customers",
+          "record_type",
+          "rows",
+          "summary",
+          "truncated"
+        ],
+        "additionalProperties": true
+      },
+      "RecordsImportRequest": {
+        "properties": {
+          "record_type": {
+            "type": "string",
+            "enum": [
+              "locations",
+              "items",
+              "equipment",
+              "due_dates"
+            ],
+            "title": "Record Type"
+          },
+          "csv": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Csv"
+          },
+          "assign": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Assign"
+          },
+          "include_lines": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "maxItems": 2000,
+            "title": "Include Lines"
+          },
+          "report": {
+            "type": "string",
+            "enum": [
+              "json",
+              "csv"
+            ],
+            "title": "Report",
+            "default": "json"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "record_type",
+          "csv"
+        ],
+        "title": "RecordsImportRequest",
+        "description": "A CSV file of shared records: the kind its rows are, the file's text, a location or a customer to give every row\nthat does not name one (`location_id`, `customer_id`), and the lines to import although they look like a record\nalready here."
       },
       "Refresh": {
         "properties": {

@@ -441,6 +441,7 @@ CREATE INDEX IF NOT EXISTS fin_bills_status ON fin_bills(status, due_date);
 CREATE INDEX IF NOT EXISTS fin_bills_pay_on ON fin_bills(status, pay_on);
 CREATE INDEX IF NOT EXISTS fin_bills_list ON fin_bills(book_id, bill_date, id);
 CREATE INDEX IF NOT EXISTS fin_bill_lines_bill ON fin_bill_lines(bill_id);
+CREATE INDEX IF NOT EXISTS fin_bills_order ON fin_bills(purchase_order_id);
 CREATE INDEX IF NOT EXISTS fin_invoices_status ON fin_invoices(status, due_date);
 CREATE INDEX IF NOT EXISTS fin_invoices_list ON fin_invoices(book_id, invoice_date, id);
 CREATE INDEX IF NOT EXISTS fin_invoice_lines_invoice ON fin_invoice_lines(invoice_id);
@@ -520,6 +521,8 @@ ADDED = (
     ("fin_bills", "approved_at", "TEXT"), ("fin_bills", "schedule_json", "TEXT NOT NULL DEFAULT '{}'"),
     ("fin_bills", "amount_paid", "BIGINT NOT NULL DEFAULT 0"), ("fin_bills", "voided_at", "TEXT"),
     ("fin_bills", "pay_on", "TEXT"), ("fin_bill_lines", "line_no", "INTEGER NOT NULL DEFAULT 0"),
+    # the purchase order a bill is linked to: a link only (it bills no line, holds nothing and posts nothing)
+    ("fin_bills", "purchase_order_id", "TEXT"),
     ("fin_invoice_lines", "line_no", "INTEGER NOT NULL DEFAULT 0"),
     ("fin_invoice_lines", "taxable", "INTEGER NOT NULL DEFAULT 1"),
     ("fin_invoices", "terms_days", "INTEGER"), ("fin_invoices", "memo", "TEXT NOT NULL DEFAULT ''"),
@@ -533,6 +536,9 @@ ADDED = (
     ("fin_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
     # vendors: seats or licenses, and the next renewal date (spec §12; the renewal stage events come from watch)
     ("fin_contacts", "seats", "INTEGER"), ("fin_contacts", "renewal_on", "TEXT"),
+    # vendor terms: the default due date of a bill, the owner, and the notice a cancel-by deadline needs (V1, P3)
+    ("fin_contacts", "payment_terms_days", "INTEGER"), ("fin_contacts", "owner_id", "TEXT"),
+    ("fin_contacts", "renewal_notice_days", "INTEGER"),
     # the books gaps (migration 73): fin_transfers' columns added since it was first written
     ("fin_transfers", "from_feed_id", "TEXT"), ("fin_transfers", "to_feed_id", "TEXT"),
     ("fin_transfers", "settled_at", "TEXT"), ("fin_transfers", "submitted_at", "TEXT"),
@@ -543,6 +549,8 @@ ADDED = (
     # the shared item a bill or invoice line names (migration 76, backend/records)
     ("fin_bill_lines", "item_id", "TEXT"), ("fin_invoice_lines", "item_id", "TEXT"),
     ("fin_bill_lines", "po_line_id", "TEXT"),
+    # a Stripe price's details (amount, currency, interval) on its own ref (backend/finance/stripe_sync.py catalog)
+    ("fin_external_refs", "detail", "TEXT NOT NULL DEFAULT '{}'"),
 )
 
 
@@ -640,6 +648,14 @@ def create(c: sqlite3.Connection) -> None:
             c.execute(statement)
     from . import tico
     tico.watch_org(c)
+
+
+def ensure(c: sqlite3.Connection) -> None:
+    """Every start: the columns in ADDED and the records tables (backend/records). Migrations 64 to 77 run once, so an
+    install already past them gets what they added to Finance's and the records' tables here, once; each skips what exists."""
+    _add_columns(c)
+    from ...records import store as RS
+    RS.create(c)
 
 
 def phase1(c: sqlite3.Connection) -> None:

@@ -200,6 +200,13 @@ def create_app(settings=None):
                 bookkeeper.ensure(c, onboarding, auth)
         except Exception as exc:
             telemetry.capture("bookkeeper", exc)
+        # Finance rights a template's bot was hired with before Finance was set up (finance/template_grants.py).
+        try:
+            from .finance import actions as finance
+            with store.transaction() as c:
+                finance.template_ensure(c)
+        except Exception as exc:
+            telemetry.capture("template_finance", exc)
         # Physical mail filed before bills and tax letters were private: those tasks go private, once.
         try:
             app.state.postal_mail.backfill_private()
@@ -7916,6 +7923,8 @@ def create_app(settings=None):
     from . import rules as wake_rules_api
     wake_rules_api.install(app, store, auth)                # the event catalog; wake rules are automations now
     turn_budgets.install(app, store, auth, mutate, settings_admin)
+    from . import sidebar
+    sidebar.install(app, store, auth, mutate)
     from . import automations
     automations.install(app, store, auth, mutate)
     from . import audit_log

@@ -491,6 +491,11 @@ class SettingsAdmin:
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (body.slug, encode(config), team, operator, encode(owners), body.description,
              body.reports_to, repo, body.thread_mode, now, who.actor, encode([pid]), who.actor))
+        if body.template:
+            # The card's Finance rights and view, given once at an owner's or an admin's hire (template_grants.py).
+            from .finance import actions as finance
+            finance.template_hire(c, body.slug, body.template, self.settings.catalog_dir, allowed=privileged,
+                                  creator=who.actor)
         if not body.model and config.get("gateway"):
             self._template_gateway_model(c, body.slug, config)
         from .report_order import arrive

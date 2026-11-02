@@ -1,21 +1,45 @@
 # Finance tools
 
-Seven hub tools reach Finance. Each is an MCP tool (`hub_finance_*`) and a `hub finance` command with the same
-inputs. Every call runs as its caller, a person or a bot, with that caller's own Finance rights and view: a bot
-without finance.pay cannot pay, and a bot sees only what its view covers. Payroll's private lines stay private for
-everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else reads or writes the books.
+Thirteen hub tools in all: seven reach Finance, and six read the Operations records (see [Records](#records)). Each
+is an MCP tool (`hub_finance_*`, `hub_locations`, `hub_items`, `hub_projects`, `hub_equipment`, `hub_due_dates`,
+`hub_customers`) and a `hub` command with the same inputs (`hub finance …`, `hub locations|items|projects|equipment|
+due-dates|customers list|get`). Every call runs as its caller, a person or a bot, with that caller's own Finance rights
+and view: a bot without finance.pay cannot pay, and a bot sees only what its view covers. Payroll's private lines stay
+private for everyone. The Finance tools call the Finance API under `/api/v2/finance/`, and the record tools the record
+routes under `/api/v2/` (locations, items, projects, equipment, due-dates, customers); nothing else reads or writes the
+books or the records.
 
 ## The tools
 
 | Tool | Command | Input | Output |
 |---|---|---|---|
-| `hub_finance_search` | `hub finance search` | `kind` (entry, feed, bill, invoice, contact, rule, card; leave it out to search all), `q`, filters (`status`, `contact_id`, `vendor`, `account_id`, `money_account_id`, `start`, `end`, `aging`, `contact_kind`, `active`, `rule_kind`), `cursor`, `limit` (up to 200) | `{results, next_cursor, view_version}` |
-| `hub_finance_report` | `hub finance report <kind>` | `kind` (pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, close), `start`, `end`, `period`, `basis`, `compare`, `top_n`, `by`; `month` for close | the report, rows past `top_n` folded into "Other · n" |
+| `hub_finance_search` | `hub finance search` | `kind` (entry, feed, bill, invoice, contact, rule, card, po, estimate, item, location, project, equipment, due_date; leave it out to search all), `q`, filters (`status`, `contact_id`, `vendor`, `account_id`, `money_account_id`, `start`, `end`, `aging`, `contact_kind`, `active`, `rule_kind`, `equipment_kind`, `customer_id`, `location_id`, `warranty_ends_by`, `warranty`, `due`), `cursor`, `limit` (up to 200). Record rows (item, location, project, equipment) carry `source` and `as_of` | `{results, next_cursor, view_version}` |
+| `hub_finance_report` | `hub finance report <kind>` | `kind` (pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, revenue_by_item, close), `start`, `end`, `period`, `basis`, `compare`, `top_n`, `by`; `month` for close | the report, rows past `top_n` folded into "Other · n" |
 | `hub_finance_metric` | `hub finance metric <name>` | `name` (cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days) and its filters | `{value, as_of, ...}` |
 | `hub_finance_act` | `hub finance act <kind>` | `kind`, `payload` (JSON), `dry_run`, `operation_id` | `{status, action_id, code, reason, result?, impact?}` |
 | `hub_finance_action` | `hub finance action <id>` | `action_id` | the action's current status |
 | `hub_finance_inbox` | `hub finance inbox` | `kind`, `cursor`, `limit` | `{items, counts, next_cursor}`: the caller's Finance work queue; with `kind`, that kind alone, paged past its first 200 |
 | `hub_finance_card_fill` | `hub finance card-fill` | `card_id`, `merchant`, `amount` | not available yet |
+
+## Records
+
+The Operations records (locations, items, products and services, projects, equipment, due dates and customers) are
+read with one tool per type. Each takes an optional `id`: with it, that one record, archived or not; without it, a page
+of the list, by name. Writes stay on `hub_finance_act` (`location_create`, `item_create`, `project_create`,
+`equipment_create`, `due_date_create`, `contact_create`); the record tools never write.
+
+| Tool | Command | Input | Output |
+|---|---|---|---|
+| `hub_locations` | `hub locations list` / `get <id>` | `id`, `q`, `archived` (hide, only, all), `kind` (store, office, warehouse, plant, customer_site, vehicle, other), `customer_id`, `cursor`, `limit` (up to 200) | `{locations, next_cursor}`; with `id`, `{location}` with its `next_due_on` |
+| `hub_items` | `hub items list` / `get <id>` | `id`, `q`, `archived`, `kind` (service, inventory, non_inventory, bundle, category, raw_material, assembly), `cursor`, `limit` | `{items, next_cursor}`; with `id`, `{item}`, its accounts only where you see them |
+| `hub_projects` | `hub projects list` / `get <id>` | `id`, `q`, `archived`, `status` (open, closed), `customer_id`, `cursor`, `limit` | `{projects, next_cursor}`; with `id`, `{project}` |
+| `hub_equipment` | `hub equipment list` / `get <id>` | `id`, `q`, `archived`, `kind` (owned, customer), `customer_id`, `location_id`, `warranty_ends_by`, `warranty` (ending), `due` (soon, overdue), `cursor`, `limit` | `{equipment, next_cursor}`; with `id`, `{equipment}` |
+| `hub_due_dates` | `hub due-dates list` / `get <id>` | `id`, `q`, `archived`, `subject_type` (location, equipment, contact), `subject_id`, `cursor`, `limit` | `{due_dates, next_cursor}`; with `id`, `{due_date}` with its days |
+| `hub_customers` | `hub customers list` / `get <id>` | `id` (a customer's contact id: its panel instead of the list), `q`, `cursor`, `limit` | `{customers, next_cursor}`; with `id`, the panel: `contact`, `locations`, `equipment`, `due_dates`, and `estimates` and `invoices` where you see receivables (null without it) |
+
+A bot reads what its routes give it: any teammate may read these records, and a bot without the receivables view sees
+the customer panel without its estimates and invoices. A record's list page is cut to the same budget as a Finance
+result (see [Sizes](#sizes)), and `next_cursor` carries on from the last row shown.
 
 ## Acting
 
@@ -28,7 +52,9 @@ everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else 
 the first call's result. A denied or failed key stays that way; a new attempt needs a new key. `--dry-run` says what
 would happen and changes nothing; it needs no key.
 
-A vendor takes `seats` (a whole number) and `renewal_on` (`YYYY-MM-DD`; empty clears it) on `contact_update`. Its renewal date raises `finance.vendor.renewal_due` 30 and 7 days before it, once per date and stage. Customers refuse both.
+A vendor takes `seats` (a whole number), `renewal_on` (`YYYY-MM-DD`; empty clears it), `renewal_notice_days` (the notice its cancel-by deadline needs), `payment_terms_days` (a bill with no due date is due this many days after its date; a typed due date wins) and `owner_id` on `contact_update`. The cancel-by day is the renewal date less the notice; `finance.vendor.renewal_due` is raised 30 and 7 days before it, once per renewal date and stage. Customers refuse seats, renewal dates and terms.
+
+Equipment (vans, tools and customer units) is a local record, never sent to the books. `equipment_create` and `equipment_update` need the records right; a bot without it asks the owner (the approval holds the draft). A `photo_file_id` must be a Library file the asker can read, otherwise it is not found; with no Library check installed a photo is refused. A bot's photo asks the owner to confirm the draft, with the photo in the approval. A customer's unit at a location that names another customer is refused. `GET /api/v2/equipment` takes `due=soon|overdue` (each row's `next_due_on`) and `warranty=ending` (warranties ending within 90 days); `GET /api/v2/customers/{id}` adds its `equipment` and the `due_dates` on the contact, its locations and its equipment.
 
 An internal transfer is `payment_create` with `method: "internal"`, `from_account` and `to_account` (the company's own bank accounts on one Mercury connection) and `amount` (cents), with an optional `memo`. The requester must see both accounts; otherwise the action is denied and the refusal names neither account. It takes the payment gates: over $1,000 asks the owner (§6.4 rule 2), and a company rule can ask for more. Rules on `accounts` match a transfer by its two ledger accounts. The new-recipient rule never applies, since an own account is never a new recipient. There is no budget hold: a move between our accounts is not an expense. Right before Mercury is called, the send re-checks the requester's payment right and view, the payments switch for the connection, and the gates (with their counters); a rule that now denies cancels the transfer, and one that now asks holds it until approved. Until its call is claimed, a queued transfer can be cancelled with `payment_cancel` and `{"transfer_id": ...}`; once it is claimed or sent, cancel is refused and the transfer is checked in Mercury. Mercury gets it once, under its own key (POST /transfer). An unknown result is never sent again: it is looked for by its key (in the note) in Mercury's transactions, and that transaction's created time is its submit day until then the claim time stands. A refused result is not sent again either, and a finance admin is asked to check Mercury. Both legs post as one transfer with no P&L effect. A leg settles the transfer only when it is dated from the transfer's submit day through five days on, and a Mercury id the leg carries for the transfer is preferred over an older match. The transfer shows `posted` once both legs are in the feed.
 
@@ -39,7 +65,7 @@ hub finance action fa_123
 
 ## Sizes
 
-A result is kept to about 4,000 tokens. `limit` (search, inbox) or `top_n` (reports) raises that to about 16,000. A
+A result is kept to about 4,000 tokens. `limit` (search, inbox, the record lists) or `top_n` (reports) raises that to about 16,000. A
 longer list keeps its first rows and ends with one row labelled "Other · n" that counts, and for reports adds up, the
 rest; a paged list's `next_cursor` carries on from the last row shown. Period columns are never folded. A row too
 big on its own keeps its ids and amounts and has its long text and nested lists cut; a result that still does not fit

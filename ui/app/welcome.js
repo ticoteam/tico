@@ -78,6 +78,8 @@ function onbAdopt(state, record) {
     bots: row.bots || [],
     machine: {...blank.machine, ...(row.machine || {})}};
   delete state.record.answers.never_without_person;
+  // The question shows once this server's setup record carries the answer, so an older server never refuses the save.
+  state.asksBusinessType = 'business_type' in row;
   const names = state.record.names;
   // The server's own "Company" (no TICO_TEAM_NAME) is no one's name: the field starts empty, with a placeholder.
   if (!names.company_name && !S.config.company_name_default) names.company_name = S.config.company_name || '';
@@ -154,6 +156,8 @@ function onbStepHTML(state, key) {
     <div class="onb-field"><span class="k">Is software your product?</span>
       <div class="onb-choices">${[['yes', 'Yes'], ['no', 'No']].map(([value, label]) =>
         `<label><input type="radio" name="onb-software" value="${value}" ${a.software_product === value ? 'checked' : ''}>${label}</label>`).join('')}</div></div>
+    ${state.asksBusinessType ? `<label class="onb-field"><span class="k">Business type</span>
+      <select id="onb-business-type">${grOpts(SB_BUSINESS_TYPES, r.business_type || '', 'Not saying')}</select></label>` : ''}
     <label class="onb-field"><span class="k">Team size</span>
       <select id="onb-size"><option value="">Not saying</option>${ONB_SIZES.map(size =>
         `<option value="${esc(size)}" ${a.team_size === size ? 'selected' : ''}>${esc(size)}</option>`).join('')}</select></label>
@@ -360,6 +364,7 @@ function onbSummaryHTML(state) {
     ${label('What you do', a.what_we_do)}
     ${label('Sells to', ONB_CUSTOMERS.find(([value]) => value === a.customers)?.[1] || '')}
     ${label('Software is the product', a.software_product ? (a.software_product === 'yes' ? 'Yes' : 'No') : '')}
+    ${label('Business type', SB_BUSINESS_TYPES.find(([value]) => value === r.business_type)?.[1] || '')}
     ${label('Team size', a.team_size)}
     ${label('AI providers', PROVIDER_PRESETS.find(row => row.id === state.providers?.preset)?.label
       || (state.providers?.providers || []).filter(row => (state.providers.enabled || []).includes(row.id)).map(row => row.label).join(', ')
@@ -479,6 +484,7 @@ function onbCollect(state, key) {
     customers: $('input[name=onb-customers]:checked')?.value || '',
     software_product: $('input[name=onb-software]:checked')?.value || '',
     team_size: $('#onb-size').value};
+  if (key === 'about' && $('#onb-business-type')) r.business_type = $('#onb-business-type').value || null;
   frCollect(state, key);
 }
 function onbBusy(state, busy, message) {
@@ -492,8 +498,8 @@ function onbBusy(state, busy, message) {
 const ONB_REFUSED = 'Tico could not save this step, so it has not moved on. Your choices are still here: press the button again to retry. If it keeps happening, reload the page and tell Tico support what you picked.';
 const onbSaveError = error => `<span class="err">${esc(error?.body?.error?.code === 'validation' ? ONB_REFUSED : error.message)}</span>`;
 async function onbSave(state) {
-  const saved = await put('/v2/setup', {names: state.record.names, answers: state.record.answers,
-                                             selected: state.record.selected});
+  const saved = await put('/v2/setup', {names: state.record.names, answers: state.record.answers, selected: state.record.selected,
+    ...(state.record.business_type ? {business_type: state.record.business_type} : {})});
   if (ONB !== state || !saved || typeof saved !== 'object') return saved;
   if (saved.machine) state.record.machine = {...state.record.machine, ...saved.machine};
   // The server stores the website as an https:// address; the research reads that one.

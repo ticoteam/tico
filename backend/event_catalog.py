@@ -156,8 +156,10 @@ def _build():
         {"metric": "cash", "crossing": 1, "event_id": "e12"}, sourceless=True, outbound=False)
     add("finance.period.ready", "A month is ready to close in Finance.",
         {"month": "2026-10", "event_id": "e13"}, sourceless=True, outbound=False)
-    add("finance.vendor.renewal_due", "A vendor's renewal is 30 or 7 days away (its date is on the vendor).",
-        {"contact_id": "c1", "stage": "renewal_in_7", "renewal_on": "2026-11-07", "event_id": "e14"},
+    add("finance.vendor.renewal_due",
+        "A vendor's cancel-by day (its renewal date less its notice) is 30 or 7 days away.",
+        {"contact_id": "c1", "stage": "renewal_in_7", "renewal_on": "2026-11-07", "notice_by": "2026-11-07",
+         "event_id": "e14"},
         sourceless=True, outbound=False)
     add("custom.*", "Anything a bot or rule sends: custom.<name>.",
         {"note": "custom.<name> carries whatever its sender puts in data."})

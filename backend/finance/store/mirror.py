@@ -26,10 +26,58 @@ def refs_holding(c: sqlite3.Connection, cid: str, local_table: str, local_id: st
 
 
 def ref_insert(c: sqlite3.Connection, *, cid: str, local_table: str, local_id: str, kind: str, external_id: str,
-               revision: str, status: str, at: str, by: str) -> None:
+               revision: str, status: str, at: str, by: str, detail: str = "{}") -> None:
     c.execute("INSERT INTO fin_external_refs(id, connection_id, local_table, local_id, external_id, kind, revision, "
-              "status, created_at, created_by, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-              (new_id(), cid, local_table, local_id, external_id, kind, revision, status, at, by, at))
+              "status, created_at, created_by, updated_at, detail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+              (new_id(), cid, local_table, local_id, external_id, kind, revision, status, at, by, at, detail))
+
+
+def refs_of_kind(c: sqlite3.Connection, cid: str, local_table: str, kind: str) -> list[Any]:
+    """A connection's refs of one provider kind on one local table (a Stripe product's and price's refs on items)."""
+    return c.execute("SELECT * FROM fin_external_refs WHERE connection_id=? AND local_table=? AND kind=?",
+                     (cid, local_table, kind)).fetchall()
+
+
+def record_providers(c: sqlite3.Connection, table: str, ids: Sequence[str]) -> dict[str, str]:
+    """Where each record came from: the provider whose books hold it (its active external ref), by record id. A record
+    with no ref is Tico's own, so it has no entry."""
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    rows = c.execute("SELECT r.local_id, b.provider FROM fin_external_refs r "
+                     "JOIN fin_connections b ON b.id=r.connection_id "
+                     f"WHERE r.local_table=? AND r.status='active' AND r.local_id IN ({marks}) ORDER BY r.created_at",
+                     [table, *ids]).fetchall()
+    return {str(row[0]): str(row[1]) for row in rows}
+
+
+def record_syncs(c: sqlite3.Connection, table: str, ids: Sequence[str]
+                 ) -> dict[str, tuple[str, str | None, str, str | None]]:
+    """record_providers with the freshness of each provider's copy, in the same single query: by record id, (provider,
+    that connection's last successful sync or None, the connection's status, the error its last sync left or None). A
+    failed sync leaves last_ok_at alone and sets last_error; the next good sync clears it. Same ref rule as
+    record_providers."""
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    rows = c.execute("SELECT r.local_id, b.provider, b.last_ok_at, b.status, b.last_error FROM fin_external_refs r "
+                     "JOIN fin_connections b ON b.id=r.connection_id "
+                     f"WHERE r.local_table=? AND r.status='active' AND r.local_id IN ({marks}) ORDER BY r.created_at",
+                     [table, *ids]).fetchall()
+    return {str(row[0]): (str(row[1]), None if row[2] is None else str(row[2]), str(row[3]),
+                          str(row[4]) if row[4] else None) for row in rows}
+
+
+def mapped_refs(c: sqlite3.Connection, cid: str, table: str, ids: Sequence[str]) -> set[str]:
+    """Which records this connection's books hold, as ref_for_local reads one: each record's first ref, if not unmapped."""
+    if not ids:
+        return set()
+    marks = ",".join("?" * len(ids))
+    first: dict[str, str] = {}
+    for row in c.execute(f"SELECT local_id, status FROM fin_external_refs WHERE connection_id=? AND local_table=? "
+                         f"AND local_id IN ({marks}) ORDER BY created_at", [cid, table, *ids]):
+        first.setdefault(str(row[0]), str(row[1]))
+    return {local for local, status in first.items() if status != "unmapped"}
 
 
 def ref_drop_unmapped(c: sqlite3.Connection, cid: str, external_id: str, keep: str) -> None:
@@ -38,9 +86,11 @@ def ref_drop_unmapped(c: sqlite3.Connection, cid: str, external_id: str, keep: s
               "AND status='unmapped'", (cid, external_id, keep))
 
 
-def ref_set(c: sqlite3.Connection, ref_id: str, *, local_id: str, revision: str, status: str, at: str) -> None:
-    c.execute("UPDATE fin_external_refs SET local_id=?, revision=?, status=?, updated_at=? WHERE id=?",
-              (local_id, revision, status, at, ref_id))
+def ref_set(c: sqlite3.Connection, ref_id: str, *, local_id: str, revision: str, status: str, at: str,
+            detail: str | None = None) -> None:
+    """Move a ref to its new state; `detail` (a JSON text) is replaced only when given."""
+    c.execute("UPDATE fin_external_refs SET local_id=?, revision=?, status=?, updated_at=?, detail=COALESCE(?, detail) "
+              "WHERE id=?", (local_id, revision, status, at, detail, ref_id))
 
 
 def restatement_insert(c: sqlite3.Connection, *, book_id: str, period_id: str, day: str, change: str,

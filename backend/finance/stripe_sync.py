@@ -5,30 +5,38 @@ two reads of the newest row that agree, so the balance holds exactly the rows th
 newest first, a few pages a step, and sets the opening balance when the list ends. Catch-up walks newest first down to
 the newest row of the last completed walk (the boundary). A walk that did not finish resumes from its cursor, so a page
 that failed is read again and nothing above or below it is skipped. Each balance transaction is taken in once by its id,
-so a repeat read changes nothing. A rehearsal copy calls nothing."""
+so a repeat read changes nothing. The product catalog (see catalog) is read on each due pass, before the balance
+transactions, and written in one transaction: each Stripe product is one item and each of its prices one ref on it.
+A rehearsal copy calls nothing."""
+import hashlib
+import json
 import logging
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 from . import banking, stripe_post
+from ..records import store as RS
 from .context import Ctx, load
 from .core import dates
 from .core import feeds as F
 from .core import kinds as K
 from .core import validate as V
 from .core.errors import CONFLICT, FinanceError, invalid
+from .core.org import SYSTEM
 from .handlers import Plan, Result
 from .store import banking as SK
+from .store import mirror as SX
 from .store import tico
 from .mercury import Answer
-from .stripe import Provider, Stripe, base_url, error_text, has_more, listed
+from .stripe import Catalog, Provider, Stripe, base_url, error_text, has_more, listed
 
 log = logging.getLogger(__name__)
 
 BALANCE_CODE, BALANCE_NAME = "1050", "Stripe balance"
 BACKFILL_PAGES = 4               # balance-transaction pages per step: the first backfill is paced across steps
 CATCH_UP_PAGES = 10              # newest pages read per step until the boundary
+CATALOG_PAGES = 50               # product or price pages read per pass: 5,000 of each; more is read in part, never "gone"
 BRACKET_TRIES = 3                # reads of the first page and balance before a backfill step waits for the next
 POLL_MINUTES = 15                # how often a connection is read without a webhook
 INBOX_MOST = 200
@@ -172,6 +180,8 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
         return "no_token"
     problems: list[str] = []
     if due:
+        if isinstance(provider, Catalog):
+            problems += catalog(store, provider, cid, now)
         problems += balances(store, provider, cid, now)
     problems += catch_up(store, provider, cid, now)
     if not problems:
@@ -197,6 +207,129 @@ def _failed(store: Any, cid: str, why: str, now: str) -> None:
     with store.transaction() as c:
         SK.update(c, "fin_connections", cid, {"status": "error", "last_error": why, "updated_at": now,
                                               "next_sync_at": _after(now, POLL_MINUTES * 60)})
+
+
+# ------------------------------------------------------------------------------------------------ catalog
+def catalog(store: Any, provider: Catalog, cid: str, now: str) -> list[str]:
+    """Stripe's products as items, and each product's prices as refs on its item (plan §7.2, case P2). Both lists are read
+    outside any transaction, then written in one. A product is found by its Stripe id, so a later read renames or
+    archives the same item rather than adding one; each price is its own ref, so a monthly and a yearly price both stay.
+    An item keeps the books' income account only when it is created, and Tico never writes back to Stripe. A product or
+    price a complete list no longer holds is marked deleted (its item archived), never removed."""
+    products, products_whole, why = _every(provider.products)
+    if why:
+        return [why]
+    prices, prices_whole, why = _every(provider.prices)
+    if why:
+        return [why]
+    with store.transaction() as c:
+        ctx = load(c, now)
+        items = _write_products(ctx, cid, products, now)
+        _write_prices(ctx, cid, prices, items, now)
+        if products_whole:
+            for r in _gone(c, cid, "Product", _keys("Product", products), now):
+                RS.update(c, "items", str(r["local_id"]), {"archived_at": now, "updated_at": now, "updated_by_id": SYSTEM})
+        if prices_whole:
+            _gone(c, cid, "Price", _keys("Price", prices), now)
+    return []
+
+
+def _every(read: Callable[[str | None], Answer]) -> tuple[list[dict[str, Any]], bool, str]:
+    """One Stripe list read to its end, a page at a time (up to CATALOG_PAGES). The flag says the whole list was read,
+    which is what lets a row missing from it count as gone; the text says why a read failed."""
+    rows: list[dict[str, Any]] = []
+    after: str | None = None
+    for _ in range(CATALOG_PAGES):
+        page = read(after)
+        if not page.ok:
+            return rows, False, error_text(page)
+        batch = listed(page)
+        rows += batch
+        last = str(batch[-1].get("id") or "") if batch else ""
+        if not has_more(page) or not last:
+            return rows, True, ""
+        after = last
+    return rows, False, ""
+
+
+def _keys(kind: str, rows: list[dict[str, Any]]) -> set[str]:
+    """The external ids (kind:id) of the rows a list read."""
+    return {f"{kind}:{r.get('id')}" for r in rows if r.get("id")}
+
+
+def _digest(value: object) -> str:
+    """A content digest: a ref's revision moves when what Stripe says about the record moves."""
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _write_products(ctx: Ctx, cid: str, products: list[dict[str, Any]], now: str) -> dict[str, str]:
+    """Each listed product's item, made, renamed or archived to match Stripe. Returns the item id by Stripe product id. A
+    new item sells on the books' income account (the one a Stripe sale with no invoice posts to) and is a service."""
+    income = banking.by_code(ctx, stripe_post.INCOME_CODE)
+    items: dict[str, str] = {}
+    for p in products:
+        pid = str(p.get("id") or "")
+        if not pid:
+            continue
+        name = str(p.get("name") or pid)
+        active = p.get("active") is True
+        digest = _digest([name, active])
+        key = f"Product:{pid}"
+        row = SX.ref(ctx.c, cid, "items", key)
+        if row is None:
+            local = RS.insert(ctx.c, "items", {
+                "name": name, "kind": "service", "income_account_id": income.id if income is not None else None,
+                "archived_at": None if active else now, "created_at": now, "created_by_id": SYSTEM,
+                "updated_at": now, "updated_by_id": SYSTEM})
+            SX.ref_insert(ctx.c, cid=cid, local_table="items", local_id=local, kind="Product", external_id=key,
+                          revision=digest, status="active", at=now, by=SYSTEM)
+        else:
+            local = str(row["local_id"])
+            if str(row["revision"]) != digest or str(row["status"]) != "active":
+                RS.update(ctx.c, "items", local, {"name": name, "archived_at": None if active else now,
+                                                  "updated_at": now, "updated_by_id": SYSTEM})
+                SX.ref_set(ctx.c, str(row["id"]), local_id=local, revision=digest, status="active", at=now)
+        items[pid] = local
+    return items
+
+
+def _write_prices(ctx: Ctx, cid: str, prices: list[dict[str, Any]], items: Mapping[str, str], now: str) -> None:
+    """Each listed price as its own ref on its product's item. A price whose product no item came from is not kept."""
+    for p in prices:
+        prid = str(p.get("id") or "")
+        item = items.get(str(p.get("product") or ""))
+        if not prid or item is None:
+            continue
+        detail = json.dumps(_price_detail(p), sort_keys=True)
+        digest = _digest(detail)
+        key = f"Price:{prid}"
+        row = SX.ref(ctx.c, cid, "items", key)
+        if row is None:
+            SX.ref_insert(ctx.c, cid=cid, local_table="items", local_id=item, kind="Price", external_id=key,
+                          revision=digest, status="active", at=now, by=SYSTEM, detail=detail)
+        elif str(row["revision"]) != digest or str(row["status"]) != "active" or str(row["local_id"]) != item:
+            SX.ref_set(ctx.c, str(row["id"]), local_id=item, revision=digest, status="active", at=now, detail=detail)
+
+
+def _price_detail(p: Mapping[str, Any]) -> dict[str, object]:
+    """What a Stripe price is for the books: its currency, its amount in minor units (null when the customer names it),
+    its type, its recurring interval (month or year; "" for a one-time price) and whether Stripe has it active."""
+    raw = p.get("recurring")
+    recurring: Mapping[str, Any] = cast(dict[str, Any], raw) if isinstance(raw, dict) else {}
+    amount = p.get("unit_amount")
+    return {"active": p.get("active") is True, "currency": str(p.get("currency") or "").upper(),
+            "amount": amount if isinstance(amount, int) and not isinstance(amount, bool) else None,
+            "type": str(p.get("type") or ""), "interval": str(recurring.get("interval") or ""),
+            "interval_count": _cents(recurring.get("interval_count")) or 1}
+
+
+def _gone(c: Any, cid: str, kind: str, listed_keys: set[str], now: str) -> list[Any]:
+    """The refs of one kind a complete list no longer holds: marked deleted. Returned so the caller can archive their items."""
+    gone = [r for r in SX.refs_of_kind(c, cid, "items", kind)
+            if str(r["external_id"]) not in listed_keys and str(r["status"]) != "deleted"]
+    for r in gone:
+        SX.ref_set(c, str(r["id"]), local_id=str(r["local_id"]), revision=str(r["revision"]), status="deleted", at=now)
+    return gone
 
 
 def balances(store: Any, provider: Provider, cid: str, now: str) -> list[str]:

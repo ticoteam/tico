@@ -197,6 +197,41 @@ VENDOR_TERMS = ("Northwind Messaging Terms\n\n4. Messaging\n\nCustomer messages 
                 "send. Keep a record of each consent for five years.\n\n5. Data\n\nDelete raw logs after 30 days.\n")
 
 
+@seed("operations")
+def operations(world):
+    """Finance set up, one customer and Acme's shared records, written as Dana through POST /api/v2/finance/actions: two
+    locations, a service, a project, two pieces of equipment and due dates (Operations, ui/tests/operations-real.cjs)."""
+    from datetime import date, timedelta
+    from backend.finance import actions as FA
+    from backend.store import H
+    with world.store.transaction() as c:
+        FA.setup(c, "human:dana")
+
+    def act(action, **payload):
+        reply = _ok(world.api("post", "/api/v2/finance/actions", {"kind": action, "payload": payload}), action)
+        if reply.get("status") in ("failed", "denied"):   # a refused action still answers 200
+            raise RuntimeError(f"{action}: {reply}")
+        return reply.get("result") or {}
+    soon = (date.fromisoformat(H.now()[:10]) + timedelta(days=40)).isoformat()
+    customer = act("contact_create", name="Beta Foods", kind="customer")["contact_id"]
+    act("location_create", name="Acme North Store", kind="store", in_books=False,
+        address={"street": "1 Main St", "city": "Portland", "state": "OR", "postal_code": "97201"})
+    site = act("location_create", name="Beta Foods Site", kind="customer_site", customer_id=customer,
+               address={"city": "Bend", "state": "OR"})["location_id"]
+    act("item_create", name="Filter change", kind="service", sku="SVC-10", unit="each", price=8900,
+        description="Swap and dispose", taxable=True)
+    act("item_create", name="Air filter 20x20", kind="non_inventory", sku="PRT-20")
+    act("project_create", name="North Store refit", customer_id=customer, status="open")
+    act("project_create", name="Old refit", status="closed")
+    unit = act("equipment_create", name="Rooftop unit 3", kind="customer", customer_id=customer, location_id=site,
+               make="Trane", model="XR-16", serial="SN-4471", warranty_ends_on=soon)["equipment_id"]
+    act("equipment_create", name="Walk-in cooler", kind="owned", make="Hussmann", serial="HU-88")
+    act("due_date_create", name="Filter change", subject_type="equipment", subject_id=unit, repeats="quarterly",
+        starts_on="2020-01-01", lead_days=14, assignee_id="human:dana")
+    act("due_date_create", name="Fire inspection", subject_type="location", subject_id=site, repeats="yearly",
+        starts_on="2099-01-01", lead_days=30, assignee_id="human:dana")
+
+
 @seed("counsel")
 def counsel(world):
     """Counsel on, as onboarding turns it on (its bot row and config, and a test token, "tico-counsel"), and a vendor's
@@ -227,3 +262,18 @@ def counsel(world):
     _ok(world.api("post", "/api/v2/runners/heartbeat", {
         "version": "test", "platform": "test",
         "readiness": {slug: True for slug in [*world.bot_slugs, H.COUNSEL]}}, who=world.runner["token"]), "heartbeat")
+
+
+@seed("finance")
+def finance(world):
+    """Finance set up with Dana as its owner, and two classes (they only come from a linked book, so no action makes
+    one)."""
+    from backend.finance import actions as FA
+    from backend.finance.store import catalog as SC
+    from backend.finance.store import ledger as SL
+    from backend.finance.store import tico
+    with world.store.transaction() as c:
+        FA.setup(c, "human:dana")
+        for value, name in (("residential", "Residential"), ("commercial", "Commercial")):
+            SC.class_insert(c, dimension_id=SL.new_id(), value=value, name=name, active=True, at=tico.now(),
+                            by="human:dana")

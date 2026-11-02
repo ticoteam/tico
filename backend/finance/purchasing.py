@@ -10,9 +10,10 @@ from .context import Ctx
 from .core import ap as AP
 from .core import budgets as B
 from .core import kinds as K
+from .core import mirror as M
 from .core import validate as V
 from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
-from .handlers import Plan, Planner, Result, may_write, private_hidden
+from .handlers import Plan, Planner, Result, may_write, private_hidden, sees_scope
 from .store import ap as SAP
 from .store import banking as SK
 from .store import ledger as SL
@@ -33,7 +34,8 @@ def _row(ctx: Ctx, table: str, row_id: str, what: str) -> Any:
     return row
 
 
-def _seen(ctx: Ctx, who: str, table: str, kind: str, row_id: str, what: str) -> tuple[Any, list[AP.DocLine]]:
+def load_document_for_action(ctx: Ctx, who: str, table: str, kind: str, row_id: str, what: str
+                             ) -> tuple[Any, list[AP.DocLine]]:
     """A document's row and lines for an action. A line on a private account the asker lacks the detail of hides the
     whole document: it is not found, before its state, amounts or vendor are looked at, as the reads leave it out."""
     row = _row(ctx, table, row_id, what)
@@ -73,20 +75,26 @@ def _line_rows(lines: Sequence[AP.DocLine], who: str, at: str, *, invoice: bool 
              **({"taxable": None if x.taxable is None else int(x.taxable)} if invoice else {})} for x in lines]
 
 
-def _visible(ctx: Ctx, who: str, lines: Sequence[AP.DocLine]) -> None:
+def check_lines_in_view(ctx: Ctx, who: str, lines: Sequence[AP.DocLine]) -> None:
     for x in lines:
         if not may_write(ctx, who, x.account_id, x.tags):
             raise denied("a line's account or tags are outside your view")
 
 
-def _release(ctx: Ctx, po_id: str, lines: Sequence[Any]) -> None:
+def release_order_holds(ctx: Ctx, po_id: str, lines: Sequence[Any]) -> None:
     for line in lines:
         budgeting.release_for(ctx, "purchase_order", f"{po_id}:{int(line['line_no'])}")
 
 
 def _owed(ctx: Ctx, lines: Sequence[Any]) -> list[tuple[Any, int]]:
-    """Each order line with what is still unbilled on it."""
-    return [(line, int(line["amount"]) - SP.billed(ctx.c, str(line["id"]))) for line in lines]
+    """Each order line with what is still unbilled on it. A provider order's tax line owes nothing: a bill bills the
+    lines it names, and tax is not one of them, so the tax line would otherwise keep the order open."""
+    out: list[tuple[Any, int]] = []
+    for line in lines:
+        account = ctx.accounts.get(str(line["account_id"] or ""))
+        taxed = account is not None and account.subtype == M.SALES_TAX
+        out.append((line, 0 if taxed else int(line["amount"]) - SP.billed(ctx.c, str(line["id"]))))
+    return out
 
 
 def _place_holds(ctx: Ctx, who: str, po: Any, owed: Sequence[tuple[Any, int]],
@@ -109,7 +117,7 @@ def _place_holds(ctx: Ctx, who: str, po: Any, owed: Sequence[tuple[Any, int]],
     return decisions
 
 
-def _settle(ctx: Ctx, who: str, po_id: str, force: bool = False) -> list[str]:
+def settle_order(ctx: Ctx, who: str, po_id: str, force: bool = False) -> list[str]:
     """Bring an order's holds and status up to date with its bills. An approved order holds what is still unbilled on
     each line. A hold already placed shrinks to what is left rather than being released and placed again, so an order
     billed in part keeps its budget on the rest. A closed, voided or draft order holds nothing, and billed in full
@@ -119,7 +127,7 @@ def _settle(ctx: Ctx, who: str, po_id: str, force: bool = False) -> list[str]:
     lines = SP.lines(ctx.c, "po", po_id)
     status, closed_by = str(po["status"]), str(po["closed_by"])
     if status in ("draft", "sent", "void") or (status == "closed" and closed_by == "hand"):
-        _release(ctx, po_id, lines)
+        release_order_holds(ctx, po_id, lines)
         return []
     owed = _owed(ctx, lines)
     new, by = ("closed", "bills") if all(left <= 0 for _, left in owed) else ("approved", "")
@@ -128,7 +136,7 @@ def _settle(ctx: Ctx, who: str, po_id: str, force: bool = False) -> list[str]:
                   {"status": new, "closed_by": by, "closed_at": ctx.at if new == "closed" else None,
                    "updated_at": ctx.at})
     if new == "closed":
-        _release(ctx, po_id, lines)
+        release_order_holds(ctx, po_id, lines)
         return []
     refused: list[str] = []
     for d in _place_holds(ctx, who, po, owed, force):
@@ -140,7 +148,7 @@ def _settle(ctx: Ctx, who: str, po_id: str, force: bool = False) -> list[str]:
 def sync_orders(ctx: Ctx, who: str, po_ids: Sequence[str]) -> None:
     """After a bill links to, or stops linking to, these orders: their holds and status follow the billing."""
     for po_id in po_ids:
-        _settle(ctx, who, po_id)
+        settle_order(ctx, who, po_id)
 
 
 def _restore(ctx: Ctx, who: str, line: Any, amount: int) -> None:
@@ -230,6 +238,24 @@ def link_bill_lines(ctx: Ctx, who: str, vendor_id: str,
     return out, po_ids
 
 
+def link_bill_order(ctx: Ctx, who: str, po_id: str) -> str:
+    """The purchase order a bill is linked to, or "" for none. A bill of any vendor may link to an order in this book
+    the asker may see (no line on a private account, none out of the asker's scope). A link bills no line, holds no
+    budget and moves neither the order's status nor its billed total."""
+    if not po_id:
+        return ""
+    row = SP.get(ctx.c, "fin_purchase_orders", po_id)
+    if row is None or str(row["book_id"]) != ctx.book.id:
+        raise FinanceError(NOT_FOUND, "no such purchase order")
+    for x in SP.lines(ctx.c, "po", po_id):
+        account = str(x["account_id"] or "")
+        tags = cast(dict[str, str], SK.loads(x["tags_json"]))
+        if private_hidden(ctx, who, account) or \
+                not sees_scope(ctx, who, account, tags.get("team", ""), tags.get("teammate", "")):
+            raise FinanceError(NOT_FOUND, "no such purchase order in your view")
+    return po_id
+
+
 def po_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """A purchase order as a draft: its lines hold nothing until it is approved."""
     V.only(p, ("vendor_id", "number", "po_date", "memo", "lines"))
@@ -260,8 +286,8 @@ def po_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 def po_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("po_id",))
     po_id = V.text(p, "po_id", 80)
-    po, lines = _seen(ctx, who, "fin_purchase_orders", "po", po_id, "purchase order")
-    _visible(ctx, who, lines)
+    po, lines = load_document_for_action(ctx, who, "fin_purchase_orders", "po", po_id, "purchase order")
+    check_lines_in_view(ctx, who, lines)
     if str(po["status"]) != "draft":
         raise FinanceError(CONFLICT, "only a draft order is marked sent")
 
@@ -270,7 +296,10 @@ def po_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                      "status='draft'") != 1:
             raise FinanceError(CONFLICT, "that order moved on")
         return {"po_id": po_id, "status": "sent"}
-    return Plan(K.default_gate(ctx.org, who, "po_send"), f"Mark purchase order {po['number']} sent", apply)
+    # A bot's send asks the owner, as an estimate's send does, before the order is marked sent; a person's is unchanged.
+    gate = (K.Gate("needs_approval", "owner", "default:bot-po-send") if who in ctx.org.bots
+            else K.default_gate(ctx.org, who, "po_send"))
+    return Plan(gate, f"Mark purchase order {po['number']} sent", apply)
 
 
 def _budget_gate(ctx: Ctx, who: str, po: Any, lines: Sequence[Any]) -> K.Gate:
@@ -298,9 +327,9 @@ def po_approve(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Approve a draft or sent order: its unbilled lines hold budget. Approving an order again changes nothing."""
     V.only(p, ("po_id",))
     po_id = V.text(p, "po_id", 80)
-    po, lines = _seen(ctx, who, "fin_purchase_orders", "po", po_id, "purchase order")
+    po, lines = load_document_for_action(ctx, who, "fin_purchase_orders", "po", po_id, "purchase order")
     status = str(po["status"])
-    _visible(ctx, who, lines)
+    check_lines_in_view(ctx, who, lines)
     if status in OPEN_ORDER or status == "closed":
         shown = SP.shown_po(status, SP.billed_total(ctx.c, po_id), int(po["total"]))
 
@@ -320,7 +349,7 @@ def po_approve(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                      {"status": "approved", "approved_by": who, "approved_at": ctx.at, "updated_at": ctx.at},
                      "status IN ('draft','sent')") != 1:
             raise FinanceError(CONFLICT, "that order moved on")
-        refused = _settle(ctx, who, po_id, force=True)
+        refused = settle_order(ctx, who, po_id, force=True)
         out: Result = {"po_id": po_id, "status": "approved"}
         if refused:
             out["not_held"] = refused
@@ -334,8 +363,8 @@ def po_close(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Close an approved order by hand: what is not billed is released and no more bills take it."""
     V.only(p, ("po_id",))
     po_id = V.text(p, "po_id", 80)
-    po, lines = _seen(ctx, who, "fin_purchase_orders", "po", po_id, "purchase order")
-    _visible(ctx, who, lines)
+    po, lines = load_document_for_action(ctx, who, "fin_purchase_orders", "po", po_id, "purchase order")
+    check_lines_in_view(ctx, who, lines)
     if str(po["status"]) not in OPEN_ORDER:
         raise FinanceError(CONFLICT, "only an approved order closes")
 
@@ -344,7 +373,7 @@ def po_close(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                      {"status": "closed", "closed_by": "hand", "closed_at": ctx.at, "updated_at": ctx.at},
                      "status='approved'") != 1:
             raise FinanceError(CONFLICT, "that order moved on")
-        _settle(ctx, who, po_id)
+        settle_order(ctx, who, po_id)
         return {"po_id": po_id, "status": "closed"}
     return Plan(K.default_gate(ctx.org, who, "po_close"),
                 f"Close purchase order {po['number']}; what is not billed is released", apply)
@@ -354,8 +383,8 @@ def po_void(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Void an order nothing has been billed against; a partly billed one is closed instead."""
     V.only(p, ("po_id",))
     po_id = V.text(p, "po_id", 80)
-    po, lines = _seen(ctx, who, "fin_purchase_orders", "po", po_id, "purchase order")
-    _visible(ctx, who, lines)
+    po, lines = load_document_for_action(ctx, who, "fin_purchase_orders", "po", po_id, "purchase order")
+    check_lines_in_view(ctx, who, lines)
     status = SP.shown_po(str(po["status"]), SP.billed_total(ctx.c, po_id), int(po["total"]))
     if status == "partial":
         raise FinanceError(CONFLICT, "a partly billed order is closed, not voided")
@@ -367,7 +396,7 @@ def po_void(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                      {"status": "void", "voided_at": ctx.at, "updated_at": ctx.at},
                      "status IN ('draft','sent','approved')") != 1:
             raise FinanceError(CONFLICT, "that order moved on")
-        _settle(ctx, who, po_id)
+        settle_order(ctx, who, po_id)
         return {"po_id": po_id, "status": "void"}
     return Plan(K.default_gate(ctx.org, who, "po_void"), f"Void purchase order {po['number']}", apply)
 
@@ -401,8 +430,8 @@ def estimate_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Mark a draft estimate sent. Sending asks the owner, whoever sends it."""
     V.only(p, ("estimate_id",))
     eid = V.text(p, "estimate_id", 80)
-    est, lines = _seen(ctx, who, "fin_estimates", "estimate", eid, "estimate")
-    _visible(ctx, who, lines)
+    est, lines = load_document_for_action(ctx, who, "fin_estimates", "estimate", eid, "estimate")
+    check_lines_in_view(ctx, who, lines)
     if str(est["status"]) != "draft":
         raise FinanceError(CONFLICT, "only a draft estimate is marked sent")
 
@@ -418,8 +447,8 @@ def _decide(ctx: Ctx, who: str, p: V.Payload, kind: str, to: str) -> Plan:
     """A customer's answer to a sent estimate: accepted or declined."""
     V.only(p, ("estimate_id",))
     eid = V.text(p, "estimate_id", 80)
-    est, lines = _seen(ctx, who, "fin_estimates", "estimate", eid, "estimate")
-    _visible(ctx, who, lines)
+    est, lines = load_document_for_action(ctx, who, "fin_estimates", "estimate", eid, "estimate")
+    check_lines_in_view(ctx, who, lines)
     if str(est["status"]) != "sent":
         raise FinanceError(CONFLICT, f"only a sent estimate can be {to}")
 
@@ -444,8 +473,8 @@ def estimate_convert(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     second conversion, or one of a declined estimate, is refused."""
     V.only(p, ("estimate_id",))
     eid = V.text(p, "estimate_id", 80)
-    est, lines = _seen(ctx, who, "fin_estimates", "estimate", eid, "estimate")
-    _visible(ctx, who, lines)
+    est, lines = load_document_for_action(ctx, who, "fin_estimates", "estimate", eid, "estimate")
+    check_lines_in_view(ctx, who, lines)
     status = str(est["status"])
     if est["invoice_id"]:
         raise FinanceError(CONFLICT, "that estimate is invoiced already")

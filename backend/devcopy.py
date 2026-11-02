@@ -108,6 +108,7 @@ HISTORY = {"attempts": "created", "jobs": "created", "messages": "created", "eve
            "bot_status_history": "since", "audit_log": "at", "browser_exit_usage": "day"}
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = frozenset((
+    "due_date_occurrences", "due_dates", "equipment", "record_files",   # Operations records; only a timer acts on them
     "agents", "approvals", "archives", "assistant_actions", "attempt_conversations", "attempt_events", "attempt_load_snapshots",
     "attempt_inputs", "backup_verified_blobs", "batches", "blob_locations", "blob_media", "blobs",
     "bot_agent_instructions", "bot_budget", "bot_config", "bot_control", "bot_file_activity", "bot_file_versions", "bot_files",

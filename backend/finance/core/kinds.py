@@ -25,9 +25,12 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "import_raw_totals",
        # shared records (backend/records): items, locations and projects
        "item_create", "item_update", "location_create", "location_update", "project_create", "project_update",
+       "equipment_create", "equipment_update", "record_file_add", "record_file_remove",
        # purchase orders and estimates (backend/finance/purchasing.py)
        "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
-       "estimate_accept", "estimate_decline", "estimate_convert")
+       "estimate_accept", "estimate_decline", "estimate_convert",
+       # due dates on records (backend/finance/due_dates.py)
+       "due_date_create", "due_date_update", "due_date_occurrence_complete", "due_date_occurrence_reopen")
 LIVE = ("journal", "categorize", "account_create", "account_update", "budget_create", "budget_update",
         "allocation_set", "projection_set", "view_grant", "view_revoke", "private_lines_set", "close_period",
         "reopen_period", "right_grant", "right_revoke",
@@ -51,9 +54,12 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         "import_raw_totals",
         # shared records (backend/records): items, locations and projects
         "item_create", "item_update", "location_create", "location_update", "project_create", "project_update",
+        "equipment_create", "equipment_update", "record_file_add", "record_file_remove",
         # purchase orders and estimates
         "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
-        "estimate_accept", "estimate_decline", "estimate_convert")
+        "estimate_accept", "estimate_decline", "estimate_convert",
+        # due dates on records
+        "due_date_create", "due_date_update", "due_date_occurrence_complete", "due_date_occurrence_reopen")
 NEEDS: dict[str, str | tuple[str, ...]] = {
          "journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
@@ -71,14 +77,24 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": (R.BOOK, R.AP, R.AR),
          "feed_match": (R.AP, R.AR), "mirror_start": R.BOOK, "mirror_stop": R.BOOK, "mirror_tags": R.BOOK, "mirror_xero_location": R.BOOK,
          "tax_jurisdiction_add": R.BOOK, "tax_remit": R.AP, "import_raw_totals": R.BOOK,
-         "item_create": R.BOOK, "item_update": R.BOOK, "location_create": R.BOOK, "location_update": R.BOOK,
-         "project_create": R.BOOK, "project_update": R.BOOK,
+         "item_create": R.RECORDS, "item_update": R.RECORDS, "location_create": R.RECORDS,
+         "location_update": R.RECORDS, "project_create": R.RECORDS, "project_update": R.RECORDS,
+         "equipment_create": R.RECORDS, "equipment_update": R.RECORDS,
+         "record_file_add": R.RECORDS, "record_file_remove": R.RECORDS,
          "po_create": R.AP, "po_send": R.AP, "po_approve": R.AP, "po_close": R.AP, "po_void": R.AP,
          "estimate_create": R.AR, "estimate_send": R.AR, "estimate_accept": R.AR, "estimate_decline": R.AR,
-         "estimate_convert": R.AR}
+         "estimate_convert": R.AR,
+         "due_date_create": R.RECORDS, "due_date_update": R.RECORDS, "due_date_occurrence_complete": R.RECORDS,
+         "due_date_occurrence_reopen": R.RECORDS}
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create", "connection_sync",
               "connection_disconnect", "connection_map")
+# Grants a company Admin may make: the records right only (the planner refuses every other right).
+ADMIN_GRANTS = ("right_grant", "right_revoke")
+# Record kinds a bot without the records right asks for: a person who holds the right decides (BotOps parity).
+RECORD_KINDS = ("item_create", "item_update", "location_create", "location_update", "project_create", "project_update",
+                "equipment_create", "equipment_update", "record_file_add", "record_file_remove", "due_date_create",
+                "due_date_update")
 # Only the owner turns direct send on or off for the company (§9) and sets what each role sees by default (§7.5).
 OWNER_ONLY = ("payment_settings", "view_defaults_set", "mirror_tags", "mirror_xero_location")
 # System work may freeze cards (a budget at cutoff, §6.4 rule 4) and nothing else card-side.
@@ -106,6 +122,10 @@ class Gate:
 
 
 ALLOW = Gate("allow")
+# A due date's assignee completes and reopens its own occurrences without the records right, and without an approval;
+# anyone else needs finance.records. The planner checks which (backend/finance/due_dates.py), so the right check here
+# leaves these two kinds alone.
+ASSIGNEE_WORKS = frozenset({"due_date_occurrence_complete", "due_date_occurrence_reopen"})
 
 
 def authority(org: Org, actor: str, kind: str, held: Collection[str]) -> Gate | None:
@@ -117,9 +137,13 @@ def authority(org: Org, actor: str, kind: str, held: Collection[str]) -> Gate | 
     if kind in OWNER_ONLY:
         return None if org.owner and actor == org.owner else Gate("deny", rule="right:owner")
     if kind in ADMIN_ONLY:
-        if not R.is_admin(org, actor, held):
-            return Gate("deny", rule="right:finance.admin")
-        return Gate("needs_approval", "owner", "default:bot-admin") if actor in org.bots else None
+        if R.is_admin(org, actor, held):
+            return Gate("needs_approval", "owner", "default:bot-admin") if actor in org.bots else None
+        if kind in ADMIN_GRANTS and actor in org.admins:
+            return None                     # the planner refuses any right but the records right
+        return Gate("deny", rule="right:finance.admin")
+    if kind in ASSIGNEE_WORKS:
+        return None
     need = NEEDS.get(kind)
     if need is None:
         return None
@@ -129,6 +153,8 @@ def authority(org: Org, actor: str, kind: str, held: Collection[str]) -> Gate | 
     right = anyof[0]
     if right == R.BUDGETS and actor != SYSTEM:
         return Gate("needs_approval", "manager", "default:budget-request")
+    if right == R.RECORDS and kind in RECORD_KINDS and actor in org.bots:
+        return Gate("needs_approval", "owner", "default:bot-records")
     return Gate("deny", rule=f"right:{right}")
 
 
@@ -271,20 +297,32 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                        ("is_1099?", "bool", ""), ("tax_id?", "str", "sealed; only its last 4 show, to finance admins"),
                        ("recipient_id?", "str", "the payment details bills to this vendor are paid to"),
                        ("seats?", "int", "vendors: seats or licenses"),
-                       ("renewal_on?", "day", "vendors: the next renewal date")),
+                       ("renewal_on?", "day", "vendors: the next renewal date"),
+                       ("payment_terms_days?", "int", "vendors: days a bill is due after its date when no due date is "
+                        "typed"),
+                       ("renewal_notice_days?", "int", "vendors: days of notice the cancel-by deadline is before the "
+                        "renewal date"),
+                       ("owner_id?", "str", "vendors: the teammate or bot who owns the vendor")),
     "contact_update": (("contact_id", "str", ""), ("name?", "str", ""), ("kind?", "vendor|customer|both", ""),
                        ("emails?", "list[str]", ""), ("default_account_id?", "str", ""), ("is_1099?", "bool", ""),
                        ("tax_id?", "str", ""), ("recipient_id?", "str", ""), ("active?", "bool", ""),
-                       ("seats?", "int", "vendors"), ("renewal_on?", "day", "vendors: a day, or empty to clear")),
+                       ("seats?", "int", "vendors"), ("renewal_on?", "day", "vendors: a day, or empty to clear"),
+                       ("payment_terms_days?", "int", "vendors: days a bill is due after its date when no due date is "
+                        "typed; empty clears it"),
+                       ("renewal_notice_days?", "int", "vendors: days of notice the cancel-by deadline is before the "
+                        "renewal date"),
+                       ("owner_id?", "str", "the teammate or bot who owns the contact; empty clears it")),
     "bill_create": (("vendor_id", "str", "a vendor contact"), ("number?", "str", "the vendor's bill number"),
                     ("bill_date", "day", ""), ("due_date?", "day", "or terms_days"),
                     ("terms_days?", "int", "due this many days after bill_date"), ("memo?", "str", ""),
                     ("lines", _BILL_LINE, "expense lines; amounts positive; po_line_id bills an open purchase order's line"),
-                    ("attachments?", "list[str]", "Library file ids"), ("origin?", "manual|email|upload", "")),
+                    ("attachments?", "list[str]", "Library file ids"), ("origin?", "manual|email|upload", ""),
+                    ("purchase_order_id?", "str", "linked purchase order, any vendor; bills and holds nothing on it")),
     "bill_update": (("bill_id", "str", ""), ("vendor_id?", "str", "draft only"), ("number?", "str", ""),
                     ("bill_date?", "day", "draft only"), ("due_date?", "day", ""), ("terms_days?", "int", ""),
                     ("memo?", "str", ""), ("lines?", _BILL_LINE, "draft only; replaces every line"),
-                    ("attachments?", "list[str]", "file ids to add")),
+                    ("attachments?", "list[str]", "file ids to add"),
+                    ("purchase_order_id?", "str", "the linked purchase order; empty clears it")),
     "bill_approve": (("bill_id", "str", "enters a draft: expense lines debit, accounts payable credit"),),
     "bill_schedule": (("bill_id", "str", ""), ("pay_on", "day", "the payment is requested on this day"),
                       ("money_account_id", "str", "the bank account it is paid from"),
@@ -331,22 +369,43 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "item_create": (("name", "str", ""),
                     ("kind", "service|inventory|non_inventory|bundle|category|raw_material|assembly", ""),
                     ("sku?", "str", ""), ("unit?", "str", ""), ("price?", "minor", "in the book's currency"),
+                    ("description?", "str", "what lines and documents say about it"),
+                    ("taxable?", "bool", "whether a sale of it is taxed"),
                     ("income_account_id?", "str", "the account a sale of it posts to"),
                     ("expense_account_id?", "str", "the account a purchase of it posts to"),
                     ("asset_account_id?", "str", "inventory it holds")),
     "item_update": (("item_id", "str", ""), ("name?", "str", ""),
                     ("kind?", "service|inventory|non_inventory|bundle|category|raw_material|assembly", ""),
                     ("sku?", "str", ""), ("unit?", "str", ""), ("price?", "minor", "a change asks for approval"),
+                    ("description?", "str", ""), ("taxable?", "bool", ""),
                     ("income_account_id?", "str", ""), ("expense_account_id?", "str", ""),
                     ("asset_account_id?", "str", ""), ("active?", "bool", "")),
+    "equipment_create": (("name", "str", ""), ("kind", "owned|customer", "owned: a van or tool the company keeps; "
+                         "customer: a unit at a customer's site"),
+                         ("location_id?", "str", "where it is kept; a van needs no location"),
+                         ("customer_id?", "str", "customer kind: the customer it is at"),
+                         ("make?", "str", ""), ("model?", "str", ""), ("serial?", "str", "a van's VIN"),
+                         ("installed_on?", "day", ""), ("warranty_ends_on?", "day", ""),
+                         ("photo_file_id?", "str", "a Library file id; a bot's photo asks a person to confirm it")),
+    "equipment_update": (("equipment_id", "str", ""), ("name?", "str", ""), ("kind?", "owned|customer", ""),
+                         ("location_id?", "str", "empty to clear"), ("customer_id?", "str", "empty to clear"),
+                         ("make?", "str", ""), ("model?", "str", ""), ("serial?", "str", ""),
+                         ("installed_on?", "day", "empty to clear"), ("warranty_ends_on?", "day", "empty to clear"),
+                         ("photo_file_id?", "str", "a bot's photo asks a person to confirm it"),
+                         ("active?", "bool", "")),
+    "record_file_add": (("subject_type", "contact|equipment|item|location", "the record the file is for"),
+                        ("subject_id", "str", ""), ("file_id", "str", "a Library file the asker can read")),
+    "record_file_remove": (("record_file_id", "str", "the link's id, as a record's files list shows it"),),
     "location_create": (("name", "str", ""), ("kind?", "store|office|warehouse|plant|customer_site|vehicle|other", ""),
                         ("in_books?", "bool",
                          "a mirrored book: false keeps it in Tico; customer sites and vehicles default to false"),
                         ("parent_id?", "str", "the location it sits under"),
+                        ("customer_id?", "str", "a customer contact this site belongs to"),
                         ("address?", "obj", "up to 10 text fields")),
     "location_update": (("location_id", "str", ""), ("name?", "str", ""),
                         ("kind?", "store|office|warehouse|plant|customer_site|vehicle|other", ""),
-                     ("parent_id?", "str", "empty to clear"), ("address?", "obj", ""), ("active?", "bool", "")),
+                     ("parent_id?", "str", "empty to clear"), ("customer_id?", "str", "empty to clear"),
+                     ("address?", "obj", ""), ("active?", "bool", "")),
     "project_create": (("name", "str", ""), ("customer_id?", "str", "a customer contact"),
                        ("status?", "open|closed", "")),
     "project_update": (("project_id", "str", ""), ("name?", "str", ""), ("customer_id?", "str", "empty to clear"),
@@ -364,6 +423,21 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "estimate_accept": (("estimate_id", "str", "a sent estimate is accepted"),),
     "estimate_decline": (("estimate_id", "str", "a sent estimate is declined"),),
     "estimate_convert": (("estimate_id", "str", "an accepted estimate becomes one invoice draft, once"),),
+    "due_date_create": (("name", "str", ""),
+                        ("subject_type", "location|equipment|contact", "the record it falls on"),
+                        ("subject_id", "str", "a location, a piece of equipment, or a vendor or customer"),
+                        ("repeats", "once|weekly|monthly|quarterly|yearly|every_days|every_months", ""),
+                        ("every_count?", "int", "every_days and every_months only: days or months between completions"),
+                        ("starts_on", "day", "the first day it falls due; a completion chain starts here"),
+                        ("lead_days?", "int", "open its task this many days before it falls due, 0 to 366"),
+                        ("assignee_id", "str", "a bot or a person who works it")),
+    "due_date_update": (("due_date_id", "str", ""), ("name?", "str", ""), ("lead_days?", "int", ""),
+                        ("assignee_id?", "str", ""),
+                        ("repeats?", "once|weekly|monthly|quarterly|yearly|every_days|every_months", ""),
+                        ("every_count?", "int", ""), ("starts_on?", "day", ""),
+                        ("next_due_on?", "day", "every_days and every_months only"), ("active?", "bool", "")),
+    "due_date_occurrence_complete": (("due_date_id", "str", ""), ("due_on?", "day", "default: the next open day")),
+    "due_date_occurrence_reopen": (("due_date_id", "str", ""), ("due_on", "day", "a completed day")),
 }
 WORDS: dict[str, str] = {
     "journal": "Post a balanced entry, or reverse one.",
@@ -412,6 +486,10 @@ WORDS: dict[str, str] = {
     "import_raw_totals": "Import a spreadsheet's history as raw totals: one balanced entry per month.",
     "item_create": "Add a product or service that lines and documents name.",
     "item_update": "Rename, re-account, deactivate, or change the price of an item (a price change asks first).",
+    "equipment_create": "Add a van, tool or customer unit: local records, never sent to the books.",
+    "equipment_update": "Change equipment, or archive it (active false).",
+    "record_file_add": "Link a Library file (contract, certificate, photo) to a contact, equipment, item or location.",
+    "record_file_remove": "Unlink a file from its record; the file stays in the Library.",
     "location_create": "Add a location that lines can be tagged with.",
     "location_update": "Rename, move, or deactivate a location.",
     "project_create": "Add a project that lines can be tagged with.",
@@ -426,6 +504,10 @@ WORDS: dict[str, str] = {
     "estimate_accept": "Record that the customer accepted an estimate.",
     "estimate_decline": "Record that the customer declined an estimate.",
     "estimate_convert": "Make an accepted estimate one invoice draft (once).",
+    "due_date_create": "Add a due date: a day a location, equipment or a vendor or customer must be worked, by a teammate.",
+    "due_date_update": "Change a due date's name, repeat, lead time or teammate, or archive it.",
+    "due_date_occurrence_complete": "Mark one day of a due date done; the task that carried it stays as it is.",
+    "due_date_occurrence_reopen": "Take back a completed day of a due date.",
 }
 
 

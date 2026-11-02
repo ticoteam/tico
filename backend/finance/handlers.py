@@ -1159,6 +1159,8 @@ def right_grant(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise denied("nobody grants rights to themselves")
     if right == R.ADMIN and who != ctx.org.owner:
         raise denied("only the owner makes a finance admin")
+    if right != R.RECORDS and not R.is_admin(ctx.org, who, ctx.rights(who)):
+        raise denied("only a finance admin gives a Finance right; a company Admin gives the records right")
     until = _until(p) or None
 
     def apply(aid: str) -> Result:
@@ -1175,6 +1177,8 @@ def right_revoke(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(CONFLICT, f"{mate} does not hold {right}")
     if right == R.ADMIN and who != ctx.org.owner:
         raise denied("only the owner takes finance admin away")
+    if right != R.RECORDS and not R.is_admin(ctx.org, who, ctx.rights(who)):
+        raise denied("only a finance admin takes a Finance right away; a company Admin takes the records right away")
 
     def apply(aid: str) -> Result:
         SA.revoke_right(ctx.c, mate, right, who, ctx.at)

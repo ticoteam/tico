@@ -85,6 +85,42 @@ def test_the_pnl_by_location_adds_up_to_the_pnl(books):
             "Denver": (9_000, 3_500), "Office": (0, 7_000), "Unattributed": (0, 300)}
 
 
+def test_a_projects_pnl_by_account_keeps_to_the_view_and_adds_up_to_its_row(books):
+    with books.transaction() as c:
+        job = _records(c)["job"]["Job 12"]
+        pay = str(act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
+                                                   "parent_id": account(c, "6000")}).result["account_id"])
+        assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"}).status == "committed"
+        _post(c, 1_000, {"project": job, "teammate": "human:eve"})
+        _post(c, 7_000, {"project": job, "teammate": "human:ben"}, "6100")
+        _post(c, 4_000, {"project": job, "teammate": "human:ben"}, "6200")
+        _post(c, 300, {"teammate": "human:eve"})                     # no project: not in this row
+        sale = act(c, OWNER, "journal", {"date": DAY, "memo": "Sale", "lines": [
+            {"account_id": account(c, "4000"), "amount": -9_000, "tags": {"project": job}},
+            {"account_id": account(c, "1000"), "amount": 9_000}]})
+        assert sale.status == "committed", sale.reason
+
+        def both(viewer):
+            of = FR.report(c, viewer, "pnl_by_account", start=WINDOW[0], end=WINDOW[1], by="project", record_id=job,
+                           basis="accrual", at=AT)
+            rows = FR.pnl_by(c, viewer, "project", *WINDOW, basis="accrual", top_n=50, at=AT)["rows"]
+            return of, next((r for r in rows if r["key"] == job), {"income": 0, "expense": 0, "net": 0})
+        mine, row = both(OWNER)
+        assert {r["account_id"] for r in mine["rows"]} == {account(c, "4000"), account(c, "5100"), account(c, "6100"), pay}
+        assert (mine["income"], mine["expense"], mine["net"]) == (row["income"], row["expense"], row["net"])
+        assert (mine["income"], mine["expense"]) == (9_000, 12_000)
+        eve, row = both("human:eve")
+        assert [(r["account_id"], r["amount"]) for r in eve["rows"]] == [(account(c, "5100"), 1_000)]
+        assert (eve["income"], eve["expense"], eve["net"]) == (row["income"], row["expense"], row["net"])
+        # A private line in a viewer's window: its account stays out and the read says something was left out.
+        assert act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "expenses"}).status == "committed"
+        wide, row = both("human:eve")
+        assert pay not in {r["account_id"] for r in wide["rows"]} and wide["excluded"]
+        assert (wide["income"], wide["expense"]) == (row["income"], row["expense"])
+        with pytest.raises(FinanceError):
+            FR.report(c, OWNER, "pnl_by_account", start=WINDOW[0], end=WINDOW[1], by="project", at=AT)
+
+
 def test_a_teammate_sees_only_their_own_lines_however_they_group(books):
     with books.transaction() as c:
         ids = _records(c)
@@ -158,7 +194,7 @@ def test_item_records_are_found_by_sku_and_show_their_accounts_to_the_owner(book
         assert shown["income_account_id"] == account(c, "4000")
 
 
-def test_a_viewer_sees_an_items_price_and_accounts_only_where_they_see_the_accounts(books):
+def test_a_teammate_sees_an_items_price_and_its_accounts_only_where_they_see_the_accounts(books):
     with books.transaction() as c:
         _records(c)
         made = act(c, OWNER, "item_create", {"name": "Gadget", "kind": "service", "price": 2500,
@@ -168,25 +204,25 @@ def test_a_viewer_sees_an_items_price_and_accounts_only_where_they_see_the_accou
         assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
         assert act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "payables"}).status == "committed"
         gadget = {r["name"]: r for r in FR.records(c, "human:eve", kind="item", at=AT)["items"]}["Gadget"]
-        assert gadget["kind"] == "service"
-        assert not {"price", "income_account_id", "expense_account_id"} & set(gadget)
+        assert gadget["kind"] == "service" and gadget["price"] == 2500      # a teammate sees the sale price
+        assert not {"income_account_id", "expense_account_id"} & set(gadget)
         assert act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "expenses"}).status == "committed"
         gadget = {r["name"]: r for r in FR.records(c, "human:eve", kind="item", at=AT)["items"]}["Gadget"]
-        assert gadget["expense_account_id"] == account(c, "5100") and "price" not in gadget
+        assert gadget["expense_account_id"] == account(c, "5100") and gadget["price"] == 2500
         assert "income_account_id" not in gadget
 
 
-def test_a_viewer_with_no_finance_view_is_refused_the_records_and_their_search(books):
+def test_x11b_a_guest_is_refused_the_records_and_their_search(books):
     with books.transaction() as c:
         locations = _records(c)["location"]
         assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
-        for call in (lambda: FR.records(c, "human:eve", kind="location", at=AT),
-                     lambda: FR.record(c, "human:eve", kind="location", record_id=locations["Denver"], at=AT),
-                     lambda: FR.search(c, "human:eve", kind="item", q="wid", at=AT)):
+        for call in (lambda: FR.records(c, "human:stranger", kind="location", at=AT),
+                     lambda: FR.record(c, "human:stranger", kind="location", record_id=locations["Denver"], at=AT),
+                     lambda: FR.search(c, "human:stranger", kind="item", q="wid", at=AT)):
             with pytest.raises(FinanceError) as refused:
                 call()
             assert refused.value.code == DENIED
-        across = FR.search(c, "human:eve", kind=None, q="den", at=AT)["results"]
+        across = FR.search(c, "human:stranger", kind=None, q="den", at=AT)["results"]
         assert all(r["kind"] not in ("location", "item", "project") for r in across)
 
 
@@ -207,3 +243,132 @@ def test_a_record_read_by_an_id_it_was_merged_under_resolves_to_the_row_kept(boo
         with pytest.raises(FinanceError) as missing:
             FR.record(c, OWNER, kind="location", record_id="loc-never-existed", at=AT)
         assert missing.value.code == NOT_FOUND
+
+
+def _made(c, action: str, payload: dict, key: str) -> str:
+    done = act(c, OWNER, action, payload)
+    assert done.status == "committed", done.reason
+    return str(done.result[key])
+
+
+def test_location_lists_narrow_by_kind_page_through_it_and_carry_the_next_due_day(books):
+    with books.transaction() as c:
+        denver = _made(c, "location_create", {"name": "Denver", "kind": "store"}, "location_id")
+        _made(c, "location_create", {"name": "Boise", "kind": "store"}, "location_id")
+        _made(c, "location_create", {"name": "Office", "kind": "office"}, "location_id")
+        due = act(c, OWNER, "due_date_create", {"name": "Permit", "subject_type": "location", "subject_id": denver,
+                                                "repeats": "once", "starts_on": "2026-11-05", "assignee_id": OWNER})
+        assert due.status == "committed", due.reason
+        first = FR.records(c, OWNER, kind="location", equal={"kind": "store"}, limit=1, at=AT)
+        assert [r["name"] for r in first["locations"]] == ["Boise"] and first["next_cursor"]
+        rest = FR.records(c, OWNER, kind="location", equal={"kind": "store"}, limit=1, at=AT,
+                          cursor=first["next_cursor"])
+        assert [r["name"] for r in rest["locations"]] == ["Denver"] and rest["next_cursor"] is None
+        assert rest["locations"][0]["next_due_on"] == "2026-11-05" and first["locations"][0]["next_due_on"] is None
+        office = FR.records(c, OWNER, kind="location", equal={"kind": "office"}, at=AT)["locations"]
+        assert [r["name"] for r in office] == ["Office"]
+
+
+def test_location_lists_narrow_by_customer_and_page(books):
+    with books.transaction() as c:
+        acme = _made(c, "contact_create", {"name": "Acme Retail", "kind": "customer"}, "contact_id")
+        bolt = _made(c, "contact_create", {"name": "Bolt & Co", "kind": "customer"}, "contact_id")
+        _made(c, "location_create", {"name": "Acme Denver", "customer_id": acme}, "location_id")
+        _made(c, "location_create", {"name": "Acme Boise", "customer_id": acme}, "location_id")
+        _made(c, "location_create", {"name": "Bolt Yard", "customer_id": bolt}, "location_id")
+        _made(c, "location_create", {"name": "Plain"}, "location_id")
+        first = FR.records(c, OWNER, kind="location", equal={"customer_id": acme}, limit=1, at=AT)
+        assert [r["name"] for r in first["locations"]] == ["Acme Boise"] and first["next_cursor"]
+        rest = FR.records(c, OWNER, kind="location", equal={"customer_id": acme}, limit=1, cursor=first["next_cursor"],
+                          at=AT)
+        assert [r["name"] for r in rest["locations"]] == ["Acme Denver"] and rest["next_cursor"] is None
+
+
+def test_item_lists_narrow_by_kind_and_page(books):
+    with books.transaction() as c:
+        for name in ("Ann Consult", "Bea Consult"):
+            _made(c, "item_create", {"name": name, "kind": "service"}, "item_id")
+        _made(c, "item_create", {"name": "Cog", "kind": "raw_material"}, "item_id")
+        first = FR.records(c, OWNER, kind="item", equal={"kind": "service"}, limit=1, at=AT)
+        assert [r["name"] for r in first["items"]] == ["Ann Consult"] and first["next_cursor"]
+        rest = FR.records(c, OWNER, kind="item", equal={"kind": "service"}, limit=1, cursor=first["next_cursor"], at=AT)
+        assert [r["name"] for r in rest["items"]] == ["Bea Consult"] and rest["next_cursor"] is None
+        raw = FR.records(c, OWNER, kind="item", equal={"kind": "raw_material"}, at=AT)["items"]
+        assert [r["name"] for r in raw] == ["Cog"]
+
+
+def test_project_lists_narrow_by_status_and_page(books):
+    with books.transaction() as c:
+        ids = {name: _made(c, "project_create", {"name": name}, "project_id") for name in ("Job 1", "Job 2", "Job 3")}
+        closed = act(c, OWNER, "project_update", {"project_id": ids["Job 2"], "status": "closed"})
+        assert closed.status == "committed", closed.reason
+        first = FR.records(c, OWNER, kind="project", equal={"status": "open"}, limit=1, at=AT)
+        assert [r["name"] for r in first["projects"]] == ["Job 1"] and first["next_cursor"]
+        rest = FR.records(c, OWNER, kind="project", equal={"status": "open"}, limit=1, at=AT,
+                          cursor=first["next_cursor"])
+        assert [r["name"] for r in rest["projects"]] == ["Job 3"] and rest["next_cursor"] is None
+        done = FR.records(c, OWNER, kind="project", equal={"status": "closed"}, at=AT)["projects"]
+        assert [r["name"] for r in done] == ["Job 2"]
+
+
+def test_project_lists_narrow_by_customer_and_page(books):
+    with books.transaction() as c:
+        acme = _made(c, "contact_create", {"name": "Acme Retail", "kind": "customer"}, "contact_id")
+        bolt = _made(c, "contact_create", {"name": "Bolt & Co", "kind": "customer"}, "contact_id")
+        _made(c, "project_create", {"name": "Acme Job A", "customer_id": acme}, "project_id")
+        _made(c, "project_create", {"name": "Acme Job B", "customer_id": acme}, "project_id")
+        _made(c, "project_create", {"name": "Bolt Job", "customer_id": bolt}, "project_id")
+        first = FR.records(c, OWNER, kind="project", equal={"customer_id": acme}, limit=1, at=AT)
+        assert [r["name"] for r in first["projects"]] == ["Acme Job A"] and first["next_cursor"]
+        rest = FR.records(c, OWNER, kind="project", equal={"customer_id": acme}, limit=1, cursor=first["next_cursor"],
+                          at=AT)
+        assert [r["name"] for r in rest["projects"]] == ["Acme Job B"] and rest["next_cursor"] is None
+
+
+def test_a_teammate_without_a_finance_view_narrows_the_locations_by_customer(books):
+    with books.transaction() as c:
+        acme = _made(c, "contact_create", {"name": "Acme Retail", "kind": "customer"}, "contact_id")
+        bolt = _made(c, "contact_create", {"name": "Bolt & Co", "kind": "customer"}, "contact_id")
+        _made(c, "location_create", {"name": "Acme Denver", "customer_id": acme}, "location_id")
+        _made(c, "location_create", {"name": "Acme Boise", "customer_id": acme}, "location_id")
+        _made(c, "location_create", {"name": "Bolt Yard", "customer_id": bolt}, "location_id")
+        assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
+        first = FR.records(c, "human:eve", kind="location", equal={"customer_id": acme}, limit=1, at=AT)
+        assert [r["name"] for r in first["locations"]] == ["Acme Boise"] and first["next_cursor"]
+        assert first["locations"][0]["customer_name"] == "Acme Retail"
+        rest = FR.records(c, "human:eve", kind="location", equal={"customer_id": acme}, limit=1,
+                          cursor=first["next_cursor"], at=AT)
+        assert [r["name"] for r in rest["locations"]] == ["Acme Denver"] and rest["next_cursor"] is None
+
+
+def test_a_location_detail_carries_its_next_due_day_as_its_list_does(books):
+    with books.transaction() as c:
+        denver = _made(c, "location_create", {"name": "Denver", "kind": "store"}, "location_id")
+        due = act(c, OWNER, "due_date_create", {"name": "Permit", "subject_type": "location", "subject_id": denver,
+                                                "repeats": "once", "starts_on": "2026-11-05", "assignee_id": OWNER})
+        assert due.status == "committed", due.reason
+        assert FR.records(c, OWNER, kind="location", at=AT)["locations"][0]["next_due_on"] == "2026-11-05"
+        assert FR.record(c, OWNER, kind="location", record_id=denver, at=AT)["location"]["next_due_on"] == "2026-11-05"
+
+
+def test_r1_the_pnl_by_location_shows_cost_of_goods_and_gross_margin_and_adds_up(books):
+    with books.transaction() as c:
+        ids = _records(c)
+        denver, office = ids["location"]["Denver"], ids["location"]["Office"]
+        _post(c, 1_000, {"location": denver}, "5100")          # AI services: under Cost of revenue
+        _post(c, 2_500, {"location": denver}, "6100")          # Software: an operating expense, not cost of goods
+        _post(c, 7_000, {"location": office}, "5200")          # Video production: under Cost of revenue
+        sale = act(c, OWNER, "journal", {"date": DAY, "memo": "Sale", "lines": [
+            {"account_id": account(c, "4000"), "amount": -9_000, "tags": {"location": denver}},
+            {"account_id": account(c, "1000"), "amount": 9_000}]})
+        assert sale.status == "committed", sale.reason
+        by_location = FR.pnl_by(c, OWNER, "location", *WINDOW, basis="accrual", top_n=50, at=AT)
+        assert (by_location["income"], by_location["expense"]) == (9_000, 10_500)
+        assert (by_location["cost_of_goods"], by_location["gross_margin"]) == (8_000, 1_000)
+        rows = {str(r["label"]): r for r in by_location["rows"]}
+        assert (rows["Denver"]["cost_of_goods"], rows["Denver"]["gross_margin"]) == (1_000, 8_000)
+        assert (rows["Office"]["cost_of_goods"], rows["Office"]["gross_margin"]) == (7_000, -7_000)
+        assert sum(int(r["cost_of_goods"]) for r in by_location["rows"]) == by_location["cost_of_goods"]
+        one = FR.report(c, OWNER, "pnl_by_account", start=WINDOW[0], end=WINDOW[1], by="location", record_id=denver,
+                        basis="accrual", at=AT)
+        assert (one["cost_of_goods"], one["gross_margin"]) == (1_000, 8_000)

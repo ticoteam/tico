@@ -528,10 +528,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub health-monitor findings            the Health Monitor: what the last hourly scan found
     hub health-monitor report <key> | --process process:<name> --cpu N --mb N
                                            report a finding as a Tico bug, one ticket per signature
-    hub finance search [--kind entry|feed|bill|invoice|contact|rule|card] [--q words] [--status S] [--vendor V]
+    hub finance search [--kind entry|feed|bill|invoice|contact|rule|card|po|estimate|item|location|project|equipment|due_date] [--q words] [--status S] [--vendor V]
                     [--start D] [--end D] [--cursor C] [--limit N]   the books you may see; name a kind to page
-    hub finance report <pnl|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by|close> [--start D]
-                    [--end D] [--period month] [--compare prior] [--top-n N] [--by vendor] [--month YYYY-MM]
+    hub finance report <pnl|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by|revenue_by_item|close>
+                    [--start D] [--end D] [--period month] [--compare prior] [--top-n N] [--by vendor] [--month YYYY-MM]
     hub finance metric <name> [--budget-id B] [--start D] [--end D] [--days N]   one number, with its as-of time
     hub finance act <kind|help> [--payload JSON|-] [--dry-run] [--operation-id KEY]
                                            ask for one Finance action; help lists kinds, `help --payload
@@ -539,6 +539,18 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub finance action <action-id>         an action's status and result
     hub finance inbox [--kind K] [--cursor C] [--limit N]   your Finance work queue, with counts per kind; --kind pages one kind
     hub finance card-fill                  fill your card into a checkout (not available yet)
+    hub locations list [--q W] [--archived hide|only|all] [--kind K] [--customer-id C] [--cursor C] [--limit N]
+                                           the locations you may see, by name; `hub locations get <id>` reads one
+    hub items list [--q W] [--archived hide|only|all] [--kind K] [--cursor C] [--limit N]
+                                           products and services by name or SKU; `get <id>` reads one
+    hub projects list [--q W] [--archived hide|only|all] [--status open|closed] [--customer-id C] [--cursor C] [--limit N]
+                                           projects by name; `get <id>` reads one
+    hub equipment list [--q W] [--archived hide|only|all] [--kind owned|customer] [--customer-id C] [--location-id L]
+                       [--warranty-ends-by D] [--warranty ending] [--due soon|overdue] [--cursor C] [--limit N]
+                                           equipment and vans; `get <id>` reads one
+    hub due-dates list [--q W] [--archived hide|only|all] [--subject-type location|equipment|contact] [--subject-id S]
+                       [--cursor C] [--limit N]   due dates by name; `get <id>` reads one with its days
+    hub customers list [--q W] [--cursor C] [--limit N]    active customers by name; `get <id>` reads a customer's panel
     hub task-manager status                the Task Manager: bot, hourly report switch and schedule, last run, each department
     hub task-manager on|off                the hourly department report (the owner or an admin)
     hub task-manager schedule <business|hourly|4h|daily> [--at HH:MM]
@@ -772,6 +784,24 @@ def _finance_payload(text):
     if not isinstance(value, dict):
         raise argparse.ArgumentTypeError("--payload must be a JSON object")
     return value
+
+
+def _record_commands(sub, word, noun, filters, archived=True):
+    """`hub <word> list` and `hub <word> get <id>`: a page of one kind of record by name, or one by id. `filters` are
+    (flag, choices or None) pairs, the route's filters; `archived` adds the hide|only|all flag when the route has it."""
+    group = sub.add_parser(word, help=f"{noun}: `list` by name, `get <id>` one").add_subparsers(dest="sub")
+    s = group.add_parser("list", help=f"{noun} you may see, by name, paged with --cursor")
+    s.add_argument("--q", help="words to match by name")
+    if archived:
+        s.add_argument("--archived", choices=["hide", "only", "all"], help="archived ones: hide (default), only, or all")
+    for flag, choices in filters:
+        s.add_argument(flag, choices=choices)
+    s.add_argument("--cursor", help="next_cursor from the last page")
+    s.add_argument("--limit", type=int, help="rows per page (default 50, up to 200)")
+    s.set_defaults(fn=word)
+    s = group.add_parser("get", help=f"one of {noun}, by its id")
+    s.add_argument("id")
+    s.set_defaults(fn=word)
 
 
 def parser():
@@ -3372,8 +3402,10 @@ def parser():
     s.set_defaults(fn="health-monitor report")
     fin = sub.add_parser("finance", help="the books, as you: search, reports, metrics, actions, your work queue "
                          "(docs/finance-tools.md)").add_subparsers(dest="sub")
-    s = fin.add_parser("search", help="entries, bank and card rows, bills, invoices, contacts and rules you may see")
-    s.add_argument("--kind", choices=["entry", "feed", "bill", "invoice", "contact", "rule", "card"])
+    s = fin.add_parser("search", help="entries, bank and card rows, bills, invoices, contacts, rules, purchase orders, "
+                       "estimates and records (items, locations, projects, equipment, due dates) you may see")
+    s.add_argument("--kind", choices=["entry", "feed", "bill", "invoice", "contact", "rule", "card", "po", "estimate",
+                                      "item", "location", "project", "equipment", "due_date"])
     s.add_argument("--q")
     for flag in ("--status", "--contact-id", "--vendor", "--account-id", "--money-account-id", "--start", "--end",
                  "--cursor"):
@@ -3381,12 +3413,13 @@ def parser():
     s.add_argument("--aging", choices=["current", "1_30", "31_60", "61_90", "over_90"])
     s.add_argument("--contact-kind", choices=["vendor", "customer", "both"])
     s.add_argument("--rule-kind", choices=["gate", "posting"])
-    s.add_argument("--active", type=lambda v: v.lower() in ("1", "true", "yes", "on"), help="contacts: true or false")
+    s.add_argument("--active", type=lambda v: v.lower() in ("1", "true", "yes", "on"),
+                   help="contacts and records: true (active only) or false (archived only)")
     s.add_argument("--limit", type=int)
     s.set_defaults(fn="finance search")
     s = fin.add_parser("report", help="one report cut to your view; rows past --top-n fold into Other")
     s.add_argument("kind", choices=["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging",
-                                    "spend_by", "close"])
+                                    "spend_by", "revenue_by_item", "close"])
     s.add_argument("--start"); s.add_argument("--end")
     s.add_argument("--period", choices=["day", "week", "month", "quarter", "year"])
     s.add_argument("--basis", choices=["cash", "accrual"])
@@ -3419,6 +3452,19 @@ def parser():
     s.add_argument("--cursor"); s.add_argument("--limit", type=int)
     s.set_defaults(fn="finance inbox")
     fin.add_parser("card-fill", help="fill your card into a checkout (not available yet)").set_defaults(fn="finance card-fill")
+    # The Operations records: the tool named after the command runs both leaves, so `fn` is the command's name.
+    _record_commands(sub, "locations", "the locations (stores, offices, sites, yards)",
+                     [("--kind", ["store", "office", "warehouse", "plant", "customer_site", "vehicle", "other"]),
+                      ("--customer-id", None)])
+    _record_commands(sub, "items", "the products and services", [("--kind", ["service", "inventory", "non_inventory",
+                     "bundle", "category", "raw_material", "assembly"])])
+    _record_commands(sub, "projects", "the projects", [("--status", ["open", "closed"]), ("--customer-id", None)])
+    _record_commands(sub, "equipment", "the equipment and vans", [
+        ("--kind", ["owned", "customer"]), ("--customer-id", None), ("--location-id", None),
+        ("--warranty-ends-by", None), ("--warranty", ["ending"]), ("--due", ["soon", "overdue"])])
+    _record_commands(sub, "due-dates", "the due dates", [("--subject-type", ["location", "equipment", "contact"]),
+                                                       ("--subject-id", None)])
+    _record_commands(sub, "customers", "the active customers", [], archived=False)
     manager = sub.add_parser("task-manager", help="the Task Manager's hourly department check (docs/task-manager.md)").add_subparsers(dest="sub")
     manager.add_parser("status", help="bot, report switch and schedule, last run, each department's last check").set_defaults(fn="task-manager status")
     manager.add_parser("on", help="switch the hourly report on").set_defaults(fn="task-manager on")

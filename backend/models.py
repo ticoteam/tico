@@ -2226,6 +2226,8 @@ class OnboardingDraft(Contract):
     names: OnboardingNames = Field(default_factory=OnboardingNames)
     answers: OnboardingAnswers = Field(default_factory=OnboardingAnswers)
     selected: dict[Slug, OnboardingSelection] = Field(default_factory=dict, max_length=300)   # the chart's 300-seat guard
+    # Setup's business type (backend/sidebar.py BUSINESS_TYPES, checked there); left out, the answer stays as it is.
+    business_type: str | None = Field(default=None, max_length=40)
 
 
 class OnboardingCompanyFile(Contract):

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 from . import banking, budgeting, cards, catalog, documents, gateway_sync, gating, handlers, jobs, mirror, payments
-from . import purchasing
+from . import due_dates, equipment, purchasing, record_files, template_grants
 from . import posting
 from . import raw_totals, runs
 from . import setup as setup_mod
@@ -49,7 +49,7 @@ PLANNERS: dict[str, handlers.Planner] = {
     "connection_sync": banking.connection_sync, "connection_disconnect": banking.connection_disconnect,
     "connection_map": banking.connection_map, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
     **documents.PLANNERS, **mirror.PLANNERS, **tax.PLANNERS, **raw_totals.PLANNERS, **catalog.PLANNERS,
-    **purchasing.PLANNERS}
+    **purchasing.PLANNERS, **equipment.PLANNERS, **due_dates.PLANNERS, **record_files.PLANNERS}
 assert set(PLANNERS) == set(K.LIVE)
 
 STATUSES = ("committed", "needs_approval", "denied", "failed", "expired", "withdrawn")
@@ -168,6 +168,16 @@ def _release(c: sqlite3.Connection, name: str) -> None:
     c.execute(f"RELEASE SAVEPOINT {name}")
 
 
+def savepoint(c: sqlite3.Connection, name: str) -> int:
+    """Opens a savepoint that `undo` rolls back: a preview stages a row's customer for real, checks the row, undoes it."""
+    return _savepoint(c, name)
+
+
+def undo(c: sqlite3.Connection, name: str, mark: int) -> None:
+    """Rolls back to a savepoint `savepoint` opened, with the after-commit hooks queued since, and releases it."""
+    _rollback(c, name, mark)
+
+
 def _requester(c: sqlite3.Connection, who: str) -> str:
     """Who the Tico approval is asked by: the teammate, or the keeper for system work."""
     return who if who != O.SYSTEM and tico.known_actor(c, who) else "keeper"
@@ -211,7 +221,9 @@ def _plan(ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object],
     """The right check first (a missing right is a denial, or for budgets a request to the asker's manager), then the
     kind's own checks and default gate, then the gate rules (§6.3), which run again whenever this does: at consume."""
     if ctx.book.mode == "mirror" and kind in mirror.REFUSED:
-        raise FinanceError(NOT_AVAILABLE, f"{kind} is not available while the books are a provider's (mirror mode)")
+        reason = ("Delete it in QuickBooks; it voids here." if kind == "po_void"
+                  else f"{kind} is not available while the books are a provider's (mirror mode)")
+        raise FinanceError(NOT_AVAILABLE, reason)
     by_right = K.authority(ctx.org, p.who, kind, ctx.rights(p.who))
     if by_right is not None and by_right.outcome == "deny":
         raise FinanceError(DENIED, f"{kind} needs {by_right.rule.removeprefix('right:')}")
@@ -544,6 +556,9 @@ drain_events = jobs.drain
 open_next_period = jobs.open_next_period
 watch_documents = jobs.watch
 grant_defaults = rights.grant_defaults
+template_declared = template_grants.declared            # a catalog template's Finance grant (template_grants.py)
+template_hire = template_grants.hire
+template_ensure = template_grants.ensure
 
 
 def set_bills_email(c: sqlite3.Connection, address: str | None, by: str = O.SYSTEM, at: str | None = None) -> None:

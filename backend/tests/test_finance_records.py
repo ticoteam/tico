@@ -103,7 +103,7 @@ def test_a_line_tag_must_name_an_active_location_or_project(books):
 def test_a_price_change_asks_a_finance_admin_unless_the_owner_makes_it(books):
     with books.transaction() as c:
         item_id = str(act(c, OWNER, "item_create", {"name": "Desk", "kind": "service", "price": 1_000}).result["item_id"])
-        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.book"}).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.records"}).status == "committed"
         assert act(c, "human:dan", "item_update", {"item_id": item_id, "price": 1_200}).status == "needs_approval"
         assert c.execute("SELECT price FROM items WHERE id=?", (item_id,)).fetchone()[0] == 1_000
         assert act(c, OWNER, "item_update", {"item_id": item_id, "price": 1_200}).status == "committed"
@@ -129,25 +129,23 @@ def test_an_item_takes_a_raw_material_or_assembly_kind_and_refuses_an_unlisted_o
             RS.insert(c, "items", {"name": "Bolt", "kind": "gizmo", "created_at": AT, "created_by_id": OWNER})
 
 
-def test_an_item_with_an_account_a_teammate_cannot_see_is_not_found_to_them_whatever_they_change(books):
+def test_an_item_with_an_account_a_teammate_cannot_see_still_takes_their_edits_and_keeps_its_account(books):
     with books.transaction() as c:
         hidden = account(c, "4000")
-        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.book"}).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.records"}).status == "committed"
         item = str(act(c, OWNER, "item_create", {"name": "Desk", "kind": "service", "price": 1_000,
                                                  "income_account_id": hidden}).result["item_id"])
-        changes = ({"price": 1_000}, {"price": 2_000}, {"name": "Desk"}, {"name": "Lamp"})
-        answers = [act(c, "human:dan", "item_update", {"item_id": item, **change}) for change in changes]
-        missing = act(c, "human:dan", "item_update", {"item_id": "no-such-item", "price": 2_000})
-        assert missing.code == "not_found", missing
-        assert {(a.status, a.code, a.reason) for a in answers} == {(missing.status, missing.code, missing.reason)}, \
-            answers
-        assert tuple(c.execute("SELECT price, income_account_id FROM items WHERE id=?", (item,)).fetchone()) == \
-            (1_000, hidden)
+        assert act(c, "human:dan", "item_update", {"item_id": item, "name": "Lamp"}).status == "committed"
+        assert act(c, "human:dan", "item_update", {"item_id": item, "price": 2_000}).status == "needs_approval"
+        assert act(c, "human:dan", "item_update", {"item_id": item, "income_account_id": hidden}).code == "not_found"
+        assert tuple(c.execute("SELECT name, price, income_account_id FROM items WHERE id=?", (item,)).fetchone()) == \
+            ("Lamp", 1_000, hidden)
 
 
 def test_an_item_sets_only_accounts_its_setter_can_see(books):
     with books.transaction() as c:
         hidden = account(c, "4000")
+        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.records"}).status == "committed"
         assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.book"}).status == "committed"
         item = str(act(c, OWNER, "item_create", {"name": "Desk", "kind": "service", "price": 1_000}).result["item_id"])
         refused = act(c, "human:dan", "item_create", {"name": "Lamp", "kind": "service", "income_account_id": hidden})

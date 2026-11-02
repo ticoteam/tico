@@ -64,7 +64,8 @@ class FakeBooks:
             return self.replies.pop(0)
         kind = {"account.create": "Account", "party.create": "Vendor", "bill.create": "Bill", "bill.void": "Bill",
                 "invoice.create": "Invoice", "invoice.void": "Invoice", "payment.bill": "BillPayment",
-                "purchaseorder.create": "PurchaseOrder", "estimate.create": "Estimate",
+                "purchaseorder.create": "PurchaseOrder", "purchaseorder.close": "PurchaseOrder",
+                "estimate.create": "Estimate", "item.create": "Item", "item.update": "Item",
                 "payment.invoice": "Payment", "writeoff.create": "CreditMemo", "credit.apply": "Payment"}.get(
                     op, "JournalEntry")
         return mirror.Sent(True, kind=kind, external_id=str(900 + len(self.sent)), revision="1")
@@ -1255,6 +1256,12 @@ def test_a_parked_refund_keeps_the_credit_it_refunds_when_it_is_decoded_again():
     refund = M.Journal(M.Ext("Payment", "ARCREDITPAYMENT:pay-1", "1"), "2026-10-12", "refund", "sync",
                        (M.EntryLine("Account:1", 4000), M.EntryLine("Account:9", -4000)), refund_of="CreditNote:cn-1")
     assert M.decode(M.encode(refund)).refund_of == "CreditNote:cn-1"
+
+
+def test_a_provider_order_keeps_its_tax_when_it_is_decoded_again():
+    order = M.Order(M.Ext("Estimate", "41", "1"), "Customer:4", "EST-41", "2026-10-06", 9150,
+                    (M.EntryLine("Account:3", 9000, item="Item:5", key="2"),), status="sent", tax=150)
+    assert M.decode(json.loads(json.dumps(M.encode(order)))) == order
 
 
 def test_a_payment_clears_the_payable_account_its_bill_posted_against(books):

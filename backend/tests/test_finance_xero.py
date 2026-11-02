@@ -2200,3 +2200,63 @@ def test_a_location_or_job_made_here_in_a_xero_book_is_refused_since_xero_keeps_
         assert act(c, OWNER, "location_create", {"name": "Dallas"}).code == "invalid"
         customer = _local(c, "Contact:contact-1", "fin_contacts")
         assert act(c, OWNER, "project_create", {"name": "Deck", "customer_id": customer}).code == "invalid"
+
+
+def test_a_job_updated_in_a_xero_book_says_xero_has_no_jobs_not_that_the_job_is_missing(books):
+    """A job that predates the mirror cannot be written to Xero, and the refusal says so (it is not a missing job)."""
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    cid = _connection(books)
+    with books.transaction() as c:
+        contact = act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer"})
+        customer = str(contact.result["contact_id"])
+        made = act(c, OWNER, "project_create", {"name": "Deck", "customer_id": customer})
+        assert made.status == "committed", made
+        project = str(made.result["project_id"])
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.transaction() as c:
+        refused = act(c, OWNER, "project_update", {"project_id": project, "name": "Deck 2"})
+        assert refused.code == "invalid" and "written to QuickBooks only" in str(refused.reason), refused
+
+
+def test_an_item_xero_holds_is_archived_in_xero_so_archiving_it_here_is_refused(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.transaction() as c:
+        refused = act(c, OWNER, "item_update", {"item_id": _local(c, "Item:item-1", "items"), "active": False})
+        assert refused.code == "invalid" and "archive it there" in str(refused.reason), refused
+
+
+def test_an_invoice_line_xero_names_by_item_code_is_held_on_the_local_item_with_that_code(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    line = {**_line("acct-4000", "100.00"), "ItemCode": "CONSULT"}
+    xbooks.rows["Invoices"] = [{**_invoice("inv-1"), "LineItems": [line]}]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        item = _local(c, "Item:item-1", "items")
+        assert c.execute("SELECT l.item_id FROM fin_invoice_lines l JOIN fin_invoices v ON v.id=l.invoice_id "
+                         "WHERE v.number='INV-inv-1'").fetchone()[0] == item
+
+
+def test_an_invoice_line_named_by_a_code_the_books_also_hold_on_a_tico_item_takes_the_provider_item(books):
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    line = {**_line("acct-4000", "100.00"), "ItemCode": "CONSULT"}
+    xbooks.rows["Invoices"] = [{**_invoice("inv-1"), "LineItems": [line]}]
+    cid = _connection(books)
+    _mirror(books, cid)
+    with books.transaction() as c:
+        c.execute("INSERT INTO items(id, name, sku, kind, created_at, created_by_id) VALUES (?, ?, ?, ?, ?, ?)",
+                  ("tico-consult", "Consulting copy", "CONSULT", "service", AT, OWNER))
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        item = _local(c, "Item:item-1", "items")
+        assert c.execute("SELECT l.item_id FROM fin_invoice_lines l JOIN fin_invoices v ON v.id=l.invoice_id "
+                         "WHERE v.number='INV-inv-1'").fetchone()[0] == item

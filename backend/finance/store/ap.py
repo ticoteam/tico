@@ -71,11 +71,11 @@ def replace_lines(c: sqlite3.Connection, kind: str, doc_id: str, rows: Sequence[
 
 def docs_page(c: sqlite3.Connection, kind: str, *, book_id: str, statuses: Sequence[str] = (), contact_id: str = "",
               q: str = "", start: str = "", end: str = "", before: tuple[str, str] | None = None,
-              most: int = 200, by_paid: bool = False) -> list[Any]:
+              most: int = 200, by_paid: bool = False, tagged: Sequence[tuple[str, Sequence[str]]] = ()) -> list[Any]:
     """Bills or invoices newest first by date (then id), or with `by_paid` by when they were last paid (their latest
     live settlement; never paid last), with the contact's name as `contact_name` and the order's key as `sort_key`
-    (what `before` pages from)."""
-    table, _, _, day, contact = DOCS[kind]
+    (what `before` pages from). `tagged` keeps those with a line tagged (tag name, any of these values)."""
+    table, lines, parent, day, contact = DOCS[kind]
     key = (f"COALESCE((SELECT MAX(s.settled_on) FROM fin_settlements s WHERE s.to_kind='{kind}' AND s.to_id=d.id "
            "AND s.voided_at IS NULL), '')" if by_paid else f"d.{day}")
     sql = (f"SELECT d.*, k.name AS contact_name, {key} AS sort_key FROM {table} d LEFT JOIN fin_contacts k "
@@ -93,6 +93,10 @@ def docs_page(c: sqlite3.Connection, kind: str, *, book_id: str, statuses: Seque
     if end:
         sql += f" AND d.{day}<=?"
         args.append(end)
+    for tag, values in tagged:
+        sql += (f" AND EXISTS (SELECT 1 FROM {lines} x WHERE x.{parent}=d.id "
+                f"AND json_extract(x.tags_json, '$.' || ?) IN ({_marks(values)}))")
+        args += [tag, *values]
     if q:
         sql += " AND (d.number LIKE ? ESCAPE '\\' OR d.memo LIKE ? ESCAPE '\\' OR k.name LIKE ? ESCAPE '\\')"
         args += [like(q)] * 3
@@ -146,10 +150,30 @@ def number_taken(c: sqlite3.Connection, kind: str, contact_id: str, number: str,
                      (contact_id, number, not_id)).fetchone() is not None
 
 
+def invoice_item_revenue(c: sqlite3.Connection, book_id: str, start: str, end: str,
+                         cut: Sequence[str] = ()) -> list[Any]:
+    """The lines of the posted invoices dated in the window, summed by the item each names (item_id NULL is the lines
+    that name none). Only lines on income accounts are revenue: a sales-tax line is a liability and counts for nothing.
+    Draft and void invoices count for nothing. An invoice with a line on a `cut` account is left out whole, as the aging
+    reads leave it (tab_ap.keep_docs)."""
+    sql = ("SELECT l.item_id, MAX(it.name) AS item_name, SUM(l.amount) AS amount "
+           "FROM fin_invoice_lines l JOIN fin_invoices v ON v.id=l.invoice_id "
+           "JOIN fin_accounts a ON a.id=l.account_id AND a.type='income' "
+           "LEFT JOIN items it ON it.id=l.item_id "
+           "WHERE v.book_id=? AND v.status IN ('sent','partial','paid') AND v.invoice_date BETWEEN ? AND ?")
+    args: list[object] = [book_id, start, end]
+    if cut:
+        sql += (" AND v.id NOT IN (SELECT invoice_id FROM fin_invoice_lines WHERE account_id IN "
+                f"({_marks(cut)}))")
+        args += list(cut)
+    return c.execute(sql + " GROUP BY l.item_id", args).fetchall()
+
+
 # ------------------------------------------------------------------------------------------------ contacts
 def contacts_page(c: sqlite3.Connection, *, book_id: str, kinds: Sequence[str] = (), q: str = "",
-                  active: bool | None = True, after: tuple[str, str] | None = None, most: int = 200) -> list[Any]:
-    """Contacts by name (then id)."""
+                  active: bool | None = True, after: tuple[str, str] | None = None, most: int = 200,
+                  by_email: bool = True) -> list[Any]:
+    """Contacts by name (then id). `q` matches a name, and an email too when `by_email`."""
     sql = "SELECT * FROM fin_contacts WHERE book_id=?"
     args: list[object] = [book_id]
     if kinds:
@@ -158,9 +182,12 @@ def contacts_page(c: sqlite3.Connection, *, book_id: str, kinds: Sequence[str] =
     if active is not None:
         sql += " AND active=?"
         args.append(1 if active else 0)
-    if q:
+    if q and by_email:
         sql += " AND (name LIKE ? ESCAPE '\\' OR emails_json LIKE ? ESCAPE '\\')"
         args += [like(q)] * 2
+    elif q:
+        sql += " AND name LIKE ? ESCAPE '\\'"
+        args.append(like(q))
     if after:
         sql += " AND (name>? OR (name=? AND id>?))"
         args += [after[0], after[0], after[1]]
@@ -214,7 +241,8 @@ def vendor_key(c: sqlite3.Connection, book_id: str, key: str) -> str:
 
 def renewals_due(c: sqlite3.Connection, book_id: str) -> list[Any]:
     """Active vendors with a renewal date: the watch raises each one's renewal stages."""
-    return c.execute("SELECT id, renewal_on FROM fin_contacts WHERE book_id=? AND active=1 "
+    return c.execute("SELECT id, name, owner_id, renewal_on, renewal_notice_days FROM fin_contacts WHERE book_id=? "
+                     "AND active=1 "
                      "AND kind IN ('vendor','both') AND renewal_on IS NOT NULL AND renewal_on<>''",
                      (book_id,)).fetchall()
 
@@ -503,3 +531,10 @@ def drop_unmatched(c: sqlite3.Connection, book_id: str, file_ids: Sequence[str])
 def doc_count(c: sqlite3.Connection, kind: str, book_id: str) -> int:
     table = DOCS[kind][0]
     return int(c.execute(f"SELECT COUNT(*) FROM {table} WHERE book_id=?", (book_id,)).fetchone()[0])
+
+
+def active_contacts(c: sqlite3.Connection, book_id: str, kinds: Sequence[str]) -> list[Any]:
+    """(id, name) of the active contacts of these kinds in the book, for an import's name lookups."""
+    marks = ",".join("?" * len(kinds))
+    return c.execute(f"SELECT id, name FROM fin_contacts WHERE book_id=? AND active=1 AND kind IN ({marks})",
+                     (book_id, *kinds)).fetchall()

@@ -242,6 +242,8 @@ class Scheduler:
         else:
             if waiting:
                 steps.append(("finance_events", lambda c: finance.drain_events(c, stamp(at))))
+            if self.finance_due("template_rights", at, timedelta(minutes=10)):
+                steps.append(("template_rights", lambda c: finance.template_ensure(c)))    # hires made before setup
             if self.finance_due("holds", at, timedelta(minutes=10)):
                 steps.append(("finance_holds", lambda c: finance.expire_holds(c, stamp(at))))
             if self.finance_due("usage", at, timedelta(hours=1)):
@@ -410,6 +412,15 @@ class Scheduler:
                 with locked("release_schedule") as c:
                     with isolated(c, "release_schedule", release_due, failures):
                         release_flow.tick(c, at)
+        # Due dates on records: once a company day, one task per teammate for what falls due (backend/due_date_flow.py).
+        if not self.store.settings.rehearsal:
+            from . import due_date_flow
+            with self.store.read() as c:
+                dates_due = due_date_flow.due(c, at)
+            if dates_due:
+                with locked("due_dates") as c:
+                    with isolated(c, "due_dates", "day", failures):
+                        due_date_flow.tick(c, at)
         # Due-date reminders: candidates are read without the lock (H.TASKS_DUE_SQL, an index), and only the ones
         # that would send are written, a batch per transaction, each checked again under the lock.
         with self.store.read() as c:

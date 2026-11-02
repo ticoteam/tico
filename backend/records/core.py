@@ -7,6 +7,8 @@ ITEM_KINDS = ("service", "inventory", "non_inventory", "bundle", "category", "ra
 # Item kinds QuickBooks and Xero have no item type for: a mirrored book does not take them.
 TICO_ONLY_ITEM_KINDS = ("raw_material", "assembly")
 PROJECT_STATUSES = ("open", "closed")
+# Owned equipment (a van, a tool) is the company's; a customer's unit sits at that customer.
+EQUIPMENT_KINDS = ("owned", "customer")
 MAX_NAME = 200
 
 

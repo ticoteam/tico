@@ -9,6 +9,8 @@ import pytest
 
 from backend.finance import mirror
 from backend.finance import qbo as QC
+from backend.finance import reads as FR
+from backend.finance.context import load
 from backend.finance.core import mirror as M
 from backend.finance.core import qbo as Q
 from backend.finance.core import xero as X
@@ -131,6 +133,30 @@ def test_an_invoice_or_estimate_line_on_another_customers_job_is_refused_and_one
         assert c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0] == outbox
         assert act(c, OWNER, "invoice_create", {"customer_id": beta, "invoice_date": "2026-10-06",
                                                 "lines": line(kitchen)}).status == "committed"
+
+
+def test_a_quickbooks_invoice_or_estimate_line_on_another_account_than_its_items_is_refused_at_plan_time(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["accounts"].append(acct(4, "4100", "Services", "income"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        beta, item = _local(c, "Customer:4", "fin_contacts"), _local(c, "Item:5", "items")
+
+        def lines(account_id: str) -> list[dict[str, Any]]:
+            return [{"item_id": item, "account_id": account_id, "amount": 1500, "description": "seats"}]
+        outbox = c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0]
+        for op, day in (("invoice_create", "invoice_date"), ("estimate_create", "estimate_date")):
+            refused = act(c, OWNER, op, {"customer_id": beta, day: "2026-10-06", "lines": lines(account(c, "4100"))},
+                          dry_run=True)
+            assert (refused.status, refused.code) == ("failed", "invalid"), refused
+            assert refused.reason == ("QuickBooks posts this item to its own income account; "
+                                      "use that account or another item"), refused
+            assert act(c, OWNER, op, {"customer_id": beta, day: "2026-10-06", "lines": lines(account(c, "4000"))},
+                       dry_run=True).status == "committed"
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0] == outbox
 
 
 def test_a_renamed_or_deactivated_record_updates_in_location_and_reverses_nothing(books):
@@ -360,8 +386,9 @@ def test_a_job_made_here_is_sent_to_quickbooks_as_a_job_under_its_customer(books
 
 def test_an_item_change_in_a_mirrored_book_leaves_the_row_as_it_was_until_the_provider_confirms_or_refuses(
         books, monkeypatch):
-    asks: list[tuple[str, str]] = []
-    monkeypatch.setattr(mirror.tico, "needs_you", lambda c, person, title, body: asks.append((person, title)))
+    """X9: a refused price keeps the local price, asks once with the provider's reason, and lands once fixed."""
+    asks: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(mirror.tico, "needs_you", lambda c, person, title, body: asks.append((person, title, body)))
     fake = FakeBooks()
     _records(fake)
     cid = _connection(books)
@@ -369,7 +396,7 @@ def test_an_item_change_in_a_mirrored_book_leaves_the_row_as_it_was_until_the_pr
     assert _drain(books, fake, cid) == []
     with books.transaction() as c:
         item = _local(c, "Item:5", "items")
-        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.book"}).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.records"}).status == "committed"
         # Dan sees the item's accounts, so a price change of his is asked of an admin rather than found missing.
         assert act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "everything",
                                             "whose": "company"}).status == "committed"
@@ -383,7 +410,7 @@ def test_an_item_change_in_a_mirrored_book_leaves_the_row_as_it_was_until_the_pr
         assert c.execute("SELECT price FROM items WHERE id=?", (item,)).fetchone()[0] == 15_000
         status, error = c.execute("SELECT status, last_error FROM fin_outbox WHERE op='item.update'").fetchone()
         assert (status, error) == ("failed", "Price is not allowed on this item")
-    assert len(asks) == 1, asks
+    assert len(asks) == 1 and "Price is not allowed on this item" in asks[0][2], asks
     with books.transaction() as c:
         assert act(c, OWNER, "item_update", {"item_id": item, "price": 21_000}).status == "committed"
     assert _drain(books, fake, cid, now=LATER) == []
@@ -741,7 +768,7 @@ def test_a_mirrored_item_keeps_the_sku_the_provider_holds_and_takes_another(book
     assert _sent(fake, "item.update")["sku"] == "CONS-2"
 
 
-def test_renaming_an_imported_job_in_a_mirrored_book_is_refused_and_queues_nothing(books):
+def test_renaming_an_imported_job_in_a_mirrored_book_is_written_to_the_provider_before_the_books_change(books):
     fake = FakeBooks()
     _records(fake)
     cid = _connection(books)
@@ -750,12 +777,35 @@ def test_renaming_an_imported_job_in_a_mirrored_book_is_refused_and_queues_nothi
     with books.transaction() as c:
         job = _local(c, "Project:12", "projects")
         renamed = act(c, OWNER, "project_update", {"project_id": job, "name": "Kitchen remodel 2"})
-        assert renamed.status == "denied" and "mirror mode" in renamed.reason, renamed
-        assert c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op='project.update'").fetchone()[0] == 0
-    assert _drain(books, fake, cid, now=LATER) == []
-    assert [op for op, _, _ in fake.sent if op == "project.update"] == []
+        assert renamed.status == "committed", renamed
     with books.read() as c:
         assert c.execute("SELECT name FROM projects WHERE id=?", (job,)).fetchone()[0] == "Kitchen remodel"
+    fake.replies.append(mirror.Sent(True, kind="Project", external_id="12", revision="2"))
+    assert _drain(books, fake, cid, now=LATER) == []
+    sent = [(op, body) for op, body, _ in fake.sent if op == "project.update"]
+    assert [(body["name"], body["ext"], body["revision"]) for _, body in sent] == \
+        [("Kitchen remodel 2", "Project:12", "1")]
+    with books.read() as c:
+        assert c.execute("SELECT name FROM projects WHERE id=?", (job,)).fetchone()[0] == "Kitchen remodel 2"
+        assert c.execute("SELECT revision FROM fin_external_refs WHERE external_id='Project:12'").fetchone()[0] == "2"
+
+
+def test_a_job_rename_the_provider_refuses_leaves_the_local_name_and_asks_the_owner(books):
+    """X9 for a job: the provider's refusal is the reason a person reads; the local job keeps its name until it is
+    accepted."""
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        job = _local(c, "Project:12", "projects")
+        act(c, OWNER, "project_update", {"project_id": job, "name": "Kitchen remodel 2"})
+    fake.replies.append(mirror.Sent(False, error="Customer name is in use", final=True))
+    assert any("Customer name is in use" in p for p in _drain(books, fake, cid, now=LATER))
+    with books.read() as c:
+        assert c.execute("SELECT name FROM projects WHERE id=?", (job,)).fetchone()[0] == "Kitchen remodel"
+        assert c.execute("SELECT status FROM fin_outbox WHERE op='project.update'").fetchone()[0] == "failed"
 
 
 def test_a_kind_change_across_the_item_type_the_books_hold_is_refused_and_one_inside_it_stays_here(books):
@@ -1098,6 +1148,30 @@ def test_a_bill_the_provider_bills_for_less_keeps_its_order_line_billed_until_th
     assert _drain(books, fake, cid, now="2026-10-15T16:00:00.000000Z", passes=1) == []
     with books.read() as c:
         assert SP.line_room(c, line) == 10_000
+
+
+def test_a_location_row_says_in_books_as_kept_local_does_and_an_item_carries_its_quantity(books):
+    with books.read() as c:
+        assert "in_books" not in str(FR.records(c, OWNER, kind="location", at=AT))        # a native book says nothing
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "location_create", {"name": "Acme Site", "kind": "customer_site"})
+        assert made.status == "committed", made
+        c.execute("UPDATE items SET quantity_on_hand=14, quantity_synced_at=? WHERE name='Consulting'", (AT,))
+    with books.read() as c:
+        rows = {r["name"]: r for r in FR.records(c, OWNER, kind="location", at=AT)["locations"]}
+        assert (rows["Austin"]["in_books"], rows["Acme Site"]["in_books"]) == (True, False)
+        ctx = load(c, AT)
+        for row in rows.values():
+            assert row["in_books"] == (not mirror.kept_local(ctx, "locations", row["id"]))
+            one = FR.record(c, OWNER, kind="location", record_id=row["id"], at=AT)["location"]
+            assert one["in_books"] == row["in_books"]
+        item = FR.records(c, OWNER, kind="item", q="Consulting", at=AT)["items"][0]
+        assert (item["quantity_on_hand"], item["quantity_synced_at"]) == (14, AT)
 
 
 def test_a_line_tagged_to_a_site_kept_in_tico_keeps_the_site_when_the_provider_revises_the_bill(books):
@@ -1783,3 +1857,909 @@ def test_an_order_the_provider_holds_that_cannot_be_linked_here_stays_failed_and
                                        (key,)).fetchone()
         assert status == "failed" and "could not be linked here" in last_error, (status, last_error)
         assert c.execute("SELECT COUNT(*) FROM fin_purchase_orders").fetchone()[0] == 0
+
+
+def test_a_purchase_order_and_an_estimate_come_in_with_their_lines_and_follow_the_provider_on_the_change_feed(books):
+    """Orders are read in backfill and in the change feed: a purchase order's status and lines come in as the provider
+    holds them, no entry is posted for either, and a later revision replaces the lines."""
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    tags = (("location", "Department:3"),)
+    po = M.Order(M.Ext("PurchaseOrder", "40", "1"), "Vendor:9", "PO-40", "2026-10-05", 1500,
+                 (M.EntryLine("Account:2", 1500, item="Item:5", tags=tags, key="1"),), status="approved")
+    estimate = M.Order(M.Ext("Estimate", "41", "1"), "Customer:4", "EST-41", "2026-10-06", 9000,
+                       (M.EntryLine("Account:3", 9000, item="Item:5", key="2"),), status="sent")
+    fake.records["documents"] += [po, estimate]
+    assert _drain(books, fake, cid) == []
+    with books.read() as c:
+        row = c.execute("SELECT vendor_id, number, status, total, closed_by FROM fin_purchase_orders").fetchone()
+        assert tuple(row) == (_local(c, "Vendor:9", "fin_contacts"), "PO-40", "approved", 1500, "")
+        line = c.execute("SELECT account_id, item_id, amount, tags_json FROM fin_po_lines").fetchall()
+        assert [tuple(x)[1:3] for x in line] == [(_local(c, "Item:5", "items"), 1500)]
+        assert json.loads(line[0]["tags_json"]) == {"location": _local(c, "Department:3", "locations")}
+        est = c.execute("SELECT customer_id, status, total FROM fin_estimates").fetchone()
+        assert tuple(est) == (_local(c, "Customer:4", "fin_contacts"), "sent", 9000)
+        assert c.execute("SELECT COUNT(*) FROM fin_entries").fetchone()[0] == 0
+    closed = M.Order(M.Ext("PurchaseOrder", "40", "2"), "Vendor:9", "PO-40", "2026-10-05", 1800,
+                     (M.EntryLine("Account:2", 1800, item="Item:5", tags=tags, key="1"),), status="closed")
+    fake.changes.append(closed)
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        row = c.execute("SELECT status, closed_by, total FROM fin_purchase_orders").fetchone()
+        assert tuple(row) == ("closed", "hand", 1800)
+        assert [int(r[0]) for r in c.execute("SELECT amount FROM fin_po_lines")] == [1800]
+        assert c.execute("SELECT revision FROM fin_external_refs WHERE external_id='PurchaseOrder:40'").fetchone()[0] == "2"
+
+
+def test_an_inventory_item_marked_raw_material_keeps_the_mark_through_the_next_import_m1(books):
+    """M1: a QuickBooks inventory item comes in as inventory; a person marks it raw material, and the next import of it
+    keeps the mark while its name and price still come in."""
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["records"].append(M.Item(M.Ext("Item", "6", "1"), "Resin", kind="inventory", price=800,
+                                          income="Account:3", expense="Account:2"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        resin = _local(c, "Item:6", "items")
+        marked = act(c, OWNER, "item_update", {"item_id": resin, "kind": "raw_material"})
+        assert marked.status == "committed", marked
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert c.execute("SELECT kind FROM items WHERE id=?", (resin,)).fetchone()[0] == "raw_material"
+    fake.changes.append(M.Item(M.Ext("Item", "6", "2"), "Resin pellets", kind="inventory", price=900,
+                               income="Account:3", expense="Account:2"))
+    assert _drain(books, fake, cid, now=LATER2) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT name, kind, price FROM items WHERE id=?", (resin,)).fetchone()) == \
+            ("Resin pellets", "raw_material", 900)
+
+
+def test_a_service_fee_change_that_needs_approval_reaches_the_provider_before_tico_changes_h6(books):
+    """H6: a service call fee of $89 going to $99 asks for approval; once approved, QuickBooks takes the new price
+    first, and Tico's row changes only when QuickBooks confirms it."""
+    from backend import hubdb as H
+    from backend.finance import actions as FA
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["records"][0] = M.Item(M.Ext("Item", "5", "1"), "Service call", kind="service", price=8900,
+                                        income="Account:3", expense="Account:2")
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item = _local(c, "Item:5", "items")
+        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.records"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "everything",
+                                            "whose": "company"}).status == "committed"
+        asked = act(c, "human:dan", "item_update", {"item_id": item, "price": 9900})
+        assert asked.status == "needs_approval", asked
+        H.approval_decide(c, str(asked.approver), str(asked.approval_id), "approved")
+        assert FA.approval_decided(c, str(asked.approval_id), LATER).status == "committed"
+    with books.read() as c:
+        assert c.execute("SELECT price FROM items WHERE id=?", (item,)).fetchone()[0] == 8900
+    fake.replies.append(mirror.Sent(True, kind="Item", external_id="5", revision="2"))
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert [body.get("price") for op, body, _ in fake.sent if op == "item.update"] == [9900]
+    with books.read() as c:
+        assert c.execute("SELECT price FROM items WHERE id=?", (item,)).fetchone()[0] == 9900
+
+
+def test_a_purchase_order_billed_in_two_parts_is_partial_then_closed_at_the_provider_m2(books):
+    """M2: a resin order billed in two bills is partial; closing it sends the close to QuickBooks, and the order
+    closes here once QuickBooks confirms it, with what was not billed released."""
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    po, line = _approved_order(books, fake, cid, 10_000)
+    for number, amount, now in (("B-81", 6_000, LATER2), ("B-82", 3_000, LATER3)):
+        with books.transaction() as c:
+            billed = act(c, OWNER, "bill_create", {
+                "vendor_id": _local(c, "Vendor:9", "fin_contacts"), "bill_date": "2026-10-05", "number": number,
+                "lines": [{"po_line_id": line, "amount": amount}]})
+            assert billed.status == "committed", billed
+        assert _drain(books, fake, cid, now=now) == []
+    with books.read() as c:
+        status, total = c.execute("SELECT status, total FROM fin_purchase_orders WHERE id=?", (po,)).fetchone()
+        assert SP.shown_po(str(status), SP.billed_total(c, po), int(total)) == "partial"
+        po_ext = str(c.execute("SELECT external_id FROM fin_external_refs WHERE local_table='fin_purchase_orders' "
+                               "AND local_id=?", (po,)).fetchone()[0])
+    with books.transaction() as c:
+        assert act(c, OWNER, "po_close", {"po_id": po}).status == "committed"
+    fake.replies.append(mirror.Sent(True, kind="PurchaseOrder", external_id=po_ext.split(":")[1], revision="2"))
+    assert _drain(books, fake, cid, now="2026-10-15T16:00:00.000000Z") == []
+    assert [op for op, _, _ in fake.sent if op == "purchaseorder.close"] == ["purchaseorder.close"]
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, closed_by FROM fin_purchase_orders WHERE id=?", (po,)).fetchone()) == \
+            ("closed", "hand")
+
+
+def test_a_description_a_person_wrote_survives_an_import_that_has_none_item_7(books):
+    """Item 7: a provider item with no description keeps the one Tico holds when the provider renames it."""
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item = _local(c, "Item:5", "items")
+        c.execute("UPDATE items SET description=? WHERE id=?", ("Hourly rate, onsite", item))
+    fake.changes.append(M.Item(M.Ext("Item", "5", "2"), "Consulting (renamed)", kind="service", price=15000,
+                               income="Account:3", expense="Account:2"))
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT name, description FROM items WHERE id=?", (item,)).fetchone()) == \
+            ("Consulting (renamed)", "Hourly rate, onsite")
+
+
+def test_a_parent_a_person_set_on_a_department_survives_an_import_that_renames_it_item_7(books):
+    """Item 7: a department's parent (a Tico field the books do not send back) survives the provider renaming it."""
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["records"].append(M.Location(M.Ext("Department", "4", "1"), "Region West"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        austin = _local(c, "Department:3", "locations")
+        region = _local(c, "Department:4", "locations")
+        c.execute("UPDATE locations SET parent_id=? WHERE id=?", (region, austin))
+    fake.changes.append(M.Location(M.Ext("Department", "3", "2"), "Austin East"))
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT name, parent_id FROM locations WHERE id=?", (austin,)).fetchone()) == \
+            ("Austin East", region)
+
+
+def test_a_location_kind_a_person_set_survives_an_import_that_renames_it_x20(books):
+    """X20, the import side: the kind is set on create and never by an import, so a kind a person set afterwards
+    survives every later import. The upgrade that moves existing `location` rows to `other` is the records builder's."""
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        austin = _local(c, "Department:3", "locations")
+        assert c.execute("SELECT kind FROM locations WHERE id=?", (austin,)).fetchone()[0] == "other"
+        c.execute("UPDATE locations SET kind='warehouse' WHERE id=?", (austin,))
+    fake.changes.append(M.Location(M.Ext("Department", "3", "2"), "Austin East"))
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT name, kind FROM locations WHERE id=?", (austin,)).fetchone()) == \
+            ("Austin East", "warehouse")
+
+
+# Orders in the mirror: tax, the status a provider revision leaves, and budget holds that follow the provider.
+
+def _tax_account_record(fake: FakeBooks) -> None:
+    fake.records["accounts"].append(M.ChartAccount(M.Ext("Account", "9", "1"), "2300", "Sales tax payable", "liability",
+                                                   subtype=M.SALES_TAX))
+
+
+def _ref_of(books, table: str, local: str) -> tuple[str, str, str]:
+    """The provider's (kind, id, a revision newer than the reference) for a record the books hold."""
+    with books.read() as c:
+        external, revision = c.execute("SELECT external_id, revision FROM fin_external_refs WHERE local_table=? AND "
+                                       "local_id=? AND status='active'", (table, local)).fetchone()
+    kind, _, key = str(external).partition(":")
+    return kind, key, str(int(revision) + 1)
+
+
+def _held(books, po: str) -> int:
+    """What budget holds on a purchase order's lines now."""
+    with books.read() as c:
+        return int(c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_holds WHERE source='purchase_order' AND "
+                             "status='held' AND source_id LIKE ?", (f"{po}:%",)).fetchone()[0])
+
+
+def _budget(books, amount: int = 100_000) -> None:
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": _local(c, "Account:2", "fin_accounts"),
+                                               "amount": amount, "at_limit": "decline", "parent_id": None})
+        assert made.status == "committed", made
+
+
+def _number(books, po: str) -> str:
+    with books.read() as c:
+        return str(c.execute("SELECT number FROM fin_purchase_orders WHERE id=?", (po,)).fetchone()[0])
+
+
+def test_a_taxed_estimate_comes_in_with_its_tax_on_the_sales_tax_account(books):
+    fake = FakeBooks()
+    _records(fake)
+    _tax_account_record(fake)
+    fake.records["documents"] += [M.Order(M.Ext("Estimate", "41", "1"), "Customer:4", "EST-41", "2026-10-06", 9150,
+                                          (M.EntryLine("Account:3", 9000, item="Item:5", key="2"),), status="sent",
+                                          tax=150)]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.read() as c:
+        tax = c.execute("SELECT id FROM fin_accounts WHERE subtype=?", (M.SALES_TAX,)).fetchone()[0]
+        assert c.execute("SELECT total FROM fin_estimates").fetchone()[0] == 9150
+        lines = c.execute("SELECT account_id, amount FROM fin_estimate_lines").fetchall()
+        assert sorted(tuple(x) for x in lines) == sorted([(tax, 150), (_local(c, "Account:3", "fin_accounts"), 9000)])
+        assert c.execute("SELECT COUNT(*) FROM fin_entries").fetchone()[0] == 0
+
+
+def test_a_taxed_purchase_order_closes_once_its_expense_line_is_billed(books):
+    """A provider order's tax is not a line a bill bills, so the tax line must not keep the order open."""
+    fake = FakeBooks()
+    _records(fake)
+    _tax_account_record(fake)
+    fake.records["documents"] += [M.Order(M.Ext("PurchaseOrder", "40", "1"), "Vendor:9", "PO-40", "2026-10-05", 1650,
+                                          (M.EntryLine("Account:2", 1500, item="Item:5", key="1"),), status="approved",
+                                          tax=150)]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        po = _local(c, "PurchaseOrder:40", "fin_purchase_orders")
+        line = str(c.execute("SELECT id FROM fin_po_lines WHERE po_id=? AND amount=1500", (po,)).fetchone()[0])
+        billed = act(c, OWNER, "bill_create", {"vendor_id": _local(c, "Vendor:9", "fin_contacts"),
+                                               "bill_date": "2026-10-05", "number": "B-40",
+                                               "lines": [{"po_line_id": line, "amount": 1500}]})
+        assert billed.status == "committed", billed
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, closed_by FROM fin_purchase_orders WHERE id=?", (po,)).fetchone()) == \
+            ("closed", "bills")
+
+
+def test_a_discounted_order_waits_with_the_same_reason_as_a_discounted_invoice(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["documents"] += [
+        M.Order(M.Ext("Estimate", "41", "1"), "Customer:4", "EST-41", "2026-10-06", 9000,
+                (M.EntryLine("Account:3", 8000, item="Item:5", key="2"),), status="sent"),
+        M.Document(M.Ext("Invoice", "12", "1"), party="Customer:4", number="I-12", day="2026-10-05", due="2026-11-05",
+                   total=9000, lines=(M.EntryLine("Account:3", 8000, description="consulting"),))]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.read() as c:
+        assert sorted(r[0] for r in c.execute("SELECT external_id FROM fin_external_refs WHERE status='unmapped'")) == \
+            ["Estimate:41", "Invoice:12"]
+        assert c.execute("SELECT COUNT(*) FROM fin_estimates").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM fin_invoices").fetchone()[0] == 0
+        for ext in ("Estimate:41", "Invoice:12"):
+            why = c.execute("SELECT detail_json FROM events WHERE action='finance.mirror.unmapped' AND target=?",
+                            (ext,)).fetchone()[0]
+            assert "discounts are not taken in yet" in why, why
+
+
+def test_a_provider_revision_keeps_the_status_the_books_set_and_moves_an_estimate_sent_to_accepted(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["documents"] += [
+        M.Order(M.Ext("Estimate", "41", "1"), "Customer:4", "EST-41", "2026-10-06", 9000,
+                (M.EntryLine("Account:3", 9000, item="Item:5", key="2"),), status="sent"),
+        M.Order(M.Ext("Estimate", "42", "1"), "Customer:4", "EST-42", "2026-10-06", 9000,
+                (M.EntryLine("Account:3", 9000, item="Item:5", key="3"),), status="sent")]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "po_create", {"vendor_id": _local(c, "Vendor:9", "fin_contacts"),
+                                           "po_date": "2026-10-05", "number": "PO-79",
+                                           "lines": [{"item_id": _local(c, "Item:5", "items"), "amount": 1500,
+                                                      "description": "seats"}]})
+        assert made.status == "committed", made
+    assert _drain(books, fake, cid, now=LATER) == []
+    po = str(made.result["po_id"])
+    with books.transaction() as c:
+        assert act(c, OWNER, "po_send", {"po_id": po}).status == "committed"
+    kind, key, rev = _ref_of(books, "fin_purchase_orders", po)
+    fake.changes.append(M.Order(M.Ext(kind, key, rev), "Vendor:9", "PO-79", "2026-10-05", 1500,
+                                (M.EntryLine("Account:2", 1500, item="Item:5", key="1"),), status="approved"))
+    fake.changes.append(M.Order(M.Ext("Estimate", "41", "2"), "Customer:4", "EST-41", "2026-10-06", 9000,
+                                (M.EntryLine("Account:3", 9000, item="Item:5", key="2"),), status="accepted"))
+    fake.changes.append(M.Order(M.Ext("Estimate", "42", "2"), "Customer:4", "EST-42", "2026-10-06", 9000,
+                                (M.EntryLine("Account:3", 9000, item="Item:5", key="3"),), status="declined"))
+    assert _drain(books, fake, cid, now=LATER2) == []
+    with books.read() as c:
+        # The PO stays sent: the provider's Open is not a move the books take. A rejection in the provider does not
+        # move a sent estimate either (only an accepted one moves).
+        assert c.execute("SELECT status FROM fin_purchase_orders WHERE id=?", (po,)).fetchone()[0] == "sent"
+        assert dict(c.execute("SELECT number, status FROM fin_estimates").fetchall()) == \
+            {"EST-41": "accepted", "EST-42": "sent"}
+
+
+def test_a_provider_reopening_a_purchase_order_closed_by_hand_waits_here(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["documents"] += [M.Order(M.Ext("PurchaseOrder", "40", "1"), "Vendor:9", "PO-40", "2026-10-05", 1500,
+                                          (M.EntryLine("Account:2", 1500, item="Item:5", key="1"),), status="approved")]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.read() as c:
+        po = _local(c, "PurchaseOrder:40", "fin_purchase_orders")
+    fake.changes.append(M.Order(M.Ext("PurchaseOrder", "40", "2"), "Vendor:9", "PO-40", "2026-10-05", 1500,
+                                (M.EntryLine("Account:2", 1500, item="Item:5", key="1"),), status="closed"))
+    assert _drain(books, fake, cid, now=LATER) == []
+    fake.changes.append(M.Order(M.Ext("PurchaseOrder", "40", "3"), "Vendor:9", "PO-40", "2026-10-05", 1500,
+                                (M.EntryLine("Account:2", 1500, item="Item:5", key="1"),), status="approved"))
+    assert _drain(books, fake, cid, now=LATER2) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, closed_by FROM fin_purchase_orders WHERE id=?", (po,)).fetchone()) == \
+            ("closed", "hand")
+        revision = c.execute("SELECT revision FROM fin_external_refs WHERE external_id='PurchaseOrder:40'").fetchone()
+        assert revision[0] == "2"
+        why = c.execute("SELECT detail_json FROM events WHERE action='finance.mirror.unmapped' AND "
+                        "target='PurchaseOrder:40' ORDER BY ts DESC LIMIT 1").fetchone()[0]
+        assert "reopened in QuickBooks" in why, why
+
+
+def test_a_purchase_order_closed_here_by_its_bills_stays_closed_while_the_provider_has_it_open(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["documents"] += [M.Order(M.Ext("PurchaseOrder", "40", "1"), "Vendor:9", "PO-40", "2026-10-05", 1500,
+                                          (M.EntryLine("Account:2", 1500, item="Item:5", key="1"),), status="approved")]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        po = _local(c, "PurchaseOrder:40", "fin_purchase_orders")
+        line = str(c.execute("SELECT id FROM fin_po_lines WHERE po_id=?", (po,)).fetchone()[0])
+        billed = act(c, OWNER, "bill_create", {"vendor_id": _local(c, "Vendor:9", "fin_contacts"),
+                                               "bill_date": "2026-10-05", "number": "B-40",
+                                               "lines": [{"po_line_id": line, "amount": 1500}]})
+        assert billed.status == "committed", billed
+    assert _drain(books, fake, cid, now=LATER) == []
+    fake.changes.append(M.Order(M.Ext("PurchaseOrder", "40", "2"), "Vendor:9", "PO-40", "2026-10-05", 1500,
+                                (M.EntryLine("Account:2", 1500, item="Item:5", key="1"),), status="approved"))
+    assert _drain(books, fake, cid, now=LATER2) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, closed_by FROM fin_purchase_orders WHERE id=?", (po,)).fetchone()) == \
+            ("closed", "bills")
+
+
+def test_a_provider_revision_of_an_invoiced_estimate_keeps_its_invoice_and_accepted_status(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "estimate_create", {
+            "customer_id": _local(c, "Customer:4", "fin_contacts"), "estimate_date": "2026-10-05", "number": "EST-7",
+            "lines": [{"item_id": _local(c, "Item:5", "items"), "amount": 1500, "description": "seats"}]})
+        assert made.status == "committed", made
+    assert _drain(books, fake, cid, now=LATER) == []
+    estimate = str(made.result["estimate_id"])
+    with books.transaction() as c:
+        assert act(c, OWNER, "estimate_send", {"estimate_id": estimate}).status == "committed"
+        assert act(c, OWNER, "estimate_accept", {"estimate_id": estimate}).status == "committed"
+        assert act(c, OWNER, "estimate_convert", {"estimate_id": estimate}).status == "committed"
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        invoice = c.execute("SELECT invoice_id FROM fin_estimates WHERE id=?", (estimate,)).fetchone()[0]
+    assert invoice is not None
+    kind, key, rev = _ref_of(books, "fin_estimates", estimate)
+    fake.changes.append(M.Order(M.Ext(kind, key, rev), "Customer:4", "EST-7", "2026-10-05", 1500,
+                                (M.EntryLine("Account:3", 1500, item="Item:5", key="1"),), status="accepted"))
+    assert _drain(books, fake, cid, now=LATER2) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, invoice_id FROM fin_estimates WHERE id=?", (estimate,)).fetchone()) == \
+            ("accepted", invoice)
+
+
+def test_a_purchase_order_its_provider_closes_gives_its_budget_hold_back(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    _budget(books)
+    po, _ = _approved_order(books, fake, cid, 10_000)
+    assert _held(books, po) == 10_000
+    kind, key, rev = _ref_of(books, "fin_purchase_orders", po)
+    fake.changes.append(M.Order(M.Ext(kind, key, rev), "Vendor:9", _number(books, po), "2026-10-05", 10_000,
+                                (M.EntryLine("Account:2", 10_000, item="Item:5", key="1"),), status="closed"))
+    assert _drain(books, fake, cid, now=LATER2) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, closed_by FROM fin_purchase_orders WHERE id=?", (po,)).fetchone()) == \
+            ("closed", "hand")
+    assert _held(books, po) == 0
+
+
+def test_a_purchase_order_its_provider_deletes_is_voided_here_and_gives_its_budget_hold_back(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    _budget(books)
+    po, _ = _approved_order(books, fake, cid, 10_000)
+    assert _held(books, po) == 10_000
+    kind, key, rev = _ref_of(books, "fin_purchase_orders", po)
+    fake.changes.append(M.Ext(kind, key, rev, True))
+    assert _drain(books, fake, cid, now=LATER2) == []
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_purchase_orders WHERE id=?", (po,)).fetchone()[0] == "void"
+    assert _held(books, po) == 0
+
+
+def test_a_purchase_order_whose_lines_change_at_the_provider_holds_its_new_amount(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    _budget(books)
+    po, _ = _approved_order(books, fake, cid, 10_000)
+    assert _held(books, po) == 10_000
+    kind, key, rev = _ref_of(books, "fin_purchase_orders", po)
+    fake.changes.append(M.Order(M.Ext(kind, key, rev), "Vendor:9", _number(books, po), "2026-10-05", 7_000,
+                                (M.EntryLine("Account:2", 7_000, item="Item:5", key="1"),), status="approved"))
+    assert _drain(books, fake, cid, now=LATER2) == []
+    with books.read() as c:
+        assert c.execute("SELECT total FROM fin_purchase_orders WHERE id=?", (po,)).fetchone()[0] == 7_000
+    assert _held(books, po) == 7_000
+
+
+def test_a_purchase_order_that_came_in_approved_without_a_hold_gets_none_when_its_lines_change(books):
+    """A provider order the books placed no hold for (it came in approved from the provider) never gains one through a
+    provider revision, even with a budget that would cover it."""
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    _budget(books)
+    fake.changes.append(M.Order(M.Ext("PurchaseOrder", "40", "1"), "Vendor:9", "PO-40", "2026-10-05", 1500,
+                                (M.EntryLine("Account:2", 1500, item="Item:5", key="1"),), status="approved"))
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        po = _local(c, "PurchaseOrder:40", "fin_purchase_orders")
+    assert _held(books, po) == 0
+    fake.changes.append(M.Order(M.Ext("PurchaseOrder", "40", "2"), "Vendor:9", "PO-40", "2026-10-05", 7_000,
+                                (M.EntryLine("Account:2", 7_000, item="Item:5", key="1"),), status="approved"))
+    assert _drain(books, fake, cid, now=LATER2) == []
+    assert _held(books, po) == 0
+    with books.read() as c:
+        assert c.execute("SELECT total FROM fin_purchase_orders WHERE id=?", (po,)).fetchone()[0] == 7_000
+
+
+def test_a_purchase_order_voided_here_says_to_delete_it_in_quickbooks_and_a_deletion_there_voids_it(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["documents"] += [M.Order(M.Ext("PurchaseOrder", "40", "1"), "Vendor:9", "PO-40", "2026-10-05", 1500,
+                                          (M.EntryLine("Account:2", 1500, item="Item:5", key="1"),), status="approved")]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        po = _local(c, "PurchaseOrder:40", "fin_purchase_orders")
+        refused = act(c, OWNER, "po_void", {"po_id": po})
+        assert refused.status != "committed" and refused.reason == "Delete it in QuickBooks; it voids here.", refused
+    fake.changes.append(M.Ext("PurchaseOrder", "40", "2", True))
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_purchase_orders WHERE id=?", (po,)).fetchone()[0] == "void"
+
+
+def test_a_purchase_order_whose_lines_name_two_locations_is_refused_at_plan_time_and_the_dry_run_shows_it(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["records"].append(M.Location(M.Ext("Department", "4", "1"), "Dallas"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item, vendor = _local(c, "Item:5", "items"), _local(c, "Vendor:9", "fin_contacts")
+        austin, dallas = _local(c, "Department:3", "locations"), _local(c, "Department:4", "locations")
+        refused = act(c, OWNER, "po_create", {
+            "vendor_id": vendor, "po_date": "2026-10-05",
+            "lines": [{"item_id": item, "amount": 1500, "description": "seats", "tags": {"location": austin}},
+                      {"item_id": item, "amount": 900, "description": "pens", "tags": {"location": dallas}}]},
+            dry_run=True)
+        assert (refused.status, refused.code) == ("failed", "invalid"), refused
+        assert refused.reason == "a purchase order is in one location: its lines name the same one", refused
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op='purchaseorder.create'").fetchone()[0] == 0
+
+
+def test_a_purchase_order_whose_lines_name_two_jobs_passes_and_each_line_is_written_with_its_own_job(books):
+    """QuickBooks takes a job per line on a purchase order (CustomerRef on each line), so two jobs are not refused."""
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["records"].append(M.Project(M.Ext("Project", "13", "1"), "Bath remodel", customer="Customer:4"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item, vendor = _local(c, "Item:5", "items"), _local(c, "Vendor:9", "fin_contacts")
+        kitchen, bath = _local(c, "Project:12", "projects"), _local(c, "Project:13", "projects")
+        lines = [{"item_id": item, "amount": 1500, "description": "seats", "tags": {"project": kitchen}},
+                 {"item_id": item, "amount": 900, "description": "pens", "tags": {"project": bath}}]
+        dry = act(c, OWNER, "po_create", {"vendor_id": vendor, "po_date": "2026-10-05", "number": "PO-79",
+                                          "lines": lines}, dry_run=True)
+        assert dry.status == "committed", dry
+        made = act(c, OWNER, "po_create", {"vendor_id": vendor, "po_date": "2026-10-05", "number": "PO-79",
+                                           "lines": lines})
+        assert made.status == "committed", made
+    assert _drain(books, fake, cid, now=LATER) == []
+    body = _sent(fake, "purchaseorder.create")
+    assert [x["project"] for x in body["lines"]] == ["Customer:12", "Customer:13"]
+    wire = Q.purchase_order_body(body)["Line"]
+    assert [line["ItemBasedExpenseLineDetail"]["CustomerRef"]["value"] for line in wire] == ["12", "13"]
+
+
+def test_a_bill_linked_to_an_order_keeps_the_link_here_and_the_provider_is_sent_no_link(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["parties"].append(M.Party(M.Ext("Vendor", "10", "1"), "Acme Freight", "vendor"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    po, _ = _approved_order(books, fake, cid, 40_000)
+    with books.transaction() as c:
+        made = act(c, OWNER, "bill_create", {
+            "vendor_id": _local(c, "Vendor:10", "fin_contacts"), "number": "F-1", "bill_date": "2026-10-12",
+            "purchase_order_id": po, "lines": [{"account_id": account(c, "6100"), "amount": 1500,
+                                                 "description": "freight"}]})
+        assert made.status == "committed", made
+    assert _drain(books, fake, cid, now=LATER2) == []
+    assert "purchase_order_id" not in json.dumps(Q.bill_body(_sent(fake, "bill.create")))
+    with books.read() as c:
+        bill = c.execute("SELECT purchase_order_id FROM fin_bills WHERE number='F-1'").fetchone()
+        assert bill is not None and bill[0] == po
+        order = FR.order(c, OWNER, po)
+        assert order["billed"] == 0
+        assert [(b["vendor"], b["total"]) for b in order["linked_bills"]] == [("Acme Freight", 1500)]
+
+
+def test_a_bill_whose_lines_name_two_jobs_passes_and_each_line_is_written_with_its_own_job(books):
+    """QuickBooks takes a job per line on a bill (CustomerRef on each line), so two jobs are not refused."""
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["records"].append(M.Project(M.Ext("Project", "13", "1"), "Bath remodel", customer="Customer:4"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item, vendor = _local(c, "Item:5", "items"), _local(c, "Vendor:9", "fin_contacts")
+        kitchen, bath = _local(c, "Project:12", "projects"), _local(c, "Project:13", "projects")
+        lines = [{"item_id": item, "amount": 1500, "description": "seats", "tags": {"project": kitchen}},
+                 {"item_id": item, "amount": 900, "description": "pens", "tags": {"project": bath}}]
+        dry = act(c, OWNER, "bill_create", {"vendor_id": vendor, "number": "B-80", "bill_date": "2026-10-05",
+                                            "due_date": "2026-11-05", "lines": lines}, dry_run=True)
+        assert dry.status == "committed", dry
+        made = act(c, OWNER, "bill_create", {"vendor_id": vendor, "number": "B-80", "bill_date": "2026-10-05",
+                                             "due_date": "2026-11-05", "lines": lines})
+        assert made.status == "committed", made
+    assert _drain(books, fake, cid, now=LATER) == []
+    body = _sent(fake, "bill.create")
+    assert [x["project"] for x in body["lines"]] == ["Customer:12", "Customer:13"]
+    wire = Q.bill_body(body)["Line"]
+    assert [line["ItemBasedExpenseLineDetail"]["CustomerRef"]["value"] for line in wire] == ["12", "13"]
+
+
+def test_an_invoice_and_an_estimate_refuse_their_own_two_locations_and_an_estimate_refuses_two_jobs(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["records"] += [M.Location(M.Ext("Department", "4", "1"), "Dallas"),
+                                M.Project(M.Ext("Project", "13", "1"), "Bath remodel", customer="Customer:4")]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item, customer = _local(c, "Item:5", "items"), _local(c, "Customer:4", "fin_contacts")
+        austin, dallas = _local(c, "Department:3", "locations"), _local(c, "Department:4", "locations")
+        kitchen, bath = _local(c, "Project:12", "projects"), _local(c, "Project:13", "projects")
+        by_location = [{"item_id": item, "amount": 1500, "description": "seats", "tags": {"location": austin}},
+                       {"item_id": item, "amount": 900, "description": "pens", "tags": {"location": dallas}}]
+        by_job = [{"item_id": item, "amount": 1500, "description": "seats", "tags": {"project": kitchen}},
+                  {"item_id": item, "amount": 900, "description": "pens", "tags": {"project": bath}}]
+        invoice = act(c, OWNER, "invoice_create", {"customer_id": customer, "invoice_date": "2026-10-05",
+                                                   "lines": by_location}, dry_run=True)
+        assert (invoice.status, invoice.code) == ("failed", "invalid"), invoice
+        assert invoice.reason == "the lines name more than one location; QuickBooks takes one per transaction", invoice
+        estimate = act(c, OWNER, "estimate_create", {"customer_id": customer, "estimate_date": "2026-10-05",
+                                                     "lines": by_job}, dry_run=True)
+        assert (estimate.status, estimate.code) == ("failed", "invalid"), estimate
+        assert estimate.reason == "the lines name more than one job; QuickBooks takes one per transaction", estimate
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op IN ('invoice.create', 'estimate.create')"
+                         ).fetchone()[0] == 0
+
+
+def test_a_bill_and_an_invoice_whose_lines_name_two_locations_or_two_jobs_are_refused_at_plan_time(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["records"] += [M.Location(M.Ext("Department", "4", "1"), "Dallas"),
+                                M.Project(M.Ext("Project", "13", "1"), "Bath remodel", customer="Customer:4")]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item, vendor = _local(c, "Item:5", "items"), _local(c, "Vendor:9", "fin_contacts")
+        customer = _local(c, "Customer:4", "fin_contacts")
+        austin, dallas = _local(c, "Department:3", "locations"), _local(c, "Department:4", "locations")
+        kitchen, bath = _local(c, "Project:12", "projects"), _local(c, "Project:13", "projects")
+        bill = act(c, OWNER, "bill_create", {
+            "vendor_id": vendor, "number": "B-79", "bill_date": "2026-10-05", "due_date": "2026-11-05",
+            "lines": [{"item_id": item, "amount": 1500, "description": "seats", "tags": {"location": austin}},
+                      {"item_id": item, "amount": 900, "description": "pens", "tags": {"location": dallas}}]},
+            dry_run=True)
+        assert (bill.status, bill.code) == ("failed", "invalid"), bill
+        assert bill.reason == "the lines name more than one location; QuickBooks takes one per transaction", bill
+        invoice = act(c, OWNER, "invoice_create", {
+            "customer_id": customer, "invoice_date": "2026-10-05",
+            "lines": [{"item_id": item, "amount": 1500, "description": "seats", "tags": {"project": kitchen}},
+                      {"item_id": item, "amount": 900, "description": "pens", "tags": {"project": bath}}]},
+            dry_run=True)
+        assert (invoice.status, invoice.code) == ("failed", "invalid"), invoice
+        assert invoice.reason == "the lines name more than one job; QuickBooks takes one per transaction", invoice
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op IN ('bill.create', 'invoice.create')"
+                         ).fetchone()[0] == 0
+
+
+def test_a_line_on_another_account_than_its_items_goes_as_an_account_line_and_the_item_stays_on_the_books(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["accounts"].append(acct(6, "6200", "Travel"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item, vendor = _local(c, "Item:5", "items"), _local(c, "Vendor:9", "fin_contacts")
+        software, travel = _local(c, "Account:2", "fin_accounts"), _local(c, "Account:6", "fin_accounts")
+        lines = [{"account_id": software, "amount": 1500, "description": "seats", "item_id": item, "tags": {}},
+                 {"account_id": travel, "amount": 900, "description": "trip", "item_id": item, "tags": {}}]
+        for op in ("bill.create", "purchaseorder.create"):
+            out = mirror._doc_out(c, cid, op, {"party": vendor, "number": "X-1", "day": "2026-10-05", "due": "",
+                                               "memo": "", "lines": lines})
+            assert [(x["item"], x["item_code"], x["account"]) for x in out["lines"]] == [
+                ("Item:5", "Consulting", "Account:2"), ("", "", "Account:6")], op
+        wire = Q.bill_body(out)["Line"]
+        assert [line["DetailType"] for line in wire] == ["ItemBasedExpenseLineDetail", "AccountBasedExpenseLineDetail"]
+        assert wire[1]["AccountBasedExpenseLineDetail"]["AccountRef"] == {"value": "6"}
+
+
+def test_an_item_whose_change_waits_is_still_held_under_the_code_the_provider_holds(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item = _local(c, "Item:5", "items")
+        assert act(c, OWNER, "item_update", {"item_id": item, "name": "Consulting HQ"}).status == "committed"
+        assert mirror._item_code(c, item) == "Consulting"
+
+
+def test_a_tag_class_is_mapped_only_to_a_class_the_books_hold_as_active(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        assert act(c, OWNER, "mirror_tags", {"enabled": True, "map": {"class": {"Austin": "7"}}}).status == "committed"
+        unknown = act(c, OWNER, "mirror_tags", {"enabled": True, "map": {"class": {"Austin": "8"}}})
+        assert unknown.status != "committed" and unknown.reason == \
+            "a provider class is one the books hold as active", unknown
+        c.execute("UPDATE fin_dimensions SET active=0 WHERE id=?", (_local(c, "Class:7", "fin_dimensions"),))
+        archived = act(c, OWNER, "mirror_tags", {"enabled": True, "map": {"class": {"Austin": "7"}}})
+        assert archived.status != "committed" and archived.reason == \
+            "a provider class is one the books hold as active", archived
+
+
+def test_archiving_a_job_in_a_mirrored_book_is_written_to_the_provider_as_inactive_under_its_customer(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        job = _local(c, "Project:12", "projects")
+        assert act(c, OWNER, "project_update", {"project_id": job, "active": False}).status == "committed"
+    assert _drain(books, fake, cid, now=LATER) == []
+    body = _sent(fake, "project.update")
+    assert body["active"] is False and body["customer"] == "Customer:4" and body["ext"] == "Project:12"
+    with books.read() as c:
+        assert c.execute("SELECT archived_at IS NOT NULL FROM projects WHERE id=?", (job,)).fetchone()[0] == 1
+
+
+def test_an_estimate_whose_job_is_moved_to_another_customer_is_not_invoiced(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["parties"].append(M.Party(M.Ext("Customer", "5", "1"), "Gamma Client", "customer"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item, customer = _local(c, "Item:5", "items"), _local(c, "Customer:4", "fin_contacts")
+        job = _local(c, "Project:12", "projects")
+        made = act(c, OWNER, "estimate_create", {
+            "customer_id": customer, "estimate_date": "2026-10-05", "number": "EST-9",
+            "lines": [{"item_id": item, "amount": 1500, "description": "seats", "tags": {"project": job}}]})
+        assert made.status == "committed", made
+    assert _drain(books, fake, cid, now=LATER) == []
+    estimate = str(made.result["estimate_id"])
+    with books.transaction() as c:
+        assert act(c, OWNER, "estimate_send", {"estimate_id": estimate}).status == "committed"
+        assert act(c, OWNER, "estimate_accept", {"estimate_id": estimate}).status == "committed"
+        moved = act(c, OWNER, "project_update", {"project_id": job,
+                                                 "customer_id": _local(c, "Customer:5", "fin_contacts")})
+        assert moved.status == "committed", moved
+    assert _drain(books, fake, cid, now=LATER2) == []
+    with books.transaction() as c:
+        refused = act(c, OWNER, "estimate_convert", {"estimate_id": estimate})
+        assert refused.status != "committed" and refused.reason == "that project belongs to another customer", refused
+
+
+def test_a_taken_bill_number_is_not_named_to_a_teammate_who_cannot_see_the_lines(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["accounts"].append(acct(4, "6500", "Payroll"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        vendor, item = _local(c, "Vendor:9", "fin_contacts"), _local(c, "Item:5", "items")
+        payroll = _local(c, "Account:4", "fin_accounts")
+        first = act(c, OWNER, "bill_create", {"vendor_id": vendor, "number": "B-82", "bill_date": "2026-10-05",
+                                              "due_date": "2026-11-05",
+                                              "lines": [{"item_id": item, "amount": 1500, "description": "seats"}]})
+        assert first.status == "committed", first
+        assert act(c, OWNER, "private_lines_set", {"account_id": payroll, "others_see": "hidden"}).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.ap"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "expenses",
+                                            "whose": "company"}).status == "committed"
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.transaction() as c:
+        refused = act(c, "human:dan", "bill_create", {
+            "vendor_id": vendor, "number": "B-82", "bill_date": "2026-10-05", "due_date": "2026-11-05",
+            "lines": [{"account_id": payroll, "amount": 900, "description": "pay"}]}, dry_run=True)
+        assert refused.status != "committed" and refused.reason == "no such line or account in your view", refused
+
+
+def test_a_provider_revision_that_only_retexts_a_billed_order_line_keeps_the_line_the_bill_bills(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    po, line = _approved_order(books, fake, cid, 10_000)
+    with books.transaction() as c:
+        billed = act(c, OWNER, "bill_create", {"vendor_id": _local(c, "Vendor:9", "fin_contacts"),
+                                               "bill_date": "2026-10-05", "number": "B-41",
+                                               "lines": [{"po_line_id": line, "amount": 4000}]})
+        assert billed.status == "committed", billed
+    assert _drain(books, fake, cid, now=LATER) == []
+    kind, key, revision = _ref_of(books, "fin_purchase_orders", po)
+    fake.changes.append(M.Order(M.Ext(kind, key, revision), "Vendor:9", _number(books, po), "2026-10-05", 10_000,
+                                (M.EntryLine("Account:2", 10_000, item="Item:5", description="seats, retexted"),),
+                                status="approved"))
+    assert _drain(books, fake, cid, now=LATER2) == []
+    with books.read() as c:
+        assert [tuple(x) for x in c.execute("SELECT id, description FROM fin_po_lines")] == [(line, "seats, retexted")]
+        assert c.execute("SELECT l.po_line_id FROM fin_bill_lines l JOIN fin_bills b ON b.id=l.bill_id "
+                         "WHERE b.number='B-41'").fetchone()[0] == line
+
+
+def test_an_estimate_with_sales_tax_is_invoiced_with_that_tax_as_the_invoices_tax_and_not_as_a_line(books):
+    fake = FakeBooks()
+    _records(fake)
+    _tax_account_record(fake)
+    fake.records["documents"] += [M.Order(M.Ext("Estimate", "41", "1"), "Customer:4", "EST-41", "2026-10-06", 9150,
+                                          (M.EntryLine("Account:3", 9000, item="Item:5", key="2"),),
+                                          status="accepted", tax=150)]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        converted = act(c, OWNER, "estimate_convert", {"estimate_id": _local(c, "Estimate:41", "fin_estimates")})
+        assert converted.status == "committed", converted
+    assert _drain(books, fake, cid, now=LATER) == []
+    body = _sent(fake, "invoice.create")
+    assert body["tax"] == 150
+    assert [x["amount"] for x in body["lines"]] == [9000]
+    out = Q.invoice_body(body, {})
+    assert out["TxnTaxDetail"] == {"TotalTax": "1.50"} and len(out["Line"]) == 1
+
+
+def test_an_estimate_for_a_job_comes_in_under_the_jobs_customer_with_the_job_on_its_lines(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["documents"] += [M.Order(M.Ext("Estimate", "42", "1"), "Customer:12", "EST-42", "2026-10-06", 9000,
+                                          (M.EntryLine("Account:3", 9000, item="Item:5", key="2"),), status="sent")]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.read() as c:
+        estimate, customer = c.execute("SELECT id, customer_id FROM fin_estimates").fetchone()
+        assert customer == _local(c, "Customer:4", "fin_contacts")
+        tags = c.execute("SELECT tags_json FROM fin_estimate_lines WHERE estimate_id=?", (estimate,)).fetchone()[0]
+        assert json.loads(tags) == {"project": _local(c, "Project:12", "projects")}
+
+
+def test_a_bill_made_here_without_a_due_date_or_terms_takes_its_vendors_payment_terms(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        vendor = _local(c, "Vendor:9", "fin_contacts")
+        c.execute("UPDATE fin_contacts SET payment_terms_days=30 WHERE id=?", (vendor,))
+        made = act(c, OWNER, "bill_create", {"vendor_id": vendor, "number": "B-83", "bill_date": "2026-10-05",
+                                             "lines": [{"item_id": _local(c, "Item:5", "items"), "amount": 1500,
+                                                        "description": "seats"}]})
+        assert made.status == "committed", made
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert _sent(fake, "bill.create")["due"] == "2026-11-04"
+
+
+def test_a_provider_description_change_leaves_the_description_the_books_hold_for_the_item(books):
+    fake = FakeBooks()
+    _records(fake)
+    terms = dict(kind="service", price=15000, income="Account:3", expense="Account:2")
+    fake.records["records"][0] = M.Item(M.Ext("Item", "5", "1"), "Consulting", description="Hourly consulting", **terms)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    fake.changes.append(M.Item(M.Ext("Item", "5", "2"), "Consulting", description="Changed in QuickBooks", **terms))
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        description = c.execute("SELECT description FROM items WHERE id=?", (_local(c, "Item:5", "items"),)).fetchone()
+        assert description[0] == "Hourly consulting"
+
+
+def test_an_invoice_sales_tax_stays_a_line_on_a_xero_book_whose_document_takes_no_tax(books):
+    fake = FakeBooks()
+    _records(fake)
+    _tax_account_record(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        tax = str(c.execute("SELECT id FROM fin_accounts WHERE subtype=?", (M.SALES_TAX,)).fetchone()[0])
+        local = {"party": _local(c, "Customer:4", "fin_contacts"), "number": "INV-1", "day": "2026-10-06", "due": None,
+                 "memo": "", "lines": [{"account_id": _local(c, "Account:3", "fin_accounts"), "amount": 9000, "description": ""},
+                                       {"account_id": tax, "amount": 150, "description": ""}]}
+        quickbooks = mirror._doc_out(c, cid, "invoice.create", local)
+        assert quickbooks["tax"] == 150 and [x["amount"] for x in quickbooks["lines"]] == [9000]
+        c.execute("UPDATE fin_connections SET provider='xero' WHERE id=?", (cid,))
+        xero = mirror._doc_out(c, cid, "invoice.create", local)
+        assert "tax" not in xero and [x["amount"] for x in xero["lines"]] == [9000, 150]
+
+
+def test_an_item_made_here_keeps_its_description_and_taxable_flag_once_the_provider_confirms(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "item_create", {"name": "Design", "kind": "service", "price": 9000,
+                                             "description": "Design hours", "taxable": True})
+        assert made.status == "committed", made
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT description, taxable FROM items WHERE name='Design'").fetchone()) == \
+            ("Design hours", 1)
+
+
+def test_a_location_made_here_keeps_its_customer_once_the_provider_confirms(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "location_create", {"name": "Austin store", "kind": "store",
+                                                 "customer_id": _local(c, "Customer:4", "fin_contacts")})
+        assert made.status == "committed", made
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        customer = c.execute("SELECT customer_id FROM locations WHERE name='Austin store'").fetchone()[0]
+        assert customer == _local(c, "Customer:4", "fin_contacts")

@@ -6,12 +6,17 @@ import json
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
+from ..records import core as RC
+from ..records import due_dates as RD
 from ..records import reads as RR
+from ..records import store as RS
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
+from . import due_dates as DD
+from . import record_files as RFILES
 from .tab_purchasing import estimate as estimate, estimates as estimates, order as order, orders as orders
 from . import closing as CL
 from . import context as _context
@@ -32,12 +37,13 @@ from .tax import sales_tax_csv as sales_tax_csv
 from .tax import sales_tax_report as sales_tax_report
 from .handlers import named_reason, private_scope, sees_budget, sees_scope, shows_numbers
 from .store import actions as SX
+from .store import ap as SAP
 from .store import access as SA
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
-from .store import ap as SAP
 from .store import catalog as SC
+from .store import mirror as SM
 from .store import raw_totals as SR
 from .store import tico as ST
 
@@ -421,7 +427,8 @@ def pnl_by(c: sqlite3.Connection, viewer: str, by: str, start: str | None = None
            basis: str | None = None, top_n: int = 20, at: str | None = None) -> Row:
     """The P&L over a window split by location, class, project or a pair of them (`by`): income, expense and net per
     group.
-    Lines with none of those tags form the Unattributed group. The totals are summed on their own, so the groups adding
+    Lines with none of those tags form the Unattributed group. cost_of_goods is the cost-of-revenue expense lines
+    (pnl_section); gross_margin is income less cost_of_goods. The totals are summed on their own, so the groups adding
     up to them is a check, not a restatement."""
     if by not in LOCATED:
         raise invalid(f"by is {'|'.join(LOCATED)}")
@@ -434,27 +441,75 @@ def pnl_by(c: sqlite3.Connection, viewer: str, by: str, start: str | None = None
     ids = [x.id for x in s.ctx.accounts.values() if x.type in PNL_TYPES and s.view.sees_account(x)]
     sup = _suppress(s, _cells(s, a, z, ids, basis), False, a, z)
     groups: dict[str, list[int]] = {}
-    totals = [0, 0]                                    # income, expense
+    totals = [0, 0, 0]                                    # income, expense
     for cell in sup.cells:
         account = s.ctx.accounts.get(cell.account_id)
         if account is None or account.type not in PNL_TYPES or cell.account_id in sup.hidden:
             continue
         income = account.type == "income"
         value = -cell.amount if income else cell.amount    # income is posted as credits
-        groups.setdefault(_located_key(cell, by), [0, 0])[0 if income else 1] += value
+        cogs = not income and pnl_section(s.ctx.accounts, account) == "cost_of_revenue"
+        slot = groups.setdefault(_located_key(cell, by), [0, 0, 0])
+        slot[0 if income else 1] += value
         totals[0 if income else 1] += value
+        if cogs:
+            slot[2] += value
+            totals[2] += value
     named = _located_names(s.ctx.c, by)
     rows: list[Row] = [{"key": k or "unattributed", "label": _located_label(named, by, k), "income": v[0],
-                        "expense": v[1], "net": v[0] - v[1]} for k, v in groups.items()]
+                        "expense": v[1], "net": v[0] - v[1],
+                        "cost_of_goods": v[2], "gross_margin": v[0] - v[2]} for k, v in groups.items()]
     rows.sort(key=lambda r: (-abs(cast(int, r["net"])), str(r["label"])))
     top = max(1, min(int(top_n), MAX_TOP))
     if len(rows) > top:
         rest = rows[top:]
         rows = [*rows[:top], {"key": "other", "label": f"Other · {len(rest)}", "count": len(rest),
-                              **{f: sum(cast(int, r[f]) for r in rest) for f in ("income", "expense", "net")}}]
+                              **{f: sum(cast(int, r[f]) for r in rest)
+                                 for f in ("income", "expense", "net", "cost_of_goods", "gross_margin")}}]
     return {"by": by, "start": a.isoformat(), "end": z.isoformat(), "basis": basis, "rows": rows,
-            "income": totals[0], "expense": totals[1], "net": totals[0] - totals[1], "excluded": sup.excluded,
+            "income": totals[0], "expense": totals[1], "net": totals[0] - totals[1],
+            "cost_of_goods": totals[2], "gross_margin": totals[0] - totals[2], "excluded": sup.excluded,
             "snapshot": snap, "view_version": s.view.version}
+
+
+def pnl_by_account(c: sqlite3.Connection, viewer: str, by: str, record_id: str | None, start: str | None = None,
+                   end: str | None = None, *, basis: str | None = None, at: str | None = None) -> Row:
+    """One location's or project's row of pnl_by, account by account: `rows` of {account_id, label, type, amount}, an
+    income amount as income, an expense as spend. It reads what pnl_by reads, so what the viewer's view leaves out of
+    that row is left out here, and its income, expense and net are that row's. One row per account: the chart caps it."""
+    if by not in ("location", "project"):
+        raise invalid("by is location|project")
+    if not record_id:
+        raise invalid("id names the location or project")
+    if basis not in (None, "cash", "accrual"):
+        raise invalid("basis is cash|accrual")
+    s = _open(c, viewer, at)
+    a, z = _window(start, end, s.ctx)
+    s, snap = _closed(s, viewer, a, z)
+    basis = basis or s.ctx.book.basis
+    wanted = RR.ids_of(c, f"{by}s", record_id)
+    ids = [x.id for x in s.ctx.accounts.values() if x.type in PNL_TYPES and s.view.sees_account(x)]
+    sup = _suppress(s, _cells(s, a, z, ids, basis), False, a, z)
+    amounts: dict[str, int] = {}
+    for cell in sup.cells:
+        account = s.ctx.accounts.get(cell.account_id)
+        if account is None or account.type not in PNL_TYPES or cell.account_id in sup.hidden:
+            continue
+        if _located_key(cell, by) in wanted:
+            value = -cell.amount if account.type == "income" else cell.amount    # income is posted as credits
+            amounts[cell.account_id] = amounts.get(cell.account_id, 0) + value
+    rows: list[Row] = [{"account_id": i, "label": s.ctx.accounts[i].name, "type": s.ctx.accounts[i].type, "amount": v}
+                       for i, v in amounts.items()]
+    rows.sort(key=lambda r: (r["type"] != "income", -abs(cast(int, r["amount"])), str(r["label"])))
+    income = sum(cast(int, r["amount"]) for r in rows if r["type"] == "income")
+    expense = sum(cast(int, r["amount"]) for r in rows if r["type"] != "income")
+    cost_of_goods = sum(cast(int, r["amount"]) for r in rows if r["type"] != "income" and
+                        pnl_section(s.ctx.accounts, s.ctx.accounts[cast(str, r["account_id"])]) == "cost_of_revenue")
+    return {"by": by, "id": record_id, "start": a.isoformat(), "end": z.isoformat(), "basis": basis, "rows": rows,
+            "income": income, "expense": expense, "net": income - expense,
+            "cost_of_goods": cost_of_goods, "gross_margin": income - cost_of_goods, "excluded": sup.excluded,
+            "snapshot": snap,
+            "view_version": s.view.version}
 
 
 def _closed(s: _Seen, viewer: str, a: date, z: date) -> tuple[_Seen, Row | None]:
@@ -653,6 +708,25 @@ def spend_by(c: sqlite3.Connection, viewer: str, by: str, start: str | None = No
     s = _open(c, viewer, at)
     a, z = _window(start, end, s.ctx)
     return _grouped(s, a, z, by, account_id, team, None, top_n)
+
+
+def revenue_by_item(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str | None = None, *,
+                    top_n: int = 10, at: str | None = None) -> Row:
+    """Revenue by item: the posted invoices' lines in the window, summed by the item each names; a line that names none
+    is Unattributed. Receivables only: a viewer without the receivables view is refused, as the aging report is. An
+    invoice with a line on a private account this viewer lacks full detail for is left out whole."""
+    ctx = load(c, at)
+    view = ctx.view(viewer)
+    if not tab_ap.sees_side(ctx, view, "invoice"):
+        raise denied("receivables are not in your view")
+    a, z = _window(start, end, ctx)
+    cut = tab.private_cut(ctx, view)
+    rows: list[Row] = []
+    for r in SAP.invoice_item_revenue(c, ctx.book.id, a.isoformat(), z.isoformat(), cut=cut):
+        key, label = (str(r["item_id"]), str(r["item_name"] or r["item_id"])) if r["item_id"] else (NONE, UNATTRIBUTED)
+        rows.append({"key": key, "label": label, "amount": int(r["amount"] or 0)})
+    return {"by": "item", "start": a.isoformat(), "end": z.isoformat(), "rows": _cap(rows, top_n),
+            "total": sum(int(str(r["amount"])) for r in rows), "view_version": view.version}
 
 
 # ------------------------------------------------------------------------------------------------ one line
@@ -1285,7 +1359,8 @@ def _uncategorized(s: _Seen, a: date, z: date, most: int, skip: int = 0) -> tupl
 
 
 # ------------------------------------------------------------------------------------------------ reports
-REPORTS = ("pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by")
+REPORTS = ("pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by",
+           "revenue_by_item")
 
 
 def _prior(a: date, z: date) -> tuple[date, date]:
@@ -1353,15 +1428,14 @@ def _cash_flow(c: sqlite3.Connection, viewer: str, a: date, z: date, period: str
 
 def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None = None, end: str | None = None,
            period: str = "month", basis: str | None = None, compare: str | None = None, top_n: int = 20,
-           by: str | None = None, at: str | None = None) -> Row:
+           by: str | None = None, record_id: str | None = None, at: str | None = None) -> Row:
     """One report (§7.1): pnl (accrual or cash), balance_sheet (as of `end`), cash_flow, budget_vs_actual, ap_aging,
-    ar_aging, spend_by (`by` department|team|teammate|bot|person|vendor|account|location|class|project or a pair) or
-    pnl_by
-    (`by` location|class|project or a pair). `compare=prior` adds the window before it. Payloads are capped: `top_n`
-    rows
-    and one "Other · n"."""
-    if kind not in REPORTS:
-        raise invalid(f"a report is {'|'.join(REPORTS)}")
+    ar_aging, spend_by (`by` department|team|teammate|bot|person|vendor|account|location|class|project or a pair),
+    pnl_by (`by` location|class|project or a pair), pnl_by_account (one location's or project's row by account: `by`
+    and `record_id`) or revenue_by_item (posted invoices by the item each line names; receivables view). `compare=prior` adds the window before it. Payloads are capped: `top_n` rows and one
+    "Other · n"."""
+    if kind not in REPORTS and kind != "pnl_by_account":   # it names one record, so it is not a report of the whole book
+        raise invalid(f"a report is {'|'.join(REPORTS)}|pnl_by_account")
     if compare not in (None, "", "prior"):
         raise invalid("compare is prior")
     top = max(1, min(int(top_n), MAX_TOP))
@@ -1377,10 +1451,14 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
             return _fold_pnl(pnl(c, viewer, p.isoformat(), q.isoformat(), period, basis or ctx.book.basis, at), top)
         if kind == "pnl_by":
             return pnl_by(c, viewer, by or "location", p.isoformat(), q.isoformat(), basis=basis, top_n=top, at=at)
+        if kind == "pnl_by_account":
+            return pnl_by_account(c, viewer, by or "location", record_id, p.isoformat(), q.isoformat(), basis=basis, at=at)
         if kind == "cash_flow":
             return _cash_flow(c, viewer, p, q, period, at)
         if kind == "budget_vs_actual":
             return budget_vs_actual(c, viewer, p.isoformat(), q.isoformat(), period, limit=top, at=at)
+        if kind == "revenue_by_item":
+            return revenue_by_item(c, viewer, p.isoformat(), q.isoformat(), top_n=top, at=at)
         return spend_by(c, viewer, by or "vendor", p.isoformat(), q.isoformat(), top_n=top, at=at)
     out: Row = {"kind": kind, **one(a, z)}
     if compare == "prior":
@@ -1391,8 +1469,8 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
 
 # ------------------------------------------------------------------------------------------------ search
 SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project", "po",
-              "estimate")
-RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects"}
+              "estimate", "equipment", "due_date")
+RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects", "equipment": "equipment"}
 SEARCH_EACH = 10            # results per kind when no kind is named
 
 
@@ -1421,30 +1499,79 @@ def _search_rules(ctx: Ctx, viewer: str, q: str, filters: Mapping[str, object], 
         (str(page[-1]["id"]) if len(rows) > most else None)
 
 
-def _record_row(kind: str, r: Any) -> Row:
-    """A record as a search result: its name is the label, and its own type keeps its own field."""
-    row: Row = {"kind": kind, "id": str(r["id"]), "label": str(r["name"]), "archived_at": r["archived_at"]}
+def _hours_between(now: str, then: str) -> float:
+    return (datetime.fromisoformat(now.replace("Z", "+00:00")) - datetime.fromisoformat(then.replace("Z", "+00:00"))
+            ).total_seconds() / 3600
+
+
+def _freshness(ctx: Ctx, sync: tuple[str, str | None, str, str | None] | None) -> Row:
+    """Where a record came from and how old its copy is. Tico's own record is as of the read and never stale. A record a
+    provider's books hold is as of that connection's last successful sync, and stale when the connection is failing,
+    when its last sync failed (a timeout leaves last_ok_at where it was, so the copy is still as of that sync), or
+    when that good sync is older than STALE_HOURS (the cash reads' threshold). A copy never synced has no as_of and is
+    stale."""
+    if sync is None:
+        return {"source": "tico", "as_of": ctx.at, "stale": False}
+    provider, last_ok, status, error = sync
+    if last_ok is None:
+        return {"source": provider, "as_of": None, "stale": True}
+    stale = status == "error" or bool(error) or _hours_between(ctx.at, last_ok) > STALE_HOURS
+    return {"source": provider, "as_of": last_ok, "stale": stale}
+
+
+def _record_row(kind: str, r: Any, fresh: Mapping[str, object]) -> Row:
+    """A record as a search result: its name is the label, and its own type keeps its own field. It names where it
+    came from and how fresh that is (source, as_of, stale), so an answer built on it can cite both."""
+    row: Row = {"kind": kind, "id": str(r["id"]), "label": str(r["name"]), "archived_at": r["archived_at"], **fresh}
     if kind == "item":
         row["item_kind"] = str(r["kind"])
         row["sku"] = str(r["sku"])
     elif kind == "location":
         row["location_kind"] = str(r["kind"])
+    elif kind == "equipment":
+        row["equipment_kind"] = str(r["kind"])
     else:
         row["status"] = str(r["status"])
     return row
 
 
-RECORD_TABLE = {"location": "locations", "item": "items", "project": "projects"}
-RECORD_PLURAL = {"location": "locations", "item": "items", "project": "projects"}
+RECORD_TABLE = {"location": "locations", "item": "items", "project": "projects", "equipment": "equipment"}
+RECORD_PLURAL = {"location": "locations", "item": "items", "project": "projects", "equipment": "equipment"}
 
 
 ITEM_ACCOUNTS = ("income_account_id", "expense_account_id", "asset_account_id")
 
 
-def _in_view_or_refuse(view: VW.View) -> None:
-    """Records are for viewers with a finance view at all, as the other reads are."""
-    if not view.sees_anything():
-        raise denied("records are not in your view")
+def _record_rows(c: sqlite3.Connection, ctx: Ctx, kind: str, rows: Sequence[Any]) -> list[Row]:
+    """Records as search rows, each with its source and the read time. A new searchable record kind adds its table to
+    RECORD_KINDS and its rows through here, so the rows keep the same shape."""
+    syncs = SM.record_syncs(c, RECORD_KINDS[kind], [str(r["id"]) for r in rows])
+    return [_record_row(kind, r, _freshness(ctx, syncs.get(str(r["id"])))) for r in rows]
+
+
+def _teammate(ctx: Ctx, viewer: str) -> bool:
+    """A teammate: a person on the roster, or a bot the company runs (org.bots holds only the bots not archived)."""
+    return ctx.org.is_person(viewer) or viewer in ctx.org.bots
+
+
+def _teammate_or_refuse(ctx: Ctx, viewer: str) -> None:
+    """Records are for teammates whatever their Finance view: names, addresses, customers and sale prices read for all
+    of them, while an item's accounts and the costs stay per view. A guest, who is not on the roster, and an unknown
+    actor read none of it."""
+    if not _teammate(ctx, viewer):
+        raise denied("records are for teammates")
+
+
+def _customer_names(ctx: Ctx, kind: str, rows: Sequence[Any]) -> dict[str, str]:
+    """The name of each customer the rows name, by contact id. An item names none."""
+    ids = sorted({str(r["customer_id"]) for r in rows if kind != "item" and r["customer_id"]})
+    return {cid: str(row["name"]) for cid, row in SAP.contacts(ctx.c, ids).items()}
+
+
+def _place_names(ctx: Ctx, kind: str, rows: Sequence[Any]) -> dict[str, str]:
+    """The name of each location the rows name: a location's parent, a piece of equipment's location."""
+    column = {"location": "parent_id", "equipment": "location_id"}.get(kind)
+    return RR.names_of(ctx.c, "locations", [str(r[column]) for r in rows if r[column]]) if column else {}
 
 
 def _account_shown(view: VW.View, accounts: Mapping[str, Account], account_id: object) -> bool:
@@ -1456,48 +1583,230 @@ def _account_shown(view: VW.View, accounts: Mapping[str, Account], account_id: o
     return account is not None and view.sees_account(account)
 
 
-def _record_out(kind: str, r: Any, accounts: Mapping[str, Account], view: VW.View) -> Row:
-    """A record as the records API shows it. An item's accounts show to the viewers who see them, and its price shows
-    to the viewers who see its income account: the price is what that account books."""
-    out: Row = {"id": str(r["id"]), "name": str(r["name"]), "archived_at": r["archived_at"]}
-    if kind == "location":
-        out.update(kind=str(r["kind"]), parent_id=r["parent_id"], address=json.loads(r["address"] or "{}"))
-    elif kind == "item":
-        out.update(sku=str(r["sku"]), kind=str(r["kind"]), unit=str(r["unit"]), currency=str(r["currency"]))
-        if _account_shown(view, accounts, r["income_account_id"]):
-            out["price"] = r["price"]
-        out.update({key: r[key] for key in ITEM_ACCOUNTS if _account_shown(view, accounts, r[key])})
-    else:
-        out.update(customer_id=r["customer_id"], status=str(r["status"]))
+WARRANTY_WINDOW_DAYS = 90
+
+
+@dataclass
+class _Narrow:
+    """The filters a record read hands records/reads.search: equal, by (on or before), between (from, to), and the ids
+    kept (None keeps every row, an empty list none)."""
+    equal: dict[str, str]
+    by: dict[str, str]
+    between: dict[str, tuple[str, str]]
+    ids: list[str] | None
+
+
+def _narrow(ctx: Ctx, kind: str, f: Mapping[str, object]) -> _Narrow:
+    """The filters a record read takes. Equipment is kept by its kind, its customer, its location (an alias resolves to
+    the location it names), a warranty that ends on or before a day or within the window, and a due date that is soon or
+    overdue: those ids are worked out from the live due dates, so the SQL paging counts right. Others take no filter."""
+    out = _Narrow({}, {}, {}, None)
+    if kind != "equipment":
+        return out
+    for key in ("kind", "customer_id"):
+        value = _filter(f, key)
+        if value is not None:
+            out.equal[key] = value
+    if out.equal.get("kind") not in (None, *RC.EQUIPMENT_KINDS):
+        raise invalid(f"equipment kind is {'|'.join(RC.EQUIPMENT_KINDS)}")
+    location = _filter(f, "location_id")
+    if location is not None:
+        out.equal["location_id"] = RS.resolve(ctx.c, "locations", location)
+    ends = _filter(f, "warranty_ends_by")
+    if ends is not None:
+        out.by["warranty_ends_on"] = dates.day(ends).isoformat()
+    warranty = _filter(f, "warranty")
+    if warranty is not None:
+        if warranty != "ending":
+            raise invalid("warranty is ending")
+        today = DD.today_of(ctx)
+        out.between["warranty_ends_on"] = (today.isoformat(),
+                                           (today + timedelta(days=WARRANTY_WINDOW_DAYS)).isoformat())
+    due = _filter(f, "due")
+    if due is not None:
+        if due not in ("soon", "overdue"):
+            raise invalid("due is soon or overdue")
+        out.ids = DD.equipment_due(ctx, due)
     return out
 
 
+def _customer_out(customer_id: object, names: Mapping[str, str]) -> Row:
+    """A record's customer by id and name, for every teammate: the customer's name is operational."""
+    key = str(customer_id) if customer_id else None
+    return {"customer_id": key, "customer_name": names.get(key) if key else None}
+
+
+def _in_books(ctx: Ctx, kind: str, rows: Sequence[Any]) -> set[str] | None:
+    """On a mirrored book, the locations the provider's books hold or are about to (mirror.kept_local's opposite, for a
+    page at once); None elsewhere, where a location has no such thing to say."""
+    if kind != "location" or ctx.book.mode != "mirror" or not ctx.book.mirror_connection_id:
+        return None
+    ids = [str(r["id"]) for r in rows]
+    return SM.mapped_refs(ctx.c, ctx.book.mirror_connection_id, "locations", ids) | SK.record_writes_open(ctx.c, "location.create", ids)
+
+
+def _record_out(ctx: Ctx, kind: str, r: Any, view: VW.View, fresh: Mapping[str, object], names: Mapping[str, str],
+                due: Mapping[str, str] | None = None, books: set[str] | None = None,
+                places: Mapping[str, str] | None = None, due_status: Mapping[str, str] | None = None) -> Row:
+    """A record as the records API shows it, to a teammate: an item's sale price and description whatever the viewer's
+    Finance view; an item's accounts show to the viewers who see them. A location's, equipment's or project's customer
+    shows by id and name, a location's parent and equipment's location too (`places`). A location's or equipment's next
+    due day comes from `due` (records/due_dates.next_due_and_status), null when none is open, and its status from `due_status`. On a mirrored book a location says whether it is `in_books` (see _in_books). An item carries
+    its last synced quantity, null on books that keep none. Only teammates reach this (see _teammate_or_refuse)."""
+    out: Row = {"id": str(r["id"]), "name": str(r["name"]), "archived_at": r["archived_at"], **fresh}
+    if kind == "location":
+        out.update(kind=str(r["kind"]), parent_id=r["parent_id"], address=json.loads(r["address"] or "{}"),
+                   parent_name=(places or {}).get(str(r["parent_id"])), next_due_on=(due or {}).get(str(r["id"])),
+                   next_due_status=(due_status or {}).get(str(r["id"])))
+        if books is not None:
+            out["in_books"] = str(r["id"]) in books
+        out.update(_customer_out(r["customer_id"], names))
+    elif kind == "equipment":
+        out.update(kind=str(r["kind"]), location_id=r["location_id"], make=str(r["make"]), model=str(r["model"]),
+                   serial=str(r["serial"]), installed_on=r["installed_on"], warranty_ends_on=r["warranty_ends_on"],
+                   photo_file_id=r["photo_file_id"], location_name=(places or {}).get(str(r["location_id"])),
+                   next_due_on=(due or {}).get(str(r["id"])), next_due_status=(due_status or {}).get(str(r["id"])))
+        out.update(_customer_out(r["customer_id"], names))
+    elif kind == "item":
+        out.update(sku=str(r["sku"]), kind=str(r["kind"]), unit=str(r["unit"]), currency=str(r["currency"]),
+                   description=str(r["description"]), taxable=bool(r["taxable"]), price=r["price"],
+                   quantity_on_hand=r["quantity_on_hand"], quantity_synced_at=r["quantity_synced_at"])
+        out.update({key: r[key] for key in ITEM_ACCOUNTS if _account_shown(view, ctx.accounts, r[key])})
+    else:
+        out.update(status=str(r["status"]))
+        out.update(_customer_out(r["customer_id"], names))
+    return out
+
+
+def _due_of(ctx: Ctx, kind: str, rows: Sequence[Any]) -> tuple[dict[str, str], dict[str, str]]:
+    """The rows' next due days and statuses; only locations and equipment have them."""
+    if kind not in ("location", "equipment"):
+        return {}, {}
+    both = RD.next_due_and_status(ctx.c, kind, [str(r["id"]) for r in rows], DD.today_of(ctx))
+    return {k: day.isoformat() for k, (day, _) in both.items()}, {k: state for k, (_, state) in both.items()}
+
+
 def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archived: str = "hide",
-            cursor: str | None = None, limit: int = 50, at: str | None = None) -> Row:
-    """Locations, items or projects by name (an item also by sku), past `cursor`. `archived` is hide, only or all.
-    A viewer with no finance view is refused; an item's accounts and price are cut to what the viewer sees."""
+            cursor: str | None = None, limit: int = 50, at: str | None = None,
+            equal: Mapping[str, str] | None = None, filters: Mapping[str, object] | None = None) -> Row:
+    """Locations, items, projects or equipment by name (an item also by sku, equipment by serial, make or model), past
+    `cursor`. `archived` is hide, only or all. `equal` narrows by column (a location's kind or customer, an item's kind,
+    a project's status or customer); equipment takes `filters`: kind, customer_id, location_id, warranty_ends_by,
+    warranty (ending) and due (soon|overdue), see _narrow. A location or equipment row carries `next_due_on`, its earliest
+    open due day, or null. A guest is refused; an item's accounts are cut to what the viewer sees."""
     ctx = load(c, at)
     view = ctx.view(viewer)
-    _in_view_or_refuse(view)
+    _teammate_or_refuse(ctx, viewer)
     parts = tab.decode_cursor(cursor)
     after = (parts[0], parts[1]) if len(parts) == 2 else None
     active = {"hide": True, "only": False, "all": None}[archived]
     most = tab.page_size(limit)
-    rows = RR.search(c, RECORD_TABLE[kind], (q or "").strip()[:100], active=active, after=after, most=most + 1)
+    narrow = _narrow(ctx, kind, filters or {})
+    rows = RR.search(c, RECORD_TABLE[kind], (q or "").strip()[:100], active=active, after=after, most=most + 1,
+                     equal={**(equal or {}), **narrow.equal}, by=narrow.by, between=narrow.between, ids=narrow.ids)
     shown = rows[:most]
     nxt = tab.encode_cursor([str(shown[-1]["name"]), str(shown[-1]["id"])]) if len(rows) > most else None
-    return {RECORD_PLURAL[kind]: [_record_out(kind, r, ctx.accounts, view) for r in shown], "next_cursor": nxt}
+    syncs = SM.record_syncs(c, RECORD_TABLE[kind], [str(r["id"]) for r in shown])
+    names = _customer_names(ctx, kind, shown)
+    due, states = _due_of(ctx, kind, shown)
+    books, places = _in_books(ctx, kind, shown), _place_names(ctx, kind, shown)
+    return {RECORD_PLURAL[kind]: [_record_out(ctx, kind, r, view, _freshness(ctx, syncs.get(str(r["id"]))), names,
+                                              due=due, books=books, places=places, due_status=states) for r in shown],
+            "next_cursor": nxt}
 
 
 def record(c: sqlite3.Connection, viewer: str, *, kind: str, record_id: str, at: str | None = None) -> Row:
-    """One location, item or project, archived or not, by its id or an id it was merged under."""
+    """One location, item, project or piece of equipment, archived or not, by its id or an id it was merged under."""
     ctx = load(c, at)
     view = ctx.view(viewer)
-    _in_view_or_refuse(view)
+    _teammate_or_refuse(ctx, viewer)
     row = RR.get(c, RECORD_TABLE[kind], record_id)
     if row is None:
         raise FinanceError(NOT_FOUND, f"no such {kind}")
-    return {kind: _record_out(kind, row, ctx.accounts, view)}
+    syncs = SM.record_syncs(c, RECORD_TABLE[kind], [str(row["id"])])
+    due, states = _due_of(ctx, kind, [row])
+    out = _record_out(ctx, kind, row, view, _freshness(ctx, syncs.get(str(row["id"]))),
+                      _customer_names(ctx, kind, [row]), due=due, books=_in_books(ctx, kind, [row]),
+                      places=_place_names(ctx, kind, [row]), due_status=states)
+    if kind in ("location", "item", "equipment"):
+        files, more = RFILES.visible(c, viewer, RECORD_TABLE[kind], str(row["id"]))
+        out.update(files=files, files_more=more)
+    return {kind: out}
+
+
+def books_connected(c: sqlite3.Connection) -> tuple[bool, bool]:
+    """Whether a books connection (QuickBooks or Xero) exists, and whether one still has provider records waiting."""
+    books = SM.books_connections(c)
+    return bool(books), any(bool(SM.mirror_state(c, cid).get("pending")) for cid, _, _ in books)
+
+
+def customer_extras(c: sqlite3.Connection, viewer: str, customer_id: str, at: str | None = None) -> Row:
+    """What a customer panel adds beyond its contact, locations, estimates and invoices: the equipment the customer has,
+    by name with each piece's next due day, and the live due dates on the contact, its locations and that equipment,
+    as the viewer may read them (finance/due_dates._can_read), the next due first."""
+    ctx = load(c, at)
+    view = ctx.view(viewer)
+    _teammate_or_refuse(ctx, viewer)
+    equipment = RR.equipment_for_customer(c, customer_id)
+    locations = RR.at_customer(c, customer_id)
+    ids = [str(r["id"]) for r in equipment]
+    syncs = SM.record_syncs(c, "equipment", ids)
+    names = _customer_names(ctx, "equipment", equipment)
+    due, states = _due_of(ctx, "equipment", equipment)
+    places = _place_names(ctx, "equipment", equipment)
+    return {
+        "equipment": [_record_out(ctx, "equipment", r, view, _freshness(ctx, syncs.get(str(r["id"]))), names, due=due,
+                                  places=places, due_status=states) for r in equipment],
+        "due_dates": DD.customer_due_dates(ctx, viewer, contact_id=customer_id,
+                                           location_ids=[str(r["id"]) for r in locations], equipment_ids=ids),
+    }
+
+
+def customers(c: sqlite3.Connection, viewer: str, *, q: str = "", cursor: str | None = None, limit: int = 50,
+              at: str | None = None) -> Row:
+    """Active customers by name then id, for the picker: id and name only, to every teammate. `q` matches a name,
+    and an email too for a viewer of receivables; `next_cursor` pages."""
+    ctx = load(c, at)
+    _teammate_or_refuse(ctx, viewer)
+    parts = tab.decode_cursor(cursor)
+    after = (parts[0], parts[1]) if len(parts) == 2 else None
+    most = tab.page_size(limit)
+    by_email = tab_ap.sees_side(ctx, ctx.view(viewer), "invoice")
+    rows = SAP.contacts_page(c, book_id=ctx.book.id, kinds=("customer", "both"), q=(q or "").strip()[:100],
+                             active=True, after=after, most=most + 1, by_email=by_email)
+    shown = rows[:most]
+    nxt = tab.encode_cursor([str(shown[-1]["name"]), str(shown[-1]["id"])]) if len(rows) > most else None
+    return {"customers": [{"id": str(r["id"]), "name": str(r["name"])} for r in shown], "next_cursor": nxt}
+
+
+def customer_panel(c: sqlite3.Connection, viewer: str, contact_id: str, at: str | None = None) -> Row:
+    """A customer's panel: the contact, the active locations it is the customer of, its open estimates (draft,
+    sent or accepted) and its unpaid invoices. A teammate without the receivables view reads the contact by id and name
+    and its locations; its estimates and invoices are null. A missing contact, or one that is not a customer, is not_found."""
+    ctx = load(c, at)
+    view = ctx.view(viewer)
+    _teammate_or_refuse(ctx, viewer)
+    row = SAP.get(c, "fin_contacts", contact_id)
+    if row is None or str(row["book_id"]) != ctx.book.id or str(row["kind"]) not in ("customer", "both"):
+        raise FinanceError(NOT_FOUND, "no such customer")
+    locations = RR.at_customer(c, contact_id)
+    syncs = SM.record_syncs(c, "locations", [str(r["id"]) for r in locations])
+    names = _customer_names(ctx, "location", locations)
+    out: Row = {
+        "contact": {"id": str(row["id"]), "name": str(row["name"])},
+        "locations": [_record_out(ctx, "location", r, view, _freshness(ctx, syncs.get(str(r["id"]))), names,
+                                  places=_place_names(ctx, "location", locations)) for r in locations],
+        "estimates": None,
+        "invoices": None,
+    }
+    if tab_ap.sees_side(ctx, view, "invoice"):
+        out["contact"] = tab_ap.contact_row(ctx, row, R.is_admin(ctx.org, viewer, ctx.rights(viewer)))
+        out["invoices"] = tab_ap.invoices(c, viewer, status="unpaid", customer_id=contact_id, at=at)
+        if R.has(ctx.org, viewer, R.AR, ctx.rights(viewer)):
+            shown = [e for status in ("draft", "sent", "accepted")
+                     for e in estimates(c, viewer, status=status, customer_id=contact_id, at=at)["estimates"]]
+            out["estimates"] = sorted(shown, key=lambda e: (str(e["date"]), str(e["id"])), reverse=True)
+    return {**out, **customer_extras(c, viewer, contact_id, at)}
 
 
 def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
@@ -1510,7 +1819,9 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
     start, end; bill/invoice: status, contact_id, start, end, aging; contact: kind, active; rule: kind (gate|posting);
     card: status, vendor (the cards saved on that vendor, so `vendor` answers "which of my cards works at X");
     po/estimate: status, contact_id, and a search over number, memo and contact name;
-    item/location/project: active (1 keeps only active records)."""
+    item/location/project: active (1 keeps only active records); equipment: kind (owned|customer), customer_id,
+    location_id, warranty_ends_by (a day: warranties ending on or before it), warranty (ending: within the window),
+    due (soon|overdue), active."""
     if kind is not None and kind not in SEARCH_KINDS:
         raise invalid(f"kind is {'|'.join(SEARCH_KINDS)}")
     if cursor and kind is None:
@@ -1569,14 +1880,23 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
                 results += [{**r, "label": f"{r['nickname'] or r['holder']} ••{r['last4'] or ''}".strip()}
                             for r in cast(list[Row], found["cards"])]
                 nxt = cast(str | None, found["next"])
+            elif k == "due_date":
+                # Due dates page by name; `active=0` names the archived ones, the default is the live ones.
+                listed = DD.listing(c, viewer, q=text, archived="only" if _filter(f, "active") in ("0", "false")
+                                    else "hide", cursor=cursor, limit=most, at=at)
+                results += [cast(Row, {**r, "kind": "due_date", "label": r["name"]})
+                            for r in cast(list[Row], listed["due_dates"])]
+                nxt = cast(str | None, listed["next_cursor"])
             elif k in RECORD_KINDS:
-                _in_view_or_refuse(view)
+                _teammate_or_refuse(ctx, viewer)
                 parts = tab.decode_cursor(cursor)
                 active = _filter(f, "active")
+                narrow = _narrow(ctx, k, f)
                 rows = RR.search(c, RECORD_KINDS[k], text, active=None if active is None else
                                  active in ("1", "true", "True"), after=(parts[0], parts[1]) if len(parts) == 2
-                                 else None, most=most)
-                results += [_record_row(k, r) for r in rows]
+                                 else None, most=most, equal=narrow.equal, by=narrow.by, between=narrow.between,
+                                 ids=narrow.ids)
+                results += _record_rows(c, ctx, k, rows)
                 nxt = tab.encode_cursor([str(rows[-1]["name"]), str(rows[-1]["id"])]) \
                     if rows and len(rows) == most else None
             else:
@@ -1926,6 +2246,14 @@ provider_users = tab_money.provider_users
 bills = tab_ap.bills
 invoices = tab_ap.invoices
 contacts = tab_ap.contacts
+def contact(c: sqlite3.Connection, viewer: str, contact_id: str, at: str | None = None) -> Row:
+    """One vendor or customer (tab_ap.contact), with how fresh its copy is and the Library files its record links that
+    the viewer may read."""
+    out = tab_ap.contact(c, viewer, contact_id, at)
+    sync = SM.record_syncs(c, "fin_contacts", [contact_id]).get(contact_id)
+    files, more = RFILES.visible(c, viewer, "fin_contacts", contact_id)
+    return {**out, "contact": {**cast(Row, out["contact"]), **_freshness(load(c, at), sync)},
+            "files": files, "files_more": more}
 bill = tab_ap.bill
 invoice = tab_ap.invoice
 chart = tab_ap.chart

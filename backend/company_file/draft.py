@@ -176,6 +176,16 @@ def _text(value, field, limit, empty=True):
     return value
 
 
+# A company's business type, as the file names it (company_file `company.business_type`). Tico checks it against its list at
+# import, where an unknown one is a warning, so this only keeps it text of a sensible length.
+BUSINESS_TYPE_LIMIT = 40
+
+
+def _business_type(value):
+    text = value if isinstance(value, str) else str(value)
+    return re.sub("[\ud800-\udfff\x00]", "", text)[:BUSINESS_TYPE_LIMIT]
+
+
 def _id(value, field):
     if not isinstance(value, str) or len(value) > LIMITS["id"] or not ID.fullmatch(value):
         raise DraftError("%s must be a short id (a-z, 0-9 and -)" % field)
@@ -500,7 +510,7 @@ def check(raw, snapshot=False):
     _keys(raw, "draft", TOP, allowed + OPTIONAL)
     if raw["step"] not in ("company",) + STEPS:
         raise DraftError("draft.step is not a step")
-    company = _keys(raw["company"], "company", ("name", "about", "signals"))
+    company = _keys(raw["company"], "company", ("name", "about", "signals"), ("business_type",))
     seq = raw["seq"]
     if isinstance(seq, bool) or not isinstance(seq, int) or not 1 <= seq <= LIMITS["seq"]:
         raise DraftError("draft.seq must be a counter")
@@ -525,6 +535,8 @@ def check(raw, snapshot=False):
         "tools": {"mode": tools["mode"], "connect": [t for t in TOOLS if t in _choices(tools["connect"], "tools.connect", TOOLS)]},
         "seq": seq,
     }
+    if company.get("business_type") not in (None, ""):
+        draft["company"]["business_type"] = _business_type(company["business_type"])
     if raw.get("strategy") is not None:
         draft["strategy"] = _strategy(raw["strategy"])
     for field in ("people", "bots", "goals"):

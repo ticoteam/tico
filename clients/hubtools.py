@@ -6438,10 +6438,12 @@ FINANCE_CHARS = 16000            # about 4k tokens
 FIN_OTHER = " other"             # an "Other · n" row's key, as backend/finance/reads.py OTHER: no real key starts
                                  # with a space, so a vendor named Other stays its own row
 FINANCE_MAX_CHARS = 64000        # about 16k tokens
-FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by", "close"]
+FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by",
+                   "revenue_by_item", "close"]
 FINANCE_METRICS = ["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
                    "ar_overdue", "uncategorized_count", "unreconciled_days"]
-FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card"]
+FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card", "po", "estimate", "item", "location",
+                  "project", "equipment", "due_date"]
 FINANCE_INBOX = ["uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
                  "budget_near_limit", "sync_failed", "period_ready"]
 FIN_DAY = {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "YYYY-MM-DD"}
@@ -6616,8 +6618,9 @@ def _fin_paged(api, path, query, key, budget):
 
 
 @tool("hub_finance_search", "Search the books you may see: entries, bank and card rows, bills, invoices, contacts, "
-      "rules and cards (each card with the vendor accounts it is saved on). Name a kind to page with cursor; without "
-      "one you get the first few of each kind.",
+      "rules, cards (each card with the vendor accounts it is saved on), purchase orders, estimates, and records: "
+      "items, locations, projects, equipment and due dates. Every record row names its source and as_of. Name a kind "
+      "to page with cursor; without one you get the first few of each kind.",
       {"kind": _s("What to search", enum=FINANCE_SEARCH), "q": _s("Words to match"),
        "status": _s("Row, document or card status"), "contact_id": _s("Bills/invoices: this vendor or customer"),
        "vendor": _s("Cards: saved on this vendor (a contact's id or name): which of your cards works there"),
@@ -6625,13 +6628,22 @@ def _fin_paged(api, path, query, key, budget):
        "money_account_id": _s("Entries/rows: this bank or card account"), "start": FIN_DAY, "end": FIN_DAY,
        "aging": _s("Bills/invoices: aging bucket", enum=["current", "1_30", "31_60", "61_90", "over_90"]),
        "contact_kind": _s("Contacts: vendor, customer or both", enum=["vendor", "customer", "both"]),
-       "active": {"type": "boolean", "description": "Contacts: active or not"},
+       "active": {"type": "boolean", "description": "Contacts and records: active or not (archived only when false)"},
        "rule_kind": _s("Rules: gate or posting", enum=["gate", "posting"]),
+       "equipment_kind": _s("Equipment: owned (a van or tool) or customer (a unit at a customer)",
+                            enum=["owned", "customer"]),
+       "customer_id": _s("Equipment: at this customer (a contact's id)"),
+       "location_id": _s("Equipment: kept at this location"),
+       "warranty_ends_by": {**FIN_DAY, "description": "Equipment: warranties ending on or before this day"},
+       "warranty": _s("Equipment: warranties ending within the next 90 days", enum=["ending"]),
+       "due": _s("Equipment: a due date soon (within its lead time) or overdue; each row's next_due_on",
+                 enum=["soon", "overdue"]),
        "cursor": _s("next_cursor from the last page (needs kind)"),
        "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows per page (default 50)"}})
 def finance_search(api, args):
     query = _fin_query(args, ("kind", "q", "status", "contact_id", "vendor", "account_id", "money_account_id", "start",
-                              "end", "aging", "contact_kind", "rule_kind", "cursor", "limit"))
+                              "end", "aging", "contact_kind", "rule_kind", "equipment_kind", "customer_id",
+                              "location_id", "warranty_ends_by", "warranty", "due", "cursor", "limit"))
     if args.get("active") is not None:
         query["active"] = "true" if args["active"] else "false"
     budget = _fin_budget(args.get("limit"), 50)
@@ -6652,7 +6664,8 @@ def finance_search(api, args):
 
 
 @tool("hub_finance_report", "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, "
-      "ar_aging, spend_by, or close (a month's close checklist). Rows past top_n fold into \"Other · n\".",
+      "ar_aging, spend_by, revenue_by_item (posted invoices by item; receivables view), or close (a month's close "
+      "checklist). Rows past top_n fold into \"Other · n\".",
       {"kind": _s("The report", enum=FINANCE_REPORTS), "start": FIN_DAY, "end": FIN_DAY,
        "period": _s("Column size", enum=["day", "week", "month", "quarter", "year"]),
        "basis": _s("cash or accrual (default: the company's)", enum=["cash", "accrual"]),
@@ -6723,6 +6736,86 @@ def finance_inbox(api, args):
        "amount": {"type": "integer", "minimum": 1, "description": "Minor units"}}, local=True)
 def finance_card_fill(api, args):
     raise APIError("not_available", "Card fill is not available yet")
+
+
+# ----------------------------------------------------------------------------- Operations records (backend/finance/reads.py)
+# One tool per record type, over the routes that already answer it: with `id` that record (archived or not), without it
+# the list by name with the route's filters, paged by `next_cursor`. Answers are cut to the Finance payload budget. Writes
+# stay on hub_finance_act. The route cuts what the caller may not see (an item's accounts, a customer's invoices).
+RECORD_ID = _s("One record by id, archived or not; omit for the list")
+RECORD_ARCHIVED = _s("hide (default), only or all", enum=["hide", "only", "all"])
+RECORD_PAGE = {"cursor": _s("next_cursor from the last page"),
+               "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows per page (default 50)"}}
+RECORD_Q = _s("Words to match by name")
+LOCATION_KINDS = ["store", "office", "warehouse", "plant", "customer_site", "vehicle", "other"]
+ITEM_KINDS = ["service", "inventory", "non_inventory", "bundle", "category", "raw_material", "assembly"]
+
+
+def _record_read(api, route, key, args, names):
+    """One record by its id, or a page of the list whose filters are `names`, each answer cut to the Finance budget."""
+    if args.get("id"):
+        return _fin_guard(api.get(f"{route}/{quote(str(args['id']), safe='')}"), FINANCE_CHARS)
+    return _fin_paged(api, route, _fin_query(args, names), key, _fin_budget(args.get("limit"), 50))
+
+
+@tool("hub_locations", "Locations you may see, by name; with id, that one. next_due_on is its earliest open due day.",
+      {"id": RECORD_ID, "q": RECORD_Q, "archived": RECORD_ARCHIVED,
+       "kind": _s("Location kind", enum=LOCATION_KINDS), "customer_id": _s("Locations of this customer (a contact's id)"),
+       **RECORD_PAGE})
+def record_locations(api, args):
+    return _record_read(api, "locations", "locations", args, ("q", "archived", "kind", "customer_id", "cursor", "limit"))
+
+
+@tool("hub_items", "Products and services you may see, by name or SKU; with id, that one (accounts only where you see them).",
+      {"id": RECORD_ID, "q": RECORD_Q, "archived": RECORD_ARCHIVED,
+       "kind": _s("Item kind", enum=ITEM_KINDS), **RECORD_PAGE})
+def record_items(api, args):
+    return _record_read(api, "items", "items", args, ("q", "archived", "kind", "cursor", "limit"))
+
+
+@tool("hub_projects", "Projects you may see, by name; with id, that one.",
+      {"id": RECORD_ID, "q": RECORD_Q, "archived": RECORD_ARCHIVED,
+       "status": _s("Project status", enum=["open", "closed"]),
+       "customer_id": _s("Projects of this customer (a contact's id)"), **RECORD_PAGE})
+def record_projects(api, args):
+    return _record_read(api, "projects", "projects", args, ("q", "archived", "status", "customer_id", "cursor", "limit"))
+
+
+@tool("hub_equipment", "Equipment and vans you may see, by name, serial, make or model; with id, that one. "
+      "next_due_on is its earliest open due day.",
+      {"id": RECORD_ID, "q": RECORD_Q, "archived": RECORD_ARCHIVED,
+       "kind": _s("owned (a van or tool) or customer (a unit at a customer)", enum=["owned", "customer"]),
+       "customer_id": _s("Equipment at this customer (a contact's id)"),
+       "location_id": _s("Equipment kept at this location"),
+       "warranty_ends_by": {**FIN_DAY, "description": "Warranties ending on or before this day"},
+       "warranty": _s("ending: warranties ending within 90 days", enum=["ending"]),
+       "due": _s("soon or overdue: a due date within its lead time, or past due", enum=["soon", "overdue"]),
+       **RECORD_PAGE})
+def record_equipment(api, args):
+    return _record_read(api, "equipment", "equipment", args,
+                        ("q", "archived", "kind", "customer_id", "location_id", "warranty_ends_by", "warranty", "due",
+                         "cursor", "limit"))
+
+
+@tool("hub_due_dates", "Due dates you may see: what each falls on, its repeat and next day due; with id, that one and its days.",
+      {"id": RECORD_ID, "q": RECORD_Q, "archived": RECORD_ARCHIVED,
+       "subject_type": _s("The record it falls on", enum=["location", "equipment", "contact"]),
+       "subject_id": _s("Due dates on this record"), **RECORD_PAGE})
+def record_due_dates(api, args):
+    return _record_read(api, "due-dates", "due_dates", args, ("q", "archived", "subject_type", "subject_id", "cursor", "limit"))
+
+
+@tool("hub_customers", "Active customers you may see, by name; with id, that customer's panel: its locations, open estimates "
+      "and unpaid invoices where you see them.",
+      {"id": _s("A customer's contact id: its panel instead of the list"), "q": RECORD_Q, **RECORD_PAGE})
+def record_customers(api, args):
+    return _record_read(api, "customers", "customers", args, ("q", "cursor", "limit"))
+
+
+# The CLI's `hub <records> list` and `hub <records> get` leaves run these tools (clients/hubcli.py).
+CLI_TOOL_ALIASES.update({f"hub_{word}_{verb}": (f"hub_{word}",) for word in
+                         ("locations", "items", "projects", "equipment", "due_dates", "customers")
+                         for verb in ("list", "get")})
 
 
 # ----------------------------------------------------------------------------- org rules (backend/org_rules.py)

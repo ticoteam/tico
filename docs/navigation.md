@@ -44,6 +44,8 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | See the market map, or ask the Librarian about the market | Strategy → Market (`#/strategy/market`; `#/market` redirects there) |
 | See growth ideas, tests, verdicts and channel economics | Growth (`#/growth`; Ideas, Buyers, Channels and Sources are its tabs, and the brain icon opens Learning) ([Growth](growth.md)) |
 | Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
+| Add or edit a location, product or service, project, piece of equipment or due date | Operations → Locations, Products & services, Projects or Equipment (unreleased; [Operations](operations.md)) |
+| Show or hide Operations or one of its tabs | Settings → General → Sidebar (unreleased; [Operations](operations.md)) |
 | Contact support or continue a support conversation | Ask → **Loop in Support** (phone: the Ask tab), or any `#/support` link |
 
 All four system bots appear as **Built-in** in Settings > Bots. Neither Assistant nor BotOps has a rail entry: **Ask**

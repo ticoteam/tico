@@ -17,6 +17,9 @@ from clients import s3links  # noqa: E402
 from clients.tico import APIError, Client  # noqa: E402
 
 
+RECORD_COMMANDS = ("locations", "items", "projects", "equipment", "due-dates", "customers")
+
+
 def tool_name(fn):
     """The MCP tool a command runs: `message mark-read` is `hub_message_mark_read`."""
     return "hub_" + fn.replace(" ", "_").replace("-", "_")
@@ -228,6 +231,8 @@ def run(args, who=None):
         return via_tool(client, args)
     if args.cmd == "finance":
         return via_tool(client, args, **({"operation_id": args.operation_id} if getattr(args, "operation_id", None) else {}))
+    if args.cmd in RECORD_COMMANDS:            # hub locations|items|projects|equipment|due-dates|customers: their read tools
+        return via_tool(client, args)
     if args.cmd == "settings":
         return via_tool(client, args)
     if args.cmd in ("card", "pin"):

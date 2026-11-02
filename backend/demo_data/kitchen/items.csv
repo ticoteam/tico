@@ -1,0 +1,26 @@
+name,sku,kind,unit,price,description,taxable
+Lunch bowl,MENU-10,service,each,13.50,Rice bowl with protein and seasonal vegetables,yes
+Breakfast burrito,MENU-11,service,each,9.25,"Egg, potato and cheese in a flour tortilla",yes
+Turkey club,MENU-12,service,each,11.75,"Sliced turkey, bacon, lettuce and tomato on toast",yes
+Garden salad,MENU-13,service,each,8.50,Mixed greens with house vinaigrette,yes
+Soup of the day,MENU-14,service,bowl,6.25,Ask for today's soup,yes
+Grilled salmon plate,MENU-15,service,each,22.00,Salmon with rice and vegetables,yes
+Pasta primavera,MENU-16,service,each,16.50,Pasta with seasonal vegetables and tomato sauce,yes
+Chicken sandwich,MENU-17,service,each,12.25,Grilled chicken on a toasted bun,yes
+Fries side,MENU-18,service,each,3.75,Hand-cut fries,yes
+Iced tea,MENU-19,service,each,2.75,"Brewed iced tea, free refills",yes
+Coffee,MENU-20,service,each,2.50,"Drip coffee, free refills",yes
+Lunch combo,MENU-30,bundle,each,15.00,Any sandwich or bowl with fries and a drink,yes
+Chicken thigh (case),ING-101,raw_material,case,68,,no
+Ground beef 80/20,ING-102,raw_material,lb,4.85,,no
+Russet potatoes 50 lb,ING-103,raw_material,bag,22,,no
+Romaine hearts,ING-104,raw_material,case,31,,no
+Salmon fillet,ING-105,raw_material,lb,13.40,,no
+Pasta dry 10 lb,ING-106,raw_material,case,18.50,,no
+Cheddar block 5 lb,ING-107,raw_material,each,27,,no
+Tomato sauce base,ING-108,assembly,quart,6.80,Batch-made in house; yield per quart,no
+House vinaigrette,ING-109,assembly,quart,5.90,Batch-made in house; yield per quart,no
+Burrito filling,ING-110,assembly,pan,38,Batch-made in house; yield per pan,no
+To-go container 32 oz,PKG-200,inventory,each,0.22,,yes
+Napkin pack,PKG-201,non_inventory,pack,4.10,,yes
+Cleaning sanitizer 1 gal,CON-300,non_inventory,gallon,9.75,,yes

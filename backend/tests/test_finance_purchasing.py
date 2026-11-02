@@ -791,3 +791,154 @@ def test_a_teammates_bill_inside_their_set_aside_is_not_held_by_a_spend_that_ove
         # Eve's bill is inside what was set aside for her; the untargeted bill took the room that was not set aside.
         assert DOC.bill_budget(load(c, AT), str(mine.result["bill_id"])).outcome == "allow"
         assert DOC.bill_budget(load(c, AT), str(untargeted.result["bill_id"])).outcome == "needs_approval"
+
+
+def test_lists_narrow_to_a_lines_location_or_project_and_a_merged_id_still_matches(books):
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        here = act(c, OWNER, "location_create", {"name": "North"}).result["location_id"]
+        there = act(c, OWNER, "location_create", {"name": "South"}).result["location_id"]
+        tagged = _order(c, vendor, [_line(c, 1_000), _line(c, 2_000, tags={"location": there})], approve=False)
+        _order(c, vendor, [_line(c, 3_000)], approve=False)
+        RS.alias(c, "locations", there, here, AT)   # South merged into North: its lines keep South's id
+        for asked in (here, there):
+            assert [r["id"] for r in FR.orders(c, OWNER, location_id=asked)["orders"]] == [tagged]
+        assert FR.orders(c, OWNER, project_id="nope")["orders"] == []
+
+
+def test_one_contact_shows_only_to_who_sees_its_side(books):
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        customer = act(c, OWNER, "contact_create", {"name": "Acme Homes", "kind": "customer"}).result["contact_id"]
+        assert act(c, OWNER, "view_grant", {"subject_kind": "teammate", "subject": EVE, "what": "payables"}).status == \
+            "committed"
+        assert FR.contact(c, EVE, vendor)["contact"]["id"] == vendor
+        with pytest.raises(FinanceError) as refused:
+            FR.contact(c, EVE, customer)
+        assert refused.value.code == NOT_FOUND
+        with pytest.raises(FinanceError):
+            FR.contact(c, FAY, vendor)
+
+
+def test_a_bill_of_any_vendor_links_to_an_order_and_neither_bills_nor_holds_on_it(books):
+    with books.transaction() as c:
+        vendor, forwarder = _vendor(c), _vendor(c, "Acme Freight")
+        po = _order(c, vendor, [_line(c, 40_000)])
+        held, status = _holds(c, po), _status(c, po)
+        made = act(c, OWNER, "bill_create", {"vendor_id": forwarder, "bill_date": "2026-10-12", "number": "F-1",
+                                              "purchase_order_id": po, "lines": [_line(c, 1_500)]})
+        assert made.status == "committed", made
+        bill = str(made.result["bill_id"])
+        order = FR.order(c, OWNER, po)
+        assert order["billed"] == 0 and order["bills"] == []
+        assert order["linked_bills"] == [{"id": bill, "number": "F-1", "vendor": "Acme Freight", "total": 1_500,
+                                          "status": "draft"}]
+        assert (_holds(c, po), _status(c, po)) == (held, status)
+        assert FR.bill(c, OWNER, bill)["purchase_order_id"] == po
+        assert act(c, OWNER, "bill_create", {"vendor_id": forwarder, "bill_date": "2026-10-12",
+                                              "purchase_order_id": "no-such-order", "lines": [_line(c, 100)]}
+                   ).code == "not_found"
+
+
+def test_a_bill_link_changes_while_the_bill_is_open_and_an_empty_value_clears_it(books):
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 40_000)])
+        bill = str(act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-12",
+                                                  "lines": [_line(c, 1_500)]}).result["bill_id"])
+        assert FR.order(c, OWNER, po)["linked_bills"] == []
+        assert act(c, OWNER, "bill_update", {"bill_id": bill, "purchase_order_id": po}).status == "committed"
+        assert [b["id"] for b in FR.order(c, OWNER, po)["linked_bills"]] == [bill]
+        assert act(c, OWNER, "bill_update", {"bill_id": bill, "purchase_order_id": ""}).status == "committed"
+        assert FR.order(c, OWNER, po)["linked_bills"] == []
+        assert FR.bill(c, OWNER, bill)["purchase_order_id"] is None
+
+
+def test_a_viewer_who_cannot_see_a_linked_bill_is_not_told_of_it_on_the_order(books):
+    with books.transaction() as c:
+        payroll = _expense(c, "6200")
+        assert act(c, OWNER, "private_lines_set", {"account_id": payroll, "others_see": "totals"}).status == \
+            "committed"
+        vendor, forwarder = _vendor(c), _vendor(c, "Acme Freight")
+        po = _order(c, vendor, [_line(c, 40_000)])
+        bill = str(act(c, OWNER, "bill_create", {"vendor_id": forwarder, "bill_date": "2026-10-12",
+                                                  "purchase_order_id": po,
+                                                  "lines": [{"account_id": payroll, "amount": 1_500}]}
+                       ).result["bill_id"])
+        assert [b["id"] for b in FR.order(c, OWNER, po)["linked_bills"]] == [bill]
+        assert act(c, OWNER, "right_grant", {"teammate": EVE, "right": "finance.ap"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": EVE, "what": "everything", "whose": "company"}).status == \
+            "committed"
+        assert FR.order(c, EVE, po)["linked_bills"] == []
+        with pytest.raises(FinanceError) as hidden:
+            FR.bill(c, EVE, bill)
+        assert hidden.value.code == NOT_FOUND
+
+
+def test_a_bill_names_its_order_only_to_a_viewer_who_can_read_that_order(books):
+    with books.transaction() as c:
+        payroll = _expense(c, "6200")
+        assert act(c, OWNER, "private_lines_set", {"account_id": payroll, "others_see": "totals"}).status == \
+            "committed"
+        vendor, forwarder = _vendor(c), _vendor(c, "Acme Freight")
+        po = _order(c, vendor, [{"account_id": payroll, "amount": 4_000}])
+        bill = str(act(c, OWNER, "bill_create", {"vendor_id": forwarder, "bill_date": "2026-10-12",
+                                                  "purchase_order_id": po, "lines": [_line(c, 1_500)]}
+                       ).result["bill_id"])
+        assert act(c, OWNER, "right_grant", {"teammate": EVE, "right": "finance.ap"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": EVE, "what": "payables"}).status == "committed"
+        assert FR.bill(c, EVE, bill)["purchase_order_id"] is None
+        assert FR.bill(c, OWNER, bill)["purchase_order_id"] == po
+        with pytest.raises(FinanceError) as hidden:
+            FR.order(c, EVE, po)
+        assert hidden.value.code == NOT_FOUND
+
+
+def _link_bills(c, vendor: str, po: str, count: int, *, payroll: str | None = None) -> list[str]:
+    """Bills linked to an order, each with one line: on the payroll account when given (a line a teammate may not
+    see), else on 6100. The dates vary, so the order shown is by date and not by id alone."""
+    ids = []
+    for i in range(count):
+        line = {"account_id": payroll, "amount": 100} if payroll else _line(c, 100)
+        made = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": f"2026-10-{1 + i % 28:02d}",
+                                              "purchase_order_id": po, "lines": [line]})
+        assert made.status == "committed", made.reason
+        ids.append(str(made.result["bill_id"]))
+    return ids
+
+
+def test_an_order_shows_fifty_visible_linked_bills_and_says_more_past_them(books):
+    with books.transaction() as c:
+        payroll = _expense(c, "6200")
+        assert act(c, OWNER, "private_lines_set", {"account_id": payroll, "others_see": "totals"}).status == \
+            "committed"
+        vendor, forwarder = _vendor(c), _vendor(c, "Acme Freight")
+        po = _order(c, vendor, [_line(c, 40_000)])
+        _link_bills(c, forwarder, po, 20, payroll=payroll)
+        visible = set(_link_bills(c, forwarder, po, 60))
+        assert act(c, OWNER, "right_grant", {"teammate": EVE, "right": "finance.ap"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": EVE, "what": "everything", "whose": "company"}).status == \
+            "committed"
+        owner = FR.order(c, OWNER, po)
+        assert len(owner["linked_bills"]) == 50 and owner["linked_bills_more"] is True
+        eve = FR.order(c, EVE, po)
+        shown = {b["id"] for b in eve["linked_bills"]}
+        # The 20 bills on the private account do not count toward the fifty: she sees fifty of the visible 60.
+        assert len(shown) == 50 and shown <= visible and eve["linked_bills_more"] is True
+
+
+def test_hidden_linked_bills_are_left_out_and_a_short_list_says_no_more(books):
+    with books.transaction() as c:
+        payroll = _expense(c, "6200")
+        assert act(c, OWNER, "private_lines_set", {"account_id": payroll, "others_see": "totals"}).status == \
+            "committed"
+        vendor, forwarder = _vendor(c), _vendor(c, "Acme Freight")
+        po = _order(c, vendor, [_line(c, 40_000)])
+        _link_bills(c, forwarder, po, 20, payroll=payroll)
+        visible = set(_link_bills(c, forwarder, po, 30))
+        assert act(c, OWNER, "right_grant", {"teammate": EVE, "right": "finance.ap"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": EVE, "what": "everything", "whose": "company"}).status == \
+            "committed"
+        eve = FR.order(c, EVE, po)
+        assert {b["id"] for b in eve["linked_bills"]} == visible and eve["linked_bills_more"] is False
+        assert len(FR.order(c, OWNER, po)["linked_bills"]) == 50

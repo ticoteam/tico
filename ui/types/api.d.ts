@@ -858,7 +858,9 @@ export type Config = {
   app_name: string;
   assistant_bot: string;
   assistant_name: string;
+  business_type?: string | null;
   company_name: string;
+  hidden_sections?: Array<string> | null;
   owner_email: string;
   public_url: string;
   s3_view_urls?: Record<string, string>;
@@ -890,6 +892,24 @@ export type ConversationList = {
   actor: string;
   actors?: Record<string, string>;
   conversations: Array<Conversation>;
+};
+
+export type CustomerPanel = {
+  contact: {
+  id: string;
+  name: string;
+};
+  estimates: Array<unknown> | null;
+  invoices: Record<string, unknown> | null;
+  locations: Array<Location>;
+};
+
+export type Customers = {
+  customers: Array<{
+  id: string;
+  name: string;
+}>;
+  next_cursor: string | null;
 };
 
 export type DocCreate = {
@@ -1028,6 +1048,39 @@ export type DueAdd = {
   timezone?: string | null;
 };
 
+export type DueDate = {
+  archived_at?: string | null;
+  assignee_id: string;
+  every_count?: number | null;
+  history?: Array<DueDay>;
+  id: string;
+  lead_days: number;
+  name: string;
+  next_due_on?: string | null;
+  repeats: string;
+  starts_on: string;
+  status: string;
+  subject_id: string;
+  subject_name?: string | null;
+  subject_type: string;
+};
+
+export type DueDateOne = {
+  due_date: DueDate;
+};
+
+export type DueDates = {
+  due_dates: Array<DueDate>;
+  next_cursor: string | null;
+};
+
+export type DueDay = {
+  completed_at?: string | null;
+  completed_by_id?: string | null;
+  due_on: string;
+  task_id?: string | null;
+};
+
 export type DueEdit = {
   first_due?: string | null;
   owner?: string | null;
@@ -1042,7 +1095,45 @@ export type DueSatisfied = {
 
 export type Empty = Record<string, unknown>;
 
+export type Equipment = {
+  archived_at?: string | null;
+  as_of?: string | null;
+  customer_id?: string | null;
+  files?: Array<{
+  added_at: string;
+  added_by_id: string;
+  file_id: string;
+  id: string;
+}>;
+  files_more?: boolean;
+  id: string;
+  installed_on?: string | null;
+  kind: "owned" | "customer";
+  location_id?: string | null;
+  location_name?: string | null;
+  make: string;
+  model: string;
+  name: string;
+  next_due_on?: string | null;
+  next_due_status?: string | null;
+  photo_file_id?: string | null;
+  serial: string;
+  source?: string;
+  stale?: boolean;
+  warranty_ends_on?: string | null;
+};
+
+export type EquipmentOne = {
+  equipment: Equipment;
+};
+
+export type Equipments = {
+  equipment: Array<Equipment>;
+  next_cursor: string | null;
+};
+
 export type Estimate = (FinanceOrderRow & {
+  actions?: Array<Record<string, unknown>>;
   lines: Array<{
   id: string;
   line_no: number;
@@ -1403,6 +1494,10 @@ export type FinanceChart = {
   subtype?: string;
   type: string;
 }>;
+  classes: Array<{
+  id: string;
+  name: string;
+}>;
   more: boolean;
   view_version: number;
 };
@@ -1438,6 +1533,37 @@ export type FinanceConnectionResult = {
   reason?: string;
   result?: Record<string, unknown>;
   status: string;
+};
+
+export type FinanceContact = {
+  contact: {
+  active: boolean;
+  as_of?: string | null;
+  created_at?: string;
+  default_account?: Record<string, unknown> | null;
+  emails?: Array<string>;
+  has_tax_id?: boolean;
+  id: string;
+  is_1099?: boolean;
+  kind: "vendor" | "customer" | "both";
+  name: string;
+  owed?: {
+  bills?: number;
+  invoices?: number;
+};
+  recipient_id?: string | null;
+  source?: string;
+  stale?: boolean;
+  tax_id_last4?: string | null;
+};
+  files: Array<{
+  added_at: string;
+  added_by_id: string;
+  file_id: string;
+  id: string;
+}>;
+  files_more: boolean;
+  view_version: number;
 };
 
 export type FinanceContacts = {
@@ -1481,6 +1607,7 @@ export type FinanceDocument = (FinanceDocumentRow & {
   id: string;
 }>;
   attachments_more?: boolean;
+  book_mode?: "native" | "mirror";
   lines: Array<{
   account: Record<string, unknown> | null;
   amount: number;
@@ -1489,6 +1616,7 @@ export type FinanceDocument = (FinanceDocumentRow & {
   tags: Record<string, unknown>;
   taxable?: boolean;
 }>;
+  purchase_order_id?: string | null;
   schedule?: Record<string, unknown> | null;
   settlement_count?: number;
   settlements: Array<{
@@ -1628,15 +1756,25 @@ export type FinanceOpenTotal = {
 };
 
 export type FinanceOrderRow = {
+  billed?: number;
   contact: {
   id: string;
   name: string;
 };
   currency: string;
   date: string;
+  held?: number;
   id: string;
+  locations?: Array<{
+  id: string;
+  name: string;
+}>;
   memo: string;
   number: string;
+  projects?: Array<{
+  id: string;
+  name: string;
+}>;
   status: string;
   total: number;
 };
@@ -1769,7 +1907,7 @@ export type FinanceReport = {
 };
 
 export type FinanceReportOf = {
-  kind: "pnl" | "pnl_by" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
+  kind: "pnl" | "pnl_by" | "pnl_by_account" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by" | "revenue_by_item";
   prior?: Record<string, unknown>;
 };
 
@@ -1815,9 +1953,12 @@ export type FinanceSearch = {
   currency: string;
   next_cursor: string | null;
   results: Array<{
+  as_of?: string | null;
   id: string;
-  kind: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project";
+  kind: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project" | "equipment";
   label: string;
+  source?: string;
+  stale?: boolean;
 }>;
   view_version: number;
 };
@@ -2481,15 +2622,27 @@ export type InternalDocVersions = {
 
 export type Item = {
   archived_at?: string | null;
+  as_of?: string | null;
   asset_account_id?: string | null;
   currency: string;
   expense_account_id?: string | null;
+  files?: Array<{
+  added_at: string;
+  added_by_id: string;
+  file_id: string;
+  id: string;
+}>;
+  files_more?: boolean;
   id: string;
   income_account_id?: string | null;
-  kind: "service" | "inventory" | "non_inventory" | "bundle" | "category";
+  kind: "service" | "inventory" | "non_inventory" | "bundle" | "category" | "raw_material" | "assembly";
   name: string;
   price?: number | null;
+  quantity_on_hand?: number | null;
+  quantity_synced_at?: string | null;
   sku: string;
+  source?: string;
+  stale?: boolean;
   unit: string;
 };
 
@@ -2773,10 +2926,26 @@ export type LocalFinding = {
 export type Location = {
   address: Record<string, unknown>;
   archived_at?: string | null;
+  as_of?: string | null;
+  customer_id?: string | null;
+  customer_name?: string | null;
+  files?: Array<{
+  added_at: string;
+  added_by_id: string;
+  file_id: string;
   id: string;
+}>;
+  files_more?: boolean;
+  id: string;
+  in_books?: boolean;
   kind: string;
   name: string;
+  next_due_on?: string | null;
+  next_due_status?: string | null;
   parent_id?: string | null;
+  parent_name?: string | null;
+  source?: string;
+  stale?: boolean;
 };
 
 export type LocationOne = {
@@ -3234,9 +3403,13 @@ export type ProfileChoices = {
 
 export type Project = {
   archived_at?: string | null;
+  as_of?: string | null;
   customer_id?: string | null;
+  customer_name?: string | null;
   id: string;
   name: string;
+  source?: string;
+  stale?: boolean;
   status: "open" | "closed";
 };
 
@@ -3306,10 +3479,28 @@ export type PublicationInput = {
 };
 
 export type PurchaseOrder = (FinanceOrderRow & {
+  actions?: Array<Record<string, unknown>>;
+  bills?: Array<{
+  date?: string;
+  id: string;
+  number?: string;
+  on_order: number;
+  status?: string;
+  total: number;
+  vendor?: string;
+}>;
   lines: Array<{
   id: string;
   line_no: number;
 }>;
+  linked_bills?: Array<{
+  id: string;
+  number?: string;
+  status: string;
+  total: number;
+  vendor?: string;
+}>;
+  linked_bills_more?: boolean;
   view_version?: number;
 });
 
@@ -3352,6 +3543,35 @@ export type Recent = {
   actor: string;
   bots: Array<unknown>;
   since: string;
+};
+
+export type RecordsImport = {
+  ignored_columns: Array<string>;
+  kind: string;
+  lines: Array<{
+  approval_id?: string;
+  line: number;
+  matches?: Record<string, unknown> | null;
+  name: string;
+  new_customer?: string;
+  reason?: string;
+  record_id?: string;
+  status: string;
+}>;
+  new_customers: number;
+  record_type: string;
+  report_csv?: string;
+  rows: number;
+  summary: Record<string, unknown>;
+  truncated: boolean;
+};
+
+export type RecordsImportRequest = {
+  assign?: Record<string, string>;
+  csv: string;
+  include_lines?: Array<number>;
+  record_type: "locations" | "items" | "equipment" | "due_dates";
+  report?: "json" | "csv";
 };
 
 export type Refresh = {
@@ -5330,6 +5550,13 @@ export type CommentOnTaskParams = {
 export type CommentOnTaskBody = TaskComment;
 export type CommentOnTaskResponse = CommentResult;
 
+/** POST /api/v2/imports/commit */
+export type CommitRecordsImportParams = {
+  "Idempotency-Key": string;
+};
+export type CommitRecordsImportBody = RecordsImportRequest;
+export type CommitRecordsImportResponse = RecordsImport;
+
 /** POST /api/v2/assistant/actions/{aid}/confirm */
 export type ConfirmAssistantActionParams = {
   "Idempotency-Key": string;
@@ -5912,12 +6139,36 @@ export type GetConversationSnapshotParams = {
 export type GetConversationSnapshotBody = never;
 export type GetConversationSnapshotResponse = Snapshot;
 
+/** GET /api/v2/customers/{contact_id} */
+export type GetCustomerParams = {
+  contact_id: string;
+  view_as?: string | null;
+};
+export type GetCustomerBody = never;
+export type GetCustomerResponse = CustomerPanel;
+
 /** GET /api/v2/context/document */
 export type GetDocumentParams = {
   id: string;
 };
 export type GetDocumentBody = never;
 export type GetDocumentResponse = unknown;
+
+/** GET /api/v2/due-dates/{due_date_id} */
+export type GetDueDateParams = {
+  due_date_id: string;
+  view_as?: string | null;
+};
+export type GetDueDateBody = never;
+export type GetDueDateResponse = DueDateOne;
+
+/** GET /api/v2/equipment/{equipment_id} */
+export type GetEquipmentParams = {
+  equipment_id: string;
+  view_as?: string | null;
+};
+export type GetEquipmentBody = never;
+export type GetEquipmentResponse = EquipmentOne;
 
 /** GET /api/v2/estimates/{estimate_id} */
 export type GetEstimateParams = {
@@ -6009,6 +6260,14 @@ export type GetFinanceCloseChecklistParams = {
 export type GetFinanceCloseChecklistBody = never;
 export type GetFinanceCloseChecklistResponse = FinanceCloseChecklist;
 
+/** GET /api/v2/finance/contacts/{contact_id} */
+export type GetFinanceContactParams = {
+  contact_id: string;
+  view_as?: string | null;
+};
+export type GetFinanceContactBody = never;
+export type GetFinanceContactResponse = FinanceContact;
+
 /** GET /api/v2/finance/expenses */
 export type GetFinanceExpensesParams = {
   account_id?: string | null;
@@ -6098,7 +6357,8 @@ export type GetFinanceReportParams = {
   by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account" | "location" | "class" | "project" | "location_class" | "location_project" | "class_project" | null;
   compare?: "prior" | null;
   end?: string | null;
-  kind: "pnl" | "pnl_by" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
+  id?: string | null;
+  kind: "pnl" | "pnl_by" | "pnl_by_account" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by" | "revenue_by_item";
   period?: "day" | "week" | "month" | "quarter" | "year";
   start?: string | null;
   top_n?: number;
@@ -6754,6 +7014,16 @@ export type ListConversationsParams = {
 export type ListConversationsBody = never;
 export type ListConversationsResponse = ConversationList;
 
+/** GET /api/v2/customers */
+export type ListCustomersParams = {
+  cursor?: string | null;
+  limit?: number;
+  q?: string;
+  view_as?: string | null;
+};
+export type ListCustomersBody = never;
+export type ListCustomersResponse = Customers;
+
 /** GET /api/v2/deleted-tasks */
 export type ListDeletedTasksParams = Record<string, never>;
 export type ListDeletedTasksBody = never;
@@ -6775,11 +7045,43 @@ export type ListDocsConversationsParams = {
 export type ListDocsConversationsBody = never;
 export type ListDocsConversationsResponse = DocsConversations;
 
+/** GET /api/v2/due-dates */
+export type ListDueDatesParams = {
+  archived?: "hide" | "only" | "all";
+  cursor?: string | null;
+  limit?: number;
+  q?: string;
+  subject_id?: string | null;
+  subject_type?: "location" | "equipment" | "contact" | null;
+  view_as?: string | null;
+};
+export type ListDueDatesBody = never;
+export type ListDueDatesResponse = DueDates;
+
+/** GET /api/v2/equipment */
+export type ListEquipmentParams = {
+  archived?: "hide" | "only" | "all";
+  cursor?: string | null;
+  customer_id?: string | null;
+  due?: "soon" | "overdue" | null;
+  kind?: "owned" | "customer" | null;
+  limit?: number;
+  location_id?: string | null;
+  q?: string;
+  view_as?: string | null;
+  warranty?: "ending" | null;
+  warranty_ends_by?: string | null;
+};
+export type ListEquipmentBody = never;
+export type ListEquipmentResponse = Equipments;
+
 /** GET /api/v2/estimates */
 export type ListEstimatesParams = {
   cursor?: string | null;
   customer_id?: string | null;
   limit?: number;
+  location_id?: string | null;
+  project_id?: string | null;
   q?: string;
   status?: string | null;
   view_as?: string | null;
@@ -6899,6 +7201,8 @@ export type ListFinanceInvoicesParams = {
   end?: string | null;
   late?: boolean;
   limit?: number;
+  location_id?: string | null;
+  project_id?: string | null;
   q?: string;
   start?: string | null;
   status?: string | null;
@@ -7085,6 +7389,7 @@ export type ListInternalDocsResponse = InternalDocList;
 export type ListItemsParams = {
   archived?: "hide" | "only" | "all";
   cursor?: string | null;
+  kind?: "service" | "inventory" | "non_inventory" | "bundle" | "category" | "raw_material" | "assembly" | null;
   limit?: number;
   q?: string;
   view_as?: string | null;
@@ -7120,6 +7425,8 @@ export type ListLinkedDocsResponse = LinkedDocList;
 export type ListLocationsParams = {
   archived?: "hide" | "only" | "all";
   cursor?: string | null;
+  customer_id?: string | null;
+  kind?: "store" | "office" | "warehouse" | "plant" | "customer_site" | "vehicle" | "other" | null;
   limit?: number;
   q?: string;
   view_as?: string | null;
@@ -7197,8 +7504,10 @@ export type ListProfilesResponse = ProfileChoices;
 export type ListProjectsParams = {
   archived?: "hide" | "only" | "all";
   cursor?: string | null;
+  customer_id?: string | null;
   limit?: number;
   q?: string;
+  status?: "open" | "closed" | null;
   view_as?: string | null;
 };
 export type ListProjectsBody = never;
@@ -7229,6 +7538,8 @@ export type ListPublicRoadmapCommentsResponse = PublicRoadmapComments;
 export type ListPurchaseOrdersParams = {
   cursor?: string | null;
   limit?: number;
+  location_id?: string | null;
+  project_id?: string | null;
   q?: string;
   status?: string | null;
   vendor_id?: string | null;
@@ -7542,6 +7853,13 @@ export type PreviewProductRepositoryParams = {
 };
 export type PreviewProductRepositoryBody = never;
 export type PreviewProductRepositoryResponse = ProductRepositoryPreview;
+
+/** POST /api/v2/imports/preview */
+export type PreviewRecordsImportParams = {
+  "Idempotency-Key": string;
+};
+export type PreviewRecordsImportBody = RecordsImportRequest;
+export type PreviewRecordsImportResponse = RecordsImport;
 
 /** POST /api/v2/tasks/{tid}/publication-preview */
 export type PreviewTaskPublicationParams = {
@@ -8121,9 +8439,12 @@ export type SearchFinanceParams = {
   contact_id?: string | null;
   contact_kind?: "vendor" | "customer" | "both" | null;
   cursor?: string | null;
+  customer_id?: string | null;
   end?: string | null;
-  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project" | "po" | "estimate" | null;
+  equipment_kind?: "owned" | "customer" | null;
+  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project" | "po" | "estimate" | "equipment" | "due_date" | null;
   limit?: number;
+  location_id?: string | null;
   money_account_id?: string | null;
   q?: string;
   rule_kind?: "gate" | "posting" | null;
@@ -8131,6 +8452,7 @@ export type SearchFinanceParams = {
   status?: string | null;
   vendor?: string | null;
   view_as?: string | null;
+  warranty_ends_by?: string | null;
 };
 export type SearchFinanceBody = never;
 export type SearchFinanceResponse = FinanceSearch;
