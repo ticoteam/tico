@@ -7,8 +7,6 @@ import re
 import uuid
 from pathlib import Path
 
-import pytest
-
 from backend import bookkeeper as BK
 from backend.finance import actions as FA
 from backend.finance import reads as FR
@@ -173,8 +171,6 @@ def test_c3_receipts_are_found_by_the_hourly_check(environment):
     assert not any("settle" in t for t in _triggers(api)), sorted(_triggers(api))
 
 
-@pytest.mark.xfail(strict=True, reason="GAP: invoice-overdue playbook says send one reminder through Finance, but no "
-                   "reminder action (invoice_remind) exists and invoice_send only marks drafts as sent")
 def test_c3_a_reminder_action_exists(environment):
     api = built(environment)
     ensure(api)

@@ -181,10 +181,7 @@ def test_invoices_turn(api):
     assert fake.sent("request_send_money") == []
 
 
-@pytest.mark.xfail(strict=True, reason="GAP: invoice-overdue.md step 3 says to send one reminder for the stage through "
-                   "Finance. The invoice kinds have no reminder (backend/finance/core/kinds.py: invoice_create, "
-                   "invoice_send, invoice_record_payment, invoice_write_off, invoice_void).")
-def test_gap_invoice_reminder_is_a_finance_action(api):
+def test_invoice_reminder_is_a_finance_action(api):
     token = hire(api)
     err, helped = call(api, "hub_finance_act", {"kind": "help"}, token=token)
     assert not err and "invoice_remind" in {k["kind"] for k in helped["kinds"]}, helped

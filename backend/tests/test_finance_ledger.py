@@ -245,3 +245,43 @@ def test_migration_74_adds_the_mirror_columns_and_credit_refunds_to_an_install_f
                               ("fin_bill_lines", "external_line"), ("fin_invoice_lines", "external_line")):
             assert column in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
         assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=74").fetchone()[0] == 1
+
+
+def test_migrations_78_to_84_add_their_tables_and_columns_to_an_install_from_77(store):
+    """An install that took migrations up to 77 (main's head) gets 78 to 84 on its next start: covered history, prepaid
+    lines and their postings, the refund link, invoice reminders, invoice email delivery, the payment cancel ask and the
+    card's merchant. A second start changes nothing."""
+    with store.transaction() as c:
+        for version in range(78, 85):
+            c.execute("DELETE FROM cloud_migrations WHERE version=?", (version,))
+        c.execute("DROP INDEX fin_feed_txns_refund")
+        c.execute("ALTER TABLE fin_feed_txns DROP COLUMN refund_of")
+        c.execute("DROP TABLE fin_prepaid_postings")
+        c.execute("ALTER TABLE fin_bill_lines DROP COLUMN prepaid_start")
+        c.execute("ALTER TABLE fin_bill_lines DROP COLUMN prepaid_months")
+        c.execute("DROP TABLE fin_invoice_reminders")
+        for column in ("send_approval_id", "send_to", "send_text", "delivered_at", "delivery_reason"):
+            c.execute(f"ALTER TABLE fin_invoices DROP COLUMN {column}")
+        c.execute("ALTER TABLE fin_payments DROP COLUMN cancel_asked_at")
+        c.execute("ALTER TABLE fin_payments DROP COLUMN cancel_asked_by")
+        c.execute("ALTER TABLE fin_cards DROP COLUMN merchant")
+    columns = {
+        "fin_feed_txns": ("refund_of",), "fin_bill_lines": ("prepaid_start", "prepaid_months"),
+        "fin_invoices": ("send_approval_id", "send_to", "send_text", "delivered_at", "delivery_reason"),
+        "fin_invoice_reminders": ("send_approval_id", "delivered_at", "delivery_reason"),
+        "fin_payments": ("cancel_asked_at", "cancel_asked_by"), "fin_cards": ("merchant",),
+    }
+
+    def check(c) -> None:
+        for table, names in columns.items():
+            assert set(names) <= {r[1] for r in c.execute(f"PRAGMA table_info({table})")}, table
+        for table in ("fin_prepaid_postings", "fin_invoice_reminders"):
+            assert c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone(), table
+        assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version BETWEEN 78 AND 84").fetchone()[0] == 7
+
+    store.initialize(seed_market=False)
+    with store.read() as c:
+        check(c)
+    store.initialize(seed_market=False)
+    with store.read() as c:
+        check(c)
