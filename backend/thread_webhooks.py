@@ -32,7 +32,15 @@ def message_facts(message, thread):
             "kind": message.get("kind") or "say"}
 
 
+def _silenced():
+    """A write under `H.NO_TRIGGERS` promises no webhook or automation hears of it (a Company page reader's message)."""
+    from . import hubdb as H
+    return H.NO_TRIGGERS.get()
+
+
 def _publish(c, type_, subject, data, actor):
+    if _silenced():
+        return
     try:
         webhooks.publish(c, type_, subject, data, actor)
     except Exception:  # noqa: BLE001 - a webhook must never fail the write that caused it
@@ -51,6 +59,8 @@ def _owner_reads(c, owner, thread_id, facts):
 def thread_created(c, thread, actor):
     """A thread was started, by any route (threads.create, dm, home, sub_thread, hubdb.open_conversation): to webhooks
     and to `event` automations. An automation hears only of a thread its owner may read, as an endpoint's owner does."""
+    if _silenced():
+        return
     facts = thread_facts(thread)
     _publish(c, "thread.created", thread["id"], facts, actor)
     try:

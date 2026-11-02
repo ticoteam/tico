@@ -68,7 +68,7 @@ EMPTY = (
     "credentials", "credential_keys", "credential_grants", "credential_uses", "credential_requests", "credential_imports",
     "directory_credentials", "company_storage", "tico_storage",
     # company model subscriptions: the sealed logins (vault values) and which computer or attempt holds which one
-    "model_subscriptions", "computer_subscriptions", "attempt_subscriptions", "subscription_connects",
+    "model_subscriptions", "computer_subscriptions", "attempt_subscriptions", "pending_subscription_fallbacks", "subscription_connects",
     # mail, Slack, GitHub, Granola, meeting bots, support
     "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
@@ -109,6 +109,11 @@ EMPTY = (
     "federation_deferrals",
     # Slack links: an active link posts to Slack both ways; its queue and message map only serve that link.
     "slack_thread_links", "slack_link_members", "slack_message_links", "slack_inbound_events",
+    # The Company page: the readers (their addresses, sessions and invite hashes, the messages they wrote, what they read,
+    # what was mailed to them), and the company's published statements and rules. A copy is rehearsal data, so none of it.
+    "readers", "audience_readers", "reader_sessions", "reader_invites", "reader_messages", "reader_notices", "edition_views",
+    "company_page_settings", "audiences", "audience_sources", "disclosure_revisions", "disclosure_rules", "editions",
+    "edition_sources", "edition_checks", "page_stats", "stat_board_approvals", "page_releases",
 )
 # Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",
