@@ -186,13 +186,17 @@ def make_side(tmp_path, hq):
         (registry / "hub-access.yaml").write_text(yaml.safe_dump({"owner": "ana@acme.example", "bot_admins": []}))
         settings = Settings(db_path=root / "hub.db", registry_dir=registry, gateway_key="tgw_" + name, company_name=name.title() + " Co", test_identities={
             "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
-            "ben-test": Identity("human:ben", "human", "ben@acme.example")})
+            "ben-test": Identity("human:ben", "human", "ben@acme.example"),
+            "bot-test": Identity("bot:ops", "bot", agent="hermes")})
         app = create_app(settings)
         client = stack.enter_context(TestClient(app))          # the lifespan creates the schema
         install = "gi_" + hashlib.sha256(name.encode()).hexdigest()[:24]
         with app.state.store.transaction() as c:
             GC._write(c, {"install": install})
             H.sync_registry(c, {}, PEOPLE)                    # the humans rows sign-in reads
+            c.execute("INSERT INTO bots(slug,display_name,state) VALUES('ops','Ops','active')")
+            c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES('ops','hermes','x',?,'human:ana')",
+                      (H.now(),))
             c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) "
                       "DO UPDATE SET value_json=excluded.value_json", (encode(PEOPLE),))
         hq.by_key["tgw_" + name] = install
@@ -334,6 +338,24 @@ def test_peering_request_needs_an_idempotency_key(make_side, hq):
 def test_only_the_owner_manages_federation(make_side, hq):
     a = make_side("alpha")
     assert a.client.get("/api/v2/federation", headers={"Authorization": "Bearer ben-test"}).status_code == 403
+
+
+def test_a_bot_or_a_non_owner_botops_run_is_refused_every_federation_management_write(make_side, hq):
+    """BotOps may delegate these rows, so the route is the check: a bot, and a person BotOps acts for (ben), get 403."""
+    a = make_side("alpha")
+    writes = [("POST", "/api/v2/federation/keys", None), ("POST", "/api/v2/federation/keys/rotate", None),
+              ("POST", "/api/v2/federation/peerings", {"peer": "gi_other"}),
+              ("POST", "/api/v2/federation/peerings/p1/approve", None),
+              ("POST", "/api/v2/federation/peerings/p1/pause", {"paused": True}),
+              ("POST", "/api/v2/federation/peerings/p1/revoke", None),
+              ("POST", "/api/v2/federation/threads/t1/installs", {"install": "gi_other"}),
+              ("POST", "/api/v2/federation/threads/t1/readers", {"actor": "human:ben"}),
+              ("DELETE", "/api/v2/federation/threads/t1/installs/gi_other", None)]
+    for token in ("bot-test", "ben-test"):
+        headers = {"Authorization": "Bearer " + token}
+        for method, path, body in writes:
+            got = a.client.request(method, path, json=body, headers=headers)
+            assert got.status_code == 403, (token, method, path, got.status_code)
 
 
 def test_a_shared_thread_reaches_the_other_install_in_both_directions(make_side, hq):

@@ -6021,6 +6021,40 @@ def thread_open_earlier(api, args):
     return api.post(_thread_path(args["thread_id"], "open-earlier"), {}, key=_key(args))
 
 
+@tool("hub_thread_delete", "Delete a message you wrote. It leaves a marker with no text, its sub-thread stays, and the asks "
+      "it answered reopen. Asks, answers and notices cannot be deleted by their writers this way.",
+      {"message_id": _s("The message's id")}, required=("message_id",), writes=True)
+def thread_delete(api, args):
+    return api.call("DELETE", "messages/" + quote(args["message_id"], safe=""), None, key=_key(args))
+
+
+@tool("hub_thread_upload", "Post a message with a local file to a thread: the file is streamed to Tico, and `text` is the "
+      "message's words (optional). `under` posts it in that message's sub-thread. Needs a Computer to stream from.",
+      {"thread": THREAD_ID, "path": _s("A local file on this computer"), "text": _s("The message's text, optional"),
+       "kind": {"type": "string", "enum": ["say", "ask"], "default": "say", "description": "say, or ask for an answer"},
+       "to": _s("The person or bot an ask is for"),
+       "under": _s("The message whose sub-thread the file goes under (optional)")},
+      required=("thread", "path"), writes=True)
+def thread_upload(api, args):
+    if not hasattr(api, "post_multipart"):
+        raise ValueError("Stream local files with hub thread upload on your Computer")
+    from . import bot_files as BF
+    path, _ = BF.local_file(BF.checkout_root(), args["path"])
+    fields = {"text": args.get("text"), "kind": args.get("kind"), "to": args.get("to"),
+              "parent_message_id": args.get("under")}
+    fields = {name: value for name, value in fields.items() if value is not None}
+    return api.post_multipart("uploads/threads/" + quote(str(args["thread"]), safe="") + "/messages", {"file": path},
+                              fields, key=_key(args))
+
+
+@tool("hub_thread_slack_resume", "Check a suspended or refused Slack link again, as the person who asked (an owner or an "
+      "admin): Tico looks at the channel and the thread once more, then activates the link or refuses it. The link's id is "
+      "in hub_thread_link_slack's listing.",
+      {"link_id": _s("The Slack link's id")}, required=("link_id",), writes=True)
+def thread_slack_resume(api, args):
+    return _as_person(api).post("slack/links/" + quote(str(args["link_id"]), safe="") + "/resume", {}, key=_key(args))
+
+
 @tool("hub_thread_task", "Make a task from a thread message you can read. The server copies the message and a link "
       "back, and the task is private unless the thread is company-wide.",
       {"message_id": _s("The message id from hub_thread_show"), "title": _s("Task title"),
@@ -7327,6 +7361,13 @@ def rules_appeal(api, args):
     return api.post(f"rule-holds/{args['id']}/appeal", {"why": args.get("why") or ""}, key=_key(args))
 
 
+@tool("hub_rules_withdraw", "Take back your held write so you can edit it and send it again: the hold is kept and "
+      "nothing is sent. Only the author of the held write may withdraw it.",
+      {"id": _s("The hold's id, from the held answer")}, required=("id",), writes=True)
+def rules_withdraw(api, args):
+    return api.post(f"rule-holds/{args['id']}/withdraw", {}, key=_key(args))
+
+
 # ----------------------------------------------------------------------------- calls (Tico Meet: docs/meet.md)
 # A call belongs to a thread. Starting, joining, ending and attaching bots are people's acts; BotOps acts as the person it
 # works for, and the server refuses a bot on each of them. Every read checks the caller's access to the thread.
@@ -7488,7 +7529,7 @@ AUDIENCE = {
     # A bot's add is a suggestion; the Assistant's is an org rule the person asked for in their own chat, citing their words.
     "hub_rules_add": KINDS,
     # A bot checks its own drafts and appeals its own holds; a person's writes are never checked.
-    "hub_rules_check": BOTS, "hub_rules_appeal": BOTS,
+    "hub_rules_check": BOTS, "hub_rules_appeal": BOTS, "hub_rules_withdraw": PEOPLE + BOTS,
     "hub_approval_decline": HUMANS_AND_ASSISTANT,         # only a person decides an approval
     "hub_approval_approve": HUMANS_AND_ASSISTANT,         # ... or their own Assistant, when they let it
     "hub_assistant_read": PEOPLE, "hub_assistant_send": PEOPLE,

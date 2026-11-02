@@ -200,7 +200,9 @@ THREADS = _routes(
     ("POST", r"threads"), ("PATCH", rf"threads/{_S}"),
     ("POST", rf"threads/{_S}/(messages|read|read-all|members)"), ("DELETE", rf"threads/{_S}/members/{_S}"),
     ("PUT", rf"threads/{_S}/follow"), ("DELETE", rf"threads/{_S}/follow"),
-    ("PATCH", rf"messages/{_S}"), ("POST", rf"threads/messages/{_S}/task"),
+    ("PATCH", rf"messages/{_S}"), ("DELETE", rf"messages/{_S}"), ("POST", rf"threads/messages/{_S}/task"),
+    ("PUT", rf"messages/{_S}/reactions/{_S}"), ("DELETE", rf"messages/{_S}/reactions/{_S}"),
+    ("POST", r"threads/dm"), ("POST", rf"threads/{_S}/open-earlier"), ("POST", rf"uploads/threads/{_S}/messages"),
 )
 
 
@@ -260,6 +262,22 @@ DO = _routes(
     ("PUT", rf"org/order/{_S}"),
     # Which Slack channels bots read and post in: an owner or an admin's call, which the route checks.
     ("POST", r"slack/channels"), ("POST", r"slack/channels/(remove|import)"),
+    # Linking a thread to a Slack channel, taking the link away and checking a suspended one again: an owner's or an
+    # admin's call, which the route checks (backend/slack_threads.py).
+    ("POST", r"slack/links"), ("DELETE", rf"slack/links/{_S}"), ("POST", rf"slack/links/{_S}/resume"),
+    # Calls: starting one, ending it, adding or removing its bots, asking again for action items and leaving. A join
+    # or a token is left out: it hands the person's media token to BotOps, so it stays with the person.
+    ("POST", rf"threads/{_S}/calls"), ("POST", rf"calls/{_S}/(end|leave|bots|action-items/retry)"),
+    ("DELETE", rf"calls/{_S}/bots/{_S}"),
+    # Federation between installs: keys, peerings and who a shared thread reaches. The route checks the owner
+    # (backend/federation_routes.py `owner`), so a bot or a non-owner gets 403 there. Key and status responses carry no key.
+    ("POST", r"federation/keys"), ("POST", r"federation/keys/rotate"), ("POST", r"federation/peerings"),
+    ("POST", rf"federation/peerings/{_S}/(approve|pause|revoke)"),
+    ("POST", rf"federation/threads/{_S}/(installs|readers)"), ("DELETE", rf"federation/threads/{_S}/installs/{_S}"),
+    # Withdrawing a held write to edit and resend it: its author's own call (backend/org_rule_check.py).
+    ("POST", rf"rule-holds/{_S}/withdraw"),
+    # Who reads an inbox: the route checks the person may change it.
+    ("PUT", rf"inbound/inboxes/{_S}/audience"),
     ("POST", rf"credentials/{_S}/grants"), ("POST", rf"credentials/{_S}/grants/{_S}/revoke"),
     ("DELETE", rf"credentials/{_S}"),
     # Computers: a restart, a model sign-in (its code is pasted in the app, never here), who may open its screen (opening

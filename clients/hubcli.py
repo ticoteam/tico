@@ -37,6 +37,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub thread react|unreact <message-id> <emoji>   your reaction to a message, such as :+1:
     hub thread open-earlier <thread>           a bot's manager opens its earlier messages to its Home readers
     hub thread task <message-id> --title T --owner O   a task from a message: private unless the thread is company-wide
+    hub thread delete <message-id>             delete a message you wrote (a marker stays)
+    hub thread upload <thread> <file> [--text T] [--kind say|ask] [--to ACTOR] [--under MESSAGE]   a file in a message
     hub thread follow|unfollow <thread> [--notify live|mentions|digest|muted]
     hub thread read <thread> [--seq N | --all]
     hub thread search "<words>" [--cursor C]   the messages in threads you can read
@@ -46,6 +48,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            a thread's Slack link (admins): with a channel, asks for it and Tico
                                            checks it; --history also brings the channel's earlier messages; --off
                                            takes it away; with the thread alone, lists its links
+    hub thread slack-resume <link-id>          check a suspended or refused Slack link again (admins)
     hub question ask <bot> [<bot>...] "<question>" --wait 60
     hub question answer <message-id> "<text>" [--unknown "needs X"] [--on-behalf-of turn]
     hub note create <bot> "<text>" [--text-file f] [--defer 4h]  a deferred message: wakes nobody; the bot's next
@@ -273,6 +276,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub rules check "<draft>" --to <teammate> [--as message|comment|task|assign]
                                            a bot checks a draft against its rules; sending it then costs no second check
     hub rules appeal <hold-id> "<why>"     a bot asks the reviewer to look at its held output
+    hub rules withdraw <hold-id>           take back your held write to edit it and send it again
     hub strategy show                      the published strategy, its bets with their goals and colour, the website
     hub strategy summary                   the text every run carries
     hub strategy versions [N]              published versions, newest first; N: that version whole
@@ -1028,6 +1032,21 @@ def parser():
     s.add_argument("--title", required=True)
     s.add_argument("--owner", required=True, help="a bot slug, a person id, or me")
     s.set_defaults(fn="thread task")
+    s = thread.add_parser("delete", help="delete a message you wrote: a marker stays, and the asks it answered reopen")
+    s.add_argument("message_id")
+    s.set_defaults(fn="thread delete")
+    s = thread.add_parser("upload", help="post a message with a local file to a thread: the file is streamed to Tico")
+    s.add_argument("thread")
+    s.add_argument("path", help="a local file on this computer")
+    s.add_argument("--text", help="the message's text (optional: the file can come alone)")
+    s.add_argument("--kind", choices=["say", "ask"], default="say")
+    s.add_argument("--to", help="the person or bot an ask is for")
+    s.add_argument("--under", metavar="MESSAGE",
+                   help="post the file in that message's sub-thread instead of the thread")
+    s.set_defaults(fn="thread upload")
+    s = thread.add_parser("slack-resume", help="check a suspended or refused Slack link again (admins); its id is in link-slack's listing")
+    s.add_argument("link_id")
+    s.set_defaults(fn="thread slack-resume")
     s = thread.add_parser("follow", help="follow a thread: live, mentions, digest or muted")
     s.add_argument("thread")
     s.add_argument("--notify", choices=["live", "mentions", "digest", "muted"], help="live by default")
@@ -2058,6 +2077,9 @@ def parser():
     s.add_argument("id", help="the hold's id, from the held answer")
     s.add_argument("why", nargs="?", default="", help="why you think the rule does not apply")
     s.set_defaults(fn="rules appeal")
+    s = rules.add_parser("withdraw", help="take back your held write to edit it and send it again (nothing is sent)")
+    s.add_argument("id", help="the hold's id, from the held answer")
+    s.set_defaults(fn="rules withdraw")
     strategy = sub.add_parser("strategy", help="the team's strategy: its bets, the four sections, the versions").add_subparsers(dest="sub")
     s = strategy.add_parser("show", help="the published strategy, its bets and their goals; the owner also gets the draft")
     s.set_defaults(fn="strategy show")

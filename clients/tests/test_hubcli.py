@@ -1046,3 +1046,74 @@ def test_call_commands_run_the_call_tools_on_their_routes(monkeypatch):
                     ("POST", "calls/call-1/bots", {"bots": ["ops", "finance"]}, None),
                     ("DELETE", "calls/call-1/bots/ops", {}, None),
                     ("GET", "threads/thread-1/calls", {"limit": 5})]
+
+
+def test_thread_delete_runs_the_message_delete_route(monkeypatch):
+    """`hub thread delete` runs `hub_thread_delete`: DELETE on the message, with no body."""
+    from clients import remotecli
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.return_value = {"actor": "human:ana"}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["thread", "delete", "m7"]))
+    client.call.assert_called_once_with("DELETE", "messages/m7", None, key=None)
+
+
+def test_thread_upload_streams_the_file_to_the_thread_message_route(monkeypatch, tmp_path):
+    """`hub thread upload` runs `hub_thread_upload`: the file is streamed (never read whole) as multipart to the thread's
+    upload route, with the text, kind and reply target as form fields."""
+    from pathlib import Path
+    from unittest.mock import Mock
+    from clients import remotecli
+    path = tmp_path / "report.pdf"
+    path.write_bytes(b"%PDF-1.4 test")
+    client = Mock()
+    client.get.return_value = {"actor": "human:ana"}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    from clients import bot_files
+    monkeypatch.setattr(bot_files, "checkout_root", lambda: tmp_path)
+    monkeypatch.setattr(Path, "read_bytes", lambda _: pytest.fail("whole file read"))
+    remotecli.run(hubcli.parser().parse_args(["thread", "upload", "T1", str(path), "--text", "Q3 numbers",
+                                              "--kind", "ask", "--to", "human:ben", "--under", "m7"]))
+    client.post_multipart.assert_called_once_with(
+        "uploads/threads/T1/messages", {"file": path},
+        {"text": "Q3 numbers", "kind": "ask", "to": "human:ben", "parent_message_id": "m7"}, key=None)
+
+
+def test_thread_slack_resume_posts_to_the_link_resume_route(monkeypatch):
+    """`hub thread slack-resume` runs `hub_thread_slack_resume`: POST on the link's resume route, as the person asking."""
+    from clients import remotecli
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.return_value = {"actor": "human:ana", "role": "owner", "kind": "owner"}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["thread", "slack-resume", "L1"]))
+    client.post.assert_called_once_with("slack/links/L1/resume", {}, key=None)
+
+
+def test_rules_withdraw_posts_an_empty_body_to_the_hold_withdraw_route(monkeypatch):
+    """`hub rules withdraw <hold-id>` runs `hub_rules_withdraw`: POST rule-holds/{id}/withdraw with an empty body."""
+    from clients import remotecli
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.return_value = {"actor": "bot:ops"}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["rules", "withdraw", "h7"]))
+    client.post.assert_called_once_with("rule-holds/h7/withdraw", {}, key=None)
+
+
+def test_connection_list_reaches_the_connections_route_with_its_paging(monkeypatch):
+    """`hub connections list --limit 5 --cursor c2` runs `hub_connections_list`: GET connections with the page."""
+    from clients import remotecli
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.side_effect = lambda path, **kw: {"actor": "bot:ops"} if path == "me" else {"items": [], "next": None}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["connections", "list", "--limit", "5", "--cursor", "c2"]))
+    from unittest.mock import call
+    assert call("connections", limit=5, cursor="c2") in client.get.call_args_list
