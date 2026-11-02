@@ -5,6 +5,7 @@ from backend.store import encode
 from backend.tests.test_api import assign, claim, get, post  # noqa: F401
 from backend.tests.test_api import api  # noqa: F401  (the fixture)
 from backend.tests.test_check_models import GROK, finish, heartbeat, parent_turn
+from backend.tests.usage_rows import segment
 
 CLAUDE = {"model": "claude-sonnet-5-5", "runtime": "claude", "harness": "claude", "billing": "api"}
 
@@ -28,8 +29,7 @@ def earlier_run(api, task_id, model, provider, runtime):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES('earlier','ops','2026-01-01T00:00:00Z',"
                   "'2026-01-01T00:05:00Z',?)", (task_id,))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,output_tokens,model,provider,runtime,"
-                  "harness) VALUES('earlier',0,10,10,?,?,?,?)", (model, provider, runtime, runtime))
+        segment(c, 'earlier', input_tokens=10, output_tokens=10, model=model, provider=provider, runtime=runtime, harness=runtime)
 
 
 def test_a_check_with_no_model_skips_every_maker_of_the_parents_work(api):

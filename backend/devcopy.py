@@ -151,8 +151,8 @@ KEEP = frozenset((
     "system_runs", "tags", "task_assets",
     "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
     "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
-    "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
-    "usage_limits", "usage_pools", "task_caps",
+    "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
+    "usage_facts", "budget_nodes", "task_caps",
     # Finance history and definitions (EMPTY has what acts; prune drops pending actions and settles undrained events)
     "fin_accounts", "fin_actions", "fin_allocations", "fin_attachments", "fin_bill_lines", "fin_bill_retained",
     "fin_bills", "fin_books",

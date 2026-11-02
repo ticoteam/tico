@@ -8,6 +8,7 @@ from backend.tests.test_api import api, assign, claim, get, headers, post, put, 
 from backend.tests.test_botops_parity import act
 from backend.tests.test_credential_sharing import JIRA, jira, local
 from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixtures)
+from backend import usage_limits
 
 
 def card_in_chat(api, card, person):
@@ -63,8 +64,8 @@ def test_botops_direct_off_turns_providers_and_raised_limits_into_cards(api, bot
     assert "needs_confirm" not in act(api, ana, "PUT", "usage/pools/company", {"daily_usd": 80}).json()
     assert act(api, ana, "PUT", "usage/pools/company", {"daily_usd": 500}).json()["needs_confirm"]
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT daily_usd FROM usage_limits WHERE bot='ops'").fetchone()[0] == 5
-        assert c.execute("SELECT daily_usd FROM usage_pools WHERE scope='company'").fetchone()[0] == 80
+        assert usage_limits.own(c, "ops")["daily_usd"] == 5
+        assert usage_limits.pool(c, "company")["daily_usd"] == 80
     confirm(api, card.json(), "ana-test")
     assert get(api, "providers")["enabled"] == ["openai"]
 
@@ -389,6 +390,6 @@ def test_a_client_that_sends_no_header_gets_the_same_card_or_refusal(api, botops
     assert JIRA not in refused.text
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM enrollments WHERE consumed_at IS NULL").fetchone()[0] == 0
-        assert c.execute("SELECT daily_usd FROM usage_limits WHERE bot='ops'").fetchone()[0] == 10
+        assert usage_limits.own(c, "ops")["daily_usd"] == 10
     assert api.app.state.auth.owner_email == "ana@acme.example"
     assert "cara@acme.example" not in api.app.state.auth.bot_admins

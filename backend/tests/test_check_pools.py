@@ -6,6 +6,7 @@ from backend import hubdb as H
 from backend.store import encode
 from backend.tests.test_github import api, get, headers  # noqa: F401
 from backend.tests.test_review_gate import HEAD, move, ticket as base_ticket
+from backend.tests.usage_rows import segment
 
 RECEIPT = f"Tests: base {'c' * 40} head {HEAD}: 9 passed, 0 failed"
 # The builder (cpo) runs on Anthropic; rev-a and rev-b on OpenAI; rev-c on Anthropic like the builder.
@@ -44,8 +45,7 @@ def ticket(api, receipt):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES(?,?,?,?,?)",
                   ("builder-" + task["id"], "cpo", H.now(), H.now(), task["id"]))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider,runtime) "
-                  "VALUES(?,0,'claude-opus-5-5','anthropic','claude')", ("builder-" + task["id"],))
+        segment(c, "builder-" + task["id"], model='claude-opus-5-5', provider='anthropic', runtime='claude')
     return task
 
 
@@ -105,8 +105,7 @@ def test_pool_candidate_model_details_show_configured_and_actual_families(api):
             "pr-reviewer-sol", encode({"runtime": "codex", "model": "gpt-6-sol"}), "engineering", "ana"))
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at) VALUES('fallback-turn','pr-reviewer-sol',?,?)",
                   (H.now(), H.now()))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider,runtime) "
-                  "VALUES('fallback-turn',0,'claude-opus-5-5','anthropic','claude')")
+        segment(c, 'fallback-turn', model='claude-opus-5-5', provider='anthropic', runtime='claude')
         candidates = {item["slug"]: item for item in check_pools.candidate_details(c,
                       ["reviewer-xai", "pr-reviewer-sol"])}
     assert candidates["reviewer-xai"]["configured"]["provider"] == "Anthropic"
@@ -123,15 +122,13 @@ def test_filed_check_captures_actual_builder_and_checker_families_for_its_head(a
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES('builder-turn','cpo',?,?,?)",
                   (H.now(), H.now(), task["id"]))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider,runtime) "
-                  "VALUES('builder-turn',0,'claude-opus-5-5','anthropic','claude')")
+        segment(c, 'builder-turn', model='claude-opus-5-5', provider='anthropic', runtime='claude')
     assert move(api, task).status_code == 200
     [check] = checks(api, task)
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES('checker-turn','rev-a',?,?,?)",
                   (H.now(), H.now(), check["id"]))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider,runtime) "
-                  "VALUES('checker-turn',0,'gpt-6-sol','openai','codex')")
+        segment(c, 'checker-turn', model='gpt-6-sol', provider='openai', runtime='codex')
         check_pools.capture_attempt(c, "checker-turn")
         evidence = c.execute("SELECT * FROM check_head_provenance WHERE check_id=? AND head=?",
                              (check["id"], HEAD)).fetchone()
@@ -420,17 +417,17 @@ def test_a_reviewer_whose_last_run_fell_back_to_the_builders_company_is_passed_o
     busy(api, "rev-b")
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at) VALUES('t1','rev-a',?,?)", (H.now(), H.now()))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('t1',0,'claude-haiku-5-5','anthropic')")
+        segment(c, 't1', model='claude-haiku-5-5', provider='anthropic')
     assert move(api, task).status_code == 200
     assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-b"]
 
 
 # A QA check prefers a bot of another model company than the builder's, and takes a bot of the builder's company only
 # when no other is free.
-def qa_ticket(api, built=True):
+def qa_ticket(api, built=True, ran=("claude-opus-5-5", "anthropic", "claude")):
     """A Dev ticket on the full board, its PR built by cpo (configured on Anthropic), ready to enter In QA. `built`
-    adds the builder's run on Anthropic; without it the ticket's only run has no usage record (provenance unknown)."""
+    adds the builder's run on `ran` (model, provider, runtime: Anthropic); without it the ticket's only run has no usage
+    record (provenance unknown)."""
     from backend import rules
     from backend.tests.test_github import PR, hook, post, pr_event
     from backend.tests.test_verdict_moves import STEPS
@@ -445,8 +442,8 @@ def qa_ticket(api, built=True):
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES(?,?,?,?,?)",
                   ("builder-" + task["id"], "cpo", H.now(), H.now(), task["id"]))
         if built:
-            c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider,runtime) "
-                      "VALUES(?,0,'claude-opus-5-5','anthropic','claude')", ("builder-" + task["id"],))
+            model, provider, runtime = ran
+            segment(c, "builder-" + task["id"], model=model, provider=provider, runtime=runtime)
     return get(api, "tasks/" + task["id"])["task"]
 
 
@@ -499,8 +496,7 @@ def test_a_qa_bot_configured_elsewhere_whose_recent_runs_were_claude_ranks_behin
     set_pool(api, task, "In QA", ["rev-a", "rev-b"])
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at) VALUES('qa-run','rev-a',?,?)", (H.now(), H.now()))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('qa-run',0,'claude-haiku-5-5','anthropic')")
+        segment(c, 'qa-run', model='claude-haiku-5-5', provider='anthropic')
     busy(api, "rev-b")
     to_qa(api, task)
     assert [k["owner_id"] for k in checks(api, task)] == ["bot:rev-b"]
@@ -525,8 +521,7 @@ def test_builder_makers_is_what_its_runs_ran_on_and_the_configured_company_only_
     with api.app.state.store.transaction() as c:
         ticket = H.task(c, task["id"])
         assert check_pools.builder_makers(c, ticket) == {"anthropic"}
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider,runtime) "
-                  "VALUES(?,0,'gpt-6-sol','openai','codex')", ("builder-" + task["id"],))
+        segment(c, "builder-" + task["id"], model='gpt-6-sol', provider='openai', runtime='codex')
         assert check_pools.builder_makers(c, ticket) == {"openai"}
 
 
@@ -643,8 +638,7 @@ def test_require_goes_by_the_task_model_a_check_runs_on_not_the_bots_own_model(a
     task_model(api, "rev-c", "gpt-6.1-sol", "codex")
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at) VALUES('chat','rev-c',?,?)", (H.now(), H.now()))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('chat',0,'claude-haiku-5-5','anthropic')")
+        segment(c, 'chat', model='claude-haiku-5-5', provider='anthropic')
     set_pool(api, task, "In QA", ["rev-a", "rev-c"], limit=1)
     set_other_company(api, task, "In QA", "require")
     held = busy(api, "rev-c")
@@ -688,8 +682,7 @@ def test_a_recent_task_on_its_own_model_says_nothing_about_where_a_check_runs(ap
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (own["id"],))
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES('own','rev-c',?,?,?)",
                   (H.now(), H.now(), own["id"]))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('own',0,'claude-haiku-5-5','anthropic')")
+        segment(c, 'own', model='claude-haiku-5-5', provider='anthropic')
     set_pool(api, task, "In QA", ["rev-c"], limit=1)
     set_other_company(api, task, "In QA", "require")
     to_qa(api, task)
@@ -731,8 +724,7 @@ def test_a_task_model_that_cannot_run_counts_only_the_turns_on_the_bots_own_mode
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (own["id"],))
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES('earlier','rev-a',?,?,?)",
                   (H.now(), H.now(), own["id"]))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('earlier',0,'claude-haiku-5-5','anthropic')")
+        segment(c, 'earlier', model='claude-haiku-5-5', provider='anthropic')
         c.execute("UPDATE runners SET readiness=? WHERE id='r1'",
                   (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {"claude": {"installed": False}}}),))
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
@@ -752,8 +744,7 @@ def test_a_task_that_fell_back_to_the_builders_company_keeps_a_require_check_off
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (own["id"],))
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES('fell','rev-a',?,?,?)",
                   (H.now(), H.now(), own["id"]))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('fell',0,'claude-sonnet-5-5','anthropic')")
+        segment(c, 'fell', model='claude-sonnet-5-5', provider='anthropic')
         c.execute("UPDATE runners SET readiness=? WHERE id='r1'",
                   (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {"claude": {"installed": False}}}),))
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
@@ -795,13 +786,10 @@ def test_a_bot_now_on_a_model_a_reseller_picks_is_not_independent_whatever_it_ra
     shown independent of an OpenAI build."""
     from backend.check_independence import assess
     team(api)
-    task = qa_ticket(api)
+    task = qa_ticket(api, ran=("gpt-6.1-sol", "openai", "codex"))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE turn_usage_segments SET model='gpt-6.1-sol',provider='openai',runtime='codex' "
-                  "WHERE turn_id=?", ("builder-" + task["id"],))
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at) VALUES('before','rev-c',?,?)", (H.now(), H.now()))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('before',0,'claude-haiku-5-5','anthropic')")
+        segment(c, 'before', model='claude-haiku-5-5', provider='anthropic')
         c.execute("UPDATE bot_config SET config=? WHERE bot='rev-c'", (encode(
             {"name": "rev-c", "runtime": "cursor", "model": "cursor-auto", "status": "active", "profile": "reviewer"}),))
         decision = assess(c, task, "rev-c")
@@ -847,8 +835,8 @@ def test_require_never_gives_the_check_to_a_bot_whose_recent_run_has_a_segment_o
     task = qa_ticket(api)
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at) VALUES('mixed','rev-a',?,?)", (H.now(), H.now()))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('mixed',0,'gpt-6.1-sol','openai'),('mixed',1,'','')")
+        segment(c, 'mixed', model='gpt-6.1-sol', provider='openai')
+        segment(c, 'mixed', position=1, model='', provider='')
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
     to_qa(api, task)
@@ -864,8 +852,7 @@ def test_require_waits_while_part_of_the_builders_run_is_of_unknown_company(api)
     team(api)
     task = qa_ticket(api)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) VALUES(?,1,'','')",
-                  ("builder-" + task["id"],))
+        segment(c, "builder-" + task["id"], position=1, model='', provider='')
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
     to_qa(api, task)
@@ -881,8 +868,7 @@ def test_require_never_gives_the_check_to_a_bot_now_on_a_model_of_unknown_compan
     task = qa_ticket(api)
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at) VALUES('before','rev-a',?,?)", (H.now(), H.now()))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('before',0,'gpt-6.1-sol','openai')")
+        segment(c, 'before', model='gpt-6.1-sol', provider='openai')
         c.execute("UPDATE bot_config SET config=? WHERE bot='rev-a'",
                   (encode({"name": "rev-a", "runtime": "fake", "status": "active", "profile": "reviewer"}),))
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
@@ -903,8 +889,7 @@ def test_a_recent_check_on_a_check_model_says_nothing_about_a_bot_with_no_task_m
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (own["id"],))
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES('checked','rev-a',?,?,?)",
                   (H.now(), H.now(), own["id"]))
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
-                  "VALUES('checked',0,'claude-haiku-5-5','anthropic')")
+        segment(c, 'checked', model='claude-haiku-5-5', provider='anthropic')
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
     to_qa(api, task)
