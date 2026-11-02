@@ -20,6 +20,7 @@ pub const CAPABILITIES: &[&str] = &[
     "model_subscriptions_v1",
     // Turns of a bot with a browser exit go through it (browser_exit.rs); the server hands them to no other runner.
     "browser_exit_v1",
+    "memory_tidy_keep_v1",
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 
