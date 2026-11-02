@@ -1,8 +1,8 @@
 """The Finance tab's later asks, cut to the viewer: the owner edits the view defaults; the expenses view filters by
 several teams and teammates, bots or people, and Unattributed (company-wide viewers only); a line opens per vendor with
 how it was paid and next month's projection; budgets read at a date; Sources' sync / disconnect / map are a finance
-admin's; Mercury's users are for teammates who may issue cards, emails masked and only for a finance admin; view_as
-reaches lines, expenses and budgets."""
+admin's; Mercury's users are for teammates who may issue cards, emails masked and only for whoever sees everything;
+view_as reaches lines, expenses and budgets."""
 import pytest
 
 from backend.finance import actions as FA
@@ -183,6 +183,30 @@ def test_sources_actions_are_a_finance_admins_and_mercury_users_are_cut_to_the_v
         act(c, OWNER, "close_period", {"month": "2026-09"})
         assert FR.balance_sheet(c, OWNER, at=AT)["closed_through"] == "2026-09-30"
 
+
+def test_a_finance_admin_adds_no_view_of_its_own_so_emails_tax_ids_and_sync_errors_stay_with_the_owner(books):
+    """finance.admin is rights (§7.4), not view (§7.5): Fay, an admin with payables, reads the vendor's tax id last 4,
+    the Mercury emails and the failed-sync inbox only as the owner would, which is not at all here."""
+    with books.transaction() as c:
+        ids = _bank(c)
+        cid = SK.insert(c, "fin_connections", {"provider": "mercury", "purpose": "bank", "status": "error",
+                                               "name": "Mercury", "last_error": "token expired", "created_at": AT,
+                                               "created_by": OWNER})
+        SK.update(c, "fin_money_accounts", ids["bank"], {"connection_id": cid})
+        SK.set_provider_users(c, cid, [{"id": "user-eve", "name": "Eve Acme", "email": "eve@acme.example"}], AT)
+        made = act(c, OWNER, "contact_create", {"name": "Acme Supplies", "kind": "vendor", "tax_id": "98-7654321"})
+        assert made.status == "committed", made
+        assert act(c, OWNER, "right_grant", {"teammate": "human:fay", "right": "finance.admin"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": "human:fay", "what": "payables"}).status == "committed"
+    with books.read() as c:
+        assert FR.provider_users(c, OWNER, at=AT)["users"][0]["email"] == "e•••@acme.example"
+        assert FR.provider_users(c, "human:fay", at=AT)["users"][0]["email"] is None
+        assert [x["id"] for x in FR.inbox(c, OWNER, kind="sync_failed", at=AT)["items"]] == [cid]
+        assert FR.inbox(c, "human:fay", kind="sync_failed", at=AT)["items"] == []
+        for who, last4 in ((OWNER, "4321"), ("human:fay", None)):
+            row = next(x for x in FR.contacts(c, who, at=AT)["contacts"] if x["name"] == "Acme Supplies")
+            assert row["tax_id_last4"] == last4, who
+        assert [m["teammate"] for m in FR.access(c, "human:fay", at=AT)["teammates"]] == ["human:fay"]
 
 def test_budgets_read_at_a_date_show_the_version_in_effect_then(books):
     with books.transaction() as c:

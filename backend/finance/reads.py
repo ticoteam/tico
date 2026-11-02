@@ -1713,7 +1713,7 @@ def _inbox_kind(s: _Seen, kind: str, n: int, skip: int = 0) -> tuple[list[Row], 
                              "excluded": st["excluded"], "label": f"{b.name} · {st['pct'] or '?'}% used"})
         return near[skip:skip + n], len(near) > skip + n
     if kind == "sync_failed":
-        if not (view.everything or view.sources or R.is_admin(ctx.org, s.view.viewer, held)):
+        if not (view.everything or view.sources):
             return None
         failed: list[Row] = [{"id": str(x["id"]), "connection_id": str(x["id"]), "date": str(x["updated_at"] or "")[:10],
                    "label": f"{x['name'] or x['provider']}: {str(x['last_error'] or 'sync failed')[:120]}"}

@@ -11,7 +11,6 @@ from typing import Any, cast
 from . import closing as CL
 from .context import Ctx, load
 from .core import dates
-from .core import rights as R
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, Account, Book, descendants
@@ -769,13 +768,14 @@ def _grant_row(g: VW.Grant, ctx: Ctx) -> Row:
 
 def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
     """Who can see what in Finance (spec §7.5): the org chart with each teammate's default and grants, private lines
-    and the defaults. Owner and finance admins (`finance.admin`) see everyone, with rights and private lines. A manager
-    sees their own row, the teammates in the teams they manage (nested) and everyone who reports to them, with defaults
-    and grants but no rights and no private lines. Anyone else sees only their own row. The owner may view as anyone."""
+    and the defaults. The owner, or anyone granted everything, sees everyone, with rights and private lines; a finance
+    admin (`finance.admin`) adds no view. A manager sees their own row, the teammates in the teams they manage (nested)
+    and everyone who reports to them, with defaults and grants but no rights and no private lines. Anyone else sees
+    only their own row. The owner may view as anyone."""
     ctx = load(c, at)
     org = ctx.org
     owner = bool(org.owner) and viewer == org.owner
-    admin = owner or R.is_admin(org, viewer, ctx.rights(viewer))
+    admin = ctx.view(viewer).everything
     led = frozenset[str]().union(*(org.below(t) for t in org.led_by(viewer)))
     if admin:
         shown = sorted(org.humans | org.bots)

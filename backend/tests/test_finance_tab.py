@@ -180,9 +180,9 @@ def test_access_shows_each_viewer_their_part_and_only_the_owner_views_as(books):
         assert [m["teammate"] for m in eve["teammates"]] == ["human:eve"] and not eve["can_view_as"]
         assert [g["subject"] for g in eve["teammates"][0]["grants"]] == ["human:eve"]
         assert act(c, OWNER, "right_grant", {"teammate": "human:fay", "right": "finance.admin"}).status == "committed"
-        fay = {m["teammate"] for m in FR.access(c, "human:fay", at=AT)["teammates"]}
+        fay = [m["teammate"] for m in FR.access(c, "human:fay", at=AT)["teammates"]]
         owner = {m["teammate"] for m in FR.access(c, OWNER, at=AT)["teammates"]}
-        assert fay == owner and {"human:ana", "human:gus", "bot:coder"} <= fay   # a finance admin sees the whole roster
+        assert fay == ["human:fay"] and {"human:ana", "human:gus", "bot:coder"} <= owner   # finance.admin adds no view
         assert FR.view_as(c, OWNER, "human:cara", at=AT) == "human:cara"
         with pytest.raises(FinanceError):
             FR.view_as(c, "human:ben", "human:cara", at=AT)
@@ -267,9 +267,9 @@ def test_tab_routes_answer_in_the_callers_view(api):
 
 
 def test_access_over_http_is_the_roster_for_admins_and_each_managers_own_teams_otherwise(api):
-    """The access read over HTTP: owner and finance admins see everyone (with rights and private lines); a manager sees
-    their own row and the teammates in the teams they manage, nested, but no rights and no private lines; anyone else
-    sees only their own row."""
+    """The access read over HTTP: the owner sees everyone (with rights and private lines); a manager sees their own row
+    and the teammates in the teams they manage, nested, but no rights and no private lines; anyone else, a finance
+    admin included, sees only their own row."""
     store = api.app.state.store
     with store.transaction() as c:
         _seed(c)                                    # the Acme org chart, as the finance fixtures have it
@@ -292,9 +292,9 @@ def test_access_over_http_is_the_roster_for_admins_and_each_managers_own_teams_o
     # Eve is a plain teammate: her own row only.
     eve = get(api, "finance/access", token="eve-test")
     assert [m["teammate"] for m in eve["teammates"]] == ["human:eve"] and eve["private_lines"] == []
-    # A finance admin sees the whole roster, rights included.
+    # A finance admin adds no view: Fay still sees her own row, with her own rights and no private lines.
     with store.transaction() as c:
         assert act(c, OWNER, "right_grant", {"teammate": "human:fay", "right": "finance.admin"}).status == "committed"
     fay = get(api, "finance/access", token="fay-test")
-    assert {m["teammate"] for m in fay["teammates"]} == everyone and fay["private_lines"]
-    assert all(m["rights"] is not None for m in fay["teammates"])
+    assert [m["teammate"] for m in fay["teammates"]] == ["human:fay"] and fay["private_lines"] == []
+    assert fay["teammates"][0]["rights"] is not None

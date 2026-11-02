@@ -342,7 +342,7 @@ def contacts(c: sqlite3.Connection, viewer: str, *, kind: str | None = None, q: 
     if not kinds:
         raise denied("contacts are not in your view")
     vendors, customers = sees_side(ctx, view, "bill"), sees_side(ctx, view, "invoice")
-    admin = R.is_admin(ctx.org, viewer, ctx.rights(viewer))
+    admin = view.everything  # the tax id's last 4 go to whoever sees everything, not to finance admins
     most = page_size(limit)
     marks = decode_cursor(cursor)
     after = (marks[0], marks[1]) if len(marks) == 2 else None
