@@ -49,6 +49,10 @@ class HQ:
         self.seen, self.hq_seq = set(), 0
         self.lose = lambda sender, to, body: False
         self.twice = False
+        self.peerings_page = None         # peerings per page; None answers as an HQ from before paging did: `items` alone
+        self.peerings_fail_on = None      # the page of peerings answered with a 503
+        self.peerings_stuck = False       # `next` never moves on
+        self.peerings_asked = []          # the cursor of each read of the list
 
     def __call__(self, request):
         path = request.url.path.split("/federation/", 1)[1]
@@ -57,8 +61,25 @@ class HQ:
             return httpx.Response(401, json={"error": "unauthorized"})
         if path == "envelopes":
             return self.envelope(me, request)
+        if path == "peerings" and request.method == "GET":
+            status, answer = self.peerings_list(me, request.url.params.get("cursor", ""))
+            return httpx.Response(status, json=answer)
         status, answer = self.route(me, request.method, path, json.loads(request.content or b"{}"))
         return httpx.Response(status, json=answer)
+
+    def peerings_list(self, me, cursor):
+        """HQ's list. Its cursor is `<rank>:<updated>:<id>`, so a client must send it URL-encoded and whole."""
+        self.peerings_asked.append(cursor)
+        items = [self.view(pid, me) for pid, p in self.peerings.items() if me in (p["a"], p["b"])]
+        if self.peerings_page is None:
+            return 200, {"items": items}
+        if len(self.peerings_asked) == self.peerings_fail_on:
+            return 503, {"error": "unavailable"}
+        start = int(cursor.split(":")[1]) if cursor else 0
+        end = start + self.peerings_page
+        more = end < len(items)
+        return 200, {"items": items[start:end],
+                     "next": f"0:{start if self.peerings_stuck else end}:fp_{'0' * 16}" if more else None}
 
     def route(self, me, method, path, body):
         if path == "keys" and method == "POST":
@@ -67,8 +88,6 @@ class HQ:
         if path.startswith("keys/"):
             found = self.keys.get(path[len("keys/"):])
             return (200, found) if found else (404, {"error": "not_found"})
-        if path == "peerings" and method == "GET":
-            return 200, {"items": [self.view(pid, me) for pid, p in self.peerings.items() if me in (p["a"], p["b"])]}
         if path == "peerings" and method == "POST":
             peer = body["peer"]
             if peer not in self.keys:
@@ -407,6 +426,96 @@ def test_an_edit_that_arrives_before_its_message_waits_for_a_catch_up(make_side,
     with b.app.state.store.read() as c:
         assert c.execute("SELECT catch_up_requested_at FROM federation_threads WHERE thread_id=?",
                          (there,)).fetchone()[0] is not None
+
+
+def many_peerings(hq, side, count):
+    """`count` pending peerings of `side` at HQ, as other companies asked for them. Returns their HQ ids in list order."""
+    assert side.client.post("/api/v2/federation/keys", headers=OWNER).status_code == 200
+    for n in range(count):
+        peer = f"gi_{n:024x}"
+        hq.keys[peer] = {"key_id": f"key-{n}", "public_key": ""}
+        hq.peerings[f"fp_{n:024x}"] = {"id": f"fp_{n:024x}", "a": side.id, "b": peer, "requester": peer, "approved": {},
+                                       "paused": {}, "revoked": False, "company": {}}
+    return list(hq.peerings)
+
+
+def sync_peerings(side):
+    relay = side.app.state.federation_relay
+    with side.app.state.store.read() as c:
+        link = relay.link(c)
+    relay.sync(link)
+
+
+def peering_state(side):
+    return {r[0]: r[1:] for r in rows(side, "SELECT hq_peering_id,status,paused_at,revoked_at FROM federation_peerings")}
+
+
+def listed_at(side):
+    return rows(side, "SELECT listed_at FROM federation_state")[0][0]
+
+
+def test_an_hq_from_before_paging_answers_the_whole_list_at_once(make_side, hq, clock):
+    a = make_side("alpha")
+    ids = many_peerings(hq, a, 5)
+    hq.peerings_asked.clear()
+    sync_peerings(a)
+    assert hq.peerings_asked == [""] and set(peering_state(a)) == set(ids)
+    assert listed_at(a) == clock["t"]
+
+
+def test_a_paged_list_is_read_to_its_end_with_each_cursor_as_hq_gave_it(make_side, hq, clock):
+    a = make_side("alpha")
+    ids = many_peerings(hq, a, 5)
+    hq.peerings_page, hq.peerings_asked[:] = 2, []
+    sync_peerings(a)
+    assert hq.peerings_asked == ["", f"0:2:fp_{'0' * 16}", f"0:4:fp_{'0' * 16}"]
+    assert set(peering_state(a)) == set(ids)
+    assert listed_at(a) == clock["t"]
+
+
+def test_a_page_that_fails_is_not_a_whole_list_and_takes_nothing_away(make_side, hq, clock):
+    a = make_side("alpha")
+    ids = many_peerings(hq, a, 5)
+    sync_peerings(a)
+    before, was = peering_state(a), listed_at(a)
+    clock["t"] += 100
+    new, peer = "fp_new", "gi_" + "f" * 24
+    hq.keys[peer] = {"key_id": "key-new", "public_key": ""}
+    hq.peerings = {new: {**hq.peerings[ids[0]], "id": new, "b": peer, "requester": peer}, **hq.peerings}    # newest first
+    hq.peerings_page, hq.peerings_fail_on, hq.peerings_asked[:] = 2, 2, []
+    with pytest.raises(hook_relay.Failed):
+        sync_peerings(a)
+    after = peering_state(a)
+    assert new in after                                     # the page that came through is applied
+    assert {k: after[k] for k in before} == before          # those it never reached keep their state, none removed
+    assert listed_at(a) == was
+    # In a tick the failure is the tick's, and the next one reads the list again.
+    relay = a.app.state.federation_relay
+    hq.peerings_asked[:], relay.synced, relay.next_try = [], 0.0, 0.0
+    hq.peerings_fail_on = 2
+    relay.tick()
+    assert rows(a, "SELECT last_error FROM federation_state")[0][0] == "unavailable"
+    hq.peerings_fail_on = None
+    tick(a)
+    assert listed_at(a) == clock["t"]
+
+
+@pytest.mark.parametrize("stuck", [False, True])
+def test_a_list_that_does_not_end_stops_incomplete_and_the_tick_goes_on(make_side, hq, clock, monkeypatch, stuck):
+    a = make_side("alpha")
+    ids = many_peerings(hq, a, 7)
+    sync_peerings(a)
+    before, was = peering_state(a), listed_at(a)
+    clock["t"] += 100
+    if not stuck:
+        monkeypatch.setattr(R, "SYNC_PAGES", 2)
+    hq.peerings_page, hq.peerings_stuck, hq.peerings_asked[:] = 2, stuck, []
+    sync_peerings(a)
+    assert len(hq.peerings_asked) == 2
+    assert peering_state(a) == before and listed_at(a) == was
+    tick(a)                                                 # no error, and the rest of the tick still runs
+    assert rows(a, "SELECT last_pull_at FROM federation_state")[0][0] == clock["t"]
+    assert set(peering_state(a)) == set(ids)
 
 
 def lose_messages_to(hq, sender, to):
