@@ -1120,3 +1120,23 @@ def test_a_prepaid_line_is_an_expense_with_a_cent_a_month(books):
                      {"account_id": account(c, "6100"), "amount": 5, "prepaid": {"start": "2026-10", "months": 12}}):
             got = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-10", "lines": [line]})
             assert (got.status, got.code) == ("failed", "invalid"), got
+
+
+def test_a_bill_or_invoice_dated_in_a_closed_month_names_its_own_date_in_the_memo(books):
+    """Spec §4.1: a late document posts in the open period, and its entry names the document's own date, as a late
+    bank row does."""
+    with books.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+    with books.transaction() as c:
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 5_000}], day="2026-09-20")
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        customer = str(act(c, OWNER, "contact_create", {"name": "Globex", "kind": "customer"}).result["contact_id"])
+        made = act(c, OWNER, "invoice_create", {"customer_id": customer, "invoice_date": "2026-09-21",
+                                                 "lines": [{"account_id": account(c, "4000"), "amount": 7_000}]})
+        assert made.status == "committed", made
+        iid = str(made.result["invoice_id"])
+        assert act(c, OWNER, "invoice_send", {"invoice_id": iid}).status == "committed"
+        rows = {str(r[0]): (str(r[1]), str(r[2])) for r in c.execute(
+            "SELECT source_id, entry_date, memo FROM fin_entries WHERE source_id IN (?, ?)", (bid, iid))}
+        assert rows[bid][0] == AT[:10] and rows[bid][1].endswith("(dated 2026-09-20)"), rows
+        assert rows[iid][0] == AT[:10] and rows[iid][1].endswith("(dated 2026-09-21)"), rows

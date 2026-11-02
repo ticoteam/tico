@@ -499,8 +499,11 @@ def _post_doc(ctx: Ctx, kind: str, doc: Any, lines: Sequence[AP.DocLine], day: s
     rows.append({"account_id": control(ctx, kind).id, "amount": -s * sum(x.amount for x in lines),
                  "contact_id": contact})
     label = f"{'Bill' if kind == 'bill' else 'Invoice'} {doc['number'] or doc['id']} · {doc['contact_name'] or ''}"
-    done = posting.post_entry(ctx.c, {"date": open_day(ctx, day), "source": kind, "source_id": str(doc["id"]),
-                                      "memo": label.strip(" ·")[:200], "lines": rows},
+    posted_on = open_day(ctx, day)
+    dated = "" if posted_on == day else f" (dated {day})"     # a late document names its own date (spec §4.1)
+    text = label.strip(" ·")[:160]
+    done = posting.post_entry(ctx.c, {"date": posted_on, "source": kind, "source_id": str(doc["id"]),
+                                      "memo": f"{text}{dated}", "lines": rows},
                               by=who, hold_ids=holds, at=ctx.at)
     if not done.get("posted"):
         raise FinanceError(CONFLICT, f"that {kind} was already posted")
