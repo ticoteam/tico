@@ -73,7 +73,8 @@ def cdc(entities: str) -> tuple[int, dict[str, object]]:
     for entity, row in STATE["changes"]:  # type: ignore[index,misc]
         if entity in wanted:
             block[entity].append(row)  # type: ignore[union-attr]
-    STATE["changes"] = []
+    # Rows of the entities this call did not ask for wait for their own call (the client reads one entity at a time).
+    STATE["changes"] = [(e, r) for e, r in STATE["changes"] if e not in wanted]  # type: ignore[index,misc]
     return 200, {"CDCResponse": [{"QueryResponse": [block]}]}
 
 
