@@ -40,7 +40,7 @@ def test_a_snapshot_is_taken_before_the_switch_and_left_alone_when_the_update_wo
     assert updater.status["state"] == "healthy" and updater.status["snapshot"].startswith("pre-update-v0.1.0-")
     verbs = docker.verbs()
     assert verbs.index("exec") < verbs.index("up") and "run" not in verbs and updater.status["restored"] is False
-    exec_call = next(a for a, _ in docker.calls if "/data/snapshots" in a)
+    assert any("/data/snapshots" in a for a, _ in docker.calls)
     assert "hub.sqlite" in updater.SNAPSHOT_SCRIPT and "backup(" in updater.SNAPSHOT_SCRIPT
 
 
