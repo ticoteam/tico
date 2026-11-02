@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 from . import banking, budgeting, cards, catalog, documents, gateway_sync, gating, handlers, jobs, mirror, payments
-from . import due_dates, equipment, purchasing, record_files
+from . import due_dates, equipment, purchasing, record_files, template_grants
 from . import posting
 from . import raw_totals, runs
 from . import setup as setup_mod
@@ -556,6 +556,9 @@ drain_events = jobs.drain
 open_next_period = jobs.open_next_period
 watch_documents = jobs.watch
 grant_defaults = rights.grant_defaults
+template_declared = template_grants.declared            # a catalog template's Finance grant (template_grants.py)
+template_hire = template_grants.hire
+template_ensure = template_grants.ensure
 
 
 def set_bills_email(c: sqlite3.Connection, address: str | None, by: str = O.SYSTEM, at: str | None = None) -> None:
