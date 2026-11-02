@@ -1151,3 +1151,18 @@ def test_a_bill_line_cannot_post_to_a_bank_a_receivable_a_prepaid_balance_or_a_g
                                                  "lines": [{"account_id": account(c, code), "amount": 5_000}]})
             assert (got.status, got.code) == ("failed", "invalid"), (code, got)
         _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 5_000}])
+
+
+def test_marked_paid_from_a_disconnected_checking_account_goes_through_clearing_and_waits_for_no_bank_row(books):
+    """Spec §4.2: marked paid with no connected account, a document goes through the clearing account the feed never
+    touches. A disconnected account keeps its connection id, so it must not wait for a bank row that will not come."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        cid = str(c.execute("SELECT id FROM fin_connections").fetchone()[0])
+        assert act(c, OWNER, "connection_disconnect", {"connection_id": cid}).status == "committed"
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 5_000}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        done = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "money_account_id": _checking(c)})
+        assert done.status == "committed" and done.result["from"] == "account", done
+        assert _balance(c, "1050") == -5_000

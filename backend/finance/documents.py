@@ -1528,6 +1528,10 @@ def _pay(kind: str) -> Any:
             # A connected money account's own line is that account: its bank row will come.
             money = next((m for m in SK.money_accounts(ctx.c, ctx.book.id)
                           if str(m["account_id"] or "") == account.id and m["connection_id"]), None)
+        if money is not None and str(money["status"]) == "disconnected":
+            # Its connection id is kept on disconnect, but no bank row will come: no connected account, so clearing.
+            money = None
+            account = None
         if money is not None and str(money["kind"]) == "card_program":
             raise invalid("a Tico card's charge pays a document through its feed row (feed_id)")
         if account is not None and not may_write(ctx, who, account.id, {}):
