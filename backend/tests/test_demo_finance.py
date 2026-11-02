@@ -1,5 +1,6 @@
 """Demo finance: Tico's own books balance, show the previous full month and this month to date by default, and carry the
-budgets, invoices, bills and rules the demo tells. The bookkeeper's rule proposal waits in Ana's approval queue.
+budgets, invoices, bills and rules the demo tells. The bookkeeper's books view is granted and its first rule proposal
+approved before the build, so nothing about them is waiting in Ana's queue.
 
 The demo is built at two moments, early in a month and mid-month in a later quarter. Finance reads its default month
 from its clock, so the test pins that clock to the build's moment, as the demo is shown the day it is built."""
@@ -12,7 +13,8 @@ from fastapi.testclient import TestClient
 
 from backend import demo
 from backend.app import create_app
-from backend.demo_sections.finance import CONTENT as C
+from backend.bookkeeper import VIEW_TITLE
+from backend.demo_sections.finance import BOOKKEEPER, CONTENT as C
 from backend.finance import context as finance_context
 
 MOMENTS = {
@@ -122,18 +124,37 @@ def test_bills_are_drafted_by_accounts_payable_and_approved_by_ana(book):
         "bot:accounts-payable", "human:ana", "open")
 
 
-def test_rules_are_in_force_and_the_bookkeepers_proposal_waits_for_ana(book):
-    settings, _ = book
+def test_rules_are_in_force_and_the_bookkeepers_proposal_was_approved_two_days_ago(book):
+    settings, now = book
     with signed_in(settings) as api:
         rules = {r["name"]: r for r in api.get("/api/v2/finance/rules").json()["rules"]}
-    assert rules["Spend over $500 needs Ana"]["active"]
-    assert rules["Marketplace fees go to 6200"]["active"]
-    assert "Freight bills go to 5400" not in rules          # not in force until Ana approves it
-    with sqlite3.connect(settings.db_path) as db:
-        waiting = db.execute("SELECT kind, actor, approval_id FROM fin_actions WHERE status = 'needs_approval'").fetchall()
-    assert [(kind, actor) for kind, actor, _ in waiting] == [("rule_create", "bot:bookkeeper")]
-    approval_id = waiting[0][2]
-    with signed_in(settings) as api:
-        assert api.get(f"/api/v2/approvals/{approval_id}").status_code == 200
         queue = api.get("/api/v2/needs-you").json()["items"]
-    assert approval_id in [item["id"] for item in queue if item["kind"] == "approval"]
+    for name in ("Spend over $500 needs Ana", "Marketplace fees go to 6200", C["proposal"]["name"]):
+        assert rules[name]["active"], name
+    with sqlite3.connect(settings.db_path) as db:
+        [(status, approval_id)] = db.execute(
+            "SELECT status, approval_id FROM fin_actions WHERE kind = 'rule_create' AND actor = ?", (BOOKKEEPER,)).fetchall()
+        waiting = db.execute("SELECT COUNT(*) FROM fin_actions WHERE status = 'needs_approval'").fetchone()[0]
+        decision, decided_by, decided_at = db.execute(
+            "SELECT decision, decided_by_id, decided_at FROM approvals WHERE id = ?", (approval_id,)).fetchone()
+    assert status == "committed"
+    assert waiting == 0
+    assert (decision, decided_by) == ("approved", "human:ana")
+    assert decided_at[:10] == (now - timedelta(days=2)).date().isoformat()
+    assert approval_id not in [item["id"] for item in queue]
+
+
+def test_the_bookkeepers_view_was_granted_six_days_ago_and_a_start_does_not_ask_again(book):
+    settings, now = book
+    with signed_in(settings) as api:
+        access = api.get("/api/v2/finance/access").json()
+    bot = next(t for t in access["teammates"] if t["teammate"] == BOOKKEEPER)
+    assert [(g["what"], g["status"]) for g in bot["grants"]] == [("everything", "active")]
+    with sqlite3.connect(settings.db_path) as db:
+        tasks = db.execute("SELECT owner_id, status, created_at FROM tasks WHERE title = ?", (VIEW_TITLE,)).fetchall()
+    assert [(owner, status) for owner, status, _ in tasks] == [("human:ana", "done")]
+    assert tasks[0][2][:10] == (now - timedelta(days=6)).date().isoformat()
+    with TestClient(create_app(settings)):      # a start of the app, as the demo is opened
+        pass
+    with sqlite3.connect(settings.db_path) as db:
+        assert db.execute("SELECT COUNT(*) FROM tasks WHERE title = ?", (VIEW_TITLE,)).fetchone()[0] == 1
