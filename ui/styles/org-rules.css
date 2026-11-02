@@ -268,7 +268,7 @@ button.rr-line:hover{background:var(--surface2)}
 .rr-dir{flex:none;color:var(--muted);font-size:var(--t-sm)}
 .rr-who{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-md);font-weight:500}
 .rr-n{flex:none;font-size:var(--t-sm);font-weight:600;white-space:nowrap}
-.rr-n.zero{color:var(--fail)}.rr-n.cap{color:var(--wait)}.rr-n.rule{color:var(--run)}.rr-n.open{color:var(--ok)}
+.rr-n.zero{color:var(--fail)}.rr-n.cap{color:var(--wait-ink)}.rr-n.rule{color:var(--run)}.rr-n.open{color:var(--ok)}
 .rr-lr{color:var(--muted);font-size:var(--t-sm);overflow-wrap:anywhere}
 .rr-box{display:flex;flex-direction:column;gap:10px;padding:10px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--bg)}
 .rr-box textarea{width:100%;resize:vertical}
