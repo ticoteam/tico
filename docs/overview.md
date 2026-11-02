@@ -1,8 +1,8 @@
 # Overview
 
-Open Overview from the desktop sidebar or the mobile More menu. It is where Tico opens. Overview has three tabs:
+Open Overview from the desktop sidebar or the mobile More menu. It is where Tico opens. Overview has four tabs:
 **Mine**, your own My dashboard and the landing page (`#/home`); **Company**, the company's Dashboard (`#/overview`);
-and **Campus** (`#/overview/campus`).
+**Campus** (`#/overview/campus`); and **Graph** (`#/overview/graph`). Owners and admins also see **Company page**.
 
 ## My dashboard
 
@@ -79,6 +79,36 @@ Hidden people, invisible or retired bots and other people's personal branches ar
 `ui/app/overview.js` supplies this minimal model to a lazy same-origin iframe in `ui/overview/`. Both sides check message origin and source. Profile requests are checked against the current roster before navigating. The iframe, event listeners and GPU resources are disposed when leaving the route. Membership, assignment or computer changes rebuild the campus while preserving the selected building when it still exists; status-only refreshes preserve the camera and selected teammate. No Three.js assets or computer inventory requests load on the default page.
 
 The renderer uses native ES modules and locally vendored Three.js; it needs no build step or external CDN. Geometry and materials are shared and static scenery is batched. Device pixel ratio is capped, invisible documents stop rendering and reduced-motion preferences pause decorative motion, including preference changes while the scene is open. If WebGL is unavailable, the same authorized roster remains accessible as a list grouped by computer and pavilion.
+
+## Graph
+
+**Graph** draws the team chart top down: the same teammates, groups and report order as the Team sidebar, with the
+built-in bots left off. The top person heads it; each group is a dashed box its teammates hang under. **Rules | Goals**
+switches what each teammate carries, and the address keeps the choice (`#/overview/graph?view=goals`).
+
+- **Rules:** each bot and person shows how many rules name them, in Who or With, and a **Block** or **Escalate** mark
+  when one of them is. Data: `GET /api/v2/rules/by-teammate`, with the reader's rights. A Tico without that route shows
+  "Rules need a newer Tico." and Goals still works.
+- **Goals:** each teammate shows their live goals as chips in the Goals page's colours (On track, At risk, Off track, No
+  fresh data). Where a goal supports another owner's goal, a dashed arrow joins the two teammates, so goals that roll up
+  across the chart show. Data: `GET /api/v2/goals/tree`.
+
+Tap a teammate (or focus it and press Enter) to open their panel; Escape or ✕ closes it. The panel lists everything
+about them, the current mode first: their rules under **Follows** (Who) and **With**, each with the teammates it links
+them to; their goals with status, the first KPI against its target, what each supports and who supports it; and **Team**
+(reports to, reports). Every name there moves the selection. Picking a rule lights up every teammate it reaches (Who
+blue, With amber) and, for an internal rule, links the Who teammates to the With ones. **Open** goes to the rule on the
+Rules page; it reads **Edit** when the rule says you may change it. **Add rule** opens the Rules page's Add rule dialog
+with Who set to the teammate. **Update** on a goal and **Add goal** open the Goals page's goal sheet, for whoever may
+edit that goal. After a save the graph reads its rules and goals again.
+
+The chart pans and zooms in its own frame: drag (one finger on a phone) to pan, the wheel, a trackpad pinch or a two-finger
+pinch to zoom around the pointer, double-click or double-tap to zoom in, and **−**, **+** and **Fit** (keys `-`, `+`
+and `0`). It opens fitted, and the selected teammate is kept in view beside the panel. A manager with more than three
+reports and none below them lists them in a column (two past eight), so a team of 60 bots stays narrow. On a phone the
+chart is the same, the page never scrolls sideways, and the panel is a bottom sheet. The browser test
+`ui/tests/overview-graph.cjs` covers both modes, the panel and its actions, an older server, zoom with 64 bots, the
+keyboard and a phone.
 
 ## Bot hours vs human hours
 

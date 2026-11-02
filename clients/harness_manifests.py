@@ -45,6 +45,7 @@ FIELDS = {
     "readiness": (bool, True),
     "repo_permission_lint": (bool, False),
     "repo_commands": (bool, False),
+    "packet_only": (bool, False),
     "sign_in_status": (dict, {}),
 }
 CHOICES = {"api_keys": ("", "computer", "bot"), "weekly_usage": ("", "refresh", "turns", "manual"),
