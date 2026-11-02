@@ -14,8 +14,8 @@ import json
 from fastapi import Query, Request
 from pydantic import BaseModel, Field
 
-from . import org_rule_check, thread_search, threads
-from .store import H, Problem, encode
+from . import org_rule_check, teammate_access, thread_search, threads
+from .store import H, Problem
 
 
 class Nothing(BaseModel):
@@ -107,13 +107,26 @@ def _home_owner(target):
 
 
 def _shared(c, v, actor, *, cursor=None, limit=None):
-    """The threads the viewer may read that `actor` is a member of, newest activity first, in the sidebar's shape. The
-    viewer's read rule is the sidebar's own SQL, so a thread the viewer cannot read never shows, whoever `actor` is."""
+    """The threads the viewer may read that `actor` is in, newest activity first, in the sidebar's shape: as a member
+    (directly or through a group), a participant (a migrated DM, a bot on a public thread), or a party to the task. The
+    viewer's read rule is the sidebar's own SQL, so a thread the viewer cannot read never shows, whoever `actor` is, and
+    a teammate the viewer may not see has no threads to show."""
     limit = max(1, min(int(limit or 50), threads.MAX_PAGE))
+    actor = str(actor)
+    try:
+        seen = teammate_access.levels_for(c, v.who, actor, auth=v.auth)["see"]
+    except (ValueError, KeyError):
+        seen = False
+    if not seen:
+        return {"attention": [], "threads": [], "dms": [], "next_cursor": None}
     activity = "(SELECT MAX(s.last_seq) FROM conversations s WHERE s.root_id=r.id)"
+    them = threads.actor_viewer(c, actor)
+    names = them.member_names(c) if them is not None else [actor]
     where = ["r.parent_id IS NULL", "r.archived_at IS NULL", "r.closed_at IS NULL",
-             "EXISTS (SELECT 1 FROM thread_members m WHERE m.thread_id=r.id AND m.actor=?)"]
-    args = [str(actor)]
+             f"(EXISTS (SELECT 1 FROM thread_members m WHERE m.thread_id=r.id AND m.actor IN ({','.join('?' * len(names))})) "
+             f"OR EXISTS (SELECT 1 FROM {threads._PARTICIPANTS.format(r='r')} WHERE value=?) "
+             "OR EXISTS (SELECT 1 FROM tasks t WHERE t.id=r.task_id AND (t.owner=? OR t.requester=?)))"]
+    args = [*names, actor, actor, actor]
     if cursor:
         try:
             at, cid = str(cursor).split(":", 1)
@@ -123,12 +136,12 @@ def _shared(c, v, actor, *, cursor=None, limit=None):
             raise Problem("cursor", "Unknown cursor", 422) from None
     sql = (f"SELECT r.*, {activity} AS activity FROM conversations r WHERE " + " AND ".join(where)
            + " AND " + threads.readable_sql(c, v, "r") + " ORDER BY activity DESC, r.id DESC LIMIT ?")
+    rows = [dict(r) for r in c.execute(sql, (*args, limit * 3))]
+    rows = [r for r in rows if threads.thread_readable(c, v, r["id"])]
+    summaries = threads.subtree_summaries(c, v, [r["id"] for r in rows[:limit + 1]])
     found, budget = [], threads.MAX_PAGE_BYTES
-    for r in c.execute(sql, (*args, limit * 3)):
-        r = dict(r)
-        if not threads.thread_readable(c, v, r["id"]):
-            continue
-        item = threads.view(c, v, r)
+    for r in rows:
+        item = threads.view(c, v, r, summary=summaries.get(r["id"]))
         item["activity_seq"] = r["activity"] or 0
         budget -= len(json.dumps(item, default=str))
         if budget < 0 or len(found) >= limit:
@@ -149,8 +162,11 @@ def install(app, store, auth, mutate, rule_check):
         """Who a thread write is for, as the org-rule check reads it (`org_rule_check.thread_people`). The recipient and
         the thread are authorized first (`auth`: 404 for a caller who may not read them), so no check reads members the
         caller cannot see and no hold names them."""
-        target = auth.target(c, who, to) if to else None
         auth.conversation(c, who, thread_id)
+        target = H.resolve_actor(c, to) if to else None
+        # Two people already in a thread need no See or Write on each other; anyone else takes the teammate gate.
+        if to and not (target and threads._in_it_together(c, thread_id, who.actor, target)):
+            target = auth.target(c, who, to)
         return org_rule_check.thread_people(c, {"thread_id": thread_id, "to_actor": target})
 
     def thread_place(who, thread_id):
@@ -201,12 +217,11 @@ def install(app, store, auth, mutate, rule_check):
     @app.get("/api/v2/threads/search")
     def search(request: Request, q: str = "", before: str | None = None, limit: int | None = None):
         """Messages whose text matches every word of `q`, newest first: only in threads and messages the viewer may
-        read (C1, rendered as SQL), so a hidden thread's hits and its existence never show."""
+        read (C1, decided for each hit), so a hidden thread's hits and its existence never show."""
         search_index()
         with store.read() as c:
             v = threads.viewer(auth, request.state.identity)
-            return thread_search.search(c, q, thread_sql=threads.readable_sql(c, v, "cv"),
-                                        message_sql=threads.message_sql(c, v, "m"), limit=limit or 20, before=before)
+            return threads.search(c, v, q, limit=limit or 20, before=before)
 
     @app.get("/api/v2/threads/home/{actor}")
     def home_thread(request: Request, actor: str):
@@ -220,11 +235,11 @@ def install(app, store, auth, mutate, rule_check):
 
     @app.get("/api/v2/threads/dm")
     def dm_thread(request: Request, peer: str = Query(..., alias="with")):
-        """My DM with `with`: the open one with exactly us two, or a new one. It needs Write on them (the reply-back rule
-        applies): 404 when I cannot see them, 403 naming Write when I can see them but may not message them."""
+        """My DM with `with`: the open one with exactly us two, or a new one. Only starting one needs Write on them (the
+        reply-back rule applies): 404 when I cannot see them, 403 naming Write when I can see them but may not message
+        them."""
         v = threads.viewer(auth, request.state.identity)
         with store.transaction() as c:
-            threads._require_write(c, v, peer)
             return threads.dm(c, v, [peer])
 
     @app.get("/api/v2/threads/{thread_id}")
@@ -237,8 +252,8 @@ def install(app, store, auth, mutate, rule_check):
     @app.get("/api/v2/threads/{thread_id}/timeline")
     def timeline(request: Request, thread_id: str, cursor: str | None = None, limit: int | None = None,
                  max_bytes: int | None = None):
-        """The thread's messages in tree order: a page of its own messages, sub-threads summarised inline, the parent
-        and the breadcrumb. `next_cursor` is the seq to pass as `cursor` for the page above."""
+        """The thread in tree order: a page of its own messages, each followed by its sub-thread's messages, and the
+        breadcrumb. `next_cursor` is the seq to pass as `cursor` for the page above."""
         with store.read() as c:
             return threads.timeline(c, threads.viewer(auth, request.state.identity), thread_id, cursor=cursor,
                                     limit=limit, max_bytes=max_bytes)
@@ -389,7 +404,8 @@ def install(app, store, auth, mutate, rule_check):
     @app.post("/api/v2/threads/dm")
     def dm_group(request: Request, body: DmCreate):
         """A DM with these teammates: the open one with exactly these people, or a new one, with the first message when
-        `body` is given. Needs Write on each of them (the reply-back rule applies), as adding them to a thread does."""
+        `body` is given. Starting one needs Write on each of them (the reply-back rule applies), as adding them to a
+        thread does."""
         who = request.state.identity
         start = {"dm": body.members, "title": body.title}
         rc = rule_check(who, "threads", body.body, lambda c: org_rule_check.thread_people(c, {"start": start}), "", {},
@@ -398,8 +414,6 @@ def install(app, store, auth, mutate, rule_check):
 
         def work(c):
             v = threads.viewer(auth, who)
-            for member in body.members:
-                threads._require_write(c, v, member)
             if not body.body:
                 return threads.dm(c, v, body.members, title=body.title)
             # The open DM with these people gets the message, or a new one is made with it: a held message makes none.
@@ -463,13 +477,8 @@ def install(app, store, auth, mutate, rule_check):
             posted = threads.post(c, v, thread_id, body.text, kind=body.kind, to_actor=body.to,
                                   parent_message_id=body.parent_message_id, checked=checked["rc"],
                                   attachments=items or None)
-            if "id" not in posted:          # held: no file is linked to a message that was not written
+            if "id" not in posted:          # held: its files are in the hold's replay, linked when it is released
                 return posted
-            for item in items:
-                c.execute("INSERT INTO message_assets VALUES(?,?)", (posted["id"], item["id"]))
-            message = H.message(c, posted["id"])
-            refs = {**(message.get("refs") or {}), "attachments": items}
-            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), posted["id"]))
             return {"thread": threads.get(c, v, thread_id), "message": _thread_message(H.message(c, posted["id"]))}
         return await asyncio.to_thread(app.state.uploads.write, request, body, uploads, work)
 

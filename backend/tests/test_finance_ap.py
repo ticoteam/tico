@@ -415,6 +415,25 @@ def test_posting_rules_need_passing_examples_run_by_priority_and_ask_raises_need
         assert act(c, "bot:coder", "rule_create", web).status == "needs_approval"
 
 
+def test_a_bill_line_naming_an_item_keeps_the_item_when_a_posting_rule_supplies_its_account(books):
+    with books.transaction() as c:
+        vendor = str(act(c, OWNER, "contact_create", {"name": "ACME PARTS", "kind": "vendor"}).result["contact_id"])
+        item = str(act(c, OWNER, "item_create", {"name": "Field visit", "kind": "service",
+                                                  "income_account_id": account(c, "4000")}).result["item_id"])
+        rule = {"kind": "posting", "name": "Parts", "when": {"counterparty": {"matches": "ACME PARTS"}},
+                "outcome": {"outcome": "post", "account_id": account(c, "6100")},
+                "examples": [{"input": {"counterparty": "ACME PARTS"}, "expect": "post"},
+                             {"input": {"counterparty": "Other"}, "expect": "none"}]}
+        assert act(c, OWNER, "rule_create", rule).status == "committed"
+        made = act(c, OWNER, "bill_create", {"vendor_id": vendor, "number": "B-9", "bill_date": "2026-10-05",
+                                              "due_date": "2026-11-05",
+                                              "lines": [{"item_id": item, "amount": 5000, "description": "visit"}]})
+        assert made.status == "committed", made
+        lines = c.execute("SELECT account_id, item_id, amount FROM fin_bill_lines WHERE bill_id=?",
+                          (made.result["bill_id"],)).fetchall()
+        assert [(str(r[0]), str(r[1]), int(r[2])) for r in lines] == [(account(c, "6100"), item, 5000)]
+
+
 def test_defaults_are_seeded_once_stay_as_edited_and_guard_bots(books):
     with books.transaction() as c:
         ids = [str(r[0]) for r in c.execute("SELECT id FROM fin_rules WHERE id LIKE 'rule:bot-%' ORDER BY id")]

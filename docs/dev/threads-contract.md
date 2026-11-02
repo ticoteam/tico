@@ -169,7 +169,7 @@ CREATE TABLE IF NOT EXISTS sequences (name TEXT PRIMARY KEY, value INTEGER NOT N
 | `members` | `thread_members` actors; a `group:<id>` member resolves live | hidden: not listed, not searchable, no existence leak (404) |
 | `task` | whoever may read the task (`auth.task`, `task_private_readable`) | today's task-discussion rule |
 | `home` | the Read audience of `owner_actor` (bot, person or group), its managers (Manage ⇒ Read) | posting needs Read **and** Write on the owner |
-| `personal` | `owner_actor` and `thread_members`; **no owner bypass**; the Strategy owner-seat rule stays | all new DMs; migrated personal/Assistant/Librarian/Strategy rooms |
+| `personal` | `thread_members` (leaving removes reading, its starter's too), plus `owner_actor` for a special room (`room_key`); **no owner bypass**; the Strategy owner-seat rule stays | all new DMs; migrated personal/Assistant/Librarian/Strategy rooms |
 | `participants` | actors in `participants_json`, plus the company owner (today's inspection) | migrated `direct` rows only |
 | `meeting` | `live_privacy.require_conversation` as today | migrated meeting rooms (`room_key` starts `live_privacy.ROOM_PREFIX`) |
 
@@ -187,7 +187,8 @@ Bots are AI employees: an internal bot reads what a person in the same seat read
   stored audience) still opens to an internal bot only by that grant, and migrated shared-room history only to the
   room's bot, a participant or a granted turn.
 - **External agents** (agent token) never get `company` or `team` standing read: there only their participation
-  counts. A bot in a thread's wake audience (`threads.audience_has`: company bots, the group's bots) may still be
+  counts, which `add_member` (or naming the bot when the thread is made) writes on a public root's `participants_json`,
+  and `remove_member` takes away. A bot in a thread's wake audience (`threads.audience_has`: company bots, the group's bots) may still be
   woken there.
 - **Posting in a Home** takes Write on its owner for bots as for people (`can_post`). Only the Home's own bot and a
   run replying into the thread its attempt was granted skip it.
@@ -205,7 +206,8 @@ Bots are AI employees: an internal bot reads what a person in the same seat read
 - **`legacy_audience='shared:<slug>'`**: readable by exactly today's live predicate, no more and no less:
   `rooms.shared_member(c, auth, actor, slug)` with bot Read for people; participants and the room's bot for an
   agent; a run's grant. Home readers outside it see one collapsed **Earlier messages** row (`{"id", "seq", "hidden":
-  true}` in a timeline; nothing on SSE).
+  true, "earlier": true}` in a timeline, consecutive ones as one; nothing on SSE). `thread.earlier` (`{"count"}`) on
+  the Home's root is the bot's manager's alone, whether or not they read that history.
 - **A migrated Home** (the bot's open shared room, `audience='home'` stored): everything new (`legacy_audience`
   NULL, any sub-thread) follows Home Read. An old reader without Home Read still opens the Home's root
   (`threads.legacy_reader_only`) but sees only that history: the timeline lists only legacy messages, `last_seq`
@@ -314,7 +316,7 @@ threads.sub_thread(c, principal, parent_message_id) -> thread row   # get-or-cre
 
 ```python
 threads.add_member(c, principal, thread_id, actor, *, role="member")
-threads.remove_member(c, principal, thread_id, actor)          # thread owner or admin; revoking removes reading
+threads.remove_member(c, principal, thread_id, actor)          # thread owner or admin; revoking removes reading, a DM's starter's too
 threads.members(c, viewer, thread_id, *, cursor=None, limit=100) -> {"members": [...], "next_cursor"}
 threads.follow(c, viewer, thread_id, *, notify="live") ; threads.unfollow(c, viewer, thread_id)
 threads.set_audience(c, principal, thread_id, audience, *, audience_group_id=None)
@@ -409,8 +411,16 @@ or reply to them). Otherwise today's cap (`UNSOLICITED_PER_DAY`) applies, counte
 - Counters per thread: `last_seq` (every message), `last_unread_seq` (a human's message, or one addressed to
   someone: `to_actor` set or any mention). Sidebar aggregates per root come from the counters of the root's subtree,
   never from per-follower writes.
+- A timeline is one tree: `threads.timeline` pages the opened thread's own messages, and each is followed by its
+  sub-thread's messages, recursively, each with its `depth`. A long branch shows its latest `BRANCH_TAIL` (20) under one
+  `collapsed` row (§10); `GET /threads/{that thread}/timeline?cursor=<the row's cursor>` reads the rest. Every row passes
+  the per-message check. Past `MAX_INLINE_ROWS`, `MAX_BRANCH_LEVELS` or the byte cap, a branch is its summary and a
+  `collapsed` row. A hidden message's branch does not show. The queries follow the tree's depth, not its branches.
+- A row's `sub_thread.title` is a title someone gave that branch: `""` while the stored one is only its parent's first
+  line, then or before an edit. The opened thread's own `title` is always the stored one.
 - Read state: `thread_followers.last_read_seq` per (thread, reader); max wins (devices); it advances only for
-  threads displayed, up to the last rendered message. A child never clears its siblings.
+  threads displayed, up to the last rendered message. A child never clears its siblings. The mark is one number, so a
+  branch whose `collapsed` row says `unread` is not marked until that part is opened.
 
 ```python
 threads.mark_read(c, viewer, thread_id, seq) -> {"thread_id", "last_read_seq"}
@@ -458,7 +468,9 @@ live shared-room rule as before.
   unread).
 - Homes for bots without a shared room, people and groups are created lazily (`threads.home`).
 - Managers of a bot with legacy history: `threads.open_earlier_messages(c, principal, slug)` clears
-  `legacy_audience` on that Home's messages (one notice offers it; UI comes later).
+  `legacy_audience` on that Home's messages. The 15-minute follow-ups job (`thread_followups.earlier_sweep`) tells each
+  manager once, in their DM with the bot (`refs.earlier_messages.thread_id`, never a wake), since the Home's readers
+  must not see it; the Home's menu and its Earlier messages row carry the same control.
 - The reader-set equality fixture asserts, per message, the same readers before and after, and again after a
   roster change.
 
@@ -495,14 +507,17 @@ audience `members|personal|participants|meeting`, a private task's thread, or a 
              "created": "...", "edited_at": null}}
 {"seq": 813, ..., "id": "<message id>", "thread_id": "...", "root_id": "...", "deleted": true, "revision": 2}
 ```
+`?conversation=` and `?thread=` narrow `messages` to what is on screen (the union of the two) and `?conversation=`
+narrows `runs`. They do not narrow `threads`: the sidebar stays live while a thread is open.
+
 `threads` topic (`changes.topic='threads'`, `subject_id` = thread id, `conversation_id` = thread id; its view is
 `_threads` in `backend/events.py`):
 ```json
 {"seq": 900, "thread_id": "...", "root_id": "...",
- "kind": "created|renamed|archived|unarchived|audience|members|read|sub_thread|counters|reactions",
+ "kind": "created|renamed|archived|unarchived|audience|members|read|sub_thread|counters|activity|reactions",
  "thread": {<thread view>},                      // created|renamed|archived|unarchived|audience|members|sub_thread
  "read": {"last_read_seq": 4411},                // kind=read, only to that reader
- "counters": {"last_seq": 4411, "last_unread_seq": 4400},   // kind=counters
+ "counters": {"last_seq": 4411, "last_unread_seq": 4400},   // kind=counters|activity
  "message_id": "...", "reactions": [{"emoji": ":+1:", "count": 2, "actors": ["human:ana", "bot:legal"]}]}
                                                  // kind=reactions, only when the viewer reads that message
 ```
@@ -514,6 +529,11 @@ audience `members|personal|participants|meeting`, a private task's thread, or a 
 carries them (`message_seq`, and the thread's `last_seq` is the highest `message_seq` seen): clients derive unread
 counts and badges from `messages` events plus their own `read` events. `counters` is written only when the counters
 change without a message (the threads migration, a repair), and tells clients to replace their numbers.
+
+`activity` (`ref` = message id) is written per message posted or deleted, carriers aside, and sent to whoever reads
+that message (or read it before it was deleted; never to someone who opens a migrated Home only for its old history),
+at most once per thread per read. It moves the row in a sidebar that follows no conversation: its counts are the
+viewer's own, so a client reads `GET /api/v2/threads` again, at most every few seconds.
 
 ## 10. REST shapes (§3.4; T2 builds the routes on these service functions)
 
@@ -530,9 +550,9 @@ Thread view (`threads.view(c, viewer, row)`):
 
 | Route | Service function |
 |---|---|
-| `GET /api/v2/threads?cursor=&limit=` | `threads.sidebar(c, viewer, cursor=None, limit=50)` → `{"attention": [...], "threads": [...], "dms": [...], "next_cursor"}`; `attention`: threads with `me.unread` (mentions, asks, DM messages), then every root the viewer owns, is in or follows that holds capped wakes, each with `"capped": n, "capped_since"` |
+| `GET /api/v2/threads?cursor=&limit=` | `threads.sidebar(c, viewer, cursor=None, limit=50)` → `{"attention": [...], "threads": [...], "dms": [...], "next_cursor"}`, ranked before it is paged: roots with an open Needs attention item for the viewer (`thread_attention.items`: mention, ask, DM, held post) or capped wakes the viewer can manage, then unread, then recent, newest first in each. `attention`: the first group's rows on this page, capped ones with `"capped": n, "capped_since"`. Each root row sums its live subtree for this viewer: `me.unread`, `me.activity`, `last_message_at`, and `activity_seq` (the newest `seq` under it). `cursor` is opaque |
 | `GET /api/v2/threads/{id}` | `threads.get(c, viewer, thread_id)` → thread view + `"breadcrumb": [{"id","title"}]` |
-| `GET /api/v2/threads/{id}/timeline?cursor=&limit=` | `threads.timeline(c, viewer, thread_id, cursor=None, limit=50, max_bytes=...)` → `{"thread", "breadcrumb", "messages": [...], "next_cursor"}`; each message carries `depth` (its thread's depth in the tree: 0 in a root, 1 in a sub-thread), and a parent carries `"sub_thread": {"id", "count", "last_seq", "unread", "more"}` |
+| `GET /api/v2/threads/{id}/timeline?cursor=&limit=` | `threads.timeline(c, viewer, thread_id, cursor=None, limit=50, max_bytes=...)` → `{"thread", "breadcrumb", "messages": [...], "next_cursor"}`; `next_cursor` and `limit` count the thread's own messages; each is followed by its sub-thread's rows in tree order (§5). Each message carries `depth` (its thread's depth in the tree: 0 in a root, 1 in a sub-thread), and a parent carries `"sub_thread": {"id", "title", "count", "last_seq", "last_read_seq", "unread", "more"}` (`count` and `unread` only of messages the viewer reads; `more` is how many are collapsed) |
 | `POST /api/v2/threads/{id}/read {seq}` | `threads.mark_read` |
 | `POST /api/v2/threads/{id}/read-all` | `threads.mark_all_read` |
 | `GET /api/v2/threads/search?q=` | T2 (FTS5), filtered by `threads.readable` per message |
@@ -545,7 +565,8 @@ Thread view (`threads.view(c, viewer, row)`):
 | `PUT/DELETE /api/v2/messages/{id}/reactions/{emoji}` | `threads.react(c, principal, message_id, emoji)` / `threads.unreact(...)` → `[{"emoji", "count", "actors"}]`; 404 when the message is unreadable, 422 for a bad emoji or past 50 distinct |
 
 Timeline messages: the existing message view plus `thread_id`, `root_id`, `seq`, `revision`, `origin_id`,
-`edited_at`, `deleted` (tombstone: no body), `reactions` (`threads.reactions(c, ids)`, when any), and hidden rows as `{"id", "seq", "thread_id", "hidden": true}`.
+`edited_at`, `deleted` (tombstone: no body), `reactions` (`threads.reactions(c, ids)`, when any), hidden rows as `{"id", "seq", "thread_id", "depth", "hidden": true}` (with `"earlier": true` for closed history, §2.3), and a long branch's older part as
+`{"id": "more:<thread id>", "thread_id", "depth", "collapsed": true, "count", "cursor", "unread"}`.
 `/api/v2/conversations/*` stay as aliases for one release. Every list is paged and byte-capped.
 
 ## 11. Outside tracks' hooks

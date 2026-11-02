@@ -31,7 +31,7 @@ function callNoted(threadId, e) {
 // ----------------------------------------------------------------- the header
 async function callLoad(view) {
   const t = view.thread;
-  if (!t || t.parent_id || view.opts.header === false || !view.id) return;
+  if (!t || view.opts.header === false || !view.id) return;
   try {
     const r = await get(`/v2/threads/${encodeURIComponent(view.id)}/calls?limit=1`, {fresh: true});
     const live = (r.calls || []).find(c => c.state === 'live') || null;
@@ -44,7 +44,7 @@ async function callLoad(view) {
 }
 function callHeadHTML(view) {
   const t = view.thread, info = CALL_THREADS.get(view.id);
-  if (!t || t.parent_id || !info || info.none) return '';
+  if (!t || !info || info.none) return '';
   if (CALL?.threadId === view.id) return '<span class="thv-call-note thv-call-on" role="status">In call</span>';
   if (info.removed) return '<span class="thv-call-note muted">Removed from call</span>';
   if (info.off) return '<span class="thv-call-note muted">Calls are off</span>';

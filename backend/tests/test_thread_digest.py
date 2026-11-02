@@ -196,3 +196,19 @@ def test_a_rehearsal_sends_no_digest_and_asks_the_issuer_nothing(signin, monkeyp
     monkeypatch.setattr(signin.auth.proxy, "_discover", lambda *a, **k: 1 / 0)
     assert signin.auth.proxy.digest("ben@acme.example", [{"title": "t", "unread": 1, "path": "/#/thread/x"}]) is None
     assert signin.fake.digest_calls == []
+
+
+def test_a_digest_counts_what_the_thread_counts_as_unread(api):
+    tid = thread(api, "Launch")
+    follow(api, tid)
+    with api.app.state.store.transaction() as c:
+        threads.post(c, "bot:ops", tid, "A bot posted, naming nobody")
+        threads.post(c, "human:ben", tid, "Ben's own post")
+    issuer = Issuer()
+    assert sweep(api, issuer) == 0 and issuer.calls == []           # activity and his own post are not unread
+    with api.app.state.store.transaction() as c:
+        threads.post(c, "bot:ops", tid, "A bot asks Ben", to_actor="human:ben")
+    say(api, tid, "Cara too")
+    assert sweep(api, issuer) == 1
+    [(_, [item])] = issuer.calls
+    assert item["unread"] == 2

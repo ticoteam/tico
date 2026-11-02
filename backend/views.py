@@ -1215,7 +1215,7 @@ def yes_no_ask(text):
 def need_of(item):
     """The group a Needs you card goes in (NEED_GROUPS)."""
     kind = item.get("kind")
-    if kind == "stale":
+    if kind in ("stale", "memory_tidy"):
         return "decide"         # Accept or Skip, row by row
     if kind == "setup":
         return "connect"        # sign in to a provider (backend/models_preset.py)
@@ -1769,6 +1769,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                 item["title"] = "Send this to Tico support?"
                 item["support"] = {"to": hq_url().split("://", 1)[-1].split("/", 1)[0]}
             items.append(item)
+    from . import memory_tidy_cards
+    items.extend(memory_tidy_cards.cards_for(c, who.actor))
     from . import stale_review
     stale = stale_review.card(c, who.actor) if H.is_human(who.actor) else None
     if stale:
@@ -2287,6 +2289,12 @@ def install_views(app, store, auth, mutate, task_view):
                 for p in r["people"]]}
             # The people and groups this caller may not see are not on the roster, the chart or the @mention picker.
             from . import teammate_access
+            # The caller's own access to each, from the teammate rules in one pass, as a bot's row has it: what a page
+            # offers (edit a profile, add to a thread), which the server checks again.
+            mine = teammate_access.levels_many(c, who, ["human:" + p["id"] for p in out["people"]]
+                                               + ["group:" + g["id"] for g in out["org_groups"]], auth=auth)
+            out["people"] = [{**p, "my_access": mine["human:" + p["id"]]} for p in out["people"]]
+            out["org_groups"] = [{**g, "my_access": mine["group:" + g["id"]]} for g in out["org_groups"]]
             people_hidden, groups_hidden = teammate_access.unseen(c, who, auth)
             if people_hidden or groups_hidden:
                 out = teammate_access.redact_chart(out, r, people_hidden, groups_hidden)

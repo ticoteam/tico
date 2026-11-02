@@ -18,7 +18,8 @@ const uiDir = path.join(__dirname, '..');
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 
 // ----------------------------------------------------------------- Acme
-const people = [{id: 'ana', name: 'Ana Silva', role: 'owner'}, {id: 'cara', name: 'Cara Lee', role: 'member', team: 'eng'}];
+const people = [{id: 'ana', name: 'Ana Silva', role: 'owner'}, {id: 'cara', name: 'Cara Lee', role: 'member', team: 'eng'},
+  {id: 'erin', name: 'Erin Tester', role: 'member'}];
 const emps = [['eng-lead', 'Engineering Lead', 'eng'], ['builder', 'Builder', 'platform'], ['mkt-lead', 'Marketing Lead', 'mkt'],
   ['writer', 'Writer', 'content'], ['bookkeeper', 'Bookkeeper', '']].map(([name, display_name, team]) =>
   ({name, display_name, role: display_name, team, status: 'active', host: 'keeper', can_chat: true}));
@@ -29,16 +30,18 @@ const ALL_RIGHTS = ['finance.book', 'finance.ap', 'finance.ar', 'finance.pay', '
 const mate = (teammate, kind, team, def, extra = {}) => ({teammate, kind, team, reports_to: '', default: def, grants: [], rights: [], ...extra});
 const MATES = [
   mate('human:ana', 'person', '', 'everything', {rights: ALL_RIGHTS}),
-  mate('human:cara', 'person', 'eng', 'team_expenses', {reports_to: 'human:ana'}),
-  mate('bot:eng-lead', 'bot', 'platform', 'team_expenses', {reports_to: 'human:cara'}),
+  // default_team (backend/finance/tab.py): Cara's default is all Engineering; Engineering Lead's spans Platform and Web.
+  mate('human:cara', 'person', 'eng', 'team_expenses', {reports_to: 'human:ana', default_team: 'eng'}),
+  mate('bot:eng-lead', 'bot', 'platform', 'team_expenses', {reports_to: 'human:cara', default_team: null}),
   mate('bot:builder', 'bot', 'platform', 'own_expenses', {reports_to: 'bot:eng-lead'}),
-  mate('bot:mkt-lead', 'bot', 'mkt', 'team_expenses', {reports_to: 'human:ana', grants: [{id: 'g1', subject_kind: 'teammate', subject: 'bot:mkt-lead',
+  mate('bot:mkt-lead', 'bot', 'mkt', 'team_expenses', {reports_to: 'human:ana', default_team: 'mkt', grants: [{id: 'g1', subject_kind: 'teammate', subject: 'bot:mkt-lead',
     what: 'pnl_lines', whose: 'company', whose_team: null, account_ids: ['a-6100'], new_members: false, granted_by: 'human:ana', expires_at: null, status: 'active', live: true}]}),
   mate('bot:writer', 'bot', 'content', 'own_expenses', {reports_to: 'bot:mkt-lead', grants: [{id: 'g2', subject_kind: 'teammate', subject: 'bot:writer',
     what: 'expenses', whose: 'team', whose_team: 'content', account_ids: [], new_members: false, granted_by: 'bot:mkt-lead', expires_at: null, status: 'active', live: true}]}),
   mate('bot:bookkeeper', 'bot', '', 'own_expenses', {rights: ['finance.book', 'finance.ap', 'finance.ar', 'finance.pay', 'finance.cards'],
     grants: [{id: 'g3', subject_kind: 'teammate', subject: 'bot:bookkeeper', what: 'everything', whose: 'company', whose_team: null, account_ids: [],
       new_members: false, granted_by: 'human:ana', expires_at: null, status: 'active', live: true}]}),
+  mate('human:erin', 'person', null, 'own_expenses'),
 ];
 function access(viewer, apGrant = false, apRights = []) {
   const base = {teams, private_lines: [{account_id: 'a-6200', name: 'Payroll', others_see: 'totals', full_detail: ['bot:bookkeeper']}],
@@ -771,7 +774,21 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('tr[data-fin-tax="v-northwind"]').waitFor();
       assert.match(await page.locator('tr[data-fin-tax="v-northwind"]').innerText(), /Northwind Design\s+Missing\s+6,100/, tag + ': a 1099 vendor without a TIN');
       await go(page, '#/finance/sources', READY.sources);
+      // Groups start collapsed, so the button expands them all; once any is open it collapses them all.
+      const fold = page.locator('[data-fin-collapse]');
+      assert.equal((await fold.innerText()).trim(), 'Expand all', tag + ': all collapsed, Expand all');
+      await fold.click();
+      assert.equal(await page.locator('[data-fin-group][aria-expanded="false"]').count(), 0, tag + ': Expand all opens every group');
+      assert.equal((await fold.innerText()).trim(), 'Collapse all', tag + ': open, Collapse all');
+      await fold.click();
+      assert.equal(await page.locator('[data-fin-group][aria-expanded="true"]').count(), 0, tag + ': Collapse all shuts every group');
+      assert.equal((await fold.innerText()).trim(), 'Expand all', tag + ': shut again, Expand all');
       await page.locator('[data-fin-group="banks"]').click();
+      assert.equal((await fold.innerText()).trim(), 'Collapse all', tag + ': one group open, Collapse all');
+      await page.locator('[data-fin-q]').fill('mercury');
+      assert.equal(await fold.isVisible(), false, tag + ': no toggle while searching');
+      await page.locator('[data-fin-q]').fill('');
+      assert.equal(await fold.isVisible(), true, tag + ': toggle back once the search clears');
       await page.locator('[data-fin-src="bank:m1"]').click();
       await page.locator('#fin-rail select[data-fin-map="m1"]').waitFor();
       const mapTo = await page.locator('#fin-rail select[data-fin-map="m1"] option').evaluateAll(o => o.map(x => x.value));
@@ -791,10 +808,16 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
       assert.deepEqual(actions(writes).at(-1), {kind: 'connection_disconnect', payload: {connection_id: 'c1'}}, tag + ': Disconnect sends connection_disconnect');
       await go(page, '#/finance/access', READY.access);
-      // The owner first, then teams in org chart order, those on no team, then the helpers; the rail opens on the owner.
+      // The owner first, then teams in org chart order, those on no team under their own heading, then the helpers;
+      // the rail opens on the owner.
       assert.deepEqual(await page.locator('.fin-acc-t tbody tr').evaluateAll(rs => rs.map(r => r.dataset.finMate || '# ' + r.innerText.trim())),
-        ['human:ana', '# Engineering', 'human:cara', '# Platform', 'bot:eng-lead', 'bot:builder', '# Web', '# Marketing', 'bot:mkt-lead', '# Content', 'bot:writer', '# Helpers', 'bot:bookkeeper'],
-        tag + ': the Access order');
+        ['human:ana', '# Engineering', 'human:cara', '# Platform', 'bot:eng-lead', 'bot:builder', '# Web', '# Marketing', 'bot:mkt-lead', '# Content', 'bot:writer',
+          '# No team', 'human:erin', '# Helpers', 'bot:bookkeeper'], tag + ': the Access order');
+      // A manager's default names the one team it covers; one spanning several teams stays generic.
+      const dflt = async who => (await page.locator(`tr[data-fin-mate="${who}"] .fin-s`).innerText()).trim();
+      assert.equal(await dflt('human:cara'), 'Engineering expenses', tag + ': a manager of one team');
+      assert.equal(await dflt('bot:mkt-lead'), 'Marketing expenses', tag + ': a manager of one team and its reports');
+      assert.equal(await dflt('bot:eng-lead'), 'Team expenses', tag + ': a manager of several teams');
       await page.waitForFunction(() => FIN_ACC.sel === 'human:ana' && document.querySelector('#fin-rail h2'));
       assert.equal(await page.locator('#fin-rail [data-fin-grant]').count(), 0, tag + ': nobody grants to themselves');
       assert.equal(await page.locator('tr[data-fin-mate="human:cara"] .fin-s.mgr').count(), 1, tag + ': a manager sees team expenses');

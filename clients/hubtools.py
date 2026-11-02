@@ -1871,7 +1871,7 @@ def strategy_bet_retire(api, args):
 # ----------------------------------------------------------------------------- brand, go-to-market, growth
 PAGE_TITLES = {"brand": "brand", "gtm": "go-to-market"}
 BRAND_SECTIONS = ("name", "positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples")
-GTM_SECTIONS = ("motion", "buyer", "wishes", "playbooks")
+GTM_SECTIONS = ("motion", "buyer", "playbooks")
 
 
 def _page_show(api, kind, args):
@@ -5314,7 +5314,8 @@ def message_redact(api, args):
       "product answered, the bot and the version. No secrets, no other people's details.",
       {"message": _s("What happened and what is missing, in plain words")}, required=("message",), writes=True)
 def support_file(api, args):
-    return _as_person(api).post("support/tickets", {"message": "[BotOps] " + args["message"], "include_ids": True}, key=_key(args))
+    return _as_person(api).post("support/tickets", {"message": "[BotOps] " + args["message"], "include_ids": True,
+                                                    "source": "botops"}, key=_key(args))
 
 
 
@@ -5833,7 +5834,9 @@ def thread_list(api, args):
 
 
 @tool("hub_thread_show", "One thread in tree order: each message is followed by the sub-thread that branched from it, "
-      "indented. Also its title and breadcrumb. Paged over the thread's own messages; next_cursor reads on.",
+      "with its depth. A long sub-thread shows its latest messages under a collapsed row: hub_thread_show on that thread "
+      "with the row's cursor reads the rest. Also its title and breadcrumb. Paged over the thread's own messages; "
+      "next_cursor reads on.",
       {"thread": THREAD_ID, "cursor": THREAD_CURSOR, "limit": THREAD_LIMIT}, required=("thread",))
 def thread_show(api, args):
     return api.get(_thread_path(args["thread"], "timeline"), cursor=args.get("cursor"), limit=args.get("limit"))
@@ -5982,7 +5985,8 @@ def thread_members_list(api, args):
 
 
 @tool("hub_thread_members_add", "Add a person, bot or group to a thread, so it can read it. You need Write on them. A "
-      "group's members are resolved live, so leaving the group takes the access away.",
+      "group's members are resolved live, so leaving the group takes the access away. A company or team thread adds "
+      "only bots: everyone else already reads it.",
       {"thread": THREAD_ID, "actor": THREAD_ACTOR,
        "role": {"type": "string", "enum": ["member", "owner"], "default": "member"}},
       required=("thread", "actor"), writes=True)
@@ -5992,7 +5996,7 @@ def thread_members_add(api, args):
 
 
 @tool("hub_thread_members_remove", "Remove a person, bot or group from a thread: they stop reading it. The thread's "
-      "owner or an admin only.",
+      "owner or an admin only. A company or team thread removes only bots.",
       {"thread": THREAD_ID, "actor": THREAD_ACTOR}, required=("thread", "actor"), writes=True)
 def thread_members_remove(api, args):
     return api.call("DELETE", _thread_path(args["thread"], "members", quote(args["actor"], safe=":")), None,
@@ -7352,7 +7356,7 @@ def call_show(api, args):
       "Refused while another call runs in the thread, and while Tico Meet is not set up on this server.",
       {"thread_id": _s("The thread's id"), "title": _s("What the call is called, up to 200 characters"),
        "speak_replies": {"type": "boolean", "description": "Bots speak their replies on this call. Off unless asked; "
-                         "spoken replies are not sent yet, so bots reply in text either way"}},
+                         "spoken replies are refused until the Gateway has text-to-speech, so leave it out"}},
       required=("thread_id",), writes=True)
 def call_start(api, args):
     body = {"title": str(args["title"])} if args.get("title") else {}

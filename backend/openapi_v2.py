@@ -1540,6 +1540,32 @@ STABLE.extend([
     ("/api/v2/finance/search", "get", "Finance", "searchFinance",
      "Search entries, bank and card rows, bills, invoices, contacts and rules the caller sees; with kind it pages by "
      "cursor, without it returns the first few of each kind", "FinanceSearch"),
+    ("/api/v2/purchase-orders", "get", "Finance", "listPurchaseOrders",
+     "Purchase orders the caller sees (payables), newest first, by status, vendor and a search over number, memo and "
+     "vendor name, with a cursor", "PurchaseOrders"),
+    ("/api/v2/purchase-orders/{po_id}", "get", "Finance", "getPurchaseOrder",
+     "One purchase order with its lines and what each line has billed", "PurchaseOrder"),
+    ("/api/v2/estimates", "get", "Finance", "listEstimates",
+     "Estimates the caller sees (receivables), newest first, by status, customer and a search over number, memo and "
+     "customer name, with a cursor", "Estimates"),
+    ("/api/v2/estimates/{estimate_id}", "get", "Finance", "getEstimate",
+     "One estimate with its lines; each line says whether it is taxable", "Estimate"),
+    ("/api/v2/locations", "get", "Finance", "listLocations",
+     "Locations by name; q searches names, archived hides them (default), shows only them or both; with a cursor",
+     "Locations"),
+    ("/api/v2/locations/{location_id}", "get", "Finance", "getLocation",
+     "One location, archived or not", "LocationOne"),
+    ("/api/v2/items", "get", "Finance", "listItems",
+     "Products and services by name or sku; q searches both, archived hides them (default), shows only them or both; "
+     "with a cursor. An item's accounts show to viewers who see them; its price shows with its income account",
+     "Items"),
+    ("/api/v2/items/{item_id}", "get", "Finance", "getItem",
+     "One product or service, archived or not; its accounts show to viewers who see them", "ItemOne"),
+    ("/api/v2/projects", "get", "Finance", "listProjects",
+     "Projects by name; q searches names, archived hides them (default), shows only them or both; with a cursor",
+     "Projects"),
+    ("/api/v2/projects/{project_id}", "get", "Finance", "getProject",
+     "One project, archived or not", "ProjectOne"),
     ("/api/v2/finance/metrics/{name}", "get", "Finance", "getFinanceMetric",
      "One number with when it was worked out (and for bank-backed numbers how fresh the data is): cash, burn, "
      "runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, "
@@ -1635,6 +1661,7 @@ SCHEMAS.update({
         "teammates": items(obj({"teammate": "s", "kind": "s", "team": "n", "reports_to": "n",
                                 "default": {"type": "string", "enum": ["everything", "team_expenses", "own_expenses",
                                                                        "none"]},
+                                "default_team": "n",
                                 "grants": items({"type": "object", "additionalProperties": True}),
                                 "rights": {"type": ["array", "null"], "items": {"type": "string"}},
                                 "may_grant": "b"})),
@@ -1761,12 +1788,43 @@ SCHEMAS.update({
         "budget_near_limit", "sync_failed", "period_ready"]}, "id": "s", "label": "s"})),
         "counts": {"type": "object", "additionalProperties": {"type": "integer"}}, "more": items({"type": "string"}),
         "next_cursor": "n", "currency": "s", "view_version": "i"}),
-    "FinanceReportOf": obj({"kind": {"type": "string", "enum": ["pnl", "balance_sheet", "cash_flow",
+    "FinanceReportOf": obj({"kind": {"type": "string", "enum": ["pnl", "pnl_by", "balance_sheet", "cash_flow",
                                                                  "budget_vs_actual", "ap_aging", "ar_aging",
                                                                  "spend_by"]},
                             "prior": {"type": "object", "additionalProperties": True}}, required=["kind"]),
+    "FinanceOrderRow": obj({
+        "id": "s", "number": "s", "contact": obj({"id": "s", "name": "s"}), "date": "s", "status": "s",
+        "currency": "s", "total": "i", "memo": "s"}, required=["id", "number", "contact", "date", "status", "currency",
+                                                             "total", "memo"]),
+    "PurchaseOrders": obj({"orders": items(ref("FinanceOrderRow")), "next_cursor": "n"}, required=["orders",
+                                                                                                "next_cursor"]),
+    "PurchaseOrder": {"allOf": [ref("FinanceOrderRow"), obj({
+        "lines": items(obj({"id": "s", "line_no": "i"}, required=["id", "line_no"])), "view_version": "i"},
+        required=["lines"])]},
+    "Estimates": obj({"estimates": items(ref("FinanceOrderRow")), "next_cursor": "n"}, required=["estimates",
+                                                                                              "next_cursor"]),
+    "Estimate": {"allOf": [ref("FinanceOrderRow"), obj({
+        "lines": items(obj({"id": "s", "line_no": "i"}, required=["id", "line_no"])), "view_version": "i"},
+        required=["lines"])]},
+    "Locations": obj({"locations": items(ref("Location")), "next_cursor": "n"}, required=["locations", "next_cursor"]),
+    "LocationOne": obj({"location": ref("Location")}, required=["location"]),
+    "Location": obj({"id": "s", "name": "s", "kind": "s", "parent_id": "n", "address": "o", "archived_at": "n"},
+                    required=["id", "name", "kind", "address"]),
+    "Items": obj({"items": items(ref("Item")), "next_cursor": "n"}, required=["items", "next_cursor"]),
+    "ItemOne": obj({"item": ref("Item")}, required=["item"]),
+    "Item": obj({"id": "s", "name": "s", "sku": "s", "kind": {"type": "string", "enum": [
+        "service", "inventory", "non_inventory", "bundle", "category"]}, "unit": "s",
+        "price": {"type": ["integer", "null"]}, "currency": "s", "archived_at": "n", "income_account_id": "n",
+        "expense_account_id": "n", "asset_account_id": "n"},
+        required=["id", "name", "sku", "kind", "unit", "currency"]),
+    "Projects": obj({"projects": items(ref("Project")), "next_cursor": "n"}, required=["projects", "next_cursor"]),
+    "ProjectOne": obj({"project": ref("Project")}, required=["project"]),
+    "Project": obj({"id": "s", "name": "s", "customer_id": "n", "status": {"type": "string",
+                                                                          "enum": ["open", "closed"]},
+                    "archived_at": "n"}, required=["id", "name", "status"]),
     "FinanceSearch": obj({"results": items(obj({"kind": {"type": "string", "enum": [
-        "entry", "feed", "bill", "invoice", "contact", "rule"]}, "id": "s", "label": "s"})),
+        "entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project"]}, "id": "s",
+        "label": "s"})),
         "next_cursor": "n", "currency": "s", "view_version": "i"}),
     "FinanceMetric": obj({"name": "s", "value": {"type": ["integer", "string", "null"]}, "unit": {
         "type": "string", "enum": ["minor", "percent", "months", "count", "days"]}, "as_of": "s",
@@ -2366,6 +2424,26 @@ SCHEMAS['SlackLink'] = obj({
     'linked_by': 's', 'created_at': 's', 'updated_at': 's'})
 SCHEMAS['SlackLinkList'] = obj({'links': items(ref('SlackLink')), 'next_cursor': 'n'})
 
+# Independent reviewer cards: task closure never changes this audience or lifetime.
+TAGS['Memory tidy'] = "Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks."
+STABLE.extend([
+    ('/api/v2/memory-tidy/cards', 'get', 'Memory tidy', 'listMemoryTidyCards',
+     'The named reviewer’s open cards; diffs are fetched on opening a card. Human and bot reviewers.', 'MemoryTidyCards'),
+    ('/api/v2/memory-tidy/cards/{ident}', 'get', 'Memory tidy', 'getMemoryTidyCard',
+     'A named reviewer’s card with its checked diff, including after both pass tasks close.', 'MemoryTidyCardResult'),
+    ('/api/v2/memory-tidy/cards/{ident}/decide', 'post', 'Memory tidy', 'decideMemoryTidyCard',
+     'Discard an open card without repository changes. Keep returns 409 until its separate implementation is available.', 'MemoryTidyCardResult'),
+])
+SCHEMAS['MemoryTidyCard'] = obj({
+    'id': 's', 'kind': {'enum': ['memory_tidy']}, 'bot': 's', 'reviewer': 's', 'requester': 's', 'title': 's',
+    'memory_commit': 's', 'model': 's', 'cost_usd': {'type': 'number', 'description': 'Filing-ledger list-price estimate, including subscription usage.'},
+    'diary': 's', 'diff': {'type': 'string', 'description': 'Checked unified diff; present on detail reads and decisions, omitted from lists.'},
+    'created': 's', 'expires': 's', 'status': {'enum': ['open', 'withdrawn', 'discarded', 'kept']}, 'reason': 's', 'keep_available': 'b',
+}, required=['id', 'kind', 'bot', 'reviewer', 'requester', 'title', 'memory_commit', 'model', 'cost_usd', 'diary',
+             'created', 'expires', 'status', 'reason', 'keep_available'])
+SCHEMAS['MemoryTidyCards'] = obj({'cards': items(ref('MemoryTidyCard'))})
+SCHEMAS['MemoryTidyCardResult'] = obj({'card': ref('MemoryTidyCard')})
+
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "
     "never removed or renamed, and a breaking change is a new /api/v3. Routes not listed are internal. "
@@ -2450,7 +2528,8 @@ SCHEMAS.update({
 })
 STABLE.extend([
     ("/api/v2/threads", "get", "Threads", "listThreads",
-     "The viewer's sidebar: needs attention, threads (recent first) and DMs they may read, one page (`cursor`); with "
+     "The viewer's sidebar, threads and DMs they may read: needs attention, then unread, then recent, one page "
+     "(`cursor`); a root's row sums its sub-threads for the viewer; with "
      "`with=<actor>`, only the threads that teammate is a member of", "ThreadSidebar"),
     ("/api/v2/threads", "post", "Threads", "createThread",
      "Start a thread (audience members unless asked otherwise); with `parent_message_id` it is a sub-thread; with `body` "
@@ -2472,7 +2551,7 @@ STABLE.extend([
     ("/api/v2/threads/{thread_id}", "patch", "Threads", "updateThread",
      "Rename, archive or unarchive a thread, or change who it is for; its managers only", "ThreadView"),
     ("/api/v2/threads/{thread_id}/timeline", "get", "Threads", "getThreadTimeline",
-     "The thread's messages in tree order, a page at a time (`cursor` is the seq from next_cursor), with the breadcrumb", "ThreadTimeline"),
+     "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest", "ThreadTimeline"),
     ("/api/v2/threads/{thread_id}/members", "get", "Threads", "listThreadMembers",
      "Who a thread is for, a page at a time", "ThreadMembers"),
     ("/api/v2/threads/{thread_id}/members", "post", "Threads", "addThreadMember",

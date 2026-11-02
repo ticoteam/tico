@@ -5,8 +5,8 @@ row checked against the per-message rule (`threads.readable`) before it is liste
 does, not by a click:
 - a mention or an ask is open until the person posts in its thread after it (or it is deleted);
 - an unread DM is open until the person reads past its last message from a person or one addressed to them;
-- a write held for review is open until it is decided: its reviewer releases or keeps it, or the person it is held for
-  withdraws it (the hold leaves `held`);
+- a write held for review (a native thread post or edit, a chat message, a run's reply) is open until it is decided:
+  its reviewer releases or keeps it, or the person it is held for withdraws it (the hold leaves `held`);
 - a capped thread (the loop guard, spec 4.5) is open until its capped deliveries resume.
 A bot's mention of the person and a bot's ask are the thread's questions to the person and count; a bot's post that
 names nobody is activity, not attention.
@@ -16,7 +16,8 @@ Every item is listed. The caller pages the whole list (views.needs_items), so no
 from . import hubdb as H
 
 ADDRESSED = ("mention", "ask", "assign", "addressed")
-HELD_OPERATIONS = ("message", "reply")      # the writes a thread post is checked as (backend/org_rule_check.py)
+# The held writes that are a message: a chat's and a run's, and a native thread's post and edit (backend/org_rule_check.py).
+HELD_OPERATIONS = ("message", "reply", "threads", "threads_edit")
 
 
 def _clip(text, n=160):
@@ -31,10 +32,14 @@ def _item(kind, item_id, thread_id, title, created, requester=None, message_id=N
             "person_ask": None, "ask_missing": False}
 
 
-def items(c, auth, who, skip=()):
-    """The thread items for `who`, skipping message ids in `skip` (asks Needs you already lists, e.g. loose asks)."""
+def items(c, auth, who, skip=(), with_capped=True):
+    """The thread items for `who`, skipping message ids in `skip` (asks Needs you already lists, e.g. loose asks).
+    `with_capped=False` leaves out the capped threads, which the sidebar lists by its own rule (threads.sidebar). A held
+    item keeps `conversation_id` empty, since its card opens the hold; `thread_id` says where it would post, for someone
+    who reads that thread."""
     from . import threads
-    viewer, me = threads.viewer(auth, who), who.actor
+    viewer = threads.viewer(auth, who)
+    me = viewer.actor
     seen, out = set(skip), []
     for row in _addressed(c, me):
         if row["id"] in seen or not threads.readable(c, viewer, row["id"]):
@@ -47,10 +52,11 @@ def items(c, auth, who, skip=()):
     for row in _unread_dms(c, viewer, me):
         out.append(_item("thread_dm", row["id"], row["id"], _clip(row["subject"] or "Direct message"),
                          row["created"], row["from_actor"]))
-    for row in _holds(c, who):
+    for row in _holds(c, viewer):
         title = "A message is held for your review" if row["role"] == "reviewer" else "A message of yours is held"
-        out.append(_item("thread_held", row["id"], None, title, row["created"], row["author"]))
-    for row in _capped(c):
+        out.append({**_item("thread_held", row["id"], None, title, row["created"], row["author"]),
+                    "thread_id": _held_thread(c, viewer, row["id"])})
+    for row in _capped(c) if with_capped else ():
         root = c.execute("SELECT * FROM conversations WHERE id=?", (row["root_id"],)).fetchone()
         if root and threads.readable(c, viewer, dict(root)) and threads.can_manage(c, viewer, dict(root)):
             out.append(_item("thread_capped", row["root_id"], row["root_id"],
@@ -76,8 +82,9 @@ def _addressed(c, me):
 
 
 def _unread_dms(c, viewer, me):
-    """Direct messages with a message past the person's read point that they may read, from a person or addressed to
-    them. The item takes that message's sender and time: a later message they cannot read sets neither."""
+    """Direct messages with a message past the person's read point that they may read and that is unread for them
+    (threads.unread_message_sql: a group DM's bot post reaches each member by a delivery, with no `to_actor`). The item
+    takes that message's sender and time: a later message they cannot read sets neither."""
     from . import threads
     out = []
     for cv in c.execute(
@@ -89,9 +96,8 @@ def _unread_dms(c, viewer, me):
         if not threads.readable(c, viewer, cv["id"]):
             continue
         for m in c.execute(
-                "SELECT m.* FROM messages m WHERE m.conversation_id=? AND m.seq>? AND m.from_actor<>? "
-                "AND (m.from_actor LIKE 'human:%' OR m.to_actor=?) AND m.deleted_at IS NULL ORDER BY m.seq DESC",
-                (cv["id"], cv["last_read_seq"], me, me)):
+                f"SELECT m.* FROM messages m WHERE m.conversation_id=? AND m.seq>? AND {threads.unread_message_sql()} "
+                "ORDER BY m.seq DESC", (cv["id"], cv["last_read_seq"], me, me)):
             if threads.readable(c, viewer, dict(m)):
                 out.append({"id": cv["id"], "subject": cv["subject"], "from_actor": m["from_actor"],
                             "created": m["created"]})
@@ -99,11 +105,25 @@ def _unread_dms(c, viewer, me):
     return out
 
 
-def _holds(c, who):
-    """Writes held for review that this person reads: the ones they review, and the ones held for them (the person
-    their bot reports up to, org_rule_check.represented). The item clears when the hold is decided."""
+def _holds(c, viewer):
+    """Writes held for review that this person reads: the ones they review, their own, and the ones held for them (the
+    person their bot reports up to, org_rule_check.represented). The item clears when the hold is decided."""
     from . import org_rule_check
-    return org_rule_check.held_for(c, who, HELD_OPERATIONS)
+    return org_rule_check.held_for(c, viewer.who, HELD_OPERATIONS) if viewer.is_person else []
+
+
+def _held_thread(c, viewer, hold_id):
+    """The thread a held native post or edit would land in, when this person reads it; None for any other hold and for
+    a post that would start its thread."""
+    from . import threads
+    row = c.execute("SELECT json_extract(payload_json,'$.replay.thread_id') AS thread, "
+                    "json_extract(payload_json,'$.replay.message_id') AS message FROM org_rule_holds "
+                    "WHERE id=? AND operation IN ('threads','threads_edit')", (hold_id,)).fetchone()
+    if row is None:
+        return None
+    message = H.message(c, row["message"]) if row["message"] and not row["thread"] else None
+    place = row["thread"] or (message or {}).get("conversation_id")
+    return place if place and threads.readable(c, viewer, place) else None
 
 
 def _capped(c):

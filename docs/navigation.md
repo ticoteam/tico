@@ -23,7 +23,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Change Instructions | Bot → More → Instructions → Edit Instructions → Ask BotOps to change |
 | Change model, effort, owners or status | Settings → Bots |
 | Register or remove a Computer | Settings → Computers → Add computer; open a computer → Revoke computer |
-| Add a subscription and give it to computers | Settings → Models → Add subscription; then Settings → Computers ([Subscriptions](computers.md#subscriptions)) |
+| Add a subscription (Connect or paste) and give it to computers | Settings → Models → Add subscription; then Settings → Computers ([Subscriptions](computers.md#subscriptions)) |
 | Sign a computer in to an AI tool | Settings → Computers → open a computer → Connections ([Computers](computers.md)) |
 | Change company turn limits | Settings → Models → Limits |
 | Check problems and recovery | Settings → Health |
@@ -44,7 +44,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Open a page full size | Tap its card, or `#/page/<id>` ([Pages](pages.md)) |
 | Read or write the team's strategy, publish a version | Strategy (`#/strategy`); the owner writes and publishes, the Strategy Bot proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
 | See the market map, or ask the Librarian about the market | Strategy → Market (`#/strategy/market`; `#/market` redirects there) |
-| See growth ideas, tests, verdicts and channel economics | Growth (`#/growth`; This week, Channels, Learning and Go-to-market are its tabs) ([Growth](growth.md)) |
+| See growth ideas, tests, verdicts and channel economics | Growth (`#/growth`; Ideas, Buyers, Channels and Sources are its tabs, and the brain icon opens Learning) ([Growth](growth.md)) |
 | Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
 | Contact support or continue a support thread | Ask → **Loop in Support** (phone: the Ask tab), or any `#/support` link |
 

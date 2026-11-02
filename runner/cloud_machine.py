@@ -385,9 +385,9 @@ def tool_commands(arch: str, apt: Path = APT) -> list[tuple[str, list[str] | dic
 
 def tools(m: Machine, *, arch: str, apt: Path = APT) -> None:
     """The tools every bot's computer needs, installed as root by `base` (see the module docstring). Node stays because
-    the runner installs each bot's harness (Claude Code, Codex, Pi, Gemini, Grok) on demand with npm
-    (runner-rs/src/harness_tools.rs, runner/harnesses/*.toml), so only the harness a bot uses lands on the machine. Nothing
-    else is here: a bot that needs ffmpeg or a toolchain installs it itself. A failed step refuses the base."""
+    the runner installs each harness its bots use (Claude Code, Codex, Pi, Gemini, Grok) with npm, even over a copy the
+    image left on PATH (runner-rs/src/harness_tools.rs, runner/harnesses/*.toml). Nothing else is here: a bot that needs
+    ffmpeg or a toolchain installs it itself. A failed step refuses the base."""
     m.say(f"installing the tools bots need: {browser_package(arch)}, Xvfb, Node.js {NODE_MAJOR} or newer")
     for what, argv in tool_commands(arch, apt):
         m.say(f"installing {what}")

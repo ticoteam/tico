@@ -103,6 +103,7 @@ OPERATIONS = {
     "reply": "a reply in a conversation", "automation": "an automation's write", "slack": "a Slack reply",
     "mail": "an email", "update": "an update", "task_question": "a question put to a person",
     "slack_message": "a Slack message", "federated_message": "a message from another Tico",
+    "slack_dm": "a Slack message to a bot",
     "threads": "a thread message", "threads_edit": "an edit to a thread message",
     "chat_upload": "a chat message with files", "assistant_message": "a message to the Assistant",
 }
@@ -945,6 +946,9 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
         return out
     text = stored.get("text") or ""
     out["text"] = text[:HOLD_TEXT_CHARS]
+    edited = (stored.get("replay") or {}).get("message_id") if hold["operation"] == "threads_edit" else None
+    if edited:
+        out["message_id"] = edited                 # the message a held edit would change: it stays under that message
     if len(text) > HOLD_TEXT_CHARS:
         out["text_cut"] = len(text)
     if reviewer:
@@ -988,7 +992,8 @@ def held_for(c, who, operations):
                      f"({marks}) ORDER BY created, id", tuple(operations)).fetchall()
     out = []
     for row in rows:
-        role = _reader(who, dict(row), c)
+        # A person's hold names its reviewer too (reviewer_for); `_reader` without `auth` settles only a bot's.
+        role = _reader(who, dict(row), c) or ("reviewer" if row["reviewer"] == who.actor else None)
         if role in ("reviewer", "represented", "author"):     # author: a person's own held post
             out.append({**dict(row), "role": role})
     return out

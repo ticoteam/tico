@@ -104,6 +104,57 @@ def test_payloads_stay_under_their_budgets(api):
     assert not [r.request.url for r in lists if MARKER in r.text] and MARKER not in encode([whole, changes])
 
 
+def test_a_thread_timeline_reads_its_branches_in_a_query_count_that_ignores_how_many_there_are(api):
+    """The whole tree comes in queries per level, so 40 branches read in as many as 5, and a page stays under its bytes."""
+    from backend import threads
+
+    def tree(branches):
+        with api.app.state.store.transaction() as c:
+            owner = threads.actor_viewer(c, "human:ana")
+            tid = threads.create(c, owner, title="Budget", audience="company")["id"]
+            for i in range(branches):
+                parent = threads.post(c, owner, tid, f"Own {i}")
+                for j in range(3):
+                    threads.post(c, owner, tid, f"Reply {j}", parent_message_id=parent["id"])
+        return tid
+
+    def statements(tid):
+        with api.app.state.store.read_transaction() as c:
+            threads.timeline(c, threads.actor_viewer(c, "human:ana"), tid, limit=100)     # warms the per-snapshot caches
+            seen = []
+            c.set_trace_callback(seen.append)
+            page = threads.timeline(c, threads.actor_viewer(c, "human:ana"), tid, limit=100)
+            c.set_trace_callback(None)
+        return len(seen), page
+
+    few, _ = statements(tree(5))
+    many, page = statements(tree(40))
+    assert len(page["messages"]) == 40 * 4
+    assert many <= few + 2, (few, many)
+
+
+def test_a_thread_timeline_stays_within_its_bytes_and_a_branch_too_big_for_a_page_is_one_more_row(api):
+    from backend import threads
+    with api.app.state.store.transaction() as c:
+        owner = threads.actor_viewer(c, "human:ana")
+        tid = threads.create(c, owner, title="Budget", audience="company")["id"]
+        older = threads.post(c, owner, tid, "Older")
+        threads.post(c, owner, tid, BODY, parent_message_id=older["id"])
+        parent = threads.post(c, owner, tid, BODY[:3000])
+        for _ in range(10):
+            threads.post(c, owner, tid, BODY, parent_message_id=parent["id"])
+    cap = 9 * KB
+    with api.app.state.store.read_transaction() as c:
+        v = threads.actor_viewer(c, "human:ana")
+        page = threads.timeline(c, v, tid, max_bytes=cap)
+        rest = threads.timeline(c, v, tid, cursor=page["next_cursor"], max_bytes=cap)
+    assert size(page["messages"]) <= cap and page["next_cursor"]
+    assert [r.get("body") for r in page["messages"]] == [BODY[:3000].strip(), None]
+    assert page["messages"][1]["collapsed"] is True and page["messages"][1]["count"] == 10
+    assert page["messages"][1]["thread_id"] == page["messages"][0]["sub_thread"]["id"]
+    assert [r.get("body") for r in rest["messages"]] == ["Older", BODY] and rest["next_cursor"] is None
+
+
 def test_a_settings_history_page_is_byte_capped(api):
     # 200 changes each carrying a 38 KB description: the page stops at its byte budget and names the next page.
     text = {"display_name": "Ops", "description": "A long description. " * 2000}

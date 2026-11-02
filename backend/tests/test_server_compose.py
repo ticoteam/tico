@@ -179,6 +179,7 @@ def test_a_runner_sharing_the_host_yields_cpu_and_memory_to_the_server_and_its_f
         assert server[name]["cpu_shares"] >= 4 * runner["cpu_shares"]
         assert server[name].get("oom_score_adj", 0) >= 0     # a negative score is refused by rootless Docker
     assert runner["oom_score_adj"] > 0
+    assert runner["mem_limit"] == runner["memswap_limit"] == "${TICO_RUNNER_MEMORY:-0}"   # the cap, with no swap beyond it
 
 
 def hold_caddyfile(services, **env):

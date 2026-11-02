@@ -1,6 +1,6 @@
 // Threads on a real hub (ui/tests/support/real-hub.cjs): a company thread and a members-only thread, made through the API as
 // Dana. Dana, on a desktop, reads the company thread and replies in its composer; a sub-thread under one of its messages
-// shows its header and opens on its own; and her bot page switches between the bot's Home and DM. Omar, a teammate on the
+// shows inline under its header and opens on its own; and her bot page switches between the bot's Home and DM. Omar, a teammate on the
 // desktop, sees the company thread in the sidebar but not the members-only one, and its text is not on his page; opened by
 // direct URL it is "Not found"; and on a bot he may see but not read, the bot has no Home tab. Priya's Home is hidden from
 // Omar until Dana makes him Priya's manager (reports_to), and then he reads it. Priya, on a phone, taps the company thread
@@ -72,11 +72,11 @@ async function restrictPerson(hub) {
     await dana.getByText('Monday works.').waitFor({timeout: t(15000)});
 
     // Dana: a sub-thread's header shows under its message with the reply count, and opens the sub-thread on its own page.
-    // A sub-thread's header is titled by its parent's first line (threads contract), so it names the kickoff message.
-    const head = dana.locator('.th-subhead', {hasText: KICKOFF});
+    const head = dana.locator(`.th-msg:has-text("${KICKOFF}") + .th-subhead`);
     await head.waitFor({timeout: t(15000)});
     assert.match(await head.innerText(), /1 reply/, 'the sub-thread header counts its one reply');
-    // The header is the way in: the timeline carries the root's messages, not the replies Dana has already read.
+    // The sub-thread's messages sit inline under it, indented; the header, or tapping one, opens it.
+    await dana.locator('.th-msg.th-sub', {hasText: RISKS}).waitFor({timeout: t(15000)});
     await head.click();
     await dana.waitForURL(new RegExp('#/thread/' + risks.thread_id), {timeout: t(15000)});
     await dana.locator('.thv-composer .p-text').waitFor({timeout: t(15000)});
@@ -110,7 +110,7 @@ async function restrictPerson(hub) {
     await omar.getByText('Not found').waitFor({timeout: t(15000)});
     assert.ok(!(await omar.content()).includes(SECRET), 'the members-only text is not on Omar\'s page');
     await omar.goto(hub.url + '/#/bot/' + BOT + '/dm');
-    await omar.locator('#btabs').waitFor({timeout: t(15000)});
+    await omar.locator('#btabs').waitFor({state: 'attached', timeout: t(15000)});
     await omar.waitForLoadState('networkidle');
     assert.equal(await omar.locator('.bot-talk-switch [data-talk="home"]').count(), 0,
       'a peer with See only on the bot gets no Home tab');
@@ -134,13 +134,14 @@ async function restrictPerson(hub) {
     assert.equal(await manager.locator('#person-home').isVisible(), true, 'the manager sees the report\'s Home card');
     await manager.context().close();
 
-    // Priya, phone: the company thread is in the sidebar; tapping it opens the thread with its composer, and the page
-    // does not scroll sideways.
+    // Priya, phone: the company thread is on the Threads tab (the sidebar is in the closed drawer); tapping it opens the
+    // thread with its composer, and the page does not scroll sideways.
     const priya = await pageAs(browser, hub, 'priya', {phone: true});
     await priya.goto(hub.url + '/#/tasks');
-    await priya.locator('#th-list .th-row-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
-    assert.equal(await priya.locator('#th-list .th-row-title', {hasText: 'Pricing war room'}).count(), 0);
-    await priya.locator('#th-list a.th-row[data-thread="' + plan.id + '"]').tap();
+    await priya.locator('#mobile-threads').tap();
+    await priya.locator('.threads-page .th-row-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
+    assert.equal(await priya.locator('.threads-page .th-row-title', {hasText: 'Pricing war room'}).count(), 0);
+    await priya.locator('.threads-page a.th-row[data-thread="' + plan.id + '"]').first().tap();
     await priya.waitForURL(new RegExp('#/thread/' + plan.id), {timeout: t(15000)});
     await priya.getByText(PLAN).waitFor({timeout: t(15000)});
     await priya.locator('.thv-composer .p-text').waitFor({timeout: t(15000)});

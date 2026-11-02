@@ -530,3 +530,16 @@ def test_botops_sets_access_as_the_person_without_the_delegation_header(acme):
     from backend import assistant
     assert assistant.valid_operation("PUT", "/api/v2/humans/cara/access", proposer="botops")
     assert assistant.valid_operation("POST", "/api/v2/groups/sales/access", proposer="botops")
+
+
+def test_the_people_list_carries_the_callers_access_and_a_manager_edits_their_report(acme):
+    api, tokens = acme
+    def row(token, pid):
+        return next(p for p in api.get("/api/people", headers=headers(token)).json()["people"] if p["id"] == pid)
+    def group(token, gid):
+        return next(g for g in api.get("/api/people", headers=headers(token)).json()["org_groups"] if g["id"] == gid)
+    assert row("dee-test", "cara")["my_access"]["manage"] and not row("eve-test", "cara")["my_access"]["manage"]
+    assert group("fay-test", "legal")["my_access"]["write"] and not group("eve-test", "legal")["my_access"]["write"]
+    # The list says what the server does: her manager edits Cara's profile and a peer does not.
+    assert api.post("/api/v2/people/cara", json={"title": "Counsel"}, headers=headers("dee-test")).status_code == 200
+    assert api.post("/api/v2/people/cara", json={"title": "Peer"}, headers=headers("eve-test")).status_code == 403

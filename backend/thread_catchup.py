@@ -24,7 +24,7 @@ SCAN_LIMIT = 300         # rows read before the readability check, newest first
 LINE_CHARS = 400         # one message's text in the transcript
 SUMMARY_CHARS = 1200     # the reply's summary at most
 EXCERPT_LINES = 5        # lines in the fallback excerpt
-SYSTEM_REFS = ("card", "follow_up", "carries")   # system notices: never summarized
+SYSTEM_REFS = ("card", "follow_up", "carries", "earlier_messages")   # system notices: never summarized
 
 
 def _clip(text, n):

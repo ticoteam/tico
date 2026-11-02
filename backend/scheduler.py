@@ -152,12 +152,13 @@ def run_bookkeeper_rules_digest(store, auth, at, failures=None):
 
 
 def run_thread_followups(store, auth, at, failures=None):
-    # Asks a bot left unanswered for a day get one nudge in their thread (backend/thread_followups.py). Nothing due is a
-    # quiet run: no post, no model.
+    # Asks a bot left unanswered for a day get one nudge in their thread, and a bot's managers one notice about its Home's
+    # closed history (backend/thread_followups.py). Nothing due is a quiet run: no post, no model.
     with SR.recording(store, "thread_followups", failures, "helper") as run:
         from . import thread_followups
         with store.transaction() as c:
             nudged = thread_followups.sweep(c, stamp(at))
+            thread_followups.earlier_sweep(c, auth, stamp(at))
         run.did(SR.words_of(nudged, "follow-up", "Nothing to follow up"), quiet=not nudged)
 
 
@@ -818,13 +819,16 @@ class Scheduler:
             self.asks_checked = at
             # Every hour: approvals and asks nobody will act on leave Needs you (backend/approval_expiry.py).
             with SR.recording(self.store, "approval_expiry", failures) as run:
-                from . import approval_expiry
+                from . import approval_expiry, memory_tidy_cards
                 with self.store.transaction() as c:
                     ended = approval_expiry.sweep(c, stamp(at))
+                    # Standalone cards use their own two-business-day clock, never task closure.
+                    tidy_expired = memory_tidy_cards.sweep(c, stamp(at))
                 ended = ended or {}
                 run.did(SR.words_of({"approvals expired": ended.get("stale") or [],
                                      "approvals closed with their task": ended.get("ended") or [],
-                                     "asks cleared": ended.get("asks") or []}, none="Nothing expired"))
+                                     "asks cleared": ended.get("asks") or [],
+                                     "tidy cards withdrawn": tidy_expired}, none="Nothing expired"))
             # A Finance action whose approval was decided, withdrawn or expired ends now (its hold released).
             try:
                 from .finance import actions as finance

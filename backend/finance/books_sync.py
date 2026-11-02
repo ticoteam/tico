@@ -96,6 +96,7 @@ def pass_once(store: Any, vault: object, settings: Any, *, now: str) -> list[str
         link = link_of(c, vault, settings)
         found = SX.books_settings(c, cid)
         realm, tenant = found.get("realm_id"), found.get("tenant_id")
+        location = str(SL.setting(c, mirror.XERO_LOCATION_SETTING) or "")
         waiting = [str(row["id"]) for row in SK.inbox_waiting(c, 50, cid, now)]
         held_until = str(SX.mirror_state(c, cid).get("held_until") or "") if provider == "xero" else ""
     if held_until and M.parse(held_until) > M.parse(now):
@@ -108,7 +109,7 @@ def pass_once(store: Any, vault: object, settings: Any, *, now: str) -> list[str
     if provider == "xero":
         if not tenant:
             return ["the Xero organisation is not known yet; connect Xero again"]
-        adapter: mirror.Books = xero.Xero(str(tenant), token)
+        adapter: mirror.Books = xero.Xero(str(tenant), token, location=location)
     else:
         adapter = qbo.QuickBooks(str(realm or ""), token)
     every = xero.CHANGE_EVERY if provider == "xero" else M.CDC_EVERY

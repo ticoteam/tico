@@ -122,11 +122,11 @@ async function pageDashboard(place) {
         <button type="button" class="ghost" data-dash-add="card"><span class="dash-plus" aria-hidden="true">+</span>Card</button>
         <button type="button" class="ghost" data-dash-add="page"><span class="dash-plus" aria-hidden="true">+</span>Page</button></span></header>
     <div class="dash-grid" id="dash-grid">${kept ? '' : skelRows(4, {card: true})}</div>
-    ${team ? '<section class="card home-card dash-home" id="dash-home"><header><h2>Home</h2></header><div id="dash-home-thread"></div></section>' : ''}
+    ${team ? '<section class="card home-card dash-home" id="dash-home"><header><h2>Home</h2><div class="home-card-acts" id="dash-home-acts"></div></header><div id="dash-home-thread"></div></section>' : ''}
     <dialog class="tmodal tmodal-shell dash-dialog" id="dash-dialog" aria-label="Card"></dialog></div>`;
   const state = DASH = {place, view: null, choices: null, root: $('#dash-root'), menu: null, readAt: Date.now()};
   // A team's Home: the thread everyone who can see the team reads.
-  if (team) threadMount($('#dash-home-thread'), {home: 'group:' + place.slice(5), card: true, header: false, hideGone: $('#dash-home'), empty: 'Nothing posted yet'});
+  if (team) threadMount($('#dash-home-thread'), {home: 'group:' + place.slice(5), card: true, header: 'compact', actsHost: $('#dash-home-acts'), hideGone: $('#dash-home'), compactEmpty: true});
   dashWire(state);
   if (kept) { state.view = kept; dashDraw(state); }
   let view;
