@@ -474,10 +474,11 @@ def freeze_paused(ctx: Ctx, budget_id: str, aid: str, by: str) -> int:
 
 
 def _over(ctx: Ctx, budget_id: str, at: date) -> bool:
-    """Whether a budget is at or past its amount on `at`, counting spend, holds and reserves."""
+    """Whether a budget's spend (actuals and holds) is at or past its amount on `at`: the cutoff a card freeze and its
+    unfreeze read. An unused allocation, a card's own limit included, is not spend, so it never freezes the card that
+    set it aside (§4.4, §8.2)."""
     from .budgeting import state
-    left = state(ctx, budget_id, at).remaining
-    return left is not None and left <= 0
+    return state(ctx, budget_id, at).at_limit
 
 
 BLOCKING = ("decline", "hold_payment")     # the at-limit actions that refuse spend: a card under one stays frozen

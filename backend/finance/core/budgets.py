@@ -3,7 +3,10 @@
 - A charge counts against the deepest budget that matches it and every parent of it (most specific wins); the
   catch-all takes expense lines no tree covers. Overlapping siblings are rejected.
 - Children share the parent's period and together never pass it.
-- Remaining = amount - posted actuals - active holds. A hold reserves in the whole chain at once.
+- Remaining = amount - posted actuals - active holds - unused allocations (§4.4). It refuses new holds and new
+  allocations. A hold reserves in the whole chain at once.
+- Spend = posted actuals + active holds. Warn and cutoff read spend, not remaining: an unused allocation keeps capacity
+  set aside for its target, but it is not spent, so a card whose limit is its whole budget runs until the money is spent.
 - Amounts live in versions with an effective-from day; a budget with no version has no amount and never cuts off.
 """
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -70,11 +73,12 @@ class State:
     period_end: str
     amount: int | None
     actual: int
-    held: int
+    held: int                       # active holds plus what unused allocations reserve (remaining counts both)
+    spent: int                      # actual + active holds: what warn and cutoff read (never the reserves)
     remaining: int | None
     pct: Decimal | None
-    crossed_warn: bool
-    at_limit: bool
+    crossed_warn: bool              # spend reached the warn level
+    at_limit: bool                  # spend reached the amount (the cutoff)
     excluded: bool = False          # a budget read netted out settled private lines (marked excluded)
 
 
@@ -145,28 +149,36 @@ def in_window(budget: Budget, versions: Sequence[Version], window: tuple[date, d
     return total if seen else None
 
 
-def state(budget: Budget, period: tuple[date, date], amount: int | None, actual: int, held: int) -> State:
+def state(budget: Budget, period: tuple[date, date], amount: int | None, actual: int, holds: int,
+          reserved: int = 0) -> State:
+    """A budget's figures. `holds` are its active holds (and settled ones no entry took yet); `reserved` is what unused
+    allocations keep set aside in its subtree. Remaining counts both, since it refuses new holds and allocations. Warn
+    and cutoff count only spend (actuals and holds): a reserve is capacity for its target, not money out."""
+    held = holds + reserved
     used = actual + held
+    spent = actual + holds
     remaining = None if amount is None else amount - used
     return State(budget_id=budget.id, period_start=period[0].isoformat(), period_end=period[1].isoformat(),
-                 amount=amount, actual=actual, held=held, remaining=remaining, pct=money.percent(used, amount),
-                 crossed_warn=amount is not None and amount > 0 and used * 100 >= amount * budget.warn_pct,
-                 at_limit=remaining is not None and remaining <= 0)
+                 amount=amount, actual=actual, held=held, spent=spent, remaining=remaining,
+                 pct=money.percent(used, amount),
+                 crossed_warn=amount is not None and amount > 0 and spent * 100 >= amount * budget.warn_pct,
+                 at_limit=amount is not None and spent >= amount)
 
 
 def decide(chain: Sequence[tuple[Budget, State]], amount: int) -> Decision:
-    """A hold of `amount` against a budget and every parent at once. Passing a budget triggers its at-limit action;
-    the strictest one wins, and only `warn` lets the hold through. A refund (negative amount) always goes through."""
+    """A hold of `amount` against a budget and every parent at once. A hold the budget has no remaining room for (reserves
+    count, §4.4) passes into its at-limit action; the strictest one wins, and only `warn` lets the hold through. The warn
+    level is read on spend, as the crossing event is, so an unused allocation never warns a budget by itself. A refund
+    (negative amount) always goes through."""
     action, limit = "ok", ""
     warns: list[str] = []
     for budget, s in chain:
         if s.amount is None:
             continue
-        used = s.actual + s.held + amount
         if amount > 0 and s.remaining is not None and amount > s.remaining and \
                 (action == "ok" or STRICTNESS[budget.at_limit] > STRICTNESS[action]):
             action, limit = budget.at_limit, budget.id
-        if amount > 0 and s.amount > 0 and used * 100 >= s.amount * budget.warn_pct:
+        if amount > 0 and s.amount > 0 and (s.spent + amount) * 100 >= s.amount * budget.warn_pct:
             warns.append(budget.id)
     return Decision(allowed=action in ("ok", "warn"), action=action, limit_budget=limit, warn_budgets=tuple(warns))
 

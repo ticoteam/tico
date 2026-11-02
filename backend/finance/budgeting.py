@@ -389,11 +389,12 @@ def reserve_growth(ctx: Ctx, budget_id: str, allocation_on: str, target_kind: st
 
 def state(ctx: Ctx, budget_id: str, at: date, target: str = "", path: Sequence[str] = (),
           read: Netted | None = None) -> B.State:
-    """A budget now: amount, actual, held (holds and allocations' reserves in its whole subtree), remaining, percent.
+    """A budget now: amount, actual, held (active holds plus the reserves unused allocations keep in its whole subtree),
+    remaining (which refuses new holds and allocations), spent (actuals and holds: what warn and cutoff read) and percent.
     With a `target` and the budget `path` a spend sits on, that target's own unused allocations on that path are not
     counted against it (it may spend what was set aside for it there); its allocations on other branches still are.
-    A read passes its `Netted`: the actual, the held and what depends on them (rollover, reserves) leave out the settled private payroll the viewer can't see, and the
-    State says so (`excluded`). Enforcement passes none."""
+    A read passes its `Netted`: the actual, the holds and what depends on them (rollover, reserves) leave out the settled
+    private payroll the viewer can't see, and the State says so (`excluded`). Enforcement passes none."""
     b = ctx.budgets().get(budget_id)
     if b is None:
         raise FinanceError(NOT_FOUND, "no such budget")
@@ -404,8 +405,9 @@ def state(ctx: Ctx, budget_id: str, at: date, target: str = "", path: Sequence[s
     mine = set(path)
     reserve = sum(v for bid, t, v in _reserve(ctx, tree, start, end, read)
                   if not (bid in mine and target and t == target))
-    held = _held(ctx, tree, start, end, read) + reserve
-    st = B.state(b, period, _amount(ctx, b, versions, period, at, read), actual(ctx, b, start, end, read=read), held)
+    holds = _held(ctx, tree, start, end, read)
+    st = B.state(b, period, _amount(ctx, b, versions, period, at, read), actual(ctx, b, start, end, read=read), holds,
+                 reserve)
     return st if read is None else replace(st, excluded=read.excluded)
 
 
@@ -429,9 +431,9 @@ def event_period(key: str) -> str:
 
 
 def crossings(ctx: Ctx, budget_ids: Sequence[str], by: str = SYSTEM) -> None:
-    """A `finance.budget.warn` / `.cutoff` event the first time a budget reaches its warn level or its amount, once per
-    period and version (a raise arms it again), for Tico's triggers to drain. A budget of 0 is at its cutoff at once:
-    it allows no spending."""
+    """A `finance.budget.warn` / `.cutoff` event the first time a budget's spend (actuals and holds, not what its unused
+    allocations reserve) reaches its warn level or its amount, once per period and version (a raise arms it again), for
+    Tico's triggers to drain. A budget of 0 is at its cutoff at once: it allows no spending."""
     at = dates.day(ctx.today)
     for bid in dict.fromkeys(budget_ids):
         b = ctx.budgets().get(bid)
@@ -441,7 +443,7 @@ def crossings(ctx: Ctx, budget_ids: Sequence[str], by: str = SYSTEM) -> None:
         if not (s.crossed_warn or s.at_limit):
             continue
         version = max((v.version for v in SB.versions(ctx.c, [bid])[bid]), default=0)
-        facts: dict[str, object] = {"budget_id": bid, "name": b.name, "amount": s.amount, "used": s.actual + s.held,
+        facts: dict[str, object] = {"budget_id": bid, "name": b.name, "amount": s.amount, "used": s.spent,
                                     "remaining": s.remaining, "pct": str(s.pct) if s.pct is not None else None}
         if s.crossed_warn:
             SB.event(ctx.c, WARN_EVENT, bid, event_key(s.period_start, version), facts, by, ctx.at)

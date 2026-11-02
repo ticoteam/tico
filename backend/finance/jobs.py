@@ -7,14 +7,13 @@ from collections.abc import Mapping
 from typing import cast
 
 from . import handlers
-from .budgeting import LIMIT_EVENT, WARN_EVENT, actual, event_period, state, subtree
+from .budgeting import LIMIT_EVENT, WARN_EVENT, event_period, state, subtree
 from .context import is_set_up, load
 from .core import budgets as B
 from .core import dates
 from .core.org import SYSTEM
 from .posting import ensure_period
 from .setup import AI, VIDEO, setup
-from .store import budgets as SB
 from .store import ledger as SL
 from .store import tico
 from .store import usage as SU
@@ -158,9 +157,7 @@ def company_ai_budget(c: sqlite3.Connection, at: str | None = None) -> tuple[str
             st = state(ctx, b.id, dates.day(ctx.today))
             if st.amount is None:
                 return None
-            spent = actual(ctx, b, st.period_start, st.period_end) + \
-                SB.held(c, subtree(ctx, b.id), st.period_start, st.period_end)
-            return b.at_limit, st, spent
+            return b.at_limit, st, st.spent
     return None
 
 

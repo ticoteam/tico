@@ -180,3 +180,29 @@ def test_a_team_budget_at_its_cutoff_pauses_that_teams_bot(books):
         cut = usage_limits.budget_cutoff(c, "coder", at=datetime(2026, 10, 15, 12, tzinfo=timezone.utc))
         assert cut is not None and cut["name"] == "AI web"
         assert usage_limits.budget_cutoff(c, "seller", at=datetime(2026, 10, 15, 12, tzinfo=timezone.utc)) is None
+
+
+def test_a_gateway_key_allocation_reserves_but_pauses_no_bot_until_the_ai_budget_is_spent(books):
+    """Spec 4.4 and 9: a Gateway key's allocation sets money aside on AI services. The reserve is not spend, so it pauses
+    no bot and does not cut the Gateway key cap; spend that reaches the budget does both."""
+    from datetime import datetime, timezone
+
+    from backend.finance import jobs
+    from backend.finance import limits
+    at = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
+    with books.transaction() as c:
+        ai = budget(c, "AI services")
+        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 100})
+        assert act(c, OWNER, "allocation_set", {"budget_id": ai, "target_kind": "gateway_key", "target_id": "gw-1",
+                                                "amount": 100}).status == "committed"
+        assert usage_limits.budget_cutoff(c, "coder", at=at) is None
+        assert usage_limits.budget_cutoff(c, "seller", at=at) is None
+        assert limits.cutoffs(c, AT).of("coder") is None
+        assert jobs.cap_wanted(c, AT)[0] == "clear"
+        # Current behaviour, pending a coordinator decision: the reserve leaves no room for a new run, so the claim is
+        # refused where it is placed (runs.hold). No usage pause reason is set by it.
+        assert FA.run_hold(c, "coder", "job-coder", at=AT).refused
+        spend(c, "5100", 100)
+        cut = usage_limits.budget_cutoff(c, "coder", at=at)
+        assert cut is not None and cut["name"] == "AI services"
+        assert jobs.cap_wanted(c, AT)[0] == "cut"
