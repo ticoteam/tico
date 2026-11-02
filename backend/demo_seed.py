@@ -155,6 +155,7 @@ class Builder:
             self.routine_tasks()
             self.updates()
             self.history()
+            self.past_weeks()
             self.messaging()
             self.files()
             self.page()
@@ -505,9 +506,11 @@ class Builder:
                     task = hubdb.task_create(c, hubdb.KEEPER, routine["title"], summary, "bot:" + bot, deduplicate=False)
                 # The run's note is the bot's own words, never a message from a person; Runs finds the run by it.
                 note = hubdb.say(c, "bot:" + bot, "human:ana", summary, refs={"task": task["id"]} if task else {})
-                turn = hubdb.turn_start(c, hubdb.KEEPER, bot, trigger=trigger, message_id=note["id"])
+                turn = hubdb.turn_start(c, hubdb.KEEPER, bot, trigger=trigger, message_id=note["id"],
+                                        task_id=task["id"] if task else None)
                 self.clock.at += timedelta(minutes=4)
                 model, provider, billing = D.USAGE[bot]
+                tokens_in, tokens_out = tokens_in * D.RUN_REQUESTS, tokens_out * D.RUN_REQUESTS
                 cached = tokens_in * 2 // 3
                 hubdb.turn_finish(c, hubdb.KEEPER, turn["id"], "completed", summary,
                                   usage={"input_tokens": tokens_in - cached, "cached_tokens": cached,
@@ -533,6 +536,65 @@ class Builder:
                 if bot not in D.STATUS_STEPS:
                     hubdb.status_set(c, hubdb.KEEPER, bot, state="idle", focus=focus)
         self.write(work)
+
+    def past_weeks(self):
+        """The weeks before the one the demo plays (D.PAST_WEEKS): each routine's runs on its schedule, the built-in
+        helpers' daily runs and the bots' own finished work. Each is a task its bot finished in one run, priced as the
+        week's runs are, so Overview's Done per week, Usage and Strategy › Budget read a team that has been at work."""
+        start, end = self.now - timedelta(weeks=D.PAST_WEEKS + 1), self.now - timedelta(weeks=1)
+        manager = {slug: up for slug, _, up in D.BOTS}
+        work = []                                   # (when, bot, title, requester, trigger, note)
+        for bot, _key, title, cron, _text, quiet in D.ROUTINES:
+            at = start
+            while (at := next_due(cron, at, "America/Los_Angeles")) < end:
+                work.append((at, bot, title, hubdb.KEEPER, "routine", quiet[len(work) % len(quiet)]))
+        for day in range(D.PAST_WEEKS * 7):
+            for index, (bot, title) in enumerate(D.PAST_DAILY):
+                work.append((start + timedelta(days=day, hours=13, minutes=20 * index), bot, title, hubdb.KEEPER,
+                             "routine", "Done; nothing needs a person."))
+        tasks = itertools.cycle(D.PAST_TASKS)
+        for week, count in enumerate(D.PAST_ONE_OFFS):
+            for number in range(count):
+                bot, title = next(tasks)
+                up = manager.get(bot)
+                asker = "bot:" + up if up and not up.startswith("human:") else "bot:coo"
+                work.append((start + timedelta(weeks=week, hours=15 + number * (7 * 24 - 20) / count), bot, title,
+                             asker, "task", "Done."))
+        # Each week most of the team also answered two chats; a few more bots each week, as the team grew.
+        for week in range(D.PAST_WEEKS):
+            share = len(D.BOTS) * (week + 6) // (D.PAST_WEEKS + 6)
+            for rank, (bot, _, _) in enumerate(D.BOTS[:share]):
+                for number in range(2):
+                    work.append((start + timedelta(weeks=week, days=(rank * 2 + number * 3) % 7, hours=16 + rank % 6),
+                                 bot, "", "", "message", "Answered a question in chat."))
+        position = {slug: index for index, (slug, _, _) in enumerate(D.BOTS)}
+
+        def run(c):
+            for index, (at, bot, title, asker, trigger, note) in enumerate(sorted(work)):
+                self.clock.at = at
+                # Long finished: the notices are quiet, so no bot is woken for work already done. A chat has no task.
+                task = hubdb.task_create(c, asker, title, note if trigger == "routine" else title, "bot:" + bot,
+                                         deduplicate=False, quiet_notice=True) if title else None
+                turn = hubdb.turn_start(c, hubdb.KEEPER, bot, trigger=trigger, task_id=task["id"] if task else None)
+                self.clock.at += timedelta(minutes=3 + index % 9)
+                model, provider, billing = D.USAGE.get(bot, ("claude-haiku-5-5", "anthropic", "api"))
+                if trigger == "routine":
+                    tokens_in, tokens_out = 21000 + 3500 * (index % 7), 1500 + 400 * (index % 5)
+                else:
+                    tokens_in = 26000 + (position.get(bot, 0) * 3100 + index * 700) % 52000
+                    tokens_out = 1800 + (position.get(bot, 0) * 260) % 3600
+                # A chat answer is a few requests; a task is the whole run's.
+                requests = D.RUN_REQUESTS // 4 if trigger == "message" else D.RUN_REQUESTS
+                tokens_in, tokens_out = tokens_in * requests, tokens_out * requests
+                cached = tokens_in * 2 // 3
+                hubdb.turn_finish(c, hubdb.KEEPER, turn["id"], "completed", note,
+                                  usage={"input_tokens": tokens_in - cached, "cached_tokens": cached,
+                                         "output_tokens": tokens_out, "model": model, "provider": provider,
+                                         "est_cost_usd": providers.estimate_cost(model, tokens_in - cached, cached, tokens_out),
+                                         "billing": billing})
+                if task:
+                    hubdb.task_update(c, "bot:" + bot, task["id"], status="done", note=note, quiet=True)
+        self.write(run)
 
     def messaging(self):
         self.at(hours=2)

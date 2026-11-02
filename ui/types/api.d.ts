@@ -5293,7 +5293,7 @@ export type Usage = {
   dimension_labels?: Record<string, unknown>;
   dimensions?: Record<string, unknown>;
   from: string;
-  group?: "bot" | "day" | "routine" | "harness" | "model" | "effort" | "subscription";
+  group?: "bot" | "day" | "routine" | "task" | "harness" | "model" | "effort" | "subscription";
   name?: string;
   prices_as_of: string;
   routines?: Array<Record<string, unknown>>;

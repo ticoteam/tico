@@ -16,6 +16,7 @@ from clients import gateway as G
 
 from backend import demo, demo_billing, gateway_tiers, github_app
 from backend.app import create_app
+from backend.demo_sections.finance import CONTENT as FINANCE
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)
 
@@ -227,11 +228,17 @@ def test_billing_is_a_sample_that_agrees_with_the_usage_page(built):
         statement = billing["statement"]
         debits = sum(day["total_micros"] for day in billing["usage"])
         assert statement["debits_micros"] == debits == statement["debits_by_product"]["gateway"]
-        assert billing["credits"][0]["amount_micros"] == demo_billing.GRANT
-        assert billing["balance_micros"] == billing["credits"][0]["left_micros"] == statement["closing_micros"]
+        # The launch credit, then the Gateway top-up Finance's books record (paid on the 2nd of the month before).
+        launch, topup = billing["credits"]
+        assert (launch["source"], launch["amount_micros"]) == ("grant", demo_billing.GRANT)
+        assert (topup["source"], topup["created"]) == ("payment", "2026-08-02")
+        assert topup["amount_micros"] == demo_billing.TOPUP == FINANCE["gateway_topup"]["amount"] * 10_000
+        assert billing["balance_micros"] == launch["left_micros"] + topup["left_micros"] == statement["closing_micros"]
+        assert launch["used_up"] or topup["left_micros"] == topup["amount_micros"]          # the launch credit goes first
         assert statement["closing_micros"] == statement["opening_micros"] + statement["credits_micros"] - debits
         csv_lines = api.get("/api/v2/billing/statements/2026-09.csv").text.splitlines()
-        assert csv_lines == ["month,line,amount_micros", "2026-09,opening,0", f"2026-09,credits:grant,{demo_billing.GRANT}",
+        assert csv_lines == ["month,line,amount_micros", f"2026-09,opening,{statement['opening_micros']}",
+                             *[f"2026-09,credits:{k},{v}" for k, v in statement["credits_by_source"].items()],
                              f"2026-09,debits:gateway,{-debits}", f"2026-09,closing,{statement['closing_micros']}"]
 
 
