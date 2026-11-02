@@ -599,11 +599,27 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         versions = [[e["file"], e["version"], e["digest"]] for e in review or []]
         return hashlib.sha256(json.dumps([text, versions]).encode()).hexdigest()
 
+    def question_shown_options(who, body):
+        """The options the person sees on the question as written: a review's own (file_reviews.options, from the
+        files as the write resolves them), else the bot's, else Yes / No. A review the write would refuse keeps the
+        bot's options: the write refuses it as it resolves."""
+        from . import file_reviews
+        if body.review:
+            with store.read() as c:
+                try:
+                    person, _ = question_checked(c, who, body)
+                    review, attachments = file_reviews.resolve(c, auth, blobs, who, person, body.review)
+                    return file_reviews.options(review, attachments, body.pick, body.options)
+                except Problem:
+                    pass
+        return body.options or [M.QuestionChoice(label="Yes"), M.QuestionChoice(label="No")]
+
     def question_ingest(who, body):
-        """Ask ingest's preflight of a task question (backend/ask_ingest.py), outside the write."""
+        """Ask ingest's preflight of a task question (backend/ask_ingest.py), outside the write: the question as the
+        person sees it, with the options it shows and the body the task is filed with."""
         from . import ask_ingest
         question = body.question.strip()
-        options = body.options or [M.QuestionChoice(label="Yes"), M.QuestionChoice(label="No")]
+        options = question_shown_options(who, body)
         asked = [{"question": question, "why": body.why,
                   "options": [o.model_dump(include={"label", "description", "then", "recommended"}) for o in options]}]
         return ask_ingest.preflight(store, app.state.judge, who, body.on, body.title or question, body.body or "",

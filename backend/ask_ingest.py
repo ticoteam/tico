@@ -283,20 +283,26 @@ def _question_lines(questions, limit):
 def structured_text(questions, text):
     """The text the model reads for an item. `questions` is the item's refs.questions as stored, or None. Without
     them, the text is the item's text cut to MAX_TEXT, as before. With them, the lines come first, in order: each
-    question's line, its why, each option with its then, which option is recommended; then the item's text. Only the
-    item's text is cut to fit MAX_TEXT. The lines are cut only when they alone are longer than MAX_TEXT, and their
-    whys and thens shorten first."""
+    question's line, its why, each option with its then, which option is recommended; then the item's text. The lines
+    are never cut, so a question set larger than MAX_TEXT on its own (the schema's largest is about 4 questions of 6
+    options) reads in full with no body; the item's text fills what is left up to MAX_TEXT."""
     body = str(text or "")
     head = _question_lines(questions, 200) if isinstance(questions, list) else ""
-    for limit in (120, 60, 20, 0):
-        if len(head) <= MAX_TEXT:
-            break
-        head = _question_lines(questions, limit)
     if not head:
         return body[:MAX_TEXT]
-    head = head[:MAX_TEXT]
     room = MAX_TEXT - len(head) - 2
     return f"{head}\n\n{body[:room]}" if room > 0 and body else head
+
+
+def _judged_text(questions, message_text, task):
+    """What a question was judged with, as replayed. A task question (its one question is `decision`, as hubdb's
+    open-question check reads it) was judged with the body its task was filed with, which the ask message does not
+    carry: the question's line stands in for a body that was not given. Any other question judged its message text."""
+    first = questions[0] if isinstance(questions, list) and questions and isinstance(questions[0], dict) else {}
+    if not task or not str(first.get("id") or "").startswith("decision"):
+        return message_text
+    body = str(task.get("body") or "")
+    return "" if body.strip() == str(first.get("question") or "").strip() else body
 
 
 def _judge(store, engine, qset, own, items, asker, person_name, title, text, kind, replay=False, asked=None):
@@ -773,11 +779,13 @@ def replay_items(c, person, start, end, assistant_bot=None):
                                "AND from_actor LIKE 'bot:%' AND from_actor<>?", (person, start, end, skip))):
         msg = H.message(c, m["id"]) or m
         tid = H.message_task_id(msg)
-        title = (H.task(c, tid) or {}).get("title", "") if tid else ""
+        task = H.task(c, tid) if tid else None
+        title = (task or {}).get("title", "") if tid else ""
         body = str(m.get("body") or "")
         asked = H._json(m.get("refs_json"), {}) or {}
         out.append({"kind": "question" if tid else "loose", "ref": tid or m["id"], "asker": m["from_actor"],
-                    "title": title or body.strip().split("\n")[0][:300], "text": body,
+                    "title": title or body.strip().split("\n")[0][:300],
+                    "text": _judged_text(asked.get("questions"), body, task),
                     "asked": asked.get("questions"), "created": m["created"]})
     return sorted(out, key=lambda it: it["created"])
 

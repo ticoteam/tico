@@ -15,6 +15,8 @@ from backend import hubdb as H
 from backend.tests.test_api import unrelated_task_managers
 from backend.tests.test_task_guest import run_on
 from backend.tests.test_task_guest import task as private_task
+from backend.tests.test_api import setup_attempt  # noqa: F401
+from backend.tests.test_file_reviews import publish
 from backend.tests.test_tasks_board import api, bot_token, get, headers, post   # noqa: F401
 
 
@@ -1195,13 +1197,79 @@ def test_an_item_without_structured_questions_is_judged_as_before(gate):
     assert A.structured_text(None, "plain") == "plain" and A.structured_text([], "plain") == "plain"
 
 
-def test_a_structured_question_with_lines_longer_than_the_limit_keeps_its_options(gate):
-    long_options = [{"label": f"Option {n}", "then": "T" * 120, "recommended": n == 6} for n in range(1, 7)]
-    text = A.structured_text([{"question": "Q" * 300, "why": "W" * 200, "options": long_options}] * 2, "Body")
-    assert len(text) <= A.MAX_TEXT
-    for n in range(1, 7):
-        assert f"Option: Option {n}" in text
-    assert "Recommended: Option 6" in text and text.count("Recommended:") == 2
+def test_the_largest_question_set_keeps_every_question_option_and_recommendation(gate):
+    """The schema's largest set: four questions of 300 characters, six options of 60 each, each with a why and a then.
+    The lines are never cut, so every question, option and recommended option reads, in order, with no body."""
+    qs = []
+    for q in range(1, 5):
+        options = [{"label": f"Q{q} option {o} " + "L" * 45, "then": f"Q{q} then {o} " + "T" * 100,
+                    "recommended": o == 6} for o in range(1, 7)]
+        qs.append({"question": f"Q{q} " + "Q" * 296, "why": f"Q{q} why " + "W" * 190, "options": options})
+    text = A.structured_text(qs, "Body")
+    cursor = 0
+    for q in qs:
+        for needle in [q["question"][:300], "Why: " + q["why"][:200]]:
+            cursor = text.index(needle, cursor) + len(needle)
+        for option in q["options"]:
+            cursor = text.index(f"Option: {option['label'][:60]}", cursor) + 1
+        cursor = text.index(f"Recommended: {q['options'][5]['label'][:60]}", cursor) + 1
+    assert len(text) > A.MAX_TEXT and text.count("Recommended:") == 4
+    assert "Body" not in text, "the lines are never cut to make room for a body"
+
+
+def ana_gate(api):
+    """Ana, asked by a bot's file review, with the filter On and a fake model."""
+    model = FakeModel()
+    api.app.state.judge = model
+    with api.app.state.store.transaction() as c:
+        A.save(c, "human:ana", "human:ana", {"mode": "on", "budget": 10, "chores_budget": 5,
+                                             "criteria": A.DEFAULTS["criteria"]})
+    return model
+
+
+def test_a_file_review_question_is_judged_with_the_choices_it_shows(api):
+    _, _, attempt = setup_attempt(api)
+    model = ana_gate(api)
+    v1 = publish(api, attempt["token"], "# Cut one")
+    r = api.post("/api/v2/task-questions", headers=headers(attempt["token"]),
+                 json={"on": "ana", "question": "Is this cut ready?", "review": [{"file": v1["id"]}]})
+    assert r.status_code == 200, r.text
+    assert model_text(model) == ("Question: Is this cut ready?\n"
+                                 "Option: Approve (then: This version is approved)\n"
+                                 "Option: Request changes (then: Your note on what to change goes back)")
+
+
+def test_a_picked_file_review_judges_one_choice_per_file(api):
+    _, _, attempt = setup_attempt(api)
+    model = ana_gate(api)
+    v1, v2 = publish(api, attempt["token"], "# Cut one"), publish(api, attempt["token"], "# Cut two", name="cut-2.md")
+    r = api.post("/api/v2/task-questions", headers=headers(attempt["token"]),
+                 json={"on": "ana", "question": "Which cut ships?", "pick": True,
+                       "review": [{"file": v1["id"]}, {"file": v2["id"]}]})
+    assert r.status_code == 200, r.text
+    lines = model_text(model).split("\n")
+    assert lines[0] == "Question: Which cut ships?"
+    assert lines[-1].startswith("Option: Request changes")
+    assert sum(line.startswith("Option: ") and "then: This one is approved" in line for line in lines) == 2
+
+
+def test_a_task_question_replays_with_the_body_it_was_judged_with(gate):
+    """A task question's body is judged live and lives on its task, which is the bot's: Replay reads it from there."""
+    api, model, token = gate
+    body = ("Dates and venue, with the context the person needs. " * 4).strip()
+    r = api.post("/api/v2/task-questions", headers=headers(token), json={
+        "on": "human:ben", "question": "Which launch date do you want?", "why": "It sets the venue deposit.",
+        "body": body,
+        "options": [{"label": "Nov 3", "then": "Book Nov 3"}, {"label": "Nov 10", "then": "Book Nov 10", "recommended": True}]})
+    assert r.status_code == 200, r.text
+    live = model_text(model)
+    head, rest = live.split("\n\n", 1)
+    assert head.endswith("Recommended: Nov 10") and rest == body
+    out = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": H.now()[:10]},
+                   headers=headers("ben-test"))
+    assert out.status_code == 200, out.text
+    assert model_text(model) == live
+    assert model.calls[-1]["state"]["item"]["title"] == "Which launch date do you want?"
 
 
 def test_a_replayed_structured_question_judges_the_same_lines(gate):
