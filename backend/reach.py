@@ -13,7 +13,7 @@
 
 Stored and shown only: nothing enforces reach yet, and task caps (backend/task_caps.py) are still their own table.
 
-Unversioned and idempotent (`ensure`), like backend/org_rules.py.
+Tables: backend/migrations/0040_reach.sql.
 """
 import dataclasses
 from typing import Literal
@@ -33,24 +33,6 @@ FIELDS = ("mode", "chats_per_day", "tasks_per_day")
 DEFAULTS = {"mode": "open", "chats_per_day": 999, "tasks_per_day": 999}
 MODES = ("open", "closed")
 LINES_MAX = 2000            # the lines one company keeps; the map answers them all at once
-
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS reach_settings(id TEXT PRIMARY KEY, party_id TEXT NOT NULL, "
-    "mode TEXT CHECK (mode IS NULL OR mode IN ('open','closed')), chats_per_day INTEGER, tasks_per_day INTEGER, "
-    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by_id TEXT NOT NULL)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS reach_settings_party ON reach_settings(party_id)",
-    "CREATE TABLE IF NOT EXISTS reach_lines(id TEXT PRIMARY KEY, sender_id TEXT NOT NULL, receiver_id TEXT NOT NULL, "
-    "per_day INTEGER, org_rule_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
-    "created_by_id TEXT NOT NULL, updated_by_id TEXT NOT NULL)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS reach_lines_pair ON reach_lines(sender_id, receiver_id)",
-    "CREATE INDEX IF NOT EXISTS reach_lines_receiver ON reach_lines(receiver_id)",
-)
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
-
 
 # ----------------------------------------------------------------------------------------------- the roster
 def context(c):
@@ -503,4 +485,4 @@ def install(app, store, auth, mutate):
         return mutate(request, _Nothing(), lambda c: remove_line(c, auth, who, line_id))
 
 
-__all__ = ["ensure", "effective", "install", "listing"]
+__all__ = ["effective", "install", "listing"]

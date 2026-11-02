@@ -1898,9 +1898,6 @@ class Store:
                 # Their verdict cache (backend/org_rule_check.py). Unversioned the same way.
                 from .org_rule_check import ensure as ensure_org_rule_check
                 ensure_org_rule_check(c)
-                # Reach (backend/reach.py): who reaches whom, its settings and lines. Unversioned too.
-                from .reach import ensure as ensure_reach
-                ensure_reach(c)
                 # Counsel's documents: the versions it was asked to read, the only versions it may cite (backend/counsel.py).
                 from .counsel import ensure as ensure_rule_reads
                 ensure_rule_reads(c)
