@@ -84,7 +84,8 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(usage, ['7']);
     // A refused save puts the switch back.
     refuse = true;
-    await page.locator('[data-browser-exit=c1]').uncheck();
+    // A click, not uncheck(): the refusal can put the switch back before uncheck() looks, which it reads as a failed click.
+    await page.locator('[data-browser-exit=c1]').click();
     await page.waitForFunction(() => document.querySelector('[data-browser-exit=c1]')?.checked && !document.querySelector('[data-browser-exit=c1]').disabled);
     refuse = false;
     await page.keyboard.press('Escape');
