@@ -155,9 +155,13 @@ def register(app, store, auth, mutate, settings):
         return mutate(request, body, lambda c: work(c, who.actor))
 
     def page_view(c):
+        from datetime import datetime, timezone
+        from . import release
         current = S.get(c)
+        # The reader address answers with a page only when something public is approved and a release is served.
+        live = bool(release.public_view(c, datetime.now(timezone.utc), settings)) and release.current_dir(settings) is not None
         return {**current, "company_name": settings.company_name, "reader_origin": settings.reader_origin,
-                "page_domain": settings.page_domain, "address": S.address(current["slug"], settings)}
+                "page_domain": settings.page_domain, "address": S.address(current["slug"], settings), "public_live": live}
 
     @app.get("/api/v2/company-page")
     def company_page_show(request: Request):

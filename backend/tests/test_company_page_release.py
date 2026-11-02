@@ -276,7 +276,7 @@ def world(tmp_path, monkeypatch):
     store.initialize()
     state = SimpleNamespace(store=store, settings=settings, approved=True, stats=[], held=[], root=tmp_path / "company-page-public")
 
-    def stream(c, audience_ids, before=None, limit=10):
+    def stream(c, audience_ids, before=None, limit=10, company_name=""):
         rows = c.execute("SELECT * FROM editions WHERE audience_id=? AND status='published' AND (? IS NULL OR published_at<?) "
                          "ORDER BY published_at DESC LIMIT ?", (audience_ids[0], before, before, limit)).fetchall()
         return [{"anchor": r["id"], "title": r["title"], "author": {"name": r["author"], "kind": "bot"}, "period": r["period_start"],
