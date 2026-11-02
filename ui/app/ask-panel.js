@@ -620,5 +620,9 @@ document.addEventListener('tico:support', () => { askPeople(); ASK?.draw?.(); })
 document.addEventListener('focusout', ev => { if (askTypes(ev.target)) setTimeout(askPeek, 0); });
 liveOn('needs-list', () => { ASK?.draw?.(); askPeek(); });
 addEventListener('hashchange', () => setTimeout(askSync, 0));
+// On a phone Ask is a page of its own: another tab, even the one already under it, leaves it.
+document.addEventListener('click', ev => {
+  if (ASK?.open && askPhone() && ev.target.closest?.('#mobile-nav .mobile-nav-item:not(#mobile-ask)')) askToggle(false, false);
+}, true);
 addEventListener('resize', () => { if (ASK?.open) askFoot(askFootNow()); askSync(); });
 setTimeout(askPeek, ASK_PEEK_WAIT_MS + 100);
