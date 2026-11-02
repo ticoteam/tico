@@ -22,6 +22,7 @@ import json
 from fastapi import Request
 
 from clients import access_entry, harness_manifests, mcp_servers
+from . import model_subscriptions
 from . import models as M
 from . import providers, read_cache, routines
 from .harnesses import EXTERNAL_HARNESSES, resolve_harness
@@ -79,7 +80,7 @@ def _unique(used, base):
     return name
 
 
-def _model_tool(c, settings, bot, config, readiness, label):
+def _model_tool(c, settings, bot, config, readiness, label, runner=None):
     row = H.bot(c, bot) or {}
     runtime, model = providers.bot_choice(c, settings, config)
     runtime = runtime or row.get("runtime") or ""
@@ -99,7 +100,10 @@ def _model_tool(c, settings, bot, config, readiness, label):
     if isinstance(state, dict):
         if not state.get("installed"):
             status, problem = "problem", "Runtime is not installed on " + label
-        elif state.get("authenticated") in ("missing", "failed", "rejected"):
+        elif state.get("authenticated") in ("missing", "failed", "rejected") and not (
+                # The computer's company subscription signs this bot's turns in (backend/model_subscriptions.py).
+                runner and runtime in model_subscriptions.covered_runtimes(
+                    c, runner, providers.fill(providers.load(c, settings), config))):
             status, problem = "problem", state.get("detail") or "Runtime is not signed in on " + label
         else:
             status = "ready"
@@ -253,7 +257,8 @@ def agent_report(c, bot, tools):
 
 
 STATE_CONFIG_SQL = "SELECT config_json,repo FROM bot_config WHERE bot=?"
-STATE_RUNNER_SQL = "SELECT r.label,r.last_seen,r.revoked_at,r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?"
+STATE_RUNNER_SQL = ("SELECT r.id,r.label,r.last_seen,r.revoked_at,r.readiness_json,r.capabilities_json FROM assignments a "
+                    "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?")
 REQUESTS_SQL = "SELECT * FROM bot_tool_requests WHERE bot=? AND state='pending' ORDER BY created,id"
 
 
@@ -269,9 +274,13 @@ def prime_state(c, bots):
             f"SELECT bot,config_json,repo FROM bot_config WHERE bot IN ({marks})", part)}
         prime(c, STATE_CONFIG_SQL, {(s,): configs.get(s) for s in part})
         runners = {r["bot"]: r for r in c.execute(
-            "SELECT a.bot,r.label,r.last_seen,r.revoked_at,r.readiness_json FROM assignments a "
+            "SELECT a.bot,r.id,r.label,r.last_seen,r.revoked_at,r.readiness_json,r.capabilities_json FROM assignments a "
             f"JOIN runners r ON r.id=a.runner_id WHERE a.bot IN ({marks})", part)}
         prime(c, STATE_RUNNER_SQL, {(s,): runners.get(s) for s in part})
+        # The same computers, for the subscription lookups each Model row may make.
+        prime(c, model_subscriptions.RUNNER_READINESS_SQL, {(r["id"],): r for r in runners.values()})
+        prime(c, model_subscriptions.RUNNER_CAPABILITIES_SQL,
+              {(r["id"],): None if r["revoked_at"] else r for r in runners.values()})
         requests = {}
         for r in c.execute(f"SELECT * FROM bot_tool_requests WHERE bot IN ({marks}) AND state='pending' "
                            "ORDER BY created,id", part):
@@ -359,7 +368,7 @@ def listing(c, settings, bot, reads=None):
     if external:
         for tool in adding:
             tool["detail"] = "Waiting for this external profile to configure and report the tool"
-    tools = [_model_tool(c, settings, bot, state["config"], state["readiness"], label)]
+    tools = [_model_tool(c, settings, bot, state["config"], state["readiness"], label, state["runner"])]
     repo = _repo_tool(settings, bot, state["row"] and state["row"]["repo"], report)
     if repo:
         matching = next((tool for tool in declared if tool["service"].lower() in ("github", "github-app")
