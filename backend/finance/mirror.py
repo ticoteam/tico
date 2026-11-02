@@ -2533,6 +2533,9 @@ def _payment_planner(kind: str) -> handlers.Planner:
             raise denied(waits)
         if kind == "bill" and SK.live_payment(ctx.c, f"bill:{doc['id']}") is not None:
             raise FinanceError(CONFLICT, "a payment for this bill is live; it settles the bill when it clears")
+        if kind == "bill" and not ctx.deciding and documents.bill_ask_waiting(ctx, str(doc["id"])):
+            raise FinanceError(CONFLICT, "a payment for this bill is waiting for approval; it settles the bill when "
+                                         "approved")
         ref = SX.ref_for_local(ctx.c, cid, table, str(doc["id"]))
         if ref is None or str(ref["status"]) != "active":
             raise FinanceError(CONFLICT, "that is not in the provider yet")
@@ -2590,7 +2593,8 @@ def _payment_planner(kind: str) -> handlers.Planner:
             oid = _queue(ctx.c, cid, f"payment.{kind}", body, by=who, action_id=aid, at=ctx.at)
             return {f"{kind}_id": str(doc["id"]), "outbox_id": oid, "status": "queued", "amount": amount}
         verb = "paid on" if kind == "bill" else "received on"
-        return handlers.Plan(K.default_gate(ctx.org, who, words),
+        gate = documents.bill_paid_gate(ctx, who, doc, words) if kind == "bill" else K.default_gate(ctx.org, who, words)
+        return handlers.Plan(gate,
                              f"Record {documents.money_of(amount)} {verb} {kind} {doc['number'] or doc['id']}", apply,
                              facts={"amount": amount, "counterparty": str(doc["contact_name"] or "")})
     return planner

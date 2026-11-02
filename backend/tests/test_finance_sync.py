@@ -36,6 +36,30 @@ def _asks(c, title):
     return c.execute("SELECT count(*) FROM tasks WHERE title LIKE ?", (f"{title}%",)).fetchone()[0]
 
 
+def test_a_webhook_reads_the_balances_now_and_the_poll_stays_every_fifteen_minutes(books):
+    """§9: balances come from webhooks. Mercury's balance event (a checkingAccount update, the recorded shape) waits on
+    the connection; its pass reads the balance then, not at the next poll, and the poll itself is unchanged."""
+    fake = FakeMercury()
+    connect(books, fake)
+    sync_once(books, fake)
+    event = MERCURY["event_balance"]
+    with books.transaction() as c:
+        cid = str(c.execute("SELECT id FROM fin_connections").fetchone()[0])
+        SK.inbox_add(c, connection_id=cid, provider="mercury", event_id=str(event["id"]), payload=event, at=AT)
+    with books.read() as c:
+        before = c.execute("SELECT m.balance, k.next_sync_at FROM fin_money_accounts m JOIN fin_connections k "
+                           "ON k.id=m.connection_id WHERE m.provider_account_id='acct-chk'").fetchone()
+    new = event["mergePatch"]["currentBalance"]
+    fake.balances["acct-chk"] = new
+    sync_once(books, fake, "2026-10-15T12:01:00.000000Z")       # a minute on: the poll is not due
+    with books.read() as c:
+        after = c.execute("SELECT m.balance, k.next_sync_at FROM fin_money_accounts m JOIN fin_connections k "
+                          "ON k.id=m.connection_id WHERE m.provider_account_id='acct-chk'").fetchone()
+    assert before[0] != round(new * 100)
+    assert after[0] == round(new * 100)
+    assert after[1] == before[1] and after[1] is not None
+
+
 def test_a_cut_off_card_create_is_never_sent_again_and_a_claim_is_won_once(books):
     """A: the outbox row is claimed before the call; one claimed and never recorded goes to a finance admin."""
     fake = FakeMercury()

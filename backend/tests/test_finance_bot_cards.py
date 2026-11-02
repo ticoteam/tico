@@ -2,6 +2,7 @@
 sees and acts on its own cards only; a decline budget's cutoff freezes them and a purchase over the budget is not held;
 a card is saved on vendor accounts by a person, replay-safe, and a bot reads where its card works; a single-use card
 waits for a provider that has them; and no card number reaches a payload, a receipt, a read or a tool."""
+import json
 import random
 import re
 import threading
@@ -15,6 +16,7 @@ from backend.finance import budgeting
 from backend.finance import reads as FR
 from backend.finance.context import load
 from backend.finance.core import validate as V
+from backend.finance.core.org import SYSTEM
 from backend.finance.store import budgets as SB
 from backend.finance.store import schema as FS
 from backend.tests.test_api import api, headers  # noqa: F401
@@ -180,6 +182,126 @@ def test_a_cutoff_freeze_lifts_at_a_new_period_and_a_person_freeze_stays(books):
     sync_once(books, fake, NEXT)
     sent = fake.sent("card_state")
     assert ("card-coder", "unfreeze") in sent and ("card-seller", "unfreeze") not in sent
+
+
+def test_the_hourly_look_lifts_a_cutoff_freeze_as_a_logged_system_action(books):
+    fake = FakeMercury()
+    _, coder, seller = _world(books, fake)
+    with books.transaction() as c:
+        spend(c, "6100", 50_000)
+        FA.drain_events(c, AT)
+        assert _frozen_by(c, coder) == "budget" and _frozen_by(c, seller) == "budget"
+    sync_once(books, fake, LATER)
+    with books.transaction() as c:
+        assert FA.watch_documents(c, NEXT) >= 1
+        assert _status(c, coder) == "active" and _status(c, seller) == "active"
+        lifts = c.execute("SELECT actor, status, payload_json FROM fin_actions WHERE kind='card_unfreeze'").fetchall()
+        assert sorted((actor, status) for actor, status, _ in lifts) == [(SYSTEM, "committed")] * 2
+        assert {json.loads(payload)["card_id"] for *_, payload in lifts} == {coder, seller}
+    sync_once(books, fake, NEXT)
+    sent = fake.sent("card_state")
+    assert ("card-coder", "unfreeze") in sent and ("card-seller", "unfreeze") in sent
+
+
+def test_a_cutoff_lift_that_failed_is_tried_again_the_next_hour(books, monkeypatch):
+    """Item E: the hourly look keys each lift by its card and the hour, so a lift refused in one hour (its failed result
+    is stored under that key) is tried again the next hour. Here each card's first lift names a card that is not there,
+    so it is refused; the next hour's lift goes through, and a look in that same hour lifts nothing more."""
+    from backend.finance import cards as CARDS
+    fake = FakeMercury()
+    _, coder, seller = _world(books, fake)
+    with books.transaction() as c:
+        spend(c, "6100", 50_000)
+        FA.drain_events(c, AT)
+        assert _frozen_by(c, coder) == "budget" and _frozen_by(c, seller) == "budget"
+    real = FA.act
+    tried: set[str] = set()
+
+    def refuse_each_cards_first_lift(c, who, kind, payload, key, **kw):
+        if kind == "card_unfreeze" and payload["card_id"] not in tried:
+            tried.add(payload["card_id"])
+            payload = {**payload, "card_id": "card-not-there"}
+        return real(c, who, kind, payload, key, **kw)
+    monkeypatch.setattr(FA, "act", refuse_each_cards_first_lift)
+    with books.transaction() as c:
+        assert CARDS.lift_through_actions(load(c, NEXT)) == 0                    # refused: both stay frozen
+        assert _frozen_by(c, coder) == "budget" and _frozen_by(c, seller) == "budget"
+    with books.transaction() as c:
+        assert CARDS.lift_through_actions(load(c, "2026-11-03T10:00:00.000000Z")) == 2
+        assert _status(c, coder) == "active" and _status(c, seller) == "active"
+        assert c.execute("SELECT count(*) FROM fin_actions WHERE kind='card_unfreeze' AND status='committed'"
+                         ).fetchone()[0] == 2
+        assert CARDS.lift_through_actions(load(c, "2026-11-03T10:30:00.000000Z")) == 0   # nothing left to lift
+
+
+def test_system_work_cannot_lift_a_person_freeze_through_the_action_path(books):
+    fake = FakeMercury()
+    _, coder, seller = _world(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "card_freeze", {"card_id": seller}).status == "committed"
+        spend(c, "6100", 50_000)
+        FA.drain_events(c, AT)
+        refused = act(c, SYSTEM, "card_unfreeze", {"card_id": seller}, key="system-lift-person")
+        assert (refused.status, refused.code) == ("failed", "conflict")
+        assert _status(c, seller) == "frozen" and _frozen_by(c, seller) == "person"
+        assert _frozen_by(c, coder) == "budget"
+
+
+def test_the_card_help_says_the_mercury_user_may_be_left_out_because_tico_finds_one(books):
+    """Mercury issues a card to one of its own users. A card names that user, or Tico finds it (the holder's email,
+    then the connection's card user): provider_user_id is optional, and the next tests show each way it is found."""
+    fields = {f["name"]: f["required"] for f in FA.help("card_create")["fields"]}
+    assert fields["provider_user_id"] is False
+
+
+def test_a_card_for_a_teammate_is_issued_to_the_mercury_user_with_the_same_email(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    fake.queue["create_card"] = [{**MERCURY["card_created"], "cardId": "card-ben", "lastFourDigits": "3333"}]
+    with books.transaction() as c:
+        made = act(c, OWNER, "card_create", {"holder": "human:ben", "budget_id": _budget(c), "amount": 20_000})
+        assert made.status == "committed", (made.code, made.reason)
+    sync_once(books, fake)
+    assert fake.sent("create_card") == [("user-ben", 20_000)]
+
+
+def test_a_card_with_no_named_or_found_mercury_user_takes_the_connections_card_user_or_is_refused(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    fake.queue["create_card"] = [{**MERCURY["card_created"], "cardId": "card-coder", "lastFourDigits": "1111"}]
+    with books.transaction() as c:
+        budget = _budget(c)
+        refused = act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": budget, "amount": 20_000})
+        assert (refused.status, refused.code) == ("failed", "invalid")
+        assert "Mercury user is needed" in refused.reason
+        assert c.execute("SELECT count(*) FROM fin_cards").fetchone()[0] == 0
+        connection = str(c.execute("SELECT id FROM fin_connections").fetchone()[0])
+        assert act(c, OWNER, "connection_settings", {"connection_id": connection,
+                                                     "card_user_id": "user-zed"}).code == "invalid"
+        assert act(c, OWNER, "connection_settings", {"connection_id": connection,
+                                                     "card_user_id": "user-eve"}).status == "committed"
+        made = act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": budget, "amount": 20_000})
+        assert made.status == "committed", (made.code, made.reason)
+    sync_once(books, fake)
+    assert fake.sent("create_card") == [("user-eve", 20_000)]
+
+
+def test_a_card_request_may_name_its_merchant_which_is_kept_on_the_card_and_not_sent_to_mercury(books):
+    """Spec §8.1: Mercury has no merchant locks, so a card's merchant is the request's intent. It is kept on the card
+    and the help lists it; it is not sent to Mercury, and the card's limit is what Mercury enforces."""
+    assert {f["name"] for f in FA.help("card_create")["fields"]} >= {"merchant"}
+    fake = FakeMercury()
+    connect(books, fake)
+    fake.queue["create_card"] = [{**MERCURY["card_created"], "cardId": "card-coder", "lastFourDigits": "1111"}]
+    with books.transaction() as c:
+        made = act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": _budget(c), "amount": 20_000,
+                                             "provider_user_id": "user-cara", "merchant": "Acme Cloud"})
+        assert made.status == "committed", (made.code, made.reason)
+        card_id = str(made.result["card_id"])
+    sync_once(books, fake)
+    assert fake.sent("create_card") == [("user-cara", 20_000)]
+    with books.read() as c:
+        assert c.execute("SELECT merchant FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0] == "Acme Cloud"
 
 
 def test_a_person_who_freezes_a_budget_frozen_card_keeps_it_frozen_when_the_budget_has_room(books):
@@ -405,8 +527,6 @@ def test_single_use_waits_for_a_provider_that_has_them_and_each_kind_fits_its_ho
         for holder, kind in (("bot:coder", "person"), ("human:eve", "standing"), ("bot:coder", "gift")):
             assert act(c, OWNER, "card_create", {"holder": holder, "budget_id": budget, "amount": 5_000, "kind": kind,
                                                  "provider_user_id": "u"}).code == "invalid", (holder, kind)
-        assert act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": budget, "amount": 5_000,
-                                             "merchant": "acme.example", "provider_user_id": "u"}).code == "invalid"
         dry = act(c, OWNER, "card_create", {"holder": "bot:coder", "budget_id": budget, "amount": 5_000,
                                             "kind": "standing", "provider_user_id": "u"}, dry_run=True)
         assert dry.rule == "rule:bot-card-standing"
@@ -562,7 +682,24 @@ def test_a_card_number_is_refused_however_its_digits_are_spaced_or_followed(book
     assert not V.has_card_number({"budget_id": "ab4222222222222cd", "card_id": "12345678-1234-1234-1234-123456789012"})
 
 
-DASHED_CARD_SHAPES = ("4242-4242-4242-4242-123", "4242 4242 4242 4242-123", "4242-4242-4242-4242-7",
+def test_a_cvc_typed_as_free_text_is_refused_and_never_stored(books):
+    """§8.3, §13: a CVC is never stored, logged or sent to a model, whatever sentence it is typed into."""
+    for typed in ("CVC 123", "cvc: 4567", "CVV2=123", "CVC123", "security code 987", "cvc is 123"):
+        assert V.has_card_number({"memo": typed}), typed
+    # CSC alone is not a card code: a memo can name a year or an invoice with it (only CVC, CVV and security code are).
+    for text in ("invoice 123 for cvc work", "CVC check passed on 3 runs", "security code 123456",
+                 "order 2026-10-31 ref 0001", "CSC 2026"):
+        assert not V.has_card_number({"memo": text}), text
+    with books.transaction() as c:
+        budgets = c.execute("SELECT count(*) FROM fin_budgets").fetchone()[0]
+        refused = act(c, OWNER, "budget_create", {"name": "CVC 123", "account_id": account(c, "6100"),
+                                                  "amount": 10_000, "at_limit": "decline"})
+        assert (refused.status, refused.code, refused.reason) == ("failed", "invalid", FA.CARD_NUMBER_REFUSED)
+        assert c.execute("SELECT count(*) FROM fin_budgets").fetchone()[0] == budgets
+        assert c.execute("SELECT count(*) FROM fin_actions WHERE payload_json LIKE '%CVC%'").fetchone()[0] == 0
+
+
+DASHED_CARD_SHAPES =("4242-4242-4242-4242-123", "4242 4242 4242 4242-123", "4242-4242-4242-4242-7",
                       "4242-4242-4242-4242-", "-4242424242424242", "4242424242424242-", "-4242-4242-4242-4242",
                       "123-4242-4242-4242-4242")
 

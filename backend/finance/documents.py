@@ -36,6 +36,7 @@ from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
 from .core.tax import SALES_TAX, taxable_default
 from .core.org import SYSTEM
 from .handlers import Plan, Result, may_write
+from .store import actions as SX
 from .store import ap as SAP
 from .store import banking as SK
 from .store import budgets as SB
@@ -978,6 +979,24 @@ def _bill_budget_gate(ctx: Ctx, bill: Any) -> K.Gate:
     return K.Gate("needs_approval", "finance_admin", f"budget:{bid}") if bid else K.ALLOW
 
 
+def bill_paid_gate(ctx: Ctx, who: str, bill: Any, words: str) -> K.Gate:
+    """The gate of marking a bill paid (bill_mark_paid, here and in the mirror): the action's default, or, when that
+    allows, the bill's expense budgets as payment_create asks for a bill's payment (bill_payment). A budget past its
+    amount sends it to a finance admin, so a bot's mark-paid waits for a person as its payment would."""
+    gate = K.default_gate(ctx.org, who, words)
+    return _bill_budget_gate(ctx, bill) if gate.outcome == "allow" else gate
+
+
+def bill_ask_waiting(ctx: Ctx, bill_id: str) -> bool:
+    """Whether a payment of this bill already waits for a person: a payment_create for it or a bill_mark_paid asked and
+    not decided. A second ask for the same bill is refused (its waiting one settles it), not put to a person twice."""
+    for row in SX.waiting(ctx.c, ("payment_create", "bill_mark_paid")):
+        body = SK.loads(str(row["payload_json"] or "{}"))
+        if str(body.get("obligation") or "") == f"bill:{bill_id}" or str(body.get("bill_id") or "").strip() == bill_id:
+            return True
+    return False
+
+
 def payment_ended(ctx: Ctx, pay: Any) -> None:
     """A bill's payment failed, was returned or cancelled: what it settled is owed again and the bill is open."""
     obligation = str(pay["obligation"] or "")
@@ -1438,6 +1457,9 @@ def _pay(kind: str) -> Any:
             raise denied(waits)
         if kind == "bill" and SK.live_payment(ctx.c, f"bill:{doc['id']}") is not None:
             raise FinanceError(CONFLICT, "a payment for this bill is live; it settles the bill when it clears")
+        if kind == "bill" and not ctx.deciding and bill_ask_waiting(ctx, str(doc["id"])):
+            raise FinanceError(CONFLICT, "a payment for this bill is waiting for approval; it settles the bill when "
+                                         "approved")
         left = _left(kind, doc)
         given = V.opt_amount(p)
         amount = left if given is None else given     # 0 is refused below, never read as the balance left
@@ -1518,7 +1540,8 @@ def _pay(kind: str) -> Any:
             return {f"{kind}_id": str(doc["id"]), "settlement_id": sid, "entry_id": entry, "from": src,
                     "feed_id": str(row["id"]) if row is not None else None,
                     "status": str(fresh["status"]), "remaining": _left(kind, fresh)}
-        return Plan(K.default_gate(ctx.org, who, words),
+        gate = bill_paid_gate(ctx, who, doc, words) if kind == "bill" else K.default_gate(ctx.org, who, words)
+        return Plan(gate,
                     f"Record {_money(amount)} {'paid on' if kind == 'bill' else 'received on'} {kind} "
                     f"{doc['number'] or doc['id']}", apply,
                     facts={"amount": amount, "counterparty": str(doc["contact_name"] or "")})

@@ -75,7 +75,8 @@ def probe(provider: Provider) -> tuple[dict[str, object], str]:
                      "available": _cents(a.get("availableBalance"))})
     found: dict[str, object] = {"accounts": rows, "credit": [
         {"id": str(a.get("id")), "status": str(a.get("status") or "active"), "current": _cents(a.get("currentBalance")),
-         "available": _cents(a.get("availableBalance"))} for a in listed(credit, "accounts")] if credit.ok else []}
+         "available": _cents(a.get("availableBalance")), "kind": str(a.get("kind") or "")}
+        for a in listed(credit, "accounts")] if credit.ok else []}
     if users.ok:
         found["users"] = user_rows(users)
     return found, ""
@@ -204,8 +205,9 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
         _failed(store, cid, "the Mercury token is missing; store it again in Settings", now)
         return "no_token"
     problems: list[str] = []
-    if due:
+    if due or inbox:       # balances come from webhooks (§9): an event waiting reads them now; the poll stays 15 minutes
         problems += balances(store, provider, cid, now)
+    if due:
         provider_users(store, provider, cid, now)
         problems += uncertain_cards(store, provider, cid, now)
         problems += backfill(store, provider, cid, now)

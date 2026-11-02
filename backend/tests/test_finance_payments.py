@@ -15,6 +15,7 @@ from backend import rules as TR
 from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance import context as FC
+from backend.finance.store import ledger as SL
 from backend.finance.store import tico as FT
 from backend.finance.actions import FinanceError
 from backend.finance.mercury import Answer
@@ -159,8 +160,41 @@ def _holds(c, source="payment"):
     return [tuple(r) for r in c.execute("SELECT amount, status FROM fin_holds WHERE source=?", (source,))]
 
 
+def _hold_of(c, payment_id):
+    """The payment's own hold (holds list in no fixed order: fin_holds_source sorts by the payment id)."""
+    return tuple(c.execute("SELECT amount, status FROM fin_holds WHERE source='payment' AND source_id=?",
+                           (payment_id,)).fetchone())
+
+
 def _asks(c, title):
     return c.execute("SELECT count(*) FROM tasks WHERE title LIKE ?", (f"{title}%",)).fetchone()[0]
+
+
+def test_the_payment_help_marks_the_payee_and_the_line_required_as_the_code_does(books):
+    """Outside an internal move, a payment names its payee and the line it posts to; the help says so too."""
+    fields = {f["name"]: f["required"] for f in FA.help("payment_create")["fields"]}
+    assert fields["recipient_id"] is True and fields["account_id"] is True
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        refused = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 10_000,
+                                                   "money_account_id": _checking(c)})
+        assert (refused.status, refused.code) == ("failed", "invalid")
+        assert "account_id is required" in refused.reason
+
+
+def test_a_payee_built_from_the_recipient_help_is_accepted(books):
+    """Bots build a payee from the help: its field names are the ones the code reads (bank numbers at the top level)."""
+    fields = {f["name"]: f["required"] for f in FA.help("recipient_add")["fields"]}
+    assert "details" not in fields and fields["account_number"] is False and fields["routing_number"] is False
+    sample = {"name": "Acme Supplies", "method": "ach", "account_number": "000099998888", "routing_number": "000000000"}
+    payload = {name: sample[name] for name in fields if name in sample}
+    assert all(name in payload for name, required in fields.items() if required), fields
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        made = act(c, OWNER, "recipient_add", payload)
+        assert made.status == "committed", made
 
 
 def test_an_unknown_payment_is_never_sent_again_and_is_found_by_memo_recipient_and_amount(books):
@@ -215,8 +249,234 @@ def test_an_unknown_payment_is_never_sent_again_and_is_found_by_memo_recipient_a
         assert act(c, "human:ben", "payment_cancel", {"payment_id": again.result["payment_id"]}).status != "committed"
         done = act(c, OWNER, "payment_cancel", {"payment_id": again.result["payment_id"]})
         assert done.status == "committed", done                                  # a finance admin, once asked
-        assert _holds(c)[-1] == (50_000, "released")
+        assert _hold_of(c, again.result["payment_id"]) == (50_000, "held")      # ...and Mercury's lookup decides
+    sync_once(books, fake, HOURS[10])
+    with books.transaction() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?",
+                         (again.result["payment_id"],)).fetchone()[0] == "cancelled"
+        assert _hold_of(c, again.result["payment_id"]) == (50_000, "released")
     assert len(fake.sent("request_send_money")) == 2
+
+
+def test_a_queued_payment_is_cancelled_here_and_one_in_mercury_ends_cancelled_when_rejected_there(books):
+    """Item 2 (spec §9): payment_cancel works while a payment is queued, and ends it at once with its hold released. Once
+    it is in Mercury's approval queue there is no cancel API: the cancel is refused, and a rejection in Mercury ends it
+    cancelled on the poll, releasing its hold."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+
+    def body(c, obligation):
+        return {"recipient_id": rid, "amount": 20_000, "obligation": obligation, "tags": {"team": "eng"},
+                "account_id": account(c, "6100"), "money_account_id": _checking(c)}
+    with books.transaction() as c:
+        queued = act(c, OWNER, "payment_create", body(c, "bill-20"))
+        assert queued.status == "committed" and queued.result["status"] == "queued", queued
+        assert act(c, OWNER, "payment_cancel", {"payment_id": queued.result["payment_id"]}).status == "committed"
+        assert _hold_of(c, queued.result["payment_id"]) == (20_000, "released")
+    with books.transaction() as c:
+        sent = act(c, OWNER, "payment_create", body(c, "bill-21"))
+        assert sent.status == "committed", sent
+        pid = str(sent.result["payment_id"])
+    sync_once(books, fake, HOURS[1])
+    with books.transaction() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == \
+            "awaiting_bank_approval"
+        refused = act(c, OWNER, "payment_cancel", {"payment_id": pid})
+        assert refused.code == "conflict" and "reject it in Mercury" in refused.reason, refused
+        assert _hold_of(c, pid) == (20_000, "held")
+    fake.requests[next(iter(fake.requests))]["status"] = "rejected"              # rejected in Mercury's queue
+    sync_once(books, fake, HOURS[2])
+    with books.transaction() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert _hold_of(c, pid) == (20_000, "released")
+
+
+def _replace_payee(c, rid):
+    """The payee's bank details change: a new recipient version replaces the old one (recipient_add with `replaces`)."""
+    made = act(c, OWNER, "recipient_add", {"replaces": rid, "name": "Acme Supplies", "method": "ach",
+                                           "account_number": "000011112222", "routing_number": "000000000"})
+    assert made.status == "committed", made
+    return str(made.result["recipient_id"])
+
+
+def test_a_queued_payment_whose_recipient_changes_is_asked_again_not_cancelled_quietly(books):
+    """Item 3 (spec §5, §6.4 rule 1): a payment approved and queued whose recipient's details change before the send is
+    not cancelled quietly. It ends cancelled (its hold released), and the same action is asked again for the new details
+    of a finance admin who did not make the payment (the owner paid, so ben decides). Nothing reaches Mercury meanwhile.
+    The approved new version is what the payment is then for."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        queued = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 50_000, "obligation": "bill-40",
+                                                  "tags": {"team": "eng"}, "account_id": account(c, "6100"),
+                                                  "money_account_id": _checking(c)})
+        assert queued.status == "committed" and queued.result["status"] == "queued", queued
+        pid = str(queued.result["payment_id"])
+        # after it is queued (the owner paid): ben, not the owner, decides the re-ask
+        SL.set_setting(c, FC.APPROVER_KEY, "human:ben", by=OWNER, at=AT)
+        _replace_payee(c, rid)
+    sync_once(books, fake, HOURS[1])
+    assert fake.sent("request_send_money") == []                                 # never sent at the old details
+    with books.transaction() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert _hold_of(c, pid) == (50_000, "released")
+        waiting = c.execute("SELECT approval_id FROM fin_actions WHERE status='needs_approval' AND "
+                            "kind='payment_create'").fetchall()
+        assert len(waiting) == 1 and waiting[0][0], "asked again for the new details, not left cancelled"
+        approval = str(waiting[0][0])
+        H.approval_decide(c, "human:ben", approval, "approved")
+        decided = FA.approval_decided(c, approval, AT)
+        assert decided.status == "committed", decided
+        new_pid = str(decided.result["payment_id"])
+        new_rid = c.execute("SELECT recipient_id FROM fin_payments WHERE id=?", (new_pid,)).fetchone()[0]
+        assert new_rid != rid and _hold_of(c, new_pid) == (50_000, "held")
+
+
+def test_a_finance_admin_whose_payment_changes_is_not_asked_to_approve_their_own_request(books):
+    """Spec §6.3: an approver is never the requester. The owner, who is the finance admin, paid a vendor and then the
+    vendor's details changed. The new details go to a finance admin, and the only one is the owner who asked, so nobody
+    else decides: the ask fails, as a re-ask nobody else can decide does. Nothing reaches Mercury, the payment is
+    cancelled with its hold released, and no approval waits for the owner."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        queued = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 50_000, "obligation": "bill-40",
+                                                  "tags": {"team": "eng"}, "account_id": account(c, "6100"),
+                                                  "money_account_id": _checking(c)})
+        assert queued.status == "committed" and queued.result["status"] == "queued", queued
+        pid = str(queued.result["payment_id"])
+        _replace_payee(c, rid)
+    sync_once(books, fake, HOURS[1])
+    assert fake.sent("request_send_money") == []
+    with books.transaction() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert _hold_of(c, pid) == (50_000, "released")
+        assert c.execute("SELECT count(*) FROM fin_actions WHERE status='needs_approval'").fetchone()[0] == 0
+        reasons = [r[0] for r in c.execute("SELECT reason FROM fin_actions WHERE kind='payment_create' AND "
+                                           "status='failed'").fetchall()]
+        assert reasons == ["nobody else decides this now; ask again"]
+
+
+def test_a_pending_approval_is_void_once_its_recipient_details_change(books):
+    """Item 4 (spec §5): an approval's payload hash includes the recipient-details version. Changed details between the
+    ask and the decision void it: the payment is asked again for the new details, and is not paid on the old approval."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
+        _rule(c, OWNER, "Payments ask", {"kind": "payment_create"}, {"outcome": "needs_approval", "who": "owner"},
+              [{"input": {"kind": "payment_create"}, "expect": "needs_approval"}])
+        asked = act(c, "human:ben", "payment_create", {"recipient_id": rid, "amount": 20_000, "obligation": "bill-41",
+                                                 "tags": {"team": "eng"}, "account_id": account(c, "6100"),
+                                                 "money_account_id": _checking(c)})
+        assert asked.status == "needs_approval" and asked.approval_id, asked
+        first = str(asked.approval_id)
+        _replace_payee(c, rid)
+        H.approval_decide(c, OWNER, first, "approved")
+        again = FA.approval_decided(c, first, AT)
+        assert again.status == "needs_approval" and again.approval_id and again.approval_id != first, again
+        assert c.execute("SELECT count(*) FROM fin_payments").fetchone()[0] == 0
+
+
+def test_an_approval_that_fails_verification_for_another_reason_is_asked_again_not_denied(books, monkeypatch):
+    """Item 5 (spec §5): any mismatch voids an approval and asks again. Only a declined approval closes denied. A
+    mismatch that is not about the payload (here: decided by someone other than the person it was sent to) asks again
+    of the person who decides it now, and the payment is not made on the approval that did not verify."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
+        _rule(c, OWNER, "Payments ask", {"kind": "payment_create"}, {"outcome": "needs_approval", "who": "owner"},
+              [{"input": {"kind": "payment_create"}, "expect": "needs_approval"}])
+        asked = act(c, "human:ben", "payment_create", {"recipient_id": rid, "amount": 20_000, "obligation": "bill-50",
+                                                       "tags": {"team": "eng"}, "account_id": account(c, "6100"),
+                                                       "money_account_id": _checking(c)})
+        assert asked.status == "needs_approval" and asked.approval_id, asked
+        first = str(asked.approval_id)
+        H.approval_decide(c, OWNER, first, "approved")
+        monkeypatch.setattr(FA, "verify", lambda row, appr: "it was decided by someone other than the person it was sent to")
+        again = FA.approval_decided(c, first, AT)
+        assert again.status == "needs_approval" and again.approval_id and again.approval_id != first, again
+        assert c.execute("SELECT count(*) FROM fin_payments").fetchone()[0] == 0
+
+
+def _unknown_and_flagged(books, fake, obligation):
+    """A payment whose send got no answer, looked for by its key for an hour: flagged for a finance admin."""
+    rid = _payee(books, fake)
+    body = {"recipient_id": rid, "amount": 50_000, "obligation": obligation, "tags": {"team": "eng"}}
+    with books.transaction() as c:
+        body["account_id"], body["money_account_id"] = account(c, "6100"), _checking(c)
+        made = act(c, OWNER, "payment_create", body)
+        assert made.status == "committed", made
+        pid = str(made.result["payment_id"])
+    fake.queue["request_send_money"] = [Answer(None, {})]
+    sync_once(books, fake, HOURS[1])
+    sync_once(books, fake, HOURS[2])
+    with books.read() as c:
+        key, flagged = c.execute("SELECT idempotency_key, flagged_at FROM fin_payments WHERE id=?", (pid,)).fetchone()
+    assert flagged, "the admin is asked once the key is not found for 30 minutes"
+    return pid, key
+
+
+def test_an_admin_cancel_of_an_unknown_payment_is_not_a_cancel_until_a_fresh_key_lookup_finds_nothing(books):
+    """Item 1 (spec §9): an unknown payment is resolved by polling by its idempotency key, never retried under a fresh
+    key. A finance admin's cancel of a flagged one asks the worker to look Mercury up by the key now; by itself it does
+    not cancel. A request carrying the key that turns up instead keeps the payment going, and it is not sent again."""
+    fake = FakeMercury()
+    connect(books, fake)
+    pid, key = _unknown_and_flagged(books, fake, "bill-8")
+    lookups = len(fake.sent("send_requests"))
+    with books.transaction() as c:
+        asked = act(c, OWNER, "payment_cancel", {"payment_id": pid})
+        assert asked.status == "committed", asked
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "unknown"
+        assert _holds(c) == [(50_000, "held")]
+    assert len(fake.sent("send_requests")) == lookups                            # no lookup happened in the click
+    fake.land({"recipientId": "rcp-1", "amount": 500.0, "note": f"tico:{key}", "externalMemo": f"tico:{key} Acme"},
+              "req-late")
+    sync_once(books, fake, HOURS[3])                                             # the lookup finds it after all
+    with books.read() as c:
+        assert c.execute("SELECT status, provider_request_id FROM fin_payments WHERE id=?",
+                         (pid,)).fetchone()[:] == ("awaiting_bank_approval", "req-late")
+    assert len(fake.sent("request_send_money")) == 1                             # never sent again under a fresh key
+
+
+def test_an_admin_cancel_of_an_unknown_payment_ends_it_when_the_fresh_lookup_finds_no_request_with_its_key(books):
+    """Item 1: the cancel goes through once a complete lookup by the key, made after the cancel, finds nothing."""
+    fake = FakeMercury()
+    connect(books, fake)
+    pid, _ = _unknown_and_flagged(books, fake, "bill-9")
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_cancel", {"payment_id": pid}).status == "committed"
+    sync_once(books, fake, HOURS[3])
+    with books.transaction() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert _holds(c) == [(50_000, "released")]
+    assert len(fake.sent("request_send_money")) == 1
+
+
+def test_a_cancel_asked_at_the_same_instant_as_a_lookup_waits_for_the_next_sweep(books):
+    """Item 4 (spec §9): a cancel asked at the same instant as a sweep may have come after that sweep's lookup by key
+    began, so the lookup finding nothing does not end the payment then. The next sweep, whose complete lookup comes
+    after the ask, ends it, with its hold released."""
+    fake = FakeMercury()
+    connect(books, fake)
+    pid, _ = _unknown_and_flagged(books, fake, "bill-11")
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_cancel", {"payment_id": pid}, at=HOURS[3]).status == "committed"
+    sync_once(books, fake, HOURS[3])
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "unknown"
+        assert _holds(c) == [(50_000, "held")]
+    sync_once(books, fake, HOURS[4])
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert _holds(c) == [(50_000, "released")]
 
 
 def test_a_409_with_the_request_is_accepted_and_a_cut_off_send_is_unknown(books):
@@ -570,6 +830,119 @@ def test_a_denied_or_declined_payee_leaves_no_bank_numbers_and_no_vault_row(api)
     assert fake.sent("create_recipient") == []
 
 
+def _over_budget(c, at_limit):
+    """A 50.00 Software budget on 6100 that a 150.00 payment goes past; the new-recipient rule is off, so only the
+    budget is judged."""
+    assert act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"}).status == "committed"
+    budget = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 5_000,
+                                             "at_limit": at_limit})
+    assert budget.status == "committed", budget
+    return str(budget.result["budget_id"])
+
+
+@pytest.mark.parametrize("at_limit", ["ask", "hold_payment"])
+def test_a_payment_past_an_ask_or_hold_payment_limit_asks_and_its_approval_pays_past_it(books, at_limit):
+    """An ask or hold_payment limit never refuses a payment: a finance admin is asked under the budget's rule (a dry run
+    says so and writes nothing), and the approval holds the payment past the limit and sends it once (the send does not
+    hold it again for the budget it was approved past)."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        bid = _over_budget(c, at_limit)
+        assert act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"}).status == "committed"
+        body = {"recipient_id": rid, "account_id": account(c, "6100"), "tags": {"team": "eng"},
+                "money_account_id": _checking(c), "amount": 15_000}
+        dry = act(c, "human:ben", "payment_create", body, dry_run=True)
+        assert (dry.status, dry.rule, dry.approver) == ("needs_approval", f"budget:{bid}", OWNER), dry
+        asked = act(c, "human:ben", "payment_create", body)
+        assert (asked.status, asked.rule) == ("needs_approval", f"budget:{bid}") and asked.approval_id, asked
+        assert c.execute("SELECT count(*) FROM fin_payments").fetchone()[0] == 0
+        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done.status == "committed", done
+        assert _hold_of(c, done.result["payment_id"]) == (15_000, "held")
+    sync_once(books, fake, HOURS[1])
+    assert [b["amount"] for b in fake.sent("request_send_money")] == [150]
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments").fetchone()[0].startswith("awaiting_bank_approval")
+
+
+def test_a_payment_past_a_decline_limit_is_refused_by_a_dry_run_and_never_asked(books):
+    """A decline limit refuses a payment past it outright, before anyone is asked (a dry run shows the refusal too)."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        _over_budget(c, "decline")
+        assert act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"}).status == "committed"
+        body = {"recipient_id": rid, "account_id": account(c, "6100"), "tags": {"team": "eng"},
+                "money_account_id": _checking(c), "amount": 15_000}
+        dry = act(c, "human:ben", "payment_create", body, dry_run=True)
+        assert (dry.status, dry.reason) == ("denied", "it does not fit: over the Software budget"), dry
+        refused = act(c, "human:ben", "payment_create", body)
+        assert (refused.status, refused.reason) == ("denied", "it does not fit: over the Software budget"), refused
+        assert c.execute("SELECT count(*) FROM fin_actions WHERE status='needs_approval'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM fin_payments").fetchone()[0] == 0
+        assert _holds(c) == []
+
+
+def test_a_payment_past_an_ask_limit_that_is_denied_is_never_placed_or_sent(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        _over_budget(c, "ask")
+        assert act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"}).status == "committed"
+        body = {"recipient_id": rid, "account_id": account(c, "6100"), "tags": {"team": "eng"},
+                "money_account_id": _checking(c), "amount": 15_000}
+        asked = act(c, "human:ben", "payment_create", body)
+        assert asked.status == "needs_approval", asked
+        H.approval_decide(c, OWNER, asked.approval_id, "declined")
+        assert FA.approval_decided(c, asked.approval_id, AT).status == "denied"
+        assert c.execute("SELECT count(*) FROM fin_payments").fetchone()[0] == 0
+        assert _holds(c) == []
+    sync_once(books, fake, HOURS[1])
+    assert fake.sent("request_send_money") == []
+
+
+def test_a_bot_payment_past_an_ask_limit_asks_a_finance_admin_and_pays_once_approved(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        bid = _over_budget(c, "ask")
+        FA.grant_defaults(c, "bot:seller", at=AT)
+        act(c, OWNER, "view_grant", {"subject": "bot:seller", "what": "everything"})
+        body = {"recipient_id": rid, "account_id": account(c, "6100"), "money_account_id": _checking(c),
+                "amount": 15_000}
+        dry = act(c, "bot:seller", "payment_create", body, dry_run=True)
+        assert (dry.status, dry.rule, dry.approver) == ("needs_approval", f"budget:{bid}", OWNER), dry
+        asked = act(c, "bot:seller", "payment_create", body)
+        assert (asked.status, asked.rule) == ("needs_approval", f"budget:{bid}"), asked
+        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done.status == "committed", done
+        assert _hold_of(c, done.result["payment_id"]) == (15_000, "held")
+
+
+def test_the_owner_pays_past_an_ask_limit_without_an_approval_and_it_is_sent_once(books):
+    """The owner decides their own payment: a payment past an ask limit commits at once (past the limit) and the send
+    does not hold it for that budget."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        _over_budget(c, "ask")
+        body = {"recipient_id": rid, "account_id": account(c, "6100"), "money_account_id": _checking(c),
+                "amount": 15_000}
+        paid = act(c, OWNER, "payment_create", body)
+        assert paid.status == "committed", paid
+        assert _hold_of(c, paid.result["payment_id"]) == (15_000, "held")
+    sync_once(books, fake, HOURS[1])
+    assert [b["amount"] for b in fake.sent("request_send_money")] == [150]
+
+
 def test_a_limit_added_after_payments_were_queued_is_reserved_at_send_once(books):
     """N6: queued payments a new monthly limit now covers reserve its counter with their send claim, owned by each
     payment: the first fits and counts once (a retried send doesn't count it again); the next is over and cancelled."""
@@ -889,12 +1262,13 @@ def test_payee_and_payment_actions_work_on_an_app_with_timers_off(stale_vault, a
     assert paid["status"] == "committed", paid
 
 
-def test_direct_send_is_for_a_paid_recipient_once_the_owner_turns_it_on_and_skips_the_approval_queue(books):
+def test_direct_send_to_a_paid_recipient_under_a_rule_skips_the_approval_queue(books):
     fake = FakeMercury()
     connect(books, fake)
     rid = _payee(books, fake)
     with books.transaction() as c:
         assert act(c, OWNER, "payment_settings", {"direct_send": True}).status == "committed"
+        _allow_direct(c)
         made = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 50_000, "account_id": account(c, "6100"),
                                                 "tags": {"team": "eng"}, "money_account_id": _checking(c)})
         assert made.status == "committed"
@@ -925,11 +1299,14 @@ def test_direct_send_is_for_a_paid_recipient_once_the_owner_turns_it_on_and_skip
         assert c.execute("SELECT status FROM fin_payments WHERE id=?", (dpid,)).fetchone()[0] == "settled"
 
 
-def _paid_acme(books, fake):
-    """Direct send on, and one payment to Acme Supplies paid through Mercury: the payee is known and paid."""
+def _paid_acme(books, fake, allow=True):
+    """Direct send on, and one payment to Acme Supplies paid through Mercury: the payee is known and paid. `allow` adds
+    the finance rule that lets direct sends through (§9), up to 500.00."""
     rid = _payee(books, fake)
     with books.transaction() as c:
         assert act(c, OWNER, "payment_settings", {"direct_send": True}).status == "committed"
+        if allow:
+            _allow_direct(c)
         made = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 50_000, "account_id": account(c, "6100"),
                                                 "tags": {"team": "eng"}, "money_account_id": _checking(c)})
         assert made.status == "committed", made
@@ -943,12 +1320,72 @@ def _paid_acme(books, fake):
     return rid
 
 
+def _allow_direct(c, limit=50_000):
+    """A finance rule that allows direct sends up to `limit` minor units (§9): the rule a direct send needs."""
+    made = _rule(c, OWNER, f"Direct sends up to {limit / 100:,.0f}",
+                 {"kind": "payment_create", "mode": "direct", "amount": {"lte": limit}}, {"outcome": "allow"},
+                 [{"input": {"kind": "payment_create", "mode": "direct", "amount": limit}, "expect": "allow"}])
+    assert made.status == "committed", made
+    return str(made.result["rule_id"])
+
+
 def _direct(books, rid, amount=10_000):
     with books.transaction() as c:
         made = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": amount, "account_id": account(c, "6100"),
                                                 "mode": "direct", "money_account_id": _checking(c)}, at=HOURS[7])
         assert made.status == "committed", made
         return str(made.result["payment_id"])
+
+
+def test_a_direct_send_is_refused_without_a_finance_rule_that_allows_it(books):
+    """§9: the owner's switch and a known payee are not enough. With no rule that allows a direct send, the payment is
+    refused and nothing is recorded as direct."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _paid_acme(books, fake, allow=False)
+    with books.transaction() as c:
+        refused = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 10_000,
+                                                   "account_id": account(c, "6100"), "mode": "direct",
+                                                   "money_account_id": _checking(c)}, at=HOURS[7])
+        assert refused.code == "denied" and "finance rule" in refused.reason, (refused.code, refused.reason)
+        assert c.execute("SELECT count(*) FROM fin_payments WHERE mode='direct'").fetchone()[0] == 0
+    sync_once(books, fake, HOURS[8])
+    assert fake.sent("create_transaction") == []
+
+
+def test_a_direct_send_over_the_amount_its_rule_allows_is_refused(books):
+    """§9: a rule allows direct sends only up to its amount limit. Over it is refused; at the limit it goes."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _paid_acme(books, fake, allow=False)
+    with books.transaction() as c:
+        _allow_direct(c, 50_000)
+        over = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 50_001, "account_id": account(c, "6100"),
+                                                "mode": "direct", "money_account_id": _checking(c)}, at=HOURS[7])
+        assert over.code == "denied" and "finance rule" in over.reason, (over.code, over.reason)
+        assert c.execute("SELECT count(*) FROM fin_payments WHERE mode='direct'").fetchone()[0] == 0
+    _direct(books, rid, amount=50_000)
+    with books.read() as c:
+        assert c.execute("SELECT count(*) FROM fin_payments WHERE mode='direct'").fetchone()[0] == 1
+
+
+def test_a_queued_direct_send_whose_rule_is_removed_is_held_and_never_sent_direct(books):
+    """§9: the rule that allowed a queued direct send is removed before it goes. It is held, not sent as a direct
+    transaction and not moved to the approval queue quietly; the finance admin is told."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _paid_acme(books, fake, allow=False)
+    with books.transaction() as c:
+        rule = _allow_direct(c)
+    dpid = _direct(books, rid)
+    with books.transaction() as c:
+        assert act(c, OWNER, "rule_disable", {"rule_id": rule}).status == "committed"
+    sync_once(books, fake, HOURS[8])
+    assert fake.sent("create_transaction") == []
+    assert len(fake.sent("request_send_money")) == 1       # only the approval-queue payment paid before
+    with books.read() as c:
+        assert tuple(c.execute("SELECT mode, status FROM fin_payments WHERE id=?", (dpid,)).fetchone()) == (
+            "direct", "queued")
 
 
 def test_turning_direct_send_off_before_a_queued_direct_payment_goes_sends_it_by_the_approval_queue(books):

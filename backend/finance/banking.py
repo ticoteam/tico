@@ -142,6 +142,11 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             if (kept := _reuse(ctx, cid, a)) is not None:
                 mapped.append(kept)
                 continue
+            if str(a.get("kind") or "").lower() == "debit":
+                # A debit card program spends cash it holds: an asset with its own account, no card liability (§8.1).
+                gl = new_account(ctx, BANK, f"{a.get('name') or 'Mercury'} debit card", "asset", "bank", who)
+                mapped.append(_money(ctx, cid, a, "card_program", "debit", gl, who))
+                continue
             cards = by_code(ctx, CARDS)
             gl = cards if cards is not None and not any(
                 str(r["account_id"]) == cards.id for r in SK.money_accounts(ctx.c, ctx.book.id)) else None
@@ -173,7 +178,8 @@ def _money(ctx: Ctx, cid: str, a: Mapping[str, object], kind: str, subtype: str,
     mid = SK.insert(ctx.c, "fin_money_accounts", {
         "book_id": ctx.book.id, "kind": kind, "subtype": subtype, "name": str(a.get("name") or "Mercury")[:120],
         "provider": "mercury", "connection_id": cid, "account_id": gl.id, "provider_account_id": str(a.get("id")),
-        "last4": str(a.get("last4") or "")[-4:] or None, "holds_cash": 0 if kind == "card_program" else 1,
+        "last4": str(a.get("last4") or "")[-4:] or None,
+        "holds_cash": 0 if kind == "card_program" and subtype == "credit" else 1,  # a credit program holds no cash
         "balance": current if isinstance(current, int) else None,
         "available_balance": available if isinstance(available, int) else None,
         "balance_currency": ctx.book.base_currency, "balance_as_of": ctx.at if isinstance(current, int) else None,
@@ -985,5 +991,27 @@ def connection_map(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 (f" ({posted} posted row(s) stay on {old.code} {old.name})" if posted and old else ""), apply)
 
 
-__all__ = ["connection_create", "connection_sync", "connection_disconnect", "connection_map", "ingest", "categorize_feed", "reconcile", "reconcile_undo", "set_balance", "event",
+def connection_settings(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """Set the Mercury user a card is issued to when the card names none (`card_user_id`): one of the connection's own
+    users, or empty to clear it. A card never falls back to a guessed user (cards.py `_mercury_user`)."""
+    V.only(p, ("connection_id", "card_user_id"))
+    row = _connection(ctx, who, p)
+    if str(row["status"]) == "disconnected":
+        raise FinanceError(CONFLICT, "that connection is disconnected")
+    user = V.opt_text(p, "card_user_id", 120) or ""
+    if user and user not in {str(u["provider_user_id"]) for u in SK.provider_users_on(ctx.c, str(row["id"]))}:
+        raise invalid("that is not a Mercury user on this connection")
+
+    def apply(aid: str) -> Result:
+        settings = {k: v for k, v in SK.loads(row["settings_json"]).items() if k != "card_user_id"}
+        if user:
+            settings["card_user_id"] = user
+        SK.update(ctx.c, "fin_connections", str(row["id"]), {"settings_json": SK.dump(settings), "updated_at": ctx.at})
+        return {"connection_id": str(row["id"]), "card_user_id": user or None}
+    return Plan(K.ALLOW, f"Issue cards on {row['name']} to {user}" if user else
+                f"Clear the card user on {row['name']}", apply)
+
+
+__all__ = ["connection_create", "connection_sync", "connection_disconnect", "connection_map", "connection_settings",
+           "ingest", "categorize_feed", "reconcile", "reconcile_undo", "set_balance", "event",
            "card_line", "undo", "reversal_locked", "new_account", "MATCH_DAYS", "card_used"]

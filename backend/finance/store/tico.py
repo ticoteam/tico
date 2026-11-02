@@ -47,6 +47,25 @@ def owner_person(c: sqlite3.Connection, fallback: str = "") -> str:
     return fallback
 
 
+def person_email(c: sqlite3.Connection, actor: str) -> str:
+    """A teammate's email in lower case: their humans row, else their line on the people roster. A bot has none."""
+    from ... import people
+    P: Any = people
+    if not actor.startswith("human:"):
+        return ""
+    ident = actor.partition(":")[2]
+    row = c.execute("SELECT email FROM humans WHERE id=?", (ident,)).fetchone()
+    email = str(row[0] or "").strip() if row else ""
+    if not email:
+        doc = _metadata(c, "people")
+        roster = cast(dict[str, Any], P.load(doc if isinstance(doc, dict) else {"people": []}))
+        for person in cast(list[dict[str, Any]], roster.get("people") or []):
+            if str(person.get("id") or "") == ident:
+                email = str(person.get("email") or "").strip()
+                break
+    return email.lower()
+
+
 def _actor(value: str, bots: set[str]) -> str:
     """A reports-to or lead reference as an actor: `bot:x`/`human:x` kept, `person:x` is a human, a bare slug of a
     bot is that bot, anything else a person id."""

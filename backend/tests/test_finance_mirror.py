@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from collections.abc import Mapping
 from typing import Any
 
+from backend.finance import actions as FA
 from backend.finance import books_sync, mirror
 from backend.finance import reads as FR
 from backend.finance.context import load
@@ -279,6 +280,31 @@ def test_a_mode_switch_keeps_an_unclear_row_from_paying_a_provider_bill(books):
             tagged = act(c, OWNER, "categorize", {"feed_id": row, "account_id": account(c, "6100")}, dry_run=dry)
             assert (tagged.status, tagged.code) == ("failed", CONFLICT), tagged
         assert c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0] == queued
+
+
+def test_a_bot_marking_a_provider_bill_paid_past_a_budget_waits_for_a_person_as_its_payment_does(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    fake.records["documents"] = [_bill(12, 1, 5_000)]
+    cid = _connection(books)
+    with books.transaction() as c:
+        assert act(c, OWNER, "mirror_start", {"connection_id": cid}).status == "committed"
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        budget = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"),
+                                                 "amount": 1_000, "at_limit": "ask"})
+        assert budget.status == "committed", budget
+        FA.grant_defaults(c, "bot:seller", at=AT)
+        act(c, OWNER, "view_grant", {"subject": "bot:seller", "what": "everything"})
+        provider_bill = _local(c, "Bill:12", "fin_bills")
+        payload = {"bill_id": provider_bill, "account_id": account(c, "1000")}
+        want = ("needs_approval", f"budget:{budget.result['budget_id']}")
+        dry = act(c, "bot:seller", "bill_mark_paid", payload, dry_run=True)
+        assert (dry.status, dry.rule) == want, dry
+        asked = act(c, "bot:seller", "bill_mark_paid", payload)
+        assert (asked.status, asked.rule) == want, asked
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op LIKE 'payment.%'").fetchone()[0] == 0
 
 
 def _bank_row(c: sqlite3.Connection, amount: int, day: str) -> tuple[str, str]:

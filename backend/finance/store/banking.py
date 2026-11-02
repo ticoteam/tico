@@ -112,6 +112,12 @@ def set_provider_users(c: sqlite3.Connection, connection_id: str, users: Sequenc
                                                       str(u.get("email") or ""), str(u.get("role") or ""), at))
 
 
+def provider_users_on(c: sqlite3.Connection, connection_id: str) -> list[Any]:
+    """The users of one connection, as its provider last listed them (set_provider_users)."""
+    return c.execute("SELECT * FROM fin_provider_users WHERE connection_id=? AND provider_user_id<>'' "
+                     "ORDER BY provider_user_id", (connection_id,)).fetchall()
+
+
 def provider_users(c: sqlite3.Connection) -> list[Any]:
     """Users of every connected (not disconnected) provider account, by name."""
     return c.execute("SELECT u.* FROM fin_provider_users u JOIN fin_connections k ON k.id=u.connection_id "
@@ -450,6 +456,12 @@ def cards_unsynced(c: sqlite3.Connection, most: int) -> list[Any]:
 # ------------------------------------------------------------------------------------------------ recipients, payments
 def recipient_current(c: sqlite3.Connection, recipient_id: str) -> Any:
     return c.execute("SELECT * FROM fin_recipients WHERE id=?", (recipient_id,)).fetchone()
+
+
+def recipient_replacing(c: sqlite3.Connection, recipient_id: str) -> Any:
+    """The newest version that replaced this recipient's (its details changed), if any."""
+    return c.execute("SELECT * FROM fin_recipients WHERE replaces_id=? ORDER BY version DESC LIMIT 1",
+                     (recipient_id,)).fetchone()
 
 
 def recipients(c: sqlite3.Connection, most: int) -> list[Any]:

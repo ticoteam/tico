@@ -47,7 +47,8 @@ PLANNERS: dict[str, handlers.Planner] = {
     **handlers.PLANNERS, "connection_create": banking.connection_create, "reconcile": banking.reconcile,
     "reconcile_undo": banking.reconcile_undo,
     "connection_sync": banking.connection_sync, "connection_disconnect": banking.connection_disconnect,
-    "connection_map": banking.connection_map, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
+    "connection_map": banking.connection_map, "connection_settings": banking.connection_settings,
+    **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
     **documents.PLANNERS, **mirror.PLANNERS, **tax.PLANNERS, **raw_totals.PLANNERS, **catalog.PLANNERS,
     **purchasing.PLANNERS}
 assert set(PLANNERS) == set(K.LIVE)
@@ -60,7 +61,8 @@ CARD_NUMBER_REFUSED = V.CARD_NUMBER_REFUSED
 STALE_DAYS = 14                        # hubdb.APPROVAL_STALE_DAYS: a withdrawal after this long is an expiry
 # Payload fields a planner fills in when the asker leaves them out (Plan.resolved): a retry without them is the same
 # request.
-RESOLVED_KEYS = frozenset({"effective_from", "date", "raise_check"})
+RESOLVED_KEYS = frozenset({"effective_from", "date", "raise_check", "recipient_version"})
+RECIPIENT_RULE = "rule:recipient-details-changed"        # the rule an approval asked for changed payee details names
 
 
 @dataclass(frozen=True)
@@ -437,16 +439,15 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
     problem = verify(row, appr)
     p = O.Principal(actor=str(row["actor"]), for_actor=str(row["on_behalf_of"] or ""), rule=str(row["rule_id"] or ""))
     kind, body = str(row["kind"]), json.loads(str(row["payload_json"]))
-    if problem == "payload":
-        return _reask(ctx, row, p, kind, body)
     if problem:
-        return _close(ctx, row, "denied", DENIED, f"the approval does not stand: {problem}")
+        # Any mismatch voids the approval and asks again (§5): only a declined approval closes denied (above).
+        return _reask(ctx, row, p, kind, body, problem)
     mark = _savepoint(c, "fin_decide")
     try:
         ctx.deciding = True
         gate, plan = _plan(ctx, p, kind, body, str(row["id"]))
         now_to = _decider(ctx, row, gate, p.who)
-        if now_to and (now_to != row["approval_to"] or _drifted(body, plan)):
+        if payments.moved(body, plan.resolved) or (now_to and (now_to != row["approval_to"] or _drifted(body, plan))):
             # The person who decides this changed since it was asked (a new manager, a finance approver named), or the
             # planner would now fix a value differently from the approved one (a parent raise that moved). When nobody
             # needs to decide it any more, it runs below with the plan as it now stands.
@@ -471,15 +472,40 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
         raise
 
 
+def void_for_recipient(ctx: Ctx, old_action_id: str, kind: str, body: Mapping[str, object], summary: str,
+                       p: O.Principal) -> str:
+    """A queued payment's recipient was replaced after its approval: that approval is void, and the new details are asked
+    for as a new action (its own payment, with its own key) of a finance admin (§5, §6.4 rule 1). The old action keeps its
+    record. Called by payments.recheck; a pending approval is asked again by approval_decided instead. Returns the new
+    approval's id."""
+    action_id = tico.new_id()
+    what = f"{summary} (Finance action {action_id})"
+    SX.insert(ctx.c, action_id=action_id, kind=kind, payload=body, actor=p.actor, on_behalf_of=p.for_actor,
+              rule_id=RECIPIENT_RULE, key=f"reask-{old_action_id}-{body.get('recipient_version')}",
+              rules=[{"rule": RECIPIENT_RULE, "outcome": "needs_approval"}], status="needs_approval",
+              result={"what": what}, code="", reason="the recipient's details changed; asked again", by=p.actor,
+              at=ctx.at)
+    approver = payments.admin_person(ctx, p.who)
+    if not approver:            # nobody else decides the new details (§6.3): the ask fails, as _reask fails one
+        _close(ctx, SX.by_id(ctx.c, action_id), "failed", DENIED, "nobody else decides this now; ask again")
+        return ""
+    approval_id = _ask(ctx, action_id, kind, body, what, p.who, approver, RECIPIENT_RULE)
+    _audit(ctx.c, p, action_id, kind, "needs_approval", "reask", {"void": old_action_id, "approval_id": approval_id,
+                                                                  "to": approver})
+    return approval_id
+
+
 def _drifted(body: Mapping[str, object], plan: handlers.Plan) -> bool:
     """Whether the planner would now fix a value differently from the one asked (Plan.resolved): what was approved
     is then not what would run."""
     return any(body.get(k) != v for k, v in plan.resolved.items())
 
 
-def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body: Mapping[str, object]) -> ActionResult:
-    """The approved payload is not the one about to run, so that approval is void. The change is planned again and asked
-    again for the payload it would now run, of the person who decides it now. Never the requester."""
+def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body: Mapping[str, object],
+           why: str = "the approved payload did not match") -> ActionResult:
+    """The approved payload is not the one about to run, so that approval is void (or it does not verify for another
+    reason, `why`). The change is planned again and asked again for the payload it would now run, of the person who
+    decides it now. Never the requester."""
     action_id = str(row["id"])
     ctx.deciding = True                       # the recheck runs on the true figures (figure_route)
     try:
@@ -487,12 +513,14 @@ def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body:
         approver = _decider(ctx, row, gate, p.who)
     except FinanceError as e:
         return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message, e.named)
+    if payments.moved(body, plan.resolved):
+        approver = payments.admin_person(ctx, p.who)    # new payment details are a finance admin's to approve (§6.4)
     if not approver:
         return _close(ctx, row, "failed", DENIED, "nobody else decides this now; ask again")
     fresh = {**body, **plan.resolved}
     what = f"{plan.summary} (Finance action {action_id})"
     SX.finish(ctx.c, action_id, status="needs_approval", result={"what": what}, code="",
-              reason="the approved payload did not match; asked again", at=ctx.at)
+              reason=f"{why}; asked again", at=ctx.at)
     approval_id = _ask(ctx, action_id, kind, fresh, what, p.who, approver, gate.rule or str(row["rule_id"]))
     _audit(ctx.c, p, action_id, kind, "needs_approval", "reask", {"void": row["approval_id"],
                                                                   "approval_id": approval_id, "to": approver})

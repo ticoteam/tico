@@ -115,7 +115,9 @@ def test_decline_someone_else_and_a_lost_right_never_commit(books):
         other = _coder_asks(c, parent, "k-other", 4_000)
         H.approval_decide(c, "human:cara", other.approval_id, "approved")
         c.execute("UPDATE approvals SET decided_by='human:dan' WHERE id=?", (other.approval_id,))
-        assert FA.approval_decided(c, other.approval_id, AT).status == "denied"
+        # Decided by someone other than the person it was sent to: the approval is void and asked again (§5), not denied.
+        asked_again = FA.approval_decided(c, other.approval_id, AT)
+        assert asked_again.status == "needs_approval" and asked_again.approval_id != other.approval_id
         late = _coder_asks(c, parent, "k-late", 3_000)
         H.approval_decide(c, "human:cara", late.approval_id, "approved")
         c.execute("UPDATE fin_budgets SET active=0 WHERE id=?", (parent,))

@@ -7,6 +7,7 @@ from backend.finance import documents as FD
 from backend.finance import payments as FP
 from backend.finance import reads as FR
 from backend.finance.context import load
+from backend.finance.core.errors import CONFLICT
 from backend.finance.store import banking as SK
 from backend.tests.test_finance_ap import _balance, _bill, _events, _ingest, _txn, _vendor
 from backend.tests.test_finance_fixtures import (  # noqa: F401
@@ -336,3 +337,56 @@ def test_an_approval_for_one_budget_never_covers_another_now_over(books):  # noq
         # Codex r4: the approval was for budget A; B asks a person again (the bot may not approve it itself).
         assert FP.recheck(load(c, AT), SK.get(c, "fin_payments", pid)) == "wait"
         assert SK.get(c, "fin_payments", pid)["last_error"] == "the Freight budget is over"
+
+
+def test_a_bot_marking_a_bill_paid_past_a_budget_waits_for_a_person_as_its_payment_does(books):  # noqa: F811
+    from backend import hubdb as H
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        budget = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"),
+                                                 "amount": 5_000, "at_limit": "ask"})
+        assert budget.status == "committed", budget
+        bid = _approved(c, _vendor(c), 15_000)
+        FA.grant_defaults(c, "bot:seller", at=AT)
+        act(c, OWNER, "view_grant", {"subject": "bot:seller", "what": "everything"})
+        want = ("needs_approval", f"budget:{budget.result['budget_id']}")
+        dry = act(c, "bot:seller", "bill_mark_paid", {"bill_id": bid}, dry_run=True)
+        assert (dry.status, dry.rule) == want, dry
+        asked = act(c, "bot:seller", "bill_mark_paid", {"bill_id": bid})
+        assert (asked.status, asked.rule) == want, asked
+        assert FR.bill(c, OWNER, bid)["status"] == "open"
+        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done.status == "committed", done
+        assert FR.bill(c, OWNER, bid)["status"] == "paid"
+
+
+def test_a_bill_waiting_for_a_payment_is_not_asked_again_by_a_mark_paid_or_a_payment(books):  # noqa: F811
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"})
+        budget = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"),
+                                                 "amount": 5_000, "at_limit": "ask"})
+        assert budget.status == "committed", budget
+        vendor = _vendor(c, recipient_id=rid)
+        paid_first = _approved(c, vendor, 15_000, number="B-1")
+        marked_first = _approved(c, vendor, 15_000, number="B-2")
+        FA.grant_defaults(c, "bot:seller", at=AT)
+        act(c, OWNER, "view_grant", {"subject": "bot:seller", "what": "everything"})
+        pay = {"recipient_id": rid, "money_account_id": _checking(c), "amount": 15_000,
+               "account_id": account(c, "2000")}
+        asked = act(c, "bot:seller", "payment_create", {**pay, "obligation": f"bill:{paid_first}"})
+        assert asked.status == "needs_approval", asked
+        before = c.execute("SELECT COUNT(*) FROM fin_actions WHERE status='needs_approval'").fetchone()[0]
+        # One ask per bill: a mark-paid waits behind the payment asked for its bill, and the reverse too.
+        mark = act(c, "bot:seller", "bill_mark_paid", {"bill_id": paid_first})
+        assert (mark.status, mark.code) == ("failed", CONFLICT), mark
+        assert "waiting for approval" in mark.reason
+        mark_asked = act(c, "bot:seller", "bill_mark_paid", {"bill_id": marked_first})
+        assert mark_asked.status == "needs_approval", mark_asked
+        again = act(c, "bot:seller", "payment_create", {**pay, "obligation": f"bill:{marked_first}"})
+        assert (again.status, again.code) == ("failed", CONFLICT), again
+        assert c.execute("SELECT COUNT(*) FROM fin_actions WHERE status='needs_approval'").fetchone()[0] == before + 1
+        assert FR.bill(c, OWNER, paid_first)["status"] == "open"
