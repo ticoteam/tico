@@ -1159,3 +1159,56 @@ def test_a_row_the_bank_failed_shows_only_under_failed_and_a_person_ignored_row_
         assert all(r["status"] == "ignored" for r in failed)
         assert [r["id"] for r in FR.transactions(c, OWNER, status="ignored", at=LATER)["rows"]] == [fee]
         assert FR.transactions(c, OWNER, q="acme ads", at=LATER)["rows"] == []
+
+
+def _bank_line(c, at=LATER):
+    return next(r for r in FR.balance_sheet(c, OWNER, at=at)["assets"] if r["code"] == "1000")["balance"]
+
+
+def test_history_arriving_late_and_out_of_order_through_events_still_meets_the_balance(books):
+    """A backfill that ends early (one short page) and gets the rest of the history through the Events API, newest
+    first: every row Mercury had posted when the opening read the balance is given back, whatever its date."""
+    fake = FakeMercury()                                  # checking holds 125,250.50 today
+    connect(books, fake)
+    fake.queue["events"] = [{"events": []}]               # no newest event: catch-up reads from the start
+    sync_once(books, fake)
+    with books.read() as c:
+        assert _bank_line(c) == 12_525_050
+    rows = [_txn(f"old-{i}", "acct-chk", -100.0, "wireFee", day=f"2026-09-0{i}") for i in (3, 1, 2)]
+    for i, raw in enumerate(rows):
+        fake.txns[str(raw["id"])] = raw
+        fake.events_list.append({"id": f"evt-{i}", "resourceType": "transaction", "resourceId": raw["id"],
+                                 "operationType": "create", "resourceVersion": 1})
+    sync_once(books, fake, LATER)
+    with books.read() as c:
+        assert c.execute("SELECT count(*) FROM fin_feed_txns WHERE provider_id LIKE 'old-%'").fetchone()[0] == 3
+        assert _bank_line(c) == 12_525_050
+        assert _opening(c)[0][0] == "2026-08-31"
+
+
+def test_an_account_with_no_balance_when_the_backfill_ended_gets_its_opening_once_later(books):
+    """No balance read at the end of the backfill: the next pass that reads one makes the opening, once; after that
+    the opening never reads the balance again (a gap the bank has and the feed lacks stays for reconciliation)."""
+    fake = FakeMercury()
+    fake.txns["txn-old"] = _txn("txn-old", "acct-chk", -1000.0, "wireFee", day="2026-09-03")
+    fake.balances["acct-chk"] = None
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.read() as c:
+        assert _opening(c) == []
+    del fake.balances["acct-chk"]                         # 125,250.50
+    sync_once(books, fake, LATER)
+    with books.read() as c:
+        assert _opening(c) == [("2026-09-02", "1000", 12_625_050), ("2026-09-02", "3900", -12_625_050)]
+    fake.balances["acct-chk"] = 1.0                       # the bank moves with no row: the opening stays
+    sync_once(books, fake, NEXT_DAY)
+    with books.read() as c:
+        assert _opening(c) == [("2026-09-02", "1000", 12_625_050), ("2026-09-02", "3900", -12_625_050)]
+    with books.transaction() as c:                        # a connection from before the list: its opening counts
+        row = c.execute("SELECT id, settings FROM fin_connections").fetchone()
+        conf = {k: v for k, v in json.loads(row[1]).items() if k not in ("opened", "opened_at")}
+        c.execute("UPDATE fin_connections SET settings=? WHERE id=?", (json.dumps(conf), row[0]))
+    fake.balances["acct-chk"] = 2.0
+    sync_once(books, fake, NEXT_DAY)
+    with books.read() as c:
+        assert _opening(c) == [("2026-09-02", "1000", 12_625_050), ("2026-09-02", "3900", -12_625_050)]
