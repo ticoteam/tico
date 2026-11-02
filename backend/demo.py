@@ -40,7 +40,7 @@ log = logging.getLogger("tico.demo")
 DEFAULT_PORT = 8765
 OWNER_EMAIL = "ana@acme.example"
 BANNER = "Demo — sample data"
-EXPLAIN = ("This is a demo with sample data: bots do not run here and nothing leaves this computer. "
+EXPLAIN = ("This is a demo with sample data: bots do not run here and nothing is sent. "
            "On a real install, this starts the bot on a connected computer.")
 BOT_REPLY = ("This is a demo, so I do not run here. On a real install this message would reach me on a "
              "connected computer and I would answer it there.")
