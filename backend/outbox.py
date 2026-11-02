@@ -87,7 +87,7 @@ def claim(c, table, row_id, now):
     moved = c.execute(f"UPDATE {table.name} SET state=?, {table.lease}=? WHERE {table.id}=? AND state=?",
                       (table.flight, now, row_id, table.due)).rowcount == 1
     if moved:
-        _bump(table.name, "claimed", 1)
+        count(table.name, "claimed", 1)
     return moved
 
 
@@ -114,7 +114,7 @@ def reclaim_stale(c, table, before, now):
     back = c.execute(f"UPDATE {table.name} SET state=?, {table.lease}=NULL, {table.due_at}=? "
                      f"WHERE state=? AND {table.lease}<?", (table.due, now, table.flight, before)).rowcount
     if back:
-        _bump(table.name, "reclaimed", back)
+        count(table.name, "reclaimed", back)
     return back
 
 
@@ -133,23 +133,24 @@ def settle_failure(c, table, row_id, *, attempts, error, schedule, now, later, g
     wait = schedule.after(attempts, rng)
     if wait is None:
         finish(c, table, row_id, give_up_state, attempts=attempts, error=error, due_at=now, extra=extra)
-        note(table, "gave_up", row_id, attempts=attempts)
+        note(table.name, "gave_up", row_id, attempts=attempts)
         return True
     finish(c, table, row_id, table.due, attempts=attempts, error=error, due_at=later(now, wait), extra=extra)
-    note(table, "retry", row_id, attempts=attempts, wait=round(wait, 1))
+    note(table.name, "retry", row_id, attempts=attempts, wait=round(wait, 1))
     return False
 
 
 # ----------------------------------------------------------------------------------------------------- log and count
-def note(table, event, row_id, **fields):
+def note(name, event, row_id, **fields):
     """One log line for an outcome, and the count of it. Fields are for the log only: never an error's text, which a
     provider may fill with the payment or the person it was about."""
-    _bump(table.name, event, 1)
+    count(name, event)
     detail = " ".join(f"{key}={value}" for key, value in fields.items() if value not in (None, ""))
-    LOG.info("outbox %s %s id=%s%s", table.name, event, row_id, f" {detail}" if detail else "")
+    LOG.info("outbox %s %s id=%s%s", name, event, row_id, f" {detail}" if detail else "")
 
 
-def _bump(name, event, n):
+def count(name, event, n=1):
+    """Count an outcome without a log line, for a retry that would otherwise log once per row per try."""
     with _lock:
         _counts[(name, event)] += n
 
