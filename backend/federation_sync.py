@@ -215,7 +215,8 @@ def home_message(c, vault, thread, row, now):
         return None
     if known is None and row["deleted"]:
         return None
-    payload = message_payload(thread["origin_id"], origin, revision, actor, row["message_kind"], row["body"],
+    payload = message_payload(thread["origin_id"], origin, revision, actor, row["message_kind"],
+                              "" if row["deleted"] else row["body"],
                               row["deleted"], row["created"], parent=row.get("parent_message") or "")
     item = sign_item(c, vault, thread, kind="message", payload=payload, origin=origin, revision=revision, now=now)
     if known is None:
@@ -239,12 +240,19 @@ def withheld(c, message_id):
     if row is None:
         return True
     message = dict(row)
-    if not message["restricted"]:
-        return False
+    if message["deleted_at"] or not message["restricted"]:
+        return False       # a tombstone carries no text, so it leaves whatever the message's access now is
     conv = c.execute("SELECT * FROM conversations WHERE id=?", (message["conversation_id"],)).fetchone()
     if conv is not None and CORE.private_task_thread(c, dict(conv)):
         return True
     return CORE._narrower_than_thread(c, message)
+
+
+def home_withheld(c, origin_id):
+    """Whether a message the home numbered must be skipped now: its privacy changed after it was staged (a task went
+    private). Checked when the item is sent, so a home reply is held to the same rule a replica's is."""
+    known = message_row(c, origin_id)
+    return known is None or withheld(c, known["message_id"])
 
 
 def _local(actor, me):
@@ -1074,7 +1082,8 @@ def staged_payload(c, row, me):
         return None                                      # it never went out: there is nothing to take back
     if sent_revision is not None and revision <= sent_revision:
         return None
-    body = E.payload_bytes(message_payload(thread["origin_id"], origin, revision, actor, cur["message_kind"], cur["body"],
+    body = E.payload_bytes(message_payload(thread["origin_id"], origin, revision, actor, cur["message_kind"],
+                                           "" if cur["deleted"] else cur["body"],
                                            cur["deleted"], cur["created"], parent=cur["parent_message"],
                                            first=sent_revision is None))
     if len(body) > E.MAX_BODY:
@@ -1098,7 +1107,8 @@ def envelope(c, vault, row, now):
                                                                or item["home_seq"] > member["removed_at_seq"])):
             return None
         thread = thread_local(c, item["thread_id"])
-        if item["kind"] == "message" and not eligible(c, member, item["origin_id"]):
+        if item["kind"] == "message" and (not eligible(c, member, item["origin_id"])
+                                          or home_withheld(c, item["origin_id"])):
             skip = True
             body = E.payload_bytes({"type": "item", "thread": thread["origin_id"], "home_seq": item["home_seq"], "skip": True})
         else:
