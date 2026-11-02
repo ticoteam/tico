@@ -40,7 +40,10 @@ fi
 "\$dir/deploy/demo/tico-demo" deploy $sha $*
 EOF
 )
-params=$(python3 -c 'import json, sys; print(json.dumps({"commands": [sys.argv[1]], "executionTimeout": ["1200"]}))' "$script")
+# SSM runs its commands with sh; the script is bash, so it goes through as base64 to bash.
+params=$(python3 -c 'import base64, json, sys
+command = "echo " + base64.b64encode(sys.argv[1].encode()).decode() + " | base64 -d | bash"
+print(json.dumps({"commands": [command], "executionTimeout": ["1200"]}))' "$script")
 id=$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript --comment "tico demo $sha" \
        --parameters "$params" --query Command.CommandId --output text)
 echo "deploy-demo: $sha on $instance (tools $tools), command $id" >&2
