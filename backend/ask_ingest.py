@@ -811,7 +811,8 @@ def _next_day(day):
     import datetime as dt
     return (dt.date.fromisoformat(day) + dt.timedelta(days=1)).isoformat() + "T00:00:00"
 _ACTIVE_AT = ("owner_id=? AND created_at<? AND (done_at IS NULL OR done_at>?) AND (closed_at IS NULL OR closed_at>?) "
-              "AND COALESCE(snoozed_until,'')<=?")
+              "AND NOT EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=tasks.id AND sh.kind='snoozed' "
+              "AND sh.released_at IS NULL AND sh.until_at>?)")
 
 
 # The owner then is the old owner of the task's first owner change (its history, hubdb `_task_event`), and today's owner

@@ -143,7 +143,8 @@ KEEP = frozenset((
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
     "memory_tidy_cards", "memory_tidy_keeps", "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_versions",
     "system_runs", "tags", "task_assets",
-    "task_check_models", "task_delegations", "history_events", "task_file_reviews", "task_links", "task_relations",
+    "task_check_models", "task_delegations", "history_events", "task_file_reviews", "task_holds", "task_links",
+    "task_relations",
     "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
     "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
     "usage_facts", "usage_meter_reads", "budget_nodes", "task_caps", "reach_settings", "reach_lines",
@@ -374,7 +375,8 @@ def prune(c, days, keep_automations=False):
     if "runners" in present:
         c.execute("UPDATE runners SET token_hash='devcopy-revoked:'||id, revoked_at=coalesce(revoked_at,?)", (stamp,))
     if "attempts" in present:
-        c.execute("UPDATE attempts SET token_hash='devcopy-revoked:'||id, lease_until=coalesce(finished_at,created_at)")
+        c.execute("UPDATE attempts SET token_hash='devcopy-revoked:'||id, lease_until=coalesce(finished_at,created_at) "
+                  "WHERE job_id IS NOT NULL")
     # A row that points at one just removed goes too (attempt_events of an attempt, oauth_grants of a token):
     # repeated until no foreign key is broken by what this run removed.
     touched, frontier = set(removed), set(removed)

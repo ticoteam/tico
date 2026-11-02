@@ -43,7 +43,7 @@ def idle_tasks(conn, at=None):
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     out = []
     for row in H._rows(conn.execute(
-            f"SELECT * FROM tasks WHERE status IN ({marks}) AND updated_at<? "
+            f"SELECT * FROM {H.TASKS} tasks WHERE status IN ({marks}) AND updated_at<? "
             "AND coalesce(checkpoint_at,'')<? ORDER BY updated_at", (*H.ACTIVE_STATUSES, cutoff, cutoff))):
         if H.TS.snoozed(row, at):
             continue                     # set aside until a date: its owner hears when that comes

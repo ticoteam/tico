@@ -1148,7 +1148,7 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
     unreadable = {slug for slug, level in view.bots().items() if not level["read"]} if who.role == "human" else None
     visible_sql = view.auth.task_sql(c, who, unreadable=unreadable)
     marks = ",".join("?" * len(ids))
-    found = H._rows(c.execute(f"SELECT * FROM tasks WHERE id IN ({marks}) AND ({visible_sql})", ids))
+    found = H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id IN ({marks}) AND ({visible_sql})", ids))
     if tasks or parties:
         # Before each task is built for the viewer: the parties it has now, or had before a change in this batch moved
         # it (`ref`, on that change's row, which a later row of the same task may follow).

@@ -698,7 +698,8 @@ class Lead(Bot):
         w, board = self.world, self.world.board
         told = []
         # A snoozed ticket is off the board the lead reads until its date (docs/tasks.md, Snoozing a task).
-        snoozed = {r["id"] for r in w.sql("SELECT id FROM tasks WHERE snoozed_until>?", (w.H.now(),))}
+        snoozed = {r["id"] for r in w.sql("SELECT task_id id FROM task_holds WHERE kind='snoozed' "
+                                                "AND released_at IS NULL AND until_at>?", (w.H.now(),))}
         for t in w.tickets():
             step = board.step(t["step"])
             # Only work its owner holds: a ticket queued for a start or out for a check moves without the owner.

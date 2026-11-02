@@ -317,7 +317,7 @@ def settle(conn, aid, bot, started):
     keeps its condition. Anything else: back to eligible, said in its history. Returns {task id: outcome}."""
     H = _H()
     out = {}
-    for row in H._rows(conn.execute("SELECT * FROM tasks WHERE carried_by=? AND next_run=1 AND status='open'", (aid,))):
+    for row in H._rows(conn.execute(f"SELECT * FROM {H.TASKS} tasks WHERE carried_by=? AND next_run=1 AND status='open'", (aid,))):
         if condition(row):
             outcome = DEFERRED
         elif _last_since(conn, row["id"], HANDLED, started) or worked(conn, row, bot, started):
@@ -417,7 +417,7 @@ def finished(conn, done_task):
     """`done_task` is done or closed: each open quiet task deferred until it resumes. Returns their ids."""
     H = _H()
     out = []
-    for row in H._rows(conn.execute("SELECT * FROM tasks WHERE resume IS NOT NULL AND next_run=1 "
+    for row in H._rows(conn.execute(f"SELECT * FROM {H.TASKS} tasks WHERE resume IS NOT NULL AND next_run=1 "
                                     "AND status='open' AND json_extract(resume,'$.task')=?", (done_task["id"],))):
         name = _task_name(done_task) if H.task_private(conn, done_task) and not H.task_private(conn, row) \
             else done_task["title"]
@@ -453,7 +453,7 @@ def stale(conn, at=None, hours=STALE_HOURS):
     out = []
     try:
         rows = H._rows(conn.execute(
-            "SELECT t.* FROM tasks t JOIN bots b ON t.owner_id='bot:'||b.id WHERE b.state='active' AND t.next_run=1 "
+            f"SELECT t.* FROM {H.TASKS} t JOIN bots b ON t.owner_id='bot:'||b.id WHERE b.state='active' AND t.next_run=1 "
             "AND t.status='open' AND t.resume IS NULL AND t.snoozed_until IS NULL "
             "AND (t.carried_by IS NOT NULL OR EXISTS (SELECT 1 FROM history_events e "
             "WHERE e.subject_type='task' AND e.subject_id=t.id AND e.kind=? AND e.new=?))", (FIELD, RETURNED)))

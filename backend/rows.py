@@ -52,20 +52,10 @@ class TaskRow(TypedDict):
     checkpoint_state: str | None
     stale_asked_at: str | None
     checkpoint_blocked: int
-    snoozed_until: str | None
-    snoozed_by_id: str | None
-    snoozed_note: str | None
     verdict: str | None
     verdict_head: str | None
-    blocked_since: str | None
-    blocked_reason: str | None
-    blocked_kind: str | None
-    blocked_from_step: str | None
-    blocked_from_status: str | None
-    blocked_gate: str | None
     building_started_at: str | None
     building_seconds: float
-    holds_cleared_at: str | None
     blocker_key: str | None
     visibility: str
     public_title: str
@@ -82,6 +72,22 @@ class TaskCheckBackWakeRow(TypedDict):
     check_back_at: str
     sent_at: str
     message_id: str | None
+class TaskHoldRow(TypedDict):
+    """One `task_holds` row (SELECT *): a task's move to Blocked or its snooze (migration 0061). At most one of each
+    kind per task is open (released_at NULL); a released one stays as history."""
+    id: int
+    task_id: str
+    kind: str
+    cause: str | None
+    reason: str | None
+    by_id: str | None
+    until_at: str | None
+    from_step_id: str | None
+    from_status: str | None
+    gate: str | None
+    cleared_at: str | None
+    created_at: str
+    released_at: str | None
 
 
 class AttemptRow(TypedDict):

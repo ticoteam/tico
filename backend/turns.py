@@ -316,7 +316,7 @@ def annotate(c, auth, who, messages):
         return next((aid for aid, t in turns.items() if "bot:" + t["bot_id"] == actor and t["from"] <= at <= t["to"]), None)
 
     did = {aid: [] for aid in turns}
-    for row in c.execute(f"SELECT * FROM tasks WHERE requester_id IN ({who_marks}) AND created_at BETWEEN ? AND ?",
+    for row in c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE requester_id IN ({who_marks}) AND created_at BETWEEN ? AND ?",
                          (*actors, lo, hi)):
         aid = owner_of(row["requester_id"], row["created_at"])
         if aid and readable(lambda: auth.task_row(c, who, dict(row))):

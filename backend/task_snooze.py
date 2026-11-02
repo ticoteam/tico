@@ -1,7 +1,8 @@
 """Snoozing a task until a date.
 
 A snoozed task says "nobody plans to get to this until then". It keeps its status, owner, goal and
-place; only `snoozed_until` (and `snoozed_by`) are set. Until that moment:
+place; only an open 'snoozed' hold is added (a task_holds row, migration 0061: until_at, by_id, reason, which a task row
+reads as `snoozed_until`, `snoozed_by_id` and `snoozed_note` through hubdb.TASKS). Until that moment:
 
 - it is left out of the board, task lists (`GET /api/v2/tasks` unless `snoozed=all|only`), Needs you
   and Decide;
@@ -110,8 +111,9 @@ def snooze(conn, actor, task_id, until, mover=False, note=None):
     note = clean_note(conn, actor, note)
     if (stamp, note) == (row.get("snoozed_until"), row.get("snoozed_note")):
         return row          # the same date and note again: nothing changes, nobody is told again
-    conn.execute("UPDATE tasks SET snoozed_until=?, snoozed_by_id=?, snoozed_note=?, updated_at=?, version=version+1 "
-                 "WHERE id=?", (stamp, actor, note, at, task_id))
+    from . import task_holds as TH
+    TH.put(conn, task_id, "snoozed", at, until_at=stamp, by_id=actor, reason=note)
+    conn.execute("UPDATE tasks SET updated_at=?, version=version+1 WHERE id=?", (at, task_id))
     H._task_event(conn, task_id, actor, "snoozed_until", row.get("snoozed_until"), stamp, note or "")
     after = H.task(conn, task_id)
     from . import task_check_backs
@@ -162,8 +164,10 @@ def _wake_refs(refs, note):
 
 def _clear(conn, actor, row, note):
     H = _H()
-    conn.execute("UPDATE tasks SET snoozed_until=NULL, snoozed_by_id=NULL, snoozed_note=NULL, updated_at=?, "
-                 "version=version+1 WHERE id=?", (H.now(), row["id"]))
+    from . import task_holds as TH
+    at = H.now()
+    TH.release(conn, row["id"], "snoozed", at)
+    conn.execute("UPDATE tasks SET updated_at=?, version=version+1 WHERE id=?", (at, row["id"]))
     H._task_event(conn, row["id"], actor, "snoozed_until", row["snoozed_until"], None, note)
     H.recount(conn, [row["owner_id"], row["requester_id"]])
     return H.task(conn, row["id"])
@@ -171,6 +175,8 @@ def _clear(conn, actor, row, note):
 
 def clear_finished(conn, actor, row):
     """A task that is done, declined or closed has nothing to wait for."""
+    from . import task_holds as TH
+    row = TH.with_holds(conn, row)
     if row.get("snoozed_until"):
         _clear(conn, actor, row, "finished")
 
@@ -178,7 +184,8 @@ def clear_finished(conn, actor, row):
 def ended(conn, at):
     """Snoozed tasks whose date has come by `at`."""
     H = _H()
-    return H._rows(conn.execute("SELECT * FROM tasks WHERE snoozed_until IS NOT NULL AND snoozed_until<=? "
+    return H._rows(conn.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id IN (SELECT task_id FROM task_holds "
+                                "WHERE kind='snoozed' AND released_at IS NULL AND until_at<=?) "
                                 "ORDER BY snoozed_until,id", (at,)))
 
 
