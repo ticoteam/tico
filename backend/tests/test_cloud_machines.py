@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from backend import cloud_access, cloud_machines as CM, placement
-from backend.store import H
+from backend.store import H, Problem
 from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.test_cloud_access import signals
 
@@ -905,6 +905,63 @@ def test_switching_own_and_shared_moves_the_bot_and_stops_the_machine_it_left(cl
     assert create[1] == "ops" and ("stop", cloud.row(CM.SHARED)["machine_id"]) in cloud.hq.calls
     again = post(cloud.api, "runners/enroll", {"code": create[3], "label": "boat-vm", "platform": "linux"})
     assert placed(cloud)["ops"] == again["runner_id"] and cloud.row()["placement"] == "own"
+
+
+def test_a_lasting_refusal_to_move_is_said_to_the_person_and_nothing_moves(cloud, monkeypatch):
+    own = enrolled(cloud)                                       # ops on its own machine
+    shared = shared_enrolled(cloud, "finance")                  # the shared machine has a computer
+    idle(cloud)
+    monkeypatch.setattr("backend.execution.stranded", lambda *args: "ticoteam/bot-ops is not on GitHub yet")
+    refused = cloud.api.post("/api/v2/bots/ops/cloud-machine", headers=headers(), json={"placement": "shared"})
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "repository_unpublished", refused.text
+    # Nothing half-applied: still its own machine, still on its own computer.
+    assert cloud.row()["placement"] == "own" and cloud.row()["mode"] == "cloud"
+    assert placed(cloud)["ops"] == own["runner_id"] and shared != own["runner_id"]
+
+
+def test_a_turn_still_out_on_the_old_computer_is_asked_again_at_a_look(cloud):
+    own = enrolled(cloud)                                       # ops on its own machine, with its work claimed there
+    ready(cloud.api, own, ["ops"])
+    assert leased(cloud, own["runner_id"]) == [] and claim_on(cloud, own, "ops")
+    assert leased(cloud, own["runner_id"]) == ["ops"]
+    shared = shared_enrolled(cloud, "finance")
+    out = cloud.api.post("/api/v2/bots/ops/cloud-machine", headers=headers(), json={"placement": "shared"})
+    assert out.status_code == 200, out.text
+    assert cloud.row()["placement"] == "shared" and placed(cloud)["ops"] == own["runner_id"]
+    with cloud.store.transaction() as c:                        # its turn ends; the next look moves it
+        c.execute("UPDATE attempts SET lease_until=0 WHERE bot='ops'")
+    cloud.tick()
+    assert placed(cloud)["ops"] == shared
+
+
+def test_a_size_or_always_on_change_on_a_bot_awaiting_its_move_is_saved_and_says_nothing(cloud, monkeypatch):
+    own = enrolled(cloud)
+    shared_enrolled(cloud, "finance")
+    idle(cloud)
+    monkeypatch.setattr("backend.execution.stranded", lambda *args: "ticoteam/bot-ops is not on GitHub yet")
+    refused = cloud.api.post("/api/v2/bots/ops/cloud-machine", headers=headers(), json={"placement": "shared"})
+    assert refused.status_code == 409, refused.text
+    kept = cloud.api.post("/api/v2/bots/ops/cloud-machine", headers=headers(), json={"always_on": True})
+    assert kept.status_code == 200, kept.text
+    assert cloud.row()["always_on"] and cloud.row()["placement"] == "own"
+    assert placed(cloud)["ops"] == own["runner_id"]
+
+
+def test_a_removing_computer_keeps_the_choice_and_the_move_waits_for_a_look(cloud, monkeypatch):
+    own = enrolled(cloud)
+    shared = shared_enrolled(cloud, "finance")
+    idle(cloud)
+    def busy_removing(*args, **kwargs):
+        raise Problem("removing", "ops is being removed from the computer it is on")
+    execution = cloud.api.app.state.execution
+    real_assign = execution.assign
+    monkeypatch.setattr(execution, "assign", busy_removing)
+    out = cloud.api.post("/api/v2/bots/ops/cloud-machine", headers=headers(), json={"placement": "shared"})
+    assert out.status_code == 200, out.text
+    assert cloud.row()["placement"] == "shared" and placed(cloud)["ops"] == own["runner_id"]
+    monkeypatch.setattr(execution, "assign", real_assign)
+    cloud.tick()
+    assert placed(cloud)["ops"] == shared
 
 
 def test_a_member_moved_to_a_computer_leaves_and_the_last_one_out_stops_it(cloud):

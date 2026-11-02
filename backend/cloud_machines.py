@@ -467,9 +467,13 @@ def unplaced(c, bot):
     return not placed_on or placed_on["runner_id"] != target
 
 
-def bind(c, execution, bot):
+TEMPORARY_REFUSALS = ("busy", "removing", "version_conflict")
+
+
+def bind(c, execution, bot, lasting=False):
     """Assign a cloud-mode bot to its machine's computer if it is not on it. False while it can't be (a turn still out
-    on the old computer): asked again at the next look."""
+    on the old computer): asked again at the next look. With `lasting` (a person's choice of a machine), any other
+    refusal raises its Problem; the looks keep it to False."""
     target = (home(c, bot) or {}).get("runner_id")
     if not target:
         return False
@@ -481,9 +485,11 @@ def bind(c, execution, bot):
     try:
         execution.assign(c, execution.auth.owner_identity(c), bot, SimpleNamespace(
             runner_id=target, expected_generation=placed_on["generation"] if placed_on else 0))
-    except Problem:
+    except Problem as exc:
         c.execute("ROLLBACK TO cloud_bind")
         c.execute("RELEASE cloud_bind")
+        if lasting and exc.code not in TEMPORARY_REFUSALS:
+            raise
         return False
     c.execute("RELEASE cloud_bind")
     return True
@@ -1128,7 +1134,8 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
         if row(c, SHARED)["enroll_fails"]:                  # and so does a member's, for the shared machine
             save(c, SHARED, enroll_fails=0, **({"problem": ""} if row(c, SHARED)["problem"] == "no_enroll" else {}))
     if after["mode"] == "cloud":
-        bind(c, execution, bot)                 # onto a machine that is there already; else when it is made
+        # onto a machine that is there already; else when it is made. A person's choice of a machine hears a lasting refusal.
+        bind(c, execution, bot, lasting=mode is not None or placement is not None)
     H.event(c, who.actor, "cloud_machine.changed", bot, {
         key: after[key] for key in ("mode", "placement", "size", "always_on") if after[key] != before[key]})
     return view(c, bot, execution.store.settings)
