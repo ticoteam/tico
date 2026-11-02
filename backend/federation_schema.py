@@ -5,7 +5,7 @@ like backend/strategy.py: an older release never reads these tables.
   NULL); registering a new one with HQ resets every peering (HQ side and here).
 - `federation_peerings`: one row per peering with another install, keyed to HQ's peering id. The peer's key is pinned
   here at this install's approval; an envelope from the peer is checked against that key, not against HQ's list.
-- `federation_directory`: HQ's published keys for installs this one met through a shared thread (author signatures).
+- `federation_directory_entries`: HQ's published keys for installs this one met through a shared thread (author signatures).
 - `federation_threads`: a thread shared over HQ. `thread_id` is this install's conversation; `origin_id` is the id the
   home gave it. The home numbers the stream (`high_seq`); a replica records how far it has applied the stream
   (`applied_through`). `removed_at_seq` is the membership tombstone on a removed install.
@@ -13,7 +13,7 @@ like backend/strategy.py: an older release never reads these tables.
   message is for a member only when it was created after the member joined: `joined_message_seq` is the newest core
   message when the member joined, so eligibility is fixed at creation, not by when the home numbers it.
   `catch_up_after` is how far a catch-up the home is still paging for that member has got (NULL when none is).
-- `federation_state.history_through`: HQ's time of the newest revoked peering a finished read of its history saw;
+- `federation_states.history_through`: HQ's time of the newest revoked peering a finished read of its history saw;
   `history_cursor` and `history_top` hold a read that was cut short.
 - `federation_threads.subtree_seq`: how far the sub-threads of a shared thread have been looked at for deliveries.
 - `federation_messages.sent_revision`: the newest revision of the message HQ took from this install (a tombstone is sent
@@ -22,7 +22,7 @@ like backend/strategy.py: an older release never reads these tables.
   catch-up re-sends exactly what was signed.
 - `federation_messages`: which local message an origin id is, its author and revision, and its home number once known.
 - `federation_receipts`: every envelope processed, by (sender, envelope id), for replay refusal.
-- `federation_outbox`: what this install still has to send: a delivery from core (a replica's post to the home), an
+- `federation_outbox_items`: what this install still has to send: a delivery from core (a replica's post to the home), an
   item (the home's stream to a member), a catch-up request, or a refusal receipt for a message this install did not take.
   A delivery is rebuilt from the message as it is when it is sent; an item to a member the message was not for goes as
   a signed skip, so the member's stream has no hole. `thread_origin` is the root's origin id: a row waits behind an
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS federation_peerings (
   revoked_at TEXT, peer_company TEXT NOT NULL DEFAULT '', approved_by TEXT, created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS federation_peerings_live ON federation_peerings(peer_install) WHERE status <> 'revoked';
-CREATE TABLE IF NOT EXISTS federation_directory (
+CREATE TABLE IF NOT EXISTS federation_directory_entries (
   install TEXT NOT NULL, key_id TEXT NOT NULL, public_key TEXT NOT NULL, fetched_at TEXT NOT NULL,
   PRIMARY KEY (install, key_id));
 CREATE TABLE IF NOT EXISTS federation_threads (
@@ -73,36 +73,36 @@ CREATE INDEX IF NOT EXISTS federation_messages_message ON federation_messages(me
 CREATE TABLE IF NOT EXISTS federation_receipts (
   id TEXT PRIMARY KEY, peer_install TEXT NOT NULL, envelope_id TEXT NOT NULL, outcome TEXT NOT NULL,
   received_at TEXT NOT NULL, UNIQUE (peer_install, envelope_id));
-CREATE TABLE IF NOT EXISTS federation_outbox (
+CREATE TABLE IF NOT EXISTS federation_outbox_items (
   id TEXT PRIMARY KEY, recipient TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('delivery','item','catch_up','refusal')),
   delivery_id TEXT, item_id TEXT, payload BLOB, thread_origin TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0,
   next_attempt_at REAL NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
   UNIQUE (kind, delivery_id), UNIQUE (kind, item_id, recipient));
-CREATE INDEX IF NOT EXISTS federation_outbox_due ON federation_outbox(next_attempt_at);
+CREATE INDEX IF NOT EXISTS federation_outbox_items_due ON federation_outbox_items(next_attempt_at);
 CREATE TABLE IF NOT EXISTS federation_deferrals (
   id TEXT PRIMARY KEY, peer_install TEXT NOT NULL, thread_origin TEXT NOT NULL, envelope_id TEXT NOT NULL,
-  headers_json TEXT NOT NULL, body BLOB NOT NULL, received_at REAL NOT NULL, reason TEXT NOT NULL DEFAULT '',
+  headers TEXT NOT NULL, body BLOB NOT NULL, received_at REAL NOT NULL, reason TEXT NOT NULL DEFAULT '',
   attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
   UNIQUE (peer_install, envelope_id));
-CREATE TABLE IF NOT EXISTS federation_state (
+CREATE TABLE IF NOT EXISTS federation_states (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1), cursor INTEGER NOT NULL DEFAULT 0,
-  acked INTEGER NOT NULL DEFAULT 0, last_pull_at REAL, failing_since REAL, last_error TEXT NOT NULL DEFAULT '',
+  acked INTEGER NOT NULL DEFAULT 0, last_pull_at REAL, started_failing_at REAL, last_error TEXT NOT NULL DEFAULT '',
   listed_at REAL, company TEXT NOT NULL DEFAULT '');
-INSERT OR IGNORE INTO federation_state(singleton) VALUES (1);
+INSERT OR IGNORE INTO federation_states(singleton) VALUES (1);
 """
 
 
 # Columns added after their table first existed: a database created before them gets them on open.
 COLUMNS = (("federation_peerings", "peer_company", "TEXT NOT NULL DEFAULT ''"), ("federation_peerings", "approved_by", "TEXT"),
-           ("federation_state", "company", "TEXT NOT NULL DEFAULT ''"),
-           ("federation_state", "history_through", "REAL"), ("federation_state", "history_cursor", "TEXT"),
-           ("federation_state", "history_top", "REAL"),
+           ("federation_states", "company", "TEXT NOT NULL DEFAULT ''"),
+           ("federation_states", "history_through", "REAL"), ("federation_states", "history_cursor", "TEXT"),
+           ("federation_states", "history_top", "REAL"),
            ("federation_threads", "subtree_seq", "INTEGER NOT NULL DEFAULT 0"),
            ("federation_members", "joined_message_seq", "INTEGER NOT NULL DEFAULT 0"),
            ("federation_members", "catch_up_after", "INTEGER"),
            ("federation_messages", "sent_revision", "INTEGER"),
-           ("federation_outbox", "thread_origin", "TEXT NOT NULL DEFAULT ''"))
+           ("federation_outbox_items", "thread_origin", "TEXT NOT NULL DEFAULT ''"))
 
 
 def ensure(c):

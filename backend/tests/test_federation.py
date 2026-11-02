@@ -263,7 +263,7 @@ def tick(side):
     relay.synced, relay.next_try = 0.0, 0.0            # every tick reads HQ's peerings, so a change shows at once
     relay.tick()
     with side.app.state.store.read() as c:
-        error = c.execute("SELECT last_error FROM federation_state WHERE singleton=1").fetchone()[0]
+        error = c.execute("SELECT last_error FROM federation_states WHERE singleton=1").fetchone()[0]
     assert error == "", error
 
 
@@ -481,7 +481,7 @@ def peering_state(side):
 
 
 def listed_at(side):
-    return rows(side, "SELECT listed_at FROM federation_state")[0][0]
+    return rows(side, "SELECT listed_at FROM federation_states")[0][0]
 
 
 def test_an_hq_from_before_paging_answers_the_whole_list_at_once(make_side, hq, clock):
@@ -524,7 +524,7 @@ def test_a_page_that_fails_is_not_a_whole_list_and_takes_nothing_away(make_side,
     hq.peerings_asked[:], relay.synced, relay.next_try = [], 0.0, 0.0
     hq.peerings_fail_on = 2
     relay.tick()
-    assert rows(a, "SELECT last_error FROM federation_state")[0][0] == "unavailable"
+    assert rows(a, "SELECT last_error FROM federation_states")[0][0] == "unavailable"
     hq.peerings_fail_on = None
     tick(a)
     assert listed_at(a) == clock["t"]
@@ -544,7 +544,7 @@ def test_a_list_that_does_not_end_stops_incomplete_and_the_tick_goes_on(make_sid
     assert len(hq.peerings_asked) == 2
     assert peering_state(a) == before and listed_at(a) == was
     tick(a)                                                 # no error, and the rest of the tick still runs
-    assert rows(a, "SELECT last_pull_at FROM federation_state")[0][0] == clock["t"]
+    assert rows(a, "SELECT last_pull_at FROM federation_states")[0][0] == clock["t"]
     assert set(peering_state(a)) == set(ids)
 
 
@@ -585,7 +585,7 @@ def test_an_hq_without_the_history_route_still_tells_revocations_in_its_working_
     tick(a)                                                 # asserts the tick recorded no error
     with a.app.state.store.read() as c:
         assert F.active(c, b.id) is None
-    assert rows(a, "SELECT history_through,history_cursor FROM federation_state") == [(None, None)]
+    assert rows(a, "SELECT history_through,history_cursor FROM federation_states") == [(None, None)]
 
 
 def test_history_is_read_once_when_nothing_is_new_and_only_as_far_as_what_is(make_side, hq):
@@ -631,7 +631,7 @@ def test_a_history_read_cut_short_resumes_and_a_revocation_past_the_cut_is_not_m
     sync_peerings(a)
     assert hq.history_asked == ["3:" + ids[2]]              # it goes on from where it stopped, not from the top
     assert peering_state(a)[ids[0]][0] == "revoked"
-    assert rows(a, "SELECT history_through,history_cursor,history_top FROM federation_state") == [(6.0, None, None)]
+    assert rows(a, "SELECT history_through,history_cursor,history_top FROM federation_states") == [(6.0, None, None)]
 
 
 def test_a_revoked_peering_this_install_never_knew_leaves_a_live_one_with_that_install_alone(make_side, hq):
@@ -655,13 +655,13 @@ def test_a_cursor_hq_no_longer_accepts_starts_the_read_over_instead_of_failing_e
     hq.peerings_page = 100
     hq.revoke(ids[0])
     with a.app.state.store.transaction() as c:
-        c.execute("UPDATE federation_state SET history_cursor='not a cursor', history_top=9")
+        c.execute("UPDATE federation_states SET history_cursor='not a cursor', history_top=9")
     refused = hq.peerings_history
     hq.peerings_history = lambda me, cursor: (422, {"error": "invalid"}) if cursor else refused(me, cursor)
     sync_peerings(a)                                        # raises nothing
     sync_peerings(a)
     assert peering_state(a)[ids[0]][0] == "revoked"
-    assert rows(a, "SELECT history_through,history_cursor,history_top FROM federation_state") == [(1.0, None, None)]
+    assert rows(a, "SELECT history_through,history_cursor,history_top FROM federation_states") == [(1.0, None, None)]
 
 
 def lose_messages_to(hq, sender, to):
@@ -710,10 +710,10 @@ def test_paging_holds_back_while_the_last_page_is_waiting_to_leave(make_side, hq
     with a.app.state.store.transaction() as c:
         thread = S.thread_local(c, tid)
         S.on_catch_up(c, a.id, b.id, {"thread": thread["origin_id"], "after": 0})
-        waiting = c.execute("SELECT COUNT(*) FROM federation_outbox WHERE recipient=? AND kind='item'", (b.id,)).fetchone()[0]
+        waiting = c.execute("SELECT COUNT(*) FROM federation_outbox_items WHERE recipient=? AND kind='item'", (b.id,)).fetchone()[0]
         S.continue_catch_ups(c)
         assert waiting == S.CATCH_UP_BATCH
-        assert c.execute("SELECT COUNT(*) FROM federation_outbox WHERE recipient=? AND kind='item'",
+        assert c.execute("SELECT COUNT(*) FROM federation_outbox_items WHERE recipient=? AND kind='item'",
                          (b.id,)).fetchone()[0] == waiting
         assert c.execute("SELECT catch_up_after FROM federation_members WHERE thread_id=?", (tid,)).fetchone()[0] is not None
     drive(a, b, rounds=6)

@@ -15,7 +15,7 @@ A Slack channel is linked to one Tico thread, and the two talk both ways.
   an `uncertain` send is found in the channel's history instead of being sent twice.
 - A linked channel that becomes Slack Connect, gains a member who does not map, or whose thread narrows, is suspended
   and gets one Needs-you item for the admin who asked. Nothing moves out while it is suspended; a channel message that
-  arrives meanwhile is queued (`slack_inbound_queue`) and carried in, in order, when the link is active again.
+  arrives meanwhile is queued (`slack_inbound_events`) and carried in, in order, when the link is active again.
 - Every inbound write goes through the org rule check as the person (`org_rule_check.inbound`, held as that person,
   with its provenance: the Slack channel and ts). A Block holds it; Send anyway can release it (`replay_held`).
 - History is opt-in: the last 30 days, at most 5,000 messages, written with `refs.import`, so nothing wakes.
@@ -121,13 +121,13 @@ SCHEMA = [
     "WHERE direction = 'out'",
     "CREATE INDEX IF NOT EXISTS slack_message_links_message ON slack_message_links(message_id)",
     "CREATE INDEX IF NOT EXISTS slack_message_links_state ON slack_message_links(state, updated_at)",
-    """CREATE TABLE IF NOT EXISTS slack_inbound_queue (
+    """CREATE TABLE IF NOT EXISTS slack_inbound_events (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   link_id TEXT NOT NULL REFERENCES slack_thread_links(id),
   event_key TEXT NOT NULL UNIQUE,
-  event_json TEXT NOT NULL,
+  event TEXT NOT NULL,
   created_at TEXT NOT NULL)""",
-    "CREATE INDEX IF NOT EXISTS slack_inbound_queue_link ON slack_inbound_queue(link_id, seq)",
+    "CREATE INDEX IF NOT EXISTS slack_inbound_events_link ON slack_inbound_events(link_id, seq)",
 ]
 
 
@@ -351,7 +351,7 @@ def unlink_link(store, who, link_id, core=None, auth=None):
         if not row or row["state"] == "unlinked" or not _can_see(c, core, auth or _auth(store), who, row["thread_id"]):
             raise Problem("not_found", "That Slack link was not found", 404)
         c.execute("UPDATE slack_thread_links SET state='unlinked', updated_at=? WHERE id=?", (H.now(), link_id))
-        c.execute("DELETE FROM slack_inbound_queue WHERE link_id=?", (link_id,))
+        c.execute("DELETE FROM slack_inbound_events WHERE link_id=?", (link_id,))
         if row["channel_id"]:
             _sweep(core, c, row["channel_id"])
             for node in _subtree(c, row["thread_id"]):
@@ -722,7 +722,7 @@ class Bridge:
         if event["op"] == "store" and event.get("author") != "human":
             return "bot"                        # Tico's own posts and other bots' are never carried in
         with self.store.transaction() as c:
-            c.execute("INSERT OR IGNORE INTO slack_inbound_queue (link_id,event_key,event_json,created_at) "
+            c.execute("INSERT OR IGNORE INTO slack_inbound_events (link_id,event_key,event,created_at) "
                       "VALUES (?,?,?,?)", (link["id"], _event_key(event), json.dumps(event, sort_keys=True), H.now()))
         try:
             return self.drain(link["id"])
@@ -738,22 +738,22 @@ class Bridge:
         for _ in range(MAX_DRAIN):
             with self.store.read() as c:
                 link = _link(c, link_id)
-                head = _one(c, "SELECT * FROM slack_inbound_queue WHERE link_id=? ORDER BY seq LIMIT 1", (link_id,))
+                head = _one(c, "SELECT * FROM slack_inbound_events WHERE link_id=? ORDER BY seq LIMIT 1", (link_id,))
             if not head:
                 return outcome
             if not link or link["state"] != "active":
                 return "queued"
-            outcome = self._process(json.loads(head["event_json"]), link)
+            outcome = self._process(json.loads(head["event"]), link)
             if outcome in STALLED:
                 return outcome
             with self.store.transaction() as c:
-                c.execute("DELETE FROM slack_inbound_queue WHERE seq=?", (head["seq"],))
+                c.execute("DELETE FROM slack_inbound_events WHERE seq=?", (head["seq"],))
         return outcome
 
     def drain_all(self):
         """The pass for the gateway loop: every active link's queue, carried in."""
         with self.store.read() as c:
-            ids = [r[0] for r in c.execute("SELECT DISTINCT q.link_id FROM slack_inbound_queue q "
+            ids = [r[0] for r in c.execute("SELECT DISTINCT q.link_id FROM slack_inbound_events q "
                                            "JOIN slack_thread_links l ON l.id=q.link_id WHERE l.state='active' LIMIT 50")]
         out = []
         for link_id in ids:

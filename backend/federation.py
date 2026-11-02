@@ -61,13 +61,13 @@ def peering(c, install_id):
 def company(c):
     """This install's display name (its settings' company name), as the relay last recorded it. Peers see it on the
     peering, and the home sends it in each membership item."""
-    row = c.execute("SELECT company FROM federation_state WHERE singleton=1").fetchone()
+    row = c.execute("SELECT company FROM federation_states WHERE singleton=1").fetchone()
     return row["company"] if row else ""
 
 
 def set_company(c, name):
-    c.execute("INSERT INTO federation_state(singleton,company) VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET "
-              "company=excluded.company WHERE federation_state.company<>excluded.company", (name,))
+    c.execute("INSERT INTO federation_states(singleton,company) VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET "
+              "company=excluded.company WHERE federation_states.company<>excluded.company", (name,))
 
 
 def company_of(c, install_id):

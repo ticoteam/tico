@@ -191,8 +191,8 @@ def due(c, limit):
         "SELECT d.*, m.body, m.from_actor, m.origin_id, m.deleted_at, m.conversation_id "
         "FROM message_deliveries d JOIN messages m ON m.id=d.message_id WHERE d.recipient LIKE 'peer:%' "
         "AND d.state='pending' AND (d.next_attempt_at IS NULL OR d.next_attempt_at<=?) "
-        "AND NOT EXISTS (SELECT 1 FROM federation_outbox o WHERE o.kind='delivery' AND o.delivery_id=d.id) "
-        "AND NOT EXISTS (SELECT 1 FROM federation_items i JOIN federation_outbox o ON o.kind='item' AND o.item_id=i.id "
+        "AND NOT EXISTS (SELECT 1 FROM federation_outbox_items o WHERE o.kind='delivery' AND o.delivery_id=d.id) "
+        "AND NOT EXISTS (SELECT 1 FROM federation_items i JOIN federation_outbox_items o ON o.kind='item' AND o.item_id=i.id "
         "AND o.recipient=substr(d.recipient,6) WHERE i.origin_id=m.origin_id AND i.revision=m.revision) "
         "ORDER BY d.created_at LIMIT ?", (H.now(), max(1, min(int(limit), 500)))).fetchall()
     return [_shape(c, dict(row)) for row in rows]
@@ -241,7 +241,7 @@ def retry_unsent(c, thread_id, install, origin_id):
     count = c.execute(f"UPDATE message_deliveries AS d SET state='pending', attempts=0, error=NULL, next_attempt_at=NULL, "
                       f"updated_at=? WHERE {UNSENT_WHERE} AND d.recipient=? AND d.root_id=?",
                       (now, f"peer:{install}", thread_id)).rowcount
-    c.execute("UPDATE federation_outbox SET next_attempt_at=0 WHERE recipient=? AND thread_origin=?", (install, origin_id))
+    c.execute("UPDATE federation_outbox_items SET next_attempt_at=0 WHERE recipient=? AND thread_origin=?", (install, origin_id))
     return count
 
 

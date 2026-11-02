@@ -196,7 +196,7 @@ class Relay:
                     if isinstance(view, dict):
                         record(c, view)
                 if whole:
-                    c.execute("UPDATE federation_state SET listed_at=? WHERE singleton=1", (now(),))
+                    c.execute("UPDATE federation_states SET listed_at=? WHERE singleton=1", (now(),))
         self.sync_revoked(link)
 
     def sync_revoked(self, link):
@@ -207,7 +207,7 @@ class Relay:
         since it would otherwise stop every sync. An HQ without this route (a 404) lists revoked peerings in its working
         list instead."""
         with self.store.read() as c:
-            state = dict(c.execute("SELECT history_through,history_cursor,history_top FROM federation_state").fetchone())
+            state = dict(c.execute("SELECT history_through,history_cursor,history_top FROM federation_states").fetchone())
         through, cursor, top = state["history_through"], state["history_cursor"], state["history_top"]
         views, done = [], False
         try:
@@ -240,7 +240,7 @@ class Relay:
                 if done:
                     through = max((v for v in (through, top) if v is not None), default=None)
                     cursor = top = None
-                c.execute("UPDATE federation_state SET history_through=?, history_cursor=?, history_top=? WHERE singleton=1",
+                c.execute("UPDATE federation_states SET history_through=?, history_cursor=?, history_top=? WHERE singleton=1",
                           (through, cursor, top))
 
     # ------------------------------------------------------------------------- envelopes
@@ -329,7 +329,7 @@ class Relay:
         if not (isinstance(author, str) and isinstance(key_id, str)) or author in (me, sender):
             return {}
         with self.store.read() as c:
-            known = c.execute("SELECT 1 FROM federation_directory WHERE install=? AND key_id=?", (author, key_id)).fetchone()
+            known = c.execute("SELECT 1 FROM federation_directory_entries WHERE install=? AND key_id=?", (author, key_id)).fetchone()
         if known:
             return {}
         try:
@@ -345,13 +345,13 @@ class Relay:
         not run, the peering is paused), or when its root already has a held envelope from that peer. A held envelope is
         kept by this install and acked, so the mailbox moves on. True when HQ has more."""
         with self.store.read() as c:
-            cursor = c.execute("SELECT cursor FROM federation_state WHERE singleton=1").fetchone()[0]
+            cursor = c.execute("SELECT cursor FROM federation_states WHERE singleton=1").fetchone()[0]
         try:
             answer = self.call(link, "POST", "pull", {"cursor": cursor, "limit": PULL_LIMIT})
         except HR.Failed as failed:
             if failed.code == "cursor_ahead" and isinstance(failed.body.get("cursor"), int):
                 with self.store.transaction() as c:
-                    c.execute("UPDATE federation_state SET cursor=? WHERE singleton=1", (failed.body["cursor"],))
+                    c.execute("UPDATE federation_states SET cursor=? WHERE singleton=1", (failed.body["cursor"],))
             raise
         items = answer.get("items") if isinstance(answer.get("items"), list) else []
         through = cursor
@@ -376,7 +376,7 @@ class Relay:
         if top > cursor:
             self.call(link, "POST", "ack", {"through_hq_seq": top})
         with self.store.transaction() as c:
-            c.execute("UPDATE federation_state SET cursor=?, acked=?, last_pull_at=? WHERE singleton=1", (top, top, now()))
+            c.execute("UPDATE federation_states SET cursor=?, acked=?, last_pull_at=? WHERE singleton=1", (top, top, now()))
         return answer.get("more") is True
 
     def apply(self, link, sender, envelope_id, headers, body, received):
@@ -413,7 +413,7 @@ class Relay:
                 return
             for held in heads:
                 try:
-                    self.apply(link, held["peer_install"], held["envelope_id"], json.loads(held["headers_json"]),
+                    self.apply(link, held["peer_install"], held["envelope_id"], json.loads(held["headers"]),
                                bytes(held["body"]), held["received_at"])
                 except HR.Stop:
                     raise
@@ -468,9 +468,9 @@ class Relay:
     def note(self, code):
         with self.store.transaction() as c:
             if code is None:
-                c.execute("UPDATE federation_state SET failing_since=NULL, last_error='' WHERE singleton=1")
+                c.execute("UPDATE federation_states SET started_failing_at=NULL, last_error='' WHERE singleton=1")
             else:
-                c.execute("UPDATE federation_state SET failing_since=COALESCE(failing_since, ?), last_error=? "
+                c.execute("UPDATE federation_states SET started_failing_at=COALESCE(started_failing_at, ?), last_error=? "
                           "WHERE singleton=1", (now(), code))
 
     async def loop(self, stop):
@@ -487,10 +487,10 @@ class Relay:
     def status(self, c):
         """What the status view shows: the key, the Gateway, and what waits, with no key material."""
         key = F.key(c)
-        state = dict(c.execute("SELECT * FROM federation_state WHERE singleton=1").fetchone())
-        pending = c.execute("SELECT count(*) FROM federation_outbox").fetchone()[0]
+        state = dict(c.execute("SELECT * FROM federation_states WHERE singleton=1").fetchone())
+        pending = c.execute("SELECT count(*) FROM federation_outbox_items").fetchone()[0]
         held = c.execute("SELECT count(*) FROM federation_deferrals").fetchone()[0]
         return {"gateway": self.link(c) is not None, "install": F.install(c) or None,
                 "key": {"key_id": key["key_id"], "registered": key["registered_at"] is not None} if key else None,
-                "outbox": pending, "held": held, "last_pull_at": state["last_pull_at"], "failing_since": state["failing_since"],
+                "outbox": pending, "held": held, "last_pull_at": state["last_pull_at"], "started_failing_at": state["started_failing_at"],
                 "last_error": state["last_error"], "listed_at": state["listed_at"]}

@@ -90,7 +90,7 @@ def message_row(c, origin_id):
 
 
 def queued(c, kind, *, delivery_id=None):
-    return c.execute("SELECT 1 FROM federation_outbox WHERE kind=? AND delivery_id=?", (kind, delivery_id)).fetchone() is not None
+    return c.execute("SELECT 1 FROM federation_outbox_items WHERE kind=? AND delivery_id=?", (kind, delivery_id)).fetchone() is not None
 
 
 def valid_text(value, limit):
@@ -100,7 +100,7 @@ def valid_text(value, limit):
 # ----------------------------------------------------------------------------- outbox
 def queue(c, *, recipient, kind, item_id=None, delivery_id=None, payload=None, thread_origin=""):
     """A row to send to `recipient`. `thread_origin` is the root's origin id: the lane the row waits in."""
-    c.execute("INSERT OR IGNORE INTO federation_outbox(id,recipient,kind,delivery_id,item_id,payload,attempts,next_attempt_at,"
+    c.execute("INSERT OR IGNORE INTO federation_outbox_items(id,recipient,kind,delivery_id,item_id,payload,attempts,next_attempt_at,"
               "last_error,created_at,thread_origin) VALUES(?,?,?,?,?,?,0,0,'',?,?)",
               (H.new_id(), recipient, kind, delivery_id, item_id, payload, stamp(), thread_origin))
 
@@ -391,7 +391,7 @@ def author_key(c, me, sender, peer, author, key_id, fetched):
         return base64.b64decode(row[0]) if row else None
     if author == sender:
         return base64.b64decode(peer["peer_public_key"]) if peer and peer["peer_key_id"] == key_id else None
-    row = c.execute("SELECT public_key FROM federation_directory WHERE install=? AND key_id=?", (author, key_id)).fetchone()
+    row = c.execute("SELECT public_key FROM federation_directory_entries WHERE install=? AND key_id=?", (author, key_id)).fetchone()
     if row:
         return base64.b64decode(row[0])
     found = fetched.get(author)
@@ -415,7 +415,7 @@ def receive(c, now, sender, envelope_id, headers, body, received_at, fetched, ga
     if c.execute("SELECT 1 FROM federation_receipts WHERE peer_install=? AND envelope_id=?", (sender, envelope_id)).fetchone():
         return "replay"
     for install, found in fetched.items():
-        c.execute("INSERT OR IGNORE INTO federation_directory(install,key_id,public_key,fetched_at) VALUES(?,?,?,?)",
+        c.execute("INSERT OR IGNORE INTO federation_directory_entries(install,key_id,public_key,fetched_at) VALUES(?,?,?,?)",
                   (install, found["key_id"], found["public_key"], stamp()))
     c.execute("SAVEPOINT federation_envelope")
     try:
@@ -615,7 +615,7 @@ def continue_catch_ups(c):
     """The next page for each member still catching up, once its last page has left: the outbox never holds more than a
     page of catch-up for a lane, and paging does not wait for the member to ask again, however far behind it is."""
     rows = c.execute("SELECT m.* FROM federation_members m JOIN federation_threads t ON t.thread_id=m.thread_id "
-                     "WHERE m.catch_up_after IS NOT NULL AND NOT EXISTS (SELECT 1 FROM federation_outbox o "
+                     "WHERE m.catch_up_after IS NOT NULL AND NOT EXISTS (SELECT 1 FROM federation_outbox_items o "
                      "WHERE o.recipient=m.install AND o.thread_origin=t.origin_id AND o.kind='item')").fetchall()
     for row in rows:
         catch_up_page(c, thread_local(c, row["thread_id"]), dict(row))
@@ -636,7 +636,7 @@ def repair_gaps(c, me, now, limit=50):
     rows = c.execute("SELECT * FROM federation_threads t WHERE home_install<>? AND removed_at_seq IS NULL "
                      "AND (high_seq>applied_through OR updated_at<?) "
                      "AND (catch_up_requested_at IS NULL OR catch_up_requested_at<=?) AND NOT EXISTS (SELECT 1 FROM "
-                     "federation_outbox o WHERE o.kind='catch_up' AND o.recipient=t.home_install "
+                     "federation_outbox_items o WHERE o.kind='catch_up' AND o.recipient=t.home_install "
                      "AND o.thread_origin=t.origin_id) ORDER BY updated_at LIMIT ?",
                      (me, quiet, now - CATCH_UP_EVERY, limit)).fetchall()
     for row in rows:
@@ -997,7 +997,7 @@ def lane_waiting(c, peer, lane):
 def hold(c, now, peer, lane, envelope_id, headers, body, received_at, reason):
     """Keeps an envelope this install cannot apply yet, in arrival order. It is acked to HQ once it is held here, so the
     mailbox moves on. The lane waits for it; `held_heads` tries it again when it is due."""
-    c.execute("INSERT OR IGNORE INTO federation_deferrals(id,peer_install,thread_origin,envelope_id,headers_json,body,"
+    c.execute("INSERT OR IGNORE INTO federation_deferrals(id,peer_install,thread_origin,envelope_id,headers,body,"
               "received_at,reason,attempts,next_attempt_at,created_at) VALUES(?,?,?,?,?,?,?,?,0,?,?)",
               (H.new_id(), peer, lane, envelope_id, json.dumps(headers, sort_keys=True, separators=(",", ":")), body,
                received_at, reason, now, stamp()))
@@ -1028,8 +1028,8 @@ def due_outbox(c, now, limit=50):
     """The first waiting row of each (recipient, root) lane, when it is due. A later row of a lane waits behind it, so a
     root's stream reaches each peer in order, while other lanes are not held back."""
     return [dict(r) for r in c.execute(
-        "SELECT o.* FROM federation_outbox o WHERE o.next_attempt_at<=? AND o.rowid=(SELECT MIN(i.rowid) FROM "
-        "federation_outbox i WHERE i.recipient=o.recipient AND i.thread_origin=o.thread_origin) "
+        "SELECT o.* FROM federation_outbox_items o WHERE o.next_attempt_at<=? AND o.rowid=(SELECT MIN(i.rowid) FROM "
+        "federation_outbox_items i WHERE i.recipient=o.recipient AND i.thread_origin=o.thread_origin) "
         "ORDER BY o.rowid LIMIT ?", (now, limit)).fetchall()]
 
 
@@ -1126,7 +1126,7 @@ def sent(c, row, outbound):
         delivery = delivery_of(c, row)
         if delivery:
             T.settle(c, delivery, "moot" if outbound.get("skip") else "delivered")
-    c.execute("DELETE FROM federation_outbox WHERE id=?", (row["id"],))
+    c.execute("DELETE FROM federation_outbox_items WHERE id=?", (row["id"],))
 
 
 def dropped(c, row):
@@ -1134,7 +1134,7 @@ def dropped(c, row):
     delivery = delivery_of(c, row)
     if delivery:
         T.moot_pending(c, delivery)
-    c.execute("DELETE FROM federation_outbox WHERE id=?", (row["id"],))
+    c.execute("DELETE FROM federation_outbox_items WHERE id=?", (row["id"],))
 
 
 def refused(c, row, code):
@@ -1143,7 +1143,7 @@ def refused(c, row, code):
     delivery = delivery_of(c, row)
     if delivery:
         T.settle(c, delivery, "failed", error=code)
-    c.execute("DELETE FROM federation_outbox WHERE id=?", (row["id"],))
+    c.execute("DELETE FROM federation_outbox_items WHERE id=?", (row["id"],))
 
 
 def retry(c, row, code, now):
@@ -1151,7 +1151,7 @@ def retry(c, row, code, now):
     paused, which is no failure."""
     attempts = row["attempts"] + 1
     wait = min(BACKOFF_MAX, RETRY_FIRST * 2 ** min(attempts, 8))
-    c.execute("UPDATE federation_outbox SET attempts=?, next_attempt_at=?, last_error=? WHERE id=?",
+    c.execute("UPDATE federation_outbox_items SET attempts=?, next_attempt_at=?, last_error=? WHERE id=?",
               (attempts, now + wait, code, row["id"]))
     delivery = delivery_of(c, row) if code != "paused" else None
     if delivery:

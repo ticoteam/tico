@@ -581,7 +581,7 @@ def test_messages_that_arrive_while_suspended_are_posted_on_resume_in_order(worl
     assert [m["body"] for m in all_rows(world, "SELECT body FROM messages WHERE body LIKE '%while suspended%' "
                                                "ORDER BY seq")] == [
         "first while suspended", "second while suspended"]
-    assert all_rows(world, "SELECT seq FROM slack_inbound_queue") == []
+    assert all_rows(world, "SELECT seq FROM slack_inbound_events") == []
 
 
 def test_users_info_is_asked_once_an_hour_per_user(world, monkeypatch):
@@ -799,7 +799,7 @@ def test_a_message_whose_audience_moves_before_its_write_is_retried_and_then_che
     monkeypatch.setattr(OR, "inbound", moves_after_the_check)
     assert world.bridge.receive(chan_event(ts(1), "The favorite color is teal")) == "retry"
     assert all_rows(world, "SELECT id FROM messages") == []
-    assert len(all_rows(world, "SELECT seq FROM slack_inbound_queue")) == 1
+    assert len(all_rows(world, "SELECT seq FROM slack_inbound_events")) == 1
     monkeypatch.setattr(OR, "inbound", real)
     assert world.bridge.drain(link_id) == "posted", "the next try checks the audience as it is now"
     assert len(all_rows(world, "SELECT id FROM messages")) == 1

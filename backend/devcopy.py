@@ -104,11 +104,11 @@ EMPTY = (
     "calls", "call_participants", "call_holds",
     # Federation: the install's keys, its peerings and what it sends or received from other installs; a copy never
     # speaks for the source to another company (the shared threads' messages are kept with the history).
-    "federation_keys", "federation_peerings", "federation_outbox", "federation_receipts", "federation_state",
-    "federation_directory", "federation_threads", "federation_members", "federation_items", "federation_messages",
+    "federation_keys", "federation_peerings", "federation_outbox_items", "federation_receipts", "federation_states",
+    "federation_directory_entries", "federation_threads", "federation_members", "federation_items", "federation_messages",
     "federation_deferrals",
     # Slack links: an active link posts to Slack both ways; its queue and message map only serve that link.
-    "slack_thread_links", "slack_link_members", "slack_message_links", "slack_inbound_queue",
+    "slack_thread_links", "slack_link_members", "slack_message_links", "slack_inbound_events",
 )
 # Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",
