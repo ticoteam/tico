@@ -154,6 +154,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub goal show <id>                     the goal, its KPIs (target, colour), tasks, check-ins, history
     hub goal read-back '[{"kind":"goal_create","owner":"company","title":"..."}]'
     hub goal save POST /api/v2/goals '<body_json>' --on-behalf-of turn
+    hub goal save POST /api/v2/goal-proposals/turned-down '<body_json>' --on-behalf-of turn
+                                           the owner's "no" to a suggestion you made in chat: stored at once as turned down
     hub goal create --owner me|X --title "..." [--parent ID] [--body "..."|--body-file f] [--top] [--bet ID]
                                            set a goal; a parent is optional. With one, it supports that goal
     hub goal status <id> red|yellow|green|done|dropped "<one sentence>"
@@ -1588,7 +1590,8 @@ def parser():
     s.add_argument("changes", help="JSON array: kind goal_create, goal_update, measure_add, target_set, measure_remove or suggestion, "
                                   "and that change's fields")
     s.set_defaults(fn="goal read-back")
-    s = goal.add_parser("save", help="save one exact read-back step after the owner's plain yes")
+    s = goal.add_parser("save", help="save one exact read-back step after the owner's plain yes, or record the owner's "
+                                     "\"no\" to a suggestion (goal-proposals/turned-down)")
     s.add_argument("method", choices=["POST"])
     s.add_argument("path", help="the step's /api/v2 path")
     s.add_argument("body_json", help="the step's exact body_json string, unchanged")

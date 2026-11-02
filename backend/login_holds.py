@@ -33,6 +33,7 @@ PROBE_STALE = 900                 # a probe job that has not started within this
 LIVE_JOB = ("leased", "running")
 CAPACITY_WAIT = 120               # seconds held after a temporary model-capacity refusal
 CAPACITY_KIND = "temporary model capacity"
+REFUSED_KIND = "refused the request"
 
 # A provider out of capacity for the moment (runner-rs/src/hosts/mod.rs capacity_re): "Selected model is at capacity.
 # Please try a different model.", "overloaded_error", HTTP 503, "rate limited, try again in 20s". Quota or billing words
@@ -53,6 +54,10 @@ _RESET_RE = re.compile(r"\bresets\s+(?:(?P<month>[A-Za-z]{3})[a-z]*\.?\s+(?P<day
                        re.I)
 # An API's own words with a timestamp: "Your usage window resets at 2026-10-19T00:00:00Z".
 _WINDOW_RE = re.compile(r"usage window resets at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)", re.I)
+
+
+# A provider turning the request down: the turn may carry the login's limit, but this line is what stopped it.
+_REFUSED_RE = re.compile(r"\bAPI Error: 4(?!29)\d\d\b|does not support this model", re.I)
 
 
 def capacity(notice):
@@ -447,6 +452,8 @@ def window(notice):
         return CAPACITY_KIND
     if BILLING_LIMIT_RE.search(notice or ""):
         return "API quota or billing limit"
+    if _REFUSED_RE.search(notice or ""):
+        return f"{REFUSED_KIND} ({' '.join(notice.split())[:160]})"
     if re.search(r"\bweekly\b", notice or "", re.I):
         return "plan usage limit (weekly)"
     if re.search(r"\bsession limit\b|5-hour|five-hour", notice or "", re.I):
@@ -508,7 +515,8 @@ def failure_line(result):
     if not isinstance(src, dict) or not src.get("runtime"):
         return None
     kind = src.get("kind") or ""
-    what = ("model capacity" if kind == CAPACITY_KIND else "quota" if src.get("billing") else "usage limit")
+    what = ("model capacity" if kind == CAPACITY_KIND else "quota" if src.get("billing")
+            else "request refused" if kind.startswith(REFUSED_KIND) else "usage limit")
     who = str(src["runtime"]).capitalize() + (" fallback" if src.get("role") == "fallback" else "")
     parts = [who + ("" if src.get("role") == "fallback" else ", primary")]
     if str(src.get("profile") or "").startswith(SUBSCRIPTION):

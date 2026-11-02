@@ -796,10 +796,14 @@ def create_app(settings=None):
                     # goal, measure and suggestion routes save exactly what it read back, or nothing (`not_agreed`).
                     goal_yes = (not approves and goal_read_back.strategy_turn(request.state.identity)
                                 and goal_read_back.saving(request.method, request.url.path))
+                    # The owner's "no" to a suggestion in their chat (backend/goal_read_back.py `turns_down`): admitted on
+                    # their cited turn, and not on the autonomous-action setting, which only gates the other instructed writes.
+                    goal_no = (not approves and asked and request.state.identity.via == "assistant"
+                               and goal_read_back.turns_down(request.method, request.url.path))
                     if goal_yes and not asked:
                         raise goal_read_back.not_agreed("A goal change is saved only on the owner's yes to its "
                                                         "read-back, citing it (`--on-behalf-of turn`)")
-                    if not goal_yes and not (asked and request.state.identity.via == "assistant" and assistant_direct()
+                    if not goal_yes and not goal_no and not (asked and request.state.identity.via == "assistant" and assistant_direct()
                             and (setting or org or assistant_instructed(request.method, request.url.path, raw,
                                                                  decides=bool(approves)))):
                         raise Problem("confirm_required", "The " + settings.assistant_name + " may not do this on its "

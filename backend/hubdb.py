@@ -2763,7 +2763,12 @@ def _writer(conn, actor):
     if not _actor_exists(conn, actor):
         refuse(conn, actor, "identity", f"{actor} is not on the roster")
     if is_bot(actor) and (bot(conn, actor_id(actor)) or {}).get("state") == "quarantined":
-        refuse(conn, actor, "quarantined", f"{actor_id(actor)} is quarantined; a human clears it")
+        timing = quarantine_resumes(conn, actor_id(actor))
+        release = "a human clears it"
+        if timing["auto"]:
+            at = parse_ts(timing.get("resumes_at"))
+            release = "it resumes " + (at.strftime("%Y-%m-%d %H:%M UTC") if at else "after its cooldown")
+        refuse(conn, actor, "quarantined", f"{actor_id(actor)} is quarantined; {release}")
     return actor
 
 
@@ -8230,10 +8235,12 @@ def _stall_stand(conn, row):
     return hashlib.sha256(json.dumps(parts, default=str).encode()).hexdigest()[:16]
 
 
-def _stall_streak(conn, row, stand):
-    """How many of the task's latest stall wakes in a row it stood unchanged through."""
+def _stall_streak(conn, row, stand, quiet=False):
+    """How many of the task's latest stall wakes in a row it stood unchanged through. With `quiet`, notices a wake rule
+    held (task.stall_quiet) count too: they space the next notice, and never count as a wake that was tried."""
+    actions = "('task.stall_wake','task.stall_quiet')" if quiet else "('task.stall_wake')"
     streak = 0
-    for (detail,) in conn.execute("SELECT detail_json FROM events WHERE action='task.stall_wake' AND target=? "
+    for (detail,) in conn.execute(f"SELECT detail_json FROM events WHERE action IN {actions} AND target=? "
                                   "ORDER BY ts DESC LIMIT 6", (row["id"],)):
         if _json(detail, {}).get("stand") != stand:
             break
@@ -8241,10 +8248,10 @@ def _stall_streak(conn, row, stand):
     return streak
 
 
-def _stall_gap(conn, row, stand):
+def _stall_gap(conn, row, stand, quiet=False):
     """Minutes to leave between two stall wakes. STALL_REPEAT_MINUTES after a wake that the task has changed since;
     doubled for each earlier wake in a row the task stood unchanged through (30, 60, 120, then the cap)."""
-    streak = _stall_streak(conn, row, stand)
+    streak = _stall_streak(conn, row, stand, quiet)
     return min(STALL_REPEAT_MINUTES * 2 ** max(streak - 1, 0), STALL_BACKOFF_CAP_MINUTES)
 
 
@@ -8371,7 +8378,11 @@ def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
                     continue
                 if count >= STALL_WAKES_PER_DAY:
                     continue
-            if last and last > shift(at, seconds=-_stall_gap(conn, row, stand) * 60):
+            # A wake a rule held leaves no stall wake, so its own event spaces the next one, or every pass would write
+            # another notice. Decide's go-ahead is not such a notice: it keeps to the gap of the wakes that went out.
+            quiet = None if triaged else conn.execute("SELECT max(ts) FROM events WHERE action='task.stall_quiet' "
+                                                      "AND target=?", (row["id"],)).fetchone()[0]
+            if max(last or "", quiet or "") > shift(at, seconds=-_stall_gap(conn, row, stand, not triaged) * 60):
                 continue
             if row["id"] not in stalled:
                 # A spot check: one status check into the task's session per quiet stretch.
@@ -8382,7 +8393,10 @@ def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
                 if queued_here is not None and msg:
                     queued_here.append(msg["id"])
                 if msg and msg["refs"].get(wake_rules.MARK) in wake_rules.SILENT:
-                    continue     # no attempted wake for the retry/escalation machinery to count
+                    # No attempted wake for the retry/escalation machinery to count.
+                    event(conn, KEEPER, "task.stall_quiet", row["id"], {"bot": actor_id(row["owner"]), "stand": stand,
+                                                                        "kind": "status_check"})
+                    continue
                 if triaged:
                     stall_triage.sent(conn, row, at)
                 event(conn, KEEPER, "task.stall_wake", row["id"],
@@ -8405,6 +8419,7 @@ def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
             if queued_here is not None and msg:
                 queued_here.append(msg["id"])
             if msg and msg["refs"].get(wake_rules.MARK) in wake_rules.SILENT:
+                event(conn, KEEPER, "task.stall_quiet", row["id"], {"bot": actor_id(row["owner"]), "stand": stand})
                 continue
             if triaged:
                 stall_triage.sent(conn, row, at)

@@ -89,6 +89,40 @@ def test_a_manager_declared_only_in_the_bots_definition_counts_too(api):
         assert H.note_create(c, "bot:ops", "bot:cpo", "The roadmap label needs an approval.")
 
 
+@pytest.mark.parametrize("reason", ["10 repeated refusals today", "10 refused writes today", "10 refusals today"])
+def test_quarantined_writer_names_its_cooldown_deadline(api, reason):
+    with api.app.state.store.transaction() as c:
+        H.quarantine(c, "cpo", reason)
+        c.execute("UPDATE events SET ts=? WHERE action='quarantine' AND target='bot:cpo'",
+                  ("2026-11-01T23:32:00Z",))
+        with pytest.raises(H.Refused) as got:
+            H._writer(c, "bot:cpo")
+        assert got.value.rule == "quarantined"
+        assert got.value.detail == "cpo is quarantined; it resumes 2026-11-02 00:32 UTC"
+        assert H.bot(c, "cpo")["state"] == "quarantined"
+
+
+def test_quarantined_writer_without_a_deadline_names_its_cooldown(api, monkeypatch):
+    with api.app.state.store.transaction() as c:
+        H.quarantine(c, "cpo", "10 repeated refusals today")
+        monkeypatch.setattr(H, "quarantine_resumes", lambda c, slug: {"auto": True, "resumes_at": None})
+        with pytest.raises(H.Refused) as got:
+            H._writer(c, "bot:cpo")
+        assert got.value.rule == "quarantined"
+        assert got.value.detail == "cpo is quarantined; it resumes after its cooldown"
+
+
+@pytest.mark.parametrize("reason", ["escape: a secrets path", "unrecognized quarantine reason"])
+def test_quarantined_writer_needing_a_person_keeps_the_existing_refusal(api, reason):
+    with api.app.state.store.transaction() as c:
+        H.quarantine(c, "cpo", reason)
+        with pytest.raises(H.Refused) as got:
+            H._writer(c, "bot:cpo")
+        assert got.value.rule == "quarantined"
+        assert got.value.detail == "cpo is quarantined; a human clears it"
+        assert H.bot(c, "cpo")["state"] == "quarantined"
+
+
 def test_quarantine_batch_and_single_read_pick_the_same_newest_event_on_a_tied_time(api):
     """Two quarantine events with the same `ts`: the batch and the single-row read both take the one inserted last."""
     from backend.read_cache import one
