@@ -7,7 +7,7 @@ from backend import company
 from backend.company_page import audiences as A, disclosure as D, editions as E, release, render, settings as S, stats as ST
 from backend.tests.test_company_page_core import numbers, setup, shown
 from backend.tests.test_company_page_editions import plain_sections
-from backend.tests.test_api import api, headers  # noqa: F401
+from backend.tests.test_api import api, get, headers, post  # noqa: F401
 from backend.tests.test_company_page_editions import page  # noqa: F401
 from backend.tests.test_finance_fixtures import OWNER, finance_template, store  # noqa: F401
 
@@ -80,3 +80,18 @@ def test_a_held_label_is_not_in_the_draft_and_its_word_is_not_allowed_in_the_tex
     assert "Northwind" not in prompt and "Harbor" not in prompt and "12,000" not in prompt
     found = E.leak_findings("Update", plain_sections("Northwind was 12,000 in October."), facts, "2026-10-01", "2026-10-31")
     assert found["numbers"] == ["12,000"] and found["names"] == ["Northwind"]
+
+
+def test_a_public_board_yes_puts_the_public_page_up_when_it_is_recorded(page):  # noqa: F811
+    """The Public page shows what the board approved, so the yes rebuilds it at once instead of at the next day's refresh.
+    A Private board's yes leaves the Public page alone."""
+    with page.store.transaction() as c:
+        A.seed(c)
+        S.set_transparency(c, OWNER, "open")
+        D.set_rule(c, "human:ana", "public", "kpi", mode="show")
+    page.decide(post(page.api, "audiences/board/stats/approval", {})["approval"])
+    assert "board approved" not in page.rebuilds
+    page.decide(post(page.api, "audiences/public/stats/approval", {})["approval"])
+    assert page.rebuilds.count("board approved") == 1
+    served = release._served(page.store.settings)
+    assert [s["label"] for s in served["stats"]] == ["Revenue"]
