@@ -2008,6 +2008,20 @@ CREATE TABLE memory_tidy_keeps (
  runner_id TEXT NOT NULL, requested_by TEXT NOT NULL, created TEXT NOT NULL,
  status TEXT NOT NULL DEFAULT 'queued', commit_sha TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '');
 CREATE UNIQUE INDEX memory_tidy_keeps_pending_v2 ON memory_tidy_keeps(card_id) WHERE status IN ('queued','applying');
+CREATE TABLE edition_checks (
+  id TEXT PRIMARY KEY, edition_id TEXT NOT NULL REFERENCES editions(id) ON DELETE CASCADE, version INTEGER NOT NULL,
+  kind TEXT NOT NULL, outcome TEXT NOT NULL, detail_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+CREATE INDEX edition_checks_edition ON edition_checks(edition_id, created_at);
+CREATE TABLE editions (
+  id TEXT PRIMARY KEY, audience_id TEXT NOT NULL REFERENCES audiences(id), author TEXT NOT NULL,
+  period_start TEXT NOT NULL, period_end TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, supersedes_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('drafting','held','ready','awaiting_approval','published','superseded','retracted')),
+  title TEXT NOT NULL DEFAULT '', body_json TEXT NOT NULL DEFAULT '{}', payload_hash TEXT, approval_id TEXT,
+  disclosure_revision_id TEXT, approved_by TEXT, published_at TEXT, retracted_at TEXT, retracted_by TEXT,
+  retraction_note TEXT, correction_note TEXT, override_note TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX editions_stream ON editions(audience_id, status, published_at);
+CREATE UNIQUE INDEX editions_one_per_period
+  ON editions(audience_id, author, period_start, period_end, version);
 CREATE INDEX messages_to_delivered ON messages(to_actor, delivered_at);
 CREATE INDEX messages_conversation ON messages(conversation_id, created);
 CREATE INDEX events_ts ON events(ts);

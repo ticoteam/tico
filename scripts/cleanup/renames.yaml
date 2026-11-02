@@ -169,6 +169,8 @@ columns:
   docs.created_by: created_by_id
   docs.updated: updated_at
   docs.updated_by: updated_by_id
+  edition_checks.detail_json: detail
+  editions.body_json: body
   enrollments.expires: expires_at
   enrollments.operator: owner_id
   events.detail_json: detail
@@ -621,7 +623,7 @@ golden_added:
 waves:
   "1":
     rule: "M2: every *_json column drops the suffix (stored encoding unchanged)"
-    count: 185
+    count: 187
     global:
       acceptance_json: acceptance  # 1 table
       access_json: access  # 1 table
@@ -637,7 +639,7 @@ waves:
       balances_json: balances  # 1 table
       before_json: before  # 3 tables
       blocked_gate_json: blocked_gate  # 1 table
-      body_json: body  # 5 tables
+      body_json: body  # 6 tables
       bot_owners_json: bot_owners  # 1 table
       bots_json: bots  # 2 tables
       broken_json: broken  # 1 table
@@ -658,7 +660,7 @@ waves:
       decided_for_json: decided_for  # 1 table
       definition_json: definition  # 1 table
       destinations_json: destinations  # 1 table
-      detail_json: detail  # 10 tables
+      detail_json: detail  # 11 tables
       diff_json: diff  # 1 table
       edits_json: edits  # 1 table
       emails_json: emails  # 1 table

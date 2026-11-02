@@ -170,6 +170,8 @@ COLUMNS = (
     ('docs', 'created_by', 'created_by_id', '3'),
     ('docs', 'updated', 'updated_at', '2'),
     ('docs', 'updated_by', 'updated_by_id', '3'),
+    ('edition_checks', 'detail_json', 'detail', '1'),
+    ('editions', 'body_json', 'body', '1'),
     ('enrollments', 'expires', 'expires_at', '2'),
     ('enrollments', 'operator', 'owner_id', '3'),
     ('events', 'detail_json', 'detail', '1'),
