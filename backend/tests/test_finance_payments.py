@@ -1092,12 +1092,13 @@ def test_payee_and_payment_actions_work_on_an_app_with_timers_off(stale_vault, a
     assert paid["status"] == "committed", paid
 
 
-def test_direct_send_is_for_a_paid_recipient_once_the_owner_turns_it_on_and_skips_the_approval_queue(books):
+def test_direct_send_to_a_paid_recipient_under_a_rule_skips_the_approval_queue(books):
     fake = FakeMercury()
     connect(books, fake)
     rid = _payee(books, fake)
     with books.transaction() as c:
         assert act(c, OWNER, "payment_settings", {"direct_send": True}).status == "committed"
+        _allow_direct(c)
         made = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 50_000, "account_id": account(c, "6100"),
                                                 "tags": {"team": "eng"}, "money_account_id": _checking(c)})
         assert made.status == "committed"
@@ -1128,11 +1129,14 @@ def test_direct_send_is_for_a_paid_recipient_once_the_owner_turns_it_on_and_skip
         assert c.execute("SELECT status FROM fin_payments WHERE id=?", (dpid,)).fetchone()[0] == "settled"
 
 
-def _paid_acme(books, fake):
-    """Direct send on, and one payment to Acme Supplies paid through Mercury: the payee is known and paid."""
+def _paid_acme(books, fake, allow=True):
+    """Direct send on, and one payment to Acme Supplies paid through Mercury: the payee is known and paid. `allow` adds
+    the finance rule that lets direct sends through (§9), up to 500.00."""
     rid = _payee(books, fake)
     with books.transaction() as c:
         assert act(c, OWNER, "payment_settings", {"direct_send": True}).status == "committed"
+        if allow:
+            _allow_direct(c)
         made = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 50_000, "account_id": account(c, "6100"),
                                                 "tags": {"team": "eng"}, "money_account_id": _checking(c)})
         assert made.status == "committed", made
@@ -1146,12 +1150,72 @@ def _paid_acme(books, fake):
     return rid
 
 
+def _allow_direct(c, limit=50_000):
+    """A finance rule that allows direct sends up to `limit` minor units (§9): the rule a direct send needs."""
+    made = _rule(c, OWNER, f"Direct sends up to {limit / 100:,.0f}",
+                 {"kind": "payment_create", "mode": "direct", "amount": {"lte": limit}}, {"outcome": "allow"},
+                 [{"input": {"kind": "payment_create", "mode": "direct", "amount": limit}, "expect": "allow"}])
+    assert made.status == "committed", made
+    return str(made.result["rule_id"])
+
+
 def _direct(books, rid, amount=10_000):
     with books.transaction() as c:
         made = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": amount, "account_id": account(c, "6100"),
                                                 "mode": "direct", "money_account_id": _checking(c)}, at=HOURS[7])
         assert made.status == "committed", made
         return str(made.result["payment_id"])
+
+
+def test_a_direct_send_is_refused_without_a_finance_rule_that_allows_it(books):
+    """§9: the owner's switch and a known payee are not enough. With no rule that allows a direct send, the payment is
+    refused and nothing is recorded as direct."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _paid_acme(books, fake, allow=False)
+    with books.transaction() as c:
+        refused = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 10_000,
+                                                   "account_id": account(c, "6100"), "mode": "direct",
+                                                   "money_account_id": _checking(c)}, at=HOURS[7])
+        assert refused.code == "denied" and "finance rule" in refused.reason, (refused.code, refused.reason)
+        assert c.execute("SELECT count(*) FROM fin_payments WHERE mode='direct'").fetchone()[0] == 0
+    sync_once(books, fake, HOURS[8])
+    assert fake.sent("create_transaction") == []
+
+
+def test_a_direct_send_over_the_amount_its_rule_allows_is_refused(books):
+    """§9: a rule allows direct sends only up to its amount limit. Over it is refused; at the limit it goes."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _paid_acme(books, fake, allow=False)
+    with books.transaction() as c:
+        _allow_direct(c, 50_000)
+        over = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 50_001, "account_id": account(c, "6100"),
+                                                "mode": "direct", "money_account_id": _checking(c)}, at=HOURS[7])
+        assert over.code == "denied" and "finance rule" in over.reason, (over.code, over.reason)
+        assert c.execute("SELECT count(*) FROM fin_payments WHERE mode='direct'").fetchone()[0] == 0
+    _direct(books, rid, amount=50_000)
+    with books.read() as c:
+        assert c.execute("SELECT count(*) FROM fin_payments WHERE mode='direct'").fetchone()[0] == 1
+
+
+def test_a_queued_direct_send_whose_rule_is_removed_is_held_and_never_sent_direct(books):
+    """§9: the rule that allowed a queued direct send is removed before it goes. It is held, not sent as a direct
+    transaction and not moved to the approval queue quietly; the finance admin is told."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _paid_acme(books, fake, allow=False)
+    with books.transaction() as c:
+        rule = _allow_direct(c)
+    dpid = _direct(books, rid)
+    with books.transaction() as c:
+        assert act(c, OWNER, "rule_disable", {"rule_id": rule}).status == "committed"
+    sync_once(books, fake, HOURS[8])
+    assert fake.sent("create_transaction") == []
+    assert len(fake.sent("request_send_money")) == 1       # only the approval-queue payment paid before
+    with books.read() as c:
+        assert tuple(c.execute("SELECT mode, status FROM fin_payments WHERE id=?", (dpid,)).fetchone()) == (
+            "direct", "queued")
 
 
 def test_turning_direct_send_off_before_a_queued_direct_payment_goes_sends_it_by_the_approval_queue(books):

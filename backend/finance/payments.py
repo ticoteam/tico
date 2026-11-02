@@ -33,6 +33,7 @@ from .store import tico
 
 CASH_BELOW_KEY = "finance_cash_below"   # the owner's cash alert floor (minor units; 0 or unset: off)
 DIRECT_KEY = "finance_direct_send"     # the owner's company switch (§9 mode 2), off unless the owner turns it on
+NO_DIRECT_RULE = "direct send needs a finance rule that allows it up to an amount (§9), and none does for this payment"
 METHODS = ("ach", "wire", "check")
 INTERNAL = "internal"                   # payment_create's method for a move between our own bank accounts (§5)
 MERCURY_METHOD = {"ach": "ach", "wire": "domesticWire", "check": "check"}
@@ -284,6 +285,11 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     memo = V.opt_text(p, "memo", 140) or ""
     method = str(rec["method"])
     purpose = _purpose(p, method)
+    if mode == "direct":
+        from . import gating     # lazy: gating reads the rules this module's payments are judged by
+        planned = {**_facts(ctx, rec, amount, line.code, obligation, tags, bank), "mode": mode}
+        if not direct_allowed(ctx, gating.send_facts(ctx, who, "payment_create", planned)):
+            raise denied(NO_DIRECT_RULE)
     pid = SL.new_id()
     gate = K.default_gate(ctx.org, who, "payment_create")
     bill = obligation.startswith("bill:")
@@ -380,6 +386,21 @@ def _purpose(p: V.Payload, method: str) -> dict[str, str]:
 def vendor_of(rec: Any) -> str:
     """The vendor a payment to this recipient holds and settles under: one key for both."""
     return str(rec["contact_id"] or rec["name"] or "")
+
+
+def direct_allowed(ctx: Ctx, facts: Mapping[str, object]) -> bool:
+    """§9: a direct send goes only where a gate rule allows it. Such a rule is active, names the mode and an amount
+    limit (an upper bound on `amount`) in its conditions, matches these facts, and is not stale. Without one a direct
+    send is not allowed. A deny rule that matches is still the gate's to apply."""
+    from . import gating     # lazy: see payment_create
+    for r in gating.rules(ctx):
+        when = r.when
+        limit = when.get("amount")
+        bounded = isinstance(limit, dict) and bool(set(cast(dict[str, object], limit)) & {"lt", "lte"})
+        if r.active and r.outcome == "allow" and "mode" in when and bounded and G.matches(when, facts) \
+                and not G.stale(r, facts):
+            return True
+    return False
 
 
 def ring() -> None:
@@ -655,6 +676,10 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         why = verdict.reason or "a finance rule now refuses it"
         end(ctx, pay, "cancelled", why)
         return why
+    if str(pay["mode"]) == "direct" and not direct_allowed(ctx, found):
+        # §9: the rule that allowed this direct send is gone or no longer reaches it. It is held: never sent direct,
+        # and never moved to the approval queue quietly either; a finance admin is told.
+        return _hold(ctx, pay, "no finance rule allows a direct send of it now")
     if verdict.outcome == "needs_approval" and (verdict.stale or
                                                 not approved_for(ctx, action, who, verdict.who, verdict.rule)):
         return _hold(ctx, pay, f"{verdict.reason or 'a finance rule asks for approval'}"
