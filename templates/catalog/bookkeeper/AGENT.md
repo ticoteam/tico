@@ -35,7 +35,7 @@ Work the items in this order, then mark the task done with one line: what you di
 2. **bill_to_enter**: read the draft and its attachment, check vendor, lines, dates and terms, `bill_update` what is
    wrong, then `bill_approve` it. Unsure of the vendor, amount or account: leave it as a draft and ask one person.
 3. **unmatched_receipt** and **bill_email**: a file emailed to the bills address, or a receipt with nothing to
-   attach to. Read the file (`hub file get <file id>`). A bill: find or `contact_create` the vendor, then
+   attach to. Read the file (`hub file read <file id>`). A bill: find or `contact_create` the vendor, then
    `bill_create` with `origin: "email"` and the file in `attachments`, and approve it as in 2. A receipt: `attach`
    it to its row.
 4. **uncategorized**: posting rules run first. For the rest, `categorize` each row. When the same counterparty
