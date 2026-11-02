@@ -377,14 +377,24 @@ def _month(ctx: Ctx, p: V.Payload) -> tuple[str, str]:
     return start.isoformat(), dates.month_end(start).isoformat()
 
 
+def _refuse_unready(ctx: Ctx, who: str, month: str) -> None:
+    """A month whose close checklist still blocks (reconciliation, suspense) does not close, for anyone and with no force."""
+    from .reads import close_blockers      # lazy: reads imports this module
+    why = close_blockers(ctx, month, who)
+    if why:
+        raise FinanceError(CONFLICT, f"{month} cannot close yet: {'; '.join(why)}")
+
+
 def close_period(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("month",))
     start, end = _month(ctx, p)
     row = SL.period_by_start(ctx.c, ctx.book.id, start)
     if row is not None and row["status"] == "closed":
         raise FinanceError(CONFLICT, f"{start[:7]} is already closed")
+    _refuse_unready(ctx, who, start[:7])
 
     def apply(aid: str) -> Result:
+        _refuse_unready(ctx, who, start[:7])      # again when an approved close commits: rows may have arrived since
         pid = SL.insert_period(ctx.c, ctx.book.id, start, end, who, ctx.at)
         SL.set_period_status(ctx.c, pid, "closed", who, ctx.at)
         CL.take(ctx, pid, start[:7], start, end, who)

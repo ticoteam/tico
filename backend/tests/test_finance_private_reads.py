@@ -10,7 +10,8 @@ from backend.finance import reads as FR
 from backend.finance.store import actions as SX
 from backend.finance.context import load
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, store, sync_once)
+    AT, MERCURY, OWNER, FakeMercury, account, act, books, close_month, connect, finance_template, reopen_rows, store,
+    sync_once)
 
 SALARY = -812_345
 
@@ -145,7 +146,7 @@ def _october_debit_paid_by_a_november_payroll_bill(c) -> None:
     payroll = str(made.result["account_id"])
     assert act(c, OWNER, "private_lines_set", {"account_id": payroll, "others_see": "totals"}).status == "committed"
     _ingest(c, _txn("txn-pay", -40.0, who="ACME PAYROLL", day="2026-10-14"))
-    assert act(c, OWNER, "close_period", {"month": "2026-10"}, at=NOV).status == "committed"
+    assert close_month(c, "2026-10", at=NOV).status == "committed"
     vendor = act(c, OWNER, "contact_create", {"name": "Acme Payroll", "kind": "vendor"}, at=NOV)
     made = act(c, OWNER, "bill_create", {"vendor_id": str(vendor.result["contact_id"]), "bill_date": "2026-11-03",
                                          "lines": [{"account_id": payroll, "amount": 4_000}], "number": "PR-7"},
@@ -195,6 +196,7 @@ def test_reversing_the_pays_bill_entry_never_re_exposes_the_amount(books):
     connect(books, FakeMercury())
     with books.transaction() as c:
         _october_debit_paid_by_a_november_payroll_bill(c)
+        reopen_rows(c)                       # the October debit is reconciled by its close; its reclass needs it open
         pays = str(c.execute("SELECT id FROM fin_entries WHERE memo='Pays bill PR-7'").fetchone()[0])
         assert act(c, OWNER, "journal", {"reverses": pays}, at=NOV).status == "committed"
     with books.read() as c:
@@ -264,7 +266,7 @@ def _card_charge_paid_by_a_november_payroll_bill(store, fake) -> str:
                              "operationType": "create", "resourceVersion": 1})
     sync_once(store, fake, LATER)
     with store.transaction() as c:
-        assert act(c, OWNER, "close_period", {"month": "2026-10"}, at=NOV).status == "committed"
+        assert close_month(c, "2026-10", at=NOV).status == "committed"
         vendor = act(c, OWNER, "contact_create", {"name": "Acme Payroll", "kind": "vendor"}, at=NOV)
         made = act(c, OWNER, "bill_create", {"vendor_id": str(vendor.result["contact_id"]), "bill_date": "2026-11-03",
                                              "lines": [{"account_id": payroll, "amount": 4_000}], "number": "PR-7"},
@@ -356,7 +358,7 @@ def _card_charge_in_october_paid_by_a_november_payroll_bill(store, fake, holder:
     sync_once(store, fake, LATER)
     with store.transaction() as c:
         payroll = _payroll_line(c)
-        assert act(c, OWNER, "close_period", {"month": "2026-10"}, at=NOV).status == "committed"
+        assert close_month(c, "2026-10", at=NOV).status == "committed"
         vendor = act(c, OWNER, "contact_create", {"name": "Acme Payroll", "kind": "vendor"}, at=NOV)
         made = act(c, OWNER, "bill_create", {"vendor_id": str(vendor.result["contact_id"]), "bill_date": "2026-11-03",
                                              "lines": [{"account_id": payroll, "amount": 4_000}], "number": "PR-8"},

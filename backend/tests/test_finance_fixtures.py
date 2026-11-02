@@ -1,8 +1,10 @@
 """Shared set-up for the Finance tests: one initialized hub database built once per worker and copied per test, the
 fictional Acme org chart, and helpers to post and act. No tests here."""
+import calendar
 import json
 import sqlite3
 from contextlib import closing
+from datetime import date
 from pathlib import Path
 from typing import cast
 
@@ -82,6 +84,36 @@ _keys = iter(range(10**9))
 def act(c: sqlite3.Connection, who: str, kind: str, payload: dict[str, object], key: str | None = None,
         **kw: object) -> FA.ActionResult:
     return FA.act(c, who, kind, payload, key or f"k{next(_keys)}", at=kw.pop("at", AT), **kw)  # type: ignore[arg-type]
+
+
+def close_month(c: sqlite3.Connection, month: str, who: str = OWNER, **kw: object) -> FA.ActionResult:
+    """Close a month the way the books do: every money account with a settled feed row by the month's end is reconciled
+    through that end at its books' balance first (the close gate asks for it), then close_period. Returns the close."""
+    year, mon = (int(x) for x in month.split("-"))
+    end = date(year, mon, calendar.monthrange(year, mon)[1]).isoformat()
+    accounts = c.execute("SELECT m.id, m.kind, m.account_id FROM fin_money_accounts m WHERE m.status='active' AND "
+                         "(SELECT MIN(f.txn_date) FROM fin_feed_txns f WHERE f.money_account_id=m.id AND f.pending=0) "
+                         "<= ?", (end,)).fetchall()
+    for mid, kind, gl in accounts:
+        last = c.execute("SELECT MAX(statement_end) FROM fin_reconciliations WHERE money_account_id=?", (mid,)).fetchone()[0]
+        if last is not None and str(last) >= end:
+            continue
+        balance = int(c.execute("SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
+                                "WHERE l.account_id=? AND e.entry_date<=?", (gl, end)).fetchone()[0])     # reversed pairs net to 0
+        shown = -balance if kind == "card_program" else balance      # a card statement shows what is owed
+        done = act(c, who, "reconcile", {"money_account_id": mid, "statement_end": end, "statement_balance": shown}, **kw)
+        assert done.status == "committed" and done.result["status"] == "done", (mid, kind, shown, done.result)
+    return act(c, who, "close_period", {"month": month}, **kw)
+
+
+def reopen_rows(c: sqlite3.Connection, **kw: object) -> None:
+    """Undo each money account's latest done reconciliation, so the rows it cleared (and a closed month's close keeps)
+    are editable again: a reconciled row changed by the bank asks a person instead of reposting itself."""
+    for (mid,) in c.execute("SELECT DISTINCT money_account_id FROM fin_reconciliations WHERE status='done' AND "
+                            "undone_at IS NULL").fetchall():
+        last = c.execute("SELECT id FROM fin_reconciliations WHERE money_account_id=? AND status='done' AND "
+                         "undone_at IS NULL ORDER BY statement_end DESC LIMIT 1", (mid,)).fetchone()
+        assert act(c, OWNER, "reconcile_undo", {"reconciliation_id": str(last[0])}, **kw).status == "committed"
 
 
 def spend(c: sqlite3.Connection, code: str, amount: int, *, day: str = "2026-10-10", team: str = "",

@@ -20,7 +20,8 @@ from backend.finance.mercury import IP_HINT, Answer, Mercury, dollars, error_tex
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.tests.test_triggers import hook
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, store, sync_once)
+    AT, MERCURY, OWNER, FakeMercury, account, act, books, close_month, connect, finance_template, reopen_rows, store,
+    sync_once)
 
 LATER = "2026-10-15T12:30:00.000000Z"
 NEXT_DAY = "2026-10-16T12:30:00.000000Z"
@@ -473,7 +474,8 @@ def test_a_correction_to_a_charge_in_a_closed_month_reverses_on_an_open_day(book
     _arrives(fake, raw, 1, "evt-sep-1")
     sync_once(books, fake)
     with books.transaction() as c:
-        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert close_month(c, "2026-09").status == "committed"
+        reopen_rows(c)
     _arrives(fake, {**raw, "amount": -25.0}, 2, "evt-sep-2")
     sync_once(books, fake, "2026-10-15T14:00:00.000000Z")
     with books.read() as c:
@@ -493,7 +495,7 @@ def test_a_late_row_for_a_closed_month_posts_today_and_names_its_own_date_in_the
     _arrives(fake, _txn("txn-sep", "acct-chk", -15.0, "wireFee", day="2026-09-20"), 1, "evt-sep-1")
     sync_once(books, fake)
     with books.transaction() as c:
-        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert close_month(c, "2026-09").status == "committed"
     _arrives(fake, _txn("txn-late-sep", "acct-chk", -12.0, "wireFee", day="2026-09-25"), 2, "evt-late-sep")
     sync_once(books, fake, "2026-10-15T14:00:00.000000Z")
     with books.read() as c:
@@ -558,7 +560,7 @@ def test_a_backfill_posts_the_opening_balance_so_the_first_reconcile_is_done_wit
         assert (done.result["status"], done.result["difference"], done.result["book_difference"]) == ("done", 0, 0)
         sheet = FR.balance_sheet(c, OWNER, at=AT)
         assert next(r for r in sheet["assets"] if r["code"] == "1000")["balance"] == 12_525_050    # Mercury's own
-        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert close_month(c, "2026-09").status == "committed"
     sync_once(books, fake, LATER)                         # idempotent: still one opening
     with books.transaction() as c:
         assert len(_opening(c)) == 2
@@ -587,7 +589,8 @@ def test_a_closed_month_correction_reconciles_that_month_at_the_new_amount(books
     _arrives(fake, raw, 1, "evt-sep-1")
     sync_once(books, fake)
     with books.transaction() as c:
-        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert close_month(c, "2026-09").status == "committed"
+        reopen_rows(c)
     _arrives(fake, {**raw, "amount": -120.0}, 2, "evt-sep-2")
     sync_once(books, fake, LATER)
     with books.transaction() as c:
@@ -629,7 +632,8 @@ def test_a_closed_month_card_correction_counts_only_the_change_in_the_open_month
     _arrives(fake, moved, 1, "evt-c11-1")
     sync_once(books, fake, LATER)
     with books.transaction() as c:
-        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert close_month(c, "2026-09").status == "committed"
+        reopen_rows(c)
 
     def october(c):
         s = FA.budget_state(c, budget_id, "2026-10-20T12:00:00.000000Z")
@@ -675,7 +679,8 @@ def test_card_use_follows_each_entrys_posted_card_line_after_the_card_account_is
     _arrives(fake, charge, 1, "evt-c14-1")
     sync_once(books, fake, LATER)
     with books.transaction() as c:
-        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert close_month(c, "2026-09").status == "committed"
+        reopen_rows(c)
         other = act(c, OWNER, "account_create", {"code": "2110", "name": "Acme card program", "type": "liability"})
         program = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='credit-io'")
                       .fetchone()[0])
@@ -770,7 +775,8 @@ def test_card_use_follows_the_ledger_across_open_months_and_a_reopened_month(boo
     _arrives(fake, charge, 1, "evt-c13-1")
     sync_once(books, fake, LATER)
     with books.transaction() as c:
-        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert close_month(c, "2026-09").status == "committed"
+        reopen_rows(c)
     _arrives(fake, {**charge, "amount": -120.0}, 2, "evt-c13-2")
     sync_once(books, fake, NEXT_DAY)
     _arrives(fake, {**charge, "amount": -130.0}, 3, "evt-c13-3")

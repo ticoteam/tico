@@ -5,7 +5,7 @@ period and keeps the charge's date in its memo."""
 from backend.finance import reads as FR
 from backend.finance.store import banking as SK
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, store, sync_once)
+    AT, MERCURY, OWNER, FakeMercury, account, act, books, close_month, connect, finance_template, store, sync_once)
 from backend.tests.test_finance_payments import _checking
 
 LATER = "2026-10-15T12:30:00.000000Z"
@@ -145,7 +145,7 @@ def test_a_refund_of_a_charge_in_a_closed_month_keeps_the_charge_date_in_its_mem
     _arrives(fake, "txn-sep", -100.0, "2026-09-20")
     sync_once(books, fake)
     with books.transaction() as c:
-        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert close_month(c, "2026-09").status == "committed"
     _arrives(fake, "txn-sep-back", 100.0, "2026-10-05")
     sync_once(books, fake, LATER)
     with books.read() as c:
