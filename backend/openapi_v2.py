@@ -1800,7 +1800,8 @@ SCHEMAS.update({
         "terms_days": {"type": ["integer", "null"]}, "schedule": {"type": ["object", "null"]}, "view_version": "i"},
         required=["lines", "settlements", "attachments", "actions"])]},
     "FinanceContacts": obj({"contacts": items(_FINANCE_CONTACT), "next_cursor": "n", "view_version": "i"}),
-    "FinanceContact": obj({"contact": _FINANCE_CONTACT, "view_version": "i", "files": items(_RECORD_FILE)}),
+    "FinanceContact": obj({"contact": {**_FINANCE_CONTACT, "properties": {**_FINANCE_CONTACT["properties"], **obj(_FRESHNESS)["properties"]}},
+                           "view_version": "i", "files": items(_RECORD_FILE)}),
     "FinanceInbox": obj({"items": items(obj({"kind": {"type": "string", "enum": [
         "uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
         "budget_near_limit", "sync_failed", "period_ready"]}, "id": "s", "label": "s"})),
