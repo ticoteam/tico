@@ -612,15 +612,24 @@ def _with_public(c, at, books, rules, entries):
     for stat_id, b in shown.items():
         if stat_id in merged:
             label, rule, quantities = merged[stat_id]
-            if (D.RANK[b["rule"]["mode"]], -b["rule"]["lag_days"]) > (D.RANK[rule["mode"]], -rule["lag_days"]):
+            if _revealing(b["rule"]) > _revealing(rule):
                 rule = b["rule"]
             merged[stat_id] = [label, rule, quantities]
         else:
             merged[stat_id] = [b["row"].get("label") or "", b["rule"], _quantities(b["row"])]
     union = [(stat_id, label, rule, quantities) for stat_id, (label, rule, quantities) in merged.items()]
-    private = {stat_id for stat_id, *_ in entries}
+    private = {stat_id: rule for stat_id, _, rule, _ in entries}
+    # Public showing a stat exempts it only at least as exactly as this board does: a coarser Public form doesn't cover
+    # the finer private one.
+    exempt = {stat_id for stat_id, b in shown.items()
+              if stat_id not in private or _revealing(b["rule"]) >= _revealing(private[stat_id])}
     return {stat_id: reason for stat_id, reason in _Check(c, rules, books, union).run().items()
-            if stat_id in private and stat_id not in shown}
+            if stat_id in private and stat_id not in exempt}
+
+
+def _revealing(rule):
+    """How exact a rule's form is, for comparing two forms of the same stat: a higher value is more revealing."""
+    return D.RANK[rule["mode"]], -rule["lag_days"]
 
 
 def _stat(row, shaped, stale):

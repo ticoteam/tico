@@ -457,6 +457,26 @@ def test_a_private_stat_is_held_when_the_public_page_and_it_give_away_a_figure_b
         assert held_labels(ST.project(c, "investors", "2026-10-15")) == {"Margin"}
 
 
+def test_a_private_stat_the_public_page_shows_only_coarsely_is_still_held(store):
+    """Investors shows revenue exactly and margin as a range; Public shows margin exactly and revenue as a range. Cost of
+    revenue is rounded on both. Investors alone gives nothing away, but the exact margin Public shows next to Investors'
+    exact revenue does. Public shows revenue only as a range, so Investors' exact revenue is the stat that is held."""
+    setup(store)
+    with store.transaction() as c:
+        numbers(c, ("Revenue", "revenue", "$"), ("Margin", "gross_margin", "%"))
+        S.set_transparency(c, OWNER, "open")
+        for audience in ("investors", "public"):
+            D.set_rule(c, OWNER, audience, "growth", mode="show")
+            D.set_rule(c, OWNER, audience, "pnl_line", "cost_of_revenue", mode="rounded", rounding="nearest:1000")
+        D.set_rule(c, OWNER, "investors", "revenue", mode="show")
+        D.set_rule(c, OWNER, "investors", "gross_margin", mode="range")
+        D.set_rule(c, OWNER, "public", "revenue", mode="range")
+        D.set_rule(c, OWNER, "public", "gross_margin", mode="show")
+        approve(c, "public")
+        assert [s["label"] for s in ST.project(c, "public", "2026-10-15")["stats"]] == ["Revenue", "Margin"]
+        assert held_labels(ST.project(c, "investors", "2026-10-15")) == {"Revenue"}
+
+
 def _private_payroll(c, amount):
     """Payroll, a private line, the only expense posted: total spend is Payroll and nothing else."""
     made = act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
