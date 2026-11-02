@@ -239,6 +239,27 @@ def test_a_sentence_copied_from_an_approved_update_is_not_news_and_a_year_month_
     assert E.leak_findings("2026-10", plain_sections("Revenue reached $120,000."), FACTS, START, END) == {}
 
 
+def test_a_source_allows_its_counts_and_plain_words_but_not_money_names_links_or_hidden_figures():
+    """An approved update lets the page repeat its counts and words, and nothing it says is a money or percent figure, a
+    name inside a sentence or a link. A figure equal to a stat the audience may not see is flagged whatever a source says."""
+    routed = "Routed 31 requests; 28 were finished within a day."
+    assert E.leak_findings("t", plain_sections("Routed 31 requests; 28 were finished."), FACTS, START, END,
+                           sources=[routed]) == {}
+    money = "Cash is $8m and margin is 40%."
+    assert E.leak_findings("t", plain_sections(money), FACTS, START, END, sources=[money])["numbers"] == ["8", "40"]
+    mid_name = "We closed a deal with Stripe."
+    assert E.leak_findings("t", plain_sections(mid_name), FACTS, START, END,
+                           sources=["Routed 31 requests; we closed a deal with Stripe."])["names"] == ["Stripe"]
+    link = "See https://acme.example/report for the figures."
+    assert E.leak_findings("t", plain_sections(link), FACTS, START, END, sources=[link])["links"] == [
+        "https://acme.example/report"]
+    hidden = "We have 148 paying customers."
+    found = E.leak_findings("t", plain_sections(hidden), FACTS, START, END, sources=[hidden], unseen=[148.0])
+    assert found["numbers"] == ["148"] and not found["names"] and not found["links"]
+    small = "We have 8 customers."
+    assert E.leak_findings("t", plain_sections(small), FACTS, START, END, sources=[small], unseen=[8.0]) == {}
+
+
 def test_a_leak_holds_a_draft_and_a_clean_edit_by_a_person_releases_it(page):
     page.answer = {**GOOD, "sections": {**GOOD["sections"], "highlights": ["We signed Globex for $900k."]}}
     edition = page.draft()

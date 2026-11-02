@@ -243,6 +243,25 @@ def test_facts_are_the_same_filtered_shape_cut_to_the_period(store):
     assert facts["classes"]["kpi"] == "show" and facts["classes"]["legal"] == "hidden"
 
 
+def test_the_leak_check_knows_the_recent_values_a_hidden_stat_keeps_back_and_not_the_shown_ones(store):
+    setup(store, shown("kpi"))
+    with store.transaction() as c:
+        paying = make_kpi(c, "Paying customers")
+        read(c, paying, 120, "2026-08-31")
+        read(c, paying, 148, "2026-09-30")
+        on_board(c, paying, cls="customers", label="Paying customers")
+        signups = make_kpi(c, "Signups")
+        read(c, signups, 500, "2026-09-30")
+        on_board(c, signups, label="Signups")
+        values = ST.unseen_values(c, "investors", "2026-10-15")
+    assert {120.0, 148.0} <= values and 500.0 not in values
+
+
+def test_a_plural_unit_reads_singular_at_exactly_one_and_a_word_ending_in_ss_does_not(store):
+    assert ST._text(1, "posts") == "1 post" and ST._text(-1, "posts") == "-1 post"
+    assert ST._text(2, "posts") == "2 posts" and ST._text(1, "class") == "1 class"
+
+
 # ------------------------------------------------------------------------------------------- the derivation check
 def numbers(c, *specs):
     """KPIs on the board, each with two months of readings: (label, data class, unit)."""

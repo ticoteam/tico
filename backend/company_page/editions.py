@@ -237,22 +237,52 @@ NOT_FIGURES = re.compile(r"\d{4}-\d{2}-\d{2}(?:[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})
                          r"[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|\b\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\b", re.I)
 
 
-def leak_findings(title, sections, facts, period_start, period_end, names=(), sources=()):
-    """Numbers, proper names and links in an edition that are not in the filtered facts or the approved update text it
-    was drafted from. A person reads what this flags and may override it; so it errs toward flagging, and a word it
-    can't place counts as a name."""
+UNSEEN_MIN = 10
+MONEY = re.compile(r"[$€£]\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?%"
+                   r"|\d[\d,]*(?:\.\d+)?(?:[kKmMbB]\b|\s(?:thousand|million|billion)\b)", re.I)
+
+
+def _source_words(text):
+    """The words an approved update may put in an edition: its lowercase words and its capitalized words that start a
+    sentence. A capital inside a sentence is a name, which a source does not allow."""
+    found = set()
+    for m in WORD.finditer(text):
+        word = m.group().removesuffix("'s").removesuffix("’s")
+        if not word[0].isupper():
+            found.add(word.lower())
+            continue
+        before = text[:m.start()].rstrip()
+        if not before or before[-1] in ".!?:;—–-•":
+            found.add(word.lower())
+    return found
+
+
+def leak_findings(title, sections, facts, period_start, period_end, names=(), sources=(), unseen=()):
+    """Numbers, proper names and links in an edition that are not in the filtered facts, the names it may use, or the
+    approved update text it was drafted from. A person reads what this flags and may override it; so it errs toward
+    flagging, and a word it can't place counts as a name.
+
+    A source allows what it says plainly: its counts, its lowercase words and its sentence-start words. It does not
+    allow a money or percent figure (those must be in the facts), a name inside a sentence, or a link. `unseen` are the
+    recent values of board stats this audience may not see: an edition's figure that equals one is flagged even when a
+    source says it."""
     strings = []
     _gather(facts, strings)
     strings.extend(n for n in names if n)
-    # The approved updates an edition is drafted from are what the page may say: a sentence copied from one is not news
-    # to the check. Their own dates and times are not figures, as in the facts.
-    strings.extend(s for s in sources if s)
     # Dates, times and ids in the facts are not figures: "2026-10-01" or "00:01:30" would otherwise make "1" an allowed
     # number, and which one is there depends on when the check runs.
     corpus = NOT_FIGURES.sub(" ", " ".join(strings))
     numbers = {_number(n) for n in NUMBER.findall(corpus)} | _period_years(period_start, period_end)
     words = {w.lower().removesuffix("'s").removesuffix("’s") for w in WORD.findall(corpus)}
     links = {m.lower() for m in LINK.findall(corpus)}
+    # Under ten a value is an ordinary count, which any text may say; only larger ones identify a hidden figure.
+    hidden = {float(v) for v in unseen if abs(v) >= UNSEEN_MIN}
+    # The approved updates an edition is drafted from are what the page may say, so a sentence copied from one is not
+    # news to the check. Their own dates and times are not figures, as in the facts.
+    for source in sources:
+        plain = NOT_FIGURES.sub(" ", LINK.sub(" ", source or ""))
+        numbers |= {_number(n) for n in NUMBER.findall(MONEY.sub(" ", plain))}
+        words |= _source_words(plain)
     found = {"numbers": [], "names": [], "links": []}
 
     def add(kind, value):
@@ -266,7 +296,10 @@ def leak_findings(title, sections, facts, period_start, period_end, names=(), so
                 add("links", link)
         text = NOT_FIGURES.sub(" ", LINK.sub(" ", text))     # "2026-10" in a title is a date, not the figure "10"
         for m in NUMBER.finditer(text):
-            if _number(m.group()) not in numbers and not _is_date(text, m.start(), m.group()):
+            if _is_date(text, m.start(), m.group()):
+                continue
+            value = _number(m.group())
+            if value not in numbers or float(value) in hidden:
                 add("numbers", m.group().rstrip(",."))
         for m in WORD.finditer(text):
             word = m.group().removesuffix("'s").removesuffix("’s")
@@ -677,8 +710,10 @@ def check(store, edition_id, primary=None):
                 # The correction note is published with the text, so the leak check reads it too.
                 checked = sections + ([{"key": "correction_note", "items": [{"body": note}]}] if note else [])
                 sources = [r["body"] for r in c.execute("SELECT body FROM edition_sources WHERE edition_id=?", (row["id"],))]
+                from . import stats as ST
+                unseen = ST.unseen_values(c, row["audience_id"])
                 leaks = leak_findings(row["title"], checked, _facts(c, row), row["period_start"], row["period_end"], names,
-                                      sources)
+                                      sources, unseen)
             except Exception as exc:  # noqa: BLE001 - facts that can't be read can't clear anything
                 LOG.warning("Edition leak check failed: %s", type(exc).__name__)
                 failed = "facts"

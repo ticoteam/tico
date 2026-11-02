@@ -111,8 +111,15 @@ def _number(value):
     return int(d) if d == d.to_integral_value() else float(d)
 
 
+def _singular(value, unit):
+    """A plural unit drops its s at exactly one: "1 post", not "1 posts". "ss" words like "class" are not plurals."""
+    if abs(value) == 1 and unit.endswith("s") and not unit.endswith("ss"):
+        return unit[:-1]
+    return unit
+
+
 def _text(value, unit):
-    text = K.amount(abs(value), unit)
+    text = K.amount(abs(value), _singular(value, unit))
     return "-" + text if value < 0 else text
 
 
@@ -663,6 +670,30 @@ def facts(c, audience_id, period_start, period_end, at=None):
     rules = D.all_rules(c, audience_id)
     return {"period_start": str(period_start), "period_end": str(period_end), "stats": stats,
             "classes": {cls: D.lookup(rules, cls)["mode"] for cls in D.DATA_CLASSES}}
+
+
+RECENT_PERIODS = 12
+
+
+def unseen_values(c, audience_id, at=None):
+    """The recent exact values of the board's stats this audience may not see: Hidden for it, or held. The leak check
+    flags an edition's figure that equals one, even when a source says it. Only the numbers leave here: they never go
+    into the model's prompt or a check's detail."""
+    at = _when(at)
+    _, held, _ = _build(c, audience_id, at)
+    rules = D.all_rules(c, audience_id)
+    books = _Books(c, at)
+    values = set()
+    for row in _board(c):
+        rule = _rule(rules, row)
+        if rule["mode"] != "hidden" and row["id"] not in held:
+            continue
+        if row["source_kind"] == "kpi":
+            row = {**row, "_unit": (K.kpi(c, row["ref_id"]) or {}).get("unit")}
+        found = _read(c, books, row, D.parse_rounding(rule["rounding"]).quarterly)
+        if found:
+            values.update(float(p.value) for p in found[0][-RECENT_PERIODS:])
+    return values
 
 
 # ------------------------------------------------------------------------------------------------- the board's approval
