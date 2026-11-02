@@ -41,10 +41,9 @@ async function themed(page, name) {
   await page.setViewportSize(size);
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
 }
-// With TICO_UI_SHOTS set, the moves spread over the window, for a screen that looks as a real year would; the task
-// routes date a move when it happens, so a seeded hub has them all today.
+// The moves spread over the window, as a real year's would be: the task routes date a move when it happens, so on a
+// seeded hub they all fall on one day and merge into one tick.
 async function spreadMarkers(page) {
-  if (!process.env.TICO_UI_SHOTS) return;
   await page.route('**/api/v2/growth/numbers*', async route => {
     const res = await route.fetch(), body = await res.json();
     body.markers.forEach((m, i) => { m.at = new Date(HUB_NOW - (5 + i * 23) * 864e5).toISOString(); });
@@ -175,7 +174,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   assert.match(await page.locator('.gr-hero').innerText(), /Active homes[\s\S]*648[\s\S]*homes/, `${tag}: the North Star's value`);
   await page.locator('[data-gr-ns] .gr-line').first().waitFor({timeout: t(5000)});
   assert.ok(await page.locator('[data-gr-ns] [data-gr-tick]').count() >= 1, `${tag}: task ticks on the North Star`);
-  assert.deepEqual(await page.locator('[data-part="value"] .gr-stat-l').allInnerTexts(), ['Revenue', 'Margin', 'LTV', 'LTV:CAC', 'Payback'], `${tag}: Value's stats`);
+  assert.deepEqual(await page.locator('[data-part="value"] .gr-stat-l').allInnerTexts(), ['Revenue / customer', 'Margin', 'LTV', 'LTV:CAC', 'Payback'], `${tag}: Value's stats`);
   assert.deepEqual(await page.locator('[data-part="growth"] .gr-stat-l').allInnerTexts(), ['New customers', 'Site visits'], `${tag}: an acquisition KPI in Growth`);
   assert.equal(await page.locator('[data-part="channels"] [data-gc-row]').count(), 9, `${tag}: eight channels and Unknown`);
   assert.equal(await page.locator('[data-gc-row]').last().getAttribute('data-gc-row'), 'unknown', `${tag}: Unknown last`);
@@ -214,9 +213,32 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await go(page, '#/growth');
   await page.locator('#gr-body [data-part="tried"]').waitFor({timeout: t(15000)});
 
-  // A hover or tap on a tick gives the title; the chart stays put.
-  await page.locator('[data-gr-ns] [data-gr-tick]').first().dispatchEvent('click');
-  assert.ok((await page.locator('[data-gr-ns] .gr-chart-tip').innerText()).length > 3, `${tag}: a tick's title`);
+  // A tap on a tick gives its title; tapping it again, the chart beside it or anywhere else clears it. So does the mouse moving off.
+  const tip = page.locator('[data-gr-ns] .gr-chart-tip'), tick = page.locator('[data-gr-ns] [data-gr-tick]').first();
+  const press = phone ? l => l.tap() : l => l.click();
+  const off = why => tip.waitFor({state: 'hidden', timeout: t(3000)}).catch(() => assert.fail(`${tag}: ${why} clears the title`));
+  const titled = async () => { await tip.waitFor({timeout: t(3000)}); assert.ok((await tip.innerText()).length > 3, `${tag}: a tick's title`); };
+  await press(tick);
+  await titled();
+  await press(tick);
+  await off('the same tick');
+  await press(tick);
+  await titled();
+  await press(page.locator('[data-part="cost"] h2'));
+  await off('a tap elsewhere');
+  await press(tick);
+  await titled();
+  await press(page.locator('[data-gr-ns] [data-gr-tick]').nth(1));
+  assert.match(await tip.innerText(), /\S/, `${tag}: another tick takes over`);
+  const box = await page.locator('[data-gr-ns]').boundingBox();
+  if (phone) await page.touchscreen.tap(box.x + 12, box.y + 40); else await page.mouse.click(box.x + 12, box.y + 40);
+  await off('a tap on the chart');
+  if (!phone) {
+    await tick.hover();
+    await titled();
+    await page.locator('[data-part="cost"] h2').hover();
+    await off('the mouse moving off');
+  }
 
   // The month picker moves the stats; the month with no spend hides Spend, and a window month with no row is not offered.
   const picker = page.locator('[data-gr-month]');

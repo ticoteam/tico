@@ -91,7 +91,7 @@ function gcCohortDialog(state, ch, c, fresh = false) {
     <div class="gr-pair">${n('spend', 'Spend', c.spend)}${n('bot_cost', 'Bot cost', c.bot_cost)}</div>
     <div class="gr-pair">${n('new_customers', 'New', c.new_customers)}${grField('Data', `<select name="quality">${grOpts([['actual', 'Actual'], ['estimate', 'Estimate']], c.quality || 'estimate', null)}</select>`)}</div>
     <div class="gr-trio">${GC_KEPT.map(([f, d]) => n(f, `Kept ${d} days %`, c[f])).join('')}</div>
-    <div class="gr-pair">${n('revenue_month', 'Revenue', c.revenue_month)}${n('margin_pct', 'Margin %', c.margin_pct)}</div>
+    <div class="gr-pair">${n('revenue_month', 'Revenue / customer', c.revenue_month)}${n('margin_pct', 'Margin %', c.margin_pct)}</div>
     ${grField('Spend from', `<input name="src_spend" maxlength="300" value="${esc(srcs.spend || '')}">`)}
     ${grField('New from', `<input name="src_new" maxlength="300" value="${esc(srcs.new_customers || '')}">`)}`, 'Save', async form => {
       const v = name => form.elements[name].value;
@@ -111,7 +111,7 @@ async function gcSettings(state) {
   const st = await get('/v2/growth/settings', {fresh: true}).catch(() => ({}));
   if (GR !== state) return;
   grDialog('Settings', `${grField('Counted in', `<input name="unit" maxlength="40" value="${esc(st.unit || '')}">`)}
-    <div class="gr-pair">${grField('Revenue', `<input name="revenue_month" inputmode="decimal" value="${esc(st.revenue_month ?? '')}">`)}
+    <div class="gr-pair">${grField('Revenue / customer', `<input name="revenue_month" inputmode="decimal" value="${esc(st.revenue_month ?? '')}">`)}
     ${grField('Margin %', `<input name="margin_pct" inputmode="decimal" value="${esc(st.margin_pct ?? '')}">`)}</div>`, 'Save', async form => {
     const v = n => form.elements[n].value;
     const body = {revenue_month: grNum(v('revenue_month')), margin_pct: grNum(v('margin_pct'))};

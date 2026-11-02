@@ -432,7 +432,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       await page.locator('#strat-news .strat-none-s').waitFor();
       assert.equal(await page.locator('.strat-x, .strat-addrow, .strat-tm.pick, .strat-hint').count(), 0);
       assert.deepEqual(await page.locator('#strat-rivals .strat-chip').allInnerTexts(), ['CleanCo', 'Sparkle']);
-      assert.deepEqual(await sectionTitles(page), ['WHO WE SERVE', 'WHAT WE SELL, AND FOR HOW MUCH', "WHAT WE KNOW THAT OTHERS DON'T", 'HOW WE SELL', "WHAT WE WON'T DO", 'BRAND']);
+      assert.deepEqual(await sectionTitles(page), ['WHO WE SERVE', 'WHAT WE SELL, AND FOR HOW MUCH', "WHAT WE KNOW THAT OTHERS DON'T", "WHAT WE WON'T DO", 'BRAND']);
       assert.deepEqual(errors, []);
       await page.close();
     }

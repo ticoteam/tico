@@ -188,7 +188,7 @@ const GR_RETENTION = [['kept_d30', '30 days'], ['kept_d90', '90 days'], ['kept_d
 const GR_PARTS = [
   {key: 'cost', label: 'Cost', stats: [{field: 'spend', label: 'Spend', fmt: grUsd}, {field: 'bot_cost', label: 'Bot cost', fmt: grUsd}, {field: 'cac', label: 'CAC', fmt: grUsd, good: 'down'}]},
   {key: 'retention', label: 'Retention', stats: GR_RETENTION},
-  {key: 'value', label: 'Value', stats: [{field: 'revenue_month', label: 'Revenue', fmt: grUsd, good: 'up'}, {field: 'margin_pct', label: 'Margin', fmt: grPct, good: 'up', points: true},
+  {key: 'value', label: 'Value', stats: [{field: 'revenue_month', label: 'Revenue / customer', fmt: grUsd, good: 'up'}, {field: 'margin_pct', label: 'Margin', fmt: grPct, good: 'up', points: true},
     {field: 'ltv', label: 'LTV', fmt: grUsd, good: 'up', carry: true}, {field: 'ltv_cac', label: 'LTV:CAC', fmt: grRatio, good: 'up', carry: true}, {field: 'payback_months', label: 'Payback', fmt: v => `${grX(v)} mo`, good: 'down'}]},
 ];
 const GR_NEW = {field: 'new_customers', label: 'New customers', fmt: v => grX(v, 0), good: 'up'};

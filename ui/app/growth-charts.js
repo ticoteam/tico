@@ -61,22 +61,39 @@ function grChartMount(host, spec) {
   let width = host.clientWidth;
   new ResizeObserver(() => { if (host.clientWidth !== width) { width = host.clientWidth; grChartDraw(host); } }).observe(host);
   const tickOf = t => t.closest?.('[data-gr-tick]');
-  host.addEventListener('pointermove', ev => { if (!tickOf(ev.target)) grChartAim(host, ev.clientX); });
-  host.addEventListener('pointerdown', ev => { if (!tickOf(ev.target)) grChartAim(host, ev.clientX); });
-  host.addEventListener('pointerleave', ev => { if (ev.pointerType !== 'touch') grChartClear(host); });
+  // A tapped tick's title stays until the next tap: on that tick, elsewhere on the chart, or off it (grChartOutside).
+  host.addEventListener('pointermove', ev => { if (host.grPin == null && !tickOf(ev.target)) grChartAim(host, ev.clientX); });
+  host.addEventListener('pointerdown', ev => {
+    if (tickOf(ev.target)) return;
+    if (host.grPin != null) grChartClear(host); else grChartAim(host, ev.clientX);
+  });
+  host.addEventListener('pointerleave', ev => { if (ev.pointerType !== 'touch' && host.grPin == null) grChartClear(host); });
   host.addEventListener('keydown', ev => {
     if (ev.target !== host || !['ArrowLeft', 'ArrowRight'].includes(ev.key)) return;
     ev.preventDefault();
+    host.grPin = null;
     const known = host.grGeo.pts, step = ev.key === 'ArrowLeft' ? -1 : 1;
     const now = host.grAim == null ? known.length - 1 : known.indexOf(host.grAim) + step;
     grChartShow(host, known[Math.max(0, Math.min(known.length - 1, now))]);
   });
-  host.addEventListener('blur', () => grChartClear(host));
-  for (const name of ['pointerover', 'click', 'focusin']) host.addEventListener(name, ev => {
+  host.addEventListener('focusout', ev => { if (!host.contains(ev.relatedTarget)) grChartClear(host); });
+  for (const name of ['pointerover', 'focusin']) host.addEventListener(name, ev => {
     const b = tickOf(ev.target);
-    if (b) grChartTick(host, b);
+    if (b && host.grPin == null) grChartTick(host, b);
+  });
+  host.addEventListener('click', ev => {
+    const b = tickOf(ev.target);
+    if (!b) return;
+    const at = Number(b.dataset.grTick);
+    if (host.grPin === at) return grChartClear(host);
+    grChartTick(host, b);
+    host.grPin = at;
   });
 }
+function grChartOutside(ev) {
+  document.querySelectorAll('.gr-chart').forEach(host => { if (host.grBound && !host.contains(ev.target)) grChartClear(host); });
+}
+document.addEventListener('pointerdown', grChartOutside, true);
 function grChartDraw(host) {
   const s = host.grSpec, W = host.clientWidth, H = host.clientHeight;
   if (!W || !H) return;
@@ -112,6 +129,7 @@ function grChartDraw(host) {
     ${ticks}<div class="gr-chart-tip" hidden></div>`;
   host.grGeo = {pts: runs.flat().map(([x, y, i]) => ({x, y, i})), W};
   host.grAim = null;
+  host.grPin = null;
 }
 function grChartAim(host, clientX) {
   const geo = host.grGeo;
@@ -146,6 +164,7 @@ function grChartClearCross(host) {
   host.querySelectorAll('.gr-cross,.gr-cross-dot').forEach(el => el.setAttribute('hidden', ''));
 }
 function grChartClear(host) {
+  host.grPin = null;
   grChartClearCross(host);
   const tip = host.querySelector('.gr-chart-tip');
   if (tip) tip.hidden = true;
