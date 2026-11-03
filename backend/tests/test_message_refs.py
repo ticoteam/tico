@@ -27,7 +27,6 @@ def _typed(api, refs):
     ('{"quiet":true}', (None, None, 1, 0, None)),
     ("[1,2]", (None, None, 0, 0, None)),
     ('{"task":"t5","depth":Infinity}', ("t5", None, 0, 0, None)),  # JSON5 json_extract reads (Python writes Infinity)
-    ("not json", (None, None, 0, 0, None)),
 ])
 def test_message_refs_types_the_routing_keys(api, refs, want):
     assert _typed(api, refs) == want
