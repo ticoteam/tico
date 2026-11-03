@@ -231,13 +231,13 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("bots"), words="turns per hour day"),
     S("bot.profile", "Bot profile", BOTS + " > Bot editor", "bot", "direct", "POST", "bots/{bot}/profile",
       value="json", card=_card("bots")),
-    # Tico Cloud: a cloud machine, shared or its own, its size and Always on all spend credit
-    # (backend/cloud_machines.py). The shared machine's size and Always on are the company's, for owners and admins.
+    # Tico Cloud: a cloud machine, shared or its own, its size, Always on and Pause after all spend credit
+    # (backend/cloud_machines.py). The shared machine's size, Always on and Pause after are the company's, for owners and admins.
     S("bot.cloud_machine", "Cloud machine", BOTS + " > Bot editor", "bot", "confirm", "POST",
       "bots/{bot}/cloud-machine", value="json", card=_card("bots"),
-      words="cloud machine shared own size always on computer"),
+      words="cloud machine shared own size always on pause after minutes computer"),
     S("cloud.shared_machine", "Shared cloud machine", BOTS + " > Bot editor", "admin", "confirm", "POST",
-      "cloud-machines/shared", value="json", card=_card("bots"), words="shared cloud machine size always on"),
+      "cloud-machines/shared", value="json", card=_card("bots"), words="shared cloud machine size always on pause after minutes"),
     # Letting a bot run workflows or edit workflow files, or turning Create product repositories back on (the Owner
     # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
     S("bot.repositories", "Bot repositories", REPOS, "admin", "direct", "PUT", "bots/{bot}/repositories",
