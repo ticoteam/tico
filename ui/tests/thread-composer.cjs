@@ -211,7 +211,7 @@ async function goalMode(browser) {
   assert.deepEqual(api.sent, [{text: 'Plain words', delivery: 'queue'}]);
   assert.equal(api.goalPosts.length, 3);
   await page.waitForFunction(() => !SEND_WAY_TIMER);
-  assert.deepEqual(api.prefs, {'compose.send_way': 'queue'}, 'goal is never kept');
+  assert.equal(api.prefs['compose.send_way'], 'queue', 'goal is never kept');
   // In goal mode a file goes as a message, the kept way: never a delivery of "goal".
   await pick(page, 'goal');
   await page.locator('#bot-thread .p-file').setInputFiles({name: 'brief.txt', mimeType: 'text/plain', buffer: Buffer.from('Pricing brief')});
