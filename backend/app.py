@@ -43,7 +43,7 @@ from . import thread_api
 from . import step_age
 from . import task_holds
 from . import runs
-from . import bot_stops, turn_budgets, proposals, task_caps
+from . import bot_stops, turn_budgets, proposals, task_caps, reach
 from . import (auto_tasks, check_models, profiles, run_triggers, task_models, task_run_models, team_rules, update_feeds,
                topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits)
 from . import task_privacy as privacy
@@ -8270,6 +8270,7 @@ def create_app(settings=None):
     thread_tasks.install(app, store, auth, create_task, settings.public_url or "")    # Make task from a message
     counsel.install(app, store, auth, mutate)      # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
+    reach.install(app, store, auth, mutate)        # Rules › Internal: who reaches whom (docs/reach.md)
     profiles.install(app, store, auth, mutate, settings_admin)
     from . import release_flow
     release_flow.install(app, store, auth, mutate)
