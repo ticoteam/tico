@@ -2926,6 +2926,23 @@ def _file_target(api, target, command):
     return {"path": relative, "digest": digest.hexdigest()}
 
 
+@tool("hub_approval_list", "The approvals addressed to you, newest first. `status` pending (the default: exactly the "
+      "set Needs you counts), approved or declined. `from` is the actor that asked; `before` and `since` a date "
+      "(YYYY-MM-DD). Pages of up to 100 rows: `limit` and `offset`; `next` is the offset of the next page, null on the "
+      "last. Each row: id, status, from_actor, summary, message_id, task_id, created, link (the task it came with, "
+      "else the thread of its message; null if neither). Only approvals you can open are listed.",
+      {"status": {"type": "string", "enum": ["pending", "approved", "declined"], "description": "Default pending"},
+       "from": _s("Only the ones this actor asked for"),
+       "before": _s("Only those asked before this date (YYYY-MM-DD)"),
+       "since": _s("Only those asked on or after this date (YYYY-MM-DD)"),
+       "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Rows per page, default 20"},
+       "offset": {"type": "integer", "minimum": 0, "description": "Start at this row, default 0"}})
+def approval_list(api, args):
+    query = {"status": args.get("status", "pending"), "limit": args.get("limit", 20), "offset": args.get("offset", 0)}
+    query.update({k: args[k] for k in ("from", "before", "since") if args.get(k)})
+    return api.get("approvals", **query)
+
+
 @tool("hub_file_approved", "Whether this exact file version is approved: `approved` true only when the newest verdict "
       "on that version, with the same bytes, approved it. By default only a person's verdict counts (an answer to "
       "hub_task_question with review); `by` bot:SLUG or any also reads bots' hub_file_review. A later Request changes "

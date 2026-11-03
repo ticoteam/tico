@@ -163,6 +163,25 @@ class GrowthRethink(unittest.TestCase):
         self.addCleanup(self.dir.cleanup)
         self.path = Path(self.dir.name) / "hub.db"
 
+    # The retired tables and columns as the release before the rethink created them. Growth's startup schema no
+    # longer makes them, so a file from that release is rebuilt with them here.
+    BEFORE = """
+CREATE TABLE gtm_drafts (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL DEFAULT '{}',
+  revision INTEGER NOT NULL DEFAULT 0, updated_by TEXT, updated_at TEXT);
+CREATE TABLE gtm_versions (id TEXT PRIMARY KEY, n INTEGER NOT NULL UNIQUE, body TEXT NOT NULL DEFAULT '{}',
+  note TEXT NOT NULL DEFAULT '', published_by TEXT, published_at TEXT NOT NULL);
+CREATE TABLE growth_ideas (
+  task_id TEXT PRIMARY KEY REFERENCES tasks(id), hypothesis TEXT NOT NULL DEFAULT '', prediction TEXT NOT NULL DEFAULT '',
+  bet_id TEXT, kpi_id TEXT, judged_kpi_id TEXT, ice_i INTEGER, ice_c INTEGER, ice_e INTEGER,
+  status TEXT NOT NULL DEFAULT 'idea', source_kind TEXT, source_ref TEXT, test_from TEXT, test_to TEXT, change TEXT,
+  stop_if TEXT, min_events INTEGER, audience TEXT, external_ref TEXT, result TEXT, learning TEXT, bet_effect TEXT,
+  confidence TEXT, verdict_at TEXT, verdict_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE growth_idea_channels (
+  task_id TEXT NOT NULL REFERENCES tasks(id), channel_id TEXT NOT NULL, PRIMARY KEY(task_id, channel_id));
+ALTER TABLE growth_settings ADD COLUMN framework TEXT NOT NULL DEFAULT '';
+ALTER TABLE growth_settings ADD COLUMN verdict_win_pct REAL NOT NULL DEFAULT 60;
+"""
+
     def before_rethink(self):
         """The file as the release before the rethink left it: every migration before it (not the ones after, which
         would then sort after an applied one), the threads schema that release's modules made after the migrations
@@ -183,6 +202,8 @@ class GrowthRethink(unittest.TestCase):
                                         lambda directory=None: [m for m in every if m.version < "0035_growth_rethink"]), \
                 unittest.mock.patch.object(migrations, "apply", apply_then_threads):
             H.migrate(conn)
+        for statement in migrations.statements(self.BEFORE):
+            conn.execute(statement)
         for statement in S.SCHEMA:
             conn.execute(statement)
         return conn

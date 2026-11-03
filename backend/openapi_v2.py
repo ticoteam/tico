@@ -335,6 +335,7 @@ STABLE = [
     ("/api/v2/stale-review/{suggestion_id}", "post", "Needs you", "decideStaleSuggestion",
      "Accept or skip one suggestion on your Stale tickets card; accept sends the task version it showed "
      "(409 version_conflict otherwise)", None),
+    ("/api/v2/approvals", "get", "Needs you", "listApprovals", "The approvals addressed to you: pending (what Needs you counts), approved or declined", None),
     ("/api/v2/approvals/{aid}", "get", "Needs you", "getApproval", "One approval request", None),
     ("/api/v2/approvals/{aid}", "post", "Needs you", "decideApproval", "Approve or reject", None),
     ("/api/v2/approvals/{aid}/undo", "post", "Needs you", "undoApproval",
@@ -2504,7 +2505,9 @@ SCHEMAS['BotDreamView'] = obj({'dream': {'oneOf': [obj({
         'type': 'boolean', 'description': 'The question is put to the caller, who answers it at POST /api/v2/messages/{mid}/answer'}}),
         {'type': 'null'}]},
     'summary': 'n', 'doing': {'type': ['string', 'null'], 'description': "While dreaming: the bot's one line on what it is doing now (the task note)"},
-    'closed_at': 'n', 'started_at': 's'}), {'type': 'null'}]}})
+    'closed_at': 'n', 'started_at': 's',
+    'auto': {'type': 'boolean', 'description': 'Started by the nightly run (Auto dream), not by a person'},
+    'reason': {'type': ['string', 'null'], 'description': "An auto dream's reason: the first line of its body"}}), {'type': 'null'}]}})
 
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "

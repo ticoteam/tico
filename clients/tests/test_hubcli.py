@@ -1259,3 +1259,27 @@ def test_a_propose_without_for_sends_no_recipient(monkeypatch):
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
     remotecli.run(hubcli.parser().parse_args(["assistant", "propose", "--summary", "Archive", "--path", "/api/v2/bots/ops/archive"]))
     assert "for" not in client.post.call_args.args[1]
+
+
+def test_approval_list_is_the_pending_default_and_the_mcp_tool_matches(monkeypatch):
+    """`hub approval list` runs `approval list` (GET approvals, pending by default, with --from/--since passed through),
+    and the MCP tool `hub_approval_list` takes the same arguments."""
+    from clients import remotecli, hubtools
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.return_value = {"actor": "human:ana", "status": "pending", "total": 0, "approvals": [], "next": None}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    args = hubcli.parser().parse_args(["approval", "list"])
+    assert args.fn == "approval list" and remotecli.tool_name(args.fn) == "hub_approval_list"
+    remotecli.run(args)
+    client.get.assert_called_with("approvals", status="pending", limit=20, offset=0)
+    remotecli.run(hubcli.parser().parse_args(
+        ["approval", "list", "--status", "declined", "--from", "bot:finance", "--since", "2026-10-01", "--limit", "5"]))
+    client.get.assert_called_with("approvals", status="declined", limit=5, offset=0, **{"from": "bot:finance"},
+                                  since="2026-10-01")
+    tool = hubtools.BY_NAME["hub_approval_list"]
+    assert set(tool["inputSchema"]["properties"]) == {"status", "from", "before", "since", "limit", "offset"}
+    tool["fn"](client, {"from": "bot:finance", "since": "2026-10-01"})
+    client.get.assert_called_with("approvals", status="pending", limit=20, offset=0, **{"from": "bot:finance"},
+                                  since="2026-10-01")

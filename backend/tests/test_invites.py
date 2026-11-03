@@ -149,3 +149,22 @@ def test_the_secret_never_goes_to_an_invite_endpoint_off_the_issuer_over_plain_h
         monkeypatch.setattr(proxy, "_discover", lambda: {"tico_invite_endpoint": endpoint})
         assert proxy.invite("cara@acme.example") is None
     assert posted == []
+
+
+def test_a_person_removed_while_the_issuer_is_asked_keeps_no_refusal_that_names_them(signin, monkeypatch):  # noqa: F811
+    """Removal keeps the invite binding without the address (people_remove). A refusal that lands after it must not
+    write the address back into that binding for a later repeat to read."""
+    from backend import invites
+    signin.fake.invites = [(502, {"error": "not_sent"})]
+    headers = owner(signin)
+    store, issuer = signin.auth.store, signin.auth.proxy.invite
+
+    def invite(email):
+        with store.transaction() as c:               # what people_remove does to the binding mid-flight
+            c.execute("UPDATE invite_sends SET request_hash='' WHERE key=?", (headers["idempotency-key"],))
+        return issuer(email)
+    monkeypatch.setattr(signin.auth.proxy, "invite", invite)
+    assert signin.api.post("/api/v2/access/people/cara/invite", json={}, headers=headers).status_code == 422
+    with store.read() as c:
+        row = c.execute("SELECT state,error_detail FROM invite_sends WHERE key=?", (headers["idempotency-key"],)).fetchone()
+    assert row["state"] == "refused" and row["error_detail"] == invites.REMOVED

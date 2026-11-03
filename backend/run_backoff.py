@@ -210,10 +210,21 @@ def wait_for(fails):
     return min(FIRST_WAIT * 2 ** max(fails - 1, 0), MAX_WAIT)
 
 
-def refusal(c, bot):
+def get_many(c, bots):
+    """{bot: its row as get returns it} for every bot in `bots`, read in set queries (the claim checks each one)."""
+    from .hubdb import chunks
+    rows = {}
+    for part in chunks(bots):
+        for row in c.execute(f"SELECT * FROM run_backoff WHERE bot IN ({','.join('?' * len(part))})", part):
+            rows[row["bot"]] = dict(row)
+    return {bot: rows.get(bot, {}) for bot in bots}
+
+
+def refusal(c, bot, state=None):
     """Why a claim passes over all of the bot's work for its failed runs: "run_hold" while it is held (until its next
-    try is due), "backoff" until its wait ends, else None. Read only, as every refusal (execution.claim_refusal)."""
-    row = get(c, bot)
+    try is due), "backoff" until its wait ends, else None. Read only, as every refusal (execution.claim_refusal).
+    `state`: the bot's row as get returns it, when the caller has read it already."""
+    row = get(c, bot) if state is None else state
     if not row:
         return None
     if row["held_at"]:

@@ -467,8 +467,11 @@ def test_a_standalone_kpi_keeps_its_target_and_the_migration_runs(tmp_path):
     assert targets == {"k-loose": 3, "k-orphan": 5} and links == 0
 
 
-def test_the_threads_delivery_trigger_follows_hubdbs_task_news_rule():
-    """Migration 0047 makes threads_primary_delivery from literal SQL; the condition must stay hubdb's
-    delivery_counts_sql, which every read side uses, or task news would wake people again on a new install."""
-    module = importlib.import_module("backend.migrations.0047_native_threads_schema")
-    assert H.delivery_counts_sql("NEW", "NEW.recipient_id") in module.THREAD_TRIGGERS["threads_primary_delivery"]
+def test_the_threads_delivery_trigger_follows_hubdbs_task_news_rule(tmp_path):
+    """Migrations 0047 and 0048 make threads_primary_delivery from literal SQL; the installed condition must stay hubdb's
+    delivery_counts_sql, with the reason the trigger gives ('addressed'), which every read side uses. Otherwise task news
+    would wake people again, and a bot's task posts too, on a new install."""
+    with sqlite3.connect(fresh(tmp_path)) as c:
+        sql = c.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='threads_primary_delivery'").fetchone()[0]
+    condition = H.delivery_counts_sql("NEW", "NEW.recipient_id", "'addressed'")
+    assert " ".join(condition.split()) in " ".join(sql.split())

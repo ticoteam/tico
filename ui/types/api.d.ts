@@ -461,6 +461,7 @@ export type BotDetail = {
 
 export type BotDreamView = {
   dream: {
+  auto: boolean;
   closed_at: string | null;
   doing: string | null;
   questions: {
@@ -468,6 +469,7 @@ export type BotDreamView = {
   mine: boolean;
   text: string;
 } | null;
+  reason: string | null;
   started_at: string;
   state: "starting" | "dreaming" | "asking" | "done" | "stopped";
   status: string;

@@ -861,6 +861,10 @@ def run(args, who=None):
     if cmd == "approval":
         if sub == "show":
             return client.get("approvals/" + args.id)
+        if sub == "list":
+            query = {"status": args.status, "limit": args.limit, "offset": args.offset}
+            query.update({k: v for k, v in (("from", args.from_actor), ("before", args.before), ("since", args.since)) if v})
+            return client.get("approvals", **query)
         if sub == "read-back":
             return post("assistant/read-back", {"approvals": args.ids})
         if sub in ("approve", "decline"):

@@ -131,6 +131,17 @@ def generations(c):
             {r[0]: int(r[1]) for r in c.execute("SELECT bot,generation FROM bot_browser_exits")})
 
 
+def exits_of(c, bots):
+    """{bot: the computer its browser exit is set on, or None} for every bot in `bots`, read in set queries (bot_exit)."""
+    from .hubdb import chunks
+    found = {}
+    for part in chunks(bots):
+        for row in c.execute(f"SELECT bot,runner_id FROM bot_browser_exits WHERE bot IN ({','.join('?' * len(part))})",
+                             part):
+            found[row["bot"]] = row["runner_id"]
+    return {bot: found.get(bot) for bot in bots}
+
+
 def bot_exits(c):
     return {r["bot"]: r["runner_id"] for r in c.execute(
         "SELECT bot,runner_id FROM bot_browser_exits WHERE runner_id IS NOT NULL")}

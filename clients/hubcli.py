@@ -337,6 +337,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            if the owner already said send in Tico, skip this and
                                            `mail send --approve <their-message-id>`
     hub approval show <id>
+    hub approval list [--status pending|approved|declined] [--from ACTOR] [--before DATE] [--since DATE] [--limit N] [--offset N]
+                                           pending is what Needs you counts; the rows you may open, newest first
     hub approval read-back <id>...         the Assistant: the list it will approve, as its reply; the person's yes runs it
     hub approval approve <id> [--note "..."] [--on-behalf-of turn]
                                            a person approves one addressed to them (the Assistant: when they let it
@@ -3032,6 +3034,14 @@ def parser():
     s = appr.add_parser("show")
     s.add_argument("id")
     s.set_defaults(fn="approval show")
+    s = appr.add_parser("list", help="the approvals addressed to you: pending (what Needs you counts), or approved or declined")
+    s.add_argument("--status", choices=["pending", "approved", "declined"], default="pending")
+    s.add_argument("--from", dest="from_actor", metavar="ACTOR", help="only the ones this actor asked for")
+    s.add_argument("--before", metavar="DATE", help="only those asked before this date (YYYY-MM-DD)")
+    s.add_argument("--since", metavar="DATE", help="only those asked on or after this date (YYYY-MM-DD)")
+    s.add_argument("--limit", type=int, default=20)
+    s.add_argument("--offset", type=int, default=0)
+    s.set_defaults(fn="approval list")
     s = appr.add_parser("read-back", help="the Assistant: list in the person's chat the approvals it will approve")
     s.add_argument("ids", nargs="+")
     s.set_defaults(fn="approval read-back")
@@ -4112,10 +4122,6 @@ def split_human(argv):
 
 def main(argv):
     argv, who = split_human(argv)
-    if list(argv[:2]) == ["approval", "list"]:   # no list route; the approvals waiting for a person are in the needs-you walk
-        print("hub: no approval list; `hub needs-you start` walks the approvals waiting for you, and "
-              "`hub approval show <id>` reads one", file=sys.stderr)
-        return 2
     old = legacy_idea(argv)
     if old:
         notice, lines = old
