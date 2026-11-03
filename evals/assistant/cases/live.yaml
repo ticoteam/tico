@@ -1,6 +1,6 @@
 # Live cases: three asks from the owner's real Assistant chat on Nov 3, where the Assistant did badly. Each case is independent.
 # Owner Dana; company Acme; bots are named by slug. The canned records are the ones the chat saw. Main has offered 100k as a
-# Compact at choice since #2313 (Nov 3), so `live-models-all-bots` tests the record it was given, not today's list.
+# Compact at choice since #2313 (Nov 3); the record here offers it, as the live hub does.
 
 - id: live-models-all-bots
   group: live
@@ -26,13 +26,13 @@
     - match: '^settings find'
       out:
         matches:
-          - {key: "bot.compact_at", label: "Compact at", value: 250000, options: [150000, 250000, 400000], where: "Bots > Bot editor", who_may_change: "the owner"}
+          - {key: "bot.compact_at", label: "Compact at", value: 250000, options: [100000, 150000, 250000, 400000, 600000, 1000000], where: "Bots > Bot editor", who_may_change: "the owner"}
     - match: '^settings show bot\.compact_at'
       out:
         key: "bot.compact_at"
         label: "Compact at"
         value: 250000
-        options: [150000, 250000, 400000]
+        options: [100000, 150000, 250000, 400000, 600000, 1000000]
         who_may_change: "the owner"
   must:
     - '^bot model copywriter claude-haiku-5-5\b.*--effort xhigh\b'
@@ -40,19 +40,20 @@
     - '^bot model analyst claude-haiku-5-5\b.*--effort xhigh\b'
     - '^bot model sales gpt-6\.1-terra\b.*--effort high\b'
     - '^bot model pricing gpt-6\.1-terra\b.*--effort high\b'
+    - '^settings set bot\.compact_at 100000\b.*--bot copywriter\b'
+    - '^settings set bot\.compact_at 100000\b.*--bot support\b'
+    - '^settings set bot\.compact_at 100000\b.*--bot analyst\b'
   must_not:
     - '^message send(?! -h\b| --help)'
     - '^question ask\b'
     - '^note create\b'
     - '^task create\b.*botops'
-    - '^settings set bot\.compact_at 100000\b'
   reply: |
     Changes the models itself, with no hand-off. It sets the three Claude bots (Copywriter, Support, Analyst) to haiku 5.5 at
     xhigh, one bot model call each, and sets the two Codex bots (Sales, Pricing) to gpt-6.1-terra at high, since terra is in
     this record's model list. For Research, the pi bot, either it sets it to haiku 5.5 at xhigh too (her words say all bots) or it leaves it and says why in one line; both pass. It does not message BotOps, file a task for BotOps, ask
-    it a question, or leave it a note. For the 100k context it says plainly that 100k is not one of the Compact at options in
-    this record (150k, 250k or 400k). It either sets the nearest, 150k, and says that it did, or asks which one Dana wants; it
-    never says 100k was set. The reply is a short summary of what changed, a few short lines, and every number in it matches the
+    it a question, or leave it a note. For the 100k context it sets Compact at to 100k (the record offers it) on the Claude bots, one settings set each, and
+    says so. The reply is a short summary of what changed, a few short lines, and every number in it matches the
     record.
 
 - id: live-short-followup-answer
