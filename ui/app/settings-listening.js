@@ -43,7 +43,8 @@ function listenRowHTML(d, names, canEdit) {
 async function renderSettingsListening() {
   const el = $('#set-listening'); if (!el) return;
   let data;
-  try { data = await get('/v2/listening/destinations'); } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  // Automation draws this card with its others, so an answer missing a list shows as empty rather than breaking the group.
+  try { data = {destinations: [], receivers: [], categories: [], ...await get('/v2/listening/destinations')}; } catch (e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
   const canEdit = listenOwner();
   const names = Object.fromEntries(data.receivers.map(r => [r.actor, r.name]));
   const editing = LISTEN_EDIT && LISTEN_EDIT !== 'new' ? data.destinations.find(d => d.key === LISTEN_EDIT) : null;

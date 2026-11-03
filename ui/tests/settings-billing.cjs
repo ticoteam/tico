@@ -72,8 +72,7 @@ const shots = process.env.TICO_SHOTS || '';
     const host = page.locator('#set-billing');
 
     await page.goto('https://tico-ui.test/#/settings');
-    await page.locator('#settings-more > summary').click();
-    await page.locator('[data-settings-tab=billing]').click();
+    await page.locator('[data-settings-tab=limits]').click();
     await host.locator('.billing-balance').waitFor();
     assert.equal(await host.locator('.billing-balance').innerText(), '$19.75');
     assert.equal(await host.locator('.billing-status').innerText(), 'Low balance: Tico models stop when your balance reaches $0.00');
@@ -154,9 +153,9 @@ const shots = process.env.TICO_SHOTS || '';
     await page.goto('about:blank');
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('#settings-tabs').waitFor();
-    assert.equal(await page.locator('[data-settings-tab=billing]').count(), 0);
+    assert.equal(await page.locator('[data-settings-tab=limits]').count(), 0);
     await page.evaluate(() => settingsShow('billing'));          // a saved link to the tab lands on another one
-    assert.notEqual(await page.evaluate(() => SETTINGS_TAB), 'billing');
+    assert.equal(await page.evaluate(() => SETTINGS_TAB), 'you');
     assert.equal(await page.locator('#settings-billing').count(), 0);
     assert.equal(asked.length, before);
     assert.deepEqual(errors, []);

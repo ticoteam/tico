@@ -142,7 +142,7 @@ async function open(browser, {role = 'owner', admin = false, connected = true, v
   });
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('https://tico-ui.test/#/repositories');
-  await page.waitForFunction(() => S.route === '#/settings' && SETTINGS_TAB === 'repos');
+  await page.waitForFunction(() => S.route === '#/settings' && SETTINGS_TAB === 'connections');
   return {page, errors, writes, data};
 }
 const shot = async (page, name) => { if (SHOTS) await page.screenshot({path: path.join(SHOTS, name), fullPage: false}); };

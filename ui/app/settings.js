@@ -40,7 +40,7 @@ async function settingsMachinesRead() {
     return operations;
   } finally { clearTimeout(timer); }
 }
-const settingsMachinesVisible = () => S.route === SETTINGS && SETTINGS_TAB === 'devices' && !!$('#set-machines');
+const settingsMachinesVisible = () => S.route === SETTINGS && SETTINGS_TAB === 'computers' && !!$('#set-machines');
 function settingsMachinesWatch() {
   clearTimeout(SETTINGS_PRESENCE.timer);
   SETTINGS_PRESENCE.timer = null;
@@ -76,28 +76,57 @@ const harnessRow = id => HARNESS_ROWS.find(row => row.id === id) || null;
 const harnessCaps = id => harnessRow(id)?.capabilities || {};
 const harnessesWith = test => HARNESS_ROWS.filter(row => row.capabilities && test(row.capabilities));
 const SETTINGS_TAB_KEY = 'tico.settings.tab';
-// Remembered per browser tab so a reload lands where the person was; a first visit opens General.
-let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY) || 'general'; } catch { return 'general'; } })();
-// The address the shown tab writes (settingsAddress) so it can be copied, bookmarked or shared; route() reads it as Settings.
+// The group shown (SETTINGS_GROUPS key), remembered per browser tab so a reload lands where the person was; a first
+// visit opens You. Anything else set here (an old tab's name, from a link or the router) is mapped by settingsShow.
+let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY) || 'you'; } catch { return 'you'; } })();
+// The address the shown group writes (settingsAddress) so it can be copied, bookmarked or shared; route() reads it as Settings.
 let SETTINGS_ADDRESS = '';
-// Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
-// can't see opens General with a line saying so; an unknown name just opens General.
-const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'repos', 'tasks', 'inbox',
-  'inbound', 'mail', 'system',
-  'webhooks', 'health', 'history', 'gateway', 'billing'];
-// System was Rules (wake rules, now automations) and before that Routines; chat: the old Chat tab; providers and
-// subscriptions: what is the Models tab now; limits: its turn levels.
-const SETTINGS_ALIAS = {humans: 'people', computers: 'devices', repositories: 'repos', google: 'inbox', 'email-phone': 'inbound',
-  rules: 'system', routines: 'system', recurring: 'system', chat: 'models', providers: 'models', subscriptions: 'models',
-  limits: 'models', 'turn-levels': 'models'};
-// Cards that moved from Computers to Models: an old link to one (the settings catalogue's) opens Models.
-const SETTINGS_MOVED_TO_MODELS = ['#settings-models', '#set-providers', '#set-gateway', '#set-turn-levels'];
+// The groups, in the list's order (settings stage 2, spec Appendix C): You is personal and sits above a divider, then
+// the company's ten. `shown` is who sees the group; its address is #/settings/<key>.
+const SETTINGS_GROUPS = [
+  {key: 'you', label: 'You'},
+  {key: 'people', label: 'People', shown: () => settingsIsAdmin()},
+  {key: 'bots', label: 'Bots'},
+  {key: 'models', label: 'AI models'},
+  {key: 'computers', label: 'Computers'},
+  {key: 'limits', label: 'Limits & billing', shown: () => settingsIsAdmin()},
+  {key: 'automation', label: 'Automation'},
+  {key: 'tasks', label: 'Tasks'},
+  {key: 'connections', label: 'Connections'},
+  {key: 'policies', label: 'Company & policies', shown: () => settingsIsAdmin()},
+  {key: 'health', label: 'Health & history'},
+];
+const settingsGroupShown = key => { const g = SETTINGS_GROUPS.find(x => x.key === key); return !!g && (!g.shown || g.shown()); };
+// Every address Settings had before the groups (`#/settings/<tab>`, a tab's other names, the old sections of General):
+// the group that holds it now, and the card to scroll to when it is not the group's first. Saved links, bookmarks,
+// the settings catalogue's links and the manual keep opening what they opened.
+const SETTINGS_PLACES = {
+  general: ['you'], assistant: ['you', '#settings-assistant-pane'], inbox: ['you', '#settings-inbox'], google: ['you', '#settings-inbox'],
+  humans: ['people'],
+  ceo: ['automation', '#set-strategy-bot-card'], 'strategy-bot': ['automation', '#set-strategy-bot-card'],
+  devices: ['computers'], subscriptions: ['models', '#settings-subs'],
+  providers: ['models'], chat: ['models'],   // chat: the old Chat tab, then the Models card; Models is AI models' first card
+  gateway: ['models', '#settings-gateway'], 'turn-levels': ['limits', '#settings-limits'],
+  billing: ['limits', '#settings-billing'],
+  system: ['automation'], recurring: ['automation'], rules: ['automation'], routines: ['automation', '#set-routines-card'],
+  listening: ['automation', '#settings-listening'],
+  tags: ['tasks', '#settings-tags'], types: ['tasks', '#settings-types'],
+  mail: ['connections', '#settings-mail'], repos: ['connections', '#settings-repos'], repositories: ['connections', '#settings-repos'],
+  inbound: ['connections', '#settings-inbound'], 'email-phone': ['connections', '#settings-inbound'],
+  'company-inbox': ['connections', '#settings-inbound'],
+  webhooks: ['connections', '#settings-webhooks'], triggers: ['connections', '#settings-webhooks'],
+  team: ['policies', '#settings-team'], company: ['policies', '#settings-company'],
+  privacy: ['policies', '#settings-privacy'], storage: ['policies', '#settings-storage'],
+  history: ['health', '#settings-history'], runs: ['health', '#settings-history'],
+};
+// The names an address may carry: a group, or an old tab or section. A known one this person can't see opens You
+// with a line saying so; an unknown name just opens You.
+const SETTINGS_TABS = [...SETTINGS_GROUPS.map(g => g.key), ...Object.keys(SETTINGS_PLACES)];
 let SETTINGS_DENIED = false;
 let SETTINGS_TRANSITION_TIMER = null;
-// A section a link points into (an old tab's name, settingsShow); it scrolls there once drawn.
+// A card a link points into (an old tab's place, or the card a link names); it scrolls there once drawn.
 let SETTINGS_REVEAL = '';
-// The old tabs that are now sections of General.
-const SETTINGS_GENERAL = {team: '#settings-team', company: '#settings-company', assistant: '#settings-assistant-pane', privacy: '#settings-privacy', storage: '#settings-storage'};
+const SETTINGS_MOVED_TO_MODELS = ['#settings-models', '#set-providers', '#set-gateway'];
 const settingsReveal = selector => {
   if (!selector || SETTINGS_REVEAL !== selector) return;
   SETTINGS_REVEAL = ''; $(selector)?.scrollIntoView({block: 'start'});
@@ -196,36 +225,70 @@ function settingsConfirm({title, text, ok = 'Confirm', danger = true}) {
 const settingsCanMakeTokens = () => S.me?.can_create_tokens ?? settingsIsAdmin();
 function pageSettings() {
   clearInterval(SETTINGS_TRANSITION_TIMER);
-  if (SETTINGS_TAB === 'credentials' || SETTINGS_TAB === 'cloud') { SETTINGS_TAB = 'general'; location.hash = INTEGRATIONS; return; }
+  if (SETTINGS_TAB === 'credentials' || SETTINGS_TAB === 'cloud') { SETTINGS_TAB = 'you'; location.hash = INTEGRATIONS; return; }
   // A repeat visit to the page already on screen (a refresh, a same-route redraw) keeps it: rebuilding
-  // it would snap back to the default tab and drop whatever is half typed in a form.
+  // it would snap back to the default group and drop whatever is half typed in a form.
   const built = $('#settings-tabs');
   if (built && built.dataset.role === (S.me?.role || '') && built.dataset.admin === String(settingsIsAdmin())) { settingsShow(SETTINGS_TAB); loadSettings(); return; }
-  $('#main').innerHTML = `<div class="meeting-head"><div><h1>Settings</h1>${settingsVersionHTML()}</div>${settingsThemeHTML()}</div>
+  const groups = SETTINGS_GROUPS.filter(g => !g.shown || g.shown());
+  const pane = (key, body) => `<div class="settings-pane" id="settings-group-${key}" data-settings-group="${key}" role="tabpanel" aria-label="${esc(SETTINGS_GROUPS.find(g => g.key === key).label)}" hidden>${body}</div>`;
+  $('#main').innerHTML = `<div class="meeting-head"><div><h1>Settings</h1>${settingsVersionHTML()}</div></div>
     <div id="settings-issues"></div>
-    <div class="tabs settings-tabs" id="settings-tabs" data-role="${esc(S.me?.role || '')}" data-admin="${settingsIsAdmin()}" role="tablist" aria-label="Settings">
-      <button type="button" data-settings-tab="general" role="tab">General</button>
-      ${settingsIsAdmin() ? '<button type="button" data-settings-tab="people" role="tab">People</button>' : ''}
-      <button type="button" data-settings-tab="bots" role="tab">Bots</button>
-      <button type="button" data-settings-tab="devices" role="tab">Computers</button>
-      <button type="button" data-settings-tab="models" role="tab">Models</button>
-      <button type="button" data-settings-tab="repos" role="tab">Repositories</button>
-      <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
-      <button type="button" data-settings-tab="inbox" role="tab">My Google account</button>
-      <details class="settings-more" id="settings-more"><summary>More</summary><div>
-        <button type="button" data-settings-tab="inbound" role="tab">Email &amp; Phone</button>
-        <button type="button" data-settings-tab="mail" role="tab">Mail</button>
-        <button type="button" data-settings-tab="system" role="tab">System</button>
-        <button type="button" data-settings-tab="webhooks" role="tab">Webhooks</button>
-        <button type="button" data-settings-tab="health" role="tab">Health<span class="hl-alert" data-hl-alert hidden></span></button>
-        <button type="button" data-settings-tab="history" role="tab">History</button>
-        ${settingsIsAdmin() ? '<button type="button" data-settings-tab="gateway" role="tab">Gateway</button>' : ''}
-        ${settingsIsAdmin() ? '<button type="button" data-settings-tab="billing" role="tab">Billing</button>' : ''}
-      </div></details>
-    </div>
-    <div class="settings-pane" id="settings-general" role="tabpanel" hidden>
-      <p class="settings-denied" id="settings-denied" role="status" hidden>That page is for admins.</p>
-      ${settingsIsAdmin() ? `<section class="card" id="settings-team"><header><h2>Team</h2></header>
+    <div class="settings-layout">
+    <nav class="settings-groups" id="settings-tabs" data-role="${esc(S.me?.role || '')}" data-admin="${settingsIsAdmin()}" aria-label="Settings">
+      <select class="settings-group-pick" id="settings-group-pick" aria-label="Settings group">${groups.map(g =>
+        `<option value="${g.key}">${esc(g.label)}</option>`).join('')}</select>
+      <div class="settings-group-list" role="tablist" aria-orientation="vertical" aria-label="Settings groups">${groups.map(g =>
+        `<button type="button" data-settings-tab="${g.key}" role="tab">${esc(g.label)}${g.key === 'health' ? '<span class="hl-alert" data-hl-alert hidden></span>' : ''}</button>${g.key === 'you' ? '<hr class="settings-group-divider">' : ''}`).join('')}</div>
+    </nav>
+    <div class="settings-panes">
+    <p class="settings-denied" id="settings-denied" role="status" hidden>That page is for admins.</p>
+    ${pane('you', `<section class="card" id="settings-theme-card"><header><h2>Theme</h2></header>${settingsThemeHTML()}</section>
+      <section class="card" id="settings-assistant-pane"><header><h2>${esc(assistantName())}</h2><div class="row">
+        <a class="ghost" href="${ASSISTANT}">Open chat</a>
+        ${settingsCanManageBot(botRow(assistantBot())) ? `<a class="ghost" href="#/bot/${encodeURIComponent(assistantBot())}/more">Bot settings</a>` : ''}
+      </div></header><div id="settings-assistant-approvals"></div></section>
+      <div id="settings-assistant"></div>
+      <section class="card" id="settings-inbox"><header><h2>Your Google account</h2></header><div id="set-google"></div></section>`)}
+    ${settingsIsAdmin() ? pane('people', '<div id="settings-people"><div id="set-people">' + skelRows(3, {card: true, dot: false}) + '</div></div>') : ''}
+    ${pane('bots', `<section class="card settings-bots-card" id="settings-bots-card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="primary" type="button" id="settings-add-bot" disabled>Add bot</button><button class="ghost" type="button" id="settings-add-catalog" disabled><span class="sb-wide">Add from template</span><span class="sb-narrow">From template</span></button></div>' : ''}</header><div id="set-bots">${skelRows(3, {card: true, dot: false})}</div></section>`)}
+    ${pane('models', `<section class="card" id="settings-subs"><header><h2>Subscriptions</h2><button class="primary settings-head-act" type="button" id="subs-add" hidden>Add subscription</button></header><div id="set-subs">${skelRows(2, {card: true, dot: false})}</div></section>
+      <section class="card" id="settings-gateway-card"><header><h2>Tico Gateway</h2></header><div id="set-gateway-card">${skelRows(1, {card: true, dot: false})}</div></section>
+      <section class="card" id="settings-defaults"><header><h2>Defaults</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
+`)}
+    ${pane('computers', `
+      <section class="card" id="settings-computers"><header><h2>Computers</h2><button class="primary settings-head-act" type="button" id="machine-add-open">Add computer</button></header><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
+      ${settingsIsAdmin() ? '<section class="card" id="settings-hosted" hidden><header><h2>Hosted servers</h2></header><div id="set-hosted"></div></section>' : ''}
+      <section class="card" id="settings-sleep" hidden><header><h2>Sleep when idle</h2></header><div id="set-sleep"></div></section>
+`)}
+    ${settingsIsAdmin() ? pane('limits', `<section class="card" id="settings-spend-limits" hidden><header><h2>Bot spend limits</h2></header><div id="set-spend-limits"></div></section>
+      <section class="card" id="settings-turn-budgets" hidden><header><h2>Run budget</h2></header><div id="set-turn-budgets"></div></section>
+      <section class="card" id="settings-limits"><header><h2>Company turn levels</h2></header><div id="set-turn-levels"></div></section>
+      <div id="settings-billing"><section class="card"><header><h2>Billing</h2></header><div id="set-billing">${skelRows(3, {card: true, dot: false})}</div></section></div>`) : ''}
+    ${pane('automation', `
+      <section class="card" id="set-system-card"><header><h2>What Tico runs on its own</h2></header><div id="set-system-routines">${skelRows(3, {card: true, dot: false})}</div></section>
+      <section class="card" id="set-release-card" hidden><header><h2>Releases</h2></header><div id="set-release"></div></section>
+      <section class="card" id="set-task-manager-card" hidden><header><h2>Task Manager</h2><span class="pill">Built-in</span></header><div id="set-task-manager"></div></section>
+      ${settingsStrategyBotShown() ? `<section class="card" id="set-strategy-bot-card"><header><h2>${esc(strategyBotName())}</h2><span class="pill">Built-in</span>
+        <div class="row"><a class="ghost" href="#/bot/goal-manager/more">Bot settings</a></div></header><div id="set-strategy-bot">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
+      ${settingsIsAdmin() ? '<section class="card" id="set-screening-card" hidden><header><h2>Screening</h2></header><div id="set-screening"></div></section>' : ''}
+    `)}
+    ${pane('tasks', `<div id="settings-tasks">
+      <section class="card" id="set-ask-filter-card"><header><h2>What bots may put on you</h2></header><div id="set-ask-filter"></div></section>
+      <div id="settings-types"></div>
+      <section class="card" id="settings-roadmaps"></section>
+      <section class="card" id="settings-tags-card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
+    </div>`)}
+    ${pane('connections', `<div id="settings-repos"><section class="card repos-card" id="set-repos">${skelRows(3, {card: true, dot: false})}</section></div>
+      <div id="settings-inbound"><section class="card" id="set-inbound"></section></div>
+      <div id="settings-webhooks"><section class="card"><header><h2>Webhooks</h2><div class="theme-seg" id="settings-webhooks-view" role="radiogroup" aria-label="Webhooks">${WH_TABS.map(([k, wide, narrow]) =>
+        `<button type="button" role="radio" data-wh-tab="${k}" aria-checked="${k === WH.tab}">${narrow ? `<span class="sb-wide">${wide}</span><span class="sb-narrow">${narrow}</span>` : wide}</button>`).join('')}</div></header>
+        <div id="set-webhooks">${skelRows(2, {card: true, dot: false})}</div></section></div>
+      ${settingsCanMakeTokens() || S.me?.has_tokens ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
+      <div id="settings-mail"><div id="set-mail">${skelRows(3, {card: true, dot: false})}</div></div>
+      <section class="card" id="settings-tools-link"><header><h2>Tools &amp; Credentials</h2></header>
+        <p class="settings-card-line">The tools bots use and the credentials they sign in with have their own page. <a href="${INTEGRATIONS}">Open Tools &amp; Credentials</a></p></section>`)}
+    ${settingsIsAdmin() ? pane('policies', `<section class="card" id="settings-team"><header><h2>Team</h2></header>
         ${S.me?.cloud && S.me?.role === 'owner' ? `<div class="settings-team-icon">
           <img id="settings-team-icon" alt="Team icon" hidden><span id="settings-team-icon-empty" class="muted">No icon</span>
           <div><strong>Team icon</strong>
@@ -235,64 +298,18 @@ function pageSettings() {
           </div>
         </div>` : ''}
         <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p></section>
-      <section class="card" id="settings-company"><header><h2>Tico company</h2></header><div id="set-company"></div></section>` : ''}
-      <section class="card" id="settings-assistant-pane"><header><h2>${esc(assistantName())}</h2><div class="row">
-        <a class="ghost" href="${ASSISTANT}">Open chat</a>
-        ${settingsCanManageBot(botRow(assistantBot())) ? `<a class="ghost" href="#/bot/${encodeURIComponent(assistantBot())}/more">Bot settings</a>` : ''}
-      </div></header><div id="settings-assistant-approvals"></div></section>
-      <div id="settings-assistant"></div>
-      ${S.me?.role === 'owner' ? `<section class="card" id="settings-privacy"><header><h2>Privacy</h2></header><div id="set-privacy">${skelRows(3, {card: true, dot: false})}</div></section>
-      <section class="card" id="settings-storage"><header><h2>Storage</h2></header><div id="set-storage">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
-    </div>
-    <div class="settings-pane" id="settings-devices" role="tabpanel">
-      <section class="card" id="settings-computers"><header><h2>Computers</h2><button class="primary settings-head-act" type="button" id="machine-add-open">Add computer</button></header><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
-      ${settingsIsAdmin() ? '<section class="card" id="settings-hosted" hidden><header><h2>Hosted servers</h2></header><div id="set-hosted"></div></section>' : ''}
-      <section class="card" id="settings-sleep" hidden><header><h2>Sleep when idle</h2></header><div id="set-sleep"></div></section>
-      ${settingsCanMakeTokens() || S.me?.has_tokens ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
-    </div>
-    <div class="settings-pane" id="settings-models" role="tabpanel" hidden>
-      <section class="card" id="settings-subs"><header><h2>Subscriptions</h2><button class="primary settings-head-act" type="button" id="subs-add" hidden>Add subscription</button></header><div id="set-subs">${skelRows(2, {card: true, dot: false})}</div></section>
-      <section class="card" id="settings-gateway-card"><header><h2>Tico Gateway</h2></header><div id="set-gateway-card">${skelRows(1, {card: true, dot: false})}</div></section>
-      <section class="card" id="settings-defaults"><header><h2>Defaults</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
-      ${settingsIsAdmin() ? '<section class="card" id="settings-limits"><header><h2>Limits</h2></header><div id="set-turn-levels"></div></section>' : ''}
-    </div>
-    <div class="settings-pane" id="settings-bots" role="tabpanel" hidden>
-      <section class="card settings-bots-card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="primary" type="button" id="settings-add-bot" disabled>Add bot</button><button class="ghost" type="button" id="settings-add-catalog" disabled><span class="sb-wide">Add from template</span><span class="sb-narrow">From template</span></button></div>' : ''}</header><div id="set-bots">${skelRows(3, {card: true, dot: false})}</div></section>
-      ${settingsIsAdmin() ? '<section class="card" id="settings-turn-budgets" hidden><header><h2>Run budget</h2></header><div id="set-turn-budgets"></div></section>' : ''}
-    </div>
-    <div class="settings-pane" id="settings-repos" role="tabpanel" hidden><section class="card repos-card" id="set-repos">${skelRows(3, {card: true, dot: false})}</section></div>
-    <div class="settings-pane" id="settings-health" role="tabpanel" hidden><div class="hl-page" id="hl-page"></div>
+      <section class="card" id="settings-policies"><header><h2>Team policies</h2></header><div id="set-policies">${skelRows(3, {card: true, dot: false})}</div></section>
+      <section class="card" id="settings-company"><header><h2>Tico company</h2></header><div id="set-company"></div></section>
+      ${S.me?.role === 'owner' ? `<section class="card" id="settings-storage"><header><h2>Storage</h2></header><div id="set-storage">${skelRows(3, {card: true, dot: false})}</div></section>
+      <section class="card" id="settings-privacy"><header><h2>Privacy</h2></header><div id="set-privacy">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}`) : ''}
+    ${pane('health', `<div id="settings-health"><div class="hl-page" id="hl-page"></div>
       ${hlSetupCheckHTML()}
-      <section class="card"><header><h2>Services</h2></header><div id="set-services">${skelRows(3, {card: true, dot: false})}</div></section></div>
-    ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-gateway" role="tabpanel" hidden><div id="set-gateway-page">${skelRows(3, {card: true, dot: false})}</div></div>` : ''}
-    ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-billing" role="tabpanel" hidden><section class="card"><header><h2>Billing</h2></header><div id="set-billing">${skelRows(3, {card: true, dot: false})}</div></section></div>` : ''}
-    ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-people" role="tabpanel" hidden><div id="set-people">${skelRows(3, {card: true, dot: false})}</div></div>` : ''}
-    <div class="settings-pane" id="settings-system" role="tabpanel" hidden>
-      <section class="card" id="set-system-card"><header><h2>What Tico runs on its own</h2></header><div id="set-system-routines">${skelRows(3, {card: true, dot: false})}</div></section>
-      <section class="card" id="set-release-card" hidden><header><h2>Releases</h2></header><div id="set-release"></div></section>
-      <section class="card" id="set-task-manager-card" hidden><header><h2>Task Manager</h2><span class="pill">Built-in</span></header><div id="set-task-manager"></div></section>
-      ${settingsStrategyBotShown() ? `<section class="card" id="set-strategy-bot-card"><header><h2>${esc(strategyBotName())}</h2><span class="pill">Built-in</span>
-        <div class="row"><a class="ghost" href="#/bot/goal-manager/more">Bot settings</a></div></header><div id="set-strategy-bot">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
-      ${settingsIsAdmin() ? '<section class="card" id="set-screening-card" hidden><header><h2>Screening</h2></header><div id="set-screening"></div></section>' : ''}
-    </div>
-    <div class="settings-pane" id="settings-webhooks" role="tabpanel" hidden>
-      <section class="card"><header><h2>Webhooks</h2><div class="theme-seg" id="settings-webhooks-view" role="radiogroup" aria-label="Webhooks">${WH_TABS.map(([k, wide, narrow]) =>
-        `<button type="button" role="radio" data-wh-tab="${k}" aria-checked="${k === WH.tab}">${narrow ? `<span class="sb-wide">${wide}</span><span class="sb-narrow">${narrow}</span>` : wide}</button>`).join('')}</div></header>
-        <div id="set-webhooks">${skelRows(2, {card: true, dot: false})}</div></section>
-    </div>
-    <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
-      <section class="card" id="set-ask-filter-card"><header><h2>What bots may put on you</h2></header><div id="set-ask-filter"></div></section>
-      <div id="settings-types"></div>
-      <section class="card" id="settings-roadmaps"></section>
-      <section class="card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
-    </div>
-    <div class="settings-pane" id="settings-inbound" role="tabpanel" hidden><section class="card" id="set-inbound"></section></div>
-    <div class="settings-pane" id="settings-mail" role="tabpanel" hidden><div id="set-mail">${skelRows(3, {card: true, dot: false})}</div></div>
-    <div class="settings-pane" id="settings-inbox" role="tabpanel" hidden><section class="card"><header><h2>Your Google account</h2></header><div id="set-google"></div></section></div>
-    <div class="settings-pane" id="settings-history" role="tabpanel" hidden><section class="card"><header><h2>History</h2>
+      <section class="card" id="settings-services-card"><header><h2>Services</h2></header><div id="set-services">${skelRows(3, {card: true, dot: false})}</div></section></div>
+      <div id="settings-history"><section class="card"><header><h2>History</h2>
       ${S.me?.role === 'owner' ? '<div class="theme-seg" id="settings-history-view" role="radiogroup" aria-label="History"><button type="button" role="radio" data-history-view="runs">Runs</button><button type="button" role="radio" data-history-view="changes">Changes</button></div>' : ''}</header>
       <div id="set-runs">${skelRows(3, {card: true, dot: false})}</div>
-      ${S.me?.role === 'owner' ? `<div id="set-history" hidden>${skelRows(3, {card: true, dot: false})}</div>` : ''}</section></div>
+      ${S.me?.role === 'owner' ? `<div id="set-history" hidden>${skelRows(3, {card: true, dot: false})}</div>` : ''}</section></div>`)}
+    </div></div>
     <dialog class="tmodal" id="people-dialog" aria-label="People"></dialog>
     <dialog class="owner-picker" id="owner-picker" aria-labelledby="owner-picker-title"></dialog>
     <dialog class="bot-editor" id="bot-editor" aria-labelledby="bot-editor-title"></dialog>
@@ -301,18 +318,17 @@ function pageSettings() {
   $('#settings-app-log')?.addEventListener('click', () => nativeHandler('showLog')?.postMessage(null));
   pageSettingsThemeBind();
   settingsTeamIconBind();
+  settingsCardsWatch();   // ui/app/settings-cards.js: each card's first line and Ask BotOps
   $('#settings-history-view')?.addEventListener('click', event => {
     const button = event.target.closest('[data-history-view]');
     if (button) settingsHistoryShow(button.dataset.historyView);
   });
+  // A group picked in the list (desktop) or the picker (phone) opens at its top: no old card to scroll to.
   $('#settings-tabs').onclick = event => {
     const button = event.target.closest('[data-settings-tab]');
-    if (button) settingsShow(button.dataset.settingsTab);
+    if (button) { SETTINGS_REVEAL = ''; settingsShow(button.dataset.settingsTab, {group: true}); }
   };
-  // Opening More on a phone shows its tabs at the end of the scrolling row, or the current one when it is in More.
-  $('#settings-more').addEventListener('toggle', event => {
-    if (event.target.open) settingsTabIntoView(event.target.querySelector('[data-settings-tab].cur') || event.target.lastElementChild);
-  });
+  $('#settings-group-pick').onchange = event => { SETTINGS_REVEAL = ''; settingsShow(event.target.value, {group: true}); };
   settingsShow(SETTINGS_TAB);
   loadSettings();
 }
@@ -342,86 +358,74 @@ function pageSettingsThemeBind() {
     seg.querySelectorAll('[data-theme-choice]').forEach(b => b.setAttribute('aria-checked', String(b === button)));
   };
 }
-function settingsShow(tab) {
+// Where a name opens: {group, reveal}. A group's own key opens it; an old tab or section opens the group that holds it
+// now, at its card. A card a link names (`#/settings/<tab>/<card>`, the settings catalogue's) wins: the group is the
+// one the card sits in, wherever it moved.
+function settingsPlace(name) {
+  const [group, reveal = ''] = SETTINGS_GROUPS.some(g => g.key === name) ? [name] : SETTINGS_PLACES[name] || [name];
+  return {group, reveal};
+}
+function settingsShow(tab, {group: picked = false} = {}) {
+  if (SETTINGS_REVEAL === '#settings-models') SETTINGS_REVEAL = '#settings-defaults';
+  if (SETTINGS_REVEAL === '#set-turn-levels') SETTINGS_REVEAL = '#settings-limits';
   if (tab === 'credentials' || tab === 'cloud') { location.hash = INTEGRATIONS; return; }
-  tab = SETTINGS_ALIAS[tab] || tab;
-  if (tab === 'tags' || tab === 'types') tab = 'tasks'; // Saved links keep working.
-  if (tab === 'triggers') tab = 'webhooks';             // Settings > Triggers became Webhooks
-  if (tab === 'devices' && SETTINGS_MOVED_TO_MODELS.includes(SETTINGS_REVEAL)) tab = 'models';
-  // The Strategy Bot's settings were a tab of their own; they are a helper's card in System now.
-  if (tab === 'strategy-bot') { tab = 'system'; SETTINGS_REVEAL = '#set-strategy-bot-card'; }
-  if (SETTINGS_GENERAL[tab]) { SETTINGS_REVEAL = SETTINGS_GENERAL[tab]; tab = 'general'; }
-  if (tab === 'runs') { tab = 'history'; SETTINGS_HISTORY_VIEW = 'runs'; }   // the Runs page moved here
-  const tabs = [...document.querySelectorAll('#settings-tabs [data-settings-tab]')];
-  // Tab names come from the navigation; recheck access in case this person's role just changed.
-  const owner = S.me?.role === 'owner';
-  const access = {people: settingsIsAdmin(), billing: settingsIsAdmin(), gateway: settingsIsAdmin()};
-  const shown = access[tab] !== false && tabs.some(button => button.dataset.settingsTab === tab);
-  // A tab this person can't see (an admin's link, a role just lost) opens General and says why.
-  SETTINGS_DENIED = !shown && SETTINGS_TABS.includes(tab) && tab !== 'general';
-  SETTINGS_TAB = shown ? tab : 'general';
+  const place = settingsPlace(tab);
+  if (tab === 'runs') SETTINGS_HISTORY_VIEW = 'runs';   // the Runs page moved here
+  if (!SETTINGS_REVEAL && place.reveal) SETTINGS_REVEAL = place.reveal;
+  const home = !picked && SETTINGS_REVEAL ? $(SETTINGS_REVEAL)?.closest('[data-settings-group]') : null;
+  const group = home?.dataset.settingsGroup || place.group;
+  // Group names come from the navigation; recheck access in case this person's role just changed. A card drawn
+  // only for some roles (Billing, Gateway, Listening, Storage) is not there for the others.
+  const shown = settingsGroupShown(group) && !!$(`#settings-tabs [data-settings-tab="${group}"]`)
+    && (!place.reveal || picked || !!$(place.reveal));
+  // A group or card this person can't see (an admin's link, a role just lost) opens You and says why.
+  SETTINGS_DENIED = !shown && SETTINGS_TABS.includes(tab) && !['you', 'general'].includes(tab);
+  SETTINGS_TAB = shown ? group : 'you';
+  if (!shown) SETTINGS_REVEAL = '';
   const denied = $('#settings-denied');
   if (denied) denied.hidden = !SETTINGS_DENIED;
-  try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the tab is just not remembered */ }
+  try { sessionStorage.setItem(SETTINGS_TAB_KEY, SETTINGS_TAB); } catch { /* private window: the group is just not remembered */ }
   settingsAddress();
-  if (['health', 'history', 'system', 'webhooks', 'inbound', 'mail', 'gateway', 'billing'].includes(SETTINGS_TAB)) $('#settings-more').open = true;
-  const tasks = $('#settings-tasks');
-  if (tasks) tasks.hidden = SETTINGS_TAB !== 'tasks';
-  tabs.forEach(button => {
+  document.querySelectorAll('#settings-tabs [data-settings-tab]').forEach(button => {
     const selected = button.dataset.settingsTab === SETTINGS_TAB;
     button.classList.toggle('cur', selected); button.setAttribute('aria-selected', String(selected));
   });
-  settingsTabIntoView();
+  const pick = $('#settings-group-pick');
+  if (pick) pick.value = SETTINGS_TAB;
+  document.querySelectorAll('.settings-pane[data-settings-group]').forEach(pane => { pane.hidden = pane.dataset.settingsGroup !== SETTINGS_TAB; });
+  const on = key => SETTINGS_TAB === key;
+  const owner = S.me?.role === 'owner';
   settingsTags();
   taskTypesSettingsShow(SETTINGS_TAB);
-  if (SETTINGS_TAB === 'tasks') { void roadmapSettingsMount(); void askFilterSettingsLoad(); }
-  const devices = $('#settings-devices'), models = $('#settings-models'), history = $('#settings-history'), bots = $('#settings-bots');
-  if (bots) { bots.hidden = SETTINGS_TAB !== 'bots'; if (SETTINGS_TAB === 'bots') void renderTeamBudgets(); }
-  if (devices) devices.hidden = SETTINGS_TAB !== 'devices';
-  if (models) models.hidden = SETTINGS_TAB !== 'models';
+  // Each group draws its cards when it opens; a card an address points into is scrolled to once they are drawn (and
+  // after route() has put the page back at its top).
+  const loads = [];
+  const load = (...calls) => loads.push(...calls.filter(Boolean));
+  if (on('you')) {
+    load(renderSettingsAssistantApprovals(),
+      // The owner's one click when the team has no Assistant (ui/assistant.js): restore it or add it.
+      owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
+      window.mountGoogleConnect?.($('#set-google')));
+  }
+  if (on('people') && $('#settings-people') && !formBusy($('#settings-people'))) load(renderSettingsPeople());
+  // Before the first load the form has no models or computers to show; loadSettings draws it then.
+  if (on('models') && SETTINGS_DATA.loaded) settingsModelsRender();
   settingsMachinesWatch();
   if (settingsMachinesVisible() && SETTINGS_DATA.loaded) void settingsMachinesRefresh();
-  // Before the first load the forms have no models or computers to show; loadSettings draws them then.
-  if (SETTINGS_DATA.loaded) settingsModelsRender();
-  if (history) { history.hidden = SETTINGS_TAB !== 'history'; if (SETTINGS_TAB === 'history') settingsHistoryShow(); }
-  const general = $('#settings-general');
-  if (general) {
-    general.hidden = SETTINGS_TAB !== 'general';
-    // Drawn for the role this person had; one lost since keeps its sections hidden.
-    const team = $('#settings-team'), privacy = $('#settings-privacy'), storage = $('#settings-storage');
-    const company = $('#settings-company');
-    if (team) team.hidden = !settingsIsAdmin();
-    if (company) company.hidden = !settingsIsAdmin();
-    if (privacy) privacy.hidden = storage.hidden = !owner;
-    if (SETTINGS_TAB === 'general') {
-      void Promise.all([renderSettingsAssistantApprovals(),
-        // The owner's one click when the team has no Assistant (ui/assistant.js): restore it or add it.
-        owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
-        privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(),
-        company && settingsIsAdmin() && renderSettingsCompany()]).then(() => settingsReveal(SETTINGS_REVEAL));
-    }
+  if (on('limits')) load(SETTINGS_DATA.loaded && renderSettingsSpendLimits(), renderTeamBudgets(), SETTINGS_DATA.loaded && renderSettingsTurnLevels(), $('#settings-billing') && renderSettingsBilling());
+  if (on('automation')) {
+    load(renderSystemRoutines(), renderReleaseCard(), renderTaskManagerCard(), renderScreeningCard(), renderSettingsStrategyBot());
   }
-  const peoplePane = $('#settings-people');
-  if (peoplePane) { peoplePane.hidden = SETTINGS_TAB !== 'people'; if (SETTINGS_TAB === 'people' && !formBusy(peoplePane)) void renderSettingsPeople(); }
-  const billingPane = $('#settings-billing');
-  if (billingPane) { billingPane.hidden = SETTINGS_TAB !== 'billing'; if (SETTINGS_TAB === 'billing') void renderSettingsBilling(); }
-  const gatewayPane = $('#settings-gateway');
-  if (gatewayPane) { gatewayPane.hidden = SETTINGS_TAB !== 'gateway'; if (SETTINGS_TAB === 'gateway') void renderSettingsGateway(); }
-  const healthPane = $('#settings-health');
-  if (healthPane) { healthPane.hidden = SETTINGS_TAB !== 'health'; if (SETTINGS_TAB === 'health') window.hlMount?.(); }
-  const inboundPane = $('#settings-inbound');
-  if (inboundPane) { inboundPane.hidden = SETTINGS_TAB !== 'inbound'; if (SETTINGS_TAB === 'inbound') void inboundMount(); }
-  const mailPane = $('#settings-mail');
-  if (mailPane) { mailPane.hidden = SETTINGS_TAB !== 'mail'; if (SETTINGS_TAB === 'mail' && !formBusy(mailPane)) void renderSettingsMail(); }
-  const inboxPane = $('#settings-inbox');
-  if (inboxPane) { inboxPane.hidden = SETTINGS_TAB !== 'inbox'; if (SETTINGS_TAB === 'inbox') void window.mountGoogleConnect?.($('#set-google')); }
-  const reposPane = $('#settings-repos');
-  if (reposPane) { reposPane.hidden = SETTINGS_TAB !== 'repos'; if (SETTINGS_TAB === 'repos' && !formBusy(reposPane)) void renderSettingsRepos(); }
-  const system = $('#settings-system');
-  if (system) { system.hidden = SETTINGS_TAB !== 'system'; if (SETTINGS_TAB === 'system') { void renderSystemRoutines(); void renderReleaseCard(); void renderTaskManagerCard(); void renderScreeningCard(); void renderSettingsStrategyBot(); } }
-  const webhooksPane = $('#settings-webhooks');
-  if (webhooksPane) { webhooksPane.hidden = SETTINGS_TAB !== 'webhooks'; if (SETTINGS_TAB === 'webhooks' && !formBusy(webhooksPane)) void renderSettingsWebhooks(); }
-  settingsRevealSoon(SETTINGS_REVEAL);
+  if (on('tasks')) load(roadmapSettingsMount(), askFilterSettingsLoad());
+  if (on('connections')) load(!formBusy($('#settings-repos')) && renderSettingsRepos(), inboundMount(), !formBusy($('#settings-mail')) && renderSettingsMail(), !formBusy($('#settings-webhooks')) && renderSettingsWebhooks());
+  if (on('policies')) {
+    const privacy = $('#settings-privacy'), storage = $('#settings-storage'), company = $('#settings-company');
+    load(privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(), company && settingsIsAdmin() && renderSettingsCompany(),
+      $('#settings-policies') && renderSettingsPolicies());
+  }
+  if (on('health')) load(window.hlMount?.(), settingsHistoryShow());
+  const reveal = SETTINGS_REVEAL;
+  if (reveal) void Promise.allSettled(loads).then(() => settingsRevealSoon(reveal));
 }
 // While Settings is the page, the address bar names the tab shown: #/settings/<tab>. It replaces the entry: no
 // hashchange, no new history step.
@@ -527,8 +531,9 @@ async function renderSettingsPrivacy() {
 }
 // Models draws its cards when shown; Computers reads the subscriptions and the Gateway toggle for its pickers.
 function settingsModelsRender() {
-  if (SETTINGS_TAB === 'models') { void renderSettingsSubs(); void renderSettingsProviders(); void renderSettingsTurnLevels(); }
-  else if (SETTINGS_TAB === 'devices' && S.me?.cloud) {
+  if (SETTINGS_TAB === 'models') { void renderSettingsSubs(); void renderSettingsProviders(); }
+  if (SETTINGS_TAB === 'limits') { void renderSettingsSpendLimits(); void renderSettingsTurnLevels(); }
+  if (SETTINGS_TAB === 'computers' && S.me?.cloud) {
     void Promise.all([subsLoad(), providersViewLoad().catch(() => null)]).then(() => { if (settingsMachinesVisible()) renderSettingsMachines(); });
   }
 }
@@ -596,7 +601,7 @@ async function loadSettings() {
     void renderSettingsTokens();
     void renderSettingsHosted();
     void renderSettingsSleep();
-    if (SETTINGS_TAB === 'models') settingsModelsRender();
+    if (['models', 'limits'].includes(SETTINGS_TAB)) settingsModelsRender();
     const add = $('#settings-add-bot');
     if (add) { add.onclick = () => void settingsRecruitFlow(); add.disabled = false; }
     const fromCatalog = $('#settings-add-catalog');
