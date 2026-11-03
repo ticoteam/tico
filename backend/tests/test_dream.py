@@ -114,3 +114,44 @@ def test_asking_answering_and_the_dreams_own_commit(api):
     assert again["task"] != tid and again["state"] == "starting"
     with api.app.state.store.read() as c:
         assert done["closed_at"][:10] in H.task(c, again["task"])["body"]
+
+
+def test_someone_who_may_give_work_but_not_read_never_gets_another_persons_open_dream(api):
+    tid = dream(api)["dream"]["task"]
+    with api.app.state.store.transaction() as c:
+        H.task_ask(c, "bot:ops", tid, QUESTIONS)
+        restrict(c, "ops", see={"people": ["ana", "ben", "cara"]}, read={"people": ["ana", "ben"]},
+                 write={"people": ["ana", "ben", "cara"]})
+    r = api.post("/api/v2/bots/ops/dream", json={}, headers=headers("cara-test"))
+    assert r.status_code == 409 and r.json()["error"]["code"] == "busy", r.text
+    assert "weekly reports" not in r.text and tid not in r.text
+
+
+def test_a_hand_labelled_task_is_no_dream(gate):
+    api, model, token = gate
+    plate(api, 15)
+    r = api.post("/api/v2/tasks", json={"title": "Dream", "body": "Anything.", "owner": "bot:ops", "labels": ["dream"]},
+                 headers=headers("ben-test"))
+    assert r.status_code == 200, r.text
+    tid = r.json()["task"]["id"]
+    with api.app.state.store.read() as c:
+        assert H.task_labels(H.task(c, tid)) == ["dream"]
+    assert current(api) is None, "the label alone does not make it the bot's dream"
+    r = api.post(f"/api/v2/tasks/{tid}/ask", json={"text": QUESTIONS}, headers=headers(token))
+    assert r.status_code == 200 and r.json()["ingest"]["outcome"] == A.SENT_BACK, r.text
+    # A real dream beside it starts as its own task. (Ben's own open "Dream" for the bot is a duplicate to task_create.)
+    real = dream(api, "ana-test")["dream"]["task"]
+    assert real != tid and current(api)["task"] == real
+
+
+def test_get_reads_the_same_branch_post_files_on(api):
+    from backend.tests.test_shared_bots import branch, share
+    share(api)
+    branch(api, runner(api, "cara"))
+    mine = dream(api, "cara-test", bot="cpo")["dream"]["task"]
+    with api.app.state.store.read() as c:
+        assert H.task(c, mine)["owner_id"] == "bot:" + H.resolve_bot(c, "cpo-cara")["id"]
+    theirs = dream(api, "ben-test", bot="cpo")["dream"]["task"]       # newer, on the original
+    assert theirs != mine
+    assert current(api, "cara-test", bot="cpo")["task"] == mine
+    assert current(api, "ben-test", bot="cpo")["task"] == theirs

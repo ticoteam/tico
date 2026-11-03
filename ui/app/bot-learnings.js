@@ -302,7 +302,12 @@ function learnOpen(slug, data, dream = null) {
     if (t.matches('[data-learn-close]')) d.close();
     else if (t.matches('[data-dream-start]')) {
       t.disabled = true;
-      try { dreamEnter((await post(dreamApi(slug), {})).dream); }
+      try {
+        const started = (await post(dreamApi(slug), {})).dream;
+        // Closed while the start was in flight: the close already cleared polling, so only the page shows it.
+        if (d.open && d.isConnected) dreamEnter(started);
+        else dreamPageShow(slug, started);
+      }
       catch (e) { toast(e.message); }
       finally { t.disabled = false; }
     } else if (t.matches('[data-dream-stop]')) {

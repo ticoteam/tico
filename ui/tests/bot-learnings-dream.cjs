@@ -38,7 +38,7 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
         state.posts.push({url, body});
         if (url.includes('/answer')) state.dream = {...state.dream, state: 'done', status: 'done', questions: null,
           summary: 'Merged two report rules. Dropped the Friday deploy rule.', closed_at: '2026-11-02T10:05:00Z'};
-        if (url.endsWith('/dream')) return {dream: state.dream};
+        if (url.endsWith('/dream')) { await state.gate; return {dream: state.dream}; }
         return {};
       };
     }, QUESTIONS);
@@ -109,7 +109,22 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
       await page.waitForTimeout(4500);
       assert.equal(await page.evaluate(() => state.dreamReads), reads, 'a closed panel polls no more');
     }
-    console.log('bot-learnings-dream: cards, numbered answer, done view, wake up, start and polling passed at 1280 and 390');
+
+    // Closed while the start is in flight: polling never starts after the close, and the page still shows the dream.
+    await page.evaluate(() => {
+      state.dream = {task: 't3', status: 'open', state: 'starting', questions: null, summary: null, closed_at: null,
+                     started_at: '2026-11-02T12:00:00Z'};
+      state.gate = new Promise(resolve => { state.release = resolve; });
+      learnOpen('ops', {updates: [], documents: {}}, null);
+    });
+    await page.locator('[data-dream-start]').click();
+    await page.locator('[data-learn-close]').click();
+    await page.locator('.learn-panel').waitFor({state: 'detached'});     // the close, and its cleanup, have run
+    const before = await page.evaluate(() => { state.release(); return state.dreamReads; });
+    await page.waitForTimeout(4500);
+    assert.equal(await page.evaluate(() => state.dreamReads), before, 'a start that lands after close polls nothing');
+    assert.ok(await page.locator('#bot-learn').evaluate(el => el.classList.contains('dreaming')), 'the brain shows it');
+    console.log('bot-learnings-dream: cards, numbered answer, done view, wake up, start, polling and a start landing after close passed at 1280 and 390');
   } finally {
     await browser.close();
   }

@@ -6,7 +6,10 @@ session resumes across the one question it may ask (`hub_task_ask`), so the answ
 commits it makes are memory updates like any other: the Learnings history names their run's task, and the panel
 filters them by this task. Nothing is stored here beyond the task.
 
-A dream's question skips ask ingest (backend/ask_ingest.py): the person started it to be asked.
+What makes a task a dream is the `dream.start` event this route writes on it, with the person as its actor: labels
+are anyone's to edit, but only this route writes that event. A hand-labelled task is never a dream, so its question
+still goes through ask ingest. A dream's question skips ask ingest (backend/ask_ingest.py): the person started it to
+be asked.
 """
 
 from fastapi import Request
@@ -22,6 +25,10 @@ TITLE = "Dream"
 RECENT_HOURS = 24          # a finished dream is still shown for this long
 SINCE_DAYS = 14            # a first dream reads this far back
 MAX_TEXT = 4000            # the question and the summary, as the panel shows them
+MARK = "dream.start"       # the event dream_start writes on the task; its actor is the task's requester
+# The marker as SQL over `tasks`: an index probe on events_task_origin (actor, action, target) per candidate row.
+MARKED = (f"EXISTS(SELECT 1 FROM events e WHERE e.actor=tasks.requester_id AND e.action='{MARK}' "
+          "AND e.target=tasks.id)")
 
 INSTRUCTIONS = """Dream: tidy your own instructions and memory. {requester} started this and is waiting for it.
 
@@ -70,20 +77,22 @@ def stateless(c, bot):
     return H.stateless(config) or bool(original and H.stateless(declared(c, original)))
 
 
-def is_dream(c, task_id):
-    return bool(c.execute("SELECT 1 FROM task_tags tt JOIN tags g ON g.id=tt.tag_id WHERE tt.task_id=? AND g.key=?",
-                          (task_id, LABEL)).fetchone())
+def started_here(c, row):
+    """Whether dream_start filed this task: its `dream.start` event, written by the person who requested it."""
+    return bool(c.execute("SELECT 1 FROM events WHERE actor=? AND action=? AND target=? LIMIT 1",
+                          (row["requester_id"], MARK, row["id"])).fetchone())
 
 
 def exempt(c, row):
-    """A dream's question to the person who started it is never judged by ask ingest: they asked to be asked."""
-    return bool(row) and H.is_human(row.get("requester_id") or "") and is_dream(c, row["id"])
+    """A dream's question to the person who started it is never judged by ask ingest: they asked to be asked. The
+    label alone does not count; a bot can put it on any task."""
+    return bool(row) and H.is_human(row.get("requester_id") or "") and started_here(c, row)
 
 
 def _dreams(c, owners, where, args=(), visible="1"):
     marks = ",".join("?" * len(owners))
     return c.execute(f"SELECT tasks.* FROM tasks JOIN task_tags tt ON tt.task_id=tasks.id JOIN tags g ON g.id=tt.tag_id "
-                     f"WHERE g.key=? AND tasks.owner_id IN ({marks}) AND {where} AND ({visible}) "
+                     f"WHERE g.key=? AND tasks.owner_id IN ({marks}) AND {where} AND {MARKED} AND ({visible}) "
                      "ORDER BY tasks.created_at DESC, tasks.rowid DESC LIMIT 1", (LABEL, *owners, *args)).fetchone()
 
 
@@ -100,20 +109,21 @@ def since(c, owner):
     """Where a dream's reading starts: the end of the bot's last finished dream, else SINCE_DAYS ago."""
     marks = ",".join("?" * len(H.TASK_ENDED))
     row = c.execute("SELECT max(coalesce(tasks.closed_at,tasks.done_at)) FROM tasks JOIN task_tags tt ON tt.task_id=tasks.id "
-                    f"JOIN tags g ON g.id=tt.tag_id WHERE g.key=? AND tasks.owner_id=? AND tasks.status IN ({marks})",
+                    f"JOIN tags g ON g.id=tt.tag_id WHERE g.key=? AND tasks.owner_id=? AND tasks.status IN ({marks}) "
+                    f"AND {MARKED}",
                     (LABEL, owner, *H.TASK_ENDED)).fetchone()
     stamp = (row and row[0]) or H.shift(H.now(), days=-SINCE_DAYS)
     return stamp[:10] + " " + stamp[11:16] + " UTC"
 
 
-def latest(c, auth, who, owners):
-    """The bot's open dream the caller may read, or else its newest one finished in the last RECENT_HOURS."""
+def latest(c, auth, who, owner):
+    """The open dream of `owner` the caller may read, or else its newest one finished in the last RECENT_HOURS."""
     visible = auth.task_sql(c, who)
-    row = _open(c, owners, visible)
+    row = _open(c, [owner], visible)
     if row:
         return row
     marks = ",".join("?" * len(H.TASK_ENDED))
-    return _dreams(c, owners, f"tasks.status IN ({marks}) AND coalesce(tasks.closed_at,tasks.done_at,tasks.updated_at)>=?",
+    return _dreams(c, [owner], f"tasks.status IN ({marks}) AND coalesce(tasks.closed_at,tasks.done_at,tasks.updated_at)>=?",
                    (*H.TASK_ENDED, H.shift(H.now(), hours=-RECENT_HOURS)), visible)
 
 
@@ -158,23 +168,18 @@ def view(c, who, row):
 
 
 def install(app, store, auth, mutate, task_create, cap_before_preflight):
-    def owners(c, who, bot):
-        """The bot, and the branch a person's new work for it goes to (shared_bots.route)."""
-        out = ["bot:" + bot]
-        routed = route(c, who.actor, "bot:" + bot)
-        if routed and routed not in out:
-            out.append(routed)
-        return out
-
     @app.get("/api/v2/bots/{bot}/dream")
     def dream_get(request: Request, bot: str):
-        """The bot's open dream, or else its newest one finished in the last day; `{"dream": null}` otherwise."""
+        """The bot's open dream, or else its newest one finished in the last day; `{"dream": null}` otherwise. It
+        reads the bot the caller's own dream goes to (shared_bots.route, as POST), so someone else's dream on the
+        original never stands in for the one on the caller's branch."""
         who = request.state.identity
         human_only(who)
         with store.read() as c:
             bot = _bot(c, bot)
             auth.require_read(c, who, bot)
-            return view(c, who, latest(c, auth, who, owners(c, who, bot)))
+            owner = route(c, who.actor, "bot:" + bot) or "bot:" + bot
+            return view(c, who, latest(c, auth, who, owner))
 
     @app.post("/api/v2/bots/{bot}/dream")
     def dream_start(request: Request, bot: str, body: M.Empty):
@@ -192,8 +197,10 @@ def install(app, store, auth, mutate, task_create, cap_before_preflight):
             original = auth.target(c, who, "bot:" + slug, need="write")
             owner = auth.target(c, who, route(c, who.actor, original), need="write")
             if found := _open(c, [owner]):
-                if not privacy.task_readable(c, who, dict(found)):
-                    raise Problem("busy", "This bot is already dreaming", 409)
+                try:
+                    auth.task(c, who, found["id"])      # Read on the bot, as the task page asks, before its questions
+                except Problem:
+                    raise Problem("busy", "This bot is already dreaming", 409) from None
                 return view(c, who, found)
             name = (H.human(c, H.actor_id(who.actor)) or {}).get("name") or H.actor_id(who.actor)
             text = INSTRUCTIONS.format(requester=name, since=since(c, owner))
@@ -201,5 +208,7 @@ def install(app, store, auth, mutate, task_create, cap_before_preflight):
             task = made.get("task") if isinstance(made, dict) else None
             if not task:
                 return made         # held by an org rule: its answer as POST /api/v2/tasks gives it
-            return view(c, who, H.task(c, task["id"]))
+            row = H.task(c, task["id"])
+            H.event(c, row["requester_id"], MARK, row["id"], {"bot": row["owner_id"]})
+            return view(c, who, row)
         return mutate(request, body, work)
