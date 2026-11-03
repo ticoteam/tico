@@ -263,8 +263,7 @@ def install(app, auth, settings):
             if RUNS.match(path):
                 return problem(409, "demo", EXPLAIN)
             if settings.demo_public and not PUBLIC_WRITES.match(path):
-                return problem(403, "demo", "This public demo is read-only. Run your own with "
-                               "`docker run --rm -p 127.0.0.1:8765:8765 ghcr.io/ticoteam/tico demo`.")
+                return problem(403, "demo", "This public demo is read-only.")
         PUBLIC_READ.set(settings.demo_public and request.method in ("GET", "HEAD"))
         return await call_next(request)
 

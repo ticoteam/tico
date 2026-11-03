@@ -6,12 +6,12 @@ Each module owns one area of the app: its words and its rows. `seed(builder)` ge
 address stays fictional (acme.example).
 """
 
-from . import automations_learnings, budgets, finance, growth, recruit, reach, schedules, services, strategy, threads_rules
+from . import automations_learnings, budgets, finance, growth, recruit, reach, schedules, services, strategy, threads_rules, work_hours
 
 # In this order: a later section builds on rows an earlier one made. Plain imports, so the PR check's import map sees
 # what the demo loads (a computed import would make it run every test on any change).
-SECTIONS = (strategy, threads_rules, recruit, automations_learnings, finance, growth, services, schedules, budgets,
-            reach)
+SECTIONS = (strategy, threads_rules, recruit, automations_learnings, finance, growth, services, schedules, work_hours,
+            budgets, reach)
 
 
 def seed_all(builder):

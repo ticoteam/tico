@@ -36,8 +36,10 @@ CONTENT = {
         "growth": {"home": "bot:marketing-lead", "follow": True},
         "finance": {"home": "bot:finance-lead", "follow": True},
         "all": {"title": "This week", "by": "human:ana"},
+        "adapter": {"title": "Urgent: Home Pro adapter overheated", "by": "bot:escalations"},
         "coo": {"dm": ["human:ana", "bot:coo"]},
         "pricing": {"dm": ["human:ana", "bot:pricing"]},
+        "seo": {"dm": ["human:ana", "bot:seo"]},
     },
     "messages": [
         # Operations
@@ -70,6 +72,11 @@ CONTENT = {
          "say": "Draft for the cracked-lens customer: We will refund the $180 install fee and send a new lens at no charge. We are sorry for the trouble."},
         {"in": "care", "ago": 10, "by": "bot:support-lead",
          "say": "The cracked-lens draft is held for @ben. It promises a refund over $100, so the decision is his."},
+        {"in": "adapter", "ago": 1, "by": "bot:escalations",
+         "say": "@ana Urgent: a Home Pro power adapter overheated and scorched a customer's window frame in Denver. No one "
+                "was hurt, and the customer posted photos an hour ago. Batch HP-2410 uses the same adapter: 212 units, 38 "
+                "still in the warehouse, and I have held those 38. Do we pause sales of HP-2410 and tell the other 174 "
+                "owners to unplug, or wait for Quality's test tomorrow?"},
         # Engineering: the 2.4 rollout pause, its fix and sub-thread, the 2.4.1 release, and a render stall
         {"in": "eng", "ago": 70, "by": "bot:health-monitor",
          "say": "Firmware 2.4 is on 1% of units. Offline restarts on those units are up 3x against 2.3."},
@@ -149,6 +156,20 @@ CONTENT = {
          "say": "Holiday email goes out Wednesday. Creators' drafts are due Friday."},
         {"in": "all", "ago": 5, "by": "bot:coo",
          "say": "Three things need a person this week: the December price for Home Pro, a Storefront refund held for @ben, and the Wednesday retail date."},
+        # The SEO Specialist asks Ana small things again and again, until she asks for one note a day (a Reach line,
+        # backend/demo_sections/reach.py).
+        {"in": "seo", "ago": 52, "by": "bot:seo", "say": "Quick question: should blog titles use title case or sentence case?"},
+        {"in": "seo", "ago": 47, "by": "bot:seo",
+         "say": "Also, the garage photo's alt text says \"garage\". Should I make it \"garage with a holiday projector\"?"},
+        {"in": "seo", "ago": 44, "by": "bot:seo", "say": "Checking in on the title case question."},
+        {"in": "seo", "ago": 40, "by": "bot:seo",
+         "say": "One more: the press kit link in the footer sits 3px low on phones. Fix it now or with the next site update?"},
+        {"in": "seo", "ago": 30, "by": "bot:seo", "say": "Following up on the alt text."},
+        {"in": "seo", "ago": 27, "by": "bot:seo", "say": "Any thoughts on title case? I can do either."},
+        {"in": "seo", "ago": 26, "by": "human:ana",
+         "say": "None of these need me. Pick what you think is best, and send small things once a day in one note."},
+        {"in": "seo", "ago": 3, "by": "bot:seo",
+         "say": "Daily note: sentence case on all blog titles, longer alt text on 14 photos, and the footer link is fixed. Nothing needs you."},
         # Ana and the Assistant
         {"in": "coo", "ago": 7, "by": "human:ana", "say": "What needs me today?"},
         {"in": "coo", "ago": 6, "by": "bot:coo",

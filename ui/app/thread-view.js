@@ -412,6 +412,8 @@ function thvListHTML(view) {
   }
   const replyAt = view.replyTo ? thvBranchEnd(view, view.replyTo) : '';
   for (const row of rows) {
+    // Updates have their own page (Updates); a Home does not repeat them as cards.
+    if (view.opts.home && row.m && thvIsUpdateCard(row.m)) continue;
     out.push(row.fold ? thvFoldHTML(view, row) : row.more ? thvMoreHTML(view, row.more) : thvMsgHTML(view, row.m));
     for (const id of row.ids || [row.m?.id || row.id]) {
       for (const p of afterParent.get(id) || []) out.push(thvPendingHTML(view, p));
@@ -775,7 +777,6 @@ async function thvClick(view, ev) {
   if (t.closest('[data-th-file]')) { const b = t.closest('[data-th-file]'); void openFileLink(b.dataset.thFile, b.dataset.name); return; }
   if (t.closest('[data-th-expand]')) { void thvExpand(view, t.closest('[data-th-expand]')); return; }
   if (t.closest('[data-thv-members]')) { threadMembersOpen(view); return; }
-  if (t.closest('[data-call-setup]')) { window.supportStart('Please set up calls on our Tico server.'); return; }
   if (t.closest('[data-call]')) { void callAction(view, t.closest('[data-call]').dataset.call); return; }
   if (t.closest('[data-thv-menu]')) { threadMenuOpen(view, t.closest('[data-thv-menu]')); return; }
   if (t.closest('[data-th-earlier]')) {

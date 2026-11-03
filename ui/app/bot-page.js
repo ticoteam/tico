@@ -379,7 +379,7 @@ async function pageBot(slug, tab) {
   <div id="pane-chat" hidden>
     ${limited ? '' : `<div class="bot-talk-bar">${talkTabs.length > 1 ? `<div class="bot-talk-switch" role="tablist" aria-label="Home or DM">${talkTabs.map(t =>
       `<button type="button" role="tab" data-talk="${t}">${BOT_TAB_LABELS[t]}</button>`).join('')}</div>` : ''}<span class="spacer"></span>
-      <a class="bot-threads-link" href="${THREADS_ROUTE}?with=${encodeURIComponent('bot:' + slug)}">Threads with ${esc(e.display_name || slug)}</a><span class="bot-talk-acts"></span></div>`}
+      <span class="bot-talk-acts"></span></div>`}
     <div id="conv-paused" class="conv-paused" role="status" hidden></div>
     <div class="bot-thread" id="bot-thread"></div>
   </div>

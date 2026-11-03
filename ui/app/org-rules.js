@@ -175,7 +175,7 @@ async function pageRules() {
       <header class="ru-ph"><h1>Rules</h1><nav class="ru-tabs" aria-label="Rules"></nav><span class="spacer"></span><span class="ru-acts"></span></header>
       <div class="ru-body"><aside class="ru-filters" aria-label="Filters"></aside><section class="ru-list" aria-live="polite">${skelRows(6)}</section>
         <aside class="ru-side" id="ru-side" hidden></aside></div></div>`;
-    RU = {root: $('#ru-root'), tab: null, rules: {internal: [], external: []}, suggested: [], due: [], sources: [], threads: null,
+    RU = {root: $('#ru-root'), tab: null, rules: {internal: [], external: []}, suggested: [], due: [], sources: [],
           reach: {...rrNormal(null), error: '', groups: null, party: null, q: '', edit: null, adding: false, open: new Set(), chart: ''},
           filter: {q: '', who: '', from: '', due: false, status: '', routine: '', moreFrom: false},
           seq: 0, loaded: new Set(), error: ''};
@@ -412,6 +412,12 @@ function rrMapPaint() {
       labels += `<button type="button" class="rr-chip ${k}" data-rr-line="${esc(l.id)}" style="left:${cx.toFixed(1)}px;top:${cy.toFixed(1)}px" aria-label="${esc(words)}" title="${esc(words)}"${l.may_edit ? '' : ' aria-disabled="true"'}>${esc(rrChip(l))}</button>`;
     }
   }
+  // A party picked from the search or a link, off screen in a chart wider than the pane (a phone): bring it into view.
+  if (R.shown !== p && (R.shown = p) && from) {
+    const b = rrBox(from, cv), l = b.x * s, t = b.y * s, r = (b.x + b.w) * s, btm = (b.y + b.h) * s;
+    if (l < pane.scrollLeft || r > pane.scrollLeft + pane.clientWidth || t < pane.scrollTop || btm > pane.scrollTop + pane.clientHeight)
+      pane.scrollTo({left: (l + r - pane.clientWidth) / 2, top: (t + btm - pane.clientHeight) / 2});
+  }
   svg.innerHTML = `<defs>${marks}</defs>${paths}`;
   chips.innerHTML = labels;
   // A chip goes where it covers no card and no chip already placed: along its line first (the middle outward), then
@@ -443,14 +449,17 @@ function rrSearchPaint() {
     pick.innerHTML = found.map(rrOption).join('') || '<p class="rr-none">Nothing matches.</p>';
   }
   root.querySelector('.rr')?.classList.toggle('picked', !!R.party && !R.q);
+  root.querySelector('.rr')?.classList.toggle('searching', !!R.q);
   rrMapPaint();
 }
 
 // ----------------------------------------------------------------- the panel
+// True while the panel's HTML is being replaced: a box removed then may fire change (rrChange).
+let RR_DRAWING = false;
 function rrPanelDraw(note = '') {
   const side = RU.root.querySelector('.rr-side'), R = RU.reach, p = R.party;
   if (!side) return;
-  if (!p) { side.innerHTML = ''; return; }
+  if (!p) { RR_DRAWING = true; try { side.innerHTML = ''; } finally { RR_DRAWING = false; } return; }
   const may = rrMay(p), dis = may ? '' : ' disabled', eff = rrEff(p), own = rrOwn(p);
   const human = S.me?.role !== 'bot';
   const {inherited, own: mine} = rrRules(p);
@@ -468,6 +477,8 @@ function rrPanelDraw(note = '') {
   };
   const list = R.adding ? rrAddHTML(p) : E ? rrEditorHTML(p, E)
     : lines.map(row).join('') || '<p class="rr-none">None.</p>';
+  RR_DRAWING = true;
+  try {
   side.innerHTML = `<div class="rr-panel" data-party="${esc(p)}">
     <div class="rr-h"><a class="ru-x rr-back" href="${ruHref('internal')}" aria-label="Back">‹</a><h2>${esc(rrName(p))}</h2></div>
     ${R.error ? `<p class="err">${esc(R.error)}</p>` : ''}
@@ -477,6 +488,7 @@ function rrPanelDraw(note = '') {
     <section class="rr-sec" aria-label="Exceptions"><header><h3 class="ru-lbl">Exceptions</h3>${R.mayEdit.size && !R.adding && !E ? '<button class="ghost small" type="button" data-rr-add-line>+ Add exception</button>' : ''}</header>
       ${list}</section>
     <p class="ru-status" role="status">${esc(note)}</p></div>`;
+  } finally { RR_DRAWING = false; }
 }
 // + Add exception: search a team, person or bot; picking one opens the editor.
 function rrAddHTML(p) {
@@ -654,8 +666,12 @@ function rrInput(ev) {
 function rrChange(ev) {
   const cap = ev.target.closest('[data-rr-cap]');
   if (!cap) return false;
-  const v = cap.value.trim();
-  void rrPut(RU.reach.party, cap.dataset.rrCap, v === '' ? null : Number(v));
+  const v = cap.value.trim(), field = cap.dataset.rrCap;
+  // A box with an unsaved number fires change when a redraw removes it (a save finishing, another party picked).
+  // Save it for the panel it was in, and after that redraw: drawing the panel again inside it throws.
+  const party = cap.closest('.rr-panel[data-party]')?.dataset.party || RU.reach.party;
+  const save = () => { if (RU?.reach) void rrPut(party, field, v === '' ? null : Number(v)); };
+  if (RR_DRAWING) setTimeout(save, 0); else save();
   return true;
 }
 function rrKey(ev) {
@@ -981,59 +997,6 @@ function ruQuoteHTML(cite) {
 const ruBack = () => ruHref(RU.tab, RU.tab === 'internal' ? {party: ruQuery().get('party')} : {});
 const ruPanelHead = (title, close) => `<div class="ru-side-h"><h2>${esc(title)}</h2><span class="spacer"></span><a class="ru-x" href="${close}" aria-label="Close">✕</a></div>`;
 
-// The Where a rule keeps, as the panel offers it: anywhere, direct chats, someone outside the company, one team, or one
-// thread. A rule that holds another term (several, or one the picker does not offer) shows as "Other" and keeps it
-// unless the person picks one here.
-function ruWhereKind(where) {
-  const t = where[0] || '';
-  if (!t) return {kind: 'any', team: '', thread: ''};
-  if (t === 'kind:dm') return {kind: 'dm', team: '', thread: ''};
-  if (t === 'has_outside_members') return {kind: 'outside', team: '', thread: ''};
-  if (t.startsWith('team:')) return {kind: 'team', team: t.slice(5), thread: ''};
-  if (t.startsWith('thread:')) return {kind: 'thread', team: '', thread: t.slice(7)};
-  return {kind: 'other', team: '', thread: ''};
-}
-// The threads the viewer can read, for the Where picker: the threads sidebar (GET /v2/threads, which checks each one),
-// a page at a time, newest activity first. Root threads only: a sub-thread's place is its root's.
-const RU_THREADS = 200, RU_THREAD_PAGES = 4;
-async function ruThreadList() {
-  const out = new Map();
-  let cursor = '';
-  for (let i = 0; i < RU_THREAD_PAGES && out.size < RU_THREADS; i++) {
-    const page = await get('/v2/threads?limit=50' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), {fresh: true})
-      .catch(() => null);
-    if (!page) break;
-    for (const t of [...(page.attention || []), ...(page.threads || []), ...(page.dms || [])]) out.set(t.id, t);
-    cursor = page.next_cursor;
-    if (!cursor) break;
-  }
-  return [...out.values()].slice(0, RU_THREADS);
-}
-let RU_ADD_THREADS = null;   // the Add rule dialog's threads when it opens away from the Rules page (a bot's tab, Overview › Graph)
-function ruThreadOptions(thread) {
-  const list = ((RU ? RU.threads : RU_ADD_THREADS) || []).slice();
-  if (thread && !list.some(t => t.id === thread)) list.unshift({id: thread, title: ''});
-  return `<option value="">Pick a thread</option>${list.map(t =>
-    `<option value="${esc(t.id)}"${t.id === thread ? ' selected' : ''}>${esc(t.title || t.id)}</option>`).join('')}`;
-}
-function ruWhereHTML(where, disabled) {
-  const was = ruWhereKind(where);
-  const radio = (value, label) => `<label><input type="radio" name="where_kind" value="${value}"${was.kind === value ? ' checked' : ''}${disabled}> ${label}</label>`;
-  return `${radio('any', 'Anywhere')}${radio('dm', 'Direct chats only')}${radio('outside', 'Someone outside the company is in it')}
-    <div class="ru-where-pick">${radio('team', 'In team')}<select name="where_team" aria-label="Team"${disabled}><option value="">Pick a team</option>${ruGroups().map(g =>
-      `<option value="${esc(g.id)}"${g.id === was.team ? ' selected' : ''}>${esc(g.name || g.id)}</option>`).join('')}</select></div>
-    <div class="ru-where-pick">${radio('thread', 'In thread')}<select name="where_thread" aria-label="Thread"${disabled}>${ruThreadOptions(was.thread)}</select></div>`;
-}
-function ruWhereValue(form, where) {
-  const pick = form.elements.where_kind.value, was = ruWhereKind(where);
-  // A team or thread keeps the stored term unless the person picks another; no pick keeps the rule's Where.
-  const id = pick === 'team' ? form.elements.where_team.value : pick === 'thread' ? form.elements.where_thread.value : '';
-  if (!pick || (pick === was.kind && (!id || id === was[pick]))) return where;
-  if (pick === 'any') return [];
-  if (pick === 'dm') return ['kind:dm'];
-  if (pick === 'outside') return ['has_outside_members'];
-  return id ? [pick + ':' + id] : where;
-}
 
 // If broken: the three choices, one line on what the chosen one does, and under Ask first the reviewer (no pick: the
 // manager above the one who broke it).
@@ -1057,7 +1020,6 @@ async function ruRulePanel(side, id, note = '') {
   if (side.dataset.open !== want) return;
   const edit = !!r.can_edit, dis = edit ? '' : ' disabled', internal = r.kind === 'internal';
   if (!internal && !RU.sources.length) RU.sources = await ruAll('/v2/rule-sources').catch(() => []);
-  RU.threads = await ruThreadList();
   const dues = ruDueSorted(r);
   const quote = ruQuoteHTML(r.cite);
   const suggested = r.status === 'suggested';
@@ -1069,7 +1031,6 @@ async function ruRulePanel(side, id, note = '') {
         <p class="ru-follow">${esc(ruFollowSentence(r.who, internal ? r.with : null))}</p></div>
       <label class="ru-fl"><span class="ru-lbl">Description</span><textarea name="description" rows="2" maxlength="2000"${dis}>${esc(r.description || '')}</textarea></label>
       <div class="ru-fl"><span class="ru-lbl">Followed by</span><div data-scope="who"></div></div>
-      <div class="ru-fl"><span class="ru-lbl">Where <span class="ru-opt">(optional)</span></span><div class="ru-where">${ruWhereHTML(r.where || [], dis)}</div></div>
       ${internal ? '<div class="ru-fl"><span class="ru-lbl">With <span class="ru-opt">(optional)</span></span><div data-scope="with"></div></div>'
         : `<label class="ru-fl"><span class="ru-lbl">From</span><select name="source"${dis}>${ruSourceOptions(RU.sources, r.source?.id)}</select></label>`}
       <div class="ru-fl"><span class="ru-lbl">If broken</span>${ruBrokenHTML(r.if_broken, r.reviewer?.id, !edit)}</div>
@@ -1113,8 +1074,6 @@ async function ruRulePanel(side, id, note = '') {
     if (text !== r.text) body.text = text;
     if (description !== (r.description || '')) body.description = description;
     if (!ruSameScope(who.value(), r.who)) body.who = who.value();
-    const where = ruWhereValue(form, r.where || []);
-    if (JSON.stringify([...where].sort()) !== JSON.stringify([...(r.where || [])].sort())) body.where = where;
     if (withEd && !ruSameScope(withEd.value(), r.with)) body.with = withEd.value();
     if (!internal && form.elements.source.value !== r.source?.id) body.source_id = form.elements.source.value;
     const broken = ruSegValue(form, 'if_broken');
@@ -1309,14 +1268,11 @@ async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
     document.body.appendChild(dlg);
   }
   const sources = await ruAll('/v2/rule-sources').catch(() => []);
-  const threads = await ruThreadList();
-  if (RU) RU.threads = threads; else RU_ADD_THREADS = threads;
   dlg.innerHTML =`<form class="ru-form" method="dialog">
       <div class="ru-side-h"><h2>Add rule</h2><span class="spacer"></span><button class="ghost tmodal-x" type="button" data-ru-close aria-label="Close">✕</button></div>
       ${ruSegHTML('kind', [['internal', 'Internal'], ['external', 'External']], kind)}
       <label class="ru-fl"><span class="ru-lbl">Rule</span><textarea name="text" rows="2" maxlength="1000" required></textarea></label>
       <div class="ru-fl"><span class="ru-lbl">Followed by</span><div data-scope="who"></div></div>
-      <div class="ru-fl"><span class="ru-lbl">Where <span class="ru-opt">(optional)</span></span><div class="ru-where">${ruWhereHTML([], '')}</div></div>
       <div class="ru-fl" data-for="internal"><span class="ru-lbl">With <span class="ru-opt">(optional)</span></span><div data-scope="with"></div></div>
       <div class="ru-fl" data-for="external"><span class="ru-lbl">From</span>
         <select name="source"><option value="">Pick one</option>${ruSourceOptions(sources, '')}<option value="new">New…</option></select>
@@ -1337,7 +1293,7 @@ async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
   form.onsubmit = async ev => {
     ev.preventDefault();
     const k = ruSegValue(form, 'kind'), f = form.elements, button = form.querySelector('[type=submit]');
-    const body = {kind: k, text: f.text.value.trim(), who: whoEd.value(), where: ruWhereValue(form, []), if_broken: ruSegValue(form, 'if_broken')};
+    const body = {kind: k, text: f.text.value.trim(), who: whoEd.value(), if_broken: ruSegValue(form, 'if_broken')};
     if (k === 'internal') body.with = withEd.value();
     if (body.if_broken === 'escalate' && f.reviewer.value) body.reviewer = f.reviewer.value;
     button.disabled = true; status.textContent = 'Saving…';
