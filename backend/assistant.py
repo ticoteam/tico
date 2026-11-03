@@ -346,12 +346,25 @@ def automation_sends_outside(store, method, path, body=None):
 def settings_route_unmatched(method, path, body=None):
     """Whether this write goes to a settings catalogue route but is not exactly one catalogue setting (a list or a bare
     value, two settings at once, or a key the setting does not have). Such a write is a card: the gate cannot tell
-    which setting it changes, so it cannot tell whether only the person may change it."""
+    which setting it changes, so it cannot tell whether only the person may change it. A route can also carry writes
+    that name none of its catalogue keys (a person's reports_to on the people route, whose catalogue entry is `left`):
+    those are no setting's write, so they are admitted on the turn like any other, and the route's own checks decide."""
     from . import settings_catalog
     p = canonical(path)
     if not p or not settings_catalog.routed(method, p):
         return False
-    return settings_catalog.matched(method, p, _json(body) if isinstance(body, (bytes, str)) else body) is None
+    fields = _json(body) if isinstance(body, (bytes, str)) else body
+    if settings_catalog.matched(method, p, fields) is not None:
+        return False
+    if not isinstance(fields, dict):
+        return True
+    named = set()
+    for e, _ in settings_catalog.routed(method, p):
+        if not e.field:
+            return True           # the whole body is the value, so any object may be one: a card
+        named.add(e.field.partition(".")[0])
+        named.update(e.extra)
+    return bool(named & set(fields))
 
 
 def admits_on_turn(method, path, body=None):
