@@ -13,7 +13,7 @@ from backend.tests.test_runner_load import point
 def waiters(api, n=37, running=3):
     computer = fleet(api, attempts=n + running, trees=0)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=? WHERE id=?", (n + running, computer['runner_id']))
+        c.execute("UPDATE runner_states SET capacity=? WHERE runner_id=?", (n + running, computer['runner_id']))
         for i in range(n):
             c.execute("UPDATE attempts SET state='leased' WHERE id=?", (f'attempt-{i}',))
             c.execute("UPDATE jobs SET state='leased' WHERE attempt_id=?", (f'attempt-{i}',))
@@ -94,7 +94,7 @@ def test_parked_logins_take_no_start_place_so_another_login_starts_and_claims_go
     assign(api, computer, 'finance')
     ready(api, computer, ['ops', 'finance'])
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET capacity=40 WHERE id=?', (rid,))
+        c.execute('UPDATE runner_states SET capacity=40 WHERE runner_id=?', (rid,))
     post(api, 'chat/finance', {'text': 'Independent work on another login'})
     with api.app.state.store.read() as c:
         assert sum(start_places.live(c, rid).values()) == 40
@@ -108,7 +108,7 @@ def test_two_ready_waiters_claim_last_start_place_atomically(api):
     """Spec 3: renewable delivery leases give neither waiter a start place."""
     computer = waiters(api, n=2, running=0)
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET capacity=1 WHERE id=?', (computer['runner_id'],))
+        c.execute('UPDATE runner_states SET capacity=1 WHERE runner_id=?', (computer['runner_id'],))
 
     def reserve(i):
         return post(api, f'attempts/attempt-{i}/start-place', {}, computer['token'])
@@ -269,7 +269,7 @@ def test_legacy_wait_takes_one_of_the_two_claims_the_limit_allows_until_its_unch
     assign(api, computer, 'finance')
     ready(api, computer, ['ops', 'finance'])
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET capacity=1 WHERE id=?', (computer['runner_id'],))
+        c.execute('UPDATE runner_states SET capacity=1 WHERE runner_id=?', (computer['runner_id'],))
     post(api, 'chat/ops', {'text': 'Legacy work'})
     old = post(api, 'jobs/claim', {'bot': 'ops'}, computer['token'])['attempt']
     post(api, f"attempts/{old['id']}/events", {'events': [
@@ -411,7 +411,7 @@ def test_a_persons_own_message_starts_on_an_overloaded_computer_and_nothing_else
 def test_a_persons_message_on_an_overloaded_computer_still_needs_a_free_turn(api):
     computer = waiters(api, n=1, running=1)
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET capacity=1 WHERE id=?', (computer['runner_id'],))
+        c.execute('UPDATE runner_states SET capacity=1 WHERE runner_id=?', (computer['runner_id'],))
     overload(api, computer)
     assert post(api, 'attempts/attempt-0/start-place', {}, computer['token']) == {
         'reserved': False, 'waiting': 'computer busy'}
@@ -425,7 +425,7 @@ def test_an_overloaded_computer_hands_out_a_persons_chat_but_not_a_bots_message(
         assign(api, computer, bot)
     ready(api, computer, ['ops', 'finance', 'cpo'])
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET capacity=5 WHERE id=?', (computer['runner_id'],))
+        c.execute('UPDATE runner_states SET capacity=5 WHERE runner_id=?', (computer['runner_id'],))
     sent_by(api, post(api, 'chat/cpo', {'text': 'Review the contract'})['id'], 'bot:ops')
     post(api, 'chat/finance', {'text': 'Close the books'})
     overload(api, computer)
@@ -627,11 +627,11 @@ def test_a_computer_that_reported_then_went_silent_past_retention_is_not_reporti
     computer = bot_waiting_for_finance(api)
     memory(api, computer, .3)
     with api.app.state.store.read() as c:
-        marked = c.execute('SELECT last_sampled_at FROM runners WHERE id=?', (computer['runner_id'],)).fetchone()[0]
+        marked = c.execute('SELECT last_sampled_at FROM runners_with_state WHERE id=?', (computer['runner_id'],)).fetchone()[0]
     assert marked == int(time.time()) // 60 * 60
     with api.app.state.store.transaction() as c:
         c.execute('DELETE FROM runner_load_samples WHERE runner_id=?', (computer['runner_id'],))
-        c.execute('UPDATE runners SET last_sampled_at=last_sampled_at-200000 WHERE id=?', (computer['runner_id'],))
+        c.execute('UPDATE runner_states SET last_sampled_at=last_sampled_at-200000 WHERE runner_id=?', (computer['runner_id'],))
     assert claim(api, computer, 'finance') is None
     memory(api, computer, .3)
     assert claim(api, computer, 'finance') is not None
@@ -649,16 +649,17 @@ def test_an_upgraded_computer_stays_held_after_its_samples_are_pruned_and_startu
     memory(api, computer, .3)
     now = int(time.time()) // 60 * 60
     with store.transaction() as c:
-        c.execute('ALTER TABLE runners DROP COLUMN last_sampled_at')
+        # Migration 0062 gives such a computer a state row with no mark.
+        c.execute('UPDATE runner_states SET last_sampled_at=NULL WHERE runner_id=?', (rid,))
     store.initialize()
     with store.read() as c:
-        assert c.execute('SELECT last_sampled_at FROM runners WHERE id=?', (rid,)).fetchone()[0] == now
+        assert c.execute('SELECT last_sampled_at FROM runners_with_state WHERE id=?', (rid,)).fetchone()[0] == now
     P.sweep(store, now=int(time.time()) + 49 * 3600)
     with store.read() as c:
         assert c.execute('SELECT count(*) FROM runner_load_samples WHERE runner_id=?', (rid,)).fetchone()[0] == 0
     store.initialize()
     with store.read() as c:
-        assert c.execute('SELECT last_sampled_at FROM runners WHERE id=?', (rid,)).fetchone()[0] == now
+        assert c.execute('SELECT last_sampled_at FROM runners_with_state WHERE id=?', (rid,)).fetchone()[0] == now
     assert claim(api, computer, 'finance') is None
     memory(api, computer, .3)
     assert claim(api, computer, 'finance') is not None
