@@ -356,3 +356,20 @@ def test_a_run_that_reads_its_credentials_again_writes_one_reveal_row(api):
         assert rows==1
     row=get(api,'credentials')['credentials'][0]
     assert row['last_used_at'] and row['last_used_by']=='finance'
+
+
+def test_a_bot_lists_only_the_names_of_what_it_is_granted(api):
+    from backend.tests.test_automation_api import as_bot
+    setup(api)
+    mine=create(api)['id']
+    other=create(api,name='Stripe',secret='sk-synthetic-other-123456',env='STRIPE_KEY')['id']
+    post(api,f'credentials/{mine}/grants',{'subject':'bot:ops'})
+    post(api,f'credentials/{other}/grants',{'subject':'bot:finance'})
+    as_bot(api,'ops')
+    body=api.get('/api/v2/credentials',headers=headers('ops-test')).json()
+    assert [(x['name'],x['env']) for x in body['credentials']]==[('PostHog','POSTHOG_API_KEY')]
+    text=json.dumps(body)
+    assert 'preview' not in body['credentials'][0] and 'phx-' not in text and 'bot:finance' not in text
+    assert body['can_manage'] is False and body['people']==[] and body['bots']==[]
+    as_bot(api,'cpo')                                               # a bot granted nothing sees nothing
+    assert api.get('/api/v2/credentials',headers=headers('cpo-test')).json()['credentials']==[]
