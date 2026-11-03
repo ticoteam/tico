@@ -16,7 +16,8 @@ function cuDialog() {
   const dlg = document.createElement('dialog');
   dlg.id = 'catch-up'; dlg.className = 'cu-dialog'; dlg.setAttribute('aria-labelledby', 'cu-h');
   document.body.append(dlg);
-  dlg.addEventListener('close', () => { CU.open = false; railRender(); threadsRecount(); });
+  // Its reads went out one by one and the rail patched each, so closing reads nothing again.
+  dlg.addEventListener('close', () => { CU.open = false; railRender(); });
   dlg.addEventListener('click', ev => void cuClick(ev));
   dlg.addEventListener('submit', ev => { ev.preventDefault(); void cuReply(ev.target); });
   dlg.addEventListener('keydown', ev => {
@@ -46,7 +47,7 @@ async function cuPage(cursor) {
   CU.next = r?.next_cursor || null;
   const count = Number(r?.count) || 0;
   CU.total = Math.max(CU.total, CU.done + count, CU.done + cuLeft());
-  if (!cursor) { THREADS.catchUp = count; threadsSideRender(); }
+  if (!cursor && !THREADS.cu) { THREADS.catchUp = count; threadsSideRender(); }
 }
 // Near the end, the next page comes in behind the cards.
 function cuMore() {
@@ -58,7 +59,7 @@ const cuMsgHTML = m => {
   const who = connectAuthor(m), bot = String(who || '').startsWith('bot:');
   return `<article class="cu-msg" style="--d:${Math.min(Number(m.depth) || 0, 3)}">${actorAvatar(who, 30)}<div class="cu-msg-main">
     <div class="cu-msg-head"><strong>${esc(actorName(who) || 'Someone')}</strong>${bot ? '<span class="cu-bot">BOT</span>' : ''}<time title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div>
-    <div class="cu-msg-body md">${safeMd(m.body || '', {shortLinks: true})}</div></div></article>`;
+    <div class="cu-msg-body md">${safeMd(m.body || '', {shortLinks: true})}${m.clipped ? '<span class="muted">…</span>' : ''}</div></div></article>`;
 };
 function cuCardHTML(it) {
   const t = it.thread, n = Number(it.new_count) || 0, more = Number(it.more) || 0, hash = threadOnRail(t);
@@ -96,7 +97,7 @@ async function cuMarkRead({mute = false} = {}) {
   const id = it.thread.id;
   CU.queue = CU.queue.filter(x => x !== it); CU.later = CU.later.filter(x => x !== it);
   CU.done++;
-  THREADS.catchUp = Math.max(0, THREADS.catchUp - 1);
+  if (!THREADS.cu) THREADS.catchUp = Math.max(0, THREADS.catchUp - 1);
   threadsAllRead(id);
   cuDraw();
   cuMore();
@@ -104,6 +105,17 @@ async function cuMarkRead({mute = false} = {}) {
     if (mute) await put(thvPath(id) + '/follow', {notify: 'muted'});
     await post(thvPath(id) + '/read-all', {});
   } catch (e) { toast(e.message, true); }
+}
+// A thread read somewhere else (the viewer's own `read` event): its card goes, counted as done. While open, Catch up
+// reads nothing again on events; it pages near the end and reads afresh when opened again.
+function catchUpGone(id) {
+  if (!CU.open) return;
+  const it = [...CU.queue, ...CU.later].find(x => x.thread?.id === id);
+  if (!it) return;
+  CU.queue = CU.queue.filter(x => x !== it); CU.later = CU.later.filter(x => x !== it);
+  CU.done++;
+  cuDraw();
+  cuMore();
 }
 function cuLater() {
   const it = cuCurrent(); if (!it || cuLeft() < 2) return;

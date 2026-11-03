@@ -139,7 +139,7 @@ function threadNewOpen({dm = false, members = []} = {}) {
         members: chosen, pin_for_members: form.elements.namedItem('pin').checked});
       const t = r?.thread || r;
       dlg.close();
-      if (t?.id) { threadsPut(t); threadsRecount(); location.hash = threadHref(t); }
+      if (t?.id) { threadsPut(t); location.hash = threadHref(t); }
     } catch (e) {
       const code = e.body?.error?.code || e.body?.code;
       if (code === 'name_required') why.textContent = 'Group chats need a name.';
@@ -261,7 +261,6 @@ function threadMenuOpen(view, button) {
       else if (key === 'read') { await post(path + '/read-all', {}); threadsMarkedRead(t.id, Number(t.last_seq) || 0); }
       else if (key === 'pin-all' || key === 'unpin-all') {
         view.thread = {...t, ...(await patch(path, {pinned_for_everyone: key === 'pin-all'}))};
-        threadsRecount();
       }
       else if (key === 'archive' || key === 'unarchive') view.thread = {...t, ...(await patch(path, {archived: key === 'archive'}))};
       threadsPut(view.thread);

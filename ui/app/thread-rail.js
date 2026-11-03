@@ -113,7 +113,7 @@ function railRender() {
   }
   rail.querySelector('.tr-none').hidden = !(words && !lists.pinned.length && !lists.threads.length);
   rail.querySelector('[data-tr-more]').hidden = !THREADS.next || !!words;
-  const can = THREADS.rail === true, n = THREADS.catchUp;
+  const can = THREADS.rail === true, n = threadsCatchUp();
   const catchUp = rail.querySelector('[data-tr-catch]'), badge = catchUp.querySelector('.tr-badge');
   catchUp.hidden = !can;
   catchUp.classList.toggle('cur', !!CU.open);
@@ -164,7 +164,6 @@ function threadBrowseOpen() {
       b.textContent = 'Joined';
       const t = await get(thvPath(id), {fresh: true}).catch(() => null);
       if (t?.id) threadsPut({...t, me: {...t.me, following: true, notify: r?.notify || 'live'}});
-      threadsRecount();
     } catch (e) { b.disabled = false; toast(e.message, true); }
   };
   dlg.showModal();

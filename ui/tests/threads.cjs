@@ -40,7 +40,7 @@ const msg = (id, seq, from, body, extra = {}) => ({id, seq, thread_id: 't-plan',
 // Catch up's cards (GET /v2/threads/catch-up), in the server's order.
 const catchUp = () => [
   {thread: listed[11], new_count: 3, mention: true, more: 1, messages: [msg('c1', 10, 'human:bea', 'Can someone check the venue?', {thread_id: 't11'}),
-    msg('c2', 11, 'bot:ops', 'Booked for Friday.', {thread_id: 't11', depth: 1})]},
+    msg('c2', 11, 'bot:ops', 'Booked for Friday.', {thread_id: 't11', depth: 1, clipped: true})]},
   {thread: listed[4], new_count: 1, mention: false, more: 0, messages: [msg('c3', 3, 'human:cy', 'The draft is up.', {thread_id: 't4'})]},
   {thread: groupDm, new_count: 1, mention: false, more: 0, messages: [msg('c4', 2, 'human:bea', 'Lunch at noon?', {thread_id: 't-gdm'})]},
 ];
@@ -106,11 +106,11 @@ const homes = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'human:cy': 'h-cy', 'hu
 // What a block below changes for the pages it opens: DM rows as the server sends them, a server with calls off, and
 // one without the rail (GET /v2/threads/rail answers 404).
 let dmRows = null, callsOff = false, railOff = false;
-async function open(browser, who, {phone = false} = {}) {
+async function open(browser, who, {phone = false, sse = null} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
   const seen = {errors: [], posts: [], reads: [], readSeqs: [], homes: [], steps: [], tasks: [], calls: [], catchUps: [], follows: [], earlier: [], withdrawn: [], patches: [],
-    readAll: [], pins: [], created: [], browsed: []};
+    readAll: [], pins: [], created: [], browsed: [], rails: 0, threadGets: []};
   page.on('pageerror', e => seen.errors.push(e.message));
   page.on('dialog', d => d.accept());
   // A stand-in media client: rooms connect after a moment and remember whether their microphone is on.
@@ -150,14 +150,29 @@ async function open(browser, who, {phone = false} = {}) {
       {id: 'di', name: 'Di', email: 'di@acme.example', my_access: {see: true, read: true, write: true, manage: false}}],
       org_groups: [{id: 'ops', name: 'Ops team', my_access: {see: true, read: true, write: true}}, {id: 'legal', name: 'Legal', my_access: {see: true, read: true, write: false}}]});
     if (p === '/api/issues') return json([]);
-    if (p === '/api/v2/events') return route.abort();
+    if (p === '/api/v2/events') {
+      if (!sse) return route.abort();
+      // A stand-in stream (`sse`): the newest connection with the threads topic waits for the events the test sends,
+      // then ends, and the page reconnects for the next ones.
+      const req = route.request();
+      if (!(new URL(req.url()).searchParams.get('topics') || '').split(',').includes('threads')) return route.abort();
+      sse.latest = req;
+      while (!sse.queue.length || sse.latest !== req) {
+        if (sse.latest !== req || sse.done) return route.abort().catch(() => {});
+        await new Promise(r => setTimeout(r, 50));
+      }
+      const body = 'event: ready\ndata: {"seq":1}\n\n' + sse.queue.splice(0).map(d => `event: threads\nid: ${++sse.seq}\ndata: ${JSON.stringify(d)}\n\n`).join('');
+      return route.fulfill({status: 200, contentType: 'text/event-stream', body}).catch(() => {});
+    }
     if (p === '/api/v2/threads' && method === 'GET') return json({attention: bob ? [] : attention, threads: bob ? [] : listed, dms: bob ? [] : dmRows || [dm, botDm],
       bot_dms: bob ? {} : {'bot:ops': 2}, next_cursor: null});
     if (p === '/api/v2/threads/rail') {
+      seen.rails++;
       if (railOff) return json({error: 'not_found'}, 404);
       const pin = t => ({...t, me: {...t.me, pinned: pins.has(t.id)}});
       return json(bob ? {pinned: [], threads: [], catch_up: 0, next_cursor: null, dms: {}} : {pinned: railRows().filter(t => pins.has(t.id)).map(pin),
-        threads: railRows().filter(t => !pins.has(t.id)).map(pin), catch_up: 3, next_cursor: null, dms: {'bot:ops': 2, 'human:bea': 1}});
+        threads: railRows().filter(t => !pins.has(t.id)).map(pin), catch_up: 3, catch_up_ids: ['t11', 't4', 't-gdm'], next_cursor: null,
+        dms: {'bot:ops': 2, 'human:bea': 1}});
     }
     if (p === '/api/v2/threads/catch-up') return json(bob ? {items: [], count: 0, next_cursor: null} : {items: catchUp(), count: 3, next_cursor: null});
     if (p === '/api/v2/threads/browse') { seen.browsed.push(url.searchParams.get('q')); return json({threads: [openHouse], next_cursor: null}); }
@@ -247,7 +262,7 @@ async function open(browser, who, {phone = false} = {}) {
     const steps = p.match(/^\/api\/v2\/turns\/([^/]+)\/steps$/);
     if (steps) { seen.steps.push(steps[1]); return json({steps: [{kind: 'tool', tool: 'search', text: 'pricing notes', at: at(57)}]}); }
     // One thread's view (Join reads it after following).
-    if (settings && method === 'GET' && known(settings[1])) return json(known(settings[1]));
+    if (settings && method === 'GET' && known(settings[1])) { seen.threadGets.push(settings[1]); return json(known(settings[1])); }
     return json(unrouted(p));
   });
   return {page, seen};
@@ -289,9 +304,9 @@ let browser = null;
     await page.locator('#nav-threads:not([hidden]) .nav-badge:not([hidden])').waitFor();
     assert.equal(await link.getAttribute('href'), '#/threads');
     assert.equal(await link.locator('.nav-badge').textContent(), '3');
-    await page.evaluate(() => { THREADS.catchUp = 140; threadsSideRender(); });
+    await page.evaluate(() => { const was = THREADS.cu; THREADS.cu = new Set(Array.from({length: 140}, (_, i) => 'x' + i)); threadsSideRender(); THREADS.cu = was; });
     assert.equal(await link.locator('.nav-badge').textContent(), '99+');
-    await page.evaluate(() => { THREADS.catchUp = 3; threadsSideRender(); });
+    await page.evaluate(() => threadsSideRender());
     // Each 1:1 DM's unread is counted on its teammate in Team, a bot or a person.
     assert.equal(await page.locator('#tree [data-org="b:ops"] .tree-dm').textContent(), '2');
     assert.equal(await page.locator('#tree [data-org="p:bea"] .tree-dm').textContent(), '1');
@@ -638,7 +653,7 @@ let browser = null;
     await cu.locator('.cu-card h3', {hasText: 'Thread 11'}).waitFor();
     assert.equal(await cu.locator('.cu-pos').textContent(), '1 of 3');
     assert.equal(await cu.locator('.cu-you').count(), 1, 'it says the viewer is named');
-    assert.match(await cu.locator('.cu-msgs').innerText(), /Booked for Friday/);
+    assert.match(await cu.locator('.cu-msgs').innerText(), /Booked for Friday\.\s*…/, 'a clipped message ends in …');
     await themed(page, 'catch-up');
     await cu.locator('[data-cu-read]').click();
     await cu.locator('.cu-card h3', {hasText: 'Thread 4'}).waitFor();
@@ -897,6 +912,54 @@ let browser = null;
     assert.equal(await member.page.locator('.thv-call-note, [data-call]').count(), 0);
     await member.page.close();
     dmRows = null; callsOff = false;
+  }
+  // ---- Live: the rail patches itself from the stream. An unread message counts on its row and joins Catch up, the
+  // viewer's own read clears both, a pin moves a row (a thread not on the rail is read alone), and none of it reads the
+  // whole rail again.
+  {
+    const sse = {queue: [], seq: 0, latest: null, done: false};
+    const {page, seen} = await open(browser, 'ana', {sse});
+    await page.goto('https://tico-ui.test/#/thread/t-plan');
+    const rail = page.locator('#thread-rail');
+    await rail.locator('.tr-row[data-thread="t0"]').waitFor();
+    await page.waitForFunction(() => typeof LIVE !== 'undefined' && LIVE_TOPICS.includes('threads'));
+    const rails = seen.rails;
+    const badges = () => page.evaluate(() => ['#nav-threads .nav-badge', '#mobile-threads .nav-badge', '#thread-rail [data-tr-catch] .tr-badge']
+      .map(q => { const b = document.querySelector(q); return b && !b.hidden ? b.textContent : ''; }));
+    const row = id => page.evaluate(id => {
+      const a = document.querySelector(`#thread-rail .tr-row[data-thread="${id}"]`);
+      return a ? {list: a.closest('[data-list]')?.dataset.list, bold: getComputedStyle(a).fontWeight >= 600, n: a.querySelector('.tr-count')?.textContent || ''} : null;
+    }, id);
+    // Events come a stream at a time, after the page reconnects: wait up to 10 s for what one should do.
+    const until = async (fn, want) => {
+      for (let i = 0; i < 100; i++) { if (JSON.stringify(await fn()) === JSON.stringify(want)) return; await page.waitForTimeout(100); }
+      assert.deepEqual(await fn(), want);
+    };
+    assert.deepEqual(await badges(), ['3', '3', '3']);
+    // Bea's new message in Thread 0, sent twice (an edit sends its activity again): one more unread, once, and Catch up
+    // takes the root. A bot's message in Thread 1 is activity only.
+    const said = {kind: 'activity', thread_id: 't0', root_id: 't0', message_id: 'm-live-1', unread: true, actor: 'human:bea', counters: {last_seq: 9, last_unread_seq: 9}};
+    sse.queue.push(said, said, {kind: 'activity', thread_id: 't1', root_id: 't1', message_id: 'm-live-2', unread: false, actor: 'bot:ops', counters: {last_seq: 9, last_unread_seq: 2}});
+    await until(() => row('t0'), {list: 'threads', bold: true, n: '1'});
+    assert.deepEqual(await badges(), ['4', '4', '4'], 'the same count in the sidebar, on the phone tab and on Catch up');
+    await until(() => row('t1'), {list: 'threads', bold: true, n: ''});
+    // A message in the open thread is read there: no count on its row.
+    sse.queue.push({kind: 'activity', thread_id: 't-plan', root_id: 't-plan', message_id: 'm-live-3', unread: true, actor: 'human:bea', counters: {last_seq: 41, last_unread_seq: 41}});
+    // Ana read Thread 11 on another device: its row is quiet and Catch up lets it go.
+    sse.queue.push({kind: 'read', thread_id: 't11', root_id: 't11', read: {last_read_seq: 99}});
+    await until(() => row('t11'), {list: 'threads', bold: false, n: ''});
+    assert.deepEqual(await badges(), ['3', '3', '3']);
+    assert.deepEqual(await row('t-plan'), {list: 'pinned', bold: false, n: ''});
+    // Pins: Thread 3 moves to Pinned; the open house, not on the rail, is read alone and joins Pinned.
+    sse.queue.push({kind: 'pinned', thread_id: 't3', root_id: 't3', pinned: true, pinned_for_everyone: false},
+      {kind: 'pinned', thread_id: 't-open', root_id: 't-open', pinned: true, pinned_for_everyone: true});
+    await until(() => row('t3'), {list: 'pinned', bold: false, n: ''});
+    await until(async () => (await row('t-open'))?.list, 'pinned');
+    assert.deepEqual(seen.threadGets, ['t-open'], 'only the thread not on the rail is read');
+    assert.equal(seen.rails, rails, 'no event read the whole rail again');
+    assert.deepEqual(seen.errors, []);
+    sse.done = true;
+    await page.close();
   }
   // ---- A server without the rail (GET /v2/threads/rail 404): its threads and group chats by title, no pins or Catch up.
   {

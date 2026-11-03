@@ -267,11 +267,12 @@ async function restrictPerson(hub) {
 
       // Calls are not set up on this hub: no Start call, and no note about it.
       await page.goto(hub.url + '/#/thread/' + plan.id);
-      await page.locator('.thv-aud').waitFor({timeout: t(15000)});
+      await page.locator('.thv-title', {hasText: 'Launch plan'}).waitFor({timeout: t(15000)});
       assert.equal(await page.locator('[data-call]').count(), 0, `${tag}: no Start call without calls`);
 
-      // The audience shows in the thread's header on either screen.
-      assert.equal(await page.locator('.thv-aud').innerText(), 'Company', `${tag}: the header names the audience`);
+      // A thread on the rail says what it is with its mark (#), as its row does, on either screen; no audience word.
+      assert.match(await page.locator('.thv-title').innerText(), /^#\s*Launch plan$/, `${tag}: the header's mark`);
+      assert.equal(await page.locator('.thv-aud').count(), 0, `${tag}: no audience word beside a # thread`);
 
       // Who can read: one title, a one-line team row, and neither Slack nor another company with neither set up here.
       await page.goto(hub.url + '/#/thread/' + secret.id);
