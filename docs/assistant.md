@@ -87,9 +87,10 @@ says so and leaves them out. A KPI reading, the company Vision, strategy drafts 
 clicks too.
 
 A suggestion the Strategy Bot made that you confirm with a plain yes leaves **Needs you**, as it does when you confirm
-its card. A "no" in your chat to a goal's wording, a KPI added to a goal, a KPI's definition, a KPI target or a flag is
-recorded at once, with your words as the reason, and needs no read-back and no second yes. A "no" to a Why line stays a
-click on its card. Only the owner gets the "no" in chat. For anyone else, a goal change still comes as a card.
+its card. A message from you that opens with a no, such as "no" or "no, too high", turns down a Strategy Bot suggestion
+about a goal's wording, a KPI added to a goal, a KPI's definition, a KPI target or a flag at once. It needs no read-back
+and no second yes. Your message is kept as the reason, unless it is only a no. A "no" to a Why line stays a click on its
+card. Only the owner's Assistant agrees goal changes in chat, so nobody else's yes or no in chat counts.
 
 ### BotOps
 
