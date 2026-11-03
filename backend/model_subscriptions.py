@@ -354,7 +354,8 @@ def _listing(c, sid=None):
         grants.setdefault(g["subscription_id"], []).append(g)
     computers = f"SELECT g.runner_id FROM computer_subscriptions g {where}"
     runners = {r["id"]: r for r in H._rows(c.execute(
-        f"SELECT * FROM runners WHERE revoked_at IS NULL AND id IN ({computers})", args))}
+        "SELECT id,label,last_seen_at,revoked_at,readiness,capabilities FROM runners "
+        f"WHERE revoked_at IS NULL AND id IN ({computers})", args))}
     ready = {rid: readiness_document(r["readiness"]) for rid, r in runners.items()}
     profiles = {(r["runner_id"], r["profile"]): r["runtimes"] for r in H._rows(c.execute(
         f"SELECT runner_id,profile,runtimes FROM computer_profiles WHERE runner_id IN ({computers})", args))}

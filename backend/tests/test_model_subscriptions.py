@@ -1202,9 +1202,9 @@ NOT_SINCE = "No usage reported since this subscription was added"
 
 
 def runtime_state(account=None, **windows):
-    """A runtime as a computer's readiness reports it on its ordinary home: signed in (as `account`'s email when given),
-    with its windows (`weekly`, `five_hour`)."""
-    state = {"installed": True, "authenticated": "ready", "signed_in": True, **windows}
+    """A runtime as a computer's readiness reports it on its ordinary home: authenticated (as `account`'s email when
+    given), with its windows (`weekly`, `five_hour`)."""
+    state = {"installed": True, "authenticated": "ready", **windows}
     return {**state, "account": {"email": account}} if account else state
 
 
