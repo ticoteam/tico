@@ -322,19 +322,9 @@ def _builtins(c, done, me):
             continue
         controls = {"on": True, "schedule": job.schedule, **(cfg.get(job.key) or {})}
         if job.key == "stale_review":
-            control = cfg[job.key]
-            flow = {"name": job.name, "owner": me, "enabled": bool(control["on"]),
-                    "trigger": {"type": "schedule", "cron": _cron(control["preset"], control["at"]), "tz": _zone()},
-                    "steps": [{"id": "tasks", "type": "find", "source": "tasks", "query": "open tasks that look finished "
-                               "or forgotten", "limit": 20},
-                              {"id": "verdict", "type": "decide", "set": "stale-review@1", "out": "d1", "level": "low"},
-                              {"id": "route", "type": "paths", "paths": [
-                                  {"name": "Suggest to the owner", "when": [{"field": "d1.verdict", "op": "is_not",
-                                                                             "value": "leave"}],
-                                   "steps": [{"id": "suggest", "type": "action", "do": "leave_for_you", "args": {}}]}]}],
-                    "source": {"kind": "system_job", "id": oid}}
-            out.append({"kind": "system_job", "id": oid, "title": job.name, "becomes": flow, "flags": [],
-                        "_do": ("stale_review", {"on": bool(control["on"])})})
+            # Stays the built-in job: the team rule `stale_review` switches it (backend/stale_review.py). No automation.
+            out.append({"kind": "system_job", "id": oid, "title": job.name, "becomes": "unchanged", "flags": [],
+                        "_do": None})
             continue
         flow = _mirror(job.name, me, "job." + job.key, controls, {"kind": "system_job", "id": oid}, job.what)
         out.append({"kind": "system_job", "id": oid, "title": job.name, "becomes": flow, "flags": [],
@@ -496,7 +486,7 @@ def _mark(c, kind, ident, mid, aid, outcome="converted", why="", title=""):
 
 def _convert_one(c, who, mid, obj, group_done):
     """One object, in the caller's transaction. Returns the automation id (or None) it made."""
-    from . import strategy_bot, team_rules, turn_budgets as TB, usage_limits
+    from . import strategy_bot, turn_budgets as TB, usage_limits
     kind, args = obj["_do"]
     now = _now()
     if kind in ("routine", "adopt_briefing"):
@@ -530,12 +520,6 @@ def _convert_one(c, who, mid, obj, group_done):
         aid = _save(c, who, obj["becomes"])
         _mark(c, {"builtin": "builtin", "task_rule": "task_rule", "system_job": "system_job",
                   "health_monitor": "health_monitor"}[obj["kind"]], obj["id"], mid, aid)
-        return aid
-    if kind == "stale_review":
-        aid = _save(c, who, obj["becomes"])
-        if args["on"]:
-            team_rules.save(c, who.actor, {"stale_review": False})   # the automation runs it now, not the job
-        _mark(c, "system_job", obj["id"], mid, aid)
         return aid
     if kind == "inbox":
         aid = _save(c, who, obj["becomes"])
@@ -794,6 +778,36 @@ def catch_up(store):
         told = _finish(c, who, mid, waiting)
     return {"converted": converted, "kept": kept, "failed": failed, "changed": changed, "waiting": waiting,
             "migration": mid, "told": told}
+
+
+REPAIR = "stale_review_repair"   # registry_metadata: set once the converted Stale ticket review automation is undone
+
+
+def repair_stale_review(c):
+    """Undo the cutover's conversion of Stale ticket review, once, at startup before the cutover (backend/store.py).
+    The converted automation's first step was a find that matched nothing, so it never reviewed a task, and its
+    conversion turned the team rule `stale_review` off. Where that automation exists: the rule goes on if the
+    automation was on, the automation is deleted through `automations.remove` (on record), and the cutover's mark
+    for the job becomes `kept` (the built-in job stays as it was). Returns the removed automation ids. Later starts
+    find the marker and do nothing; an install without the automation gets only the marker."""
+    from . import automations, team_rules
+    if _meta(c, REPAIR):
+        return []
+    found = c.execute("SELECT * FROM automations WHERE deleted_at IS NULL AND "
+                      "json_extract(flow,'$.source.kind')='system_job' "
+                      "AND json_extract(flow,'$.source.id')='job:stale_review'").fetchall()
+    removed = []
+    for row in found:
+        if row["enabled"]:
+            team_rules.save(c, H.KEEPER, {"stale_review": True})
+        automations.remove(c, H.KEEPER, row, via="migration repair")
+        removed.append(row["id"])
+    if removed:
+        c.execute("UPDATE redesign_migrated SET outcome='kept', automation=NULL, why=? "
+                  "WHERE kind='system_job' AND id='job:stale_review'",
+                  ("Stays the built-in job: the team rule Stale ticket review runs it.",))
+    _set_meta(c, REPAIR, json.dumps({"at": _now(), "removed": removed}, sort_keys=True))
+    return removed
 
 
 def _wakes_of(c, scope_kind, scope_id):
@@ -1139,9 +1153,7 @@ def inventory(c):
     for m in marked:
         outcome = _outcome(m)
         now = {"converted": "moved"}.get(outcome, outcome)
-        if outcome == "converted" and m["id"] == "job:stale_review":
-            now = "moved"
-        elif outcome == "converted" and m["kind"] in ("builtin", "task_rule", "system_job", "health_monitor"):
+        if outcome == "converted" and m["kind"] in ("builtin", "task_rule", "system_job", "health_monitor"):
             now = "runs as before"
         if m["id"] in GONE_JOBS:
             continue
@@ -1149,8 +1161,7 @@ def inventory(c):
                                                      "on" if m["automation_on"] else "off")
         out.append({"kind": m["kind"], "id": m["id"], "title": m.get("title") or m["id"], "now": now,
                     "automation": m["automation"], "name": m.get("automation_name"), "state": state_of,
-                    "runs_from": ("Automations" if m["id"] == "job:stale_review" else RUNS_FROM.get(m["kind"], ""))
-                    if outcome == "converted" else "",
+                    "runs_from": RUNS_FROM.get(m["kind"], "") if outcome == "converted" else "",
                     "why": m.get("why") or ""})
     seen = {(m["kind"], m["id"]) for m in marked}
     who = system_who(c)
@@ -1297,10 +1308,10 @@ def main(argv=None):
 def pending(c):
     """What the cutover would still change in this database, counted by kind ({} for nothing). Read only, and from
     plain SQL so a database an older release wrote is read as it is: routines, wake rules (not Tico Team's notice
-    rules), inboxes, hourly spend limits, turn budgets below the guard, the stale review job when on, and the Strategy
+    rules), inboxes, hourly spend limits, turn budgets below the guard, and the Strategy
     bot's rename. Nothing once the cutover started or finished; read-only mirrors of jobs Tico
     keeps running count for nothing."""
-    from . import strategy_bot, team_rules, tico_notices, turn_budgets as TB, usage_limits
+    from . import strategy_bot, tico_notices, turn_budgets as TB, usage_limits
     if not _table(c, "registry_metadata") or state(c):
         return {}
     done = ({(r[0], r[1]) for r in c.execute("SELECT kind, id FROM redesign_migrated")}
@@ -1333,8 +1344,6 @@ def pending(c):
     add("turn_budget", int(low(_json(_meta(c, TB.TEAM_KEY), {}))))
     if _table(c, "bot_config"):
         add("turn_budget", sum(low(_json(r[0], {})) for r in c.execute("SELECT config FROM bot_config")))
-    if team_rules.load(c).get("stale_review") and ("system_job", "job:stale_review") not in done:
-        add("system_job", 1)
     row = bots.get(strategy_bot.SLUG)
     if row and row != "archived" and ("bot", "bot:" + strategy_bot.SLUG) not in done:
         name = (c.execute("SELECT "

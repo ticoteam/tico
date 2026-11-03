@@ -9,6 +9,7 @@ from backend import automation_flow as F
 from backend import hubdb as H
 from backend import redesign_migration as M
 from backend import rules as R
+from backend import team_rules
 from backend.tests.test_api import api, get, post  # noqa: F401
 
 DUE = "2026-11-02T09:00:00.000000Z"
@@ -360,3 +361,95 @@ def test_the_upgrade_drops_the_cutover_record_and_accepts_tables_and_holds_still
         assert "redesign_migrated" in tables
         assert M.holds(conn, "routine", "sch_1") is True
         assert M.holds(conn, "routine", "sch_2") is False
+
+
+OLD_FLOW = {"name": "Stale ticket review", "owner": "human:ana", "enabled": True,
+            "trigger": {"type": "schedule", "cron": "0 * * * *", "tz": "Europe/London"},
+            "steps": [{"id": "tasks", "type": "find", "source": "tasks",
+                       "query": "open tasks that look finished or forgotten", "limit": 20},
+                      {"id": "verdict", "type": "decide", "set": "stale-review@1", "out": "d1", "level": "low"},
+                      {"id": "route", "type": "paths", "paths": []}],
+            "source": {"kind": "system_job", "id": "job:stale_review"}}
+
+
+def old_stale_automation(api, enabled=True, rule_on=False):
+    """The cutover as it was before this fix: Stale ticket review became a find-based automation, the team rule off."""
+    aid = "auto_mig_old_stale"
+    flow = {**OLD_FLOW, "enabled": enabled}
+    with db(api).transaction() as c:
+        M.ensure(c)
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (M.REPAIR,))   # an install that has not been repaired
+        c.execute("INSERT INTO automations(id,name,owner_id,trigger_type,enabled,builtin,flow,version,created_at,"
+                  "created_by_id,updated_at) VALUES(?,?,?,?,?,0,?,1,?,?,?)",
+                  (aid, "Stale ticket review", "human:ana", "schedule", int(enabled), json.dumps(flow), DUE,
+                   "human:ana", DUE))
+        c.execute("INSERT INTO redesign_migrated(kind,id,migration,automation,outcome,why,title,migrated_at) "
+                  "VALUES('system_job','job:stale_review','mig_old',?,'converted','','Stale ticket review',?)",
+                  (aid, DUE))
+        team_rules.save(c, "human:ana", {"stale_review": rule_on})
+    return aid
+
+
+def stale_automations(api):
+    return rows(api, "SELECT id, enabled, deleted_at FROM automations WHERE json_extract(flow,'$.source.id')=?",
+                ("job:stale_review",))
+
+
+def repair(api):
+    with db(api).transaction() as c:
+        return M.repair_stale_review(c)
+
+
+def stale_rule(api):
+    with db(api).read() as c:
+        return team_rules.load(c)["stale_review"]
+
+
+def test_stale_review_stays_the_built_in_job_on_a_fresh_install(api):
+    with db(api).transaction() as c:
+        team_rules.save(c, "human:ana", {"stale_review": True})
+    first_start(api)
+    assert stale_automations(api) == []                       # no find-automation, the job itself runs
+    assert stale_rule(api) is True                            # the cutover does not switch the rule off
+    assert ("system_job", "job:stale_review") not in marks(api)
+    with db(api).read() as c:
+        assert all(i["id"] != "job:stale_review" or i["now"] == "unchanged" for i in M.inventory(c))
+        assert M.pending(c).get("system_job") is None
+    assert repair(api) == [] and stale_rule(api) is True      # nothing to repair here, and the marker is set
+
+
+def test_the_repair_turns_the_rule_on_for_an_enabled_no_op_automation_once(api):
+    aid = old_stale_automation(api, enabled=True, rule_on=False)
+    assert stale_rule(api) is False
+    assert repair(api) == [aid]
+    assert stale_rule(api) is True
+    (gone,) = stale_automations(api)
+    assert gone["deleted_at"] and gone["enabled"] == 0        # removed through automations.remove, on record
+    with db(api).read() as c:
+        assert c.execute("SELECT 1 FROM audit_log WHERE object=? AND via=?", ("automation:" + aid, "migration repair")).fetchone()
+    assert marks(api)[("system_job", "job:stale_review")]["outcome"] == "kept"
+    assert marks(api)[("system_job", "job:stale_review")]["automation"] is None
+    # Once: a second start changes nothing, and the cutover run again (its done bookkeeping) makes no automation.
+    before = stale_automations(api)
+    assert repair(api) == [] and stale_rule(api) is True
+    first_start(api)
+    assert stale_automations(api) == before and stale_rule(api) is True
+    assert [i for i in rows(api, "SELECT id FROM automations WHERE deleted_at IS NULL "
+                                 "AND json_extract(flow,'$.source.id')='job:stale_review'")] == []
+
+
+def test_the_repair_with_the_old_automation_off_removes_it_and_leaves_the_rule_off(api):
+    aid = old_stale_automation(api, enabled=False, rule_on=False)
+    assert repair(api) == [aid]
+    assert stale_rule(api) is False
+    (gone,) = stale_automations(api)
+    assert gone["deleted_at"] and gone["enabled"] == 0
+    assert repair(api) == [] and stale_rule(api) is False
+
+
+def test_the_repair_leaves_an_install_without_the_automation_alone(api):
+    with db(api).transaction() as c:
+        team_rules.save(c, "human:ana", {"stale_review": False})
+    assert repair(api) == [] and stale_rule(api) is False
+    assert stale_automations(api) == []
+
