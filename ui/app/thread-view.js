@@ -33,7 +33,8 @@ function thvDraftSave(view) {
 // first message). {card: true} keeps the list to a box inside a page; {header: false} leaves out the title line, and
 // {header: 'compact'} keeps only its actions (call, Members, the thread menu), drawn into `actsHost` when given (a bar
 // the page owns). {compactEmpty: true} draws a Home with no messages as its composer alone, never a blank timeline, and
-// hides the card (`hideGone`) from a viewer who can't post either. {focus: message id} shows that message.
+// hides the card (`hideGone`) from a viewer who can't post either. {focus: message id} shows that message. {goals: slug}
+// (a bot's Home or DM) adds the old chat's goal: the target in the composer and the pinned goal's bar (chat-goal.js).
 function threadMount(host, opts = {}) {
   const view = {key: ++THV_N, host, opts, id: '', thread: null, breadcrumb: [], messages: [], next: null, state: 'loading',
                 readAt: 0, openSeq: 0, readSent: new Map(), marks: new Map(), pending: [], replyTo: '', editing: '',
@@ -41,11 +42,13 @@ function threadMount(host, opts = {}) {
   THV_VIEWS.add(view);
   host.innerHTML = `<section class="thv${opts.card ? ' thv-card' : ''}" data-thv="${view.key}">
     ${opts.header === false ? '' : '<header class="thv-head"></header>'}
+    ${opts.goals ? '<section class="chat-goal thv-goal" aria-label="Goal" hidden></section>' : ''}
     <div class="thv-scroll"><button type="button" class="ghost small thv-older" hidden>Earlier</button>
       <div class="thv-list" role="log" aria-live="polite"></div></div>
     <button type="button" class="stick-pill thv-unread" hidden>Unread</button>
     <div class="thv-composer"></div></section>`;
   view.el = host.querySelector('.thv');
+  if (opts.goals) view.goals = chatGoalThread(view, opts.goals);
   thvWire(view);
   // A view that is not displayed (a hidden tab or pane) reads nothing; it marks read once it shows.
   if (window.ResizeObserver) { view.shown = new ResizeObserver(() => thvMarkRead(view)); view.shown.observe(view.el); }
@@ -86,12 +89,13 @@ function thvSetId(view, id) {
   view.follow?.();
   view.id = id;
   view.follow = liveFollowThread(id);
+  if (view.goals) void chatGoalThreadId(view);
 }
 async function thvLoad(view) {
   try {
     const id = await thvResolve(view);
     if (view.gone) return;
-    if (!id) { view.state = 'empty'; thvDraw(view); return; }
+    if (!id) { view.state = 'empty'; thvDraw(view); if (view.goals) void chatGoalThreadId(view); return; }
     thvSetId(view, id);
     const r = await get(thvPath(id) + '/timeline?limit=50', {fresh: true});
     if (view.gone) return;
@@ -281,6 +285,7 @@ function thvRows(view) {
       continue;
     }
     if (m.collapsed) { rows.push({more: m, id: m.id}); continue; }
+    if (chatGoalControl(m)) continue;          // a goal's /goal message: the goal bar shows its effect (chat-goal.js)
     rows.push({m});
   }
   return rows;
@@ -335,6 +340,8 @@ function thvMsgHTML(view, m) {
   else if (view.editing === m.id) body = `<div class="th-edit"><textarea class="th-edit-text" rows="2" aria-label="Edit message">${esc(m.body || '')}</textarea>
       <div class="th-edit-acts"><button type="button" class="ghost small" data-th-edit-cancel>Cancel</button><button type="button" class="primary small" data-th-edit-save>Save</button></div></div>`;
   else if (thvIsUpdateCard(m)) body = thvUpdateHTML(m);
+  // A met or stopped goal: the one line the chat showed (chat-goal.js).
+  else if (m.refs?.chat_goal && m.refs?.goal_status) body = chatGoalNoticeHTML(m, view.goals?.goal);
   // A card a bot left for you fills in from its action or request (ui/assistant.js, ui/credential-card.js).
   else if (m.refs?.credential_request) body = `<div data-credential-host="${esc(m.refs.credential_request)}"><div class="asst-state">Loading the card…</div></div>`;
   else if (m.refs?.action) body = `<div data-action-host="${esc(m.refs.action)}"><div class="asst-state">Loading the card…</div></div>`;
@@ -521,7 +528,11 @@ function threadViewsLive(topic, d) {
     if (topic === 'messages' && thvApplyMessage(view, d)) { thvDraw(view); thvMarkRead(view); }
   }
 }
-liveOn('messages', d => { if (d?.thread_id || d?.message?.thread_id) threadViewsLive('messages', d); });
+liveOn('messages', d => {
+  if (d?.thread_id || d?.message?.thread_id) threadViewsLive('messages', d);
+  // A goal set, paused, met or stopped in a bot's Home or DM on screen: read it as the goal route shows it.
+  if (d?.goal_id) for (const view of THV_VIEWS) if (view.goals && view.id && view.id === d.conversation_id && !view.gone) void chatGoalThreadId(view);
+});
 
 // ----------------------------------------------------------------- the composer
 function thvComposerDraw(view) {
@@ -531,9 +542,13 @@ function thvComposerDraw(view) {
   if (!can) { host.hidden = true; return; }
   host.hidden = false;
   if (view.composer) return;
-  const C = view.composer = {files: [], lib: [], mention: null};
-  host.innerHTML = `<div class="ask thv-ask"><div class="p-pill">
+  // One line, as the bot chat's pill was: Attach, the words, Goal (a bot's Home or DM), Send. `pill-thread` keeps the
+  // task question card's frame (.ask, ui/styles/task-files.css) off it.
+  const C = view.composer = {files: [], lib: [], mention: null, slug: view.opts.goals || null,
+    label: () => thvComposerLabel(view), buttons: () => thvComposerButtons(view), goalsOf: () => view.goals};
+  host.innerHTML = `<div class="ask pill-thread thv-ask"><div class="p-pill">
       <textarea class="p-text" rows="1" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="Message" placeholder="Message"></textarea>
+      ${view.goals ? '<button class="p-goal p-icon" type="button" title="Goal" aria-label="Goal" aria-pressed="false" hidden><span class="nav-icon" aria-hidden="true">target</span></button>' : ''}
       <span class="thv-attach-wrap"><button class="p-attach p-icon" type="button" title="Attach" aria-label="Attach" aria-haspopup="menu" aria-expanded="false">${ICON_CLIP}</button>
         <div class="p-menu thv-attach-menu" role="menu" hidden><button type="button" role="menuitem" data-attach="upload">Upload</button><button type="button" role="menuitem" data-attach="library">Library file</button></div></span>
       <input type="file" multiple hidden class="p-file">
@@ -544,13 +559,15 @@ function thvComposerDraw(view) {
   C.el = host.firstElementChild;
   const box = C.el.querySelector('.p-text'), file = C.el.querySelector('.p-file'), menu = C.el.querySelector('.thv-attach-menu');
   const grow = () => { box.style.height = 'auto'; box.style.height = Math.min(box.scrollHeight, 160) + 'px'; };
-  box.addEventListener('input', () => { grow(); thvMentionFind(view); });
+  box.addEventListener('input', () => { grow(); thvMentionFind(view); thvComposerButtons(view); });
   box.addEventListener('keydown', ev => {
     if (C.mention && thvMentionKey(view, ev)) return;
     if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && !touchKeyboard()) { ev.preventDefault(); void thvComposerSend(view); }
   });
   box.addEventListener('blur', () => setTimeout(() => thvMentionClose(view), 150));
   C.el.querySelector('.p-send').onclick = () => void thvComposerSend(view);
+  const goal = C.el.querySelector('.p-goal');
+  if (goal) goal.onclick = () => chatGoalButton(view.goals);
   C.el.querySelector('.p-attach').onclick = ev => {
     const open = menu.hidden;
     menu.hidden = !open; ev.currentTarget.setAttribute('aria-expanded', String(open));
@@ -571,6 +588,27 @@ function thvComposerDraw(view) {
   thvDropZone(view);
   const draft = THV_DRAFTS.get(thvDraftKey(view));
   if (draft) { box.value = draft.text; C.files.push(...draft.files); C.lib.push(...draft.lib); thvChips(view); requestAnimationFrame(grow); }
+  if (view.goals) chatGoalRender(view.goals);
+  thvComposerLabel(view);
+}
+// Send says what it will do: the arrow, or "Set goal" in goal mode, and the empty box says so too (as pill.js
+// pillLabel). An empty box only dims it.
+function thvComposerLabel(view) {
+  const C = view.composer, btn = C?.el.querySelector('.p-send'), box = C?.el.querySelector('.p-text');
+  if (!btn) return;
+  const goal = chatGoalThreadMode(C), word = goal ? 'Set goal' : 'Send';
+  // The arrow is swapped only when the mode changes: a redraw between press and release would lose the click.
+  if (btn.dataset.shows !== word) { btn.innerHTML = goal ? esc(word) : ICON_SEND; btn.dataset.shows = word; }
+  btn.classList.toggle('p-send-goal', goal);
+  btn.setAttribute('aria-label', btn.disabled && btn.dataset.busy || word);
+  btn.title = btn.disabled && btn.dataset.busy || word;
+  box.placeholder = goal ? `Goal for ${botDisplayName(C.slug)}…` : 'Message';
+  thvComposerButtons(view);
+}
+function thvComposerButtons(view) {
+  const C = view.composer, btn = C?.el.querySelector('.p-send'), box = C?.el.querySelector('.p-text');
+  if (!btn) return;
+  btn.classList.toggle('p-off', !box.value.trim() && !C.files.length && !C.lib.length);
 }
 function thvDropZone(view) {
   const zone = view.el;
@@ -587,6 +625,7 @@ function thvChips(view) {
   C.el.querySelector('.p-chips').innerHTML = [
     ...C.files.map((f, i) => `<span>${esc(f.name)} <a href="#" data-rm="file:${i}" aria-label="Remove ${esc(f.name)}">×</a></span>`),
     ...C.lib.map((f, i) => `<span>${esc(f.title)} <a href="#" data-rm="lib:${i}" aria-label="Remove ${esc(f.title)}">×</a></span>`)].join('');
+  thvComposerLabel(view);   // a file sends as a message, so goal mode's "Set goal" waits until it is gone
 }
 // Library files: the newest the viewer may read, filtered as they type.
 async function thvLibOpen(view) {
@@ -671,7 +710,9 @@ function thvMentionClose(view) {
 async function thvComposerSend(view) {
   const C = view.composer, box = C.el.querySelector('.p-text');
   const text = box.value.trim();
-  if (!text && !C.files.length && !C.lib.length) return;
+  // Goal mode: the words are the bot's goal for this thread (POST /v2/conversations/<thread>/goal), not a message.
+  if (chatGoalThreadMode(C)) { if (await chatGoalSend(C, text)) THV_DRAFTS.delete(thvDraftKey(view)); return; }
+  if (!text && !C.files.length && !C.lib.length) { box.focus(); return; }
   const files = C.files.splice(0), lib = C.lib.splice(0);
   box.value = ''; box.style.height = ''; thvChips(view);
   THV_DRAFTS.delete(thvDraftKey(view));

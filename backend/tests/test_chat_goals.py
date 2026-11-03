@@ -261,3 +261,21 @@ def test_a_persons_edit_of_a_task_goal_survives_task_goals_turning_off(api):
     claim(api, machine)
     goal = get(api, f"conversations/{task['conversation_id']}/goal")['goal']
     assert goal['status'] == 'active' and goal['objective'] == 'Publish it and tell the board'
+
+
+@pytest.mark.parametrize('where', ['dm', 'home'])
+def test_a_bot_dm_or_home_thread_takes_a_goal(api, where):
+    # The bot page's Home and DM are threads (docs/dev/threads-contract.md): the goal route takes their id as the
+    # conversation, and a native DM names its bot only as a member, not on the participant list.
+    machine, old = setup(api)
+    with api.app.state.store.transaction() as c:      # not the legacy chat room: a DM made as threads make one
+        c.execute('UPDATE conversations SET closed_at=? WHERE id=?', (H.now(), old))
+    thread = post(api, 'threads/dm', {'members': ['bot:ops']}) if where == 'dm' else get(api, 'threads/home/bot:ops')
+    tid = thread['id']
+    assert tid != old
+    assert get(api, f'conversations/{tid}/goal')['supported'] is True
+    goal = action(api, tid, objective='Ship the Acme pricing page')['goal']
+    assert goal['status'] == 'active' and goal['conversation_id'] == tid
+    attempt = claim(api, machine)
+    assert attempt['message']['body'] == '/goal Ship the Acme pricing page'
+    assert attempt['message']['refs']['goal_action'] == 'set'
