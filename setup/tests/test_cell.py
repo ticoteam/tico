@@ -2478,8 +2478,8 @@ def test_set_page_host_that_failed_to_start_is_redone_in_full_when_given_again(r
 def test_a_page_host_that_is_the_companys_visual_or_runner_host_is_refused(ready):
     ready(*add_args(ready, "acme"))
     env = ready.root / "companies" / "acme" / ".env"
-    env.write_text(env.read_text() + "TICO_VISUAL_ORIGIN=https://vis.acme.example\nTICO_RUNNER_URL=https://run.acme.example/x\n")
-    for taken in ("vis.acme.example", "run.acme.example"):
+    env.write_text(env.read_text() + "TICO_VISUAL_ORIGIN=https://vis.acme.example\nTICO_RUNNER_URL=https://run.acme.example/x\nTICO_PUBLIC_URL=//app.acme.example\n")
+    for taken in ("vis.acme.example", "run.acme.example", "app.acme.example"):
         assert ready("set-page-host", "--company", "acme", "--host", taken)["error"] == "bad_domain"
     assert "page_host" not in record(ready, "acme")
 

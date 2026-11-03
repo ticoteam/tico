@@ -357,7 +357,7 @@ def refuse_server_host(host: str, env: dict[str, str], flag: str) -> None:
     for key in ("TICO_PUBLIC_URL", "TICO_VISUAL_ORIGIN", "TICO_RUNNER_URL"):
         value = (env.get(key) or "").strip()
         try:
-            other = urllib.parse.urlsplit(value if "://" in value else "//" + value).hostname if value else None
+            other = (urllib.parse.urlsplit(value).hostname or urllib.parse.urlsplit("//" + value).hostname) if value else None
         except ValueError:
             other = None
         if host and other and other.lower() == host:
