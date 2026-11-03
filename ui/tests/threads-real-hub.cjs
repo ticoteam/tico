@@ -224,12 +224,13 @@ async function restrictPerson(hub) {
     const group = await phone.locator(`#thread-rail a.tr-row[data-thread="${(trio.thread || trio).id}"] .tr-title`).innerText({timeout: t(15000)});
     assert.equal(group.trim(), 'Launch trio', 'a group chat is on the rail by its name');
     assert.equal(await phone.locator(`#thread-rail a[data-thread="${(pair.thread || pair).id}"]`).count(), 0, 'a 1:1 DM is on its teammate, not the rail');
-    await phone.goto(hub.url + '/#/thread/' + (pair.thread || pair).id);
-    await phone.locator('.thv-title', {hasText: 'Priya'}).waitFor({timeout: t(15000)});
+    // The card first: opening the DM reads it, and the card lists only unread threads.
     await phone.goto(hub.url + '/#/home');
     const card = phone.locator('.dash-list a', {hasText: 'Priya'}).first();
     await card.waitFor({timeout: t(15000)});
     assert.equal(await phone.locator('.dash-list a', {hasText: 'Untitled'}).count(), 0, 'no DM on the card is Untitled');
+    await phone.goto(hub.url + '/#/thread/' + (pair.thread || pair).id);
+    await phone.locator('.thv-title', {hasText: 'Priya'}).waitFor({timeout: t(15000)});
 
     // The same phone: a bot's Home and DM are named in the top line, and each one switches the page.
     await phone.goto(hub.url + '/#/bot/' + BOT + '/home');
