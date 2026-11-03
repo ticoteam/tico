@@ -258,8 +258,10 @@ def test_a_turn_never_edits_deletes_or_redacts_a_message_the_person_wrote(api):
     assert not assistant.admits_on_turn("PATCH", f"/api/v2/messages/{mid}", {"body": "yes"})
     assert not assistant.admits_on_turn("DELETE", f"/api/v2/messages/{mid}")
     assert not assistant.admits_on_turn("POST", f"/api/v2/messages/{mid}/redact", {})
-    for method, body in (("PATCH", {"body": "yes"}), ("DELETE", None), ("POST", {})):
-        raw = api.request(method, f"/api/v2/messages/{mid}", json=body, headers=cited)
+    for method, path, body in (("PATCH", f"/api/v2/messages/{mid}", {"body": "yes"}),
+                               ("DELETE", f"/api/v2/messages/{mid}", None),
+                               ("POST", f"/api/v2/messages/{mid}/redact", {})):
+        raw = api.request(method, path, json=body, headers=cited)
         assert raw.status_code == 403 and raw.json()["error"]["code"] == "confirm_required", (method, raw.text)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT body FROM messages WHERE id=?", (mid,)).fetchone()["body"] == "No"
@@ -284,10 +286,37 @@ def test_a_message_edited_after_it_was_posted_lends_no_words(api):
         assert assistant.edited(c, {"id": mid, "edited_at": None, "revision": 1})
 
 
+# The walk's keyword match reads a handler's source, so a word like "provider" or "login" can match a route that writes no
+# credential. Each such route is reviewed here with the reason; a new route that the walk flags and this list does not
+# name fails the test. A route that does touch a credential, a sign-in, an invite, a subscription or a signing key is on
+# NEVER instead (backend/assistant.py), and a route here must never be one of those.
+REVIEWED = {
+    "POST /api/v2/humans/{pid}": "a profile edit; 'login' is a last-login field",
+    "POST /api/v2/people/{pid}": "a profile edit; 'login' is a last-login field",
+    "POST /api/v2/runners/heartbeat": "the runner's own heartbeat; 'provider' is a field name",
+    "POST /api/v2/bots/{bot}/go-live": "switches a bot live on credentials the person already granted; writes none",
+    "POST /api/v2/grokbot/sync": "syncs a bot's state from its provider; writes no credential",
+    "POST /api/v2/bots/{bot}/model": "a bot's model choice; a computer's sign-in is NEVER",
+    "POST /api/v2/bots/{bot}/limit/retry": "retries a bot's limit; writes no sign-in",
+    "POST /api/v2/lenses/{lens_id}/runs": "runs a lens on the model provider the company already set",
+    "POST /api/v2/files/links": "a file link; 'provider' names the file's host",
+    "POST /api/v2/connectors/calendar/actions/claim": "claims a calendar card the person taps; 'invite' is a calendar invite",
+    "POST /api/v2/calendar/appointments": "books a calendar event; its invites go out through the calendar (see the report)",
+    "POST /api/v2/imports/transcripts": "imports a transcript; 'provider' is its source field",
+    "POST /api/v2/credential-requests": "asks the person for a credential; they enter it in Settings, which is NEVER",
+    "POST /api/v2/credential-requests/{rid}/cancel": "cancels that ask; writes no credential",
+    "POST /api/v2/decisions": "asks the LLM judge; 'provider' is the model provider",
+    "POST /api/v2/judge": "asks the LLM judge; 'provider' is the model provider",
+    "POST /api/v2/rules/read": "reads a rules document with the company's model provider; writes nothing",
+    "POST /api/v2/bots/{bot}/tools": "registers a bot's tool manifest; clients/access_entry refuses any credential in it",
+    "POST /api/v2/assistant/actions": "the Assistant's own card route: a proposal the person confirms",
+}
+
+
 def test_every_route_that_touches_a_credential_or_a_sign_in_is_never_a_chat_write(api):
     """Walks app.routes: any route whose handler reads or writes a credential, a grant, a computer's sign-in or keys, a
-    subscription, a federation or signing key, an invite, or the providers, must be on NEVER for every write it takes.
-    A new such route that is not listed fails here, not in a chat."""
+    subscription, a federation or signing key, an invite, or the providers, must be on NEVER for every write it takes
+    (or be reviewed in REVIEWED with its reason). A new such route that is neither fails here, not in a chat."""
     touches = re.compile(r"credential|model_login|computer_keys|shared_key|attach_shared|login|logout|password|service_key|"
                          r"enroll|pairing|subscription|federation|signing|replace_lost|invite|provider")
     checked, offenders = 0, []
@@ -308,7 +337,8 @@ def test_every_route_that_touches_a_credential_or_a_sign_in_is_never_a_chat_writ
             if assistant.admits_on_turn(method, path, None):
                 offenders.append(f"{method} {route.path}")
     assert checked >= 20, checked
-    assert not offenders, offenders
+    unreviewed = [o for o in offenders if o not in REVIEWED]
+    assert not unreviewed, "\n".join(unreviewed)
 
 
 def _template_tools():

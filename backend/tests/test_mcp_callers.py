@@ -31,7 +31,9 @@ def test_each_caller_is_offered_only_the_tools_it_can_use(api, botops):
     everything = {n for n, t in hubtools.BY_NAME.items() if not t["local"]}
     for who, names in lists.items():
         assert names < everything, who                                   # nobody is offered every tool
-        assert "hub_assistant_propose" not in names, who                 # the Assistant's own
+        # The Assistant's own: offered to bots (its background run is a bot, and a listing cannot tell it apart), and the
+        # server refuses a `for` from any bot but the Assistant (backend/assistant.py `propose`).
+        assert "hub_assistant_propose" not in names or who == "bot", who
         assert {"hub_whoami", "hub_task_list", "hub_message_send", "hub_doc_search", "hub_sql"} <= names, who
     for who in ("owner", "admin", "member"):
         assert HUMANS_ONLY <= lists[who] and not BOTS_ONLY & lists[who] and not BOTOPS_ONLY & lists[who], who
