@@ -222,6 +222,7 @@ async function messageMenu(page, text, item) {
       });
       await step(page, 'add a card', phone, name, async () => {
         await shell(page, '#/home')();
+        await page.locator('[data-dash-mode="edit"]').first().click();
         await page.locator('[data-dash-add="card"]').first().click();
         const dialog = page.locator('dialog[open]').first();
         await dialog.waitFor({timeout: WAIT});
@@ -230,7 +231,7 @@ async function messageMenu(page, text, item) {
         await sleep(800);
         await snap(page, 'card-added', phone);
       });
-      // Arranging is by the grip on each card (.dash-grip): drag the last card's grip to the top of the page.
+      // Arranging is by the grip on each card (.dash-grip), still in edit mode: drag the last card's grip to the top.
       await step(page, 'arrange cards', phone, name, async () => {
         const from = await page.locator('.dash-grip').last().boundingBox();
         const to = await page.locator('.dash-grip').first().boundingBox();

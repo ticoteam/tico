@@ -264,7 +264,8 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await sd.waitFor({state: 'detached', timeout: t(10000)});
   assert.equal((await ok(page, 'GET', 'growth/settings')).revenue_month, 95, `${tag}: the setting saved`);
 
-  // A Number for one channel, added from the grid's form.
+  // A Number for one channel, added from the grid's form, in edit mode.
+  await page.locator('[data-dash-mode="edit"]').click();
   await page.locator('[data-dash-add="card"]').click();
   const form = page.locator('#dash-dialog[open]');
   assert.equal(await form.locator('[name="template"]').inputValue(), 'growth_number', `${tag}: a Number first`);
