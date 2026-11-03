@@ -35,7 +35,7 @@ async function open(browser, viewport, state) {
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/conversations/room1/snapshot') return json({messages: state.messages, execution: null, has_more: false, next_before: null});
     if (p === '/api/v2/assistant' && method === 'GET') return json({available: true, state: 'active', bot: 'coo', name: 'Assistant',
-      can_turn_on: false, room_id: 'room1', messages: state.messages, has_more: false, next_before: null, execution: null, actions: {},
+      can_turn_on: false, room_id: 'room1', messages: state.messages, has_more: false, next_before: null, execution: state.execution || null, actions: {},
       pending: state.card?.status === 'pending' ? [state.card] : []});
     if (p === '/api/v2/assistant/actions/act9' && method === 'GET') return json({action: state.card});
     if (p === '/api/v2/assistant/actions/act9/confirm') { state.decided.push('act9'); state.card.status = 'done'; return json({action: state.card}); }
@@ -332,6 +332,24 @@ const words = text => text.trim().split(/\s+/).length;
       return !!document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest('#ask-panel'); }), true, 'the chat is above the needs-you sheet');
     await tab.click();
     await page.locator('#ask-panel').waitFor({state: 'hidden'});
+    assert.deepEqual(errors, []);
+    await page.close();
+
+    // A turn at work with no words yet: its label, how long it has run and its newest step, never the tool's arguments.
+    // Once it replies, the reply instead.
+    state = {messages: [msg('w1', 'human:ben', 'Help me clear out my task list', ago(5))], sent: [], read: [], decided: [], answers: [], tickets: [], needs: [],
+      execution: {job_id: 'j1', message_id: 'w1', bot_id: 'coo', state: 'running', label: 'Working', text: '', started_at: ago(4.3), parts: [
+        {kind: 'tool', text: 'Ran hub hub task list', at: ago(4)}, {kind: 'tool', text: 'Ran hub task bulk close', at: ago(1)}]}};
+    ({page, errors} = await open(browser, {width: 1280, height: 900}, state));
+    await page.locator('#ask-row').click();
+    const working = page.locator('#ask-panel [data-ask-working]');
+    await working.waitFor();
+    assert.equal(await working.innerText(), 'Working · 4m · Closing tasks');
+    state.execution = {...state.execution, state: 'completed', label: 'Complete', parts: []};
+    state.messages.push(msg('w2', 'bot:coo', 'Closed 12 tasks.'));
+    await page.evaluate(() => ASK.refresh());
+    await page.locator('#ask-panel').getByText('Closed 12 tasks.').waitFor();
+    assert.equal(await working.count(), 0, 'no working line once it replied');
     assert.deepEqual(errors, []);
     await page.close();
 

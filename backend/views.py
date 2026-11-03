@@ -963,7 +963,8 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     person = "m.sender_id LIKE 'human:%'"
     which = (f"AND (j.bot_id=? OR {person}) " if bot and people else "AND j.bot_id=? " if bot
              else f"AND {person} " if people else "")
-    job = c.execute("SELECT j.*,m.sender_id AS sender,a.state AS attempt_state,a.lease_until,a.stop_requested_at "
+    job = c.execute("SELECT j.*,m.sender_id AS sender,a.state AS attempt_state,a.lease_until,a.stop_requested_at,"
+                    "a.started_at AS attempt_started_at "
                     "FROM jobs j JOIN messages m ON m.id=j.message_id "
                     "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
                     "AND coalesce(json_extract(m.refs,'$.maintenance'),'')!='checkpoint' "
@@ -1027,6 +1028,8 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
             execution["waiting"] = waiting
         if readiness_reason:
             execution["readiness_reason"] = readiness_reason
+        if state in ("leased", "running") and job["attempt_started_at"]:
+            execution["started_at"] = job["attempt_started_at"]   # the chat counts the turn's time from it
     return execution
 
 

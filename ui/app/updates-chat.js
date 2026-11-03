@@ -121,16 +121,22 @@ async function updcLoad(chat) {
   const el = chat.el, thread = el.querySelector('[data-updc-thread]'), error = el.querySelector('[data-updc-error]');
   const current = () => UPDC === chat && el.isConnected;
   const fail = text => { if (!current()) return; error.textContent = text || ''; error.hidden = !text; };
-  let info = null, messages = [], execution = null, rendered = '', es = null, poll = null;
+  let info = null, messages = [], execution = null, rendered = '', es = null, poll = null, tick = null;
   const stopStream = () => { try { es?.(); } catch { /* released */ } es = null; clearInterval(poll); poll = null; };
-  chat.stop = stopStream;
+  chat.stop = () => { stopStream(); clearInterval(tick); tick = null; };
   const isReply = m => m.sender_id === 'bot:' + info?.bot;
   const draw = () => {
-    if (!current()) return;
+    if (!current()) { clearInterval(tick); tick = null; return; }
     const rows = messages.map(m => v2MessageHTML({...m, run: null}));
     const live = execution && execution.state !== 'completed' ? execution.text : '';
+    // No words yet: what the turn is doing and for how long (ui/app/ask-rules.js), its time kept current by a tick.
+    const working = !live && messages.length && !isReply(messages.at(-1)) ? askWorkingLine(execution) : '';
     if (live) rows.push(`<div data-updc-live>${v2MessageHTML({from_actor: 'bot:' + info.bot, body: live})}</div>`);
-    else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status">${esc(execution?.label || 'Waiting for reply…')}</p>`);
+    else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status" data-updc-working>${esc(working || execution?.label || 'Waiting for reply…')}</p>`);
+    // The tick moves only the line's time, never the thread (its cards would load again).
+    if (working && !tick) tick = setInterval(() => { const el = current() && thread.querySelector('[data-updc-working]'), t = askWorkingLine(execution);
+      if (el && t) el.textContent = t; }, ASK_TICK_MS);
+    else if (!working && tick) { clearInterval(tick); tick = null; }
     const html = rows.join('') || `<div class="updc-empty"><p class="muted">Ask ${esc(info.name)} about today's updates.</p>
       <button class="ghost" type="button" data-updc-hint="${esc(UPDC_HINT)}">${esc(UPDC_HINT)}</button></div>`;
     if (html === rendered) return;

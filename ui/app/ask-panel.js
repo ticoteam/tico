@@ -254,14 +254,14 @@ async function askLoad(chat) {
   const el = $('#ask-panel'), thread = el.querySelector('[data-ask-thread]'), error = el.querySelector('[data-ask-error]');
   const current = () => ASK === chat && chat.mounted;
   const fail = text => { if (!current()) return; askSet(error, 'textContent', text || ''); askSet(error, 'hidden', !text); };
-  let info = null, messages = [], execution = null, rendered = '', es = null, poll = null;
+  let info = null, messages = [], execution = null, rendered = '', es = null, poll = null, tick = null;
   const stopStream = () => { try { es?.(); } catch { /* released */ } es = null; clearInterval(poll); poll = null; };
-  chat.stop = stopStream;
+  chat.stop = () => { stopStream(); clearInterval(tick); tick = null; };
   const isReply = m => m.sender_id === 'bot:' + info?.bot;
   let pending = [];
   const seenRows = new Set();
   const draw = () => {
-    if (!current() || !info?.available) return;
+    if (!current() || !info?.available) { clearInterval(tick); tick = null; return; }
     const at = x => Date.parse(x || '') || 0;
     // While the Assistant is replying, Ask's dot works, then talks as the words stream in, the panel open or not.
     const streaming = !!(execution && execution.state !== 'completed' && execution.text);
@@ -281,8 +281,14 @@ async function askLoad(chat) {
       .concat(cards)
       .map((r, i) => ({...r, i})).sort((a, b) => at(a.at) - at(b.at) || a.i - b.i).map(r => r.html);
     const live = execution && execution.state !== 'completed' ? execution.text : '';
+    // No words yet: what the turn is doing and for how long (ui/app/ask-rules.js), its time kept current by a tick.
+    const working = !live && messages.length && !isReply(messages.at(-1)) ? askWorkingLine(execution) : '';
     if (live) rows.push(`<div data-ask-live>${v2MessageHTML({from_actor: 'bot:' + info.bot, body: live})}</div>`);
-    else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status">${esc(execution?.label || 'Thinking…')}</p>`);
+    else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status" data-ask-working>${esc(working || execution?.label || 'Thinking…')}</p>`);
+    // The tick moves only the line's time, never the thread (its cards would load again).
+    if (working && !tick) tick = setInterval(() => { const el = current() && thread.querySelector('[data-ask-working]'), t = askWorkingLine(execution);
+      if (el && t) el.textContent = t; }, ASK_TICK_MS);
+    else if (!working && tick) { clearInterval(tick); tick = null; }
     const html = rows.join('') || `<div class="ask-empty">${ASSISTANT_HINTS.map(h =>
       `<button class="ghost" type="button" data-ask-hint="${esc(h)}">${esc(h)}</button>`).join('')}</div>`;
     if (html !== rendered) {
