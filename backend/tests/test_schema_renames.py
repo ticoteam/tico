@@ -85,7 +85,9 @@ RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_ch
            "turn_usage_segments", "usage_limits", "usage_pools",
            "federation_deferrals", "federation_outbox_items", "federation_receipts", "federation_messages",
            "federation_items", "federation_members", "federation_threads", "federation_directory_entries",
-           "federation_peerings", "federation_keys", "federation_states"}
+           "federation_peerings", "federation_keys", "federation_states",
+           # 0059_history_events moves these five logs into history_events (backend/tests/test_history_events.py).
+           "task_events", "goal_events", "market_events", "company_events", "strategy_events"}
 
 
 @pytest.fixture(scope="module")

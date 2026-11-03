@@ -44,7 +44,7 @@ def seed_overdue(store, monkeypatch):
         rows = c.execute("SELECT id,owner_id,created_at FROM tasks WHERE owner_id LIKE 'bot:bot%' AND status='open' "
                          "ORDER BY id").fetchall()
         for tid, _owner, created in rows:
-            key = c.execute("SELECT coalesce((SELECT id FROM task_events WHERE task_id=t.id AND field='owner' "
+            key = c.execute("SELECT coalesce((SELECT id FROM history_events WHERE subject_type='task' AND subject_id=t.id AND kind='owner' "
                             "ORDER BY created_at DESC,rowid DESC LIMIT 1),t.owner_id||':'||t.created_at) "
                             "FROM tasks t WHERE t.id=?", (tid,)).fetchone()[0]
             H.event(c, H.KEEPER, A.EVENT, tid, {"assignment": key, "assigned_at": created,

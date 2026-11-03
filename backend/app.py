@@ -5983,7 +5983,8 @@ def create_app(settings=None):
         "" when there is none to name. None when BotOps has owned it since it was filed, or the requester moved it to
         BotOps themselves (not through BotOps or the Assistant). Otherwise any bot that owns a person's task could
         reassign it to BotOps and borrow their rights for its next run."""
-        moved = c.execute("SELECT * FROM task_events WHERE task_id=? AND field='owner' ORDER BY created_at DESC, rowid DESC "
+        moved = c.execute("SELECT new, actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='owner' "
+                          "ORDER BY created_at DESC, rowid DESC "
                           "LIMIT 1", (task["id"],)).fetchone()
         if not moved:
             made = c.execute("SELECT detail FROM events WHERE action='task.create' AND target=? ORDER BY created_at,id LIMIT 1",
@@ -6255,7 +6256,8 @@ def create_app(settings=None):
         found = carried(c, task, requester)
         if not found or not found.get("lends") or not open_task(task):
             return None
-        if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='status' AND old IN (?,?,?) LIMIT 1",
+        if c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' AND old IN (?,?,?) "
+                     "LIMIT 1",
                      (task["id"], *botops_act.TERMINAL)).fetchone():
             return None             # finished once: the request it carried was done, whoever reopened it
         msg = H.message(c, found.get("message_id") or "")

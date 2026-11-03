@@ -31,7 +31,7 @@ CARRIED = "task.next-run.carried"
 SETTLED = "task.next-run.settled"
 STALE_HOURS = 2
 MAX_DAYS = 730
-# The task_events field each outcome is written under, so a task's own history says what became of each carriage.
+# The task history kind each outcome is written under, so a task's own history says what became of each carriage.
 FIELD = "quiet"
 WORKED, RETURNED, DEFERRED, HANDLED = "worked", "returned", "deferred", "handled"
 # What a carried task tells the run, beside its id and title (execution.claim): how to say "not now".
@@ -103,7 +103,7 @@ def _own_job_sql(claimable=False):
 
 
 def _last_sql(outcomes):
-    return ("SELECT created_at, old, new FROM task_events WHERE task_id=? AND field=? "
+    return ("SELECT created_at, old, new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? "
             f"AND new IN ({','.join('?' * len(outcomes))}) ORDER BY created_at DESC LIMIT 1")
 
 
@@ -169,7 +169,8 @@ def prime(conn, rows):
         ids = [row["id"] for row in rows]
         outcomes = {(RETURNED,): {}, (WORKED, HANDLED): {}}
         for part in H.chunks(ids):
-            for event in conn.execute("SELECT task_id, created_at, old, new FROM task_events WHERE task_id IN (%s) AND field=? "
+            for event in conn.execute("SELECT subject_id AS task_id, created_at, old, new FROM history_events "
+                                      "WHERE subject_type='task' AND subject_id IN (%s) AND kind=? "
                                       "ORDER BY created_at DESC" % ",".join("?" * len(part)), (*part, FIELD)):
                 for wanted, last in outcomes.items():
                     if event["new"] in wanted:
@@ -196,7 +197,8 @@ def prime(conn, rows):
 
 def was_quiet(conn, task_id):
     """Whether this task ever was a quiet one: a Run now or a resume moved it to a run of its own."""
-    return conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='next_run' AND old='1' LIMIT 1",
+    return conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='next_run' "
+                        "AND old='1' LIMIT 1",
                         (task_id,)).fetchone() is not None
 
 
@@ -249,7 +251,8 @@ def worked(conn, row, bot, since, until=None):
     to. A link refreshed from GitHub (checks, mergeable, review) is not work."""
     actor = "bot:" + bot
     until = until or "9999"
-    if conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND actor=? AND created_at>=? AND created_at<=? AND field<>? LIMIT 1",
+    if conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=? "
+                    "AND created_at>=? AND created_at<=? AND kind<>? LIMIT 1",
                     (row["id"], actor, since, until, FIELD)).fetchone():
         return True
     if row.get("conversation_id") and conn.execute(
@@ -290,7 +293,8 @@ def settle(conn, aid, bot, started):
 
 
 def _last_since(conn, task_id, outcome, since):
-    return conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND field=? AND new=? AND created_at>=? LIMIT 1",
+    return conn.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? AND new=? "
+                        "AND created_at>=? LIMIT 1",
                         (task_id, FIELD, outcome, since)).fetchone() is not None
 
 
@@ -415,15 +419,16 @@ def stale(conn, at=None, hours=STALE_HOURS):
         rows = H._rows(conn.execute(
             "SELECT t.* FROM tasks t JOIN bots b ON t.owner_id='bot:'||b.id WHERE b.state='active' AND t.next_run=1 "
             "AND t.status='open' AND t.resume IS NULL AND t.snoozed_until IS NULL "
-            "AND (t.carried_by IS NOT NULL OR EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=t.id "
-            "AND e.field=? AND e.new=?))", (FIELD, RETURNED)))
+            "AND (t.carried_by IS NOT NULL OR EXISTS (SELECT 1 FROM history_events e "
+            "WHERE e.subject_type='task' AND e.subject_id=t.id AND e.kind=? AND e.new=?))", (FIELD, RETURNED)))
     except Exception:  # noqa: BLE001 - a local hub without these tables has no runs
         return []
     for row in rows:
         bot = H.actor_id(row["owner_id"])
         last_work = _last(conn, row["id"], (WORKED, HANDLED, DEFERRED))
         floor = last_work["created_at"] if last_work else ""
-        first = conn.execute("SELECT old FROM task_events WHERE task_id=? AND field=? AND new=? AND created_at>? "
+        first = conn.execute("SELECT old FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? AND new=? "
+                             "AND created_at>? "
                              "ORDER BY created_at LIMIT 1", (row["id"], FIELD, RETURNED, floor)).fetchone()
         aid = first["old"] if first else row.get("carried_by")
         since = carried_at(conn, aid, row["id"]) if aid else None

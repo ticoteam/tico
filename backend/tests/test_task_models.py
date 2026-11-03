@@ -154,7 +154,7 @@ def test_a_task_model_that_cannot_run_falls_back_to_the_bots_model_and_says_why(
     assert ran["task_model"]["note"] == ("Ran on the bot's model claude-sonnet-5-5 at task effort low: task model "
                                          "grok-4.6 (low) could not run (grok is not signed in on Test Mac)")
     with api.app.state.store.read() as c:
-        events = c.execute("SELECT old,new,note FROM task_events WHERE task_id=? AND field='task_model'",
+        events = c.execute("SELECT old,new,note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='task_model'",
                            (task["id"],)).fetchall()
     assert [tuple(e) for e in events] == [("grok-4.6 (low)", "claude-sonnet-5-5 (low)", ran["task_model"]["note"])]
     # Its next turn says the same once more on the run, not again on the task.
@@ -162,7 +162,7 @@ def test_a_task_model_that_cannot_run_falls_back_to_the_bots_model_and_says_why(
     again = claim(api, machine)
     assert again["task"]["id"] == task["id"] and again["config"]["model"] == "claude-sonnet-5-5"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='task_model'",
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='task_model'",
                          (task["id"],)).fetchone()[0] == 1
     # Signed in again: the next task runs on the task model.
     finish(api, machine, again)
@@ -366,7 +366,7 @@ def test_a_cheaper_task_model_on_a_bot_that_sends_warns_in_plain_words_and_still
     note = get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]["task_model"]["note"]
     assert note.startswith("Ran on the bot's task model claude-haiku-5-5 (low), below the minimum for this bot")
     with api.app.state.store.read() as c:
-        assert [r[0] for r in c.execute("SELECT note FROM task_events WHERE task_id=? AND field='task_model'",
+        assert [r[0] for r in c.execute("SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='task_model'",
                                         (task["id"],))] == [note]
     # The bot view judges against the bot's model now: on Haiku itself, its Haiku tasks are not below it.
     with api.app.state.store.transaction() as c:

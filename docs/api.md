@@ -153,7 +153,7 @@ Task `labels` remain a list of keys. Task responses also include `tags` with the
 metadata and notes. `GET /api/v2/tasks/labels` preserves `labels` and adds `tags` for those keys.
 `task_tags` is the source of truth; the old `labels` column is kept for one release but
 is no longer read or written. All tag changes are audited in `events`, and task tag changes
-keep the `labels` entry in `task_events`. See [Tags and release checklists](using-tico.md#tags-and-release-checklists).
+keep the `labels` entry in the task's history (`history_events`). See [Tags and release checklists](using-tico.md#tags-and-release-checklists).
 
 ## Task pipelines
 

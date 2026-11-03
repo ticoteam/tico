@@ -2162,7 +2162,8 @@ def obsolete_notices_sql():
             f"JOIN conversations cv ON cv.id=m.conversation_id JOIN tasks t ON t.id={H.MESSAGE_TASK_SQL} "
             f"WHERE x.runner_id=? AND j.bot_id=x.bot AND j.state='queued' AND {H.unheld_sql()} AND m.id=j.message_id "
             "AND m.sender_id=? AND (m.kind='say' AND json_extract(m.refs,'$.review_gate') IS NOT NULL "
-            "AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=t.id AND e.created_at>m.created_at AND e.field='step') "
+            "AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=t.id "
+            "AND e.created_at>m.created_at AND e.kind='step') "
             "OR m.kind='notice' "
             "AND ((m.ref_wake='check_back' AND ("
             "t.check_back_at IS NOT json_extract(m.refs,'$.check_back_at') OR "
@@ -2180,10 +2181,10 @@ def obsolete_notices_sql():
             "AND NOT EXISTS (SELECT 1 FROM attempts fa WHERE fa.id=json_extract(m.refs,'$.filed_in') "
             "AND fa.state IN ('leased','running'))) "
             "OR ((m.ref_wake IN ('status_check','stalled','step_status') "
-            "OR json_extract(m.refs,'$.rule')='status_check') AND EXISTS (SELECT 1 FROM task_events "
-            "e WHERE e.task_id=t.id AND e.created_at>m.created_at AND e.actor<>m.sender_id)) "
-            "OR (json_extract(m.refs,'$.step_late') AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=t.id "
-            "AND e.created_at>m.created_at AND e.field='step')) "
+            "OR json_extract(m.refs,'$.rule')='status_check') AND EXISTS (SELECT 1 FROM history_events "
+            "e WHERE e.subject_type='task' AND e.subject_id=t.id AND e.created_at>m.created_at AND e.actor_id<>m.sender_id)) "
+            "OR (json_extract(m.refs,'$.step_late') AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' "
+            "AND e.subject_id=t.id AND e.created_at>m.created_at AND e.kind='step')) "
             "OR (json_extract(m.refs,'$.at_step') IS NOT NULL AND json_extract(m.refs,'$.at_step')<>"
             "coalesce(t.step_id,'') AND coalesce(json_extract(m.refs,'$.caused_by'),'') NOT LIKE 'human:%') "
             "OR (m.ref_wake='pr_checks_done' AND json_extract(m.refs,'$.pr_head') IS NOT NULL "
@@ -5169,8 +5170,8 @@ class Execution:
             deferred = False
             if task_id and task_id != turn_task:
                 task = H.task(c, task_id)
-                outcome = c.execute("SELECT 1 FROM task_events WHERE task_id=? AND actor=? AND created_at>=? "
-                                    "AND (field='note' OR (field='status' AND new IN ('done','closed','declined'))) LIMIT 1",
+                outcome = c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=? "
+                                    "AND created_at>=? AND (kind='note' OR (kind='status' AND new IN ('done','closed','declined'))) LIMIT 1",
                                     (task_id, actor, row["started_at"] or row["created_at"])).fetchone()
                 deferred = bool(task and task["status"] in H.ACTIVE_STATUSES and not outcome)
             state = ("queued" if deferred else "completed" if body.outcome == "completed" and answered else

@@ -262,7 +262,7 @@ def test_a_check_moves_to_its_next_model_once_its_default_login_is_out_of_quota(
     with api.app.state.store.read() as c:
         assert "the check moved to grok" in H.status(c, "ops")["focus"]
         assert c.execute("SELECT count(*) FROM events WHERE action='attempt.check_moved'").fetchone()[0] == 1
-        event = c.execute("SELECT old,new,note FROM task_events WHERE task_id=? AND field='check_model' "
+        event = c.execute("SELECT old,new,note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_model' "
                           "AND old IS NOT NULL", (sub["id"],)).fetchone()
         assert (event["old"], event["new"]) == ("codex:gpt-6-luna", "grok:grok-4.6"), dict(event)
     shown = get(api, "tasks/" + sub["id"])

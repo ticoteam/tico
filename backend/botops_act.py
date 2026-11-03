@@ -133,7 +133,8 @@ def _untouched(c, task, writer):
     """Nobody but `writer` (who opened it) and BotOps changed the task's words or said anything on it."""
     from .store import H
     botops = "bot:" + H.FLEET_MAINTAINER
-    if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field IN ('title','body') AND actor NOT IN (?,?) LIMIT 1",
+    if c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind IN ('title','body') "
+                 "AND actor_id NOT IN (?,?) LIMIT 1",
                  (task["id"], writer, H.KEEPER)).fetchone():
         return False
     said = c.execute("SELECT 1 FROM message_refs m WHERE m.ref_task_id=? AND m.sender_id NOT IN (?,?,?) "
@@ -157,8 +158,8 @@ def lend_lapsed(c, task):
     requester last spoke on it more than LEND_MAX_DAYS ago."""
     from .store import H
     requester = task["requester_id"]
-    for row in c.execute("SELECT * FROM task_events WHERE task_id=? AND field='status' AND old IN (?,?,?) "
-                         "AND new NOT IN (?,?,?)", (task["id"], *TERMINAL, *TERMINAL)):
+    for row in c.execute("SELECT actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? "
+                         "AND kind='status' AND old IN (?,?,?) AND new NOT IN (?,?,?)", (task["id"], *TERMINAL, *TERMINAL)):
         if row["actor"] != requester or dict(row).get("via"):
             # Re-asking on the same task can't clear this: the reopening stays in its history. The person's own new
             # words start a run with their rights anyway (a comment on the open task, or their BotOps chat).

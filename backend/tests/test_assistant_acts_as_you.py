@@ -35,7 +35,8 @@ def test_the_turn_closes_a_task_the_person_owns_as_them_on_the_cite(api):
     closed = post(api, "tasks/" + task, {"version": current["version"], "status": "done"}, token=token)
     assert closed["status"] == "done"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT via FROM task_events WHERE task_id=? AND field='status' ORDER BY created_at DESC LIMIT 1",
+        assert c.execute("SELECT via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' "
+                  "ORDER BY created_at DESC LIMIT 1",
                          (task,)).fetchone()[0] == "assistant"
 
 
@@ -48,8 +49,8 @@ def test_a_bulk_change_on_the_turn_records_each_task_as_the_person_via_assistant
     assert done["changed"] >= 2, done
     with api.app.state.store.read() as c:
         latest = {}                                  # newest first: keep the first row seen for each task
-        for task_id, via in c.execute("SELECT task_id, via FROM task_events WHERE task_id IN (?,?) AND field='status' "
-                                      "ORDER BY created_at DESC", ids).fetchall():
+        for task_id, via in c.execute("SELECT subject_id, via FROM history_events WHERE subject_type='task' AND subject_id IN (?,?) "
+                                      "AND kind='status' ORDER BY created_at DESC", ids).fetchall():
             latest.setdefault(task_id, via)
     assert latest == {ids[0]: "assistant", ids[1]: "assistant"}, latest
 

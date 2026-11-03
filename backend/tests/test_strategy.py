@@ -376,13 +376,13 @@ def test_an_open_bet_task_from_an_earlier_trip_holds_the_trip_until_it_closes(ap
     publish(api)
     log(api, kpi["id"], 20)
     with api.app.state.store.transaction() as c:
-        assert not c.execute("SELECT 1 FROM strategy_events WHERE kind=?", (S.TRIPPED,)).fetchone()
+        assert not c.execute("SELECT 1 FROM history_events WHERE subject_type='strategy' AND kind=?", (S.TRIPPED,)).fetchone()
         c.execute("UPDATE tasks SET status='done' WHERE title='Bet 1: may be wrong'")
     log(api, kpi["id"], 15)
     with api.app.state.store.read() as c:
         tasks = H._rows(c.execute("SELECT status FROM tasks WHERE title='Bet 1: may be wrong' ORDER BY created_at"))
         assert [t["status"] for t in tasks][-1] != "done" and len(tasks) == 2
-        assert c.execute("SELECT count(*) FROM strategy_events WHERE kind=?", (S.TRIPPED,)).fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='strategy' AND kind=?", (S.TRIPPED,)).fetchone()[0] == 1
 
 
 def test_a_text_wrong_if_trips_after_its_check_by_and_nothing_trips_with_checks_off(api):
@@ -426,7 +426,6 @@ def test_trip_and_realign_cards_skip_the_daily_room(api):
 def test_the_old_company_vision_moves_into_the_first_draft(api):
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM strategy_versions")
-        c.execute("DELETE FROM strategy_events")
         # Upsert: a restarted hub (or a test database restored from a snapshot) already has the row.
         c.execute("INSERT INTO company_profile (id, vision, description, updated_at, updated_by) "
                   "VALUES ('company','Acme for every landlord.','Bots that run rentals.',?, 'human:ana') "

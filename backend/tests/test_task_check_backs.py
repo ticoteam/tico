@@ -133,7 +133,8 @@ def test_repair_backoff_stops_unbounded_original_task_runs(followups):
         assert intervals == [30, 60, 120, 240, 480]
         due(c, row)
         assert CB.sweep(c)["woke"] == []
-        assert c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='check_back_blocked'", (row["id"],)).fetchone()[0]
+        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_back_blocked'",
+                      (row["id"],)).fetchone()[0]
         CB.set_time(c, H.task(c, row["id"]), "2h", actor="bot:ops")
         assert CB._repairs(c, H.task(c, row["id"]))[0] == 6
 
@@ -233,7 +234,8 @@ def test_claim_carries_the_followup_and_successful_turn_must_leave_a_next_time(f
     post(followups, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "I inspected the handoff.", "last_seq": 0}, token=r["token"])
     with followups.app.state.store.read() as c:
         assert H.task(c, row["id"])["check_back_at"] > H.now()
-        assert c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='check_back_repair'", (row["id"],)).fetchone()
+        assert c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='check_back_repair'",
+                  (row["id"],)).fetchone()
         assert H.task(c, other["id"])["check_back_at"] == other["check_back_at"]
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (other_wake["id"],)).fetchone()[0] == "queued"
         assert not CB.stale(c, H.message(c, other_wake["id"]), "ops")
@@ -259,7 +261,7 @@ def test_scan_does_not_let_paused_tasks_starve_other_bots(followups, monkeypatch
         c.execute("UPDATE bots SET state='paused' WHERE id='ops'")
         assert set(CB.sweep(c)["blocked"]) == {r["id"] for r in blocked}
         assert CB.sweep(c)["woke"] == [eligible["id"]]
-        assert not c.execute("SELECT 1 FROM task_events WHERE field='check_back_repair'").fetchone()
+        assert not c.execute("SELECT 1 FROM history_events WHERE subject_type='task' AND kind='check_back_repair'").fetchone()
         c.execute("UPDATE bots SET state='active' WHERE id='ops'")
         assert set(CB.sweep(c)["woke"]) == {r["id"] for r in blocked}
 

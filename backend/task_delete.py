@@ -38,10 +38,13 @@ TRASH_ASSETS = """CREATE TABLE IF NOT EXISTS task_trash_assets(
  task_id TEXT NOT NULL, blob_id TEXT NOT NULL, PRIMARY KEY(task_id, blob_id))"""
 
 # Rows that only describe the task: kept with it in the trash.
-TASK_ROWS = ("task_events", "task_links", "task_tags", "task_delegations", "task_reminders",
+TASK_ROWS = ("history_events", "task_links", "task_tags", "task_delegations", "task_reminders",
              "task_check_back_wakes",
              "service_key_tasks", "task_roles", "task_assets", "task_requesters", "task_milestone_waits",
              "task_check_models", "task_run_models")
+# A table whose rows name the task other than by `task_id`: its column and the rows of it that are a task's. A task's
+# history is the shared history table's task rows (backend/migrations/0059_history_events.py).
+TASK_KEYS = {"history_events": ("subject_id", "subject_type='task'")}
 # Rows that are work done on the task: any one of them refuses the run.
 TASK_WORK = ("turns", "approvals", "bot_tool_requests", "meeting_deliveries", "schedule_occurrences",
              "watcher_items")
@@ -112,27 +115,36 @@ def _parts(values):
         yield values[i:i + 500]
 
 
-def _count(c, table, column, values):
+def _task_key(table):
+    """(column, extra condition) that picks one of TASK_ROWS' tables' rows by task id."""
+    return TASK_KEYS.get(table, ("task_id", None))
+
+
+def _where(column, where, p):
+    return (f"{where} AND " if where else "") + f"{column} IN ({_marks(p)})"
+
+
+def _count(c, table, column, values, where=None):
     if not values or not _has(c, table, column):
         return 0
-    return sum(c.execute(f"SELECT count(*) FROM {table} WHERE {column} IN ({_marks(p)})", p).fetchone()[0]
+    return sum(c.execute(f"SELECT count(*) FROM {table} WHERE {_where(column, where, p)}", p).fetchone()[0]
                for p in _parts(values))
 
 
-def _rows(c, table, column, values):
+def _rows(c, table, column, values, where=None):
     """Each row of `table` whose `column` is in `values`, with its rowid, as dicts."""
     if not values or not _has(c, table, column):
         return []
     out = []
     for p in _parts(values):
-        out += [dict(r) for r in c.execute(f"SELECT rowid AS _rowid, * FROM {table} WHERE {column} IN ({_marks(p)})", p)]
+        out += [dict(r) for r in c.execute(f"SELECT rowid AS _rowid, * FROM {table} WHERE {_where(column, where, p)}", p)]
     return out
 
 
-def _delete(c, table, column, values):
+def _delete(c, table, column, values, where=None):
     if not values or not _has(c, table, column):
         return 0
-    return sum(c.execute(f"DELETE FROM {table} WHERE {column} IN ({_marks(p)})", p).rowcount for p in _parts(values))
+    return sum(c.execute(f"DELETE FROM {table} WHERE {_where(column, where, p)}", p).rowcount for p in _parts(values))
 
 
 def _column(c, sql, values):
@@ -167,7 +179,8 @@ def _snapshot(c, tid, relations=None):
                 seen.add((table, row["_rowid"]))
                 rows.setdefault(table, []).append(row)
     for table in TASK_ROWS:
-        add(table, _rows(c, table, "task_id", [tid]))
+        column, where = _task_key(table)
+        add(table, _rows(c, table, column, [tid], where))
     # Taken for the whole list before any is deleted, so each entry keeps every relation it had.
     rows["task_relations"] = TR.snapshot_rows(c, tid) if relations is None else relations
     for table, column in MESSAGE_ROWS:
@@ -237,7 +250,7 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
     refusals = _refusals(c, ids, conversations, messages)
     report = {"tasks": len(found), "missing": missing, "refused": refusals,
               "conversations": len(conversations), "messages": len(messages),
-              "rows": {t: _count(c, t, "task_id", ids) for t in TASK_ROWS},
+              "rows": {t: _count(c, t, _task_key(t)[0], ids, _task_key(t)[1]) for t in TASK_ROWS},
               "applied": False}
     if missing or (refusals and not keep_work) or not apply:
         return report
@@ -274,7 +287,8 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
             c.execute("INSERT OR IGNORE INTO task_trash_assets(task_id, blob_id) "
                       "SELECT task_id, blob_id FROM task_assets WHERE task_id=?", (tid,))
         for table in TASK_ROWS:
-            _delete(c, table, "task_id", [tid])
+            column, where = _task_key(table)
+            _delete(c, table, column, [tid], where)
         c.execute("DELETE FROM task_relations WHERE from_task=? OR to_task=?", (tid, tid))
         # Status lines and filed insights keep their own history; they only stop pointing at the task.
         if _has(c, "bot_status", "task_id"):
@@ -369,7 +383,20 @@ def _current(snap):
         table, key, column = spec.split(".")
         table = renames.current_table(table)
         pointers[f"{table}.{renames.current_column(table, key)}.{renames.current_column(table, column)}"] = keys
-    return {**snap, "rows": renames.current_rows(snap.get("rows") or {}), "pointers": pointers}
+    return {**snap, "rows": _history_rows(renames.current_rows(snap.get("rows") or {})), "pointers": pointers}
+
+
+def _history_rows(rows):
+    """A snapshot saved before the task's history moved to history_events (its `task_events` rows) under the new table,
+    so a restore puts that history back rather than skipping a dropped table."""
+    old = rows.pop("task_events", None)
+    if not old:
+        return rows
+    moved = [{"_rowid": row.get("_rowid"), "id": row.get("id"), "subject_type": "task", "subject_id": row.get("task_id"),
+              "actor_id": row.get("actor_id", row.get("actor")), "kind": row.get("kind", row.get("field")) or "",
+              "old": row.get("old"), "new": row.get("new"), "note": row.get("note"), "action_id": row.get("action_id"),
+              "via": row.get("via"), "created_at": row.get("created_at") or ""} for row in old if isinstance(row, dict)]
+    return {**rows, "history_events": [*rows.get("history_events", []), *moved]}
 
 
 def _unplaced(c, snap):
