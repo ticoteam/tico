@@ -1152,7 +1152,7 @@ def test_an_api_key_has_no_owner_and_a_company_saves_many(api):
 def test_the_owner_migration_backfills_a_plan_from_a_person_who_added_it_and_skips_a_new_file():
     import importlib
     import sqlite3
-    owner = importlib.import_module("backend.migrations.0060_subscription_owner")
+    owner = importlib.import_module("backend.migrations.0059_subscription_owner")
     conn = sqlite3.connect(":memory:")
     owner.up(conn)                                                            # a new file: nothing there yet
     conn.executescript(
