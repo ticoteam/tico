@@ -253,7 +253,7 @@ NEVER = [(m, re.compile(p)) for m, p in (
     (None, r"/api/v2/credential-requests/[^/]+/save"),
     (None, r"/api/v2/bots/[^/]+/agent-credential(/revoke)?"),
     (None, r"/api/v2/github/app/replace-lost-key"),
-    (None, r"/api/v2/federation/keys(/.*)?"), (None, r"/api/v2/triggers/[^/]+/signing"),
+    (None, r"/api/v2/triggers/[^/]+/signing"),
     # A computer's sign-in and its keys: its logins, logouts, shared key and keys (`model_login`, `computer_keys`), and a
     # model subscription's connect. Its enrollment and pairing codes are the person's own tap too.
     (None, r"/api/v2/computers/[^/]+/(shared-key|logins(/.*)?|logouts(/.*)?|keys(/.*)?)"),
@@ -273,10 +273,9 @@ NEVER = [(m, re.compile(p)) for m, p in (
     # A token for GitHub, a webhook's signing secret and the wake-URL secret: credentials, never a chat's to set.
     (None, r"/api/v2/github/token"), (None, r"/api/v2/webhooks/[^/]+/rotate"), (None, r"/api/v2/hooks/wake-url"),
     # Connections to an outside account: a mail sign-in, the bank and the books, a meeting provider, an importer's login
-    # and the postal intake. Federation shares threads with another company, so it sends outside.
+    # and the postal intake.
     (None, r"/api/v2/mail/google/connect"), (None, r"/api/v2/finance/(connections|books/connect)(/.*)?"),
     ("POST", r"/api/v2/live-meetings"), ("POST", r"/api/v2/meeting-importers/[^/]+"), (None, r"/api/v2/postal/intake"),
-    (None, r"/api/v2/federation(/.*)?"),
     # Subscriptions: the owner's own tap.
     (None, r"/api/v2/subscriptions(/.*)?"), (None, r"/api/v2/runner-subscription-refreshes(/.*)?"),
     # Single sign-on, the directory and its SCIM token, and the OAuth sign-in of an agent.

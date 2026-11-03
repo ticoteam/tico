@@ -300,7 +300,6 @@ function thvIsNew(view, m) {
   return m.seq > view.readAt && m.seq <= view.openSeq;
 }
 function thvWhoHTML(a) {
-  if (connectIsGuest(a)) return `<span class="th-who">${connectGuestHTML(a)}</span>`;   // another company's (ui/app/thread-connect.js)
   const slug = actorSlug(a), pid = actorPerson(a);
   if (slug && S.emps.some(e => e.id === slug)) return `<a class="th-who" href="#/bot/${esc(slug)}">${esc(actorName(a))}</a>`;
   if (pid) return `<a class="th-who" href="#/person/${esc(encodeURIComponent(pid))}">${esc(actorName(a))}</a>`;
@@ -332,11 +331,11 @@ function thvReactionsHTML(m) {
 function thvMsgHTML(view, m) {
   const depth = thvDepth(view, m.depth), sub = m.thread_id && m.thread_id !== view.id;
   // A bot's own words take a row of Copy, 👍 and 👎 under them, apart from the emoji reactions (ui/app/feedback.js).
-  const fb = !m.deleted && m.id && String(m.sender_id || '').startsWith('bot:') && !connectIsGuest(connectAuthor(m)) ? fbKey('message', m.id) : '';
+  const fb = !m.deleted && m.id && String(m.sender_id || '').startsWith('bot:') ? fbKey('message', m.id) : '';
   const fresh = thvIsNew(view, m), quiet = fresh && !thvAddressed(m);
   const cls = ['th-msg', view.focus === m.id && 'th-focus', sub && 'th-sub', m.refs?.follow_up && 'th-followup', thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted']
     .filter(Boolean).join(' ');
-  const head = `<div class="th-head">${thvWhoHTML(connectAuthor(m))}<time title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>${
+  const head = `<div class="th-head">${thvWhoHTML(m.sender_id)}<time title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>${
     m.edited_at && !m.deleted ? '<span class="th-edited muted">edited</span>' : ''}</div>`;
   let body;
   if (m.deleted) body = '<div class="th-body muted">Deleted</div>';
@@ -365,7 +364,7 @@ function thvMsgHTML(view, m) {
     <span class="th-subhead-n">${n ? `${n} ${n === 1 ? 'reply' : 'replies'}` : 'No replies'}</span>${
     st.unread ? `<span aria-hidden="true">·</span><span class="th-more-new">${st.unread} new</span>` : ''}</a>` : '';
   return `<div class="${cls}" data-mid="${esc(m.id)}" data-message="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}" style="--d:${depth}"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>
-    <div class="th-av">${actorAvatar(connectAuthor(m), sub ? 20 : 28)}</div>
+    <div class="th-av">${actorAvatar(m.sender_id, sub ? 20 : 28)}</div>
     <div class="th-main">${head}${body}${m.deleted ? '' : thvFilesHTML(m) + thvReactionsHTML(m) + fbRowHTML(fb, m.body)}</div>
     ${m.deleted || view.editing === m.id ? '' : `<div class="th-acts"><button type="button" class="th-act" data-th-ack aria-label="Acknowledge" title="Acknowledge">${THV_ACK}</button><button type="button" class="th-act" data-th-more aria-haspopup="menu" aria-expanded="false" aria-label="Message menu" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div>`}
   </div>${more}`;
