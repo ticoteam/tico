@@ -44,7 +44,9 @@ def test_a_mistyped_command_names_the_closest_commands_that_exist(capsys):
 def test_a_bad_flag_value_lists_its_choices(capsys):
     code, err = parse_failure(capsys, ["task", "list", "--status", "todo"])
     assert code == 2
-    assert "choose from open, doing, waiting, review, ready, done, closed, declined" in err
+    listed = err.split("choose from", 1)[1]    # quoted on newer Pythons, bare on older ones: match the names only
+    for status in ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined"):
+        assert status in listed
 
 
 def test_an_unknown_flag_suggests_the_closest_flag_of_that_command(capsys):
