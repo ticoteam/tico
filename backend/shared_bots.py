@@ -124,7 +124,7 @@ def add_copy(c, who, source, runner_id, settings_admin, execution, github_owner)
     settings_admin.auth.require_read(c, who, source)
     runner = None
     if runner_id:
-        runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
+        runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
         if not runner:
             raise Problem("not_found", "Computer is not registered", 404)
         if runner["owner_id"] != person:

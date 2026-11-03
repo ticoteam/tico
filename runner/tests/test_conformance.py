@@ -169,7 +169,7 @@ class Computer:
 
     def readiness(self):
         with self.api.app.state.store.read() as c:
-            row = c.execute("SELECT readiness FROM runners WHERE id=?", (self.registration["runner_id"],)).fetchone()
+            row = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (self.registration["runner_id"],)).fetchone()
         return (json.loads(row[0] or "{}") if row else {}).get("bots", {})
 
     def profiles(self):
@@ -1022,7 +1022,7 @@ def test_the_signed_in_account_reaches_readiness_without_anything_token_like(api
 
     def account():
         with api.app.state.store.read() as c:
-            row = c.execute("SELECT readiness FROM runners WHERE id=?", (computer.registration["runner_id"],)).fetchone()
+            row = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (computer.registration["runner_id"],)).fetchone()
         return json.loads(row[0] or "{}").get("runtimes", {}).get(computer.runtime, {}).get("account")
 
     got = until(account, "the account in readiness", timeout=40)
@@ -1033,13 +1033,13 @@ def test_the_signed_in_account_reaches_readiness_without_anything_token_like(api
     else:
         assert got == {"email": "ops@acme.example", "plan": "max", "org": "Acme Ltd"}
     with api.app.state.store.read() as c:
-        stored = json.dumps([list(r) for r in c.execute("SELECT readiness FROM runners")])
+        stored = json.dumps([list(r) for r in c.execute("SELECT readiness FROM runners_with_state")])
     assert "sk-ant-oat01" not in stored and "acme-org-0001" not in stored
 
 
 def runtime_row(api, computer):
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT readiness FROM runners WHERE id=?", (computer.registration["runner_id"],)).fetchone()
+        row = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (computer.registration["runner_id"],)).fetchone()
     return json.loads(row[0] or "{}").get("runtimes", {}).get(computer.runtime, {})
 
 
@@ -1357,7 +1357,7 @@ def test_python_m_runner_run_is_the_rust_runner_and_says_so_in_readiness(api, li
     try:
         machine.start()
         with api.app.state.store.read() as c:
-            row = c.execute("SELECT readiness FROM runners WHERE id=?", (machine.registration["runner_id"],)).fetchone()
+            row = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (machine.registration["runner_id"],)).fetchone()
         from runner.engine import source_id
         reported = json.loads(row[0])["engine"]
         assert (reported["name"], reported["build"]) == ("rust", source_id(ROOT))

@@ -33,9 +33,9 @@ SIGNED_OUT = ("missing", "failed", "rejected")
 CONFIG_SQL = "SELECT config FROM bot_config WHERE bot=?"
 # One computer's row, and the row of the computer a bot is on: read through read_cache, so a page that judges the same
 # bot for many harnesses and moves (backend/health.py runtime_choice) reads each once per snapshot, not once per check.
-RUNNER_SQL = "SELECT id,label,last_seen_at,revoked_at,readiness,capabilities FROM runners WHERE id=?"
+RUNNER_SQL = "SELECT id,label,last_seen_at,revoked_at,readiness,capabilities FROM runners_with_state WHERE id=?"
 PLACED_SQL = ("SELECT r.id,r.label,r.last_seen_at,r.revoked_at,r.readiness,r.capabilities FROM assignments a "
-              "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?")
+              "JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?")
 HELD_SQL = "SELECT id,env FROM credentials WHERE ciphertext IS NOT NULL AND env!=''"
 
 

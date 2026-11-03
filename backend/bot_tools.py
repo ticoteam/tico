@@ -257,7 +257,7 @@ def agent_report(c, bot, tools):
 
 STATE_CONFIG_SQL = "SELECT config,repo FROM bot_config WHERE bot=?"
 STATE_RUNNER_SQL = ("SELECT r.id,r.label,r.last_seen_at,r.revoked_at,r.readiness,r.capabilities FROM assignments a "
-                    "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?")
+                    "JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?")
 REQUESTS_SQL = "SELECT * FROM bot_tool_requests WHERE bot=? AND state='pending' ORDER BY created_at,id"
 
 
@@ -274,7 +274,7 @@ def prime_state(c, bots):
         prime(c, STATE_CONFIG_SQL, {(s,): configs.get(s) for s in part})
         runners = {r["bot"]: r for r in c.execute(
             "SELECT a.bot,r.id,r.label,r.last_seen_at,r.revoked_at,r.readiness,r.capabilities FROM assignments a "
-            f"JOIN runners r ON r.id=a.runner_id WHERE a.bot IN ({marks})", part)}
+            f"JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot IN ({marks})", part)}
         prime(c, STATE_RUNNER_SQL, {(s,): runners.get(s) for s in part})
         # The same computers, for the subscription lookups each Model row may make.
         prime(c, model_subscriptions.RUNNER_READINESS_SQL, {(r["id"],): r for r in runners.values()})

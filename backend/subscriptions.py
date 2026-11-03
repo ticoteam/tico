@@ -235,7 +235,7 @@ def record(c, runner_id, profiles, readiness=None):
 
 def listing(c, auth, who, computer_rows):
     computers = []
-    visible = (c.execute("SELECT r.* FROM runners r JOIN assignments a ON a.runner_id=r.id "
+    visible = (c.execute("SELECT r.* FROM runners_with_state r JOIN assignments a ON a.runner_id=r.id "
                          "WHERE a.bot=? AND r.revoked_at IS NULL", (H.actor_id(who.actor),)).fetchall()
                if who.role == "bot" else computer_rows(c, who))
     for runner in visible:
@@ -259,7 +259,7 @@ def bot_subscription(c, bot, settings, ctx=None):
 
 def _bot_line(c, bot, ctx):
     """The connection without its tool, and the bot's filled-in configuration that names the tool."""
-    runner = c.execute('SELECT r.* FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=? '
+    runner = c.execute('SELECT r.* FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=? '
                        'AND r.revoked_at IS NULL', (bot,)).fetchone()
     computer = {'runner_id': runner['id'], 'label': runner['label']} if runner else None
     from . import providers
@@ -318,7 +318,7 @@ def connections_by_runner(c, settings, ctx=None):
     placed, runners = {}, {}
     for row in c.execute("SELECT a.runner_id, a.bot, r.id, r.label, r.readiness, r.capabilities, "
                          "r.revoked_at FROM assignments a JOIN bots b ON b.id=a.bot "
-                         "JOIN runners r ON r.id=a.runner_id "
+                         "JOIN runners_with_state r ON r.id=a.runner_id "
                          "WHERE b.state<>'archived' ORDER BY a.bot"):
         placed.setdefault(row["runner_id"], []).append(row["bot"])
         runners.setdefault(row["runner_id"], row)
@@ -403,7 +403,7 @@ def install(app, store, auth, mutate, settings, computer_rows):
         def work(c):
             from .repositories import save_metadata
             auth.domain(who)
-            runner = c.execute('SELECT * FROM runners WHERE id=? AND revoked_at IS NULL', (body.runner_id,)).fetchone()
+            runner = c.execute('SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL', (body.runner_id,)).fetchone()
             if not runner or not (who.role == 'human' or who.role == 'owner') or not (
                     auth.bot_admin(who) or runner['owner_id'] == H.actor_id(who.actor)):
                 raise Problem('forbidden', 'Only a computer operator or administrator can record weekly usage', 403)

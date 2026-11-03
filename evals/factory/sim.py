@@ -295,7 +295,7 @@ class Run:
         lines = []
         with w.store.read() as c:
             try:
-                cap = c.execute("SELECT capacity FROM runners WHERE id=?", (rid,)).fetchone()
+                cap = c.execute("SELECT capacity FROM runners_with_state WHERE id=?", (rid,)).fetchone()
                 lines.append(f"computer: turns held {sum(X.turns_here(c, rid).values())} "
                              f"of capacity {cap['capacity']}, "
                              f"places held {sum(start_places.held(c, rid).values())}, starts waiting "
@@ -320,7 +320,7 @@ class Run:
         it, with the reasons its queued work gets on this round."""
         from backend.execution import readiness_document
         with w.store.read() as c:
-            row = c.execute("SELECT readiness FROM runners WHERE id=?", (w.runner["runner_id"],)).fetchone()
+            row = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (w.runner["runner_id"],)).fetchone()
         doc = readiness_document(row["readiness"]) if row else {}
         ready = ((doc.get("bots") or {}).get(slug) or {}).get("ready")
         return {"at": w.now(), "bot_id": slug, "server_ready": ready, "reasons": self.reasons(w, [slug])}

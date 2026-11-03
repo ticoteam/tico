@@ -19,7 +19,7 @@ def test_company_waiter_reads_a_computer_with_two_waits_once(api):
     assert len(jobs) >= 2
     statements = []
     with store.read_transaction() as c:
-        row = c.execute("SELECT * FROM runners WHERE id=?", (here["runner_id"],)).fetchone()
+        row = c.execute("SELECT * FROM runners_with_state WHERE id=?", (here["runner_id"],)).fetchone()
         c.set_trace_callback(statements.append)
         try:
             who = Identity("runner:" + here["runner_id"], "runner", runner_id=here["runner_id"])

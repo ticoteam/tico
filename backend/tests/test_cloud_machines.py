@@ -334,7 +334,7 @@ def test_first_work_creates_the_machine_and_its_runner_is_that_bots_only(cloud):
     # The machine enrolls with that code: a computer named after the bot, closed to others, the bot assigned to it.
     enrolled = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})
     with cloud.store.read() as c:
-        computer = dict(c.execute("SELECT * FROM runners WHERE id=?", (enrolled["runner_id"],)).fetchone())
+        computer = dict(c.execute("SELECT * FROM runners_with_state WHERE id=?", (enrolled["runner_id"],)).fetchone())
         placed = c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()["runner_id"]
         others = placement.candidates(c, cloud.api.app.state.auth, "cpo")
     assert computer["label"] == "ops (cloud)" and not computer["accepts_member_bots"]
@@ -983,7 +983,7 @@ def test_one_shared_machine_wakes_for_any_member_and_hosts_them_all(cloud):
     # Its computer is the company's, open to members' bots, and every member is assigned to it.
     rid = post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})["runner_id"]
     with cloud.store.read() as c:
-        computer = dict(c.execute("SELECT * FROM runners WHERE id=?", (rid,)).fetchone())
+        computer = dict(c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone())
         offered = {r["id"] for r in placement.candidates(c, cloud.api.app.state.auth, "cpo")}
     assert computer["label"] == "Shared cloud machine" and computer["accepts_member_bots"] and computer["owner_id"] == "ana"
     assert placed(cloud) == {"ops": rid, "finance": rid} and rid not in offered

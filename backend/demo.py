@@ -158,7 +158,8 @@ async def keep_alive(store, stop, vault=None):
 def tick(store):
     with store.transaction() as c:
         now = H.now()
-        c.execute("UPDATE runners SET last_seen_at=? WHERE revoked_at IS NULL", (now,))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id IN (SELECT id FROM runners WHERE revoked_at IS NULL)",
+                  (now,))
         c.execute("INSERT INTO service_health VALUES('scheduler',?,NULL,'{}') ON CONFLICT(service) DO UPDATE SET "
                   "last_succeeded_at=excluded.last_succeeded_at,last_error=NULL", (now,))
         for job in c.execute("SELECT j.id,j.bot_id,m.sender_id,m.conversation_id,m.id AS message FROM jobs j "

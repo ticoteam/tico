@@ -50,7 +50,7 @@ def _exists(c):
 
 
 def _computer(c, bot):
-    return c.execute("SELECT r.id,r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    return c.execute("SELECT r.id,r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                      "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
 
 

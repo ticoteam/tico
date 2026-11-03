@@ -161,7 +161,7 @@ def capable_computer(api):
     joined = runner(api)
     with api.app.state.store.transaction() as c:
         rid = c.execute('SELECT id FROM runners ORDER BY created_at DESC LIMIT 1').fetchone()[0]
-        c.execute('UPDATE runners SET capabilities=? WHERE id=?', ('["memory_tidy_keep_v1"]', rid))
+        c.execute('UPDATE runner_states SET capabilities=? WHERE runner_id=?', ('["memory_tidy_keep_v1"]', rid))
         c.execute('INSERT OR REPLACE INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,?,?,?)',
                   ('ops', rid, 1, H.now(), 'human:ana'))
     return rid, joined['token']

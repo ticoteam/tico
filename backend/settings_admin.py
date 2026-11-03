@@ -59,7 +59,7 @@ def repository_present(c, bot):
     from .agents import external_harness
     if external_harness(c, bot):
         return True
-    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                     "WHERE a.bot=?", (bot,)).fetchone()
     report = bot_readiness(row["readiness"], bot) if row else {}
     return bool(report.get("repository_present"))
@@ -444,7 +444,7 @@ class SettingsAdmin:
             raise Problem("harness", "A bot run by an external agent has no computer; leave the "
                           "computer unassigned and give it an agent credential after saving", 422)
         if body.runner_id:
-            runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (body.runner_id,)).fetchone()
+            runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (body.runner_id,)).fetchone()
             if not runner:
                 raise Problem("not_found", "Computer is not registered", 404)
         parent = (self._config(c, body.reports_to)
@@ -943,7 +943,7 @@ class SettingsAdmin:
                 raise Problem("runner_not_ready", can["problem"], 409, extra={"fix": can["fix"], "link": can["link"]})
             return {"model": choice["id"], "runtime": runtime_name, "harness": harness,
                     "effort": effort}
-        runner = c.execute("SELECT id,label,owner_id,revoked_at,last_seen_at,readiness FROM runners WHERE id=?",
+        runner = c.execute("SELECT id,label,owner_id,revoked_at,last_seen_at,readiness FROM runners_with_state WHERE id=?",
                            (body.runner_id,)).fetchone()
         if not runner or runner["revoked_at"]:
             raise Problem("not_found", "Computer is not registered", 404)
@@ -1068,7 +1068,7 @@ class SettingsAdmin:
                 # same spent login or Gateway key.
                 lift_after_model_change(c, self.settings, who.actor, bot, was)
             else:
-                runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (target["runner_id"],)).fetchone()
+                runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (target["runner_id"],)).fetchone()
                 if not runner:
                     raise Problem("not_found", "The destination computer is no longer registered", 409)
                 current = c.execute("SELECT * FROM assignments WHERE bot=?", (bot,)).fetchone()
@@ -1332,7 +1332,7 @@ class SettingsAdmin:
         if change["field"] == "placement":
             if not before.get("runner_id"):
                 raise Problem("not_reversible", "There was no previous computer to restore", 409)
-            runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (before["runner_id"],)).fetchone()
+            runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (before["runner_id"],)).fetchone()
             if not runner:
                 raise Problem("not_reversible", "The previous computer is no longer registered", 409)
             current = c.execute("SELECT * FROM assignments WHERE bot=?", (bot,)).fetchone()
