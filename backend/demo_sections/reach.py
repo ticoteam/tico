@@ -2,7 +2,7 @@
 
 A company default under the built-in one, team settings (Finance, Legal and HR only reach who's listed; Support chats
 more, Marketing sends fewer tasks), and bots and people set apart from their team: Finance's lead is open again, the
-Tax bot sends 5 tasks a day, the Video Producer has no chats, the SDR is capped. Lines with a count, a rule or both (a
+Tax bot sends 5 tasks a day, the Video Producer has no chats, the SDR is capped. Ana's limit on the SEO Specialist (1 a day, after it kept asking her small things). Lines with a count, a rule or both (a
 count of 0 blocks the pair; no count leaves it open): who a closed team may reach, hand-offs between departments and
 the limits on the busiest pairs. Every write goes through the API as Ana, after the bots and people it names exist.
 """
@@ -52,6 +52,7 @@ LINES = [
     ("bot:paid-media", "bot:finance-lead", 1, "Budget changes over $1k."),
     ("bot:creators", "human:cara", 1, "Creator contracts only."),
     ("bot:seo", "bot:content", None, "Keyword briefs, one per post."),
+    ("bot:seo", "human:ana", 1, "Small questions wait for one daily note. Message me sooner only if it costs money or affects customers."),
     ("bot:community", "bot:support", 10, "Hand off any owner with a broken unit."),
     ("bot:email-marketing", "bot:sales-ops", 2, "List pulls on Mondays."),
     ("bot:reputation", "group:marketing", 1, "Review trends, weekly."),
