@@ -88,6 +88,19 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     await stream.route.fulfill({contentType: 'text/event-stream', body: blocks.join('')});
     return stream.url;
   };
+  // A block goes to the stream the page holds at that moment. The page can replace that connection before it reads the
+  // block (a reconnect), and the block is then lost with the old one: what the page did not show is sent again, to the
+  // stream it holds now (the server resends from the last change number on reconnect; the same change number is harmless).
+  const sendUntil = async (match, blockText, shown, arg) => {
+    for (let attempt = 1; ; attempt++) {
+      const url = await send(match, blockText);
+      const done = await page.waitForFunction(shown, arg, {timeout: t(4000)}).then(() => true, error => {
+        if (attempt === 3) throw error;
+        return false;
+      });
+      if (done) return url;
+    }
+  };
   const following = url => url.searchParams.get('conversation') === 'c-ops';
 
   await page.goto('https://tico-ui.test/#/assistant');
@@ -202,18 +215,17 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     await page.locator('#bot-tip:not([hidden])').waitFor();
     assert.doesNotMatch(await page.locator('#bot-tip').innerText(), /Waiting for.*ChatGPT/);
     const waiting = 'Waiting for the ChatGPT login (held by Scribe on #7 Count the words since 19:06Z; position 2)';
-    const onBotPage = await send(url => url.searchParams.get('party') === 'bot:ops', block(seq++, 'bots', {bot: 'ops', status: {bot: 'ops', state: 'waiting_bot', focus: waiting,
-      waiting, changed_at: now, open_tasks: 1, needs_human: 0}}));
+    const onBotPage = await sendUntil(url => url.searchParams.get('party') === 'bot:ops', block(seq++, 'bots', {bot: 'ops', status: {bot: 'ops', state: 'waiting_bot', focus: waiting,
+      waiting, changed_at: now, open_tasks: 1, needs_human: 0}}),
+    text => !document.querySelector('#bot-tip').hidden && document.querySelector('#bot-tip').textContent.includes(text) && !LIVE_SOON.has('bots'), waiting)
+      .catch(async error => {
+        console.error('tooltip live state', await page.evaluate(() => ({width: innerWidth,
+          hidden: document.querySelector('#bot-tip')?.hidden, text: document.querySelector('#bot-tip')?.textContent,
+          status: S.v2.status.ops, stream: LIVE.es?.url, cursor: LIVE.after, queued: [...LIVE_SOON.keys()]})));
+        throw error;
+      });
     assert.equal(onBotPage.searchParams.get('party'), 'bot:ops', "a bot's page is sent its own tasks' changes, not every task's");
-    await page.waitForFunction(text => !document.querySelector('#bot-tip').hidden
-      && document.querySelector('#bot-tip').textContent.includes(text) && !LIVE_SOON.has('bots'), waiting).catch(async error => {
-      console.error('tooltip live state', await page.evaluate(() => ({width: innerWidth,
-        hidden: document.querySelector('#bot-tip')?.hidden, text: document.querySelector('#bot-tip')?.textContent,
-        status: S.v2.status.ops, stream: LIVE.es?.url, cursor: LIVE.after, queued: [...LIVE_SOON.keys()]})));
-      throw error;
-    });
-    await send(() => true, block(seq++, 'bots', {bot: 'ops', status: null}));
-    await page.waitForFunction(() => !document.querySelector('#bot-tip').hidden
+    await sendUntil(() => true, block(seq++, 'bots', {bot: 'ops', status: null}), () => !document.querySelector('#bot-tip').hidden
       && !document.querySelector('#bot-tip').textContent.includes('Waiting for the ChatGPT') && !LIVE_SOON.has('bots'));
     assert.equal(await page.evaluate(() => S.v2.status.ops), undefined);
   }
