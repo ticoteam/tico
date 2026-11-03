@@ -74,6 +74,14 @@ The commands the assistant tools branch adds (`needs-you show`, `origin show`, `
 the cases, and the CI test allows them to be absent on main. Delete an entry from `NEW_COMMANDS` in the test when its
 command lands, so it is checked against the real parser.
 
+Calls that did not work are visible: each logged call carries its `exit` and a short `out`. A `must` regex matches
+only calls that worked (exit 0), unless the case sets `must_allow_failed: true`; `must_not` still sees every attempt. The
+judge sees a failed call marked FAILED. Inherited `HUB_*` and `TICO_*` variables never reach the run. On `--surface mcp`
+a `hub` stub on PATH exits 127 and logs the attempt as an invalid call.
+
+Known limit: the call log (`EVAL_LOG`) is a file the model could write to with Bash. Treat a run whose log looks forged as
+void; the harness does not guard against it.
+
 ## Adding a case
 
 Turn a 👎 on an Assistant reply, or a chat that went wrong, into a case: the person's words as the prompt, the
