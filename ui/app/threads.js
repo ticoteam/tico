@@ -10,7 +10,9 @@ const THREADS_ROUTE = '#/threads', THREAD_ROUTE = '#/thread/', INBOX_ROUTE = '#/
 const THREADS_SIDE_MAX = 5;
 // `on`: null until the server answered GET /v2/threads once; false when it has no threads (an older server).
 // `botDms`: {bot actor: unread} for the viewer's DMs with one bot, which the Team list shows on that bot (sidebar.js).
-const THREADS = {on: null, attention: [], threads: [], dms: [], botDms: {}, loading: null, wired: false};
+const THREADS = {on: null, attention: [], threads: [], dms: [], botDms: {}, loading: null, wired: false, needsSeen: null, readAt: 0, gen: 0};
+// A stream connect within this long of the list's last read leaves it be (the `needs` handler in threadsSync).
+const THREADS_CONNECT_FRESH_MS = 300e3;
 // The list's order, the viewer's choice kept in this browser: Important (each thread's 1-10 level, then newest, noise
 // left out; the default) or Recent (newest first). GET /v2/threads?sort=.
 const THREADS_SORTS = [['important', 'Important'], ['recent', 'Recent']];
@@ -109,6 +111,11 @@ async function threadsLoad() {
   // A read still out for the other order is followed by one for this order, not taken for it.
   if (THREADS.loading) return THREADS.loadingSort === sort ? THREADS.loading : THREADS.loading.then(() => threadsLoad());
   THREADS.loadingSort = sort;
+  // The Needs you version known before the read: the list it answers is at least that new (the `needs` handler below).
+  // Held only once the read lands, so a read that fails is tried again on the next connect.
+  // A change that comes while it is on its way (`gen`) may not be in it, so that read vouches for nothing.
+  const seen = S.v2.needsVersion || null, gen = THREADS.gen;
+  THREADS.needsSeen = null;
   THREADS.loading = (async () => {
     try {
       const r = await get('/v2/threads?limit=50&sort=' + sort, {fresh: true});
@@ -119,7 +126,8 @@ async function threadsLoad() {
       // A page of a list whose every row waits on the viewer may have more of them past it.
       const ids = new Set((r.attention || []).map(t => t.id)), full = list => list.length >= 50 && list.every(t => ids.has(t.id));
       const attentionMore = !!r.next_cursor && (full(r.threads) || full(r.dms || []));
-      Object.assign(THREADS, {on: true, attention: r.attention || [], threads: r.threads, dms: r.dms || [], botDms, attentionMore});
+      Object.assign(THREADS, {on: true, attention: r.attention || [], threads: r.threads, dms: r.dms || [], botDms, attentionMore,
+        needsSeen: gen === THREADS.gen ? seen : null, readAt: Date.now()});
       if (moved && typeof renderTree === 'function') renderTree();
       liveTopicAdd('threads');
     } catch (e) {
@@ -210,6 +218,7 @@ function threadsSync() {
   // again (once per burst), and each open view is told. A paused root is a Needs you row with no `needs` event of its
   // own, so that list is read whole, as if one had come.
   liveOn('threads', d => {
+    THREADS.gen++;
     if (d.kind === 'activity') return threadsActivity(d);
     if (d.kind === 'read' && d.read) threadsMarkedRead(d.thread_id, Number(d.read.last_read_seq) || 0);
     else if (d.thread && !d.thread.parent_id) threadsPut(d.thread);
@@ -218,8 +227,16 @@ function threadsSync() {
     liveThrottle('threads-side', threadsLoad, 400);
     threadViewsLive('threads', d);
   });
-  // A hold or an ask moved on the viewer's Needs you list: the rows it marks are ranked first.
-  liveOn('needs', () => { if (THREADS.on) liveThrottle('threads-side-live', threadsLoad, 3000); });
+  // A hold or an ask moved on the viewer's Needs you list: the rows it marks are ranked first. A reconnect that carried
+  // `threads` over (it replays the thread changes it missed) naming the Needs you version the list was last read at,
+  // within 5 minutes of that read, moved nothing, so the list is not read again for it. Any other connect reads it: a
+  // change no event names (a thread the viewer can no longer see) is caught by one at least that often.
+  liveOn('needs', d => {
+    const fresh = Date.now() - THREADS.readAt < THREADS_CONNECT_FRESH_MS;
+    if (!THREADS.on || fresh && d?.carried?.includes('threads') && d.version === THREADS.needsSeen) return;
+    if (!d?.connect) THREADS.gen++;
+    liveThrottle('threads-side-live', threadsLoad, 3000);
+  });
   // Needs you read again (its holds are Inbox's): the count follows the list as it now stands.
   liveOn('needs-list', () => { if (THREADS.on) threadsSideRender(); });
   liveOn('reset', () => { liveSoon('threads-side', threadsLoad, 400); threadViewsLive('reset', {}); });
