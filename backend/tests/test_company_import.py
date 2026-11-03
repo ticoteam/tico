@@ -268,7 +268,7 @@ def invited_from_setup(api, finance):
 def an_older_releases_roster_add_retries_after_the_upgrade(api):
     """An older release's onboarding route stored its roster add as an answer under the request's key before it bound
     the invite, so a refusal (or a crash) between the two left an answer with no binding and nothing sent. Migration
-    0049 removes it: the retry after the upgrade sends once and answers, and its repeat sends nothing more."""
+    0050 removes it: the retry after the upgrade sends once and answers, and its repeat sends nothing more."""
     import sqlite3
     from contextlib import closing
 
@@ -299,7 +299,7 @@ def an_older_releases_roster_add_retries_after_the_upgrade(api):
                   (actor, url, key, digest(encode(body)), encode({"id": ben["id"]}), H.now()))
         c.execute("DROP TABLE idempotency")
         c.execute("ALTER TABLE idempotency_legacy RENAME TO idempotency")
-        c.execute("DELETE FROM schema_migrations WHERE version>='0049' AND version NOT LIKE 'legacy_%'")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0050' AND version NOT LIKE 'legacy_%'")
 
     class Issuer:
         name, calls = "oidc", []

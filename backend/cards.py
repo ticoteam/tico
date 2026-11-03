@@ -38,6 +38,7 @@ from . import bot_access as A
 from . import groups as G
 from . import models as M
 from . import people as P
+from . import read_cache
 from .store import H, Problem, encode
 
 SCHEMA = """
@@ -519,16 +520,24 @@ def page_brief(row):
 def page_read(ctx, row, files_cache):
     """A pinned page as pageCard draws it: the contract's page read (status line fields and a fresh src)."""
     pages = ctx.pages
-    found = pages.rows(ctx.c, [row["id"]]).get(row["id"]) if pages is not None else None
+    found = None
+    if pages is not None:
+        known = ctx.memo("pages_found", dict)       # prime_pins reads the place's pages together
+        if row["id"] not in known:
+            known[row["id"]] = pages.rows(ctx.c, [row["id"]]).get(row["id"])
+        found = known[row["id"]]
     if not found:
         return page_brief(row)
     return {**page_brief(row), **pages.view(ctx.c, ctx.who, found, pages.page_of(found), files_cache)}
 
 
+PAGE_ROW_SQL = ("SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id=? "
+                "AND f.state<>'deleted'")
+
+
 def page_row(c, fid):
     """A page's file, or None for anything that is not a page (or was deleted for good)."""
-    return c.execute("SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id WHERE p.file_id=? "
-                     "AND f.state<>'deleted'", (fid,)).fetchone()
+    return read_cache.one(c, PAGE_ROW_SQL, (fid,))
 
 
 PLACE_WORDS = {"dashboard": "Dashboard"}
@@ -747,6 +756,17 @@ DATA = {"tasks_by_status": tasks_by_status, "done_per_week": done_per_week, "nee
         "growth_channels": growth_channels, "growth_retention": growth_retention, "growth_board": growth_board}
 
 
+def card_data(ctx, template, settings):
+    """What a card of this template and these settings shows its reader, or None when it shows nothing. Cards that
+    agree on both read the same rows, so one request works each out once (ctx.memo)."""
+    def make():
+        try:
+            return DATA[template](ctx, settings)
+        except Problem:
+            return None
+    return ctx.memo(("data", template, json.dumps(settings, sort_keys=True)), make)
+
+
 def card_view(ctx, row):
     """A card for its reader: its settings and what it shows them, or `hidden` when that is nothing."""
     settings = json.loads(row["settings"]) if isinstance(row.get("settings"), str) else row["settings"]
@@ -754,11 +774,8 @@ def card_view(ctx, row):
     team = settings.get("team") or ""
     data = None
     if template in DATA and (not team or team in ctx.groups):
-        try:
-            data = DATA[template](ctx, {**{k: v[2] for k, v in TEMPLATES[template]["fields"].items()
-                                           if isinstance(v, tuple)}, **settings})
-        except Problem:
-            data = None
+        data = card_data(ctx, template, {**{k: v[2] for k, v in TEMPLATES[template]["fields"].items()
+                                            if isinstance(v, tuple)}, **settings})
     name = TEMPLATES.get(template, {}).get("name", template)
     return {"id": row.get("id"), "template": template, "title": row.get("title") or "", "settings": settings,
             "name": name, "heading": row.get("title") or name,
@@ -898,9 +915,41 @@ def pins_at(c, place):
     return [dict(r) for r in c.execute("SELECT * FROM pins WHERE place=? ORDER BY position, created_at, id", (place,))]
 
 
+CARD_ROW_SQL = "SELECT * FROM cards WHERE id=?"
+
+
 def card_row(c, cid):
-    row = c.execute("SELECT * FROM cards WHERE id=?", (cid,)).fetchone()
+    row = read_cache.one(c, CARD_ROW_SQL, (cid,))
     return dict(row) if row else None
+
+
+def prime_pins(ctx, pins):
+    """Read the cards and pages `pins` point at, one query a chunk each, and seed read_cache with them, so the per-pin
+    reads in pin_view take no statement of their own. Each row is the one its own lookup would read."""
+    from . import files as F
+    c = ctx.c
+    ids = {"card:": set(), "page:": set()}
+    for pin in pins:
+        item = pin.get("item") or ""
+        if pin.get("card") is None and item[:5] in ids:
+            ids[item[:5]].add(item[5:])
+    cards, pages = {}, {}
+    for kind, found, sql in (("card:", cards, "SELECT * FROM cards WHERE id IN (%s)"),
+                             ("page:", pages, "SELECT f.* FROM pages p JOIN bot_files f ON f.id=p.file_id "
+                                              "WHERE p.file_id IN (%s) AND f.state<>'deleted'")):
+        wanted = sorted(ids[kind])
+        for part in H.chunks(wanted):
+            for row in c.execute(sql % ",".join("?" * len(part)), part):
+                found[row["id"]] = row
+    read_cache.prime(c, CARD_ROW_SQL, {(cid,): cards.get(cid) for cid in ids["card:"]})
+    read_cache.prime(c, PAGE_ROW_SQL, {(fid,): pages.get(fid) for fid in ids["page:"]})
+    if pages:
+        from . import pages as PG
+        F.prime_visible(c, list(pages.values()))
+        PG.prime_views(c, list(pages.values()))
+        if ctx.pages is not None:
+            found = ctx.pages.rows(c, sorted(pages))
+            ctx.memo("pages_found", dict).update({fid: found.get(fid) for fid in ids["page:"]})
 
 
 def default_settings(kind, ident, template):
@@ -940,6 +989,7 @@ def place_view(ctx, place):
     place = canonical(kind, ident)
     saved = kind not in DEFAULTS or bool(place_row(ctx.c, place))
     pins = pins_at(ctx.c, place) if saved else default_pins(kind, ident)
+    prime_pins(ctx, pins)
     cache = ctx.memo("file_cache", dict)
     shown = [v for v in (pin_view(ctx, p, cache) for p in pins) if v]
     out = {"place": place, "kind": kind, "saved": saved, "can_edit": may_manage(ctx, kind, ident), "pins": shown}

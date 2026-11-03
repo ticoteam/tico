@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from backend.finance import budgeting as BG
 from backend.finance import mirror
 from backend.finance import qbo as QC
 from backend.finance.core import mirror as M
@@ -1101,6 +1102,109 @@ def test_a_bill_the_provider_bills_for_less_keeps_its_order_line_billed_until_th
     assert _drain(books, fake, cid, now="2026-10-15T16:00:00.000000Z", passes=1) == []
     with books.read() as c:
         assert SP.line_room(c, line) == 10_000
+
+
+def _software_budget(c) -> tuple[int, int, int]:
+    """The Software budget's actual, held and remaining (budget_state) at the mirror's clock."""
+    bid = str(c.execute("SELECT id FROM fin_budgets WHERE name='Software'").fetchone()[0])
+    s = BG.budget_state(c, bid, LATER3)
+    return s.actual, s.held, s.remaining
+
+
+def test_a_bill_the_provider_bills_for_less_keeps_the_budget_committed_until_the_bill_is_deleted(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": _local(c, "Account:2", "fin_accounts"),
+                                               "amount": 10_000, "at_limit": "decline", "parent_id": None})
+        assert made.status == "committed", made
+    _, line = _approved_order(books, fake, cid, 10_000)
+    with books.transaction() as c:
+        SK.outbox_add(c, connection_id=cid, action_id="", op="bill.create", payload=_bill_body(c, line, 4_000, "B-111"),
+                      key="bill.create:budget-1", by=OWNER, at=AT)
+    fake.replies = [mirror.Sent(True, kind="Bill", external_id="111", revision="1", lines=("L1",))]
+    assert _drain(books, fake, cid, now=LATER2) == []
+    with books.read() as c:
+        assert _software_budget(c) == (4_000, 6_000, 0)           # the bill's 4,000 posted, the order's 6,000 held
+    # The provider now bills 2,000. The order line keeps the 4,000 it billed, so the 2,000 it no longer bills stays
+    # committed: the budget still holds the whole 10,000 until the bill is deleted.
+    fake.changes = [M.Document(M.Ext("Bill", "111", "2"), party="Vendor:9", number="B-111", day="2026-10-05", due="",
+                               total=2_000, lines=(M.EntryLine("Account:2", 2_000, description="seats", key="L1"),))]
+    assert _drain(books, fake, cid, now=LATER3) == []
+    with books.read() as c:
+        assert SP.billed(c, line) == 4_000
+        assert _software_budget(c) == (2_000, 8_000, 0)           # actual 2,000 + held 8,000 = 10,000, none spendable
+    # Deleting the bill releases what it kept, once: the order line has its whole 10,000 back, held and no more.
+    fake.changes = [M.Ext("Bill", "111", "3", True)]
+    assert _drain(books, fake, cid, now="2026-10-15T16:00:00.000000Z", passes=1) == []
+    with books.read() as c:
+        assert SP.line_room(c, line) == 10_000
+        assert _software_budget(c) == (0, 10_000, 0)
+
+
+def test_voiding_in_tico_a_bill_the_provider_bills_for_less_releases_what_it_kept_committed_once(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": _local(c, "Account:2", "fin_accounts"),
+                                               "amount": 10_000, "at_limit": "decline", "parent_id": None})
+        assert made.status == "committed", made
+    _, line = _approved_order(books, fake, cid, 10_000)
+    with books.transaction() as c:
+        SK.outbox_add(c, connection_id=cid, action_id="", op="bill.create", payload=_bill_body(c, line, 4_000, "B-111"),
+                      key="bill.create:budget-1", by=OWNER, at=AT)
+    fake.replies = [mirror.Sent(True, kind="Bill", external_id="111", revision="1", lines=("L1",))]
+    assert _drain(books, fake, cid, now=LATER2) == []
+    fake.changes = [M.Document(M.Ext("Bill", "111", "2"), party="Vendor:9", number="B-111", day="2026-10-05", due="",
+                               total=2_000, lines=(M.EntryLine("Account:2", 2_000, description="seats", key="L1"),))]
+    assert _drain(books, fake, cid, now=LATER3) == []
+    with books.read() as c:
+        assert _software_budget(c) == (2_000, 8_000, 0)
+    with books.transaction() as c:
+        bill = str(c.execute("SELECT id FROM fin_bills WHERE number='B-111'").fetchone()[0])
+        assert act(c, OWNER, "bill_void", {"bill_id": bill}).status == "committed"
+    fake.replies = [mirror.Sent(True, kind="Bill", external_id="111", revision="3")]
+    assert _drain(books, fake, cid, now="2026-10-15T16:00:00.000000Z") == []
+    with books.read() as c:
+        assert SP.line_room(c, line) == 10_000
+        assert _software_budget(c) == (0, 10_000, 0)              # the void gives the kept 2,000 back to the order's hold
+
+
+def test_a_provider_revision_that_bills_the_kept_amount_again_moves_its_hold_back_to_the_order(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": _local(c, "Account:2", "fin_accounts"),
+                                               "amount": 10_000, "at_limit": "decline", "parent_id": None})
+        assert made.status == "committed", made
+    _, line = _approved_order(books, fake, cid, 10_000)
+    with books.transaction() as c:
+        SK.outbox_add(c, connection_id=cid, action_id="", op="bill.create", payload=_bill_body(c, line, 4_000, "B-111"),
+                      key="bill.create:budget-1", by=OWNER, at=AT)
+    fake.replies = [mirror.Sent(True, kind="Bill", external_id="111", revision="1", lines=("L1",))]
+    assert _drain(books, fake, cid, now=LATER2) == []
+    fake.changes = [M.Document(M.Ext("Bill", "111", "2"), party="Vendor:9", number="B-111", day="2026-10-05", due="",
+                               total=2_000, lines=(M.EntryLine("Account:2", 2_000, description="seats", key="L1"),))]
+    assert _drain(books, fake, cid, now=LATER3) == []
+    with books.read() as c:
+        assert _software_budget(c) == (2_000, 8_000, 0)
+    # The provider bills the 4,000 again: the kept amount's hold goes back to the order, and nothing is held twice.
+    fake.changes = [M.Document(M.Ext("Bill", "111", "3"), party="Vendor:9", number="B-111", day="2026-10-05", due="",
+                               total=4_000, lines=(M.EntryLine("Account:2", 4_000, description="seats", key="L1"),))]
+    assert _drain(books, fake, cid, now="2026-10-15T16:00:00.000000Z") == []
+    with books.read() as c:
+        assert SP.billed(c, line) == 4_000
+        assert _software_budget(c) == (4_000, 6_000, 0)
+        assert c.execute("SELECT COUNT(*) FROM fin_holds WHERE source='bill' AND status='held'").fetchone()[0] == 0
 
 
 def test_a_line_tagged_to_a_site_kept_in_tico_keeps_the_site_when_the_provider_revises_the_bill(books):

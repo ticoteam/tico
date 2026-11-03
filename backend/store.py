@@ -230,7 +230,7 @@ CREATE INDEX IF NOT EXISTS attempt_captures_created ON attempt_captures(created_
 CREATE TABLE IF NOT EXISTS attempt_capture_drops(attempt_id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
 -- One table for the request cache (binding NULL: a saved answer, swept after IDEMPOTENCY_RETENTION_HOURS) and the
 -- retained operation bindings (binding names the operation; never swept). docs/status-and-state.md has the states.
--- Migration 0049_idempotency_one_table.py builds this same table, with its indexes, on every file (test_migrations
+-- Migration 0050_idempotency_one_table.py builds this same table, with its indexes, on every file (test_migrations
 -- checks the two match), so this statement only declares it.
 CREATE TABLE IF NOT EXISTS idempotency(
  actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL,

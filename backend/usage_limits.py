@@ -114,6 +114,16 @@ def own(c, bot):
     return _caps(one(c, OWN_SQL, (bot,)))
 
 
+def own_many(c, bots):
+    """{bot: its own limits, as own returns them} for every bot in `bots`, read in set queries (the claim checks each)."""
+    from .hubdb import chunks
+    rows = {}
+    for part in chunks(bots):
+        for row in c.execute(f"SELECT * FROM usage_limits WHERE bot IN ({','.join('?' * len(part))})", part):
+            rows[row["bot"]] = row
+    return {bot: _caps(rows.get(bot)) for bot in bots}
+
+
 def prime_own(c, bots):
     """Every bot's own limits read in one statement, for a page that asks for many bots in one snapshot."""
     from .read_cache import prime
@@ -121,10 +131,11 @@ def prime_own(c, bots):
     prime(c, OWN_SQL, {(bot,): found.get(bot) for bot in bots})
 
 
-def effective(c, bot, default=None):
-    """Each period's cap in USD or None, and where each came from: `bot`, `company` or None."""
+def effective(c, bot, default=None, mine=None):
+    """Each period's cap in USD or None, and where each came from: `bot`, `company` or None. `mine`: the bot's own
+    limits when the caller has them read already (own)."""
     default = default if default is not None else company(c)
-    mine = own(c, bot)
+    mine = own(c, bot) if mine is None else mine
     out, source = {}, {}
     live = {name for name, _ in periods(c)}
     for name, _ in PERIODS:
@@ -336,11 +347,11 @@ def spent_now(c, bot=None, scope=None, at=None, default=None):
     return out
 
 
-def state(c, bot, at=None, default=None):
+def state(c, bot, at=None, default=None, mine=None):
     """Where the bot stands: its own limits and their source, what it has spent, the highest percentage of one of them
     reached, and `blocked` (the period) when a limit is met, its own or a pool's; `blocked_by` then says whose."""
     default = default if default is not None else company(c)
-    limits, source = effective(c, bot, default)
+    limits, source = effective(c, bot, default, mine)
     when = bounds(at)
     result = {**limits, "source": source, **{label_ + "_spent": None for _, label_ in PERIODS},
               "percent": 0, "blocked": None, "blocked_by": None}
@@ -394,9 +405,9 @@ def budget_cutoff(c, bot, at=None, default=None):
     return {"scope": "budget", "name": cut.name, "period": cut.period, "budget_id": cut.budget_id, "until": cut.until}
 
 
-def blocked(c, bot, at=None, default=None):
+def blocked(c, bot, at=None, default=None, mine=None):
     """The period (`hourly`, `daily`, `weekly` or `monthly`) when the bot may take no new job, else None."""
-    return state(c, bot, at, default)["blocked"]
+    return state(c, bot, at, default, mine)["blocked"]
 
 
 def why(met):

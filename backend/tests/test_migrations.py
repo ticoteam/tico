@@ -476,9 +476,9 @@ def _migration(name):
 
 
 def test_a_session_link_keeps_its_thread_once_in_its_url():
-    """Migration 0048 strips the thread_id copy from session rows whose url gives that thread back, and leaves every
+    """Migration 0049 strips the thread_id copy from session rows whose url gives that thread back, and leaves every
     other row alone: a url that only contains the id, or names another thread, keeps its copy."""
-    up = _migration("0048_task_session_thread_once").up
+    up = _migration("0049_task_session_thread_once").up
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE task_links(id TEXT PRIMARY KEY, kind TEXT, url TEXT, detail TEXT)")
     rows = {
@@ -508,7 +508,7 @@ def test_a_session_link_keeps_its_thread_once_in_its_url():
     up(sqlite3.connect(":memory:"))                 # a database with no task_links has nothing to strip
 
 
-# The tables 0049_idempotency_one_table.py moves into `idempotency`, as migration 0048 and earlier left them.
+# The tables 0050_idempotency_one_table.py moves into `idempotency`, as migration 0049 and earlier left them.
 LEGACY_TABLES = (
     "CREATE TABLE idempotency(actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL, "
     "request_hash TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(actor,operation,key))",
@@ -570,7 +570,7 @@ def test_a_populated_legacy_database_moves_each_row_and_keeps_its_behaviour(tmp_
             ("rev-pending", "r1", None), ("rev-done", "r2", '{"id": 1}'),
         ])
         before = dict(c.execute("SELECT key, rowid FROM idempotency").fetchall())
-        c.execute("DELETE FROM schema_migrations WHERE version>='0049' AND version NOT LIKE 'legacy_%'")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0050' AND version NOT LIKE 'legacy_%'")
     boot(path)
 
     with sqlite3.connect(path) as c:
@@ -626,14 +626,17 @@ def test_a_populated_legacy_database_moves_each_row_and_keeps_its_behaviour(tmp_
 def test_the_idempotency_table_the_migration_builds_is_the_one_store_declares():
     source = STORE_SOURCE.read_text()
     declared = re.search(r"CREATE TABLE IF NOT EXISTS (idempotency\(.*?PRIMARY KEY\(actor,operation,key\)\));", source, re.S)
-    migration = _migration("0049_idempotency_one_table")
+    migration = _migration("0050_idempotency_one_table")
     squash = lambda sql: re.sub(r"\s+", "", sql)
     assert declared and squash("CREATE TABLE " + declared.group(1)) == squash(migration.TABLE)
     assert migration.INDEXES[0] + ";" in source      # the answers' index; the bindings' one is the migration's own
 
 
-def test_the_threads_delivery_trigger_follows_hubdbs_task_news_rule():
-    """Migration 0047 makes threads_primary_delivery from literal SQL; the condition must stay hubdb's
-    delivery_counts_sql, which every read side uses, or task news would wake people again on a new install."""
-    module = importlib.import_module("backend.migrations.0047_native_threads_schema")
-    assert H.delivery_counts_sql("NEW", "NEW.recipient_id") in module.THREAD_TRIGGERS["threads_primary_delivery"]
+def test_the_threads_delivery_trigger_follows_hubdbs_task_news_rule(tmp_path):
+    """Migrations 0047 and 0048 make threads_primary_delivery from literal SQL; the installed condition must stay hubdb's
+    delivery_counts_sql, with the reason the trigger gives ('addressed'), which every read side uses. Otherwise task news
+    would wake people again, and a bot's task posts too, on a new install."""
+    with sqlite3.connect(fresh(tmp_path)) as c:
+        sql = c.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='threads_primary_delivery'").fetchone()[0]
+    condition = H.delivery_counts_sql("NEW", "NEW.recipient_id", "'addressed'")
+    assert " ".join(condition.split()) in " ".join(sql.split())

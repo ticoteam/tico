@@ -155,7 +155,7 @@ def _once(store, who, request, body, person, work, unknown=None):
             raise Problem("invite_unknown", f"This invite to {name} is still being sent, or Tico couldn't tell whether it "
                                             f"went. Check the People page or ask {name} before inviting again.", 422)
         # An answer left under this key with no binding is an older release's roster add that committed before its
-        # invite was bound (migration 0049 removes those): nothing was sent for it, so the binding takes its place.
+        # invite was bound (migration 0050 removes those): nothing was sent for it, so the binding takes its place.
         c.execute("DELETE FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                   (who.actor, operation, key))
         now = H.now()

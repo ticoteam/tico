@@ -68,7 +68,7 @@ def test_an_invite_whose_outcome_is_unknown_is_refused_again_and_its_send_is_nev
 
 
 def test_an_answer_stored_before_the_upgrade_replays_after_it(api):  # noqa: F811
-    """A key whose answer an older release stored (the six-column table) still replays after migration 0049: the retry
+    """A key whose answer an older release stored (the six-column table) still replays after migration 0050: the retry
     gets the first answer and makes nothing new, and other content under the key is still refused."""
     import sqlite3
     from contextlib import closing
@@ -91,7 +91,7 @@ def test_an_answer_stored_before_the_upgrade_replays_after_it(api):  # noqa: F81
         c.execute("DROP TABLE idempotency")
         c.execute("ALTER TABLE idempotency_legacy RENAME TO idempotency")
         c.execute("CREATE INDEX idempotency_by_created ON idempotency(created_at)")
-        c.execute("DELETE FROM schema_migrations WHERE version>='0049' AND version NOT LIKE 'legacy_%'")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0050' AND version NOT LIKE 'legacy_%'")
         tasks = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
     with TestClient(create_app(settings), follow_redirects=False) as upgraded:
         again = upgraded.post("/api/v2/tasks", json=body, headers=h)

@@ -2504,7 +2504,9 @@ SCHEMAS['BotDreamView'] = obj({'dream': {'oneOf': [obj({
         'type': 'boolean', 'description': 'The question is put to the caller, who answers it at POST /api/v2/messages/{mid}/answer'}}),
         {'type': 'null'}]},
     'summary': 'n', 'doing': {'type': ['string', 'null'], 'description': "While dreaming: the bot's one line on what it is doing now (the task note)"},
-    'closed_at': 'n', 'started_at': 's'}), {'type': 'null'}]}})
+    'closed_at': 'n', 'started_at': 's',
+    'auto': {'type': 'boolean', 'description': 'Started by the nightly run (Auto dream), not by a person'},
+    'reason': {'type': ['string', 'null'], 'description': "An auto dream's reason: the first line of its body"}}), {'type': 'null'}]}})
 
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "
