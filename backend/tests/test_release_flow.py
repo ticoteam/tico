@@ -178,3 +178,20 @@ def test_a_published_release_withdraws_the_undecided_asks_at_or_below_it_in_its_
     assert got == {"old": "withdrawn", "same": "withdrawn", "newer": None, "pre": None, "other": None}
     assert sorted(told) == ["Withdrawn: your publish approval. v1.2.3 already shipped."] * 2, "the bot hears it quietly"
     assert kept == "approved"
+
+
+def test_a_release_in_another_connected_repository_withdraws_its_own_older_asks_at_once(api):
+    """Only the server's release repository gets the ticket and docs follow-ups; the older asks of any repository
+    are withdrawn as soon as its release publishes."""
+    _team(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        task = H.task_create(c, H.human_actor("ana"), "Release", "Cut it.", H.bot_actor("cmo"), lint=False)
+        older = H.approval_request(c, H.bot_actor("cmo"), "publish", {
+            "url": "https://github.com/acme/other/releases/tag/v1.0.0", "version": "1.0.0", "commit": "o1",
+            "content_sha256": "a" * 64}, task_id=task["id"])
+    hook(api, "release", {"action": "published", "release": {"tag_name": "v1.2.3",
+                          "html_url": "https://github.com/acme/other/releases/tag/v1.2.3"},
+                          "repository": {"full_name": "acme/other"}})
+    with store.read() as c:
+        assert H.approval(c, older["id"])["decision"] == "withdrawn"

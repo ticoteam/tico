@@ -327,10 +327,10 @@ def published(c, target, url="", release_repo=""):
     approvals at or below it in its channel are withdrawn (supersede). A prerelease (a tag with a suffix) and a
     repository other than the server's release repository do nothing more. Returns the carried ticket ids."""
     repo, _, tag = target.partition("@")
+    # Asks for this release or an older one in its channel are stale now, in any connected repository.
+    supersede(c, repo, tag)
     if release_repo and repo.lower() != str(release_repo).lower():
         return []
-    # Asks for this release or an older one in its channel are stale now, whatever the tag's kind.
-    supersede(c, repo, tag)
     if "-" in tag:
         return []
     cfg = load(c)
