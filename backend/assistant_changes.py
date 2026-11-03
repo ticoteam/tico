@@ -266,6 +266,53 @@ def undoable(c, auth, who, kind, row, detail, settings):
     return False, "a message sent stays sent"
 
 
+def restore(c, auth, who, cid, settings):
+    """Undo one of the caller's Assistant changes. Idempotent: a second restore answers `already`."""
+    row, kind = find(c, who, cid)
+    if row is None:
+        raise Problem("not_found", f"no change {cid} of yours", 404)
+    done = c.execute("SELECT id FROM events WHERE action=? AND target=? LIMIT 1", (RESTORE_ACTION, cid)).fetchone()
+    if done:
+        return {"id": cid, "restored": True, "already": True}
+    if kind == "message":
+        raise Problem("not_undoable", "a message sent stays sent", 409)
+    detail = json.loads(row["detail"] or "{}") if kind == "event" else {
+        "before": json.loads(row["before"]) if row["before"] else None,
+        "after": json.loads(row["after"]) if row["after"] else None}
+    if kind == "setting":
+        undo, why = undoable(c, auth, who, kind, row, {}, settings)
+        if not undo:
+            raise Problem("not_undoable", why, 409)
+        config = settings._config(c, row["bot"])
+        settings.undo(c, who, row["id"], M.SettingsUndo(expected_revision=config["revision"]))
+        obj = f"setting:{row['bot']}:{row['field']}"
+    elif kind == "event" and row["action"] in ("approval.decide",):
+        undo, why = undoable(c, auth, who, kind, row, detail, settings)
+        if not undo:
+            raise Problem("not_undoable", why, 409)
+        H.approval_undo(c, who.actor, row["target"])
+        obj = f"approval:{row['target']}"
+    elif kind == "event":
+        undo, why = undoable(c, auth, who, kind, row, detail, settings)
+        if not undo:
+            raise Problem("not_undoable", why, 409)
+        restore_task(c, who, row, detail)
+        obj = f"task:{row['target']}"
+    else:
+        undo, why = undoable(c, auth, who, kind, row, detail, settings)
+        if not undo:
+            raise Problem("not_undoable", why, 409)
+        obj = row["object"]
+        if obj.startswith("org_rule:"):
+            rule = obj.split(":", 1)[1]
+            version = c.execute("SELECT version FROM org_rules WHERE id=?", (rule,)).fetchone()
+            org_rules.decide_rule(c, auth, who, rule, {"version": version["version"] if version else 1}, "retire")
+        else:
+            restore_automation(c, who, obj.split(":", 1)[1], detail["before"])
+    H.event(c, who.actor, RESTORE_ACTION, cid, {"object": obj, "undid": row["id"]})
+    return {"id": cid, "restored": True, "already": False, "object": obj}
+
+
 def find(c, who, cid):
     """(row, kind) of the caller's own change `cid`, or (None, None): another person's or none."""
     row = c.execute("SELECT * FROM settings_changes WHERE id=? AND actor=? AND via='assistant'", (cid, who.actor)).fetchone()

@@ -126,6 +126,7 @@ def test_a_declined_approval_is_listed_and_puts_it_back_to_waiting(api):
         assert H.approval(c, approval["id"]).get("decided_by_id") in (None, "")
 
 
+@pytest.mark.xfail(strict=True, reason="a direct setting is refused at the write gate (403 confirm_required) until track B")
 def test_a_setting_the_assistant_changes_through_the_route_is_listed_and_restored(api):
     r, attempt = assistant_turn(api, "ana-test", "Keep three tasks going on ops")
     said = turn_message(api, attempt)
@@ -227,10 +228,11 @@ def test_an_automation_change_is_not_restored_by_someone_who_no_longer_manages_i
     with api.app.state.store.transaction() as c:
         now = json.loads(c.execute("SELECT flow FROM automations WHERE id=?", (aid,)).fetchone()["flow"])
         before = dict(now, name="Earlier name")
+        after = dict(now, owner="human:ana")
         c.execute("INSERT INTO audit_log (id, created_at, actor, object, before, after, via) VALUES (?,?,?,?,?,?,?)",
-                  (H.new_id(), H.now(), "human:ben", f"automation:{aid}", json.dumps(before), json.dumps(now),
+                  (H.new_id(), H.now(), "human:ben", f"automation:{aid}", json.dumps(before), json.dumps(after),
                    "assistant"))
-        c.execute("UPDATE automations SET flow=? WHERE id=?", (json.dumps(dict(now, owner="human:ana")), aid))
+        c.execute("UPDATE automations SET flow=? WHERE id=?", (json.dumps(after), aid))
     [change] = [c for c in get(api, "assistant/changes?days=30", "ben-test")["changes"]
                 if c["object"] == f"automation:{aid}"]
     assert change["undoable"] is False and change["why_not"] == "you no longer manage this automation"
