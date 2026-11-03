@@ -1,4 +1,4 @@
-/* ui/app/settings-gateway.js — Settings > Gateway: the connection's status, the picks bots use, the services
+/* ui/app/settings-gateway.js — Settings > Gateway: the connection's status, the picks bots use, the services, the API keys link
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -26,6 +26,14 @@ function gatewayServicesHTML(rows) {
     `<tr data-gateway-service="${esc(r.id)}"><td class="gw-name">${esc(r.name)}</td><td class="gw-status-cell" data-status="${esc(r.status)}">${esc(GATEWAY_STATUS[r.status] || r.status)}</td>
       <td class="gw-price">${esc(r.price || '')}</td><td class="gw-tools">${(r.tools || []).map(t => `<code>${esc(t)}</code>`).join(' ')}</td></tr>`).join('')}</tbody></table>`;
 }
+// API keys, to use the Gateway from other tools, are made and revoked on app.tico.dev (HQ's portal); the app only links
+// there, for the owner (who sees the spend) while the install has a Gateway connection.
+const GATEWAY_API_KEYS_URL = 'https://app.tico.dev/gateway#api-keys';
+function gatewayApiKeysHTML() {
+  return `<section class="card"><table class="gw-table" data-gateway-api-keys><tbody><tr><td class="gw-name">API keys</td>
+      <td class="gw-note">Use the Gateway from other tools</td>
+      <td class="gw-open"><a href="${GATEWAY_API_KEYS_URL}" target="_blank" rel="noopener noreferrer" data-gateway-api-keys-link>Open</a></td></tr></tbody></table></section>`;
+}
 async function renderSettingsGateway() {
   const host = $('#set-gateway-page');
   if (!host) return;
@@ -35,9 +43,10 @@ async function renderSettingsGateway() {
   catch (e) { if (asked === GATEWAY_ASKED) host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   if (asked !== GATEWAY_ASKED) return;
   const [tone, line] = gatewayStatusLine(v.connection || {});
+  const keys = S.me?.role === 'owner' && v.connection?.connected ? gatewayApiKeysHTML() : '';
   const level = v.decide_level ? v.decide_level.charAt(0).toUpperCase() + v.decide_level.slice(1) : '';
   host.innerHTML = `<section class="card"><p class="billing-status gw-status" data-tone="${tone === 'fail' ? 'bad' : tone}" role="status" data-gateway-line>${esc(line)}</p>
       <p class="muted">${level ? `Decisions: ${esc(level)}. ` : ''}<a href="#/settings/models" data-gateway-key-link>Key and connection</a></p></section>
-    <section class="card"><header><h2>Picks in use</h2></header>${gatewayPicksHTML(v.picks || [])}</section>
+    ${keys}<section class="card"><header><h2>Picks in use</h2></header>${gatewayPicksHTML(v.picks || [])}</section>
     <section class="card"><header><h2>Services</h2></header>${gatewayServicesHTML(v.services || [])}</section>`;
 }
