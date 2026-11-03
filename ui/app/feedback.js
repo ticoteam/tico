@@ -13,7 +13,7 @@
 const FB = {on: null, items: new Map(), asked: new Set(), reasons: null, queued: false, press: null, quiet: 0};
 const FB_PRESS_MS = 450;          // a long press, short of iOS's own text selection
 const FB_FIXED = ["Shouldn't exist", 'Badly written', 'Wrong person'];
-const FB_REASON_MAX = 1000;
+const FB_REASON_MAX = 1000;       // the API's cap on a reason and on a rule's text
 const fbKey = (type, id) => `${type}:${id}`;
 const fbSplit = key => { const i = String(key).indexOf(':'); return {type: key.slice(0, i), id: key.slice(i + 1)}; };
 const fbMine = key => (FB.items.get(key) || []).find(f => f.person_id === myActor()) || null;
@@ -248,7 +248,7 @@ function fbSheet(key, f, {fixed = fbSplit(key).type !== 'message'} = {}) {
 function fbRuleSheet(key, f, text) {
   const d = fbDialog('fb-rule', 'Make a rule');
   d.innerHTML = `${fbHeadHTML('Make a rule')}
-    <textarea class="fb-rule-text" rows="3" maxlength="2000" aria-label="Rule">${esc(text)}</textarea>
+    <textarea class="fb-rule-text" rows="3" maxlength="${FB_REASON_MAX}" aria-label="Rule">${esc(text.slice(0, FB_REASON_MAX))}</textarea>
     <label class="fb-all"><input type="checkbox" role="switch" class="people-switch" data-fb-all> All bots</label>
     <div class="fb-acts"><button type="button" class="ghost" data-fb-close>Cancel</button><button type="button" class="primary" data-fb-save>Save rule</button></div>`;
   d.showModal();
@@ -320,7 +320,8 @@ function fbMenu(key, copy, opts = {}) {
 // ---- clicks, before each surface's own: a thumb never opens the row or card it sits on
 const fbOpts = el => el.closest('[data-fb-fixed]') ? {fixed: true} : {};
 document.addEventListener('click', ev => {
-  if (FB.quiet && Date.now() < FB.quiet) { ev.preventDefault(); ev.stopPropagation(); FB.quiet = 0; return; }   // the long press's own click
+  // The long press's own click, just after the lift; with the menu open the page is inert, so it lands on the menu.
+  if (FB.quiet && Date.now() < FB.quiet) { ev.preventDefault(); ev.stopPropagation(); FB.quiet = 0; return; }
   const rate = ev.target.closest('[data-fb-rate]'), copy = ev.target.closest('[data-fb-copy]');
   if (!rate && !copy) return;
   ev.preventDefault(); ev.stopPropagation();
@@ -337,12 +338,15 @@ function fbPressEnd() { if (FB.press) { clearTimeout(FB.press.timer); FB.press =
 document.addEventListener('pointerdown', ev => {
   if (ev.pointerType !== 'touch' || !FB.on || !ev.isPrimary) return;
   const el = ev.target.closest('[data-fb-press]');
-  if (!el || ev.target.closest('a, button, input, textarea, select, summary, [contenteditable]')) return;
+  // A control keeps its own touch, except a task row's title, which is a button over the whole row: a long press there
+  // is the row's, and the quiet click after it keeps the task from opening too.
+  const own = ev.target.closest('a, button, input, textarea, select, summary, [contenteditable]');
+  if (!el || (own && !own.matches('.tl-open'))) return;
   fbPressEnd();
   FB.press = {el, x: ev.clientX, y: ev.clientY, timer: setTimeout(() => {
     const key = el.dataset.fbPress, copy = el.querySelector('[data-chat-copy],[data-fb-copy]');
     FB.press = null;
-    FB.quiet = Date.now() + 800;
+    FB.quiet = Date.now() + 60000;   // until the finger lifts (fbPressUp), however long it is held
     getSelection?.()?.removeAllRanges();
     navigator.vibrate?.(8);
     fbMenu(key, copy?.dataset.chatCopy || copy?.dataset.fbCopy || '', fbOpts(el));
@@ -351,6 +355,11 @@ document.addEventListener('pointerdown', ev => {
 document.addEventListener('pointermove', ev => {
   if (FB.press && Math.hypot(ev.clientX - FB.press.x, ev.clientY - FB.press.y) > 10) fbPressEnd();
 }, true);
-for (const type of ['pointerup', 'pointercancel']) document.addEventListener(type, fbPressEnd, true);
+// The press's own click comes just after the lift; a click later than that is a new tap.
+function fbPressUp() {
+  fbPressEnd();
+  if (FB.quiet > Date.now() + 1000) FB.quiet = Date.now() + 400;
+}
+for (const type of ['pointerup', 'pointercancel']) document.addEventListener(type, fbPressUp, true);
 document.addEventListener('scroll', fbPressEnd, {capture: true, passive: true});
 document.addEventListener('contextmenu', ev => { if ((FB.press || Date.now() < FB.quiet) && ev.target.closest?.('[data-fb-press]')) ev.preventDefault(); }, true);

@@ -44,6 +44,25 @@ def test_rating_again_replaces_the_one_row_and_bumps_updated_at(api):
     assert again["updated_at"] > first["updated_at"]
     assert [(m["rating"], m["reason"], m["bot_id"]) for m in markers(api, [mid])] == [("down", "Wrong date", "bot:cpo")]
     assert rows(api, "SELECT count(*) AS n FROM feedbacks")[0]["n"] == 1
+    # A members thread is private: who rated in it stays out of the audit trail. On company-wide work the event
+    # targets the rated message, so the SQL event gate reads it as that message's provenance says.
+    assert rows(api, "SELECT count(*) AS n FROM events WHERE action LIKE 'feedback.%'")[0]["n"] == 0
+    public = bot_message(api, new_thread(api, audience="company", title="Handbook"))
+    rated = give(api, public, "up")
+    assert [(e["target"], json.loads(e["detail"])["feedback"]) for e in rows(
+        api, "SELECT target, detail FROM events WHERE action='feedback.given'")] == [(public, rated["id"])]
+
+
+def test_markers_carry_only_the_callers_own_rows_and_everyones_counts(api):
+    thread = new_thread(api, members=("bot:cpo", "human:ben", "human:cara"))
+    mid, other = bot_message(api, thread), bot_message(api, thread, "Second draft")
+    give(api, mid, "down", reason="Wrong date")
+    give(api, mid, "up", token="ben-test", reason="Clear")
+    give(api, mid, "down", token="cara-test", reason="Too long")
+    answer = api.get("/api/v2/feedback", params={"subject_type": "message", "subject_ids": f"{mid},{other}"},
+                     headers=headers("ben-test")).json()
+    assert [(i["person_id"], i["reason"]) for i in answer["items"]] == [("human:ben", "Clear")]
+    assert answer["counts"] == [{"subject_id": mid, "up": 1, "down": 2}]
 
 
 def test_only_a_bots_work_that_the_rater_reads_takes_feedback_and_only_from_a_person(api):
@@ -72,6 +91,8 @@ def test_a_private_assistant_chats_feedback_is_its_persons_alone(api):
     rated = give(api, reply, token="cara-test", reason="Too chirpy")
     assert rows(api, "SELECT attempt_id FROM feedbacks WHERE id=?", rated["id"])[0]["attempt_id"] is None   # fast path
     assert [m["id"] for m in markers(api, [reply], token="cara-test")] == [rated["id"]]
+    # Who rated a private reply, and how, is not in the audit trail the owner reads whole.
+    assert rows(api, "SELECT count(*) AS n FROM events WHERE action LIKE 'feedback.%'")[0]["n"] == 0
     for other in ("ana-test", "ben-test"):                        # the owner and an admin included
         assert markers(api, [reply], token=other) == []
         listed = api.get("/api/v2/feedback/list", headers=headers(other)).json()

@@ -58,7 +58,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub feedback give message|task|approval <id> up|down [--reason R] [--tell-bot]   a person's 👍/👎 on a bot's work;
                                            again replaces it; --tell-bot (👎) leaves the bot a note
     hub feedback remove <id>               take back your feedback (and its note, if no run carried it)
-    hub feedback markers message|task|approval <id> [<id>...]   everyone's feedback on these, as far as you read them
+    hub feedback markers message|task|approval <id> [<id>...]   your feedback on these and everyone's up/down counts
     hub feedback list [--bot B] [--rating up|down] [--since 7d] [--cursor C] [--limit N]   newest first
     hub feedback reasons                   your five latest distinct reasons
     hub feedback rule-draft <id>           a one-sentence rule drafted from your 👎; stores nothing
@@ -1169,7 +1169,7 @@ def parser():
     s = feedback.add_parser("remove", help="take back your feedback, and its note if no run carried it")
     s.add_argument("id")
     s.set_defaults(fn="feedback remove")
-    s = feedback.add_parser("markers", help="everyone's feedback on these subjects, as far as you read them")
+    s = feedback.add_parser("markers", help="your feedback on these subjects and everyone's up/down counts")
     s.add_argument("subject_type", choices=subjects)
     s.add_argument("subject_ids", nargs="+")
     s.set_defaults(fn="feedback markers")

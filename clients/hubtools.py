@@ -374,7 +374,8 @@ def feedback_remove(api, args):
     return api.call("DELETE", "feedback/" + quote(args["id"], safe=""), None, key=_key(args))
 
 
-@tool("hub_feedback_markers", "Everyone's feedback on these subjects (at most 200 ids), for the ones you may read.",
+@tool("hub_feedback_markers", "Your own feedback on these subjects (at most 200 ids) and everyone's up/down counts, "
+      "for the ones you may read.",
       {"subject_type": FEEDBACK_SUBJECT, "subject_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 200,
                                                           "description": "Their ids"}},
       required=("subject_type", "subject_ids"))
