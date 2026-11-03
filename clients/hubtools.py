@@ -6012,11 +6012,15 @@ def thread_task(api, args):
       {"summary": _s("One plain sentence saying what will happen if they confirm"),
        "method": {"enum": ["POST", "PUT", "PATCH", "DELETE"], "default": "POST"},
        "path": _s("The API path, e.g. /api/v2/approvals/<id> or /api/v2/messages/<id>/answer"),
-       "body": {"type": "object", "description": "The JSON body of that request"}},
+       "body": {"type": "object", "description": "The JSON body of that request"},
+       "for_person": _s("Only the Assistant's own background run: the person (human:<id>) whose Assistant chat gets the card")},
       required=("summary", "path"), writes=True)
 def assistant_propose(api, args):
-    return api.post("assistant/actions", {"summary": args["summary"], "method": args.get("method") or "POST",
-                                          "path": args["path"], "body": args.get("body") or {}}, key=_key(args))
+    sent = {"summary": args["summary"], "method": args.get("method") or "POST", "path": args["path"],
+            "body": args.get("body") or {}}
+    if args.get("for_person"):
+        sent["for"] = args["for_person"]
+    return api.post("assistant/actions", sent, key=_key(args))
 
 
 @tool("hub_assistant_withdraw", "Take back a Confirm card that still waits for the person (its id from "

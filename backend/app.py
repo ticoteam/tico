@@ -610,7 +610,7 @@ def create_app(settings=None):
     from .assistant import write_allowed as assistant_writes, own_room as assistant_room, create_proposal
     from .assistant import valid_operation as assistant_valid
     from .assistant import describe as describe_action
-    from .assistant import instructed_route as assistant_instructed, instruction as assistant_instruction
+    from .assistant import instruction as assistant_instruction
     from . import goal_read_back
     from . import assistant as assistant_mod
     from . import botops_act
@@ -627,7 +627,8 @@ def create_app(settings=None):
                 return all(a == actor or not str(a).startswith("human:") for a in people)
             if row["owner_id"] != actor:
                 return False
-            if any(str(a).startswith("bot:") for a in people):
+            # Alone: no bot and no other person on it (a human requester is another person, who would see the comment).
+            if any(str(a).startswith("bot:") or (str(a).startswith("human:") and a != actor) for a in people):
                 return False
             return not c.execute("SELECT 1 FROM task_delegations WHERE task_id=? AND expires_at>?",
                                  (task_id, H.now())).fetchone()
@@ -643,6 +644,13 @@ def create_app(settings=None):
     def assistant_decides(actor):
         with store.read() as c:
             return assistant_mod.decides(c, actor)
+
+    def assistant_confirm_hint():
+        """What a write the person's Assistant may not make on its own is refused with (`confirm_required`)."""
+        return ("The " + settings.assistant_name + " does not make this on its own: it is a credential, sign-in, owner, "
+                "support or deletion change, one of its own switches, or the owner turned off \u201cAssistant acts without "
+                "asking\u201d. Propose it with `hub assistant propose` (or POST /api/v2/assistant/actions) and the person "
+                "confirms a card in " + settings.app_name + ".")
 
     @app.middleware("http")
     async def request_guard(request, call_next):
@@ -813,10 +821,11 @@ def create_app(settings=None):
                             request.state.identity.actor,
                             lambda tid, shared: assistant_owns(tid, request.state.identity.actor, shared),
                             assistant_direct(), assistant_to_bot))):
-                    # A task change, comment or link, a decline or an answer the person asked for in their own Assistant
-                    # chat: the turn cites their message and it runs as them, recorded via assistant for that message
-                    # (backend/assistant.py).
-                    asked = request.headers.get(botops_act.HEADER)
+                    # A write the person's own Assistant run makes (backend/assistant.py): the run cites the message that
+                    # started it (its turn), unless the request names another (`X-Tico-On-Behalf-Of`), and the write runs as
+                    # the person, recorded via assistant for that message. Their rights are the ceiling: the route checks them.
+                    header = request.headers.get(botops_act.HEADER)
+                    asked = header or "turn"
                     raw = getattr(request, "_body", b"")
                     # Approving on the person's words: only when they let their Assistant decide approvals (and the
                     # team allows it); otherwise the one sentence it tells them about the setting.
@@ -825,35 +834,27 @@ def create_app(settings=None):
                     state = assistant_decides(request.state.identity.actor) if approves else None
                     if approves and not state["active"]:
                         raise Problem("approve_setting_off", assistant_mod.approve_hint(settings, state), 403)
-                    # A direct setting from the catalogue the person asked for runs on their words the same way.
+                    # A setting from the catalogue is refused here only when only the person may change it (class `person`,
+                    # `require_direct_setting`).
                     setting = (not approves and request.state.identity.via == "assistant"
-                               and assistant_mod.instructed_setting(request.method, request.url.path, raw))
-                    # An org change they asked for (a Strategy Bot suggestion they said to make) runs the same way.
-                    org = (not approves and request.state.identity.via == "assistant"
-                           and assistant_mod.instructed_org(request.method, request.url.path, raw))
+                               and assistant_mod.catalogue_setting(request.method, request.url.path, raw))
                     # The owner's yes to a goal read-back in their own Assistant chat (backend/goal_read_back.py): the
                     # goal, measure and suggestion routes save exactly what it read back, or nothing (`not_agreed`).
                     goal_yes = (not approves and goal_read_back.strategy_turn(request.state.identity)
                                 and goal_read_back.saving(request.method, request.url.path))
                     # The owner's "no" to a suggestion in their chat (backend/goal_read_back.py `turns_down`): admitted on
-                    # their cited turn, and not on the autonomous-action setting, which only gates the other instructed writes.
+                    # their cited turn, and not on the autonomous-action setting, which only gates the other writes.
                     goal_no = (not approves and asked and request.state.identity.via == "assistant"
                                and goal_read_back.turns_down(request.method, request.url.path))
-                    if goal_yes and not asked:
+                    if goal_yes and not header:
                         raise goal_read_back.not_agreed("A goal change is saved only on the owner's yes to its "
                                                         "read-back, citing it (`--on-behalf-of turn`)")
-                    if not goal_yes and not goal_no and not (asked and request.state.identity.via == "assistant" and assistant_direct()
-                            and (setting or org or assistant_instructed(request.method, request.url.path, raw,
-                                                                 decides=bool(approves)))):
-                        raise Problem("confirm_required", "The " + settings.assistant_name + " may not do this on its "
-                                      "own. A task change, comment or link, declining an approval, answering a bot's "
-                                      "question, a direct setting (`hub settings set`) or an org change (groups, leads, "
-                                      "reports to) that the person clearly asked for in this chat runs when you cite their "
-                                      "message (`--on-behalf-of turn`). Otherwise propose it with `hub assistant propose` "
-                                      "(or POST /api/v2/assistant/actions), several actions on one card (path "
-                                      "/api/v2/assistant/batch); approving is a card unless the person lets you "
-                                      "decide approvals, then their cited words. The person confirms a card in "
-                                      + settings.app_name, 403)
+                    # Every write the turn makes is admitted on its cited words, except what the Assistant may not do as the
+                    # person (`admits_on_turn`); an approve is admitted only on its read-back and the person's yes (`approves`).
+                    admitted = (request.state.identity.via == "assistant" and assistant_direct()
+                                and (approves or assistant_mod.admits_on_turn(request.method, request.url.path, raw)))
+                    if not goal_yes and not goal_no and not admitted:
+                        raise Problem("confirm_required", assistant_confirm_hint(), 403)
                     def cited():
                         with store.read() as c:
                             if goal_yes:
@@ -866,7 +867,13 @@ def create_app(settings=None):
                                 return {**record, "assistant": request.state.identity.task_actor,
                                         **goal_read_back.agreement(c, request.state.identity, record["cited"],
                                                                    request.method, request.url.path, raw, auth=auth)}
-                            record = assistant_instruction(c, request.state.identity, asked)
+                            try:
+                                record = assistant_instruction(c, request.state.identity, asked)
+                            except Problem:
+                                if header:
+                                    raise
+                                # No message of the person's own is behind this run, so it is a card, as it always was.
+                                raise Problem("confirm_required", assistant_confirm_hint(), 403) from None
                             assistant_mod.require_on_task(c, auth, request.state.identity, request.url.path)
                             if setting:
                                 def trial(e, target, body):
