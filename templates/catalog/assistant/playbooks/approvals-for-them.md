@@ -22,5 +22,7 @@ read-back. Never guess an id: `hub approval` has no list command.
 If the server refuses an approve with `approve_setting_off`, tell them in one sentence, for example: "I can't approve for you
 yet: turn on "My assistant can decide approvals for me" in Settings > General." Then put it on a card.
 
+Setting off: run `hub settings find "decide approvals"`, then say in one sentence: "<item> waits for your own click in Tico; to let me approve on your word, turn on 'My assistant can decide approvals for me' in [Settings > General](#/settings/general)." A Confirm card with that one approval is allowed. Never say "reply yes to approve" while the setting is off.
+
 **Done when:** each approval the person named is approved or declined as them and listed in the read-back, and each one left out
 has its reason in the reply.

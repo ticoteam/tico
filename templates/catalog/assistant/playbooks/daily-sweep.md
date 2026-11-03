@@ -12,7 +12,7 @@ Inputs: `hub needs-you show` (the exact counts by kind and by the bot that asked
 3. Build ONE batch for that person: a close for each id, as `{"path": "/api/v2/tasks/<id>", "body": {"close": true}}`, up to 100
    steps. Never a status filter: only the ids you picked.
 4. Propose it for that person: `hub assistant propose --for human:<person id> --summary "<the closes, with counts; the source
-   to stop, one line>" --path /api/v2/assistant/batch --body '<the batch JSON>'`. One card per person, however many items: done, duplicate and superseded tasks all go on it. Identical items (same title, same source) go on it together, as one line, and all are closed in the batch, the newest included.
+   to stop, one line>" --path /api/v2/assistant/batch --body '<the batch JSON>'`. One card per person, however many items: done, duplicate and superseded tasks all go on it. Propose once; never withdraw and re-propose it. Identical items (same title, same source) go on it together, as one line, and all are closed in the batch, the newest included.
 5. The stop for a source is a separate step once the batch accepts it: an automation pause (`hub automation update <id>
    --disable --summary "<why>"`) or a rule (`hub rules add`). Until then, name the source and its stop in the card's summary,
    and say the stop still needs the person's click in Tico. Do not put a stop in the batch if the server refuses it: the refusal
@@ -20,6 +20,6 @@ Inputs: `hub needs-you show` (the exact counts by kind and by the bot that asked
 6. Only if `--for` is refused (the server does not take it on this Tico yet) or the proposal is refused: file one task for the
    person instead, and do not retry. `hub task create --owner human:<person id> --title "Daily tidy: <N> done or duplicate items,
    and one source to stop" --body "<the list, with links>"`.
-7. Your final reply is the person's DM summary: three lines at most, what was found and what confirming does. No operator notes or commit details. Send no message with `hub message send`.
+7. Your final reply is the person's DM summary: three lines at most, what was found and what confirming does. Address them as "you", never by name, "she" or "her". No operator notes or commit details. Send no message with `hub message send`.
 
 Close nothing directly: no `hub task close`, no bulk close, no decline, no answer. Those are the person's, and go on the card.
