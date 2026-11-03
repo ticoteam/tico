@@ -86,7 +86,8 @@
     - '^question ask\b'
     - '^note create\b'
     - '^task create\b.*botops'
-    - '^bot (model|task-model|update|pause|resume|archive) copywriter\b(?!\s*$)'
+    - '^bot (pause|resume|archive) copywriter\b'
+    - '^bot (model|task-model|update) copywriter\b(?!\s*$)'
   reply: |
     Applies the change itself. It sets Sales and Pricing, the two Codex bots, to gpt-6-luna at xhigh, one bot model call each.
     It does not send the change through BotOps, does not message anyone, and leaves Copywriter alone. The reply is one to three
@@ -132,9 +133,9 @@
         tasks: []
         notices: []
   must_not:
-    - '^(question answer|answer|thread reply|batch respond)\b'
-    - '^(task comment|message reply|note create)\b.*(?i:name-level|every key|all keys|staff-only)'
-    - '^task (close|done|bulk close)\b'
+    - '^(question answer|answer|thread reply|batch respond|task ask-resolve)\b'
+    - '^(task comment|message reply|note create)\b(?!.*(?i:\b(question|open|unanswered|still|not yet)\b)).*(?i:name-level)'
+    - '^task (close|done|bulk close|bulk status (done|closed))\b|^task update\b.*--status[= ](done|closed)\b'
     - '^message send(?! -h\b| --help)'
   reply: |
     Dana's words are about adding gpt-6.1-terra as a model like any other model. They do not answer either open question on the

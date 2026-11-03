@@ -820,11 +820,13 @@ def run_sample(case, sample, args, outdir):
 def judge(case, reply, lines, attached, args):
     if not case.get("reply"):
         return {"pass": True, "score": 5, "why": "no rubric"}
-    canned = json.dumps([{"matches": h["match"], "returns": h.get("out", "")} for h in case.get("hub") or []],
-                        indent=1)[:4000]
+    # A row's `after` entries are what the same read returns once a write they name has run (a read-back).
+    canned = json.dumps([{"matches": h["match"], "returns": h.get("out", ""),
+                          **({"after_a_write": [{"when": a["when"], "returns": a["out"]} for a in h["after"]]}
+                             if h.get("after") else {})} for h in case.get("hub") or []], indent=1)[:6000]
     prompt = f"""You grade one turn of an AI assistant that works for one person in a company work app (Tico). Be strict but
 fair: judge only against the rubric, not style. The assistant's hub CLI calls are listed; a call marked FAILED did not
-work (a canned failure or a rejected argument), so it does not count as done. The CANNED RECORD is what the hub returned for the calls the grader scripted; numbers in the reply must match it.
+work (a canned failure or a rejected argument), so it does not count as done. The CANNED RECORD is what the hub returned for the calls the grader scripted; numbers in the reply must match it. A row's after_a_write is what that read returns once a write its `when` names has run.
 
 THE PERSON WRITING: Dana (human:dana), the owner of this Tico workspace. The assistant's reply is addressed to Dana, so
 "you" in the reply means Dana. A record that says "Dana" describes the same person as "you"; do not mark that wrong.
