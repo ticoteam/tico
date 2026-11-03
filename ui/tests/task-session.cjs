@@ -250,12 +250,13 @@ async function answered(viewport, shot) {
 // the server (preference compose.send_way) and read again after a reload; every comment names it. Set as goal is for
 // one comment. A reader who may not steer gets the nearest way they may use, and a task with no bot has a plain Send
 // and no caret.
-async function deliveryChoice(viewport, shot) {
+async function deliveryChoice(viewport, shot, theme = 'light') {
   const browser = await launch();
   try {
     const phone = viewport.width < 761;
     const ctx = await browser.newContext({viewport, serviceWorkers: 'block', ...(phone ? {isMobile: true, hasTouch: true} : {})});
     const page = await ctx.newPage();
+    await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
     const errors = [];
     const plan = {id: 't-plan', title: 'Plan the launch', owner_id: 'human:ana', requester_id: 'bot:lead', status: 'open',
       lane: 'company', version: 1, created_at: at(30), updated_at: at(5), conversation_id: 'r-plan'};
@@ -346,6 +347,7 @@ async function deliveryChoice(viewport, shot) {
     // Queue: the icon changes, the comment names it, and it is kept on the server.
     await pick('queue');
     assert.deepEqual(await looks(), {shows: 'queue:', label: 'Send, queue', badge: ''});
+    if (shot) await page.screenshot({path: shot.replace('.png', '-queue.png'), clip: await modal.locator('.task-pill').boundingBox()});
     assert.equal((await send('Billing first, then the docs.')).delivery, 'queue');
     await page.waitForFunction(() => !SEND_WAY_TIMER);
     assert.deepEqual(prefPosts.at(-1), ['compose.send_way', 'queue']);
@@ -353,6 +355,7 @@ async function deliveryChoice(viewport, shot) {
     // Defer 4h: a clock with a 4h badge, and it stays after the send.
     await pick('defer:4h');
     assert.deepEqual(await looks(), {shows: 'defer:4h', label: 'Send, defer 4h', badge: '4h'});
+    if (shot) await page.screenshot({path: shot.replace('.png', '-defer.png'), clip: await modal.locator('.task-pill').boundingBox()});
     assert.deepEqual(await send('After lunch is fine.'), {text: 'After lunch is fine.', public: false, delivery: 'defer', defer_for: '4h'});
     assert.deepEqual(await looks(), {shows: 'defer:4h', label: 'Send, defer 4h', badge: '4h'});
     // A press outside closes the menu.
@@ -402,6 +405,7 @@ async function deliveryChoice(viewport, shot) {
     assert.deepEqual((await ways()).filter(w => !w.startsWith('defer')), []);
     await page.keyboard.press('Escape');
     assert.deepEqual(await send('Deferred'), {text: 'Deferred', public: false, delivery: 'defer', defer_for: 'never'});
+    await page.waitForFunction(() => !SEND_WAY_TIMER);
     assert.equal(prefs['compose.send_way'], 'steer', 'the kept way stays what the person picked');
 
     // A task with no bot keeps the plain arrow and no caret, and its comment carries no delivery.
@@ -422,6 +426,6 @@ async function deliveryChoice(viewport, shot) {
   await answered({width: 1200, height: 800}, shot('task-session-answered.png'));
   await answered({width: 390, height: 844}, shot('task-session-answered-phone.png'));
   await deliveryChoice({width: 1200, height: 800}, shot('task-session-delivery.png'));
-  await deliveryChoice({width: 390, height: 844}, shot('task-session-delivery-phone.png'));
+  await deliveryChoice({width: 390, height: 844}, shot('task-session-delivery-phone.png'), 'dark');
   console.log('ok');
 })().catch(e => { console.error(e); process.exit(1); });
