@@ -1097,3 +1097,77 @@ def test_an_api_key_subscriptions_month_cost_is_the_measured_cost_of_its_runs(ap
         cost = c.execute("SELECT est_cost_usd FROM turns WHERE id=?", (turn["id"],)).fetchone()[0]
     assert cost and cost > 0
     assert listed(api)[0]["usage"]["cost_usd_month"] == round(cost, 2)
+
+
+def roster(api, pid, **fields):
+    """Mark a person on the roster: hidden (left) or sign_in False (switched off)."""
+    with api.app.state.store.transaction() as c:
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        next(p for p in people["people"] if p["id"] == pid).update(fields)
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(people),))
+
+
+def test_a_subscription_is_owned_by_a_person_of_the_company_the_adder_unless_named(api):
+    setup(api)
+    company(api)
+    mine = add(api)
+    assert mine["owner_id"] == "human:ana" and mine["owner_name"] == mine["added_by_name"] != ""
+    theirs = post(api, "model-subscriptions", {"kind": "claude_token", "secret": TOKEN, "name": "Cara Max",
+                                               "owner_id": "cara"}, "ben-test")
+    assert (theirs["added_by"], theirs["owner_id"]) == ("human:ben", "human:cara")
+    # Only an active person of this company: not someone unknown, a bot, Tico support, one who left or is switched off.
+    for owner in ("human:eve", "bot:ops", "tico-support", "", "service:x"):
+        refused = post(api, "model-subscriptions", {"kind": "claude_token", "secret": TOKEN, "name": "X",
+                                                    "owner_id": owner}, expected=422)
+        assert refused["error"]["code"] == "owner"
+    post(api, f"model-subscriptions/{mine['id']}", {"owner_id": "human:ben"}, "cara-test", expected=403)
+    roster(api, "cara", hidden=True)
+    post(api, f"model-subscriptions/{mine['id']}", {"owner_id": "human:cara"}, expected=422)
+    roster(api, "ben", sign_in=False)
+    post(api, f"model-subscriptions/{mine['id']}", {"owner_id": "ben"}, expected=422)
+    roster(api, "ben", sign_in=True)
+    # An owner or admin changes it later (a member does not, above). A rename leaves it as it is.
+    moved = post(api, f"model-subscriptions/{mine['id']}", {"owner_id": "human:ben"}, "ben-test")
+    assert (moved["owner_id"], moved["added_by"]) == ("human:ben", "human:ana")
+    assert post(api, f"model-subscriptions/{mine['id']}", {"name": "Max"})["owner_id"] == "human:ben"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM model_subscriptions WHERE name='X'").fetchone()[0] == 0
+        changed = c.execute("SELECT detail FROM events WHERE action='subscription.owner_changed'").fetchall()
+    assert [json.loads(d[0]) for d in changed] == [{"from": "human:ana", "to": "human:ben"}]
+
+
+def test_an_api_key_has_no_owner_and_a_company_saves_many(api):
+    setup(api)
+    company(api)
+    keys = [add(api, "anthropic_key", "sk-ant-api03-" + str(n) * 20, name=f"Key {n}") for n in range(3)]
+    assert [(k["owner_id"], k["owner_name"]) for k in keys] == [("", "")] * 3
+    assert len({k["id"] for k in keys}) == 3
+    refused = post(api, "model-subscriptions", {"kind": "openai_key", "secret": "sk-" + "c" * 24, "name": "OpenAI",
+                                                "owner_id": "human:ana"}, expected=422)
+    assert refused["error"]["code"] == "owner"
+    post(api, f"model-subscriptions/{keys[0]['id']}", {"owner_id": "human:ana"}, expected=422)
+    assert [k["kind"] for k in MS.kinds() if k["owned"]] == ["claude_token", "codex_login"]
+
+
+def test_the_owner_migration_backfills_a_plan_from_a_person_who_added_it_and_skips_a_new_file():
+    import importlib
+    import sqlite3
+    owner = importlib.import_module("backend.migrations.0059_subscription_owner")
+    conn = sqlite3.connect(":memory:")
+    owner.up(conn)                                                            # a new file: nothing there yet
+    conn.executescript(
+        "CREATE TABLE model_subscriptions(id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, sealed TEXT "
+        "NOT NULL, preview TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT "
+        "'new', status_detail TEXT NOT NULL DEFAULT '', status_at TEXT, added_by TEXT NOT NULL, created_at TEXT NOT NULL,"
+        " updated_at TEXT NOT NULL);"
+        "CREATE TABLE subscription_connects(login_id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',"
+        " subscription_id TEXT NOT NULL DEFAULT '');"
+        "INSERT INTO model_subscriptions(id,name,kind,sealed,added_by,created_at,updated_at) VALUES"
+        " ('a','A','claude_token','x','human:ana','t','t'),('b','B','claude_token','x','keeper','t','t'),"
+        " ('c','C','anthropic_key','x','human:ana','t','t');"
+        "INSERT INTO subscription_connects(login_id,kind) VALUES('l','claude_token');")
+    owner.up(conn)
+    owner.up(conn)                                                            # idempotent
+    assert conn.execute("SELECT id,owner_id FROM model_subscriptions ORDER BY id").fetchall() == [
+        ("a", "human:ana"), ("b", ""), ("c", "")]
+    assert conn.execute("SELECT owner_id FROM subscription_connects").fetchall() == [("",)]

@@ -1,7 +1,7 @@
 """Which computer runs each meeting importer, and how each one is doing.
 
 The owner turns an importer on in Settings and picks the enrolled computer that holds its
-credentials. That computer's `python -m runner importers` job asks `GET /api/v2/runners/importers`
+credentials. That computer's `python -m runner_support importers` job asks `GET /api/v2/runners/importers`
 what to run and reports through `POST /api/v2/imports/sources/{source}/status`. Credentials are never
 stored here: they live in `secrets/<file>` on the computer (docs/meetings.md).
 """

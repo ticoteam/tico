@@ -233,3 +233,20 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
     assert seen["state"] == "failed" and seen["message"] == "It stopped" and seen["lines"] == []
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] == 0
+
+
+def test_connect_saves_the_owner_named_up_front_and_refuses_one_who_is_not_a_person_here(api):
+    setup(api)
+    company(api)
+    m = computer(api)
+    refused = post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Max", "owner_id": "human:eve"},
+                   expected=422)
+    assert refused["error"]["code"] == "owner" and asked(api, m) == []        # checked before anyone signs in
+    login = post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Ben Max", "owner_id": "ben"})
+    assert send(api, m, login)["state"] == "done"
+    saved = get(api, "model-subscriptions")["subscriptions"]
+    assert [(s["name"], s["added_by"], s["owner_id"]) for s in saved] == [("Ben Max", "human:ana", "human:ben")]
+    # A reconnect keeps the owner.
+    login = post(api, "model-subscriptions/connect", {"subscription": saved[0]["id"]})
+    assert send(api, m, login, OTHER)["state"] == "done"
+    assert get(api, "model-subscriptions")["subscriptions"][0]["owner_id"] == "human:ben"

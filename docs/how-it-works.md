@@ -144,9 +144,11 @@ The database itself is readable with plain SQL (`hub sql`, the SQL page, `POST /
 one `SELECT` at a time, each caller seeing only what the JSON API would show it, credentials never
 ([Querying Tico with SQL](hub-sql.md)).
 
-**Your Mac's runner** — the Rust runner `tico-runner` (`runner-rs/`), with Python helpers in `runner/` for the side
+**Your Mac's runner** — the Rust runner `tico-runner` (`runner-rs/`), with Python helpers in `runner_support/` for the side
 jobs, registered once with **Add computer** in **Settings → Computers** (`scripts/setup-runner.sh`, credential in
-`~/.config/tico/runner.json`). Four launchd jobs, installed and managed with `scripts/tico`:
+`~/.config/tico/runner.json`). Four launchd jobs, installed and managed with `scripts/tico`. Their plists name
+`runner`, which forwards to `runner_support/` (runner/__init__.py), so a computer moved back to an older release still
+starts them:
 
 | Job | Command | What it does |
 |---|---|---|
@@ -640,7 +642,7 @@ made or revoked is an `events` row (`token.create`, `token.revoke`).
 |---|---|
 | `backend/` | the cloud API, authorization, write layer, scheduler, backups (FastAPI, SQLite) |
 | `runner-rs/` | the local runner (`tico-runner`): enrolment, readiness, leases, runs, harnesses, updates |
-| `runner/` | the runner's Python helpers: the `python -m runner run` shim, connectors, Close call and meeting import, catalog set-up, the update process |
+| `runner_support/` | the runner's Python helpers: the `python -m runner_support run` shim, connectors, Close call and meeting import, catalog set-up, the update process |
 | `clients/` | what bots and the runner call: the `hub` CLI, the HTTP client, attachment download, routine validation, preflight, the docs read and write commands |
 | `connectors/` | shared Slack, mail/calendar and browser adapters bots use instead of vendor APIs |
 | `integrations/` | one page per outside system (what it is, how a bot uses it, rules, recipes) and the query lists; served as **Tools** and `hub tool show <service>`, with the learnings bots add |
