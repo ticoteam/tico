@@ -143,7 +143,7 @@ function liveWire() {
   // My dashboard reads itself again when what its cards show may have moved (ui/app/dashboard.js dashFollow).
   for (const topic of ['tasks', 'needs-list', 'threads']) liveOn(topic, dashFollow);
   // Away longer than the server keeps: read everything once.
-  liveOn('reset', () => { if (TASKS_ST) TASKS_ST.since = null; liveSoon('refresh', () => refresh(true), 100); });
+  liveOn('reset', () => { if (TASKS_ST) TASKS_ST.since = null; if (S.lastRead.tasks) S.lastRead.tasks.since = null; liveSoon('refresh', () => refresh(true), 100); });
   liveStart();
 }
 // A tab back from sleep or from a dropped network catches its task list up at once: a delta read from the list's
