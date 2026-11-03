@@ -444,6 +444,11 @@ STABLE = [
      "AssistantActionResult"),
     ("/api/v2/assistant/actions/{aid}/cancel", "post", "Assistant", "cancelAssistantAction",
      "Drop a proposal; it never runs", "AssistantActionResult"),
+    ("/api/v2/assistant/actions/{aid}/withdraw", "post", "Assistant", "withdrawAssistantAction",
+     "Any teammate (a person or a bot) withdraws a waiting card: it never runs, and the owner's chat says who withdrew it. "
+     "Only the owner confirms it; the owner cancels it instead", "AssistantActionResult"),
+    ("/api/v2/assistant/proposals", "get", "Assistant", "listAssistantProposals",
+     "The Confirm cards still waiting for their owner, to find one to withdraw: filter by proposer and/or owner", None),
     ("/api/v2/assistant/settings", "get", "Assistant", "getAssistantSettings",
      "Your Assistant settings: whether it decides approvals for you, and whether the team allows it", None),
     ("/api/v2/assistant/settings", "post", "Assistant", "setAssistantSettings",
@@ -2656,6 +2661,48 @@ SCHEMAS.update({
     "CallList": obj({"calls": items(ref("CallSummary")), "next_before": "n", "available": "b"}),
     "CallJoin": obj({"call": ref("Call"), "url": "s", "expires_in": "i", "token": "s"}),
     "CallToken": obj({"url": "s", "expires_in": "i", "token": "s"}),
+})
+
+
+# Feedback on bot work (backend/feedback.py): 👍/👎 with a reason on a message, task or approval a bot made.
+TAGS["Feedback"] = ("A person's 👍 or 👎 on a message, task or approval a bot made, with an optional reason: a 👎 can tell "
+                    "the bot (a note for its next run in that conversation) or become an org rule. Every answer leaves "
+                    "out feedback on what the caller cannot read.")
+STABLE.extend([
+    ("/api/v2/feedback", "post", "Feedback", "giveFeedback",
+     "Rate a message, task or approval a bot made; rating again replaces it. tell_bot (a 👎 only) leaves the bot a note",
+     "Feedback"),
+    ("/api/v2/feedback", "get", "Feedback", "listFeedbackMarkers",
+     "On these subjects the caller reads (subject_ids, comma-separated, at most 200): the caller's own feedback and "
+     "everyone's up/down counts",
+     "FeedbackMarkers"),
+    ("/api/v2/feedback/list", "get", "Feedback", "listFeedback",
+     "Feedback newest first, paged and byte-capped, by bot, rating and since, on subjects the caller reads", "FeedbackPage"),
+    ("/api/v2/feedback/recent-reasons", "get", "Feedback", "listRecentFeedbackReasons",
+     "The caller's five latest distinct reasons, each with how often they used it", "FeedbackReasons"),
+    ("/api/v2/feedback/{feedback_id}", "delete", "Feedback", "removeFeedback",
+     "Remove my feedback; a note it left that no run carried yet is taken back", "FeedbackRemoved"),
+    ("/api/v2/feedback/{feedback_id}/rule-draft", "post", "Feedback", "draftFeedbackRule",
+     "A one-sentence rule drafted from my 👎; stores nothing. With no model the reason comes back, drafted false",
+     "FeedbackRuleDraft"),
+    ("/api/v2/feedback/{feedback_id}/rule", "post", "Feedback", "makeFeedbackRule",
+     "Make my 👎 an internal org rule for the bot or all bots: active when I manage its Who, else suggested",
+     "FeedbackRuleMade"),
+])
+SCHEMAS.update({
+    "Feedback": obj({"id": "s", "person_id": "s", "subject_type": {"enum": ["message", "task", "approval"]},
+                     "subject_id": "s", "bot_id": "s", "rating": {"enum": ["up", "down"]}, "reason": "s",
+                     "outcome": {"enum": ["none", "told_bot", "rule"]}, "note_id": "n",
+                     "note_status": {"enum": ["waiting", "carried", "settled", "canceled", None]}, "org_rule_id": "n",
+                     "rule_status": {"enum": ["suggested", "active", "retired", None]}, "created_at": "s",
+                     "updated_at": "s"}),
+    "FeedbackMarkers": obj({"items": items(ref("Feedback")),
+                            "counts": items(obj({"subject_id": "s", "up": "i", "down": "i"}))}),
+    "FeedbackPage": obj({"items": items(ref("Feedback")), "next_cursor": "n"}),
+    "FeedbackReasons": obj({"reasons": items(obj({"text": "s", "count": "i"}))}),
+    "FeedbackRemoved": obj({"ok": "b", "id": "s"}),
+    "FeedbackRuleDraft": obj({"text": "s", "drafted": "b"}),
+    "FeedbackRuleMade": obj({"feedback": ref("Feedback"), "rule": "o"}),
 })
 
 

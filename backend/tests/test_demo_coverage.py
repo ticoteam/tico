@@ -43,6 +43,8 @@ PAGES = {
     "connections": page("connections", "connections"),
     "meetings": page("meetings", "meetings"),
     "threads": page("threads", "threads"),
+    # The sidebar's Inbox header opens the Threads page on its Inbox view: the same threads.
+    "inbox": page("threads", "threads"),
     "strategy": page("strategy", "bets"),
     "growth": page("growth/numbers", "months", months=24),
     "finance": page("finance/transactions", "rows"),

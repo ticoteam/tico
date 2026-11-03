@@ -1262,6 +1262,53 @@ def test_an_older_connection_whose_opening_went_to_zero_gets_it_back_from_the_ba
         assert _opening(c) == made
 
 
+def test_card_payments_taken_in_before_they_could_pair_pair_on_a_later_pass(books, monkeypatch):
+    """Both sides of an IO autopay taken in by a release that could not pair them (bank side on Other, card side
+    waiting): the next due pass pairs them as a transfer. One with two possible bank sides still waits."""
+    from backend.finance import banking
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.read() as c:
+        cards = str(c.execute("SELECT a.code FROM fin_money_accounts m JOIN fin_accounts a ON a.id=m.account_id "
+                              "WHERE m.provider_account_id='credit-io'").fetchone()[0])
+    fake.txns["old-out"] = _txn("old-out", "acct-chk", -105.5, "other", day="2026-10-01")
+    fake.txns["old-in"] = _txn("old-in", "credit-io", 105.5, "other", day="2026-10-01")
+    fake.txns["amb-a"] = _txn("amb-a", "acct-chk", -7.0, "other", day="2026-10-05")
+    fake.txns["amb-b"] = _txn("amb-b", "acct-chk", -7.0, "other", day="2026-10-05")
+    fake.txns["amb-in"] = _txn("amb-in", "credit-io", 7.0, "other", day="2026-10-05")
+    with monkeypatch.context() as m:
+        m.setattr(banking, "_card_payment", lambda *a: False)      # the release before pairing
+        m.setattr(banking, "pair_card_payments", lambda *a: 0)
+        sync_once(books, fake)
+    with books.read() as c:
+        assert _row(c, "old-in")[1] is None and ("6900", 10_550) in _codes(c, _row(c, "old-out")[1])
+    sync_once(books, fake, LATER)
+    with books.read() as c:
+        entry = _row(c, "old-in")[1]
+        assert entry and tuple(_row(c, "old-out")) == ("posted", entry)
+        assert _codes(c, entry) == sorted([("1000", -10_550), (cards, 10_550)])
+        assert _row(c, "amb-in")[1] is None
+
+
+def test_a_mirror_leaves_both_sides_of_a_card_payment_for_the_provider(books):
+    """Mirrored books: an IO autopay's bank and card sides wait for the provider's entries. The later pass pairs
+    nothing and writes no local transfer."""
+    from backend.finance.store import ledger as SL
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        c.execute("INSERT INTO fin_connections(id, provider, purpose, created_at, created_by, name) "
+                  "VALUES('conn-books','quickbooks','books',?,?,'Acme books')", (LATER, "human:owner"))
+        SL.set_book_mode(c, SL.book(c).id, "mirror", "conn-books")
+    fake.txns["pay-out"] = _txn("pay-out", "acct-chk", -105.5, "other", day="2026-10-01")
+    fake.txns["pay-in"] = _txn("pay-in", "credit-io", 105.5, "other", day="2026-10-01")
+    sync_once(books, fake)
+    sync_once(books, fake, LATER)
+    with books.read() as c:
+        assert _row(c, "pay-out")[1] is None and _row(c, "pay-in")[1] is None
+        assert c.execute("SELECT COUNT(*) FROM fin_entries WHERE source='bank'").fetchone()[0] == 0
+
+
 def test_names_made_before_bare_names_lose_the_doubled_last_four_on_the_next_pass(books):
     """A money account named with its own last four, and the line Finance made from that name, come back bare on the
     next pass; a line a person renamed keeps its name."""

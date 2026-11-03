@@ -57,6 +57,7 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     await page.locator('.rr-panel[data-party="bot:engineering-lead"] [data-rr-add-rule]').click({timeout: t(15000)});
     const modal = page.locator('#ru-add');
     await modal.locator('textarea[name=text]').fill('Ask before a production deploy');
+    await modal.locator('[data-ru-adv]').click();
     assert.match(await modal.locator(`[data-scope="who"] .ru-chip`).innerText(), /engineering.lead/i);
     await modal.locator('[data-scope="with"] [data-seg="groups"]').click();
     await modal.locator('[data-scope="with"] .ru-addsel').selectOption({label: 'Engineering'});
@@ -105,6 +106,7 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     await page.locator('.rr-panel[data-party="bot:engineering-lead"] [data-rr-add-rule]').click({timeout: t(15000)});
     const threaded = page.locator('#ru-add');
     await threaded.locator('textarea[name=text]').fill('Post deploy notes in the thread');
+    await threaded.locator('[data-ru-adv]').click();
     assert.equal(await threaded.locator('input[name=where_kind]').count(), 0);
     // If broken in Add rule: Ask first with a reviewer.
     await threaded.locator('[data-ru-seg="if_broken"] [data-v="escalate"]').click();

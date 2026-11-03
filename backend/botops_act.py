@@ -627,8 +627,10 @@ def parse_body(raw):
 
 
 # BotOps' own: the run's plumbing and what BotOps says itself. Never switched to the requester by default.
+# Taking back its own Confirm card, and listing them (backend/assistant.py): BotOps' own cards, never run for a person.
 OWN = re.compile(API + r"(credential-runtime|runner-credential-.*|runner-watcher-credentials|attempts.*|jobs.*|runners/.*|"
-                 r"messages(/.*)?|chat/.*|conversations/.*|bots/" + "botops" + r"(/.*)?|files/(uploads|imports)|uploads/.*|me(/.*)?)")
+                 r"messages(/.*)?|chat/.*|conversations/.*|bots/" + "botops" + r"(/.*)?|files/(uploads|imports)|uploads/.*|me(/.*)?|"
+                 r"assistant/proposals|assistant/actions/" + _S + r"/withdraw)")
 
 
 def default_delegable(method, path, body=None, query=None):

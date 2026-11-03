@@ -33,6 +33,7 @@ from . import federation_threads as T
 from . import threads as CORE
 from . import hubdb as H
 from . import org_rule_check as OR
+from . import outbox as O
 from . import screening
 from .store import Problem
 
@@ -42,6 +43,7 @@ CATCH_UP_QUIET = 86_400     # seconds a shared thread stays quiet before its rep
 MESSAGE_KINDS = ("say", "ask", "answer")          # what a remote author may write (core: say, ask or answer)
 RETRY_FIRST = 15            # seconds before a failed send is tried again; doubled per attempt
 BACKOFF_MAX = 300
+SCHEDULE = O.Doubling(RETRY_FIRST, BACKOFF_MAX)     # the outbox and the deferrals both wait this long per failed try
 ROSTER_NAME = re.compile(r"(human|bot):[^@\s]{1,200}(@gi_[0-9a-f]{24})?")
 REASON_NOTES = {"rules": "Tico held this message, so it did not reach the thread.",
                 "screening": "Tico held this message, so it did not reach the thread.",
@@ -1045,9 +1047,10 @@ def held_heads(c, now, limit=50):
 
 def held_again(c, held, reason, now):
     attempts = held["attempts"] + 1
-    wait = min(BACKOFF_MAX, RETRY_FIRST * 2 ** min(attempts, 8))
+    wait = SCHEDULE.after(attempts)
     c.execute("UPDATE federation_deferrals SET attempts=?, reason=?, next_attempt_at=? WHERE id=?",
               (attempts, reason, now + wait, held["id"]))
+    O.count("federation_deferrals", "retry")
 
 
 def held_done(c, held_id):
@@ -1184,9 +1187,10 @@ def retry(c, row, code, now):
     """A send that may go later: tried again after the backoff. The delivery keeps the count, unless the peering is merely
     paused, which is no failure."""
     attempts = row["attempts"] + 1
-    wait = min(BACKOFF_MAX, RETRY_FIRST * 2 ** min(attempts, 8))
+    wait = SCHEDULE.after(attempts)
     c.execute("UPDATE federation_outbox_items SET attempts=?, next_attempt_at=?, last_error=? WHERE id=?",
               (attempts, now + wait, code, row["id"]))
+    O.count("federation_outbox_items", "retry")
     delivery = delivery_of(c, row) if code != "paused" else None
     if delivery:
         T.note_failure(c, delivery, code)

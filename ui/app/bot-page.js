@@ -696,8 +696,9 @@ function botThreadShow(kind) {
   if (BOT.thread?.kind === kind && BOT.thread.view.host === host && !BOT.thread.view.gone) return;
   botThreadStop();
   const actor = 'bot:' + BOT.slug;
-  // The thread's actions (call, Members, menu) sit in the Home/DM bar instead of a title line.
-  const acts = {header: 'compact', actsHost: $('#pane-chat .bot-talk-acts')};
+  // The thread's actions (call, Members, menu) sit in the Home/DM bar instead of a title line. Both keep the bot
+  // chat's goal (chat-goal.js): the target in the composer, the pinned goal above the thread.
+  const acts = {header: 'compact', actsHost: $('#pane-chat .bot-talk-acts'), goals: BOT.slug};
   const view = threadMount(host, kind === 'home' ? {home: actor, ...acts} : {dm: actor, ...acts});
   BOT.thread = {kind, view};
 }
