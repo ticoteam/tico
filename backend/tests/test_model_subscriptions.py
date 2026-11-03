@@ -1178,7 +1178,7 @@ def usage_of(api, sid):
     return next(s for s in listed(api) if s["id"] == sid)["usage"]
 
 
-def window_reading(used, resets_in, reported_ago=timedelta(minutes=1)):
+def window_reading(used, resets_in, reported_ago=timedelta(0)):
     """A usage window as a computer reports it: `used` percent (None when the plan sends none), resetting `resets_in`
     after the reading, which was taken `reported_ago` ago."""
     reported = datetime.now(timezone.utc) - reported_ago
@@ -1196,6 +1196,24 @@ def beat(api, m, profiles, *, takes=True, logins=True, signed_in=True, runtime="
     return post(api, "runners/heartbeat", {
         "version": "test", "platform": "test", "capabilities": capabilities, "readiness": readiness,
         "profiles": [{"name": name, "runtimes": runtimes} for name, runtimes in profiles.items()]}, token=m["token"])
+
+
+NOT_SINCE = "No usage reported since this subscription was added"
+
+
+def runtime_state(account=None, **windows):
+    """A runtime as a computer's readiness reports it on its ordinary home: signed in (as `account`'s email when given),
+    with its windows (`weekly`, `five_hour`)."""
+    state = {"installed": True, "authenticated": "ready", "signed_in": True, **windows}
+    return {**state, "account": {"email": account}} if account else state
+
+
+def home_beat(api, m, **runtimes):
+    """A heartbeat from a computer on its ordinary home: readiness names no profile ("", so no profile row) and carries
+    each runtime's windows itself."""
+    return post(api, "runners/heartbeat", {
+        "version": "test", "platform": "test", "capabilities": [MS.CAPABILITY, "computer_logins_v1"],
+        "readiness": {"schema_version": 1, "bots": {}, "computer_profile": "", "runtimes": runtimes}}, token=m["token"])
 
 
 def test_a_plan_says_why_it_shows_no_usage_yet(api):
@@ -1225,8 +1243,9 @@ def test_a_plan_shows_the_most_used_window_its_computer_reads_even_at_zero(api):
     company(api)
     sid = add(api)["id"]
     m = runner(api, label="Plan Mac")
-    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(0, timedelta(days=3))}}})
+    beat(api, m, {})
     give(api, m, "claude", sid)
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(0, timedelta(days=3))}}})
     usage = usage_of(api, sid)
     assert (usage["window"], usage["used_pct"]) == ("week", 0) and "reason" not in usage
     # Its 5-hour window is the most used now, then its week again.
@@ -1262,9 +1281,114 @@ def test_only_a_computer_that_names_its_default_login_and_takes_plans_reads_usag
     company(api)
     sid = add(api)["id"]
     m = runner(api, label="Plan Mac")
+    beat(api, m, {}, logins=False)
+    give(api, m, "claude", sid)
     weekly = {"own": {"claude": {"signed_in": True, "weekly": window_reading(30, timedelta(days=3))}}}
     beat(api, m, weekly, logins=False)
-    give(api, m, "claude", sid)
     assert usage_of(api, sid)["reason"] == "Update the computer to see usage"
     beat(api, m, weekly)
     assert usage_of(api, sid)["used_pct"] == 30
+
+
+def test_a_reading_from_before_a_plan_was_given_to_the_computer_is_not_its_usage(api):
+    setup(api)
+    company(api)
+    sid = add(api)["id"]
+    m = runner(api, label="Plan Mac")
+    # The computer's own login was at 88% before the plan reached it: that is not this plan's usage.
+    home_beat(api, m, claude=runtime_state(weekly=window_reading(88, timedelta(days=3))))
+    give(api, m, "claude", sid)
+    assert usage_of(api, sid)["reason"] == NOT_SINCE and usage_of(api, sid)["used_pct"] is None
+    home_beat(api, m, claude=runtime_state(weekly=window_reading(45, timedelta(days=3))))
+    assert usage_of(api, sid)["used_pct"] == 45
+
+
+def test_a_new_secret_on_a_plan_ends_the_readings_taken_for_the_old_one(api):
+    setup(api)
+    company(api)
+    sid = add(api)["id"]
+    m = runner(api, label="Plan Mac")
+    beat(api, m, {})
+    give(api, m, "claude", sid)
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(30, timedelta(days=3))}}})
+    assert usage_of(api, sid)["used_pct"] == 30
+    post(api, f"model-subscriptions/{sid}", {"secret": OTHER})     # another account: the readings are not its
+    assert usage_of(api, sid)["reason"] == NOT_SINCE
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(12, timedelta(days=3))}}})
+    assert usage_of(api, sid)["used_pct"] == 12
+
+
+def test_a_chatgpt_reading_on_an_ordinary_home_counts_only_for_the_account_the_plan_is_signed_in_as(api):
+    setup(api)
+    company(api)
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    m = runner(api, label="Plan Mac")
+    home_beat(api, m, codex=runtime_state(account="ana@acme.example"))
+    give(api, m, "codex", sid)
+    home_beat(api, m, codex=runtime_state(account="ana@acme.example", weekly=window_reading(64, timedelta(days=3))))
+    assert usage_of(api, sid)["used_pct"] == 64
+    # The same computer signed in as someone else: that account's usage is not this plan's.
+    home_beat(api, m, codex=runtime_state(account="someone@else.example", weekly=window_reading(99, timedelta(days=3))))
+    assert usage_of(api, sid)["reason"] == NOT_SINCE
+    # A reading that names no account cannot be attributed to the plan either.
+    home_beat(api, m, codex=runtime_state(weekly=window_reading(50, timedelta(days=3))))
+    assert usage_of(api, sid)["reason"] == NOT_SINCE
+
+
+def test_a_computer_on_its_ordinary_home_shows_the_usage_its_own_claude_login_reports(api):
+    setup(api)
+    company(api)
+    sid = add(api)["id"]
+    m = runner(api, label="Plan Mac")
+    home_beat(api, m, claude=runtime_state())
+    give(api, m, "claude", sid)
+    home_beat(api, m, claude=runtime_state(five_hour=window_reading(40, timedelta(hours=2)),
+                                           weekly=window_reading(70, timedelta(days=3))))
+    usage = usage_of(api, sid)
+    assert (usage["window"], usage["used_pct"]) == ("week", 70)
+
+
+def listing_statements(api, monkeypatch):
+    """GET /api/v2/model-subscriptions after one warm-up read, and the SQL statements that request ran."""
+    import contextlib
+    store, seen = api.app.state.store, []
+    get(api, "model-subscriptions")
+    with monkeypatch.context() as patched:
+        for name in ("read", "read_transaction"):
+            def traced(opened=getattr(store, name)):
+                @contextlib.contextmanager
+                def borrowed():
+                    with opened() as c:
+                        c.set_trace_callback(seen.append)
+                        try:
+                            yield c
+                        finally:
+                            c.set_trace_callback(None)
+                return borrowed()
+            patched.setattr(store, name, traced)
+        get(api, "model-subscriptions")
+    return seen
+
+
+def join_home(api, label, claude, codex, used):
+    m = runner(api, label=label)
+    home_beat(api, m, claude=runtime_state(weekly=window_reading(used, timedelta(days=3))),
+              codex=runtime_state(account="ana@acme.example"))
+    give(api, m, "claude", claude)
+    give(api, m, "codex", codex)
+
+
+def test_the_plan_list_runs_the_same_queries_however_many_computers_it_has(api, monkeypatch):
+    setup(api)
+    company(api)
+    claude = add(api)["id"]
+    codex = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    for i in range(3):
+        join_home(api, f"Mac {i}", claude, codex, 10 + i)
+    few = listing_statements(api, monkeypatch)
+    for i in range(3, 12):
+        join_home(api, f"Mac {i}", claude, codex, 10 + i)
+    many = listing_statements(api, monkeypatch)
+    assert any("computer_subscriptions" in sql for sql in many)     # the traced reads are the listing's
+    assert len(many) == len(few)
+    assert [len(row["computers"]) for row in listed(api)] == [12, 12]

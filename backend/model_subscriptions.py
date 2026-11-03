@@ -340,25 +340,60 @@ def covered(ready, runtimes):
 
 
 # ------------------------------------------------------------------------------------------------ views
-def _usage(c, sub):
+def _listing(c, sid=None):
+    """What a plan list reads about plans and their computers, in a fixed number of queries however many plans and
+    computers there are (Settings > Models shows every plan's usage at once): the grants with their computers, each
+    computer's readiness, its named logins' reported runtimes, the login holds, the API keys' month cost and the
+    registry metadata. With `sid`, only that plan's grants and computers are read."""
+    from . import login_holds
+    from .subscriptions import subscription_meta
+    where, args = ("WHERE g.subscription_id=?", (sid,)) if sid else ("", ())
+    grants = {}
+    for g in H._rows(c.execute("SELECT g.subscription_id,g.runner_id,g.runtime,g.updated_at AS granted_at "
+                               f"FROM computer_subscriptions g {where} ORDER BY g.runner_id, g.runtime", args)):
+        grants.setdefault(g["subscription_id"], []).append(g)
+    computers = f"SELECT g.runner_id FROM computer_subscriptions g {where}"
+    runners = {r["id"]: r for r in H._rows(c.execute(
+        f"SELECT * FROM runners WHERE revoked_at IS NULL AND id IN ({computers})", args))}
+    ready = {rid: readiness_document(r["readiness"]) for rid, r in runners.items()}
+    profiles = {(r["runner_id"], r["profile"]): r["runtimes"] for r in H._rows(c.execute(
+        f"SELECT runner_id,profile,runtimes FROM computer_profiles WHERE runner_id IN ({computers})", args))}
+    month = H.now()[:7] + "-01"
+    costs = {r["subscription_id"]: r["cost"] for r in H._rows(c.execute(
+        "SELECT s.subscription_id, coalesce(sum(t.est_cost_usd),0) AS cost FROM attempt_subscriptions s "
+        "JOIN turns t ON t.id=s.attempt_id JOIN attempts a ON a.id=s.attempt_id "
+        "WHERE t.started_at>=? AND coalesce(a.handed_runtime,s.runtime)=s.runtime"
+        + (" AND s.subscription_id=?" if sid else "") + " GROUP BY s.subscription_id", (month, *args[:1])))}
+    holds = {row["key"]: row["value"] for row in c.execute(
+        "SELECT key,value FROM registry_metadata WHERE key>=? AND key<?",
+        (login_holds.PREFIX, login_holds.PREFIX[:-1] + ";"))}
+    return {"grants": grants, "runners": runners, "ready": ready, "profiles": profiles, "costs": costs,
+            "holds": holds, "meta": subscription_meta(c), "people": {}}
+
+
+def _person(c, ctx, pid):
+    if pid not in ctx["people"]:
+        ctx["people"][pid] = H.human(c, H.actor_id(pid)) or {}
+    return ctx["people"][pid]
+
+
+def _usage(c, sub, ctx=None):
     """What is known of a subscription's use without new telemetry: an API key's cost this month from the runs that
     used it; a plan's limit while its hold stands (backend/login_holds.py), else its used percent from its computers'
     reports (`_plan_usage`). A plan always answers: with no reading, `reason` says why in a short line."""
+    from types import SimpleNamespace
     from . import login_holds
+    ctx = _listing(c, sub["id"]) if ctx is None else ctx
     spec = KINDS.get(sub["kind"]) or {}
     if spec.get("billing") == "api":
-        month = H.now()[:7] + "-01"
-        cost = c.execute("SELECT coalesce(sum(t.est_cost_usd),0) FROM attempt_subscriptions s "
-                         "JOIN turns t ON t.id=s.attempt_id JOIN attempts a ON a.id=s.attempt_id "
-                         "WHERE s.subscription_id=? AND t.started_at>=? "
-                         "AND coalesce(a.handed_runtime,s.runtime)=s.runtime", (sub["id"], month)).fetchone()[0]
-        return {"window": None, "used_pct": None, "cost_usd_month": round(float(cost or 0), 2)}
-    hold = login_holds.get(c, "", login_holds.subscription_login(sub["id"]), spec.get("runtime", ""))
+        return {"window": None, "used_pct": None, "cost_usd_month": round(float(ctx["costs"].get(sub["id"]) or 0), 2)}
+    hold = login_holds.get(c, "", login_holds.subscription_login(sub["id"]), spec.get("runtime", ""),
+                           loads=SimpleNamespace(holds=ctx["holds"]))
     if hold and (hold.get("until") or "") > H.now() and not hold.get("capacity"):
         kind = login_holds.window(hold.get("error"))
         window = "week" if "weekly" in kind else "5h" if "5-hour" in kind else None
         return {"window": window, "used_pct": 100, "cost_usd_month": None, "resets_at": hold["until"]}
-    return _plan_usage(c, sub, spec.get("runtime", ""))
+    return _plan_usage(c, sub, spec.get("runtime", ""), ctx)
 
 
 def _reason(text):
@@ -370,34 +405,62 @@ def _at(ts):
     return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
-def _plan_usage(c, sub, runtime):
+def _login_state(c, ctx, runner_id, profile, runtime):
+    """The usage windows and account a login reports on `runtime`: a named login's from its profile row, the computer's
+    own home ("") from its readiness runtimes, which name no profile row. A window is kept only when it passes its
+    checks, and an account only beside a sign-in that is not known to be gone."""
+    from .subscriptions import reported_runtimes, weekly_snapshot
+    if profile:
+        raw = ctx["profiles"].get((runner_id, profile))
+        if raw is None:
+            return {}
+        return reported_runtimes(c, runner_id, profile, raw, ctx["meta"]).get(runtime) or {}
+    state = dict((ctx["ready"][runner_id].get("runtimes") or {}).get(runtime) or {})
+    state["weekly"] = weekly_snapshot(state.get("weekly"))
+    state["five_hour"] = weekly_snapshot(state.get("five_hour"), "five_hour")
+    if state.get("signed_in") is False or not state.get("account"):
+        state.pop("account", None)
+    return state
+
+
+def _plan_identity(sub):
+    """The account a plan is signed in as, where Tico knows it: a ChatGPT login's email (its preview, from the id_token
+    when it was saved). A Claude token names none, so for it only the time a reading was taken can say whose it is."""
+    preview = sub.get("preview") or ""
+    return preview if sub.get("kind") == "codex_login" and "@" in preview else ""
+
+
+def _plan_usage(c, sub, runtime, ctx):
     """A plan's used percent from the computers it is given to. Each signs in with it on its turns, and the runner files
     those turns' usage windows under the computer's default profile (runner-rs drive.rs `remember_weekly`, with the
-    profile `turn_profile` picks, which the heartbeat names as readiness `computer_profile`). So that profile's windows
-    for `runtime` are this plan's. Only a computer whose turns run that way can say so (`runner_takes` and
-    `computer_logins`); an older one's windows belong to its own login, so they are never read. A window whose reset
-    has passed is no longer this reading. The most-used window wins, its freshest report breaking a tie. Otherwise the
-    reason is what the data tells: not on a computer, a reconnect due, a computer too old, a plan that sends no percent,
+    profile `turn_profile` picks, which the heartbeat names as readiness `computer_profile`; "" is its own home). So that
+    profile's windows for `runtime` are this plan's, but only a reading that is this plan's: taken since the plan was
+    given to that computer or last changed (a new value may be another account, a refresh is the same one), and, where
+    the plan names its account, reported for that account. A window whose reset has passed is no longer any reading.
+    The most-used window wins, its freshest report breaking a tie. Otherwise the reason is what the data tells: not on a
+    computer, a reconnect due, a computer too old, a plan that sends no percent, readings from before it was added,
     computers offline, or a computer yet to report."""
     from . import model_login
-    from .subscriptions import WINDOWS, computer_logins, reported_runtimes
-    computers = c.execute("SELECT r.* FROM computer_subscriptions g JOIN runners r ON r.id=g.runner_id "
-                          "WHERE g.subscription_id=? AND r.revoked_at IS NULL ORDER BY r.id", (sub["id"],)).fetchall()
+    from .subscriptions import WINDOWS, computer_logins
+    runners = ctx["runners"]
+    computers = [g for g in ctx["grants"].get(sub["id"], []) if g["runtime"] == runtime and g["runner_id"] in runners]
     if not computers:
         return _reason("Not on a computer yet")
     if sub["status"] == "needs_reconnect":
         return _reason("Reconnect to see usage")
-    readers = [r for r in computers if runner_takes(r) and computer_logins(r)]
+    readers = [g for g in computers if runner_takes(runners[g["runner_id"]])
+               and computer_logins(runners[g["runner_id"]], ctx["ready"][g["runner_id"]])]
     if not readers:
         return _reason("Update the computer to see usage")
     now = datetime.now(timezone.utc)
-    best, percent_missing = None, False
-    for runner in readers:
-        profile = readiness_document(runner["readiness"]).get("computer_profile") or ""
-        found = c.execute("SELECT runtimes FROM computer_profiles WHERE runner_id=? AND profile=?",
-                          (runner["id"], profile)).fetchone()
-        runtimes = reported_runtimes(c, runner["id"], profile, found[0]) if found else {}
-        state = runtimes.get(runtime) or {}
+    account_of_plan = _plan_identity(sub)
+    best, percent_missing, outside = None, False, False
+    for grant in readers:
+        runner_id = grant["runner_id"]
+        profile = ctx["ready"][runner_id].get("computer_profile") or ""
+        state = _login_state(c, ctx, runner_id, profile, runtime)
+        account = (state.get("account") or {}).get("email") or ""
+        since = max(_at(grant["granted_at"]), _at(sub["updated_at"]))
         for window, label in (("weekly", "week"), ("five_hour", "5h")):
             reading = state.get(window)
             if not reading:
@@ -405,6 +468,9 @@ def _plan_usage(c, sub, runtime):
             reported = _at(reading["reported_at"])
             ends = _at(reading["resets_at"]) if reading.get("resets_at") else reported + WINDOWS[window]
             if ends <= now:
+                continue
+            if reported < since or (account_of_plan and account.lower() != account_of_plan.lower()):
+                outside = True
                 continue
             if reading.get("used_percent") is None:
                 percent_missing = True
@@ -417,22 +483,24 @@ def _plan_usage(c, sub, runtime):
         return {"window": label, "used_pct": used, "cost_usd_month": None, "resets_at": resets}
     if percent_missing:
         return _reason("No percentage from the plan")
-    if not any(model_login._online(r) for r in readers):
+    if outside:
+        return _reason("No usage reported since this subscription was added")
+    if not any(model_login._online(runners[g["runner_id"]]) for g in readers):
         return _reason("Its computers are offline")
     return _reason("Waiting for a computer to report")
 
 
-def view(c, sub):
+def view(c, sub, ctx=None):
     """A subscription as Settings > Models lists it: no value, a preview, its status, the computers given it."""
+    ctx = _listing(c, sub["id"]) if ctx is None else ctx
     spec = KINDS.get(sub["kind"]) or {}
-    computers = [r[0] for r in c.execute("SELECT runner_id FROM computer_subscriptions WHERE subscription_id=? "
-                                         "ORDER BY runner_id, runtime", (sub["id"],))]
-    added = H.human(c, H.actor_id(sub["added_by"])) or {}
-    owner = (H.human(c, H.actor_id(sub["owner_id"])) or {}) if sub.get("owner_id") else {}
+    computers = [g["runner_id"] for g in ctx["grants"].get(sub["id"], [])]
+    added = _person(c, ctx, sub["added_by"])
+    owner = _person(c, ctx, sub["owner_id"]) if sub.get("owner_id") else {}
     return {"id": sub["id"], "name": sub["name"], "kind": sub["kind"], "runtime": spec.get("runtime", ""),
             "label": spec.get("label", sub["kind"]), "status": sub["status"], "status_detail": sub["status_detail"],
             "status_at": sub["status_at"], "preview": sub["preview"], "revision": sub["revision"],
-            "computers": list(dict.fromkeys(computers)), "usage": _usage(c, sub), "added_by": sub["added_by"],
+            "computers": list(dict.fromkeys(computers)), "usage": _usage(c, sub, ctx), "added_by": sub["added_by"],
             "added_by_name": added.get("name") or added.get("email") or "", "owner_id": sub.get("owner_id") or "",
             "owner_name": owner.get("name") or owner.get("email") or "",
             "created_at": sub["created_at"], "updated_at": sub["updated_at"]}
@@ -441,8 +509,10 @@ def view(c, sub):
 def listed(c):
     if not _present(c):
         return []
-    return [view(c, s) for s in H._rows(c.execute(
-        "SELECT * FROM model_subscriptions ORDER BY lower(name), id LIMIT ?", (MAX_SUBSCRIPTIONS,)))]
+    subs = H._rows(c.execute("SELECT * FROM model_subscriptions ORDER BY lower(name), id LIMIT ?", (MAX_SUBSCRIPTIONS,)))
+    ctx = _listing(c) if subs else None
+    return [view(c, s, ctx) for s in subs]
+
 
 
 def kinds():
@@ -819,12 +889,13 @@ def lend(c, runner_id, runtime, actor, shared, others):
         if r["runner_id"] in cloud:
             on_cloud[r["subscription_id"]] = min(cloud[r["runner_id"]], on_cloud.get(r["subscription_id"], 1))
     plans = []
+    ctx = _listing(c) if subs else None
     for sub in subs:
         if login_holds.holding(c, "", login_holds.subscription_login(sub["id"]), runtime) == "held":
             continue
         where = on_cloud.get(sub["id"])
         tier = 2 if where is None else where                        # shared machine's, another cloud machine's, the rest
-        used = (_usage(c, sub) or {}).get("used_pct")
+        used = (_usage(c, sub, ctx) or {}).get("used_pct")
         plans.append(((tier, used is None, used or 0), sub))
     if not plans:
         return None
