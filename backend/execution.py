@@ -2450,6 +2450,25 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, s
         yield job, why
 
 
+# Stop and redirect (Execution._redirect_job) reads the caller's own job in this turn's conversation. jobs.message_id is
+# UNIQUE, so each lookup is one index read. A Home or thread message reaches its bot as a keeper carrier, a job of its
+# own: the carrier is found through its delivery to the bot (message_deliveries.carrier_id, indexed by recipient and
+# message_id), then checked: a keeper notice that carries the message and is from the caller.
+REDIRECT_TURN = ("AND (m.conversation_id=(SELECT om.conversation_id FROM jobs oj JOIN messages om "
+                 "ON om.id=oj.message_id JOIN attempts oa ON oa.job_id=oj.id WHERE oa.id=?) OR m.conversation_id IN "
+                 "(SELECT conversation_id FROM attempt_conversations WHERE attempt_id=?))")
+REDIRECT_OWN_JOB = ("SELECT j.id,j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
+                    "WHERE j.message_id=? AND j.bot_id=? "
+                    "AND CASE WHEN m.sender_id='keeper' THEN json_extract(m.refs,'$.from') ELSE m.sender_id END=? "
+                    + REDIRECT_TURN)
+REDIRECT_CARRIER_JOB = ("SELECT j.id,j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
+                        "WHERE j.message_id=? AND j.bot_id=? AND m.sender_id='keeper' "
+                        "AND json_extract(m.refs,'$.carries')=? AND json_extract(m.refs,'$.from')=? "
+                        + REDIRECT_TURN)
+REDIRECT_CARRIERS = ("SELECT carrier_id FROM message_deliveries WHERE message_id=? AND recipient=? "
+                     "AND carrier_id IS NOT NULL")
+
+
 class Execution:
     def __init__(self, store, auth):
         self.store, self.auth = store, auth
@@ -4255,6 +4274,19 @@ class Execution:
                    (wait(c, aid) or start_places.is_waiting(c, aid)) else {}),
                 **({"stop_reason": benched} if benched else {})}
 
+    def _redirect_job(self, c, bot, redirect, attempt_id, actor):
+        """The job a Stop and redirect names, when it is the caller's own: their message's job in this turn's conversation,
+        or the keeper carrier of that message. The queued one first, else the message's own job; None when there is none.
+        A carrier is found through its delivery to the bot, so no job is scanned."""
+        direct = c.execute(REDIRECT_OWN_JOB, (redirect, bot, actor, attempt_id, attempt_id)).fetchone()
+        found = [direct] if direct else []
+        if not direct or direct["state"] != "queued":
+            for (carrier,) in c.execute(REDIRECT_CARRIERS, (redirect, f"bot:{bot}")).fetchall():
+                job = c.execute(REDIRECT_CARRIER_JOB, (carrier, bot, redirect, actor, attempt_id, attempt_id)).fetchone()
+                if job:
+                    found.append(job)
+        return min(found, key=lambda job: job["state"] != "queued", default=None)
+
     def stop(self, c, who, bot, attempt_id=None, redirect=None):
         """A person who manages the bot asks its running turn to stop. The runner interrupts the turn
         when it next renews the lease, and `complete` settles it as stopped rather than held for review.
@@ -4293,16 +4325,9 @@ class Execution:
         row = rows[0]
         if redirect:
             # A Home or thread message reaches the bot through its keeper carrier (threads._carrier): the queued job is
-            # the carrier, whose refs name the person's message (carries) and its sender (from), so both are matched.
-            job = c.execute("SELECT j.id,j.state,CASE WHEN m.sender_id='keeper' THEN json_extract(m.refs,'$.from') "
-                            "ELSE m.sender_id END AS person FROM jobs j JOIN messages m ON m.id=j.message_id "
-                            "WHERE (j.message_id=? OR (m.sender_id='keeper' AND json_extract(m.refs,'$.carries')=?)) "
-                            "AND j.bot_id=? AND (m.conversation_id=(SELECT om.conversation_id "
-                            "FROM jobs oj JOIN messages om ON om.id=oj.message_id JOIN attempts oa ON oa.job_id=oj.id "
-                            "WHERE oa.id=?) OR m.conversation_id IN (SELECT conversation_id FROM attempt_conversations "
-                            "WHERE attempt_id=?)) ORDER BY j.state='queued' DESC,j.message_id=? DESC LIMIT 1",
-                            (redirect, redirect, bot, row["id"], row["id"], redirect)).fetchone()
-            if not job or job["person"] != who.actor:
+            # the carrier, found through its delivery to the bot (_redirect_job).
+            job = self._redirect_job(c, bot, redirect, row["id"], who.actor)
+            if job is None:
                 raise Problem("not_found", "Redirect with your own message to this turn's conversation", 404)
             if job["state"] != "queued":
                 raise Problem("not_queued", "That message is already being answered", 409)

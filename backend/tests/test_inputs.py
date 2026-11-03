@@ -340,6 +340,19 @@ def test_a_persons_home_message_carried_by_its_notice_is_redirected_by_that_pers
         assert c.execute("SELECT redirect FROM jobs WHERE id=?", (carrier["id"],)).fetchone()[0] == 1
 
 
+def test_stop_and_redirect_reads_its_job_by_the_unique_message_id_and_scans_no_jobs(api):
+    from backend.execution import REDIRECT_CARRIER_JOB, REDIRECT_CARRIERS, REDIRECT_OWN_JOB
+    # Each lookup runs with its placeholders bound: the caller's own job, the carrier's job, and the carrier's delivery.
+    queries = {REDIRECT_OWN_JOB: ("m1", "ops", "human:ana", "a1", "a1"),
+               REDIRECT_CARRIER_JOB: ("c1", "ops", "m1", "human:ana", "a1", "a1"),
+               REDIRECT_CARRIERS: ("m1", "bot:ops")}
+    with api.app.state.store.read() as c:
+        for sql, params in queries.items():
+            plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql, params)]
+            assert not [d for d in plan if d.startswith(("SCAN j", "SCAN m"))], plan
+            assert any("INDEX" in d for d in plan), plan
+
+
 def test_a_requester_bot_steers_its_delegated_tasks_running_turn(api):
     from backend.store import H
     r = two_bots(api)
