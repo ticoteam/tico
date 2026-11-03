@@ -409,10 +409,14 @@ def test_removal_keeps_a_changed_name_that_is_not_utf8_and_saves_nothing(trees):
     odd.write_text('ghp_abcdefghijklmnopqrstuvwxyz0123\n')
     (path / 'draft.txt').write_text('half done')
     head = git(path, 'rev-parse', 'HEAD')
+    branch = git(path, 'symbolic-ref', '--short', 'HEAD')
+    index = git(path, 'ls-files', '--stage')
     with pytest.raises(UnicodeDecodeError):
         W.act(workspace, row, 'remove', os.environ.copy())
     assert odd.exists() and (path / 'draft.txt').read_text() == 'half done'
     assert git(path, 'rev-parse', 'HEAD') == head
+    assert git(path, 'symbolic-ref', '--short', 'HEAD') == branch, 'the removal must not switch branches'
+    assert git(path, 'ls-files', '--stage') == index, 'the removal must not add to the index'
     assert 'refs/heads/' + W.wip_branch(row) not in git(remote, 'for-each-ref', '--format=%(refname)', 'refs/heads').split()
 
 
