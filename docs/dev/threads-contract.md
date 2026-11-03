@@ -258,7 +258,7 @@ threads.AUDIENCES, threads.PRIVATE_AUDIENCES, threads.SAFE_REF_KEYS
 
 ```python
 threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None,
-             via=None, origin=None, checked=None, attachments=None, as_actor=None, start=None) -> message view
+             via=None, origin=None, checked=None, attachments=None, start=None) -> message view
 ```
 - `c`: inside the caller's write transaction (`mutate`/`store.transaction`). `principal`: a `threads.viewer(...)`, or
   an actor string for system writes (`keeper`, a migration) which skip C1.
