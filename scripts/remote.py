@@ -38,9 +38,9 @@ def gh(*args, capture=True):
 
 
 def rate_limited(stderr):
-    """gh says 'API rate limit exceeded' for the limit, and the HTTP status may be 403 or 429."""
+    """gh says 'API rate limit exceeded' (a secondary limit too), or HTTP 429. A plain 403 is an access error."""
     text = (stderr or '').lower()
-    return 'rate limit' in text or 'http 403' in text or 'http 429' in text
+    return 'rate limit' in text or 'http 429' in text
 
 
 def gh_poll(*args):
@@ -55,6 +55,22 @@ def gh_poll(*args):
             time.sleep(pause)
             waited += pause
             pause = min(pause * 2, 300)
+
+
+def download_run(database_id, artifact, scratch):
+    """Fetch the run's log artifact into `scratch`: True when it worked. A rate-limit error waits 60, 120, 240 and
+    300 s and tries again; after the fourth wait, or on any other error, it gives up as it always has."""
+    pauses = iter((60, 120, 240, 300))
+    while True:
+        result = subprocess.run(['gh', 'run', 'download', str(database_id), '-n', artifact, '-D', scratch],
+                                cwd=ROOT, capture_output=True, text=True)
+        if result.returncode == 0:
+            return True
+        pause = next(pauses, None)
+        if pause is None or not rate_limited(result.stderr):
+            return False
+        print(f'remote: GitHub API rate limited; waiting {pause}s', file=sys.stderr, flush=True)
+        time.sleep(pause)
 
 
 def git(*args):
@@ -149,8 +165,7 @@ def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
     logs = ROOT / '.remote-runs' / run_id
     logs.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as scratch:
-        fetched = subprocess.run(['gh', 'run', 'download', str(found['databaseId']), '-n', f'remote-run-{run_id}',
-                                  '-D', scratch], cwd=ROOT, capture_output=True, text=True).returncode == 0
+        fetched = download_run(found['databaseId'], f'remote-run-{run_id}', scratch)
         for name in ('command', 'output.log', 'exit-code'):
             if (Path(scratch) / name).is_file():
                 (logs / name).write_bytes((Path(scratch) / name).read_bytes())

@@ -133,7 +133,7 @@ def test_other_gh_errors_still_stop_the_wait(monkeypatch, clock):
     ('HTTP 403: API rate limit exceeded for user ID 1', True),
     ('You have exceeded a secondary rate limit', True),
     ('HTTP 429: Too Many Requests', True),
-    ('HTTP 403: Resource not accessible by integration', True),
+    ('HTTP 403: Resource not accessible by integration', False),
     ('HTTP 404: Not Found', False),
     ('', False),
 ])
@@ -144,3 +144,40 @@ def test_gh_marks_a_rate_limit_apart_from_other_failures(monkeypatch, stderr, li
         remote.gh('run', 'view', '7')
     assert isinstance(caught.value, remote.RateLimited) == limited
     assert caught.value.code == 'remote: gh run view failed: ' + stderr
+
+
+def scripted_download(monkeypatch, *results):
+    """subprocess.run answers each call with the next (returncode, stderr); the commands are recorded."""
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        code, stderr = results[len(calls) - 1]
+        return SimpleNamespace(returncode=code, stderr=stderr)
+
+    monkeypatch.setattr(remote, 'subprocess', SimpleNamespace(run=fake_run))
+    return calls
+
+
+RATE_LIMIT_STDERR = 'HTTP 403: API rate limit exceeded for user ID 1'
+
+
+def test_a_rate_limited_download_waits_and_tries_again(monkeypatch, clock):
+    calls = scripted_download(monkeypatch, (1, RATE_LIMIT_STDERR), (1, RATE_LIMIT_STDERR), (0, ''))
+    assert remote.download_run(42, 'remote-run-abc', '/scratch') is True
+    assert clock.sleeps == [60, 120]
+    assert calls == [['gh', 'run', 'download', '42', '-n', 'remote-run-abc', '-D', '/scratch']] * 3
+
+
+def test_a_download_still_rate_limited_after_four_waits_gives_up(monkeypatch, clock):
+    calls = scripted_download(monkeypatch, *[(1, RATE_LIMIT_STDERR)] * 5)
+    assert remote.download_run(42, 'remote-run-abc', '/scratch') is False
+    assert clock.sleeps == [60, 120, 240, 300]
+    assert len(calls) == 5
+
+
+def test_other_download_failures_give_up_at_once(monkeypatch, clock):
+    calls = scripted_download(monkeypatch, (1, 'HTTP 404: Not Found'))
+    assert remote.download_run(42, 'remote-run-abc', '/scratch') is False
+    assert clock.sleeps == []
+    assert len(calls) == 1
