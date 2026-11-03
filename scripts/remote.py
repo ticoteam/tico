@@ -23,11 +23,38 @@ WORKFLOW = 'remote-run.yml'
 TAIL = 200
 
 
+class RateLimited(SystemExit):
+    """GitHub's API rate limit refused a gh call. A poll waits and asks again; any other failure still stops."""
+
+
 def gh(*args, capture=True):
     result = subprocess.run(['gh', *args], cwd=ROOT, capture_output=capture, text=True)
     if result.returncode != 0:
-        raise SystemExit(f'remote: gh {" ".join(args[:2])} failed: {(result.stderr or "").strip()}')
+        message = f'remote: gh {" ".join(args[:2])} failed: {(result.stderr or "").strip()}'
+        if rate_limited(result.stderr):
+            raise RateLimited(message)
+        raise SystemExit(message)
     return result.stdout
+
+
+def rate_limited(stderr):
+    """gh says 'API rate limit exceeded' for the limit, and the HTTP status may be 403 or 429."""
+    text = (stderr or '').lower()
+    return 'rate limit' in text or 'http 403' in text or 'http 429' in text
+
+
+def gh_poll(*args):
+    """gh(*args) for a status poll: a rate-limit error waits 60 s, then 120 s, 240 s, and 300 s from then on.
+    Returns the output and the seconds spent waiting, so a caller with a deadline can leave that time out of it."""
+    waited, pause = 0, 60
+    while True:
+        try:
+            return gh(*args), waited
+        except RateLimited:
+            print(f'remote: GitHub API rate limited; waiting {pause}s', file=sys.stderr, flush=True)
+            time.sleep(pause)
+            waited += pause
+            pause = min(pause * 2, 300)
 
 
 def git(*args):
@@ -77,25 +104,27 @@ def setup_for(command):
 def find_run(run_id, deadline):
     title = f'Remote run {run_id}'
     while time.monotonic() < deadline:
-        runs = json.loads(gh('run', 'list', '--workflow', WORKFLOW, '--event', 'workflow_dispatch', '--limit', '30',
-                             '--json', 'databaseId,displayTitle,url'))
-        for run in runs:
+        output, waited = gh_poll('run', 'list', '--workflow', WORKFLOW, '--event', 'workflow_dispatch', '--limit', '30',
+                                 '--json', 'databaseId,displayTitle,url')
+        deadline += waited
+        for run in json.loads(output):
             if run['displayTitle'] == title:
                 return run
-        time.sleep(3)
+        time.sleep(10)
     raise SystemExit(f'remote: dispatched, but "{title}" did not appear; see the Remote run workflow in Actions')
 
 
 def wait(run):
     last = None
     while True:
-        view = json.loads(gh('run', 'view', str(run['databaseId']), '--json', 'status,conclusion'))
+        output, _ = gh_poll('run', 'view', str(run['databaseId']), '--json', 'status,conclusion')
+        view = json.loads(output)
         if view['status'] != last:
             print(f'remote: {view["status"]}', file=sys.stderr, flush=True)
             last = view['status']
         if view['status'] == 'completed':
             return view['conclusion']
-        time.sleep(10)
+        time.sleep(60 if view['status'] == 'in_progress' else 30)
 
 
 def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
@@ -114,7 +143,7 @@ def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
     gh('workflow', 'run', WORKFLOW, '--ref', 'main', '-f', f'id={run_id}', '-f', f'ref={ref}',
        '-f', f'command={shlex.join(command)}', '-f', f'setup={setup}', '-f', f'cpus={cpus}',
        '-f', f'minutes={minutes}')
-    found = find_run(run_id, time.monotonic() + 120)
+    found = find_run(run_id, time.monotonic() + 180)
     print(f'remote: {found["url"]}', file=sys.stderr, flush=True)
     conclusion = wait(found)
     logs = ROOT / '.remote-runs' / run_id
