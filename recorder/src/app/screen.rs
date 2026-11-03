@@ -542,6 +542,8 @@ mod tests {
                         }
                         Err(error) => panic!("{error}"),
                     };
+                    // The accept loop is nonblocking; each HTTP worker reads complete headers and bodies.
+                    socket.set_nonblocking(false).unwrap();
                     let (beats, frames, complete, done, stopped_tx) = (
                         beats.clone(),
                         frames.clone(),
