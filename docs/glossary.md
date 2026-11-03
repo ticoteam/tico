@@ -13,7 +13,7 @@ The words Tico uses, and what each replaces.
 - **Task Manager**: a built-in helper bot that tidies tasks once an hour on weekdays: it closes what is plainly done, fixes obvious status and step drift, and leaves one Needs-you line per department for anything it is unsure of. It sits outside the org chart and never touches bots, credentials, sends or spending ([Task Manager](task-manager.md)).
 - **Built-in**: a bot that comes with Tico, serves everyone and belongs to no group: Assistant, BotOps, Librarian, Strategy Bot. The Task Manager and the Health Monitor are built-in helpers too, outside the chart. These four appear as **Built-in** in Settings > Bots. Ask (bottom left, ⌘J; the phone's middle tab) opens the Assistant, which hands BotOps what needs it; the Strategy Bot is on Goals and Strategy, and the Librarian is on Docs and Strategy's Market tab. The Assistant, BotOps and the Librarian stay out of the team chart and goal owner list; the Strategy Bot stays out of the team chart too.
 - **Strategy Bot**: the built-in bot on every install that owns the **Strategy** section, the way the Librarian owns Docs and Market. It proposes the strategy to the owner, proposes the org chart that follows from it, and keeps KPIs and goal colours current. It sits under the owner at the top of the team chart, with the Heads under it ([Goals](goals-and-kpis.md#the-strategy-bot)). By default it suggests actions and acts only when a person says yes. The owner picks its level: **Passive**, **Suggests actions** (the default), or **Acts on its own**, which lets it act without asking ([Your Strategy Bot](strategy-bot.md)). It never publishes a strategy version.
-- **Strategy**: the section (`#/strategy`) where the team writes down its bets: a **summary** every bot reads on every run, a **vision**, three to five **bets**, and four sections (Who we serve, What we sell, What we know that others don't, What we won't do). The owner writes and publishes it; the Strategy Bot proposes; **Market** is a tab under it ([Strategy](strategy.md)).
+- **Strategy**: the section (`#/strategy`) where the team writes down its bets: a **summary** every bot reads on every run, a **vision**, three to five **bets**, and seven sections (Who we serve, What we sell, How we know they want it, Why now, What we know that others don't, How we sell, What we won't do). The owner writes and publishes it; the Strategy Bot proposes; **Market** is a tab under it ([Strategy](strategy.md)).
 - **Bet**: one of the short decisions on the Strategy page that could turn out wrong, with a why, what it rules out, a **wrong-if**, and a status (proposed, active, retired). At most seven are active. Goals link to the bet they serve, and a bet's health comes only from its goals that have a KPI.
 - **Wrong-if**: the observation that would retire a bet: a KPI crossing a threshold, a change to a market entity it cites, or a sentence with a check-by date ("not yet measurable"). Every active bet has one; when it trips, the Strategy Bot puts a card in front of the owner.
 - **Guide**: the interview questions the Strategy Bot works from when it proposes a strategy, and the word for bets. Only the Default guide, in the style of YC and a16z, is offered. A guide never changes what the page stores. The other frameworks are lenses now.
@@ -53,14 +53,18 @@ The words Tico uses, and what each replaces.
 - **Proposal**: a suggested change to a goal, a KPI or the strategy draft, for its owner to confirm. A `strategy_draft` proposal is how the Strategy Bot puts a draft or a bet change in front of the owner.
 - **Run**: one time a bot works.
 - **Update**: a bot's daily or weekly post, and a new Tico version.
-- **Message**, **Comment**: a message is chat. A comment is on a task.
+- **Message**, **Comment**: a message is said in a thread. A comment is on a task.
+- **Thread**: a conversation with an audience and members, listed under Threads ([Threads](threads.md)).
+- **DM**: a private thread for exactly the people in it. Starting one with the same people reuses it.
+- **Sub-thread**: a side topic under one message, with its own read state.
+- **Call**: a Tico Meet call started in a thread ([Meetings](meetings.md)).
 - **Steer**, **Queue**, **Defer**: how a message, comment or new task reaches a bot. Steer: into its running turn now. Queue: right after that turn, or now. Defer: with its next turn there, at the latest after a deadline ([Steer, queue or defer](using-tico.md#steer-queue-or-defer)).
 - **Deferred message**, **deferred task**: deferred to a bot's next run of any kind; once called a next-run task ([leave work for the next run](using-tico.md#leave-work-for-the-next-run)).
 - **Decision**: the typed-question model that classifies and decides.
 - **Handoff**: delegating work by opening a child task and setting the parent to waiting.
 - **Session**: one model conversation a bot resumes (a Claude Code or Codex thread). A bot has several ([Sessions](sessions.md)).
-- **Main chat**: a bot's chat on its page, and its session. It sees task work only as one-line reports.
-- **Task session**: the session for one task a bot owns, with its own room (thread) and worktree. Subtasks continue it by default.
+- **Home**: a bot's or a person's public thread, where a bot's open asks wait. A bot's Home is its main session's thread; it sees task work only as one-line reports.
+- **Task session**: the session for one task a bot owns, with its own thread and worktree. Subtasks continue it by default.
 - **Checkpoint**: a task's last turn reply, which a fresh session on the task starts from.
 - **state.md**: a bot's own note of what it is doing and what to pick up next.
 

@@ -5,7 +5,7 @@ const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {open} = require('./tasks-page.cjs');
 const at = minutes => new Date(Date.now() - minutes * 60000).toISOString();
-const ask = (id, to, delivered = null) => ({id, to_actor: to, from_actor: 'bot:writer', body: 'Approve the venue?', delivered_at: delivered, read_at: null});
+const ask = (id, to, delivered = null) => ({id, recipient_id: to, sender_id: 'bot:writer', body: 'Approve the venue?', delivered_at: delivered, read_at: null});
 const request = (id, title, a) => ({id, kind: 'task', title, body: 'Which venue?', owner: 'human:ana', requester: 'bot:writer', status: 'open',
   version: 1, labels: [], created: at(60), updated: at(60), conversation_id: 'c-' + id, ask: a, open_asks: 1});
 const loose = (id, to) => ({id, kind: 'ask', body: 'Tacos or pizza?', requester: 'bot:writer', created: at(30), ask: ask(id, to)});

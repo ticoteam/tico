@@ -243,8 +243,8 @@ def test_an_accepted_size_change_on_a_cited_segment_trips_the_bet_once_and_a_pro
     post(api, f"market/sizes/{one['id']}/accept", {})
     post(api, f"market/sizes/{two['id']}/accept", {})
     with api.app.state.store.read() as c:
-        tasks = H._rows(c.execute("SELECT title, owner, body FROM tasks WHERE title LIKE 'Bet %'"))
-    assert [(t["title"], t["owner"]) for t in tasks] == [("Bet 1: may be wrong", "bot:goal-manager")]
+        tasks = H._rows(c.execute("SELECT title, owner_id, body FROM tasks WHERE title LIKE 'Bet %'"))
+    assert [(t["title"], t["owner_id"]) for t in tasks] == [("Bet 1: may be wrong", "bot:goal-manager")]
     assert first in tasks[0]["body"]
 
 
@@ -270,8 +270,8 @@ def test_asking_for_the_market_to_be_sized_files_one_task_and_asking_again_retur
     again = post(api, "market/spend/research", {"description": "A different words"})
     assert first["task_id"] == again["task_id"]
     with api.app.state.store.read() as c:
-        rows = H._rows(c.execute("SELECT owner, title, body FROM tasks WHERE title LIKE 'Size the market%'"))
-    assert len(rows) == 1 and rows[0]["owner"] == "bot:librarian" and "size-the-market.md" in rows[0]["body"]
+        rows = H._rows(c.execute("SELECT owner_id, title, body FROM tasks WHERE title LIKE 'Size the market%'"))
+    assert len(rows) == 1 and rows[0]["owner_id"] == "bot:librarian" and "size-the-market.md" in rows[0]["body"]
     assert get(api, "market/spend")["definition"]["description"] == "Software for small landlords"
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (first["task_id"],))

@@ -19,7 +19,7 @@ def marks(api, mid):
 
 
 def withdrawn_label(c, ask_id):
-    return (H._json(H.message(c, ask_id)["refs_json"], {}) or {}).get("withdrawn")
+    return (H._json(H.message(c, ask_id)["refs"], {}) or {}).get("withdrawn")
 
 
 def test_a_question_on_needs_you_is_delivered_and_opening_its_task_reads_it(api):

@@ -1,4 +1,4 @@
-// BotOps' Confirm cards in its chat (ui/assistant.js), fixtures only.
+// BotOps' Confirm cards in the Assistant's chat (ui/assistant.js; BotOps has no DM of its own now), fixtures only.
 //  - plain words: the card's title is the server's sentence, never the method and path; a card stored with no readable
 //    description gets a plain sentence too. The method, path and fields sit behind a closed Details.
 //  - no jump on Confirm: in a chat scrolled partway down with several cards, a click changes only that card. The thread
@@ -14,12 +14,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {assistantView} = require('./support/assistant-chat.cjs');
 
 const at = n => new Date(Date.UTC(2026, 9, 17, 9, n)).toISOString();
-const say = (id, from, body, n, refs = {}) => ({id, from_actor: from, body, refs, created: at(n), kind: 'say'});
+const say = (id, from, body, n, refs = {}) => ({id, sender_id: from, body, refs, created_at: at(n), kind: 'say'});
 
 function fixture() {
-  const card = (id, extra) => ({id, owner: 'human:ana', status: 'pending', result: null, proposed_via: 'botops', proposer: 'botops',
+  const card = (id, extra) => ({id, owner_id: 'human:ana', status: 'pending', result: null, proposed_via: 'botops', proposer: 'botops',
     diff: [], body: {}, ...extra});
   const actions = {
     act1: card('act1', {method: 'PUT', path: '/api/v2/bots/security-engineer-2/repositories',
@@ -81,6 +82,7 @@ async function open(browser, state) {
     if (p === '/api/employees') return json([{name: 'botops', display_name: 'BotOps', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/issues') return json([]);
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
+    if (p === '/api/v2/assistant' && method === 'GET') return json(assistantView('c-botops', {messages: state.messages}));
     if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with')
       ? [{id: 'c-botops', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']}] : []});
     if (p === '/api/v2/conversations/c-botops/snapshot') return json({messages: state.messages, execution: null, next_before: null});
@@ -97,7 +99,7 @@ async function open(browser, state) {
       if (state.slowPost) await new Promise(done => setTimeout(done, state.slowPost));
       const action = state.actions[act[1]];
       state.decided.push([act[1], act[2]]);
-      action.status = act[2] === 'confirm' ? 'done' : 'cancelled';
+      action.status = act[2] === 'confirm' ? 'done' : 'canceled';
       // The server says how it went in the chat (assistant.py action_confirm): one more message.
       state.messages.push(say('r' + act[1], 'bot:botops', 'Done: ' + action.description, state.n++, {assistant: true, action_result: act[1]}));
       return json({action});
@@ -112,7 +114,7 @@ async function open(browser, state) {
   try {
     const state = fixture();
     const {page, errors} = await open(browser, state);
-    await page.goto('https://tico-ui.test/#/bot/botops/chat');
+    await page.goto('https://tico-ui.test/#/assistant');
     await page.waitForFunction(() => V2C?.rendered && document.querySelectorAll('#conv-thread .asst-card').length === 6);
 
     // Plain words first; the raw request only behind Details, closed.

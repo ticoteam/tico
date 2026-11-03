@@ -160,7 +160,7 @@ async function openChat(bot) {
 
 function renderChat() {
   const box = $("messages");
-  const nodes = chat.messages.map((m) => el("div", m.body, "msg" + (m.from_actor.startsWith("bot:") ? "" : " me")));
+  const nodes = chat.messages.map((m) => el("div", m.body, "msg" + (m.sender_id.startsWith("bot:") ? "" : " me")));
   if (chat.live) nodes.push(el("div", chat.live, "msg live"));
   box.replaceChildren(...nodes);
   box.scrollTop = box.scrollHeight;
@@ -247,7 +247,7 @@ async function loadTasks() {
   const { tasks } = await api("/api/v2/tasks?status=open,doing,waiting,review,ready&limit=100");
   const table = el("table");
   table.append(row(["Task", "Owner", "Status"], "th"));
-  for (const t of tasks) table.append(row([t.title, t.owner_name || t.owner, t.status]));
+  for (const t of tasks) table.append(row([t.title, t.owner_name || t.owner_id, t.status]));
   $("tasks").replaceChildren(el("h1", "Tasks"), tasks.length ? table : el("p", "Nothing open."));
 }
 

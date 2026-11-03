@@ -55,8 +55,8 @@ MINUTES_MAX = 24 * 60            # the listener's own ceiling; 0 there means nev
 POLICY_FOR = 60                  # seconds a cell's listener answer is kept
 POLICY = {"at": None, "minutes": None}
 NOT_NOW = ("busy", "cooldown")   # HQ refusals that are no failure
-STREAM = "/api/v2/stream"        # an open stream says nothing about a person being there
-# Outgoing sends: a row waiting for its next try (`next_attempt`, NULL = now) keeps the server up only when that try is
+STREAM = "/api/v2/events"        # an open stream says nothing about a person being there
+# Outgoing sends: a row waiting for its next try (`next_attempt_at`, NULL = now) keeps the server up only when that try is
 # near; one Svix-style retry ten hours away must not. `sending` always does.
 SENDS = {"slack_posts": "state IN ('ready','retry','rate_limited')",
          "webhook_sends": "state IN ('ready')"}
@@ -142,8 +142,8 @@ def routine_times(c, at):
     when = datetime.fromtimestamp(at, timezone.utc)
     out = []
     if table(c, "automations"):
-        for row in c.execute("SELECT trigger_type, next_due, flow_json FROM automations WHERE enabled=1 "
-                             "AND deleted_at IS NULL AND next_due IS NOT NULL").fetchall():
+        for row in c.execute("SELECT trigger_type, next_due_at, flow FROM automations WHERE enabled=1 "
+                             "AND deleted_at IS NULL AND next_due_at IS NOT NULL").fetchall():
             if row[0] == "due":
                 # A due day wakes the server when its run starts (the lead time before it), not on the day.
                 if not row[1]:
@@ -159,7 +159,18 @@ def routine_times(c, at):
     from . import delivery
     if table(c, "deferrals") and (due := epoch(delivery.next_due(c))) is not None:
         out.append(max(due, at))
+    out.extend(edition_times(c, when))
     return sorted(out)
+
+
+def edition_times(c, when):
+    """When the Company page next opens a draft (backend/company_page/schedule.py); nothing while it is Closed."""
+    from .company_page import schedule
+    try:
+        found = schedule.next_wake(c, when) if table(c, "audiences") else None
+    except Exception:
+        return []
+    return [found.timestamp()] if found else []
 
 
 def fixed_times(c, when):
@@ -171,7 +182,7 @@ def fixed_times(c, when):
         last = SR.last_started(c, list(SR.CONTROLS))
         for key, cfg in SR.config(c).items():
             if cfg["on"] and cfg["preset"] == SR.DAILY:
-                found = SR.next_night(c, cfg, when) if key == "learnings" else SR.next_due(cfg, last.get(key), when)
+                found = SR.next_night(c, cfg, when, key) if key in SR.NIGHT_CLAIMS else SR.next_due(cfg, last.get(key), when)
                 if found:
                     out.append(found.timestamp())
     except Exception:
@@ -186,11 +197,11 @@ def fixed_times(c, when):
 
 
 def later_sends(c, at):
-    """The earliest `next_attempt` of each kind of waiting send that is beyond the 15 minutes `busy` already covers."""
+    """The earliest `next_attempt_at` of each kind of waiting send that is beyond the 15 minutes `busy` already covers."""
     out = []
     for name, where in SENDS.items():
         if table(c, name):
-            row = c.execute(f"SELECT min(next_attempt) FROM {name} WHERE {where} AND next_attempt>?",
+            row = c.execute(f"SELECT min(next_attempt_at) FROM {name} WHERE {where} AND next_attempt_at>?",
                             (stamp(at + SOON),)).fetchone()
             if row and row[0] and (found := epoch(row[0])):
                 out.append(found)
@@ -218,7 +229,7 @@ def busy(c, at):
         return "computer_online"
     for name, where in SENDS.items():
         if table(c, name) and c.execute(
-                f"SELECT 1 FROM {name} WHERE state='sending' OR ({where} AND coalesce(next_attempt,'')<=?) LIMIT 1",
+                f"SELECT 1 FROM {name} WHERE state='sending' OR ({where} AND coalesce(next_attempt_at,'')<=?) LIMIT 1",
                 (stamp(at + SOON),)).fetchone():
             return "send_pending"
     if (times := routine_times(c, at)) and times[0] <= at + SOON:
@@ -228,7 +239,7 @@ def busy(c, at):
 
 def last_work(c, at, span):
     """When the last run started or ended, or None; `span` in seconds. Only recent runs are looked at (the created index)."""
-    row = c.execute("SELECT max(coalesce(finished,started,created)) FROM attempts WHERE created>=?",
+    row = c.execute("SELECT max(coalesce(finished_at,started_at,created_at)) FROM attempts WHERE created_at>=?",
                     (stamp(at - span - 48 * 3600),)).fetchone()
     return epoch(row[0]) if row and row[0] else None
 

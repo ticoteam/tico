@@ -1,6 +1,6 @@
 """Outcome stats: counts of how proposals and tool calls turned out, for a bot the owner names.
 
-A bot that studies how the team's work holds up (accepted, cancelled, failed) needs the totals, never the rows: an
+A bot that studies how the team's work holds up (accepted, canceled, failed) needs the totals, never the rows: an
 Assistant proposal belongs to the person it was made for and carries their words, and a tool call's event names who
 made it. The owner grants a bot these totals in `registry_metadata` (`outcome-stats-readers`), outside any editable
 bot definition, so no bot grants them to itself. A granted bot reads `assistant_action_weekly` and `mcp_call_weekly` in
@@ -60,6 +60,7 @@ def install(app, store, auth):
         auth.domain(who)
         require_owner(who)
         with store.transaction() as c:
+            slug = (H.resolve_bot(c, slug) or {}).get("id", slug)
             if not H.bot(c, slug):
                 raise Problem("not_found", "No bot " + slug, 404)
             grants = metadata(c, GRANTS)

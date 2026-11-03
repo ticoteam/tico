@@ -12,7 +12,7 @@ from backend.finance.core import tax as T
 from backend.finance.store import banking as SK
 from backend.finance.store import schema
 from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT, OWNER, PEOPLE, account, act, books, finance_template, store)
+    AT, OWNER, PEOPLE, account, act, books, close_month, finance_template, store)
 
 PLAIN = "human:eve"
 PAYABLES = "human:dan"                          # a teammate whose view covers their own expenses and payables
@@ -70,7 +70,7 @@ def _card_charge(c, program, amount, provider_id):
     return SK.insert(c, "fin_feed_txns", {
         "money_account_id": program, "provider_id": provider_id, "txn_date": "2026-06-01", "amount": -amount,
         "counterparty": "Acme Consulting", "currency": "USD", "created_at": AT, "created_by": "system:finance",
-        "status": "posted", "raw_json": "{}"})
+        "status": "posted", "raw": "{}"})
 
 
 def _feed(c, money, amount, day="2026-06-01", kind=""):
@@ -78,7 +78,7 @@ def _feed(c, money, amount, day="2026-06-01", kind=""):
     return SK.insert(c, "fin_feed_txns", {
         "money_account_id": money, "provider_id": "txn", "txn_date": day, "amount": amount, "currency": "USD",
         "counterparty": "Acme Consulting", "kind": kind, "created_at": AT, "created_by": "system:finance",
-        "raw_json": "{}"})
+        "raw": "{}"})
 
 
 def _pay(c, vendor, amount, source, bill_day="2026-05-01", paid_on="2026-06-01", code="6100"):
@@ -228,6 +228,9 @@ def test_a_jurisdiction_needs_a_vendor_authority_and_a_remittance_needs_one(keep
 
 def test_due_dates_wait_for_finance_and_the_bookkeeper_then_seed_once(store):
     with store.transaction() as c:
+        # the shared fixture registers the Bookkeeper; a new install has none until its own set-up
+        c.execute("DELETE FROM bot_config WHERE bot=?", ("bookkeeper",))
+        c.execute("DELETE FROM bots WHERE slug=?", ("bookkeeper",))
         assert FT.seed_dues(c, AT) == []
         FA.setup(c, OWNER, AT)
         assert FT.seed_dues(c, AT) == []
@@ -249,7 +252,7 @@ def test_due_dates_wait_for_finance_and_the_bookkeeper_then_seed_once(store):
             rules = c.execute("SELECT COUNT(*) FROM org_rules WHERE id=? AND kind='external' AND status='active'",
                               (rule_id,)).fetchone()[0]
             dues = [(str(r[0]), str(r[1]), str(r[2]), r[3]) for r in c.execute(
-                "SELECT owner, repeats, first_due, routine_id FROM rule_due_dates WHERE rule_id=?", (rule_id,))]
+                "SELECT owner, repeats, first_due_on, routine_id FROM rule_due_dates WHERE rule_id=?", (rule_id,))]
             assert rules == 1, key
             assert len(dues) == 1, key
             owner, repeats, first_due, routine_id = dues[0]
@@ -400,7 +403,7 @@ def test_a_card_row_on_a_bank_account_is_a_card_payment(keeper, kind):
         card = SK.insert(c, "fin_feed_txns", {
             "money_account_id": bank, "provider_id": "t3", "txn_date": "2026-06-01", "amount": -40_000,
             "counterparty": "Acme Consulting", "currency": "USD", "created_at": AT, "created_by": "system:finance",
-            "status": "posted", "raw_json": "{}", "kind": kind})
+            "status": "posted", "raw": "{}", "kind": kind})
         _pay(c, acme, 40_000, {"feed_id": card})
         _pay(c, acme, 10_000, {"money_account_id": bank})
     with keeper.read() as c:
@@ -414,8 +417,9 @@ def test_a_payment_posted_after_its_month_closed_counts_in_the_year_it_was_paid(
     jan = "2026-01-05T12:00:00.000000Z"
     with keeper.transaction() as c:
         acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
-        fid = _feed(c, _bank(c), -60_000, day="2025-12-30")
-        assert act(c, OWNER, "close_period", {"month": "2025-12"}, at=jan).status == "committed"
+        bank = _bank(c)
+        assert close_month(c, "2025-12", at=jan).status == "committed"      # no December row is in the books yet
+        fid = _feed(c, bank, -60_000, day="2025-12-30")                      # the payment is found after the close
         assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100")},
                    at=jan).status == "committed"
         assert c.execute("SELECT entry_date FROM fin_lines WHERE contact_id=?", (acme,)).fetchone()[0] == "2026-01-05"
@@ -435,8 +439,8 @@ def test_a_payment_matched_to_a_bill_after_its_month_closed_counts_once_in_the_y
         fid = _feed(c, _bank(c), -60_000, day="2025-11-20")
         assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100")},
                    at="2025-11-25T12:00:00.000000Z").status == "committed"
-        assert act(c, OWNER, "close_period", {"month": "2025-11"},
-                   at="2025-12-05T12:00:00.000000Z").status == "committed"
+        assert close_month(c, "2025-11",
+                       at="2025-12-05T12:00:00.000000Z").status == "committed"
         made = act(c, OWNER, "bill_create", {"vendor_id": acme, "bill_date": "2025-11-01",
                                              "lines": [{"account_id": account(c, "6100"), "amount": 60_000}]})
         assert made.status == "committed", made

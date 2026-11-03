@@ -20,7 +20,7 @@ def forget_claims():
 
 def job_of(c, task_id, bot="ops"):
     return c.execute("SELECT j.* FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations cv "
-                     f"ON cv.id=m.conversation_id WHERE j.bot=? AND {H.MESSAGE_TASK_SQL}=?", (bot, task_id)).fetchone()
+                     f"ON cv.id=m.conversation_id WHERE j.bot_id=? AND {H.MESSAGE_TASK_SQL}=?", (bot, task_id)).fetchone()
 
 
 def secret_taken_away(api):
@@ -29,7 +29,7 @@ def secret_taken_away(api):
     with api.app.state.store.transaction() as c:
         assert job_of(c, secret["id"])["state"] == "queued"
         # Any way a bot loses read access to a queued message; the claim and the sweep judge only the verdict.
-        c.execute("UPDATE tasks SET owner='bot:finance' WHERE id=?", (secret["id"],))
+        c.execute("UPDATE tasks SET owner_id='bot:finance' WHERE id=?", (secret["id"],))
     return secret
 
 
@@ -38,7 +38,7 @@ def refusal(api, machine, job):
     store = api.app.state.store
     with store.read() as c:
         runner = c.execute("SELECT * FROM runners WHERE id=?", (machine["runner_id"],)).fetchone()
-        ready = execution.readiness_document(runner["readiness_json"])
+        ready = execution.readiness_document(runner["readiness"])
         return execution.job_refusal(c, job, {}, ready, set(), execution.lanes_on(runner), execution.roots_on(runner))
 
 
@@ -49,27 +49,27 @@ def sweep(api):
 
 def suppressed(c, job_id):
     return [H._json(r[0], {}) for r in c.execute(
-        "SELECT detail_json FROM events WHERE action='job.suppress' AND target=?", (job_id,))]
+        "SELECT detail FROM events WHERE action='job.suppress' AND target=?", (job_id,))]
 
 
-def test_an_unreadable_job_is_cancelled_and_a_readable_one_is_still_claimed(api):
+def test_an_unreadable_job_is_canceled_and_a_readable_one_is_still_claimed(api):
     machine = task_bot(api, lanes=True, others=("finance",))
     secret, finished = secret_taken_away(api), secret_taken_away(api)
     first = new_task(api, "first")
     store = api.app.state.store
     with store.transaction() as c:
         # Unreadable too, but no longer queued: the sweep leaves it as it is.
-        c.execute("UPDATE jobs SET state='done' WHERE id=?", (job_of(c, finished["id"])["id"],))
+        c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job_of(c, finished["id"])["id"],))
         unreadable, readable = job_of(c, secret["id"]), job_of(c, first["id"])
     assert refusal(api, machine, unreadable) == "unreadable"
     assert refusal(api, machine, readable) is None
     sweep(api)
     sweep(api)                                                    # a second pass finds nothing left to cancel
     with store.read() as c:
-        assert job_of(c, secret["id"])["state"] == "cancelled"
+        assert job_of(c, secret["id"])["state"] == "canceled"
         assert suppressed(c, unreadable["id"]) == [{"reason": "unreadable"}]
         done = job_of(c, finished["id"])
-        assert done["state"] == "done" and suppressed(c, done["id"]) == []
+        assert done["state"] == "completed" and suppressed(c, done["id"]) == []
         assert job_of(c, first["id"])["state"] == "queued" and suppressed(c, readable["id"]) == []
         # The message stays where it was: only the job is let go.
         assert H.message(c, unreadable["message_id"])
@@ -77,14 +77,14 @@ def test_an_unreadable_job_is_cancelled_and_a_readable_one_is_still_claimed(api)
     assert claim(api, machine, "ops") is None
 
 
-def test_health_counts_no_queued_work_from_the_cancelled_job(api):
+def test_health_counts_no_queued_work_from_the_canceled_job(api):
     machine = task_bot(api, lanes=True, others=("finance",))
     secret_taken_away(api)
     store = api.app.state.store
 
     def ops_rows():
         with store.transaction() as c:
-            c.execute("UPDATE jobs SET created=? WHERE bot='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),))
+            c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),))
             online = {r["id"] for r in health._online_runners(c)}
             waiting, slow, stuck = health._waiting(c, online, store.settings)
         return [r for r in waiting + slow + stuck if r["bot"] == "ops"]
@@ -122,7 +122,7 @@ def test_work_held_for_another_reason_stays_queued(api, monkeypatch):
         for job in jobs.values():
             assert c.execute("SELECT state FROM jobs WHERE id=?", (job["id"],)).fetchone()[0] == "queued"
             assert suppressed(c, job["id"]) == []
-        assert job_of(c, secret["id"])["state"] == "cancelled"
+        assert job_of(c, secret["id"])["state"] == "canceled"
 
 
 def test_the_claim_that_finds_its_pick_unreadable_says_why_it_let_it_go(api, monkeypatch):
@@ -143,7 +143,7 @@ def test_the_claim_that_finds_its_pick_unreadable_says_why_it_let_it_go(api, mon
     assert claim(api, machine, "ops") is None
     assert picks == [None, job["id"]], "select in the read snapshot, then recheck that pick under the writer"
     with store.read() as c:
-        assert job_of(c, secret["id"])["state"] == "cancelled"
+        assert job_of(c, secret["id"])["state"] == "canceled"
         assert suppressed(c, job["id"]) == [{"reason": "unreadable"}]
 
 

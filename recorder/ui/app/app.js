@@ -20,6 +20,7 @@
     statusKey: '',
     ui: {
       search: '', ask: '', addItem: '', peopleQuery: '', ownerQuery: '', tq: '', signin: null, legacy: '', key: '', xai: '',
+      editLine: null, editDraft: '', editInitial: '', removeLine: null, // { id, seq }: a draft or question belongs to one meeting
       hot: 0, mention: null,
       panel: null, opened: null, pop: null, tsearch: false, showAudio: false, confirm: null,
       form: null, saving: false, titleDraft: null, notesDraft: null, prevPage: 'library', stick: true,
@@ -174,20 +175,27 @@
   // ---- Top bar ----
   function topbar() {
     const st = S.status;
+    if (!st.screen?.active) document.getElementById('screen-preview')?.remove();
     let left = '';
     let right = '';
     if (S.page !== 'library') {
       const label = S.page === 'settings' && S.ui.prevPage === 'meeting' ? 'Back' : 'Recordings';
       left = `<button class="pill-back" data-act="back" title="Back (Esc)">${icon('back', 14)}${label}</button>`;
     }
+    const screen = st.screen;
+    if (screen?.active) right += `<button class="btn small danger screen-stop" data-act="stop-screen" title="${esc(screen.title)} · ${esc(screen.source || screen.phase)}">${icon('screen', 13)}<span>${screen.phase === 'Sharing' ? `Sharing${S.status.meeting !== screen.meeting ? ' · ' + esc(screen.title) : ' · ' + esc(screen.source)}` : 'Starting…'}</span><b>Stop</b></button>`;
     if (st.demo) right += badge('Demo library', 'amber');
     if (S.page === 'meeting' && S.meeting) {
       const m = S.meeting;
       // Send does every step itself (stop, last words, finish the live meeting); the button shows the step.
       const sending = st.sending?.id === m.id ? st.sending : null;
       if (m.can_finish && !sending) right += `<button class="btn small" data-act="finish" ${st.busy ? 'disabled' : ''}>Finish meeting</button>`;
+      if (m.can_control && !sending) right += `<button class="btn small" data-act="control-live" data-action="${m.live_state === 'paused' ? 'resume' : 'pause'}" ${st.busy ? 'disabled' : ''}>${m.live_state === 'paused' ? 'Resume sharing' : 'Pause sharing'}</button>`;
+      if (m.can_discard && !sending) right += `<button class="btn small" data-act="pop" data-pop="discard" ${st.busy ? 'disabled' : ''}>Discard…</button>`;
+      if (!screen?.active && m.can_share_screen) right += `<button class="btn small screen-start" data-act="share-screen" title="Share a screen or window">${icon('screen', 13)}<span>Share screen</span></button>`;
       right += peopleButton(m.people);
-      if (m.sent) right += badge(`${icon('check', 12)}In Tico`, 'accent');
+      if (m.discarded) right += badge(m.discard_pending ? 'Discard pending · saved locally' : 'Discarded · saved locally', m.discard_pending ? 'amber' : 'muted');
+      else if (m.sent) right += badge(`${icon('check', 12)}In Tico`, 'accent');
       else if (sending) right += `<button class="btn small sending" disabled><span class="spin"></span>${esc(sending.label)}</button>`;
       else right += `<button class="btn small" data-act="pop" data-pop="send" data-id="${esc(m.id)}" ${st.busy ? 'disabled' : ''}>${icon('send', 13)}Send</button>`;
       right += `<button class="icon-btn ${S.ui.pop?.kind === 'more' ? 'on' : ''}" data-act="pop" data-pop="more" title="More" aria-label="More">${icon('more')}</button>`;
@@ -204,7 +212,7 @@
 
   // ---- Notices ----
   function errorNotice() {
-    const error = S.status.error;
+    const error = S.status.error || S.status.screen?.error;
     if (!error) return '';
     return `<div class="notice">${icon('alert')}<span class="grow selectable">${esc(error)}</span><button class="icon-btn dismiss" data-act="dismiss-error" title="Dismiss" aria-label="Dismiss">${icon('close', 12)}</button></div>`;
   }
@@ -381,7 +389,7 @@
       : `<button class="owner empty" data-act="pop" data-pop="owner" data-id="${id}">Who gets it?</button>`;
     const send = it.sending
       ? `<span class="spin" style="margin:7px 8px"></span>`
-      : `<button class="btn small primary" data-act="send-item" data-id="${id}" ${it.can_send ? '' : 'disabled'} title="${it.can_send ? 'Send as a private Tico task' : it.owner ? '' : 'Choose who gets it'}">Send</button>`;
+      : `<button class="btn small primary" data-act="send-item" data-id="${id}" ${it.can_send ? '' : 'disabled'} title="${it.can_send ? 'Send as a private Tico task' : it.send_blocked ? esc(it.send_blocked) : it.owner ? '' : 'Choose who gets it'}">Send</button>`;
     return `<li class="item ${picking ? 'picking' : ''} ${it.sending ? 'busy' : ''}">
       <span class="bullet"><i></i></span>
       <div class="content"><div class="line1"><span class="title" contenteditable="true" data-defer data-edit-item="${id}" data-key="item-${id}" spellcheck="false" role="textbox" aria-label="Action item">${esc(it.title)}</span>${owner}</div>${detail}${it.error ? `<div class="error selectable">${esc(it.error)}</div>` : ''}</div>
@@ -616,12 +624,32 @@
         previous = null;
       }
       const who = !b.me && previous !== b.speaker ? `<div class="who" style="color:${colors[b.speaker]}">${esc(b.speaker)}</div>` : '';
-      items.push(`<div class="turn ${b.me ? 'me' : ''} ${b.partial ? 'partial' : ''}">${who}<div class="bubble">${b.paragraphs.map((p) => `<p>${highlight(p, q)}</p>`).join('')}</div></div>`);
+      items.push(`<div class="turn ${b.me ? 'me' : ''} ${b.partial ? 'partial' : ''} ${b.removed ? 'removed' : ''}">${who}<div class="bubble">${sharedLine(b, q)}</div></div>`);
       previous = b.speaker;
     }
     const tail = blocks[blocks.length - 1];
     if (a.pending && !m.setup.length && !recording && !q && !tail.partial) items.push(`<div class="turn"><div class="bubble typing"><i></i><i></i><i></i></div></div>`);
     return items;
+  }
+  /** A line shared live: its text, or the edit form or removal question while one is open. */
+  function sharedLine(b, q) {
+    const seq = b.seq ?? null;
+    const current = S.transcript?.id;
+    if (seq !== null && S.ui.editLine?.id === current && S.ui.editLine?.seq === seq) {
+      // The draft is typed into the box without a re-render, so the box keeps its place and focus.
+      return `<textarea class="line-edit" data-model="editDraft" rows="3" aria-label="Edit line" spellcheck="false">${esc(S.ui.editInitial)}</textarea><div class="line-actions"><button class="btn small quiet" data-act="cancel-line">Cancel</button><button class="btn small" data-act="save-line" data-seq="${seq}">Save</button></div>`;
+    }
+    let html = b.paragraphs.map((p) => `<p>${highlight(p, q)}</p>`).join('');
+    if (seq === null) return html;
+    if (b.edited && !b.removed) html += `<i class="line-note">edited</i>`;
+    if (S.ui.removeLine?.id === current && S.ui.removeLine?.seq === seq) {
+      return html + `<div class="line-actions"><span class="faint">Remove this line in Tico?</span><button class="btn small quiet" data-act="cancel-remove-line">Cancel</button><button class="btn small danger" data-act="remove-line" data-seq="${seq}">Remove</button></div>`;
+    }
+    if (b.editable) {
+      const remove = b.removed ? '' : `<button class="icon-btn tiny" data-act="ask-remove-line" data-seq="${seq}" title="Remove line" aria-label="Remove line">${icon('trash', 12)}</button>`;
+      html += `<div class="line-tools"><button class="icon-btn tiny" data-act="edit-line" data-seq="${seq}" title="Edit line" aria-label="Edit line">${icon('pencil', 12)}</button>${remove}</div>`;
+    }
+    return html;
   }
   /** Replaces only the rows that changed, so a partial turn grows in place instead of jumping. */
   function patchTranscript(body) {
@@ -672,6 +700,8 @@
     let body = '';
     let cls = '';
     if (pop.kind === 'send') body = sendPop(pop);
+    else if (pop.kind === 'send-item') body = `<div class="pop-title">Review action item</div><div class="pop-text">This title or quote may include paused speech. Review or dismiss the item before sending. The surrounding transcript excludes paused words.</div><button class="menu-item" data-act="confirm-item-send" data-id="${esc(pop.id)}">Send reviewed item</button>`;
+    else if (pop.kind === 'discard') body = `<div class="pop-title">Discard shared meeting?</div><div class="pop-text">End this meeting in Tico without filing it? Your recording stays on this computer.</div><div class="pop-foot"><button class="btn small quiet" data-act="close-pop">Cancel</button><button class="btn small danger" data-act="discard-live">Discard</button></div>`;
     else if (pop.kind === 'more') body = morePop(pop);
     else if (pop.kind === 'owner') body = ownerPop(pop);
     else if (pop.kind === 'people') {
@@ -687,6 +717,7 @@
     if (!row) return '';
     const connected = fromMeeting ? row.connected : S.library.connected;
     let html = `<div class="pop-title">Send to Tico</div>`;
+    if (row.paused_warning && !pop.pausedConfirmed) return html + `<div class="pop-text">This recording includes paused speech. Kept action item titles and quotes may include it and will be sent even though paused words are left out of the shared transcript. Review or dismiss those items before sending.</div><button class="menu-item" data-act="confirm-paused-send">Continue to Send</button>`;
     if (!connected) return html + `<div class="pop-text">Sign in to a Tico first.</div><button class="menu-item" data-act="settings">${icon('gear')}<span class="grow">Settings</span></button>`;
     if (fromMeeting && row.send_blocked) return html + `<div class="pop-text">${esc(row.send_blocked)}</div>`;
     return html + row.targets.map((t) => `<button class="menu-item" data-act="send-meeting" data-id="${esc(pop.id)}" data-dest="${esc(t.id)}" ${t.already ? 'disabled' : ''}>${icon(t.already ? 'check' : 'send')}<span class="grow">${t.already ? 'Already in' : 'Send to'} ${esc(t.name)}</span></button>`).join('');
@@ -700,6 +731,7 @@
     let html = '';
     if (m.audio.failed) html += `<button class="menu-item" data-act="retry" data-id="${esc(m.id)}">${icon('retry')}<span class="grow">Retry ${m.audio.failed} failed</span></button>`;
     html += `<button class="menu-item" data-act="audio-status">${icon('mic')}<span class="grow">Audio status</span></button>`;
+    html += `<button class="menu-item" data-act="copy-link">${icon('link')}<span class="grow">Copy meeting link</span></button>`;
     html += `<button class="menu-item" data-act="copy">${icon('copy')}<span class="grow">Copy transcript</span></button>`;
     html += `<div class="menu-sep"></div><button class="menu-item danger" data-act="confirm-delete" ${m.recording_here ? 'disabled title="Stop recording before deleting it"' : ''}>${icon('trash')}<span class="grow">Delete recording…</span></button>`;
     return html;
@@ -723,7 +755,7 @@
     const m = S.meeting;
     if (!m) return '';
     const p = m.people;
-    let html = `<div class="pop-title">In this meeting</div><div class="pop-list">`;
+    let html = `<button class="menu-item" data-act="copy-link">${icon('link')}<span class="grow">Copy meeting link</span></button><div class="menu-sep"></div><div class="pop-title">In this meeting</div><div class="pop-list">`;
     for (const row of p.rows) {
       const tail = row.pending ? `<span class="spin" title="Adding…"></span>` : row.removable ? `<button class="btn small quiet" data-act="remove-access" data-actor="${esc(row.actor)}">Remove</button>` : row.local ? `<span class="tag">Not in Tico</span>` : row.kind === 'bot' ? `<span class="tag">Bot</span>` : '';
       html += `<div class="person ${row.pending ? 'pending' : ''}">${avatar(row)}<span class="grow">${esc(row.name)}</span>${tail}</div>`;
@@ -741,6 +773,7 @@
       const button = `<button class="btn small" data-act="set-team" data-team="${!p.team}" ${p.can_share ? '' : 'disabled'} title="${esc(p.blocked)}">${p.team ? 'Make private' : 'Make public'}</button>`;
       html += `<div class="vis">${icon(p.team ? 'globe' : 'lock')}<span class="grow">${label}</span>${button}</div>`;
     }
+    if (S.status.screen?.active && S.status.screen.meeting === S.meeting.id) html += '<div class="pop-text">People you add will also see your screen.</div>';
     if (p.blocked && p.org) html += `<div class="pop-text">${esc(p.blocked)}</div>`;
     if (p.blocked) return html;
     html += `<input class="pop-input" data-model="peopleQuery" data-enter="people-enter" data-list placeholder="Add a person or bot" spellcheck="false" aria-label="Type a name to add a person or bot">`;
@@ -777,6 +810,56 @@
     return `<div class="connect"><div class="card"><div class="pop-title" style="padding:0 0 6px">Connect to Tico?</div><div class="host">${esc(host)}</div><p>Your browser opens this Tico to approve. Continue only if you chose Connect recorder there.</p><div class="buttons"><button class="btn" data-act="connect-cancel">Cancel</button><button class="btn primary" data-act="connect-ok" ${S.status.busy ? 'disabled' : ''}>Sign in</button></div></div></div>`;
   }
 
+  // A local meeting becomes private in the selected Tico only after this confirmation.
+  function sharingCard() {
+    if (S.ui.shareAudience) return `<div class="connect" role="dialog" aria-modal="true" aria-label="Make meeting public"><div class="card"><div class="host">Make this meeting public?</div><p>Everyone in ${esc(S.meeting?.people.org)} will be able to open it. Stop screen sharing before changing the audience.</p><div class="buttons"><button class="btn small quiet" data-act="cancel-public">Cancel</button><button class="btn small primary" data-act="stop-and-public">Stop sharing and make public</button></div></div></div>`;
+    const d = S.ui.sharing;
+    if (!d) return '';
+    const selected = d.targets.find(t => t.id === d.destination);
+    const choose = d.targets.length > 1 ? `<div class="label">Tico</div>${d.targets.map(t => `<button class="btn small ${d.destination === t.id ? 'primary' : ''}" data-act="share-org" data-id="${esc(t.id)}">${esc(t.name)}</button>`).join(' ')}` : '';
+    const intro = !d.ready ? `Its transcript so far will be uploaded to <b>${esc(selected?.name || 'the selected Tico')}</b> and kept private to you. Add people in People so they can open the link.` : d.team ? `Everyone in <b>${esc(d.org)}</b> can open this meeting${d.kind === 'screen' ? ' and see your screen' : ''}.` : `Only you and the people added in People can open this meeting${d.kind === 'screen' ? ' and see your screen' : ''}.`;
+    return `<div class="connect share-sheet" role="dialog" aria-modal="true" aria-label="${d.kind === 'screen' ? 'Share screen' : 'Meeting link'}"><div class="card"><div class="host">${d.kind === 'screen' ? 'Share a screen or window' : 'Copy meeting link'}</div><p>${intro}</p>${d.kind === 'screen' ? '<p class="faint">Updates a few times a second, for documents and slides. Screen images are shown live and never saved. Recorder’s own windows are excluded. Whole-screen sharing needs Screen Recording permission in System Settings → Privacy &amp; Security; otherwise choose a window.</p>' : ''}${choose}${!d.targets.length ? '<p>Sign in to a Tico in Settings first.</p>' : ''}${d.error ? `<p class="error selectable" role="alert">${esc(d.error)}</p>` : ''}${d.success ? `<p role="status">${esc(d.success)}</p>` : ''}${d.url ? `<input class="field selectable" readonly aria-label="Meeting link" value="${esc(d.url)}">` : ''}<div class="buttons"><button class="btn small quiet" data-act="share-cancel">${d.url ? 'Done' : 'Cancel'}</button><button class="btn small primary" data-act="share-go" ${d.busy || !d.destination ? 'disabled' : ''}>${d.busy ? 'Connecting…' : d.kind === 'screen' ? 'Choose what to share' : 'Copy link'}</button></div></div></div>`;
+  }
+  async function openSharing(kind) {
+    const m = S.meeting;
+    if (!m) return;
+    S.ui.pop = null;
+    const targets = m.targets || m.people.orgs;
+    S.ui.sharing = {kind, id:m.id, ready:m.link_ready || !!m.live || m.sent, org:m.people.org, team:m.people.team,
+      targets, destination:targets.length === 1 ? targets[0].id : '', error:'', busy:false};
+    render();
+    if (kind === 'link' && S.ui.sharing.ready && targets.length === 1) await executeSharing();
+  }
+  async function copyLink(text) {
+    if (navigator.clipboard?.writeText) {
+      try { await navigator.clipboard.writeText(text); return; } catch { /* Use the selected text fallback. */ }
+    }
+    const area = document.createElement('textarea'); area.value = text; document.body.appendChild(area); area.select();
+    const copied = document.execCommand('copy'); area.remove();
+    if (!copied) throw new Error('Could not copy automatically. Select and copy the meeting link below.');
+  }
+  async function executeSharing() {
+    const d = S.ui.sharing;
+    if (!d || d.busy || !d.destination) return;
+    d.busy = true; d.error = ''; d.success = ''; render();
+    try {
+      const link = await invoke('meeting_link', {id:d.id, destination:d.destination, confirmed:true, copy:d.kind === 'link'});
+      if (S.ui.sharing !== d) return;
+      if (!link?.url) throw new Error('Update Tico to copy meeting links.');
+      d.url = link.url;
+      if (d.kind === 'screen') {
+        // Cancellation is available while the picker is open; it never changes the audience.
+        await invoke('share_screen', {id:d.id, expectedTeam:!!d.team});
+        S.ui.sharing = null;
+      } else {
+        if (!link.copied) await copyLink(link.url);
+        d.success = link.only_you ? 'Link copied. Add people in People to let them open it.' : 'Link copied.';
+      }
+      await poll();
+    } catch (error) { if (S.ui.sharing === d) d.error = String(error?.message || error); }
+    finally { d.busy = false; render(); if (d.error && d.url) { const input = document.querySelector('[aria-label="Meeting link"]'); input?.focus(); input?.select(); } }
+  }
+
   // ---- Rendering ----
   function page() {
     if (S.page === 'meeting') return meeting();
@@ -789,7 +872,7 @@
       root.innerHTML = '<div id="r-top"></div><main class="page" id="r-page"></main><div id="r-dock"></div><div id="r-panel"></div><div id="r-pop"></div><div id="r-mention"></div><div id="r-connect"></div>';
       root.dataset.ready = '1';
     }
-    const html = { top: topbar(), page: page(), dock: dock(), panel: panel(), pop: popover(), mention: mentionPop(), connect: connectCard() };
+    const html = { top: topbar(), page: page(), dock: dock(), panel: panel(), pop: popover(), mention: mentionPop(), connect: connectCard() + sharingCard() };
     const active = document.activeElement;
     const key = active?.dataset?.key || active?.dataset?.model;
     const selection = key && 'selectionStart' in active ? [active.selectionStart, active.selectionEnd] : null;
@@ -990,6 +1073,11 @@
     S.ui.tsearch = false;
     S.ui.tq = '';
     S.ui.ask = '';
+    // Drafts and removal questions belong to the meeting they were started in.
+    S.ui.editLine = null;
+    S.ui.editDraft = '';
+    S.ui.editInitial = '';
+    S.ui.removeLine = null;
     S.page = 'meeting';
     S.meeting = null;
     S.hash.meeting = '';
@@ -1102,6 +1190,12 @@
       const id = await act('record', { event });
       if (id) openMeeting(id);
     },
+    'copy-link': () => openSharing('link'),
+    'share-screen': () => openSharing('screen'),
+    'stop-screen': () => { S.ui.preview = null; act('stop_screen'); },
+    'share-org': el => { if (S.ui.sharing && !S.ui.sharing.busy) { S.ui.sharing.destination = el.dataset.id; render(); } },
+    'share-cancel': () => { S.ui.sharing = null; render(); },
+    'share-go': () => executeSharing(),
     stop: () => act('stop_recording'),
     'ask-delete': (el) => { S.ui.confirm = el.dataset.id; render(); },
     'cancel-delete': () => { S.ui.confirm = null; render(); },
@@ -1113,8 +1207,51 @@
     'confirm-delete': () => { S.ui.pop = { ...S.ui.pop, confirm: true }; render(); },
     pop: (el) => openPop(el.dataset.pop, el, { id: el.dataset.id, anchorId: el.dataset.pop === 'send' ? el.dataset.id : undefined }),
     'close-pop': () => { S.ui.pop = null; render(); },
-    'send-meeting': (el) => { S.ui.pop = null; act('send_meeting', { id: el.dataset.id, destination: el.dataset.dest }); },
+    'confirm-paused-send': () => { S.ui.pop.pausedConfirmed = true; render(); },
+    'control-live': (el) => act('control_live', { action: el.dataset.action }),
+    'discard-live': () => { S.ui.pop = null; act('control_live', { action: 'discard' }); },
+    'send-meeting': (el) => { const pausedConfirmed = !!S.ui.pop?.pausedConfirmed; S.ui.pop = null; act('send_meeting', { id: el.dataset.id, destination: el.dataset.dest, pausedConfirmed }); },
     finish: () => act('finish_live'),
+    'edit-line': (el) => {
+      const seq = Number(el.dataset.seq);
+      const id = S.transcript?.id;
+      const block = (S.transcript?.blocks || []).find((b) => b.seq === seq);
+      if (!block || !id) return;
+      S.ui.editLine = { id, seq };
+      S.ui.editInitial = block.paragraphs.join(' ');
+      S.ui.editDraft = S.ui.editInitial;
+      S.ui.removeLine = null;
+      render();
+      document.querySelector('.line-edit')?.focus();
+    },
+    'cancel-line': () => { S.ui.editLine = null; render(); },
+    'save-line': async (el) => {
+      const edit = S.ui.editLine;
+      if (!edit) return;
+      const text = (S.ui.editDraft || '').trim();
+      await act('edit_shared_line', { id: edit.id, seq: edit.seq, text });
+      // A refused save (being sent, ended in Tico, empty) keeps the draft open with the reason shown.
+      const block = (S.transcript?.blocks || []).find((b) => b.seq === edit.seq);
+      const saved = S.transcript?.id === edit.id && block && block.paragraphs[0] === text;
+      if (saved && S.ui.editLine?.id === edit.id && S.ui.editLine?.seq === edit.seq) {
+        S.ui.editLine = null;
+        render();
+      }
+    },
+    'ask-remove-line': (el) => { S.ui.removeLine = { id: S.transcript?.id, seq: Number(el.dataset.seq) }; S.ui.editLine = null; render(); },
+    'cancel-remove-line': () => { S.ui.removeLine = null; render(); },
+    'remove-line': async (el) => {
+      const removal = S.ui.removeLine;
+      if (!removal) return;
+      S.ui.removeLine = null;
+      await act('remove_shared_line', { id: removal.id, seq: removal.seq });
+      // A refused removal asks again, with the reason shown, while the same meeting stays open.
+      const block = (S.transcript?.blocks || []).find((b) => b.seq === removal.seq);
+      if (S.transcript?.id === removal.id && !block?.removed && !S.ui.removeLine) {
+        S.ui.removeLine = removal;
+        render();
+      }
+    },
     retry: (el) => { S.ui.pop = null; act('retry', { id: el.dataset.id }); },
     'audio-status': () => { S.ui.pop = null; S.ui.panel = 'transcript'; S.ui.showAudio = true; render(); },
     'toggle-transcript': () => { S.ui.panel = S.ui.panel === 'transcript' ? null : 'transcript'; S.ui.stick = true; render(); },
@@ -1140,7 +1277,19 @@
     'toggle-private': () => act('set_chat_private', { private: !S.meeting.chat.private }),
     'send-item': (el) => {
       const it = S.meeting.actions.items.find((i) => i.id === el.dataset.id);
-      if (it) act('send_item', { id: it.id, owner: it.owner });
+      if (!it?.can_send) return;
+      if (it.paused_warning) openPop('send-item', el, { id: it.id, title: it.title, quote: it.quote });
+      else act('send_item', { id: it.id, owner: it.owner });
+    },
+    'confirm-item-send': (el) => {
+      const it = S.meeting.actions.items.find((i) => i.id === el.dataset.id);
+      const reviewed = S.ui.pop;
+      if (it?.can_send && (reviewed?.title !== it.title || reviewed?.quote !== it.quote)) {
+        openPop('send-item', el, { id: it.id, title: it.title, quote: it.quote });
+        return;
+      }
+      S.ui.pop = null;
+      if (it?.can_send) act('send_item', { id: it.id, owner: it.owner, pausedConfirmed: true });
     },
     'remove-item': (el) => act('remove_item', { id: el.dataset.id }),
     'set-owner': (el) => { S.ui.pop = null; act('set_owner', { id: el.dataset.id, owner: el.dataset.actor }); },
@@ -1150,7 +1299,17 @@
     'people-org': (el) => { S.ui.focusNext = '#popover .pop-input'; act('choose_people_org', { id: el.dataset.id }); },
     pick: (el) => { S.ui.peopleQuery = ''; act('pick', { actor: el.dataset.actor }); },
     'remove-access': (el) => act('remove_access', { actor: el.dataset.actor }),
-    'set-team': (el) => act('set_team', { team: el.dataset.team === 'true' }),
+    // Stop first so widening the audience cannot expose an already captured frame.
+    'set-team': async (el) => {
+      if (el.dataset.team === 'true' && S.status.screen?.active) {
+        S.ui.pop = null;
+        S.ui.shareAudience = true;
+        render(); return;
+      }
+      act('set_team', {team:el.dataset.team === 'true'});
+    },
+    'stop-and-public': async () => { await act('stop_screen'); S.ui.shareAudience = false; await act('set_team', {team:true}); },
+    'cancel-public': () => { S.ui.shareAudience = false; render(); },
     'open-url': (el) => act('open_url', { url: el.dataset.url }),
     'dismiss-error': () => act('dismiss_error'),
     'dismiss-notice': () => act('dismiss_notice'),
@@ -1357,7 +1516,9 @@
       return;
     }
     if (event.key !== 'Escape') return;
-    if (S.ui.pop) {
+    if (S.ui.sharing || S.ui.shareAudience) {
+      S.ui.sharing = null; S.ui.shareAudience = false; render();
+    } else if (S.ui.pop) {
       S.ui.pop = null;
       render();
     } else if (S.status.connect) {
@@ -1399,6 +1560,15 @@
   window.addEventListener('DOMContentLoaded', () => {
     const events = window.__TAURI__.event;
     events.listen('changed', () => poll());
+    events.listen('screen-preview', async (event) => {
+      await poll();
+      if (event.payload?.capture_id !== S.status.screen?.capture_id) return;
+      S.ui.preview = event.payload.url;
+      let preview = document.getElementById('screen-preview');
+      if (!event.payload.url || !S.status.screen?.active) { preview?.remove(); return; }
+      if (!preview) { preview = document.createElement('div'); preview.id = 'screen-preview'; preview.innerHTML = '<img alt="Your shared screen"><div>Screen · updates a few times a second</div>'; document.getElementById('app').appendChild(preview); }
+      preview.querySelector('img').src = event.payload.url;
+    });
     events.listen('level', (event) => onLevel(event.payload));
     poll();
   });

@@ -154,6 +154,28 @@ def _get(url, limit):
     return data
 
 
+def _release_base(release, env):
+    return f"{(env.get('TICO_RUNNER_RELEASES') or RELEASES).rstrip('/')}/download/v{release.lstrip('v')}/"
+
+
+def _listed(sums, name):
+    """The checksum `sums` gives for asset `name`, or ""."""
+    return next((line.split()[0] for line in sums.splitlines() if line.split()[1:] in ([name], ["*" + name])), "")
+
+
+def published(release, env=os.environ, name=None):
+    """Whether release `release` already has this computer's binary: True, False, or None when that cannot be told
+    (no binary is built for this computer, or the checksum file cannot be read). False is a release whose runner
+    changed, published before its Mac binaries: release.yml adds them minutes later, and the checksum file after them."""
+    name = name or asset()
+    if not name:
+        return None
+    try:
+        return bool(_listed(_get(_release_base(release, env) + SUMS, 1 << 16).decode(), name))
+    except (OSError, ValueError):
+        return None
+
+
 def fetch(root, env, release=None):
     """Download this release's binary, checked against the release's checksums, into `dist(root)`. Only a checkout on
     a release tag has one to download. "" when it is there and current, else why."""
@@ -167,11 +189,11 @@ def fetch(root, env, release=None):
         return f"no release binary is built for {sys.platform} {platform.machine()}"
     if not source_id(root):
         return "this checkout has no runner-rs sources"
-    base = f"{(env.get('TICO_RUNNER_RELEASES') or RELEASES).rstrip('/')}/download/v{release.lstrip('v')}/"
+    base = _release_base(release, env)
     target = dist(root)
     try:
         sums = _get(base + SUMS, 1 << 16).decode()
-        want = next((line.split()[0] for line in sums.splitlines() if line.split()[1:] in ([name], ["*" + name])), "")
+        want = _listed(sums, name)
         if not want:
             raise ValueError(f"{name} is not in this release")
         data = _get(base + name, MAX_BINARY_BYTES)

@@ -6,8 +6,10 @@ recognise, so that every bot reads the same summary on every run and the goals h
 propose; they write, confirm and publish. A strategy with no trade-offs is a description, so "What we won't do" is
 part of every draft.
 
+Inputs: `hub strategy show` and `hub strategy versions`, the market pages (`hub market show company/self`, `hub doc search --market`), `knowledge/company.md`, the goals and KPIs, the Growth numbers and what customers said (`playbooks/keep-proof-current.md`), and the owner's words in the task.
+
 The outcome is one `strategy_draft` proposal the owner can confirm and publish after twenty minutes of their time:
-a summary of at most 400 characters, the vision (at most 400), the four sections filled or marked unknown, and three
+a summary of at most 400 characters, the vision (at most 400), the seven sections filled or marked unknown, and three
 to five bets, each with a statement, why, what it rules out and what would prove it wrong. Nothing else counts as
 good.
 
@@ -33,9 +35,11 @@ Start from the record, not from memory.
 - `hub strategy show`: the published version, if there is one, with its bets, `goals_by_bet` and `health_by_bet`.
   You do not see the owner's draft; only they do. If a version is published, this run is a revision: read
   `hub strategy versions` and propose only what should change, saying why in the proposal's reason.
-- The questions to turn into claims, in the style of the YC application and a16z's go-to-market writing: what you make and who needs it, what you understand that
-  others don't, how you make money and how much, who you fear and what stops a bigger company copying you, the wedge
-  you enter through, the price that breaks, the request you turned down, the bet most people would call wrong.
+- The questions to turn into claims are the default guide's, in the style of the YC application
+  and a16z's go-to-market writing: what you make and who needs it; how bad the problem is and what they use instead;
+  the wedge you enter through; how you know people want it; why now; why this team; what you understand that others
+  don't; who you fear and what stops a bigger company copying you; how you make money, how much, and the price that
+  breaks; where the next 100 customers come from; the bet most people would call wrong; what you won't do.
   Lenses (`playbooks/run-a-lens.md`) come after a first strategy is published, not before.
 - The market: `hub market show company/self` (who the team is, from the Librarian's research), then
   `hub doc search --market "<the team's name>"`, the Overview and Theses pages, and Open questions. The market
@@ -80,16 +84,23 @@ Each bet has four fields:
 Propose a bet as `active` when it has a rules-out and a wrong-if (confirming the card is the owner keeping it),
 and as `proposed` when it still lacks one.
 
-## 4. Fill the four sections
+## 4. Fill the sections
 
 Markdown, in the owner's words where you have them, in this order:
 
-1. **Who we serve** (`serve`): the customer, the alternative they use today, the one you turned down.
+1. **Who we serve** (`serve`): the customer, how badly they need it, and what they use today instead.
 2. **What we sell, and for how much** (`sell`): the product and the pricing model, and the price that would break
    if doubled or halved.
-3. **What we know that others don't** (`know`): the heart of the strategy. The thing the team understands about the
-   business that the obvious competitors miss; this is where "how we win" lives. Spend the most care here.
-4. **What we won't do** (`not`): required. Fill it from the bets' `rules_out` and from what the owner strikes or says
+3. **How we know they want it** (`proof`): who uses it, how often, who comes back, and what they say. Evidence only,
+   each line with its source: fill it with `playbooks/keep-proof-current.md`. A new idea with no users yet says so.
+4. **Why now** (`now`): what changed recently (technology, cost, rules, how people behave) that makes this possible
+   or needed now.
+5. **What we know that others don't** (`know`): the heart of the strategy. The thing the team understands about the
+   business that the obvious competitors miss, and why this team is the one to build it; this is where "how we win"
+   lives. Spend the most care here.
+6. **How we sell** (`how`): how customers find the team and buy, and where the next 100 customers come from: a channel
+   or a list of people, not "marketing".
+7. **What we won't do** (`not`): required. Fill it from the bets' `rules_out` and from what the owner strikes or says
    no to; never leave it empty or soft.
 
 Anything else the owner raises (brand, channels) is an extra section: `"extra": {"brand": {"title": "Brand",
@@ -106,6 +117,8 @@ Bet 1: Charge half what other cleaning companies charge, because bots do the off
   rules out  A premium tier; one-off deep cleans.
   wrong if   Monthly churn among property managers passes 4% (KPI), checked by 2027-03-31.
 Who we serve       Property managers with ten or more units, who use a local cleaner today.
+How we know        12 managers book weekly; 10 of them are still booking after 90 days. (Growth, October 2026)
+Why now            Bots can now book, schedule and bill for almost nothing.
 What we know       The office work, not the cleaning, is what makes cleaning expensive.
 What we won't do   No premium tier, no one-off jobs, no phone support, no new cities yet.
 Summary            Acme cleans for property managers at half the usual price, because bots run the office.
@@ -131,12 +144,12 @@ section has a position, or at eight claims.
 The payload is partial: send only the fields you have something for.
 
     {"summary": "...", "vision": "...",
-     "sections": {"serve": "...", "sell": "...", "know": "...", "not": "..."},
+     "sections": {"serve": "...", "sell": "...", "proof": "...", "now": "...", "know": "...", "how": "...", "not": "..."},
      "bets": [{"statement": "...", "why": "...", "rules_out": "...",
                "wrong_if": {"kind": "kpi", "kpi_id": "...", "direction": "above", "threshold": 4, "check_by": "2027-03-31"},
                "cites": ["..."], "status": "active"}]}
 
-A bet already on the page carries its `id`. A bet may list the growth ideas it serves as `"ideas": ["<idea task id>"]`; confirming links them. Look at `hub proposal list` first: one pending `strategy_draft` from a
+A bet already on the page carries its `id`. Look at `hub proposal list` first: one pending `strategy_draft` from a
 drafting run at a time; replace yours rather than file a second beside it. Confirming writes the draft and the bets
 as the owner; nothing is published.
 
@@ -148,6 +161,8 @@ rules-out and a wrong-if, and something under "What we won't do"; the page refus
 Rewrite `state.md` (what the draft rests on, which claims were kept, edited or struck, what is still open), record
 a durable lesson about this team's words or sources in `knowledge/`, and commit this repository. From a task,
 finish it with `hub task update <id> --status done --note "<the message above>"`.
+
+**Done when:** one `strategy_draft` proposal is pending (or it replaced an older one), every bet has a rules-out and a wrong-if or is left `proposed` with the gap named, the owner's message with its ask is the task note, and `state.md` says what the draft rests on.
 
 ## After the owner publishes
 

@@ -77,7 +77,8 @@ pub struct Runner {
     flush_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Attempts whose first streamed text has reached the server (one timing mark each).
     pub first_posted: Mutex<HashSet<String>>,
-    assignments: Mutex<Vec<Value>>,
+    /// The last `runners/assignments` answer. A writer replaces the Arc; a reader takes a clone of it, not the list.
+    assignments: Mutex<Arc<Vec<Value>>>,
     published: Mutex<HashMap<String, Option<(i128, u64)>>>,
     beat: Mutex<Option<(String, Instant)>>,
     /// When a person asked for a restart (the Restart button): the runner exits once no turn runs, and claims
@@ -166,7 +167,7 @@ impl Runner {
             accounts: AtomicBool::new(false),
             flush_locks: Mutex::new(HashMap::new()),
             first_posted: Mutex::new(HashSet::new()),
-            assignments: Mutex::new(vec![]),
+            assignments: Mutex::new(Arc::new(vec![])),
             published: Mutex::new(HashMap::new()),
             beat: Mutex::new(None),
             restart: Mutex::new(None),
@@ -213,9 +214,9 @@ impl Runner {
         }
     }
 
-    /// The last `runners/assignments` answer.
-    pub fn assignments_seen(&self) -> Vec<Value> {
-        self.assignments.lock().unwrap().clone()
+    /// The last `runners/assignments` answer, shared: a read is a pointer copy, not a copy of every bot's row.
+    pub fn assignments_seen(&self) -> Arc<Vec<Value>> {
+        Arc::clone(&self.assignments.lock().unwrap())
     }
 
     /// Stderr has its own capped row, never repeated in the event outbox or ordinary event stream.
@@ -229,7 +230,7 @@ impl Runner {
             while let Some(ev) = rx.recv().await {
                 if ev["kind"] == "diagnostic" && ev.get("stderr_tail").is_some() {
                     let text = crate::util::text_of(&ev["stderr_tail"]);
-                    let text = redactor.as_ref().map_or(text.clone(), |r| r.scrub_text(&text));
+                    let text = redactor.as_ref().map_or(text.clone(), |r| r.scrub_text(&text).into_owned());
                     let text = crate::redact::scrub_credentials(&text, &[]);
                     let id = aid.clone();
                     let _ = state.off(move |s| s.stderr(&id, &text)).await;
@@ -352,7 +353,7 @@ impl Runner {
         let repository_rows = if full { self.lanes.repositories.poll().await } else { None };
         if full {
             let assignments = self.client.get("runners/assignments").await?;
-            *self.assignments.lock().unwrap() = assignments.as_array().cloned().unwrap_or_default();
+            *self.assignments.lock().unwrap() = Arc::new(assignments.as_array().cloned().unwrap_or_default());
             // Before the grants are read: a bot from before grants keeps the legacy keys it could read.
             if let Err(e) = crate::credential_migration::migrate(&self.config, &self.client, assignments.as_array().map(Vec::as_slice).unwrap_or_default()).await {
                 log(&format!("Tico runner: credential migration failed ({}); will retry", describe(&e)));
@@ -366,7 +367,7 @@ impl Runner {
                 }
             }
         }
-        let assignments = self.assignments.lock().unwrap().clone();
+        let assignments = self.assignments_seen();
         let candidates = readiness_candidates(&assignments);
         // A built-in bot is set up from the catalog first; any other (or one whose history is on GitHub) is fetched.
         // A bot delivered through an app has no repository to fetch.
@@ -698,7 +699,8 @@ fn note_skipped_actions(skipped: u64) {
 
 /// The loop's own clocks (service.py `wants`, `claim_due`, `claimed`, `claim_wait`).
 struct Clock {
-    polled: HashMap<&'static str, Instant>,
+    /// When each event channel was last read on its interval, by its index in `events::CHANNELS`.
+    polled: [Option<Instant>; crate::events::CHANNELS.len()],
     next_claim: Option<Instant>,
     idle_claims: u32,
     claim_hint: (Option<Instant>, f64),
@@ -709,18 +711,19 @@ struct Clock {
 impl Clock {
     fn wants(&mut self, events: &Events, channel: &'static str, every: Option<f64>) -> bool {
         let now = Instant::now();
+        let Some(slot) = crate::events::index(channel) else { return false };
         let due = if events.take(channel) {
             true
         } else if let Some(every) = every {
-            match self.polled.get(channel) {
+            match self.polled[slot] {
                 None => true,
-                Some(at) => now.duration_since(*at).as_secs_f64() >= if events.live() { BACKUP_POLL_S } else { every },
+                Some(at) => now.duration_since(at).as_secs_f64() >= if events.live() { BACKUP_POLL_S } else { every },
             }
         } else {
             return false;
         };
         if due {
-            self.polled.insert(channel, now);
+            self.polled[slot] = Some(now);
         }
         due
     }
@@ -774,9 +777,10 @@ impl Runner {
         tokio::spawn(self.events.clone().run(self.client.clone()));
         tokio::spawn(crate::perf::run_loop(self.clone()));
         tokio::spawn(crate::afterwatch::run_loop(self.clone()));
+        tokio::spawn(crate::memory_tidy_keep::run_loop(self.clone()));
         tokio::spawn(crate::appdriver::run_loop(self.clone()));
         let mut clock = Clock {
-            polled: HashMap::new(),
+            polled: [None; crate::events::CHANNELS.len()],
             next_claim: None,
             idle_claims: 0,
             claim_hint: (None, CLAIM_IDLE_MAX),
@@ -850,7 +854,7 @@ impl Runner {
             || crate::follow::shared().is_some_and(|f| f.draining()) {
             if crate::follow::feature("runner_drain") { self.drain.begin(Instant::now()); }
         } else {
-            self.drain.end(); // a failed or cancelled update takes work again
+            self.drain.end(); // a failed or canceled update takes work again
         }
         let finished: Vec<String> = workers.iter().filter(|(_, w)| w.is_finished()).map(|(a, _)| a.clone()).collect();
         for aid in finished {
@@ -917,7 +921,7 @@ impl Runner {
             }
         }
         // Programs bots declare in `watchers:` (crate::watchers); a failure is logged and never stops the runner.
-        let assignments = self.assignments.lock().unwrap().clone();
+        let assignments = self.assignments_seen();
         let ctx = crate::watchers::Ctx {
             client: self.client.clone(),
             url: self.config.url(),
@@ -1200,9 +1204,61 @@ mod tests {
 
     #[test]
     fn idle_claims_back_off_to_two_seconds() {
-        let mut c = Clock { polled: HashMap::new(), next_claim: None, idle_claims: 0, claim_hint: (None, 2.0), claim_live_at: None, last_heartbeat: None };
+        let mut c = Clock { polled: [None; crate::events::CHANNELS.len()], next_claim: None, idle_claims: 0, claim_hint: (None, 2.0), claim_live_at: None, last_heartbeat: None };
         let waits: Vec<f64> = (0..5).map(|_| c.claim_wait(false)).collect();
         assert_eq!(waits, vec![0.5, 1.0, 2.0, 2.0, 2.0]);
         assert_eq!(c.claim_wait(true), 0.25);
+    }
+
+    #[test]
+    fn a_channel_is_taken_once_per_ask_and_each_channel_keeps_its_own_interval() {
+        let events = Events::new();
+        let mut c = Clock { polled: [None; crate::events::CHANNELS.len()], next_claim: None, idle_claims: 0, claim_hint: (None, 2.0), claim_live_at: None, last_heartbeat: None };
+        assert!(c.wants(&events, "sync", Some(15.0)), "never read yet");
+        assert!(!c.wants(&events, "sync", Some(15.0)), "read a moment ago");
+        assert!(!c.wants(&events, "config", None), "neither asked for nor on an interval");
+        events.ask(&["config"]);
+        assert!(c.wants(&events, "config", None) && !c.wants(&events, "config", None));
+        assert!(!c.wants(&events, "sync", Some(15.0)), "the sync interval is its own");
+    }
+
+    /// One bot's row from `runners/assignments`, about 1.2 KB as the server sends it.
+    fn bench_assignment(i: usize) -> Value {
+        json!({
+            "bot": format!("bot:role-{i}"), "runner_id": "r1", "state": "active", "generation": 12, "team": "engineering",
+            "owner_id": "user-1", "computer_label": "Studio Mac", "active": true,
+            "repository": {"owner": "acme", "name": format!("role-{i}"), "branch": "main", "url": format!("https://github.com/acme/role-{i}.git")},
+            "config": {"runtime": "claude", "model": "claude-sonnet-5", "effort": "medium", "tools": ["hub", "browser", "mail", "github"],
+                       "memory": {"history": true, "cap_bytes": 65536},
+                       "watchers": [{"name": "inbox", "every_s": 60, "command": "python3 watch.py --inbox"}],
+                       "instructions": format!("Role {i}. {}", "Keep the board current. ".repeat(30))}
+        })
+    }
+
+    /// `cargo test bench_assignments -- --ignored --nocapture`: the bytes one tick's read of the assignment list asks
+    /// the allocator for, with 20 bots (the tick runs four times a second).
+    #[tokio::test]
+    #[ignore]
+    async fn bench_assignments_read_per_tick() {
+        let dir = std::env::temp_dir().join(format!("tico-assign-bench-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("projects")).unwrap();
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        let client = Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Runner::new(config, client, State::open(&dir.join("state")).unwrap());
+        let assignments: Vec<Value> = (0..20).map(bench_assignment).collect();
+        let json_bytes = serde_json::to_vec(&assignments).unwrap().len();
+        *runner.assignments.lock().unwrap() = Arc::new(assignments);
+        let mut bytes = Vec::new();
+        for _ in 0..50 {
+            let asked = crate::util::alloc_probe::requested();
+            let seen = runner.assignments_seen();
+            bytes.push(crate::util::alloc_probe::requested() - asked);
+            assert_eq!(seen.len(), 20);
+        }
+        bytes.sort_unstable();
+        eprintln!("assignment read per tick, 20 bots ({json_bytes} JSON bytes): bytes requested median {} (min {}, max {})", bytes[25], bytes[0], bytes[49]);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

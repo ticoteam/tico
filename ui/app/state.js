@@ -28,14 +28,14 @@ let BOOT_DEFAULT_ROUTE = false;
 const ENTRY_JUMP = entryJump();
 const ENTRY_ROUTE = entryRoute();
 if (ENTRY_ROUTE) history.replaceState(null, '', location.pathname + ENTRY_ROUTE);
-else if (!location.hash || location.hash === '#/') { BOOT_DEFAULT_ROUTE = true; history.replaceState(null, '', UPDATES); }   // Updates is home
+else if (!location.hash || location.hash === '#/') { BOOT_DEFAULT_ROUTE = true; history.replaceState(null, '', HOME); }   // My dashboard is home
 // Every team-facing name comes from the server (GET /api/me -> config, also GET /api/v2/config),
 // so a second environment shows its own application, team and assistant names. The defaults keep
 // an older server working, and strings built before /api/me answers read the names lazily.
 const CONFIG_DEFAULTS = {environment_id: '', company_name: '', app_name: 'Tico', assistant_name: 'Assistant',
                          assistant_bot: 'coo', public_url: '', runner_url: location.origin, visual_origin: '',
                          github_owner: '', local: false, release: '', onboarding_needed: false, version: '', update: null, s3_view_urls: {}};
-const S = { emps: [], people: [], orgGroups: [], status: null, statusPending: true, issues: [], me: null, route: location.hash || UPDATES,
+const S = { emps: [], people: [], orgGroups: [], status: null, statusPending: true, issues: [], me: null, route: location.hash || HOME,
             config: {...CONFIG_DEFAULTS},
             v2: {on: false, status: {}, needs: []},
             // What each main page last read (Tasks, Strategy, Automations, a dashboard, the campus's hours card): a
@@ -67,7 +67,7 @@ const isAssistantHelper = slug => ASSISTANT_HELPERS.includes(slug);
 const strategyDefaultName = () => 'Strategy Bot';
 const strategyDefaultish = name => !name || name === 'Goal Manager' || name === 'CEO Bot';
 const strategyBotName = () => {
-  const name = String((S.emps || []).find(e => e.name === 'goal-manager')?.display_name || '').trim();
+  const name = String(botRow('goal-manager')?.display_name || '').trim();
   return strategyDefaultish(name) ? strategyDefaultName() : name;
 };
 // Everyone's chat is their Assistant, the owner's too (backend/assistant.py): the Strategy Bot is a helper it asks.
@@ -161,6 +161,7 @@ function applyConfig(config) {
   document.documentElement.classList.toggle('strip', strip || document.documentElement.classList.contains('cloud-frozen'));
   $('#demo-banner').hidden = !strip;
   if (S.config.rehearsal && !S.config.demo) $('#demo-banner').innerHTML = '<strong>Rehearsal: nothing runs or leaves this server</strong>';
+  if (S.config.demo && S.config.demo_public) $('#demo-banner').innerHTML = '<strong>Read only demo</strong>';
   renderOnboardingNav();
   renderNewVersion();
   window.renderChangelogNotice?.();
@@ -186,7 +187,7 @@ function betaMark(root = document) {
 }
 // ----------------------------------------------------------------- derived state
 function stateOf(slug) {
-  const e = S.emps.find(x => x.name === slug);
+  const e = botRow(slug);
   if (!e || e.status === 'planned') return 'planned';
   if (e.status === 'paused') return 'paused';
   const live = S.v2?.status?.[slug];
@@ -199,8 +200,8 @@ const openCount = slug => S.v2?.status?.[slug]?.open_tasks || 0;
 // number is a fixed attention count matching the default Needs You tab, independent of edits to that tab.
 function botNeeds(slug) {
   return (S.v2?.needs || []).filter(it => (['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it)
-    && companyNeedActor(it, it) === 'bot:' + slug) || (it.kind === 'ask' && it.requester === 'bot:' + slug)
-    || (it.kind === 'approval' && (it.requested_by || it.requester) === 'bot:' + slug));
+    && companyNeedActor(it, it) === 'bot:' + slug) || (it.kind === 'ask' && it.requester_id === 'bot:' + slug)
+    || (it.kind === 'approval' && (it.requested_by_id || it.requester_id) === 'bot:' + slug));
 }
 // While only some pages are held, the counts are the server's over the whole list (its `bots`).
 const needsBotsWhole = () => S.v2?.needsNext && S.v2.needsBots ? S.v2.needsBots : null;
@@ -212,7 +213,7 @@ function needsMeCounts() {
   const counts = new Map();
   for (const it of S.v2?.needs || []) {
     const actor = ['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it) ? companyNeedActor(it, it)
-      : it.kind === 'ask' ? it.requester : it.kind === 'approval' ? it.requested_by || it.requester : null;
+      : it.kind === 'ask' ? it.requester_id : it.kind === 'approval' ? it.requested_by_id || it.requester_id : null;
     if (typeof actor === 'string' && actor.startsWith('bot:')) counts.set(actor, (counts.get(actor) || 0) + 1);
   }
   return counts;

@@ -162,11 +162,11 @@ def test_the_cli_and_the_mcp_tool_send_the_bulk_change_the_route_takes(api):
             sent.append((path, body))
             return {}
 
-    args = hubcli.parser().parse_args(["task", "bulk", "step", "Legal review", "--where-type", "Marketing",
+    args = hubcli.parser().parse_args(["task", "bulk", "step", "Legal review", "--where-type", "Campaign",
                                        "--where-step", "Draft", "--where-owner", "me", "--where-status", "open",
                                        "--where-status", "doing", "--dry-run"])
     remotecli.via_tool(Client(), args)
-    assert sent == [("task-bulk", {"filter": {"type": "Marketing", "step": "Draft", "owner": "human:ana",
+    assert sent == [("task-bulk", {"filter": {"type": "Campaign", "step": "Draft", "owner": "human:ana",
                                               "status": "open,doing"},
                                    "action": "step", "step": "Legal review", "dry_run": True})]
 

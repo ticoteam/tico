@@ -8,8 +8,9 @@ const PERSON_TABS = ['profile', 'slack'];
 // Assistant page (ui/app/assistant-page.js), the owner's too. The old #/person/<you>/assistant link lands there too.
 const personTabs = p => S.me?.id === p.id ? ['assistant', ...PERSON_TABS] : PERSON_TABS;
 const PERSON_TAB_LABELS = {assistant: 'Assistant', profile: 'Profile', slack: 'Slack'};
+// Manage on them, as the server says it: yourself, the owner, an admin, or anyone they report up to.
 function personCanEdit(p) {
-  return S.me?.role === 'owner' || S.me?.id === p.id;
+  return p.my_access ? !!p.my_access.manage : S.me?.role === 'owner' || S.me?.id === p.id;
 }
 function fieldEditor(label, value, {placeholder, rows, save}) {
   const current = String(value || '');
@@ -51,7 +52,7 @@ function pagePerson(id, tab) {
   const placed = byReportOrder('p:' + p.id), inOrder = (a, b) => placed(a, b) || chartFallback(a, b);
   const reports = (S.people || []).filter(row => row.reports_to === p.id && !row.hidden)
     .sort((a, b) => inOrder({kind: 'person', person: a}, {kind: 'person', person: b}));
-  const bots = (p.bots || []).map(slug => S.emps.find(e => e.name === slug)).filter(e => e && !isHiddenBot(e.name));    // not the Assistant or its helpers (ui/app/sidebar.js)
+  const bots = (p.bots || []).map(slug => botRow(slug)).filter(e => e && !isHiddenBot(e.id));    // not the Assistant or its helpers (ui/app/sidebar.js)
   const under = shownEmps().filter(e => e.org_parent === 'p:' + p.id);
   const boss = (S.people || []).find(row => row.id === p.reports_to);
   const edit = personCanEdit(p);
@@ -60,7 +61,7 @@ function pagePerson(id, tab) {
     <div class="botid"><h1>${esc(p.name || p.id)}</h1>
       <ul class="goal-lines head-goals" id="head-goals" aria-label="Goals"></ul>
       ${String(p.goals || '').trim() ? `<div class="role" id="head-standing">${esc(String(p.goals).trim())}</div>` : ''}
-    </div></div>
+    </div>${S.me?.id !== p.id && THREADS.on !== false && p.my_access?.write !== false ? '<button type="button" class="ghost small" id="person-dm">DM</button>' : ''}</div>
   <div class="tabs bottabs" id="ptabs" role="tablist">
     ${tabs.map(t => `<button data-pt="${t}" role="tab" class="${t === tab ? 'cur' : ''}">${t === 'assistant' ? esc(myChatName()) : PERSON_TAB_LABELS[t]}</button>`).join('')}
   </div>
@@ -79,6 +80,7 @@ function pagePerson(id, tab) {
       <div id="person-id">${p.title || p.team ? `<div class="meta">${esc([...new Set([p.title, p.team ? teamLabel(p.team) : ''].filter(Boolean))].join(' · '))}</div>` : ''}
         ${p.about ? `<div class="role">${esc(about.lead)}${about.rest ? `<span id="goal-rest" hidden> ${esc(about.rest)}</span> <button class="linkish" type="button" id="goal-more" aria-expanded="false">more</button>` : ''}</div>`
           : edit && !p.title ? '<div class="muted">No title or description yet.</div>' : ''}</div></section>` : ''}
+    <section class="card home-card" id="person-home"><header><h2>Home</h2><div class="home-card-acts" id="person-home-acts"></div></header><div id="person-home-thread"></div></section>
     <section class="card tasks" id="person-tasks-card"><header><h2>Tasks</h2>
         <button class="ghost" type="button" id="person-task-add" aria-haspopup="dialog">+ Add task</button></header>
       <div id="person-tasks">Loading…</div></section>
@@ -87,7 +89,10 @@ function pagePerson(id, tab) {
     ${reports.length ? `<section class="card"><header><h2>Reports</h2></header>
       <div>${reports.map(row => `<a class="chip" href="#/person/${encodeURIComponent(row.id)}">${personAvatar(row, 20)}<span>${esc(firstName(row.name) || row.id)}</span></a>`).join('')}</div></section>` : ''}
     ${(bots.length || under.length) ? `<section class="card"><header><h2>Bots</h2></header>
-      <div>${[...new Map([...bots, ...under].map(e => [e.name, e])).values()].sort((a, b) => inOrder({kind: 'bot', ...a}, {kind: 'bot', ...b})).map(e => `<a class="chip" href="#/bot/${esc(e.name)}">${avatar(e.name, 20, stateOf(e.name))}<span>${shownName(e)}</span>${runtimeTag(e)}</a>`).join('')}</div></section>` : ''}
+      <div>${[...new Map([...bots, ...under].map(e => [e.id, e])).values()].sort((a, b) => inOrder({kind: 'bot', ...a}, {kind: 'bot', ...b})).map(e => `<a class="chip" href="#/bot/${encodeURIComponent(e.id)}">${avatar(e.id, 20, stateOf(e.id))}<span>${shownName(e)}</span>${runtimeTag(e)}</a>`).join('')}</div></section>` : ''}
+    <section class="card" id="person-access" hidden><header><h2>Access</h2>
+        <button class="linkish person-edit-btn" type="button" id="person-access-edit">Edit</button></header>
+      <div class="muted" id="person-access-text"></div></section>
     ${edit ? `<section class="card" id="person-notify"><header><h2>Notifications</h2></header>
       <label class="person-notify" title="A Slack DM when a task they asked for is finished or declined">
         <input type="checkbox" role="switch" class="people-switch" id="person-notify-slack" ${p.notify_slack_task_done !== false ? 'checked' : ''}>
@@ -96,6 +101,12 @@ function pagePerson(id, tab) {
         <input type="checkbox" role="switch" class="people-switch" id="person-notify-bots" ${p.notify_slack_bot_messages !== false ? 'checked' : ''}>
         <span>Bot messages in Slack</span></label>
       <div class="person-muted" id="person-muted" ${p.notify_slack_bot_messages === false ? 'hidden' : ''}></div>
+      ${S.me?.id === p.id ? `<label class="person-notify" title="A browser notification for new threads that need you (a question, a mention, a DM, a held message), while Tico is in the background. Your browser asks permission the first time">
+        <input type="checkbox" role="switch" class="people-switch" id="person-notify-browser" ${p.notify_browser === true ? 'checked' : ''}>
+        <span>Browser notifications</span></label>` : ''}
+      <label class="person-notify" title="One email an hour for the threads you follow on digest that have new messages for you: each title, its unread count and a link. Never the messages or who wrote them">
+        <input type="checkbox" role="switch" class="people-switch" id="person-email-digest" ${p.email_digest !== false ? 'checked' : ''}>
+        <span>Email digests</span></label>
       <label class="person-notify" title="Each morning the Assistant drafts their update from what everyone may see: their shared tasks and goals, their decisions, comments and answers on those tasks, the meetings they were in that are not private, and their reports' updates. Never their private chats or approvals. It posts as theirs, labelled, and they can edit or replace it; once they post their own words that day, there is no draft">
         <input type="checkbox" role="switch" class="people-switch" id="person-update-draft" ${p.update_draft !== false ? 'checked' : ''}>
         <span>Assistant drafts my update</span></label>
@@ -106,6 +117,9 @@ function pagePerson(id, tab) {
       <div id="person-slack">Loading…</div></section>
   </div>`;
   void headGoalsLoad('human:' + p.id);
+  void personAccessLoad(p);
+  const dmButton = $('#person-dm');
+  if (dmButton) dmButton.onclick = () => threadNewOpen({dm: true, members: ['human:' + p.id]});
   $('#ptabs').onclick = ev => {
     const b = ev.target.closest('[data-pt]'); if (!b) return;
     location.hash = b.dataset.pt === 'assistant' ? ASSISTANT : `#/person/${encodeURIComponent(p.id)}${b.dataset.pt === 'profile' ? '' : '/' + b.dataset.pt}`;
@@ -133,6 +147,23 @@ function pagePerson(id, tab) {
   notifySwitch('#person-notify-slack', 'notify_slack_task_done');
   notifySwitch('#person-notify-bots', 'notify_slack_bot_messages');
   notifySwitch('#person-update-draft', 'update_draft');
+  notifySwitch('#person-email-digest', 'email_digest');
+  const browser = $('#person-notify-browser');
+  if (browser) browser.onchange = async () => {
+    const value = browser.checked, status = $('#person-notify-status');
+    status.textContent = '';
+    if (value && !('Notification' in window)) { browser.checked = false; status.textContent = 'This browser has no notifications.'; return; }
+    if (value && Notification.permission !== 'granted' && (Notification.permission === 'denied' || await Notification.requestPermission() !== 'granted')) {
+      browser.checked = false; status.textContent = 'Your browser is not allowing notifications for Tico.'; return;
+    }
+    browser.disabled = true;
+    try {
+      const row = await post(`/v2/humans/${encodeURIComponent(p.id)}`, {notify_browser: value});
+      p.notify_browser = row.notify_browser === true; S.notifyBrowser = p.notify_browser; browser.checked = p.notify_browser;
+    } catch (e) {
+      browser.checked = !value; status.textContent = e.message || 'Could not save.';
+    } finally { browser.disabled = false; }
+  };
   const botsSwitch = $('#person-notify-bots');
   if (botsSwitch) botsSwitch.addEventListener('change', () => { $('#person-muted').hidden = !botsSwitch.checked; });
   // Muted bots: their messages stay in Tico while the other bots still reach Slack.
@@ -140,12 +171,12 @@ function pagePerson(id, tab) {
     const box = $('#person-muted');
     if (!box) return;
     const muted = p.slack_muted_bots || [];
-    const rest = shownEmps().filter(e => !muted.includes(e.name));
+    const rest = shownEmps().filter(e => !muted.includes(e.id));
     box.innerHTML = `<span class="muted">Muted</span>
-      ${muted.map(slug => { const e = S.emps.find(x => x.name === slug);
-        return `<span class="chip">${avatar(slug, 18)}<span>${e ? shownName(e) : esc(slug)}</span><button type="button" class="people-chip-x" data-unmute="${esc(slug)}" aria-label="Unmute ${esc(slug)}">×</button></span>`; }).join('')}
+      ${muted.map(slug => { const e = botRow(slug);
+        return `<span class="chip">${avatar(slug, 18)}<span>${e ? shownName(e) : esc(slug)}</span><button type="button" class="people-chip-x" data-unmute="${esc(slug)}" aria-label="Unmute ${empName(slug)}">×</button></span>`; }).join('')}
       ${rest.length ? `<select id="person-mute-add" aria-label="Mute a bot in Slack"><option value="">${muted.length ? '+ Bot' : 'None · mute a bot'}</option>
-        ${rest.map(e => `<option value="${esc(e.name)}">${shownName(e)}</option>`).join('')}</select>` : ''}`;
+        ${rest.map(e => `<option value="${esc(e.id)}">${shownName(e)}</option>`).join('')}</select>` : ''}`;
     const save = async next => {
       const status = $('#person-notify-status');
       box.querySelectorAll('button,select').forEach(el => el.disabled = true); status.textContent = '';
@@ -193,6 +224,9 @@ function pagePerson(id, tab) {
     };
   };
   githubPaint(false);
+  // Their Home under the profile: their posts and update cards, never an empty timeline.
+  threadMount($('#person-home-thread'), {home: 'human:' + p.id, card: true, header: 'compact', actsHost: $('#person-home-acts'),
+    hideGone: $('#person-home'), compactEmpty: true});
   const cards = $('#pane-profile').querySelectorAll('section.card');
   const goalsCard = [...cards].find(el => el.querySelector('h2')?.textContent === 'Goals');
   const notesCard = [...cards].find(el => el.querySelector('h2')?.textContent === 'Notes');
@@ -239,6 +273,14 @@ function pagePerson(id, tab) {
 // The human's tasks: what they own, active first, finished behind a toggle. The rows are
 // the same as a keeper bot's (v2TaskRow), opening the shared task detail.
 let PERSON_TASKS = null;
+// Shown only to whoever manages this person: the read is refused to everyone else.
+async function personAccessLoad(p) {
+  const data = await teammateAccessRead('human', p.id), card = $('#person-access');
+  if (!data || !card || !$('#person-access-text')) return;
+  $('#person-access-text').textContent = accessSummary(data);
+  card.hidden = false;
+  $('#person-access-edit').onclick = () => teammateEditAccess('human', p.id, p.name || p.id, () => personAccessLoad(p));
+}
 async function personTasksLoad(p) {
   PERSON_TASKS = p.id;
   const box = $('#person-tasks'); if (!box) return;
@@ -315,10 +357,10 @@ async function personSlackLoad(p) {
     el.innerHTML = threads.map(t => {
       const msgs = t.messages || [];
       return `<div class="conv-bots-one"><div class="conv-run-head">${avatar(t.bot, 20, stateOf(t.bot))}
-          <a href="#/bot/${esc(t.bot)}">${esc(t.display_name || t.bot)}</a>
+          <a href="#/bot/${encodeURIComponent(t.bot)}">${esc(t.display_name || botDisplayName(t.bot))}</a>
           <span class="spacer" style="flex:1"></span><span class="tnum">${esc(ago(t.last_message_at))}</span></div>
-        ${msgs.map(m => `<div class="bubble ${String(m.from_actor || '').startsWith('bot:') ? 'bot reply' : 'you'}">
-            <span class="who">${esc(actorLabel(m.from_actor))}</span>
+        ${msgs.map(m => `<div class="bubble ${String(m.sender_id || '').startsWith('bot:') ? 'bot reply' : 'you'}">
+            <span class="who">${esc(actorLabel(m.sender_id))}</span>
             ${m.refs?.read_back ? `<div class="read-back" style="white-space:pre-line">${esc(m.body || '')}</div>`
               : `<div class="md">${safeMd(m.body || '')}</div>`}${chatCopyHTML(m.body)}</div>`).join('') || '<div class="empty">No messages yet.</div>'}
         </div>`;

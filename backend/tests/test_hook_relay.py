@@ -53,7 +53,7 @@ class HQ:
         if path == "relays" and request.method == "GET":
             return httpx.Response(200, json={"items": [
                 {"relay_id": r["id"], "trigger_id": r["trigger_id"], "name": "", "address_prefix": "", "wake": r.get("wake", False),
-                 "system": bool(r.get("system")), "created": "2026-10-25T09:00:00Z"} for r in self.relays.values()]})
+                 "system": bool(r.get("system")), "created_at": "2026-10-25T09:00:00Z"} for r in self.relays.values()]})
         if path == "relays":
             if "idempotency-key" not in request.headers:
                 return httpx.Response(400, json={"error": "idempotency_key"})
@@ -213,7 +213,7 @@ def test_a_concurrent_create_that_gets_the_same_hq_relay_keeps_it_instead_of_del
         answer = real(link, method, path, body, idempotency, quiet)
         if path == "relays" and method == "POST":
             with api.app.state.store.transaction() as c:
-                c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created) VALUES(?,?,?,?,?)",
+                c.execute("INSERT INTO trigger_relays(relay_id,trigger_id,address_prefix,created_by,created_at) VALUES(?,?,?,?,?)",
                           (answer["relay_id"], "shop", f"{BASE}/v1/hooks/{answer['relay_id']}", "human:ana", H.now()))
         return answer
     svc.ask = ask_then_other_request_saves_first
@@ -416,9 +416,9 @@ def test_the_owner_sets_and_clears_the_wake_address_and_the_secret_is_shown_once
     assert shown["url"] == url and shown["set_by"] == "human:ana" and shown["set_at"] and "whsec" not in json.dumps(shown)
     with api.app.state.store.read() as c:           # HQ signs: the secret is nowhere here, and the audit names only the host
         assert "whsec_test" not in json.dumps([tuple(r) for r in c.execute("SELECT * FROM hook_relay_state")])
-        audit = [dict(r) for r in c.execute("SELECT action, detail_json FROM events WHERE action LIKE 'hooks.wake_url%'")]
-    assert [a["action"] for a in audit] == ["hooks.wake_url_set"] and "t0ken" not in audit[0]["detail_json"]
-    assert "wake.acme.example" in audit[0]["detail_json"]
+        audit = [dict(r) for r in c.execute("SELECT action, detail FROM events WHERE action LIKE 'hooks.wake_url%'")]
+    assert [a["action"] for a in audit] == ["hooks.wake_url_set"] and "t0ken" not in audit[0]["detail"]
+    assert "wake.acme.example" in audit[0]["detail"]
 
     assert put(api, "hooks/wake-url", {"url": None}) == {"url": None, "secret": None}
     assert hq.calls[-1][2] == {"url": None, "secret": None} and hq.wake is None

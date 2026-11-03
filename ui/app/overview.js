@@ -21,25 +21,25 @@ function overviewModel() {
     if (c.id && !c.revoked_at) computer(String(c.id), c.label);
   }
   const commons = {id: '@commons', name: 'Shared pavilion', kind: 'commons', members: []};
-  const visible = (S.emps || []).filter(e => e.name && !['archived', 'retired'].includes(e.status || e.state)
+  const visible = (S.emps || []).filter(e => e.id && !['archived', 'retired'].includes(e.status || e.state)
     && e.my_access?.see !== false && orgBranchVisible(e));
-  const byBot = new Map(visible.map(e => [e.name, e]));
+  const byBot = new Map(visible.map(e => [e.id, e]));
   for (const e of visible) {
     const readable = e.my_access?.read !== false;
-    const live = readable && fresh ? S.v2.status[e.name] : null;
+    const live = readable && fresh ? S.v2.status[e.id] : null;
     const state = !readable ? 'restricted' : !fresh ? 'unknown' : ['paused', 'planned'].includes(e.status) ? e.status : live?.state || 'unknown';
-    const stuck = readable ? overviewStuck().find(row => row.bot === e.name) : null;
+    const stuck = readable ? overviewStuck().find(row => row.bot === e.id) : null;
     const word = state === 'restricted' ? 'Activity requires Read access.' : stuck ? 'Stuck: ' + stuck.why
       : state === 'unknown' ? 'No current status available.' : V2_WORD[state] || statusWord(state);
     // Never infer a restricted bot's machine from inventory, even if the response happens to name it.
     const location = readable ? e.machine : null;
     const group = location?.runner_id ? computer(String(location.runner_id), location.label) : commons;
-    group.members.push({id: 'bot:' + e.name, name: botDisplayName(e.name) + (e.shared_from || e.is_branch ? ' · Your branch' : ''),
-      type: 'bot', state, detail: word, href: readable || e.can_chat ? '#/bot/' + encodeURIComponent(e.name) : '', face: overviewFace(e)});
+    group.members.push({id: 'bot:' + e.id, name: botDisplayName(e.id) + (e.shared_from || e.is_branch ? ' · Your branch' : ''),
+      type: 'bot', state, detail: word, href: readable || e.can_chat ? '#/bot/' + encodeURIComponent(e.id) : '', face: overviewFace(e)});
     if (group === commons) continue;
-    const collaborators = new Set([actor(e.operator), ...(e.users || []).map(actor), ...(e.owners || []).map(actor), ...(e.bot_owners || []).map(actor)]);
+    const collaborators = new Set([actor(e.owner_id), ...(e.users || []).map(actor), ...(e.owners || []).map(actor), ...(e.bot_owners || []).map(actor)]);
     // Follow visible reporting chains too: a human may direct a bot through another bot.
-    let parent = e.reports_to; const seen = new Set([e.name]);
+    let parent = e.reports_to; const seen = new Set([e.id]);
     while (parent && !seen.has(parent)) {
       if (String(parent).startsWith('human:')) { collaborators.add(actor(parent)); break; }
       seen.add(parent); parent = byBot.get(parent)?.reports_to;
@@ -57,8 +57,8 @@ function overviewModel() {
 }
 // A robot's screen face is the same symbol as its avatar (avatars.js botAvatar), glowing in its colour.
 function overviewFace(e) {
-  const meta = BOT_AVATARS[e.name], glyph = !meta?.tico && TEMPLATE_ICON.test(e.icon || '') ? e.icon : '';
-  return {glyph, initials: avInitials(e.name), color: meta?.tico ? '#3fd6a8' : meta?.color || `hsl(${avHue(e.name)} 60% 55%)`,
+  const meta = BOT_AVATARS[e.id], glyph = !meta?.tico && TEMPLATE_ICON.test(e.icon || '') ? e.icon : '';
+  return {glyph, initials: avInitials(e.slug || e.id), color: meta?.tico ? '#3fd6a8' : meta?.color || `hsl(${avHue(e.id)} 60% 55%)`,
     svg: meta?.tico ? '/assets/tico/tico-glyph.svg' : !glyph && meta?.icon ? '/assets/bot-symbols/' + meta.icon + '.svg' : ''};
 }
 async function overviewLoadComputers() {
@@ -122,10 +122,10 @@ async function overviewReplayLoad(state) {
   try { data = await get('/v2/replay?' + new URLSearchParams({from: from.toISOString(), to: to.toISOString()})); }
   catch { post({type: 'tico-overview-replay-error'}); return; }
   const nameOf = replayName(data), names = {};
-  const actors = (data.items || []).flatMap(it => [it.who, it.to, it.owner, it.kind === 'task.owner' ? it.new : null, it.bot ? 'bot:' + it.bot : null])
+  const actors = (data.items || []).flatMap(it => [it.who, it.to, it.owner_id, it.kind === 'task.owner' ? it.new : null, it.bot ? 'bot:' + it.bot : null])
     .concat(Object.keys(data.start?.bots || {}).map(slug => 'bot:' + slug));
   for (const a of actors) if (a && !(a in names)) names[a] = nameOf(a);
-  const slim = it => ({at: it.at, kind: it.kind, who: it.who, to: it.to, owner: it.owner, bot: it.bot, state: it.state, exit: it.exit,
+  const slim = it => ({at: it.at, kind: it.kind, who: it.who, to: it.to, owner: it.owner_id, bot: it.bot, state: it.state, exit: it.exit,
     new: it.new, task: it.task ? {title: it.task.title} : undefined, goal: it.goal ? {title: it.goal.title} : undefined,
     text: it.kind === 'chat.message' || it.kind === 'task.comment' ? String(it.text || '').slice(0, 160) : undefined});
   const start = {bots: Object.fromEntries(Object.entries(data.start?.bots || {}).map(([slug, b]) => [slug, {state: b.state}]))};
@@ -183,7 +183,7 @@ const overviewStuck = () => (typeof HL !== 'undefined' && HL?.stuck) || [];
 function overviewFallbackLine() {
   const on = (typeof HL !== 'undefined' && HL?.on_fallback) || [], limited = (typeof HL !== 'undefined' && HL?.limited) || [];
   if (!on.length && !limited.length) return '';
-  const first = on.map(row => row.since).filter(Boolean).sort()[0];
+  const first = on.map(row => row.changed_at).filter(Boolean).sort()[0];
   const clock = first ? new Date(first).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}) : '';
   const parts = [on.length ? `${on.length} ${on.length === 1 ? 'bot' : 'bots'} running on fallback${clock ? ' since ' + clock : ''}` : '',
     limited.length ? `${limited.length} limited` : ''].filter(Boolean);

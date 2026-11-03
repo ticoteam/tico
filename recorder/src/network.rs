@@ -351,6 +351,8 @@ pub struct Tico {
     pub destination: Destination,
     token: String,
     client: Client,
+    browser: std::sync::Mutex<Option<String>>,
+    oauth: bool,
 }
 impl Tico {
     pub fn saved(config: &Settings, id: &str) -> Result<Self> {
@@ -361,7 +363,9 @@ impl Tico {
             .context("Choose a Tico connection")?
             .clone();
         let token = crate::signin::token(id)?;
-        Self::new(destination, token)
+        let mut tico = Self::new(destination, token)?;
+        tico.oauth = !settings::secret(&format!("tico-grant:{id}"))?.is_empty();
+        Ok(tico)
     }
     pub fn new(destination: Destination, token: String) -> Result<Self> {
         settings::safe_url(&destination.base_url)?;
@@ -370,6 +374,8 @@ impl Tico {
             destination,
             token,
             client: client()?,
+            browser: std::sync::Mutex::new(None),
+            oauth: false,
         })
     }
     pub fn call(&self, path: &str, body: Option<&Value>, key: &str) -> Result<Value> {
@@ -458,6 +464,42 @@ impl Tico {
             result => result,
         }
     }
+    /// The server supplies the browser address; an OAuth runner host may serve only API routes.
+    pub fn browser_url(&self) -> Result<String> {
+        if let Some(browser) = self.browser.lock().unwrap().clone() {
+            return Ok(browser);
+        }
+        let response = self.call("/api/v2/recorder/browser", None, "")?;
+        let browser = settings::safe_url(
+            response["url"]
+                .as_str()
+                .context("Update Tico to copy meeting links")?,
+        )?;
+        let remote = reqwest::Url::parse(&self.destination.base_url)?;
+        let target = reqwest::Url::parse(&browser)?;
+        let local = |u: &reqwest::Url| {
+            ["localhost", "127.0.0.1", "[::1]", "::1"].contains(&u.host_str().unwrap_or(""))
+        };
+        ensure!(
+            local(&remote) || !local(&target),
+            "Tico returned a local browser address for a remote connection"
+        );
+        *self.browser.lock().unwrap() = Some(browser.clone());
+        Ok(browser)
+    }
+    fn task_browser_url(&self) -> Result<String> {
+        match self.browser_url() {
+            Ok(browser) => Ok(browser),
+            Err(error) if error.chain().any(|cause| cause.to_string() == OLD_TICO) => {
+                if self.oauth {
+                    Ok(String::new())
+                } else {
+                    settings::safe_url(&self.destination.base_url)
+                }
+            }
+            Err(error) => Err(error).context("Could not resolve Tico links; the task was not sent"),
+        }
+    }
     pub fn verify(&self) -> Result<Value> {
         let who = self.call("/api/v2/me", None, "")?;
         let actor = who["actor"].as_str().unwrap_or("");
@@ -522,6 +564,10 @@ impl Tico {
         let record = store.get(id)?;
         let context = store.context(id)?;
         ready(&record)?;
+        ensure!(
+            !context.live_discarded,
+            "This meeting was discarded; its recording stays local"
+        );
         ensure!(
             context.live_id.is_empty() || context.live_state == "ended",
             "Finish the connected live meeting first"
@@ -712,6 +758,25 @@ impl Tico {
         owner_name: &str,
         private: bool,
     ) -> Result<()> {
+        self.send_task_confirmed(store, id, item_id, owner, owner_name, private, false)
+    }
+    /// Explicit review can include the selected quote; surrounding transcript always excludes pauses.
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_task_confirmed(
+        &self,
+        store: &Store,
+        id: &str,
+        item_id: &str,
+        owner: &str,
+        owner_name: &str,
+        private: bool,
+        paused_confirmed: bool,
+    ) -> Result<()> {
+        let _guard = store.live_lock();
+        let context = store.context(id)?;
+        if let Some(reason) = crate::live::item_send_blocked(&context) {
+            anyhow::bail!(reason);
+        }
         let who = self.verify()?;
         let record = store.get(id)?;
         let context = store.context(id)?;
@@ -719,6 +784,20 @@ impl Tico {
             context.live_destination.is_empty() || context.live_destination == self.destination.id,
             "This meeting belongs to another Tico"
         );
+        // A remote control can have changed since the window last refreshed. Discover it
+        // before constructing an export from local speech, under the same control lock.
+        if !context.live_id.is_empty() {
+            let view = self.call(
+                &format!("/api/v2/live-meetings/{}", context.live_id),
+                None,
+                "",
+            )?;
+            crate::live::note_state(store, id, &view)?;
+        }
+        let context = store.context(id)?;
+        if let Some(reason) = crate::live::item_send_blocked(&context) {
+            anyhow::bail!(reason);
+        }
         let item = context
             .items
             .iter()
@@ -729,17 +808,28 @@ impl Tico {
             return Ok(());
         }
         ensure!(
+            paused_confirmed
+                || context.paused_windows.is_empty()
+                || (item.quote.trim().is_empty() && item.title.trim().is_empty()),
+            "This action item may quote paused speech. Review its title and quote before sending"
+        );
+        let record = crate::live::shareable(&record, &context.paused_windows);
+        ensure!(
             owner.starts_with("bot:") || owner.starts_with("human:"),
             "Choose who gets it"
         );
-        let base = settings::safe_url(&self.destination.base_url)?;
+        let base = self.task_browser_url()?;
         let filed = record.deliveries.iter().find(|entry| {
             entry.destination_id == self.destination.id && !entry.meeting_id.is_empty()
         });
-        let link = match (filed, context.live_id.is_empty()) {
-            (Some(entry), _) => format!("{base}/#/meetings?meeting={}", entry.meeting_id),
-            (None, false) => format!("{base}/#/meetings?live={}", context.live_id),
-            (None, true) => String::new(),
+        let link = if base.is_empty() {
+            String::new()
+        } else {
+            match (filed, context.live_id.is_empty()) {
+                (Some(entry), _) => format!("{base}/#/meetings?meeting={}", entry.meeting_id),
+                (None, false) => format!("{base}/#/meetings/live/{}", context.live_id),
+                (None, true) => String::new(),
+            }
         };
         let sender = who["name"]
             .as_str()
@@ -759,7 +849,11 @@ impl Tico {
         store.update_context(id, |current| {
             current.live_destination = self.destination.id.clone();
             if let Some(item) = current.items.iter_mut().find(|item| item.id == item_id) {
-                item.task_url = format!("{base}/#/task/{task}");
+                item.task_url = if base.is_empty() {
+                    String::new()
+                } else {
+                    format!("{base}/#/task/{task}")
+                };
                 item.task_id = task;
                 item.owner = owner.into();
                 item.sent_to = owner_name.into();

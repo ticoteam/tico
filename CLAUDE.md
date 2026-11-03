@@ -53,6 +53,7 @@ calling a change done, walk this list and say in the PR which entries applied:
 - **Reverse states**: a way in needs a way out and a way to see it. Snooze needs unsnooze, close needs reopen,
   grant needs revoke.
 - **Docs**: change the page the change makes wrong; do not add a page per feature.
+- **Demo mode**: a feature with a page adds or updates its `backend/demo_sections/` module, and `test_demo_coverage.py` maps the page.
 
 ## Ways to hurt yourself
 1. **Killing by pattern.** Never `pkill -f` or kill a PID found by matching a name or path: bot runs, runners and

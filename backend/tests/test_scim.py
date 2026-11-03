@@ -60,7 +60,7 @@ def test_auth_is_a_bearer_token_and_the_endpoint_is_off_until_scim_is_the_source
 def test_okta_deactivates_with_a_pathless_patch_and_the_user_stays_listed(scim):
     kim = create(scim).json()
     with scim.app.state.store.transaction() as c:
-        c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created,created_by) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created_at,created_by) VALUES(?,?,?,?,?,?)",
                   (uuid.uuid4().hex, kim["id"], "t", "h", "2026-01-01T00:00:00+00:00", "test"))
     body = {"schemas": [PATCH], "Operations": [{"op": "replace", "value": {"active": False}}]}
     r = call(scim, "PATCH", "/Users/" + kim["id"], body)

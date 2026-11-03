@@ -28,8 +28,8 @@ CONTRACT = ("Acme Vendor Terms\n\n4. Messaging\n\nCustomer messages must include
 def counsel_on(api):
     """Counsel is built in and active, as onboarding makes it: a bot row, a config, and its own token."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO bots(slug, display_name, state) VALUES('tico-counsel', 'Counsel', 'active')")
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,team,operator) VALUES('tico-counsel','{}','','ana')")
+        c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('tico-counsel', 'tico-counsel', 'Counsel', 'active')")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,owner_id) VALUES('tico-counsel','{}','','ana')")
     as_bot(api, "tico-counsel", "counsel-test")
 
 
@@ -52,7 +52,7 @@ def restrict_bot(api, slug, people=("ana",)):
     audience = {"everyone": False, "people": list(people), "teams": [], "bots": []}
     doc = {level: audience for level in ("see", "read", "write")}
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET access_json=? WHERE bot=?", (json.dumps(doc), slug))
+        c.execute("UPDATE bot_config SET access=? WHERE bot=?", (json.dumps(doc), slug))
 
 
 def source(api, name="Acme Vendor", kind="vendor"):
@@ -130,7 +130,7 @@ def test_accepting_a_suggestion_writes_an_audit_row(api):
     accepted = post(api, f"rules/{r['id']}/accept", {"version": r["version"]})
     assert accepted["rule"]["status"] == "active"
     with api.app.state.store.read() as c:
-        rows = [dict(x) for x in c.execute("SELECT * FROM audit_log WHERE object=? ORDER BY at, id",
+        rows = [dict(x) for x in c.execute("SELECT * FROM audit_log WHERE object=? ORDER BY created_at, id",
                                            ("org_rule:" + r["id"],))]
     assert rows[-1]["actor"] == "human:ana"
 
@@ -166,8 +166,8 @@ def test_the_document_is_fenced_as_data_in_counsels_task(api):
     file_id, _ = store_file(api, CONTRACT + "\n" + hostile)
     read = post(api, "rules/read", {"file_id": file_id, "source_id": source(api)})
     with api.app.state.store.read() as c:
-        body = c.execute("SELECT body, owner FROM tasks WHERE id=?", (read["task_id"],)).fetchone()
-    assert body["owner"] == "bot:tico-counsel"
+        body = c.execute("SELECT body, owner_id FROM tasks WHERE id=?", (read["task_id"],)).fetchone()
+    assert body["owner_id"] == "bot:tico-counsel"
     text = body["body"]
     start = text.index("<<UNTRUSTED DOCUMENT ")
     end = text.index("<<END UNTRUSTED DOCUMENT ")
@@ -191,10 +191,10 @@ def test_counsel_has_no_credentials_and_sends_nothing(api):
 
 def test_a_branch_of_a_stateless_bot_is_stateless_too():
     branch = SB.follow(None, "counsel-acme", {"shared_from": "tico-counsel"},
-                       rows=lambda slug: {"config_json": json.dumps({"template": "tico-counsel", "shared": True}), "repo": "emp-counsel"})
+                       rows=lambda slug: {"config": json.dumps({"template": "tico-counsel", "shared": True}), "repo": "emp-counsel"})
     assert branch["stateless"] is True
     plain = SB.follow(None, "ops-acme", {"shared_from": "ops"},
-                      rows=lambda slug: {"config_json": json.dumps({"shared": True, "model": "m1"}), "repo": "emp-ops"})
+                      rows=lambda slug: {"config": json.dumps({"shared": True, "model": "m1"}), "repo": "emp-ops"})
     assert "stateless" not in plain
 
 
@@ -569,8 +569,8 @@ def test_another_bot_cannot_cite_a_file_it_cannot_read(api):
     file_id, _ = store_file(api, CONTRACT)
     read_document(api, file_id)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO bots(slug, display_name, state) VALUES('scout', 'Scout', 'active')")
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,team,operator) VALUES('scout','{}','','ana')")
+        c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('scout', 'scout', 'Scout', 'active')")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,owner_id) VALUES('scout','{}','','ana')")
     as_bot(api, "scout", "scout-test")
     r = api.post("/api/v2/rules", headers=headers("scout-test"), json={
         "kind": "external", "text": "Keep a consent record.", "who": {"bots": ["ops"]}, "source_id": source(api),
@@ -772,7 +772,7 @@ def test_a_suggestion_with_no_who_is_accepted_only_once_a_who_is_set(api):
     rule = r.json()
     assert rule["status"] == "suggested"
     with api.app.state.store.read() as c:
-        stored = json.loads(c.execute("SELECT who_json FROM org_rules WHERE id=?", (rule["id"],)).fetchone()[0])
+        stored = json.loads(c.execute("SELECT who FROM org_rules WHERE id=?", (rule["id"],)).fetchone()[0])
     assert not O._has(stored)
     # A person cannot add a rule with no Who, and cannot accept a suggestion that has none.
     no_who = api.post("/api/v2/rules", headers=headers("ana-test"), json={
@@ -959,13 +959,13 @@ def test_the_cli_refuses_an_outward_command_for_counsel_only(monkeypatch):
 def test_a_from_matches_a_credential_by_whole_words_only(api):
     org(api)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO credentials(id,name,kind,created,updated,updated_by) "
+        c.execute("INSERT INTO credentials(id,name,kind,created_at,updated_at,updated_by) "
                   "VALUES('cred-metabase','Metabase','token','2026-10-30','2026-10-30','ana')")
-        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created) "
+        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) "
                   "VALUES('grant-metabase','cred-metabase','bot:ops','ana','2026-10-30')")
-        c.execute("INSERT INTO credentials(id,name,kind,created,updated,updated_by) "
+        c.execute("INSERT INTO credentials(id,name,kind,created_at,updated_at,updated_by) "
                   "VALUES('cred-meta-ads','Meta Ads','token','2026-10-30','2026-10-30','ana')")
-        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created) "
+        c.execute("INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at) "
                   "VALUES('grant-meta-ads','cred-meta-ads','bot:finance','ana','2026-10-30')")
     with api.app.state.store.read() as c:
         assert counsel.suggested_who(c, "Meta")["bots"] == ["finance"]
@@ -981,7 +981,7 @@ def test_a_hostile_page_title_is_fenced_and_the_task_title_is_fixed(api, monkeyp
     monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: fetched(CONTRACT, title=hostile))
     r = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
     row = task_row(api, r["task_id"])
-    assert row["title"] == f"Read document (file {r['file']['id']} v1)"
+    assert row["title"] == f"Read document (file {r['file']['id']} v1; source {r['source']['id']})"
     assert hostile not in row["title"]
     assert hostile in row["body"] and hostile not in outside_fence(row["body"])
 
@@ -1019,7 +1019,7 @@ def test_a_link_read_is_private_to_its_requester_and_counsel(api, monkeypatch):
 def test_counsel_tasks_are_private_by_default(api):
     counsel_on(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='tico-counsel'", (json.dumps({"template": "tico-counsel"}),))
+        c.execute("UPDATE bot_config SET config=? WHERE bot='tico-counsel'", (json.dumps({"template": "tico-counsel"}),))
     with api.app.state.store.read() as c:
         assert H.private_tasks_default(c, "bot:tico-counsel") is True
 
@@ -1061,6 +1061,38 @@ def test_an_identical_reread_returns_the_open_task_and_a_closed_one_opens_a_new_
     third = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
     assert third["existing"] is False and third["task_id"] != first["task_id"]
     assert third["file"]["version"] == 1
+
+
+@pytest.mark.parametrize("document_kind", ["file", "link"])
+def test_read_identity_includes_source_and_receipts_match_persisted_reads(api, monkeypatch, document_kind):
+    """Two sources can read one version in flight; each same-source retry keeps its own task."""
+    org(api)
+    counsel_on(api)
+    if document_kind == "file":
+        file_id, _ = store_file(api, CONTRACT)
+        document = {"file_id": file_id}
+    else:
+        monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: fetched(CONTRACT))
+        document = {"url": "https://vendor.example/terms"}
+    sources = [source(api, name="Acme Vendor"), source(api, name="Globex")]
+    reads = [post(api, "rules/read", {**document, "source_id": sid}) for sid in sources]
+    assert reads[0]["task_id"] != reads[1]["task_id"]
+    assert reads[0]["file"] == reads[1]["file"]
+    assert all(read["existing"] is False for read in reads)
+    for sid, read in zip(sources, reads):
+        again = post(api, "rules/read", {**document, "source_id": sid})
+        assert again["task_id"] == read["task_id"] and again["existing"] is True
+        for receipt in (read, again):
+            with api.app.state.store.read() as c:
+                persisted = c.execute("SELECT * FROM rule_reads WHERE task_id=?", (receipt["task_id"],)).fetchone()
+                task = c.execute("SELECT title, body, closed_at, status FROM tasks WHERE id=?", (receipt["task_id"],)).fetchone()
+                source_row = c.execute("SELECT name, kind FROM rule_sources WHERE id=?", (sid,)).fetchone()
+            assert receipt["source"]["id"] == persisted["source_id"] == sid
+            assert f"source {sid})" in task["title"]
+            assert receipt["file"]["id"] == persisted["file_id"]
+            assert receipt["file"]["version"] == persisted["version"]
+            assert f"From: {source_row['name']} ({source_row['kind']})" in task["body"]
+            assert task["closed_at"] is None and task["status"] not in ("done", "closed", "declined")
 
 
 def test_the_server_refuses_counsel_outward_routes_and_comments_only_on_its_own_task(api, monkeypatch):
@@ -1202,12 +1234,12 @@ def test_a_leftover_counsel_task_does_not_block_a_read_and_the_read_sees_only_it
     asked = post(api, "rules/ask", {"question": "Can I text customers on Sunday about the secret Globex launch?"})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='declined' WHERE id=?", (asked["task_id"],))
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='tico-counsel'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='tico-counsel'")
     file_id, version = store_file(api, CONTRACT)
     other_file, _ = store_file(api, "Globex launch plan: secret.", title="Globex Plan")
     read_document(api, other_file)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='tico-counsel'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='tico-counsel'")
     read = read_document(api, file_id)
     r, attempt = counsel_run(api)
     with api.app.state.store.read() as c:
@@ -1268,8 +1300,8 @@ def test_a_stateless_bots_task_keeps_its_own_session_lane_and_checkpoint_even_on
     gives the turn its task's lane, links its session and accepts its checkpoint, as the runner keys it."""
     from backend.tests.test_api import assign, claim, runner
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO bots(slug, display_name, state) VALUES('tico-counsel', 'Counsel', 'active')")
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,team,operator) VALUES('tico-counsel', ?, '', 'ana')",
+        c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('tico-counsel', 'tico-counsel', 'Counsel', 'active')")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,team,owner_id) VALUES('tico-counsel', ?, '', 'ana')",
                   (json.dumps({"template": "tico-counsel", "session": "bot"}),))
         task = H.task_create(c, "human:ana", "Read the synthetic contract", "Use only fixture text.",
                              "bot:tico-counsel", lint=False)["id"]

@@ -44,7 +44,7 @@ Draft messages to outsiders until a person turns mail sending on for this bot in
 the requested work and granted Tools. Apply an owner's routine changes directly.
 
 These need the task to ask for them and a granted Tool to allow them. Otherwise they stay drafts for a person:
-- **Renewing, cancelling, giving notice, amending or signing.** Record the options and the deadline.
+- **Renewing, canceling, giving notice, amending or signing.** Record the options and the deadline.
 - **Changing a vendor's owner or tier**, and sharing the register beyond Operations and Finance.
 
 Always:

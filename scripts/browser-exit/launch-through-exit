@@ -124,5 +124,27 @@ if [ -z "$real" ]; then
   echo "$name: not installed" >&2
   exit 127
 fi
+# Chrome's background downloads (on-device model, component updates) would use the owner's connection for nothing the bot
+# asked for, so they are off. --disable-features is one switch and Chrome keeps only its last occurrence, so the caller's
+# own list is folded into ours and removed from the arguments rather than left to override it.
+features="OptimizationGuideModelDownloading,OptimizationHintsFetching,OptimizationGuideOnDeviceModel"
+for word in $CHROMIUM_FLAGS; do
+  switch="" value=""
+  read_switch "$word"
+  [ "$switch" = disable-features ] && [ -n "$value" ] && features="$features,$value"
+done
+left=$#
+while [ "$left" -gt 0 ]; do
+  word=$1
+  shift
+  left=$((left - 1))
+  switch="" value=""
+  read_switch "$word"
+  if [ "$switch" = disable-features ]; then
+    [ -n "$value" ] && features="$features,$value"
+  else
+    set -- "$@" "$word"
+  fi
+done
 exec "$real" "$marker" "$proxy_flag" --force-webrtc-ip-handling-policy=disable_non_proxied_udp \
-  "--user-data-dir=$profile" "$@"
+  --disable-component-update "--disable-features=$features" "--user-data-dir=$profile" "$@"

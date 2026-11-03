@@ -122,6 +122,11 @@ class View:
             return self.balance_sheet or account.id in self.bs_lines
         return any(s.covers_account(account) for s in self.slices)
 
+    def sees_anything(self) -> bool:
+        """Whether the viewer has a finance view at all: some P&L slice, balance sheet lines, or a side or source."""
+        return bool(self.everything or self.slices or self.balance_sheet or self.bs_lines or self.payables
+                    or self.receivables or self.sources)
+
     def company_wide(self, account: Account) -> bool:
         """Whether this viewer sees every line on `account`, unattributed ones included."""
         if self.everything:
@@ -182,12 +187,15 @@ def live(grant: Grant, at: str) -> bool:
 
 
 def applies(org: Org, grant: Grant, viewer: str) -> bool:
-    """Whether `grant` reaches `viewer`: its teammate, or a member of its team (a later joiner only if it says so)."""
+    """Whether `grant` reaches `viewer` now: its teammate, or a member of its team. A team grant reaches the members it
+    was made for (`members`, a snapshot) only while they are still on the team, so anyone who leaves loses it at once.
+    A later joiner gets it only with new_members, which reads the team as it is now (spec §7.5)."""
     if grant.subject_kind == "teammate":
         return grant.subject == viewer
+    on_team = org.team_of.get(viewer, "") in org.below(grant.subject)
     if grant.new_members:
-        return org.team_of.get(viewer, "") in org.below(grant.subject)
-    return viewer in grant.members
+        return on_team
+    return viewer in grant.members and on_team
 
 
 def resolve(org: Org, viewer: str, *, grants: Iterable[Grant], defaults: Defaults,
@@ -304,6 +312,15 @@ def unstanding(org: Org, grants: Iterable[Grant], defaults: Defaults, accounts: 
     return [g.id for g in grants if g.status == "active" and not standing(org, g, defaults, accounts)]
 
 
+def left_team(org: Org, grant: Grant) -> frozenset[str]:
+    """The members a team grant was made for who are no longer on its team (spec §7.5: they lose it at once). Such a
+    member is forgotten from the grant's snapshot, so rejoining the team does not bring the grant back."""
+    if grant.subject_kind != "team" or grant.new_members:
+        return frozenset()
+    below = org.below(grant.subject)
+    return frozenset(m for m in grant.members if org.team_of.get(m, "") not in below)
+
+
 def may_revoke(org: Org, actor: str, grant: Grant) -> bool:
     return actor == grant.granted_by or bool(org.owner) and actor == org.owner
 
@@ -319,6 +336,9 @@ class Cell:
     vendor: str
     amount: int
     linked: bool = False            # settled private payroll lines were netted out of it (reads._cells); totals say so
+    location: str = ""                 # the location, class and project tag values of its lines ("" when none)
+    class_id: str = ""
+    project: str = ""
 
 
 @dataclass(frozen=True)

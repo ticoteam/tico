@@ -9,7 +9,8 @@ from .org import SYSTEM, Org
 # Every §5 kind, plus right_grant / right_revoke, which §7.4 needs and §5 does not list.
 ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "bill_create", "bill_update", "bill_approve", "bill_schedule", "bill_mark_paid", "bill_void",
-       "invoice_create", "invoice_send", "invoice_record_payment", "invoice_write_off", "invoice_void",
+       "invoice_create", "invoice_send", "invoice_remind", "invoice_record_payment", "invoice_write_off",
+       "invoice_void", "invoice_delivery",
        "payment_create", "payment_cancel", "recipient_add", "card_create", "card_update_limit", "card_freeze",
        "card_unfreeze", "card_cancel", "card_resolve", "card_save", "card_unsave", "reconcile_undo",
        "connection_create", "payment_settings",
@@ -19,9 +20,21 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "account_create", "account_update", "right_grant", "right_revoke",
        # not in §5: the Finance tab's Access and Sources pages (§12), attaching receipts and documents (§8.4), and
        # linking a bank row to payments marked paid when the automatic match cannot tell which (feed_match)
-       "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map", "attach",
-       "feed_match", "mirror_start", "mirror_stop", "mirror_tags", "tax_jurisdiction_add", "tax_remit",
-       "import_raw_totals")
+       "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map", "connection_settings",
+       "attach",
+       "books_disconnect", "bills_address_set", "finance_approver_set",
+       "feed_match", "mirror_start", "mirror_stop", "mirror_tags", "mirror_xero_location", "tax_jurisdiction_add",
+       "tax_remit",
+       "import_raw_totals",
+       # shared records (backend/records): items, locations and projects
+       "item_create", "item_update", "location_create", "location_update", "project_create", "project_update",
+       # purchase orders and estimates (backend/finance/purchasing.py)
+       "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
+       "estimate_accept", "estimate_decline", "estimate_convert",
+       # prepaid expenses: one month of a prepaid bill line comes out as expense (backend/finance/prepaids.py)
+       "prepaid_amortize",
+       # Gateway credit: bank money onto the prepaid asset usage draws down (backend/finance/topups.py)
+       "gateway_topup")
 LIVE = ("journal", "categorize", "account_create", "account_update", "budget_create", "budget_update",
         "allocation_set", "projection_set", "view_grant", "view_revoke", "private_lines_set", "close_period",
         "reopen_period", "right_grant", "right_revoke",
@@ -30,19 +43,26 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         "card_freeze", "card_unfreeze", "card_cancel", "card_resolve", "recipient_add", "payment_create",
         "payment_cancel",
         "rule_create", "rule_update", "rule_enable", "rule_disable", "rule_test",
-        "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map",
+        "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map", "connection_settings",
+        "books_disconnect", "bills_address_set", "finance_approver_set",
         # phase 2: contacts, bills, invoices and attachments
         "contact_create", "contact_update", "bill_create", "bill_update", "bill_approve", "bill_schedule",
-        "bill_mark_paid", "bill_void", "invoice_create", "invoice_send", "invoice_record_payment",
-        "invoice_write_off", "invoice_void", "attach", "feed_match",
+        "bill_mark_paid", "bill_void", "invoice_create", "invoice_send", "invoice_remind", "invoice_record_payment",
+        "invoice_write_off", "invoice_void", "invoice_delivery", "attach", "feed_match",
         # mirror mode (spec §10): a provider's books are the books
-        "mirror_start", "mirror_stop", "mirror_tags",
+        "mirror_start", "mirror_stop", "mirror_tags", "mirror_xero_location",
         # phase 3: the vendor accounts a card is saved on (bot cards, §8.3)
         "card_save", "card_unsave",
         # phase 3: sales tax jurisdictions and remittances (finance/tax.py)
         "tax_jurisdiction_add", "tax_remit",
         # history imports: a spreadsheet's totals as raw totals (finance/raw_totals.py)
-        "import_raw_totals")
+        "import_raw_totals",
+        # shared records (backend/records): items, locations and projects
+        "item_create", "item_update", "location_create", "location_update", "project_create", "project_update",
+        # purchase orders and estimates
+        "po_create", "po_send", "po_approve", "po_close", "po_void", "estimate_create", "estimate_send",
+        "estimate_accept", "estimate_decline", "estimate_convert",
+        "prepaid_amortize", "gateway_topup")
 NEEDS: dict[str, str | tuple[str, ...]] = {
          "journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
@@ -56,17 +76,27 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          # phase 2: contacts are payables' or receivables' (the planner asks for the right the contact's kind needs)
          "contact_create": (R.AP, R.AR), "contact_update": (R.AP, R.AR),
          "bill_create": R.AP, "bill_update": R.AP, "bill_approve": R.AP, "bill_schedule": R.AP, "bill_mark_paid": R.AP,
-         "bill_void": R.AP, "invoice_create": R.AR, "invoice_send": R.AR, "invoice_record_payment": R.AR,
+         "bill_void": R.AP, "invoice_create": R.AR, "invoice_send": R.AR, "invoice_remind": R.AR, "invoice_delivery": R.AR,
+         "invoice_record_payment": R.AR,
          "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": (R.BOOK, R.AP, R.AR),
-         "feed_match": (R.AP, R.AR), "mirror_start": R.BOOK, "mirror_stop": R.BOOK, "mirror_tags": R.BOOK,
-         "tax_jurisdiction_add": R.BOOK, "tax_remit": R.AP, "import_raw_totals": R.BOOK}
+         "feed_match": (R.AP, R.AR), "mirror_start": R.BOOK, "mirror_stop": R.BOOK, "mirror_tags": R.BOOK, "mirror_xero_location": R.BOOK,
+         "prepaid_amortize": R.BOOK, "gateway_topup": R.BOOK,
+         "tax_jurisdiction_add": R.BOOK, "tax_remit": R.AP, "import_raw_totals": R.BOOK,
+         "item_create": R.BOOK, "item_update": R.BOOK, "location_create": R.BOOK, "location_update": R.BOOK,
+         "project_create": R.BOOK, "project_update": R.BOOK,
+         "po_create": R.AP, "po_send": R.AP, "po_approve": R.AP, "po_close": R.AP, "po_void": R.AP,
+         "estimate_create": R.AR, "estimate_send": R.AR, "estimate_accept": R.AR, "estimate_decline": R.AR,
+         "estimate_convert": R.AR}
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create", "connection_sync",
-              "connection_disconnect", "connection_map")
+              "connection_disconnect", "connection_map", "connection_settings", "books_disconnect",
+              "bills_address_set")
 # Only the owner turns direct send on or off for the company (§9) and sets what each role sees by default (§7.5).
-OWNER_ONLY = ("payment_settings", "view_defaults_set", "mirror_tags")
-# System work may freeze cards (a budget at cutoff, §6.4 rule 4) and nothing else card-side.
-SYSTEM_KINDS = ("card_freeze",)
+OWNER_ONLY = ("payment_settings", "view_defaults_set", "mirror_tags", "mirror_xero_location",
+              "finance_approver_set")
+# System work may freeze cards at a budget's cutoff and lift those freezes once the budgets have room (§6.4 rule 4,
+# §8.2), and nothing else card-side.
+SYSTEM_KINDS = ("card_freeze", "card_unfreeze")
 SPEND = ("payment_create",)
 # Resolved values kept on the stored action only: a fingerprint of a hidden total must not reach an approval, a
 # rule test or anything a requester reads. Drift still compares it, from the stored body.
@@ -133,6 +163,10 @@ def default_gate(org: Org, actor: str, kind: str) -> Gate:
         return Gate("needs_approval", "finance_admin", "default:bot-card-resolve")
     if actor in org.bots and kind in ("card_save", "card_unsave"):
         return Gate("needs_approval", "finance_admin", "default:bot-card-vendor")
+    if actor in org.bots and kind in ("invoice_remind", "invoice_send"):
+        # An invoice email goes out under a Tico send approval a person gives (finance/delivery.py). A rule can make a
+        # gate stricter but never looser (gating.stricter), so this ask stands: a bot's email waits for a finance admin.
+        return Gate("needs_approval", "finance_admin", "default:bot-invoice-email")
     return ALLOW
 
 
@@ -141,8 +175,10 @@ def default_gate(org: Org, actor: str, kind: str) -> Gate:
 # (YYYY-MM-DD), month (YYYY-MM), int, minor (integer minor units), bool, list[...], obj, or a | b choices. What
 # `actions.help` and the hub tools show; the planners accept exactly these fields.
 Field = tuple[str, str, str]
-_LINE = "list[{account_id, amount: minor, description?, tags?: obj}]"
-_INVOICE_LINE = "list[{account_id, amount: minor, description?, tags?: obj, taxable?: bool}]"
+_LINE = "list[{account_id?, item_id?, amount: minor, description?, tags?: obj}]"
+_INVOICE_LINE = "list[{account_id?, item_id?, amount: minor, description?, tags?: obj, taxable?: bool}]"
+_BILL_LINE = ("list[{account_id?, item_id?, po_line_id?, prepaid?: {start: month, months: int}, amount: minor, "
+              "description?, tags?: obj}]")
 _RULE: tuple[Field, ...] = (
     ("kind?", "gate|posting", "gate (before an action) or posting (on a new feed row or bill draft); default gate"),
     ("name", "str", "short name"), ("words?", "str", "the rule in plain words"),
@@ -199,18 +235,28 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "mirror_stop": (),
     "mirror_tags": (("enabled", "bool", "send tags as provider classes"),
                     ("map?", "obj", "{tag kind: {tag value: provider class id}}")),
+    "mirror_xero_location": (("category_id", "str",
+                              "the Xero tracking category whose options are locations ('' for none)"),),
     "view_defaults_set": (("manager?", "str", ""), ("member?", "str", ""), ("manager_payroll?", "totals|hidden", "")),
     "right_grant": (("teammate", "str", ""), ("right", "str", "finance.book|ap|ar|pay|cards|budgets|rules|admin"),
                     ("expires_at?", "str", "")),
     "right_revoke": (("teammate", "str", ""), ("right", "str", "")),
-    "reconcile": (("money_account_id", "str", ""), ("statement_end", "day", ""), ("statement_balance", "minor", ""),
-                  ("cleared", "list[str]", "feed row ids"), ("opening_balance?", "minor", "")),
+    "reconcile": (("money_account_id", "str", ""), ("statement_end", "day", "the statement's last day"),
+                  ("statement_balance?", "minor", "the bank's ending balance in cents: typed when no bank statement "
+                                                  "ends on statement_end"),
+                  ("cleared?", "list[str]", "feed row ids; default: every settled row through that day not yet cleared"),
+                  ("opening_balance?", "minor", "")),
     "reconcile_undo": (("reconciliation_id", "str", ""),),
     "connection_create": (("provider", "mercury|stripe", ""), ("credential_id", "str", ""), ("name?", "str", ""),
                           ("probe?", "bool", ""), ("approver_email?", "str", ""), ("token_creator_email?", "str", ""),
                           ("server_ip?", "str", "")),
     "connection_sync": (("connection_id", "str", ""),), "connection_disconnect": (("connection_id", "str", ""),),
+    "books_disconnect": (("connection_id", "str", ""),), "bills_address_set": (("address", "str", "the bills address, or empty to clear it"),),
+    "finance_approver_set": (("approver", "str", "a person, or empty for the owner"),),
     "connection_map": (("money_account_id", "str", ""), ("account_id", "str", "")),
+    "connection_settings": (("connection_id", "str", ""),
+                            ("card_user_id?", "str", "the Mercury user cards are issued to when a card names none "
+                             "(empty clears it)")),
     "payment_settings": (("direct_send?", "bool", ""),
                          ("cash_below?", "minor", "finance.cash.below fires when cash drops under this; 0 turns "
                           "it off")),
@@ -218,7 +264,10 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                     ("kind?", "standing|person", "standing for a bot (the default for one), person for a teammate; "
                      "single_use is not on Mercury yet"),
                     ("nickname?", "str", ""), ("money_account_id?", "str", ""),
-                    ("provider_user_id?", "str", "the Mercury user the card is issued to")),
+                    ("merchant?", "str", "the merchant it is for: recorded, not enforced (Mercury has no "
+                     "merchant locks)"),
+                    ("provider_user_id?", "str", "the Mercury user the card is issued to; left out, Tico uses the "
+                     "holder's Mercury user (same email) or the connection's card user")),
     "card_update_limit": (("card_id", "str", ""), ("amount", "minor", "")),
     "card_freeze": (("card_id", "str", ""), ("budget_id?", "str", ""), ("reason?", "str", "")),
     "card_unfreeze": (("card_id", "str", ""), ("reason?", "str", "")),
@@ -227,13 +276,20 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "card_save": (("card_id", "str", ""), ("vendor", "str", "a vendor contact's id, or the name the vendor goes by")),
     "card_unsave": (("card_id", "str", ""), ("vendor", "str", "the vendor the card was saved on")),
     "recipient_add": (("name", "str", ""), ("method", "ach|wire|check", ""), ("account_type?", "str", ""),
-                      ("address?", "obj", ""), ("email?", "str", ""), ("contact_id?", "str", ""),
+                      ("address", "obj", "the payee's address in Mercury's keys (every method needs one): address1, "
+                       "city, region, postalCode, country; address2 is optional"),
+                      ("email?", "str", ""), ("contact_id?", "str", ""),
                       ("replaces?", "str", ""), ("money_account_id?", "str", ""),
-                      ("details", "obj", "bank details; sealed, never stored readable")),
-    "payment_create": (("recipient_id?", "str", "the payee (not for method internal)"), ("amount", "minor", ""),
+                      ("account_number?", "str", "ach or wire: the account number, digits; sealed, never stored "
+                       "readable"),
+                      ("routing_number?", "str", "ach or wire: the 9-digit routing number; sealed, never stored "
+                       "readable")),
+    "payment_create": (("recipient_id", "str", "the payee (required unless method is internal)"),
+                       ("amount", "minor", ""),
                        ("money_account_id?", "str", "the bank to pay from"),
                        ("memo?", "str", ""), ("obligation?", "str", "one live payment per obligation (bill:<id>)"),
-                       ("account_id?", "str", "the line it posts to (not for method internal)"), ("tags?", "obj", ""),
+                       ("account_id", "str", "the line it posts to (required unless method is internal)"),
+                       ("tags?", "obj", ""),
                        ("mode?", "approval_queue|direct", "default approval_queue"),
                        ("purpose?", "obj", ""),
                        ("method?", "internal", "a move between our own bank accounts: from_account and to_account"),
@@ -260,11 +316,12 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "bill_create": (("vendor_id", "str", "a vendor contact"), ("number?", "str", "the vendor's bill number"),
                     ("bill_date", "day", ""), ("due_date?", "day", "or terms_days"),
                     ("terms_days?", "int", "due this many days after bill_date"), ("memo?", "str", ""),
-                    ("lines", _LINE, "expense lines; amounts positive"),
+                    ("lines", _BILL_LINE, "expense lines; amounts positive; po_line_id bills an open purchase "
+                     "order's line; prepaid spreads a line over months from its start"),
                     ("attachments?", "list[str]", "Library file ids"), ("origin?", "manual|email|upload", "")),
     "bill_update": (("bill_id", "str", ""), ("vendor_id?", "str", "draft only"), ("number?", "str", ""),
                     ("bill_date?", "day", "draft only"), ("due_date?", "day", ""), ("terms_days?", "int", ""),
-                    ("memo?", "str", ""), ("lines?", _LINE, "draft only; replaces every line"),
+                    ("memo?", "str", ""), ("lines?", _BILL_LINE, "draft only; replaces every line"),
                     ("attachments?", "list[str]", "file ids to add")),
     "bill_approve": (("bill_id", "str", "enters a draft: expense lines debit, accounts payable credit"),),
     "bill_schedule": (("bill_id", "str", ""), ("pay_on", "day", "the payment is requested on this day"),
@@ -276,13 +333,26 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                        ("money_account_id?", "str", "or the money account it was paid from (its bank row links later)"),
                        ("account_id?", "str", "or another money line; none: a clearing account")),
     "bill_void": (("bill_id", "str", ""), ("reason?", "str", "")),
+    "prepaid_amortize": (("bill_line_id", "str", ""), ("month", "str", "YYYY-MM, due and not yet expensed")),
+    "gateway_topup": (("money_account_id", "str", "a bank money account the money comes from"),
+                      ("amount", "minor", "more than zero: the money moved onto Gateway credit"),
+                      ("date?", "day", "default today"), ("memo?", "str", "up to 140 characters")),
     "invoice_create": (("customer_id", "str", "a customer contact"), ("number?", "str", ""),
                        ("invoice_date", "day", ""), ("due_date?", "day", "or terms_days"), ("terms_days?", "int", ""),
                        ("memo?", "str", ""),
                        ("lines", _INVOICE_LINE, "income lines; amounts positive; taxable defaults to true on income "
                                                 "lines of an invoice with a sales tax line"),
                        ("payment_link?", "str", "")),
-    "invoice_send": (("invoice_id", "str", "posts accounts receivable debit, income credit; returns the document"),),
+    "invoice_send": (("invoice_id", "str", "posts accounts receivable debit, income credit; with an email on file and a "
+                                           "Bookkeeper mailbox, returns the email's text under a send approval"),),
+    "invoice_remind": (("invoice_id", "str", "an unpaid sent invoice"),
+                       ("stage", "int", "days past its due date: 1, 7, 30, 60 or 90; each stage is reminded once, and only "
+                                        "once the invoice is that late; needs a Bookkeeper mailbox and an email on "
+                                        "file")),
+    "invoice_delivery": (("invoice_id", "str", "the invoice whose email the Bookkeeper sent or tried to"),
+                         ("stage?", "int", "a reminder's stage (1, 7, 30, 60 or 90); left out for the invoice's own email"),
+                         ("delivered", "bool", "true when the email went out; false with a reason when it did not"),
+                         ("reason?", "str", "why it did not go (required when delivered is false)")),
     "invoice_record_payment": (("invoice_id", "str", ""), ("amount", "minor", "may be part of what is owed"),
                                ("date?", "day", ""), ("feed_id?", "str", "the bank row it came in on"),
                                ("money_account_id?", "str", "or the money account it went to (its row links later)"),
@@ -309,6 +379,42 @@ SHAPES: dict[str, tuple[Field, ...]] = {
         ("basis", "cash|accrual", "the basis the figures were reported on"),
         ("mapping", "obj", "each sheet line name to an account id or code"),
         ("source_name?", "str", "what the file was called, for the record")),
+    "item_create": (("name", "str", ""),
+                    ("kind", "service|inventory|non_inventory|bundle|category|raw_material|assembly", ""),
+                    ("sku?", "str", ""), ("unit?", "str", ""), ("price?", "minor", "in the book's currency"),
+                    ("income_account_id?", "str", "the account a sale of it posts to"),
+                    ("expense_account_id?", "str", "the account a purchase of it posts to"),
+                    ("asset_account_id?", "str", "inventory it holds")),
+    "item_update": (("item_id", "str", ""), ("name?", "str", ""),
+                    ("kind?", "service|inventory|non_inventory|bundle|category|raw_material|assembly", ""),
+                    ("sku?", "str", ""), ("unit?", "str", ""), ("price?", "minor", "a change asks for approval"),
+                    ("income_account_id?", "str", ""), ("expense_account_id?", "str", ""),
+                    ("asset_account_id?", "str", ""), ("active?", "bool", "")),
+    "location_create": (("name", "str", ""), ("kind?", "store|office|warehouse|plant|customer_site|vehicle|other", ""),
+                        ("in_books?", "bool",
+                         "a mirrored book: false keeps it in Tico; customer sites and vehicles default to false"),
+                        ("parent_id?", "str", "the location it sits under"),
+                        ("address?", "obj", "up to 10 text fields")),
+    "location_update": (("location_id", "str", ""), ("name?", "str", ""),
+                        ("kind?", "store|office|warehouse|plant|customer_site|vehicle|other", ""),
+                     ("parent_id?", "str", "empty to clear"), ("address?", "obj", ""), ("active?", "bool", "")),
+    "project_create": (("name", "str", ""), ("customer_id?", "str", "a customer contact"),
+                       ("status?", "open|closed", "")),
+    "project_update": (("project_id", "str", ""), ("name?", "str", ""), ("customer_id?", "str", "empty to clear"),
+                       ("status?", "open|closed", ""), ("active?", "bool", "")),
+    "po_create": (("vendor_id", "str", "a vendor contact"), ("number?", "str", "default PO-0001 onward"),
+                  ("po_date", "day", ""), ("memo?", "str", ""), ("lines", _LINE, "expense lines; amounts positive")),
+    "po_send": (("po_id", "str", "a draft is marked sent; nothing is emailed"),),
+    "po_approve": (("po_id", "str", "holds each line's unbilled amount in its budget; over $1,000 asks the owner"),),
+    "po_close": (("po_id", "str", "an approved order closes; what is not billed is released"),),
+    "po_void": (("po_id", "str", "a draft, sent or approved order nothing is billed against"),),
+    "estimate_create": (("customer_id", "str", "a customer contact"), ("number?", "str", "default EST-0001 onward"),
+                        ("estimate_date", "day", ""), ("memo?", "str", ""),
+                        ("lines", _LINE, "income lines; amounts positive")),
+    "estimate_send": (("estimate_id", "str", "a draft is marked sent; the owner approves it"),),
+    "estimate_accept": (("estimate_id", "str", "a sent estimate is accepted"),),
+    "estimate_decline": (("estimate_id", "str", "a sent estimate is declined"),),
+    "estimate_convert": (("estimate_id", "str", "an accepted estimate becomes one invoice draft, once"),),
 }
 WORDS: dict[str, str] = {
     "journal": "Post a balanced entry, or reverse one.",
@@ -324,10 +430,15 @@ WORDS: dict[str, str] = {
     "mirror_start": "Switch the books to a provider's books (preview first).",
     "mirror_stop": "Switch a mirrored book back to native.",
     "mirror_tags": "Send tags to the provider as its classes (off by default).",
+    "mirror_xero_location": "Pick the Xero tracking category that holds locations (the other is classes).",
     "right_grant": "Give a teammate a Finance right.", "right_revoke": "Take a Finance right back.",
     "reconcile": "Match a statement to the feed and lock it.", "reconcile_undo": "Unlock a reconciliation.",
     "connection_create": "Connect a bank or Stripe.", "connection_sync": "Sync a connection now.",
     "connection_disconnect": "Disconnect a provider.", "connection_map": "Point a money account at a line.",
+    "books_disconnect": "Disconnect a books connection (its HQ grant is revoked first).",
+    "bills_address_set": "Set or clear the address vendors send bills to (empty clears it).",
+    "finance_approver_set": "Name the one person who approves finance-admin actions (empty returns them to the owner).",
+    "connection_settings": "Set the Mercury user cards are issued to when a card names none.",
     "payment_settings": "Turn direct send on or off and set the cash alert.",
     "card_create": "Issue a card on a budget.", "card_update_limit": "Change a card's limit.",
     "card_freeze": "Freeze a card.", "card_unfreeze": "Unfreeze a card.", "card_cancel": "Cancel a card.",
@@ -346,7 +457,12 @@ WORDS: dict[str, str] = {
     "bill_schedule": "Pay a bill on a day: a payment is requested then.",
     "bill_mark_paid": "Record that a bill was paid, from a bank or card row, a money account or line.",
     "bill_void": "Void a bill (an entered one is reversed).",
-    "invoice_create": "Draft an invoice.", "invoice_send": "Send an invoice: it posts to receivables.",
+    "prepaid_amortize": "Expense one due month of a prepaid bill line, out of its prepaid asset.",
+    "gateway_topup": "Top up Gateway credit from a bank account: a prepaid asset moves, no expense.",
+    "invoice_create": "Draft an invoice.",
+    "invoice_send": "Send an invoice: it posts to receivables, and returns its email (text, recipients, send approval).",
+    "invoice_remind": "Remind the customer an unpaid invoice is late (once per stage), by email under a send approval.",
+    "invoice_delivery": "Report whether the Bookkeeper's invoice email went out: delivered, or why it did not.",
     "invoice_record_payment": "Record money received on an invoice (part or all).",
     "invoice_write_off": "Write off what a customer will not pay.", "invoice_void": "Void an invoice.",
     "attach": "Attach receipts or documents to an entry, a bank or card row, a bill or an invoice.",
@@ -354,6 +470,22 @@ WORDS: dict[str, str] = {
     "tax_jurisdiction_add": "Add a sales tax jurisdiction: its liability account and quarterly due date.",
     "tax_remit": "Remit a quarter's sales tax: a bill to the tax authority, tagged with the quarter.",
     "import_raw_totals": "Import a spreadsheet's history as raw totals: one balanced entry per month.",
+    "item_create": "Add a product or service that lines and documents name.",
+    "item_update": "Rename, re-account, deactivate, or change the price of an item (a price change asks first).",
+    "location_create": "Add a location that lines can be tagged with.",
+    "location_update": "Rename, move, or deactivate a location.",
+    "project_create": "Add a project that lines can be tagged with.",
+    "project_update": "Rename, re-status, or deactivate a project.",
+    "po_create": "Draft a purchase order: its lines are what the vendor will bill.",
+    "po_send": "Mark a draft purchase order sent.",
+    "po_approve": "Approve an order: each line's unbilled amount holds budget until it is billed or closed.",
+    "po_close": "Close an approved order: what is not billed is released.",
+    "po_void": "Void an order nothing has been billed against.",
+    "estimate_create": "Draft an estimate for a customer.",
+    "estimate_send": "Mark an estimate sent (the owner approves).",
+    "estimate_accept": "Record that the customer accepted an estimate.",
+    "estimate_decline": "Record that the customer declined an estimate.",
+    "estimate_convert": "Make an accepted estimate one invoice draft (once).",
 }
 
 

@@ -41,8 +41,9 @@ function redesignNav() {
   libRow.append(library, libToggle);
   const subs = document.createElement('div'); subs.className = 'rd-lib'; subs.id = 'rd-lib';
   const tools = link('tools', RD_TOOLS, 'api', 'Tools');   // ui/app/redesign-library.js
+  const connections = link('connections', RD_CONNECTIONS, 'link', 'Connections');   // ui/app/connections.js
   const files = link('files', RD_FILES, 'folder_shared', 'Files');   // ui/app/pages.js
-  subs.append(...[pick('a[data-nav="docs"]'), files, pick('a[data-nav="meetings"]'), tools].filter(Boolean));
+  subs.append(...[pick('a[data-nav="docs"]'), files, pick('a[data-nav="meetings"]'), tools, connections].filter(Boolean));
   // Rules (ui/app/org-rules.js) folds the same way, its tabs under it, folded until opened.
   const rules = link('rules', RULES_ROUTE, RD_NAV_ICONS.rules, 'Rules'); rules.classList.add('rd-lib-head');
   const rulesRow = document.createElement('div'); rulesRow.className = 'nav-row rd-lib-row rd-rules-row';
@@ -105,6 +106,7 @@ function redesignNavCurrent(nav) {
   const r = S.route || '';
   if (nav === 'automations') return rdUnder(r, RD_AUTOMATIONS);
   if (nav === 'tools') return rdUnder(r, RD_TOOLS);
+  if (nav === 'connections') return r.split('?')[0] === RD_CONNECTIONS;
   if (nav === 'files') return rdUnder(r, RD_FILES);
   if (nav === 'strategy') return rdUnder(r, '#/strategy');
   if (nav === 'growth') return rdUnder(r, GR_ROUTE);
@@ -128,7 +130,8 @@ function redesignRoute(r) {
   if (r === '#/settings/listening') { location.replace(RD_LISTENING); return true; }
   if (r === '#/library') { location.replace(DOCS); return true; }
   if (rdUnder(r, GR_OLD_ROUTE)) { location.replace(GR_ROUTE + r.slice(GR_OLD_ROUTE.length)); return true; }
-  if (rdUnder(r, GTM_OLD_ROUTE)) { location.replace(GTM_ROUTE + r.slice(GTM_OLD_ROUTE.length)); return true; }
+  if (rdUnder(r, GTM_OLD_ROUTE + '/sources')) { location.replace(GR_SOURCES); return true; }   // Sources is growth's now
+  if (rdUnder(r, GTM_OLD_ROUTE)) { location.replace('#/strategy'); return true; }
   if (['#/recurring', '#/tasks/routines'].includes(r.split('?')[0])) { location.replace(RD_AUTOMATIONS); return true; }   // the Tasks page's Routines view
   if (rdUnder(r, RD_AUTOMATIONS)) {
     // The Automations page is its own files (ui/app/automations*.js); until they load, an empty mount point.
@@ -138,7 +141,6 @@ function redesignRoute(r) {
   }
   if (rdToolsRoute(r)) return true;
   if (rdUnder(r, BRAND_ROUTE)) { pageBrand(); return true; }   // ui/app/brand-page.js
-  if (rdUnder(r, GTM_ROUTE)) { pageGtm(); return true; }   // ui/app/gtm-page.js
   if (rdUnder(r, GR_ROUTE)) { pageGrowth(); return true; }   // ui/app/growth-page.js
   if (rdUnder(r, RULES_ROUTE)) { pageRules(); return true; }   // ui/app/org-rules.js
   if (pagesRoute(r)) return true;   // Library › Files and #/page/<id> (ui/app/pages.js)
@@ -146,6 +148,7 @@ function redesignRoute(r) {
   if (rdUnder(r, RD_ORG)) { pageRdOrg(); return true; }
   if (rdUnder(r, RD_BUDGET)) { pageBudget(); return true; }
   if (rdUnder(r, FIN_ROUTE)) { pageFinance(); return true; }   // ui/app/finance.js
+  if (rdUnder(r, CP_ROUTE)) { pageCompanyPage(); return true; }   // ui/app/company-page.js
   if (rdUnder(r, RD_LISTENING)) { pageRdListening(); return true; }
   // Market opens on the latest briefing.
   if (r === MARKET_ROUTE || rdUnder(r, RD_BRIEFING)) { pageRdBriefing(); return true; }
@@ -160,6 +163,7 @@ function redesignAfterRoute() {
   rdLibSync();
   financeStop();
   growthStop();
+  companyPageStop();
   finProbeOnce();   // the Finance link shows once the viewer sees something in Finance
 }
 

@@ -16,19 +16,21 @@ class TaskRow(TypedDict):
     id: str
     title: str | None
     body: str | None
-    requester: str | None
-    owner: str | None
+    requester_id: str | None
+    owner_id: str | None
     status: str | None
-    due: str | None
+    due_at: str | None
+    check_back_at: str | None
+    check_back_note: str | None
     conversation_id: str | None
-    created: str | None
-    updated: str | None
+    created_at: str | None
+    updated_at: str | None
     done_at: str | None
     closed_at: str | None
-    closed_by: str | None
+    closed_by_id: str | None
     note: str | None
     goal_id: str | None
-    labels_json: str
+    labels: str
     type_id: str | None
     step_id: str | None
     number: int | None
@@ -40,18 +42,18 @@ class TaskRow(TypedDict):
     rank: float | None
     next_run: int
     carried_by: str | None
-    resume_json: str | None
+    resume: str | None
     occurrence: str | None
     occurrence_step: str | None
     rule_due_id: str | None
     checkpoint: str | None
     checkpoint_at: str | None
-    checkpoint_by: str | None
+    checkpoint_by_id: str | None
     checkpoint_state: str | None
     stale_asked_at: str | None
     checkpoint_blocked: int
     snoozed_until: str | None
-    snoozed_by: str | None
+    snoozed_by_id: str | None
     snoozed_note: str | None
     verdict: str | None
     verdict_head: str | None
@@ -60,7 +62,7 @@ class TaskRow(TypedDict):
     blocked_kind: str | None
     blocked_from_step: str | None
     blocked_from_status: str | None
-    blocked_gate_json: str | None
+    blocked_gate: str | None
     building_started_at: str | None
     building_seconds: float
     holds_cleared_at: str | None
@@ -71,52 +73,60 @@ class TaskRow(TypedDict):
     size: float | None
     request_id: str | None
     version: int
-    acceptance_json: str
+    acceptance: str
+
+
+class TaskCheckBackWakeRow(TypedDict):
+    """A reminder occurrence; jobs and attempts retain all execution state."""
+    task_id: str
+    check_back_at: str
+    sent_at: str
+    message_id: str | None
 
 
 class AttemptRow(TypedDict):
     """One `attempts` row (SELECT *)."""
     id: str
     job_id: str
-    bot: str
+    bot_id: str
     runner_id: str
     generation: int
     token_hash: str
     state: str
     lease_until: str
-    created: str
-    started: str | None
-    finished: str | None
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
     thread_id: str | None
-    result_json: str | None
+    result: str | None
     final_text: str | None
     last_seq: int
-    stop_requested: str | None
+    stop_requested_at: str | None
     gateway_key_id: str | None
     handed_runtime: str | None
     handed_model: str | None
     lane: str
-    wake_json: str | None
-    model_json: str | None
+    wake: str | None
+    model: str | None
 
 
 class RunnerRow(TypedDict):
     """One `runners` row (SELECT *)."""
     id: str
     label: str
-    operator: str
+    owner_id: str
     token_hash: str
-    created: str
-    last_seen: str | None
+    created_at: str
+    last_seen_at: str | None
     revoked_at: str | None
     platform: str | None
     version: str | None
     capacity: int
-    readiness_json: str
-    capabilities_json: str
+    readiness: str
+    capabilities: str
     awake_since: str | None
-    checkout_json: str | None
-    restart_requested: str | None
+    checkout: str | None
+    restart_requested_at: str | None
     readiness_at: str | None
     accepts_member_bots: int
     screen: str
@@ -124,6 +134,8 @@ class RunnerRow(TypedDict):
     performance: str
     restart_since: str | None
     turns_at_once: int | None
+    memory_hold: int
+    last_sampled_at: int | None
 
 
 class ApprovalRow(TypedDict):
@@ -132,16 +144,16 @@ class ApprovalRow(TypedDict):
     kind: str | None
     task_id: str | None
     message_id: str | None
-    payload_json: str | None
+    payload: str | None
     payload_hash: str | None
-    requested_by: str | None
-    decided_by: str | None
+    requested_by_id: str | None
+    decided_by_id: str | None
     decision: str | None
     decided_at: str | None
     consumed_at: str | None
-    created: str | None
+    created_at: str | None
     decided_via: str | None
-    decided_for_json: str | None
+    decided_for: str | None
     ready_since: str | None
     decision_owner: str | None
 
@@ -152,5 +164,76 @@ class AttemptEventRow(TypedDict):
     attempt_id: str
     seq: int
     kind: str
-    payload_json: str
-    created: str
+    payload: str
+    created_at: str
+
+
+class PrincipalRow(TypedDict):
+    """One `principals` row (SELECT *): an actor string's identity (`human:<id>`, `bot:<bot id>`, a system actor).
+    A deleted human or bot keeps its row with `deleted_at` set (backend/migrations/0012_bot_ids.py)."""
+    id: str
+    kind: str
+    deleted_at: str | None
+
+
+class MemoryTidyPassRow(TypedDict):
+    """One admission and its reconciled pilot cost."""
+    id: str
+    night: str
+    bot: str
+    model: str
+    started_at: str
+    deadline: str
+    status: str
+    reason: str
+    parent_task_id: str | None
+    check_task_id: str | None
+    baseline: str
+    cost_usd: float
+
+
+class FeedbackRow(TypedDict):
+    """One person's 👍 or 👎 on something a bot made (backend/feedback.py); the run fields are None where it had none."""
+    id: str
+    person_id: str
+    subject_type: str
+    subject_id: str
+    bot_id: str
+    conversation_id: str | None
+    attempt_id: str | None
+    model: str | None
+    harness: str | None
+    subject_revision: int | None
+    rating: str
+    reason: str
+    outcome: str
+    note_id: str | None
+    org_rule_id: str | None
+    created_at: str
+    updated_at: str
+
+
+class ThreadRankingRow(TypedDict):
+    """A root thread's Important level (backend/thread_rank.py); `score` is None until a call answers."""
+    thread_id: str
+    score: int | None
+    ranked_seq: int
+    tried_at: str
+    created_at: str
+    updated_at: str
+
+
+class MemoryTidyPacketRow(TypedDict):
+    """Trusted runner custody for one editing and verification attempt."""
+    attempt_id: str
+    pass_id: str
+    memory_commit: str
+    snapshot: str
+    before_digest: str
+    after_digest: str | None
+    since: str | None
+    previous_learnings: str | None
+    proposal: str | None
+    conflicts: int | None
+    flags: str
+    stage: str

@@ -233,7 +233,7 @@ class Bot:
     def stale(self, task, message):
         """Whether Tico's notice was out of date when the bot read it: its task had already finished, its CI news was
         for a head the PR has moved past, or it had moved to another step after the notice was written."""
-        if not task or message.get("from_actor") not in (None, "keeper"):
+        if not task or message.get("sender_id") not in (None, "keeper"):
             return False   # a colleague's comment is theirs to judge; the claim's cleanup is for Tico's own notices
         if message.get("id") in self.unfinished:
             return False   # its first turn ended unanswered (a limit, a crash, a lost computer): this one resumes it
@@ -244,7 +244,7 @@ class Bot:
             pr = self.world.pr_of(task["id"])
             return bool(pr) and self.world.prs[pr]["head"] != head
         moved = self.world.step_entered_at(task["id"], claimed_by="bot:" + self.slug)
-        return bool(moved and message.get("created") and message["created"] < moved)
+        return bool(moved and message.get("created_at") and message["created_at"] < moved)
 
     # ------------------------------------------------------------------ role behaviour
     def act(self, task, message):
@@ -272,7 +272,7 @@ class Builder(Bot):
 
     def act(self, task, message):
         w, board = self.world, self.world.board
-        if task["owner"] != "bot:" + self.slug or task["status"] in FINISHED:
+        if task["owner_id"] != "bot:" + self.slug or task["status"] in FINISHED:
             return None
         step = board.step(w.step_of(task))
         if not step or step.merged:
@@ -461,7 +461,7 @@ class Builder(Bot):
         for task_id, what in list(self.owed.items()):
             del self.owed[task_id]
             task, pr = w.task(task_id), w.pr_of(task_id)
-            if not task.get("blocked_since") or not pr or w.prs[pr]["merged"]:
+            if not any(h.get("kind") == "blocked" for h in task.get("holds") or ()) or not pr or w.prs[pr]["merged"]:
                 continue   # moved on meanwhile: nothing left to put right
             if what == "push":
                 self.push(task, pr, clean=True)
@@ -523,7 +523,7 @@ class Checker(Bot):
     def act(self, task, message):
         w = self.world
         parent = w.parent_of(task["id"])
-        if task["owner"] != "bot:" + self.slug or task["status"] in FINISHED or not parent:
+        if task["owner_id"] != "bot:" + self.slug or task["status"] in FINISHED or not parent:
             return None
         head = w.head_for(task)
         if self.chance("off_script"):
@@ -566,7 +566,7 @@ class Architect(Bot):
 
     def act(self, task, message):
         w = self.world
-        if task["owner"] != "bot:" + self.slug or task["status"] in FINISHED or not task["title"].startswith("Plan:"):
+        if task["owner_id"] != "bot:" + self.slug or task["status"] in FINISHED or not task["title"].startswith("Plan:"):
             return None
         w.update(task["id"], token=self.token, status="done",
                  note="Plan: 1. data model first; 2. API; 3. UI. Risks: migration order. Build in that order.")
@@ -580,15 +580,15 @@ class Lead(Bot):
 
     def act(self, task, message):
         refs = message.get("refs") or {}
-        if refs.get("step_late") and task["status"] not in FINISHED and str(task["owner"]).startswith("bot:"):
-            self.world.post(f"tasks/{task['id']}/comments", {"text": f"@{task['owner'][4:]} this ticket is late at "
+        if refs.get("step_late") and task["status"] not in FINISHED and str(task["owner_id"]).startswith("bot:"):
+            self.world.post(f"tasks/{task['id']}/comments", {"text": f"@{task['owner_id'][4:]} this ticket is late at "
                                                                      f"{self.world.step_of(task)}: what does it wait on?",
                                                                      "needs_action": True},
                             token=self.token)
             return "asked the owner of a late ticket"
         if refs.get("step_backlog"):
             return self.spread(task)
-        if not task["title"].startswith("Hourly board sweep") or task["owner"] != "bot:" + self.slug \
+        if not task["title"].startswith("Hourly board sweep") or task["owner_id"] != "bot:" + self.slug \
                 or task["status"] in FINISHED:
             return None
         told = self.sweep()
@@ -601,7 +601,7 @@ class Lead(Bot):
         w = self.world
         step = w.step_of(task)
         here = [t for t in w.tickets() if t["step"] == step and t["status"] not in FINISHED]
-        owned = Counter(t["owner"] for t in here if str(t["owner"]).startswith("bot:"))
+        owned = Counter(t["owner_id"] for t in here if str(t["owner_id"]).startswith("bot:"))
         if not owned:
             return "noted a backlog the board is to assign"
         busiest, n = owned.most_common(1)[0]
@@ -611,7 +611,7 @@ class Lead(Bot):
             return f"noted the backlog on {busiest[4:]}"
         target = min(peers, key=lambda o: owned[o])
         moved = 0
-        for t in [t for t in here if t["owner"] == busiest and t["status"] == "open"][: (n - owned[target]) // 2]:
+        for t in [t for t in here if t["owner_id"] == busiest and t["status"] == "open"][: (n - owned[target]) // 2]:
             w.update(t["id"], token=self.token, owner=target)
             moved += 1
         return f"moved {moved} tickets from {busiest[4:]} to {target[4:]}" if moved else f"noted the backlog on {busiest[4:]}"
@@ -624,13 +624,13 @@ class Lead(Bot):
         for t in w.tickets():
             step = board.step(t["step"])
             # Only work its owner holds: a ticket queued for a start or out for a check moves without the owner.
-            if not step or not step.work or not str(t["owner"]).startswith("bot:") or t["status"] != "doing" \
+            if not step or not step.work or not str(t["owner_id"]).startswith("bot:") or t["status"] != "doing" \
                     or t["id"] in snoozed:
                 continue
             limit = step.wake_after_hours or 2
             if w.idle_hours(t["id"]) < limit:
                 continue
-            w.post(f"tasks/{t['id']}/comments", {"text": f"@{t['owner'][4:]} this ticket has sat at {step.name} for "
+            w.post(f"tasks/{t['id']}/comments", {"text": f"@{t['owner_id'][4:]} this ticket has sat at {step.name} for "
                                                           f"{w.idle_hours(t['id']):.1f} h: what moves it on?",
                                                           "needs_action": True},
                    token=self.token)

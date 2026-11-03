@@ -9,8 +9,11 @@ refuses it.
 Control endpoints under /_fake/ are not Xero's:
   POST /_fake/seed     {"Accounts": [...], "Contacts": [...], ...} adds rows
   POST /_fake/change   the same shape: a row with an existing id replaces that row; the change time is now
-  POST /_fake/expire   the next call is refused with 401 once (the token has expired)
+  POST /_fake/expire   the next call is refused with 401 once (the token has expired); {"writes_only": true} makes the
+                       next write (PUT or POST) the one refused, so a background read cannot use up the 401
   POST /_fake/throttle {"times": n} the next n calls are refused with 429 and Retry-After: 1
+  POST /_fake/lose     {"times": n} the next n writes (PUT or POST) are applied, then the connection closes with no
+                       answer, as when a reply is lost on the way back to the install
   GET  /_fake/calls    every call made, in order (method, path, query, idempotency key; never the token)
   POST /_fake/reset    empties everything
 
@@ -22,17 +25,19 @@ import re
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from decimal import Decimal
 from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-ENDPOINTS = ("Accounts", "Contacts", "Invoices", "CreditNotes", "Payments", "ManualJournals", "BankTransactions",
-             "BankTransfers")
-ID_KEY = {"Accounts": "AccountID", "Contacts": "ContactID", "Invoices": "InvoiceID", "CreditNotes": "CreditNoteID",
+ENDPOINTS = ("Accounts", "Contacts", "Items", "TrackingCategories", "Invoices", "CreditNotes", "Payments",
+             "ManualJournals", "BankTransactions", "BankTransfers", "Overpayments", "Prepayments")
+ID_KEY = {"Accounts": "AccountID", "Contacts": "ContactID", "Items": "ItemID", "Invoices": "InvoiceID",
+          "CreditNotes": "CreditNoteID",
           "Payments": "PaymentID", "ManualJournals": "ManualJournalID", "BankTransactions": "BankTransactionID",
-          "BankTransfers": "BankTransferID"}
+          "BankTransfers": "BankTransferID", "Overpayments": "OverpaymentID", "Prepayments": "PrepaymentID"}
 ACCOUNT_TYPES = {"BANK", "CURRENT", "CURRLIAB", "EQUITY", "EXPENSE", "REVENUE", "FIXED", "SALES", "OVERHEADS"}
 PAGE = 100
 PREFIX = "/api.xro/2.0/"
@@ -45,7 +50,7 @@ TENANT = ["acme-tenant"]
 def reset() -> None:
     STATE.clear()
     STATE.update({"books": {e: [] for e in ENDPOINTS}, "calls": [], "keys": {}, "expire": False, "throttle": 0,
-                  "next_id": 100})
+                  "next_id": 100, "lose": 0})
 
 
 def now_ms() -> str:
@@ -80,8 +85,41 @@ def _find(endpoint: str, ident: str) -> dict[str, object] | None:
     return None
 
 
+ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}$")
+
+
+def _dates(row: dict[str, object]) -> None:
+    """Xero answers a date in its Microsoft form with the plain text beside it (DateString), whatever form the request
+    used: a plain day in a request is kept as the day, and the answer gives both."""
+    for key in ("Date", "DueDate"):
+        value = row.get(key)
+        if isinstance(value, str) and ISO_DAY.match(value):
+            day = datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            row[key] = f"/Date({int(day.timestamp() * 1000)}+0000)/"
+            row[f"{key}String"] = f"{value}T00:00:00"
+        elif ms_of(value) is not None and not row.get(f"{key}String"):
+            stamp = datetime.fromtimestamp((ms_of(value) or 0) / 1000, timezone.utc)
+            row[f"{key}String"] = stamp.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _amounts(row: dict[str, object]) -> None:
+    """Xero works out a line's amount from its quantity and unit amount when the request gives none, and a document's
+    total from its lines (no tax on these lines, as the client sends them)."""
+    lines = row.get("LineItems")
+    if not isinstance(lines, list):
+        return
+    for line in lines:
+        if isinstance(line, dict) and "LineAmount" not in line and "UnitAmount" in line:
+            line["LineAmount"] = f"{Decimal(str(line.get('Quantity', 1))) * Decimal(str(line['UnitAmount'])):.2f}"
+    if "Total" not in row:
+        row["Total"] = f"{sum((Decimal(str(line.get('LineAmount', 0))) for line in lines if isinstance(line, dict)), Decimal(0)):.2f}"
+
+
 def _defaults(endpoint: str, row: dict[str, object]) -> None:
     """What Xero fills in: a status, a credit note's allocations, and a payment's type from the invoice it settles."""
+    _dates(row)
+    if endpoint in ("Invoices", "CreditNotes", "BankTransactions"):
+        _amounts(row)
     if endpoint in ("Invoices", "CreditNotes", "Payments"):
         row.setdefault("Status", "AUTHORISED")
     if endpoint == "CreditNotes":
@@ -195,6 +233,19 @@ def listing(endpoint: str, query: dict[str, str], since: int | None) -> tuple[in
         rows = [r for r in rows if r.get("ContactStatus") != "ARCHIVED"]
     if since is not None:
         rows = [r for r in rows if (ms_of(r.get("UpdatedDateUTC")) or 0) > since]
+    if endpoint == "Invoices":
+        # Xero computes these on every invoice (the Invoice schema marks both readOnly): AmountPaid is the authorised
+        # payments on it, AmountDue what is left of its Total; a voided or deleted invoice owes nothing.
+        paid: dict[str, Decimal] = {}
+        for pay in STATE["books"]["Payments"]:  # type: ignore[index,union-attr]
+            if pay.get("Status") == "AUTHORISED":
+                key = str((pay.get("Invoice") or {}).get("InvoiceID"))
+                paid[key] = paid.get(key, Decimal(0)) + Decimal(str(pay.get("Amount") or 0))
+        for row in rows:
+            got = paid.get(str(row.get("InvoiceID")), Decimal(0))
+            row["AmountPaid"] = got
+            row["AmountDue"] = (Decimal(0) if row.get("Status") in ("VOIDED", "DELETED")
+                                else Decimal(str(row.get("Total") or 0)) - got)
     order = query.get("order", "")
     if order:
         rows.sort(key=lambda r: ms_of(r.get("UpdatedDateUTC")) or 0, reverse=order.endswith("DESC"))
@@ -206,11 +257,18 @@ def listing(endpoint: str, query: dict[str, str], since: int | None) -> tuple[in
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    _lose_reply = False
 
     def log_message(self, fmt: str, *args: object) -> None:
         return
 
     def _send(self, status: int, body: object, extra: dict[str, str] | None = None) -> None:
+        if status == 200 and self._lose_reply and STATE["lose"] > 0:
+            # The write landed (the state changed before this answer); the answer itself is lost on the way back.
+            STATE["lose"] -= 1
+            self._lose_reply = False
+            self.close_connection = True
+            return
         raw = json.dumps(body, default=float).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -226,12 +284,14 @@ class Handler(BaseHTTPRequestHandler):
         return found if isinstance(found, dict) else {}
 
     def _route(self, method: str) -> None:
+        self._lose_reply = False          # a keep-alive connection's last write never leaks into this request
         url = urlsplit(self.path)
         query = {k: v[0] for k, v in parse_qs(url.query).items()}
         body = self._body()
         with LOCK:
             if url.path.startswith("/_fake/"):
                 return self._control(url.path, body)
+            self._lose_reply = method != "GET"
             key = self.headers.get("Idempotency-Key", "")
             since_header = self.headers.get("If-Modified-Since", "")
             STATE["calls"].append({"method": method, "path": url.path, "query": query,  # type: ignore[attr-defined]
@@ -240,7 +300,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(401, {"Message": "Unauthorized"})
             if self.headers.get("xero-tenant-id") != TENANT[0]:
                 return self._send(403, {"Message": "Forbidden: unknown tenant"})
-            if STATE["expire"]:
+            if STATE["expire"] and (not STATE.get("expire_writes") or method != "GET"):
                 STATE["expire"] = False
                 return self._send(401, {"Message": "token expired"})
             if STATE["throttle"]:
@@ -272,9 +332,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True})
         if path == "/_fake/expire":
             STATE["expire"] = True
+            STATE["expire_writes"] = bool(body.get("writes_only"))
             return self._send(200, {"ok": True})
         if path == "/_fake/throttle":
             STATE["throttle"] = int(body.get("times") or 0)
+            return self._send(200, {"ok": True})
+        if path == "/_fake/lose":
+            STATE["lose"] = int(body.get("times") or 0)
             return self._send(200, {"ok": True})
         if path in ("/_fake/seed", "/_fake/change"):
             for endpoint, rows in body.items():

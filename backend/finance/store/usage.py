@@ -14,9 +14,9 @@ def add_snapshot(c: sqlite3.Connection, *, month: str, as_of: str, ai_nano: int,
     """Keep one fetch of the meter. A fetch with the same (month, as_of) and a higher total replaces the kept row under
     a new id (so its posting is a new source id) and makes it unposted again. None when nothing changed."""
     sid = new_id()
-    made = c.execute("INSERT INTO fin_usage_snapshots(id, month, as_of, ai_nano, video_nano, rows_json, created_at, "
+    made = c.execute("INSERT INTO fin_usage_snapshots(id, month, as_of, ai_nano, video_nano, rows, created_at, "
                      "created_by) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(month, as_of) DO UPDATE SET id=excluded.id, "
-                     "ai_nano=excluded.ai_nano, video_nano=excluded.video_nano, rows_json=excluded.rows_json, "
+                     "ai_nano=excluded.ai_nano, video_nano=excluded.video_nano, rows=excluded.rows, "
                      "created_at=excluded.created_at, created_by=excluded.created_by, posted_at=NULL, ignored_at=NULL "
                      "WHERE excluded.ai_nano + excluded.video_nano > "
                      "fin_usage_snapshots.ai_nano + fin_usage_snapshots.video_nano",
@@ -101,7 +101,7 @@ def resettle(c: sqlite3.Connection, hold_id: str, amount: int, at: str) -> int:
 
 # ------------------------------------------------------------------------------------------------ events
 def undrained(c: sqlite3.Connection, most: int) -> list[Any]:
-    return c.execute("SELECT id, name, subject, period_key, payload_json FROM fin_events WHERE drained_at IS NULL "
+    return c.execute("SELECT id, name, subject, period_key, payload FROM fin_events WHERE drained_at IS NULL "
                      "ORDER BY created_at, id LIMIT ?", (most,)).fetchall()
 
 
