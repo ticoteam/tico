@@ -176,8 +176,8 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
   group or any group above it. **members**, **personal** and **participants** threads open to a bot only as a member (or
   a participant). An external agent (an agent token) gets no company or team reading: only the threads it is in.
   Posting in a Home takes **Write** on its owner, for bots as for people.
-- A thread can reach outside the company through a linked Slack channel or a shared install. Taking that away (unlink,
-  unshare) removes the outside readers at once ([Slack](slack.md), [Federation](federation.md)).
+- A thread can reach outside the company through a linked Slack channel. Unlinking it removes the outside readers at
+  once ([Slack](slack.md)).
 - A message the org rules hold writes nothing. The author may withdraw it, and so may the person a bot reports to; only
   the reviewer sends it anyway ([Rules](rules-plan.md)).
 
