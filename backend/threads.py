@@ -1189,6 +1189,15 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
         reason = wanted.pop(primary)
         c.execute("UPDATE message_deliveries SET reason=? WHERE message_id=? AND recipient=?",
                   (reason if reason in REASONS else "addressed", message["id"], primary))
+        # The trigger wrote no row for a task thread's bot post to a person (hubdb.delivery_counts_sql): a mention of
+        # the primary makes it here. An ask's reason is 'ask' here, so the mention is read from in_audience, and the row
+        # is written as 'mention' (the only reason counts_for_person lets a task thread's bot post through).
+        mentioned = any(actor == primary and kind == "mention" for actor, kind in in_audience)
+        if (mentioned and primary.startswith("human:") and not c.execute(
+                "SELECT 1 FROM message_deliveries WHERE message_id=? AND recipient=?", (message["id"], primary)).fetchone()):
+            sent = _deliver_person(c, thread, root, message, primary, "mention", replay, warnings)
+            if sent:
+                out.append(sent)
         if any(actor == primary for actor, _ in in_audience):
             _follow(c, thread["id"], primary, "mentioned", (message.get("seq") or 1) - 1)
     if primary and primary.startswith("bot:"):
@@ -1383,9 +1392,10 @@ def _outside(c, thread_id):
 
 
 def _insert_delivery(c, message, recipient, thread, root, mode, reason, *, state="pending"):
-    """One delivery row, or None when the message is task news a person gets no delivery for (hubdb.task_news): it stays
-    in the task's conversation only. Every person's delivery in Python passes here (_deliver_person, task_opened)."""
-    if recipient.startswith("human:") and H.task_news(message.get("sender_id"), message.get("refs")):
+    """One delivery row, or None when a person gets no delivery for it (hubdb.counts_for_person: task news, and a bot's
+    post in a task's thread that did not @mention them). It stays in the conversation. Every person's delivery in Python
+    passes here (_deliver_person, task_opened)."""
+    if recipient.startswith("human:") and not H.counts_for_person(c, message, reason, thread["id"]):
         return None
     did = _new_id()
     now = _now()
@@ -2836,7 +2846,7 @@ def unread_message_sql(m="m"):
     return (f"{m}.deleted_at IS NULL AND {m}.sender_id<>? AND NOT {_backfill_sql(m)} "
             f"AND ({m}.sender_id LIKE 'human:%' OR EXISTS (SELECT 1 "
             f"FROM message_deliveries unread_d WHERE unread_d.message_id={m}.id AND unread_d.recipient=? "
-            f"AND {H.delivery_counts_sql(m, 'unread_d.recipient')}))")
+            f"AND {H.delivery_counts_sql(m, 'unread_d.recipient', 'unread_d.reason')}))")
 
 
 def unread(c, v, thread_id, *, follower=None):
@@ -3281,7 +3291,7 @@ def _branch_stats(c, v, branches, below):
             "SUM(m.seq<cut.below AND m.seq>cut.mark AND m.sender_id<>?), "
             "SUM(m.seq>cut.mark AND m.sender_id<>? AND (m.sender_id LIKE 'human:%' OR EXISTS (SELECT 1 FROM "
             "message_deliveries d WHERE d.message_id=m.id AND d.recipient=? "
-            f"AND {H.delivery_counts_sql('m', 'd.recipient')}))) "
+            f"AND {H.delivery_counts_sql('m', 'd.recipient', 'd.reason')}))) "
             "FROM cut JOIN messages m ON m.conversation_id=cut.tid WHERE m.seq IS NOT NULL AND m.deleted_at IS NULL "
             "AND m.restricted=0 AND m.legacy_audience IS NULL GROUP BY cut.tid", (*args, me, me, me)):
         stats[r[0]].update(count=r[1], older=r[2] or 0, unseen=r[3] or 0, unread=r[4] or 0)
@@ -3591,7 +3601,7 @@ def _sidebar_page(c, v, cursor, limit, sort):
     to_viewer = ("r.id IN (SELECT s.root_id FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
                  "JOIN conversations s ON s.id=d.thread_id LEFT JOIN thread_followers f ON f.thread_id=s.id "
                  "AND f.actor=d.recipient WHERE d.recipient=:me AND d.state IN ('pending','delivered','capped','held') "
-                 f"AND {H.delivery_counts_sql('m', 'd.recipient')} "
+                 f"AND {H.delivery_counts_sql('m', 'd.recipient', 'd.reason')} "
                  f"AND {_SUBTREE_OPEN} AND m.seq>{mark} AND m.sender_id<>:me AND m.deleted_at IS NULL)")
     place = f"CASE WHEN {is_needing} THEN 0 WHEN NOT {is_history} AND ({by_person} OR {to_viewer}) THEN 1 ELSE 2 END"
     from . import thread_rank

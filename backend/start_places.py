@@ -174,6 +174,20 @@ def at_turn_limit(c, bot):
     return limit is not None and bot_held(c, bot) >= limit
 
 
+def held_counts(c, bots):
+    """{bot: the turns it holds on every computer} for every bot in `bots`, in set queries: bot_held's predicate,
+    grouped by bot."""
+    from .hubdb import chunks
+    now = H.now()
+    counts = {}
+    for part in chunks(bots):
+        for bot, count in c.execute(
+                "SELECT a.bot_id,count(*) FROM attempts a WHERE a.bot_id IN (" + ",".join("?" * len(part)) + ") "
+                "AND (a.state='running' OR (a.state='leased' AND a.lease_until>?)) GROUP BY a.bot_id", (*part, now)):
+            counts[bot] = count
+    return {bot: counts.get(bot, 0) for bot in bots}
+
+
 def bot_held(c, bot, exclude=None):
     """Turns the bot holds on every computer together: what its "Turns at once" is checked against. A turn holds its
     place from its claim until it ends, whether it is starting, parked on a wait or running: a parked turn still

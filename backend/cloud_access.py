@@ -96,13 +96,18 @@ def access(c):
     return found["access"] if found else None
 
 
-def frozen(c):
-    """Whether new turns that would spend usage wait: out of credit, or locked."""
-    return access(c) in ("frozen", "locked")
+_UNREAD = object()
 
 
-def locked(c):
-    return access(c) == "locked"
+def frozen(c, value=_UNREAD):
+    """Whether new turns that would spend usage wait: out of credit, or locked. `value`: access(c), when read already."""
+    value = access(c) if value is _UNREAD else value
+    return value in ("frozen", "locked")
+
+
+def locked(c, value=_UNREAD):
+    value = access(c) if value is _UNREAD else value
+    return value == "locked"
 
 
 def routines_paused(c):
