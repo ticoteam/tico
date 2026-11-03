@@ -267,23 +267,12 @@ Strategy Bot is on ([Strategy Bot](strategy-bot.md#what-it-has-learned)).
 
 ## On the Updates page
 
-Updates has your DM beside the feed: the same thread as the menu tab, so a question asked here shows there too.
-It is labelled with your Assistant, the owner's too. On a
-desktop it is a right rail; drag its left edge to resize it, as with other right rails, and the button at the end of the
-page's header shows or hides it. Tico remembers that for you on every device. On a phone the same button opens the DM
-full screen; its close button or Back shuts it. While the Assistant is off, whoever may turn it on sees one line with
-**Turn on** there; anyone else gets no DM and no button.
+Updates has no Assistant chat beside the feed. To talk to your Assistant, open its DM from the left rail (**Assistant**);
+the same thread shows there. While the Assistant is off, whoever may turn it on sees one line with **Turn on** there;
+anyone else gets no DM.
 
-A question asked here is handed the recent updates you can read: the last four days' dailies and the latest week in
-review, chosen by the same rules as your Updates page. Tico leaves out any update that links or names a task, thread or
-bot you can't open, so the bot never has it to quote or link. That filter runs on the server, not in the bot's
-instructions. Ask "what's the top update today?" and it picks one and says why in a sentence. With nothing posted today
-it says so and offers the last day's top one. Until you teach it otherwise (see below), "top" means affects a goal, then
-waits on you, then newest.
-
-A link to an update in its reply stays on the page. It scrolls to that card and highlights it, switching Daily or Weekly
-and the day as needed. On a phone the DM closes first. Each question is one ordinary turn. It costs no more than any
-other message to your Assistant, and it acts only as you, as everywhere.
+Each question is one ordinary turn. It costs no more than any other message to your Assistant, and it acts only as you,
+as everywhere.
 
 ## API
 
