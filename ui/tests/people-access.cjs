@@ -129,7 +129,7 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     // Add manually is the mode with no directory; no title/team column and no Edit button; the bot limit reads 25.
     assert.equal(await page.locator('[data-people-mode=manual]').getAttribute('aria-pressed'), 'true');
     assert.doesNotMatch(await page.locator('#set-people').textContent(), /leadership|Edit/);
-    assert.equal(await page.locator('#member-bot-limit').inputValue(), '25');
+    assert.equal(await page.locator('#set-people #member-bot-limit').count(), 0);
     assert.equal(await page.locator('#people-proxy-note').count(), 0);
     assert.equal(await row('ana').locator('[data-person-role]').count(), 0);
     assert.equal(await row('ana').locator('[data-person-signin]').count(), 0, 'the owner can always sign in: words, not a switch');
@@ -209,17 +209,22 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     assert.deepEqual(await next(), ['allow', {allowed: ['ana@acme.example', 'cy@acme.example'], allowed_domains: [], expected_revision: 5}]);
     await page.waitForFunction(() => !document.querySelector('[data-allow="old@partner.example"]'));
 
+    await page.getByRole('tab', {name: 'Company & policies'}).click();
+    await page.locator('#member-bot-limit').waitFor();
+    assert.equal(await page.locator('#member-bot-limit').inputValue(), '25');
     await page.locator('#member-bot-limit').fill('30');
     await page.locator('#member-bot-limit').press('Enter');
     assert.deepEqual(await next(), ['limits', {member_bot_limit: 30}]);
 
     // The owner's rules are all on, and turning one off saves it (backend/team_rules.py).
-    assert.equal(await page.locator('[data-rule]').count(), 11);
-    assert.equal(await page.locator('[data-rule]:checked').count(), 11);
-    await page.locator('[data-rule=admin_sql]').uncheck();
+    assert.equal(await page.locator('[data-policy]').count(), 11);
+    assert.equal(await page.locator('[data-policy]:checked').count(), 11);
+    await page.locator('[data-policy=admin_sql]').uncheck();
     assert.deepEqual(await next(), ['rules', {admin_sql: false}]);
-    await page.waitForFunction(() => document.querySelector('[data-rule=admin_sql]')?.checked === false);
+    await page.waitForFunction(() => document.querySelector('[data-policy=admin_sql]')?.checked === false);
 
+    await page.getByRole('tab', {name: 'People'}).click();
+    await row('ben').waitFor();
     // Sync with directory: pick a source and save; going back to manual stops the sync after a confirm.
     await page.locator('[data-people-mode=sync]').click();
     await page.locator('#directory-sync select[name=source]').waitFor();
