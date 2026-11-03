@@ -19,12 +19,12 @@ body.fb-on .fb-mark:not(:empty){display:inline-flex;vertical-align:middle}
    chat's own Copy line (chat.css) becomes this row. */
 body.fb-on .fb-row,
 body.fb-on .bubble.bot>.chat-message-actions:has(.fb-ctl){display:flex;align-items:center;justify-content:flex-start;gap:2px;height:28px;margin:0;padding:0 2px;
-  position:absolute;top:100%;bottom:auto;left:-8px;right:auto;z-index:2;border-radius:7px;background:var(--bg);pointer-events:none}
+  position:absolute;top:100%;bottom:auto;left:-8px;right:auto;z-index:2;border-radius:7px;background:transparent;pointer-events:none}
 body.fb-on .th-main:has(>.fb-row){position:relative}
 /* Each chat run and thread message is its own layer (a transform, a position): the one in use rises above the next. */
 body.fb-on :is(.conv-run.chat,.th-msg):is(:hover,:focus-within):has(.fb-ctl){z-index:3}
 body.fb-on :is(.bubble:hover,.th-msg:hover .th-main,.tcomment:hover .bubble)>:is(.fb-row,.chat-message-actions),
-body.fb-on :is(.fb-row,.chat-message-actions):focus-within{pointer-events:auto}
+body.fb-on :is(.fb-row,.chat-message-actions):focus-within{background:var(--bg);pointer-events:auto}
 body.fb-on .fb-row:has([aria-pressed="true"]),
 body.fb-on .bubble.bot>.chat-message-actions:has([aria-pressed="true"]){position:static;margin:2px 0 0 -8px;background:none;pointer-events:auto}
 .fb-row .fb-btn,.chat-message-actions .fb-btn{opacity:0;transition:opacity var(--dur-fast) var(--ease)}
