@@ -5,7 +5,7 @@ scored with a real model. The CI test (`backend/tests/test_assistant_evals.py`) 
 model run is on demand only and never in CI. The shape follows `evals/botops/`.
 
     python3 evals/assistant/run.py --repo <tico checkout> [--model claude-haiku-5-5] [--judge claude-opus-5-5] \
-        [--only queue,approvals,jobs] [--case id,id] [--samples 2] [-j 6] [--tag base-haiku]
+        [--only queue,approvals,jobs] [--case id,id] [--samples 2] [-j 6] [--tag base-haiku] [--surface both]
 
 - `--repo` names the Tico checkout. Its template and its `clients/hubcli.py` parser are used, so the same cases score
   main against a branch.
@@ -20,13 +20,22 @@ summary then covers only the samples that finished.
 
 1. Copies the template to a sandbox with the placeholders filled (company Acme, assistant "Tico Assistant"). The card
    and the reports are left out, as the runner leaves them.
-2. Puts a fake `hub` first on `PATH`. It parses each call with the repo's real parser, so a command the CLI does not have
+2. Puts a fake `hub` first on `PATH` (unless `--surface mcp`), and attaches the fake hub MCP server (unless `--surface cli`). It parses each call with the repo's real parser, so a command the CLI does not have
    fails the sample. It logs every call and answers from the case's `hub:` entries; a call with no entry gets a generic
    reply. `--on-behalf-of` is ignored when answers are matched, so an answer does not depend on whether the template
    cites the turn itself.
    Writes answer as the real hub does, with the changed object (`task close` gives `task.status` closed). The fake hub
    keeps the ids a run closed or updated, and the automations it enabled or disabled, in `state.json` next to the log;
    a later `task list` or `automation show` from canned output shows that state. A canned row that matches still wins.
+   The built-in layer covers: `task update` and `task close` (status, owner, title, due, labels), `automation update`
+   (enabled, schedule, trigger), `bot pause|resume|model` (status, model), and `approval approve|decline` (status), read
+   back by `show`, `list` and `status` for the same id (a prefix matches the full id).
+   A successful write (exit 0, not `--dry-run`, not invalid) is also logged. A canned read can list `after` entries, and
+   the read then returns the output of the latest logged write that an entry's `when` regex names. `after` wins over
+   the built-in layer for that read. A failed or `--dry-run` write is not logged, so the old value stays.
+   A read with no canned row is no longer a bare ok: a list read (`* list`, `*status list`, `needs-you show`,
+   `conversation show`) returns an empty list in its shape with `note: "no canned data"`. `approval list` with no canned
+   row is built from the approval refs in the case's canned `message list` (each one a pending row).
 3. Builds the prompt the way the runner builds an Assistant DM turn (`runner-rs/src/prompt.rs`): the standing opening,
    the personal-chat block ("You are privately assisting human:dana"), the case's `history` if it has one, then
    "Current message from human:dana:" and the person's message. The runner's full prompt is longer; this keeps the parts
@@ -34,9 +43,19 @@ summary then covers only the samples that finished.
 4. Checks the run. A sample passes when every check holds:
    - `must`: each regex matches some logged hub call, or the reply when it starts with `reply:`.
    - `must_not`: no logged call (or reply, with `reply:`) matches.
-   - `invalid`: no hub call is rejected by the parser.
+   - `invalid`: counted per sample, not a failure (a model that gets a usage error and then runs the right command did fine). A case that sets `no_invalid: true` fails on any invalid call.
    - the judge passes the reply against `reply:`, reading the person's message, the rubric, the hub calls, and the
      canned record (numbers in a reply must match it).
+
+## Surfaces
+
+Production gives the Assistant the hub two ways: the hub as an MCP server (`clients/hubmcp.py`, the tool listing for its
+kind, here `assistant`, about 200 tools that Claude Code defers behind tool search) and the `hub` CLI on PATH. `--surface`
+picks which the run has: `both` (the default, production) attaches the MCP server and keeps `hub` on PATH; `mcp` attaches
+the server and takes `hub` off PATH; `cli` is the old harness with no MCP server. An MCP `tools/call` is turned into the
+same canonical line the CLI logs (the typed command words, then the id, then `--key value` per argument), so one set of
+regexes checks either surface. The summary reports the calls and the invalid calls per surface, and an MCP call the
+tool's input schema rejects counts as invalid, as a CLI call the parser rejects does.
 
 ## Cases
 
@@ -51,6 +70,10 @@ summary then covers only the samples that finished.
   hub:                             # canned answers, matched against the call without --on-behalf-of
     - match: '^assistant change list'
       out: {changes: [...]}        # a string prints as is; anything else prints as JSON
+    - match: '^task show 9f7e3a2c'
+      out: {task: {id: 9f7e3a2c..., status: open}}
+      after:                       # optional: read after a successful write that a `when` names
+        - {when: '^task update 9f7e3a2c\S* .*--status done', out: {task: {id: 9f7e3a2c..., status: done}}}
   must: ['^assistant change list\b']
   must_not: ['^task (create|close)\b']
   reply: |                         # the rubric for the judge
@@ -63,6 +86,14 @@ and companies only. Regexes are Python `re` against the call's words (`^task clo
 The commands the assistant tools branch adds (`needs-you show`, `origin show`, `assistant change list|restore`) are in
 the cases, and the CI test allows them to be absent on main. Delete an entry from `NEW_COMMANDS` in the test when its
 command lands, so it is checked against the real parser.
+
+Calls that did not work are visible: each logged call carries its `exit` and a short `out`. A `must` regex matches
+only calls that worked (exit 0), unless the case sets `must_allow_failed: true`; `must_not` still sees every attempt. The
+judge sees a failed call marked FAILED. Inherited `HUB_*` and `TICO_*` variables never reach the run. On `--surface mcp`
+a `hub` stub on PATH exits 127 and logs the attempt as an invalid call.
+
+Known limit: the call log (`EVAL_LOG`) is a file the model could write to with Bash. Treat a run whose log looks forged as
+void; the harness does not guard against it.
 
 ## Adding a case
 
