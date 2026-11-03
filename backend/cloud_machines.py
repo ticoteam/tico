@@ -130,7 +130,6 @@ SYNC = 60                       # seconds between HQ lists
 HEARTBEAT = 60
 PAUSE_MINUTES = 30              # a machine with no Pause after of its own pauses after this many idle minutes
 PAUSE_MIN, PAUSE_MAX = 5, 1440  # the whole minutes a person may set
-UNCHANGED = object()            # a change that leaves a field as it is (None is a value: back to the default)
 BACKOFF, BACKOFF_MAX = 15, 900
 STOPPING_RETRY = 5              # boat answers 409 sandbox_stopping to a resume right after a stop
 FROZEN_RETRY = 600              # a 402 is asked again this late, or as soon as HQ says the company is open
@@ -419,10 +418,8 @@ def pause_after(current):
 
 
 def checked_pause(value):
-    """A Pause after as it is stored: None (back to the default), or a whole number of minutes from PAUSE_MIN to
-    PAUSE_MAX. Anything else is refused before a change is written."""
-    if value is None:
-        return None
+    """A person's Pause after: a whole number of minutes from PAUSE_MIN to PAUSE_MAX. Anything else is refused before a
+    change is written."""
     if type(value) is not int or not PAUSE_MIN <= value <= PAUSE_MAX:
         raise Problem("validation", f"Pause after takes whole minutes from {PAUSE_MIN} to {PAUSE_MAX}", 422)
     return value
@@ -1186,10 +1183,10 @@ def shown(bot, current, assigned, shared=None):
     return {"mode": current["mode"], "placement": current["placement"], **machine_view(machine)}
 
 
-def change(c, execution, who, bot, mode=None, size=None, always_on=None, placement=None, pause_minutes=UNCHANGED):
+def change(c, execution, who, bot, mode=None, size=None, always_on=None, placement=None, pause_minutes=None):
     """A person's choice for the bot: a cloud machine (`mode` cloud), which one (`placement` shared or own), its own
-    machine's size (applied at its next start), Always on and Pause after (`pause_minutes`: minutes, or None for the
-    default). Moving to another computer is Execution.assign's (which sets `computer`). Those who manage the bot only."""
+    machine's size (applied at its next start), Always on and Pause after (`pause_minutes`, whole minutes). None leaves a
+    choice as it is. Moving to another computer is Execution.assign's (which sets `computer`). Those who manage the bot only."""
     auth = execution.auth
     if not (auth.operator(c, who, bot) or auth.bot_manager(c, who, bot)):
         raise Problem("forbidden", "You do not manage this bot's computer", 403)
@@ -1204,8 +1201,8 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
         raise Problem("validation", "Choose a computer to move it there; mode only takes cloud", 422)
     if placement is not None and placement not in PLACEMENTS:
         raise Problem("validation", "Choose shared or own", 422)
-    if pause_minutes is not UNCHANGED:
-        pause_minutes = checked_pause(pause_minutes)
+    if pause_minutes is not None:
+        checked_pause(pause_minutes)
     c.execute("INSERT OR IGNORE INTO cloud_machines(bot,mode,placement,changed_by,updated_at) VALUES(?,?,?,?,?)",
               (bot, "computer" if c.execute("SELECT 1 FROM assignments WHERE bot=?", (bot,)).fetchone() else "cloud",
                placement or default_placement(c, bot), who.actor, H.now()))
@@ -1223,7 +1220,7 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
         fields["size"] = size
     if always_on is not None:
         fields["always_on"] = int(always_on)
-    if pause_minutes is not UNCHANGED:
+    if pause_minutes is not None:
         fields["pause_minutes"] = pause_minutes
     save(c, bot, **fields)
     after = row(c, bot)
@@ -1251,7 +1248,7 @@ def shared_view(c):
     return {**machine_view(row(c, SHARED)), "bots": members(c)}
 
 
-def change_shared(c, auth, who, size=None, always_on=None, pause_minutes=UNCHANGED):
+def change_shared(c, auth, who, size=None, always_on=None, pause_minutes=None):
     """The company's choice for the shared machine: its size (applied at its next start), Always on and Pause after.
     Owners and admins only: it spends the company's credit for every bot on it. The route checks the company is on
     Tico Cloud."""
@@ -1259,8 +1256,8 @@ def change_shared(c, auth, who, size=None, always_on=None, pause_minutes=UNCHANG
         raise Problem("forbidden", "Only owners and admins change the shared cloud machine", 403)
     if size is not None and size not in size_names(c):
         raise Problem("validation", "Choose one of: " + ", ".join(size_names(c)), 422)
-    if pause_minutes is not UNCHANGED:
-        pause_minutes = checked_pause(pause_minutes)
+    if pause_minutes is not None:
+        checked_pause(pause_minutes)
     ensure_shared(c)
     before = row(c, SHARED)
     fields = {"changed_by": who.actor, "enroll_fails": 0}        # a person's choice lets a machine be made again
@@ -1270,7 +1267,7 @@ def change_shared(c, auth, who, size=None, always_on=None, pause_minutes=UNCHANG
         fields["size"] = size
     if always_on is not None:
         fields["always_on"] = int(always_on)
-    if pause_minutes is not UNCHANGED:
+    if pause_minutes is not None:
         fields["pause_minutes"] = pause_minutes
     save(c, SHARED, **fields)
     after = row(c, SHARED)
@@ -1367,11 +1364,6 @@ class SharedChange(BaseModel):
     pause_minutes: int | None = None
 
 
-def _pause(body):
-    """The body's Pause after: a number, or null for the default, when the body names it; UNCHANGED when it does not."""
-    return body.pause_minutes if "pause_minutes" in body.model_fields_set else UNCHANGED
-
-
 def install(app, settings, store, auth, execution, mutate):
     service = Manager(store, settings, execution)
     service.vault_of = lambda: getattr(app.state, "vault", None)
@@ -1400,15 +1392,14 @@ def install(app, settings, store, auth, execution, mutate):
 
     @app.post("/api/v2/cloud-machines/shared")
     def cloud_machine_shared_set(request: Request, body: SharedChange):
-        """The shared cloud machine's `size` (applied at its next start), `always_on` and `pause_minutes` (5 to 1440, or
-        null for the default). Owners and admins only."""
+        """The shared cloud machine's `size` (applied at its next start), `always_on` and `pause_minutes` (5 to 1440). Owners and admins only."""
         who = request.state.identity
         auth.domain(who)
 
         def run(c):
             if not offered(c, settings):
                 raise Problem("not_cloud", "Cloud machines are for Tico Cloud companies", 409)
-            return {"shared": change_shared(c, auth, who, body.size, body.always_on, _pause(body))}
+            return {"shared": change_shared(c, auth, who, body.size, body.always_on, body.pause_minutes)}
         return mutate(request, body, run)
 
     @app.delete("/api/v2/cloud-machines/shared")
@@ -1427,12 +1418,12 @@ def install(app, settings, store, auth, execution, mutate):
     def cloud_machine_set(bot: str, request: Request, body: Change):
         """Where the bot runs and how: `mode` cloud puts it on a cloud machine (another computer is chosen with a
         machine transition), `placement` on the shared one or its own; its own machine's `size` applies at that
-        machine's next start, `always_on` keeps it running, and `pause_minutes` (5 to 1440, or null for the default)
+        machine's next start, `always_on` keeps it running, and `pause_minutes` (5 to 1440)
         pauses it after that many idle minutes. Those who manage the bot only; Tico Cloud only."""
         who = request.state.identity
         auth.domain(who)
         return mutate(request, body, lambda c: {"cloud_machine": change(
-            c, execution, who, _known(c, bot), body.mode, body.size, body.always_on, body.placement, _pause(body))})
+            c, execution, who, _known(c, bot), body.mode, body.size, body.always_on, body.placement, body.pause_minutes)})
 
     @app.delete("/api/v2/bots/{bot}/cloud-machine")
     def cloud_machine_delete(bot: str, request: Request):

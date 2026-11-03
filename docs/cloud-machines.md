@@ -16,7 +16,7 @@ cloud machine" under Computer).
 - The shared machine is one row and one HQ machine, key `_shared` (a bot's own machine is keyed by the bot id, and no
   bot id has an underscore). It is on while any bot on it wants it (work, a move, a watcher's wake) and pauses once
   every bot on it has had no turn out and no activity for its Pause after (`pause_minutes`: 30 by default, whole
-  minutes from 5 to 1440, NULL for the default; Always on never pauses). Its size, Pause after and Always on are the
+  minutes from 5 to 1440; Always on never pauses). Its size, Pause after and Always on are the
   company's, set by owners and admins (`POST /api/v2/cloud-machines/shared`, which takes `pause_minutes` too). They can
   also delete it, to replace a broken one (`DELETE /api/v2/cloud-machines/shared`): HQ deletes its disk, its computer is revoked, its size, Always on
   and members stay, and a member's next work makes a fresh one. The row keeps the old id as `deleted`: HQ keeps the

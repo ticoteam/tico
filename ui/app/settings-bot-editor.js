@@ -305,7 +305,8 @@ function settingsEditBot(slug = '', inline = false) {
       const cloudPause = event.target.closest('[data-bot-cloud-pause]');
       if (cloudPause) {
         settingsFieldClear(cloudPause);
-        const whole = cloudPause.checkValidity() && cloudPause.value !== '';
+        if (cloudPause.value === '') cloudPause.value = '30';      // an empty box is the default
+        const whole = cloudPause.checkValidity();
         if (!whole) settingsFieldError(cloudPause, 'Enter whole minutes from 5 to 1440.');
         stage('cloud-pause', 'pause after', changed(cloudPause) && whole && cloudMachineRun(slug, {pause_minutes: Number(cloudPause.value)}, cloudPause));
       }

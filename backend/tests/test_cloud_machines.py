@@ -300,9 +300,9 @@ def test_the_pause_is_pause_minutes_or_30_and_only_whole_minutes_from_5_to_1440_
     assert CM.pause_after(machine_row(pause_minutes=5)) == 300
     assert CM.pause_after(machine_row(pause_minutes=1440)) == 86400
     assert CM.machine_view(None)["pause_minutes"] == 30
-    for ok in (None, 5, 30, 1440):
+    for ok in (5, 30, 1440):
         assert CM.checked_pause(ok) == ok
-    for bad in (4, 1441, 0, -5, 2.5, "30", True):
+    for bad in (None, 4, 1441, 0, -5, 2.5, "30", True):
         with pytest.raises(Problem):
             CM.checked_pause(bad)
 
@@ -934,17 +934,17 @@ def test_sizes_and_choices_are_checked(cloud):
     post(cloud.api, "bots/ops/cloud-machine", {"size": "large"}, token="cara-test", expected=403)
 
 
-def test_pause_after_takes_whole_minutes_from_5_to_1440_and_null_is_the_default(cloud):
+def test_pause_after_takes_whole_minutes_from_5_to_1440_and_null_leaves_it(cloud):
     adopt(cloud)
     cloud.tick()
     for bad in (4, 1441, 2.5):
         post(cloud.api, "bots/ops/cloud-machine", {"pause_minutes": bad}, expected=422)
     assert post(cloud.api, "bots/ops/cloud-machine", {"pause_minutes": 1440})["cloud_machine"]["pause_minutes"] == 1440
     assert post(cloud.api, "bots/ops/cloud-machine", {"size": "large"})["cloud_machine"]["pause_minutes"] == 1440
-    assert post(cloud.api, "bots/ops/cloud-machine", {"pause_minutes": None})["cloud_machine"]["pause_minutes"] \
-        == CM.PAUSE_MINUTES
+    assert post(cloud.api, "bots/ops/cloud-machine", {"pause_minutes": None})["cloud_machine"]["pause_minutes"] == 1440
+    assert post(cloud.api, "bots/ops/cloud-machine", {"pause_minutes": 30})["cloud_machine"]["pause_minutes"] == 30
     with cloud.store.read() as c:
-        assert CM.row(c, "ops")["pause_minutes"] is None
+        assert CM.row(c, "ops")["pause_minutes"] == 30
 
 
 def test_the_shared_machines_pause_is_the_companys_and_checked(cloud):
@@ -954,7 +954,7 @@ def test_the_shared_machines_pause_is_the_companys_and_checked(cloud):
     assert post(cloud.api, "cloud-machines/shared", {"pause_minutes": 45}, token="ben-test")["shared"]["pause_minutes"] == 45
     assert post(cloud.api, "cloud-machines/shared", {"always_on": True}, token="ben-test")["shared"]["pause_minutes"] == 45
     assert post(cloud.api, "cloud-machines/shared", {"pause_minutes": None}, token="ben-test")["shared"]["pause_minutes"] \
-        == CM.PAUSE_MINUTES
+        == 45
 
 
 # ----------------------------------------------------------------------------- the shared machine
