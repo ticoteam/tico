@@ -149,6 +149,13 @@ fn printed_token(raw: &str, prefix: &str, ended: bool) -> Option<String> {
     })
 }
 
+/// A CLI waiting for Enter after an OAuth error cannot finish without another interactive attempt. Never relay
+/// its text: a Connect's output can contain codes and credentials. Cursor movements and wrapping split words.
+fn oauth_retry(raw: &str) -> bool {
+    let text: String = plain(raw).chars().filter(|c| !c.is_whitespace()).flat_map(char::to_lowercase).collect();
+    text.contains("oautherror:") && text.contains("pressentertoretry")
+}
+
 /// What the login command has shown so far: {url, code, lines, prompt} (login.py `parse`). `hide` is a pasted
 /// code a terminal may echo.
 pub fn parse(raw: &str, hide: &str) -> (String, String, Vec<String>, bool) {
@@ -743,6 +750,10 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         if Instant::now() > deadline {
             kill(&mut child);
             break Some(("failed".into(), "The sign-in was not finished in time".into()));
+        }
+        if connect && oauth_retry(&s.inner.lock().unwrap().raw) {
+            kill(&mut child);
+            break Some(("failed".into(), "The sign-in could not finish. Choose Try again and use the code from the new sign-in page.".into()));
         }
         // The token is all a Connect wants. The command gets to end by itself, so a failure it reports still counts.
         if !token_prefix.is_empty() && printed_token(&s.inner.lock().unwrap().raw, &token_prefix, false).is_some()
@@ -1592,6 +1603,16 @@ mod tests {
         assert_eq!(printed_token(&format!("{}\n", &token[..80]), "sk-ant-oat", true), None);
     }
 
+    #[test]
+    fn oauth_retry_waits_for_the_blocked_state() {
+        let error = "\x1b[31mOAuth error:\x1b[0m That code was not accepted.\r\nPress\x1b[1GEnter to re";
+        assert!(!oauth_retry(error), "a partial prompt is still arriving");
+        assert!(oauth_retry(&format!("{error}try.")));
+        assert!(!oauth_retry("Paste code here if prompted >"));
+        assert!(!oauth_retry("Your OAuth token:\nvalid-token\nPress Enter to continue"));
+        assert!(!oauth_retry("Press Enter to retry"), "an unrelated retry is not an OAuth failure");
+    }
+
     /// A Connect relays the link, leaves the login it does not need alone, and holds its one result for the server.
     #[test]
     fn connect_captures_the_result_and_leaves_the_computers_own_login() {
@@ -1607,6 +1628,11 @@ case "$*" in
     echo 'Use the url below to sign in'; echo 'https://claude.example/authorize?x=1'; echo 'Paste code here if prompted >'
     read code
     test "$code" = pasted-code || exit 4
+    if test -e "$HOME/rejects-code"; then
+      trap 'touch "$HOME/rejected-stopped"; exit 0' TERM
+      printf '\033[31mOAuth error:\033[0m code %s {token}\r\nPress\033[1GEnter to retry.' "$code"
+      while :; do sleep 0.1; done
+    fi
     echo 'Your OAuth token:'; echo '{token}'; echo 'Store it safely.'
     test ! -e "$HOME/fails-after-token" || exit 7
     sleep 30 ;;
@@ -1683,6 +1709,27 @@ esac
             assert!(i.captured.is_none() && i.finished && i.state == "failed", "{runtime}: {}", i.state);
         }
         std::fs::remove_file(root.join("fails-after-token")).unwrap();
+
+        // A rejected code leaves the real CLI alive waiting for Enter. End it so the browser can offer a fresh
+        // attempt, without exposing even an error that echoes the code or includes a token.
+        std::fs::write(root.join("rejects-code"), "").unwrap();
+        let login = Session::new(&json!({"id": "rejected", "runtime": "claude", "kind": "connect"}));
+        let (s2, r2, c2) = (login.clone(), runner.clone(), config.clone());
+        let running = std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(20)));
+        wait_for(|| !login.inner.lock().unwrap().url.is_empty());
+        login.submit("pasted-code");
+        wait_for(|| login.inner.lock().unwrap().finished);
+        running.join().unwrap();
+        assert_eq!(state(&login).0, "failed");
+        assert!(root.join("rejected-stopped").exists(), "the blocked command was stopped");
+        {
+            let i = login.inner.lock().unwrap();
+            assert!(i.captured.is_none() && i.raw.is_empty() && i.lines.is_empty());
+        }
+        let shown = login.report().unwrap().to_string();
+        assert!(!shown.contains("pasted-code") && !shown.contains("sk-ant"), "{shown}");
+        assert!(!login.inner.lock().unwrap().message.is_empty());
+        std::fs::remove_file(root.join("rejects-code")).unwrap();
 
         // Cancelled: nothing is captured.
         let login = Session::new(&json!({"id": "c3", "runtime": "claude", "kind": "connect"}));
