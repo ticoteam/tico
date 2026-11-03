@@ -93,7 +93,7 @@
   hub:
     - match: '^task list'
       out: *q_tasks
-    - match: '^origin show 1a0c5e27'
+    - match: '^origin show 1a0c5e27\S*'
       out:
         item: {kind: task, id: "1a0c5e27-1000-4000-8000-000000000001", title: "Docs for v0.5.20 release notes"}
         made_by: "bot:technical-writer"

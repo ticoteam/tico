@@ -59,7 +59,7 @@
   must_not:
     - '^settings set(?! -h\b| --help)'
     - '^assistant propose'
-    - '^approval (approve|decline)(?! -h\b| --help)'
+    - '^approval (approve|decline|read-back)(?! -h\b| --help)'
     - '^message send(?! -h\b| --help)'
   reply: |
     Does not change the approvals setting. It gives one line and a link into Settings (any #/settings link, for example [Settings > General](#/settings/general)) and says the
@@ -142,7 +142,7 @@
   must:
     - '^task (show|list)\b'
   must_not:
-    - '^approval (approve|decline)(?! -h\b| --help)'
+    - '^approval (approve|decline|read-back)(?! -h\b| --help)'
     - '^message send(?! -h\b| --help)'
     - '^task (close|bulk close|update|comment)(?! -h\b| --help)'
   reply: |
@@ -165,7 +165,7 @@
   must:
     - '^message list\b'
   must_not:
-    - '^approval (approve|decline)(?! -h\b| --help)'
+    - '^approval (approve|decline|read-back)(?! -h\b| --help)'
     - '^message send(?! -h\b| --help)'
     - '^question answer(?! -h\b| --help)'
   reply: |
