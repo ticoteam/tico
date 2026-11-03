@@ -218,7 +218,7 @@ def load(c):
 
 
 # What a runner before this release said when nothing supervised it; the line now says how to fix that.
-NO_SUPERVISOR = ("no supervisor would start this runner again after an update: run `scripts/tico install` "
+NO_SUPERVISOR = ("no supervisor would start this runner again after an update: run `scripts/tico-computer install` "
                  "once on this computer and it updates itself")
 
 

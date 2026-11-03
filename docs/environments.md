@@ -2,11 +2,11 @@
 
 One environment is one team: its own server or its own account on a hosted server, its own
 database, workspace, subscriptions, names and Mac app. Several can run on one Mac. `-e <slug>`
-(or `TICO_ENV`) picks one for every `scripts/tico` command; without it you get the original
+(or `TICO_ENV`) picks one for every `scripts/tico-computer` command; without it you get the original
 single-team setup described under [the legacy default](#the-legacy-default).
 
 The reference implementation is `clients/environments.py` (create, list, show, remove),
-`scripts/tico` (services and lifecycle) and `runner-rs/src/profiles.rs` (subscriptions). Start from the
+`scripts/tico-computer` (services and lifecycle) and `runner-rs/src/profiles.rs` (subscriptions). Start from the
 quick start in the [README](../README.md); this page is the contract.
 
 ## The environment directory
@@ -16,7 +16,7 @@ lowercase letters, digits and single hyphens.
 
 | Path | Mode | Written by | What it is |
 |---|---|---|---|
-| `environment.json` | inside the 0700 directory | `env create` | Identity and names. The only file `scripts/tico` reads to resolve `-e` |
+| `environment.json` | inside the 0700 directory | `env create` | Identity and names. The only file `scripts/tico-computer` reads to resolve `-e` |
 | `server.env` | 0600 | `env create --local` | `KEY=VALUE` lines the local backend runs with, including the provider choice (`TICO_ENABLED_PROVIDERS`, `TICO_DEFAULT_RUNTIME`, `TICO_DEFAULT_MODEL`), which seeds the database once. No credential is in it |
 | `local-owner.token` | 0600 | `env create --local` | 32 url-safe random bytes: the loopback owner session credential |
 | `hub.sqlite`, `-wal`, `-shm` | as SQLite writes them | `backend.manage initialize`, then the server | This team's database |
@@ -46,7 +46,7 @@ repository goes, and how a bot finds a sibling's work.
 | `slug` | The short name you type after `-e`. Appears in launchd labels and paths |
 | `company_name`, `app_name`, `assistant_name` | Display names. `app_name` defaults to the team, `assistant_name` to the app. All three may be changed later |
 | `url` | Where clients reach the server: `http://127.0.0.1:<port>` for a local server, the hosted address otherwise |
-| `server` | `local` or `remote`. `local` is what makes `scripts/tico -e <slug> server ...` legal |
+| `server` | `local` or `remote`. `local` is what makes `scripts/tico-computer -e <slug> server ...` legal |
 | `port` | Local only. The first free loopback port from 8770 that no other environment has claimed |
 | `workspace` | Absolute path to the bot checkouts and `secrets/` |
 | `created_at` | UTC timestamp, for the record |
@@ -66,7 +66,7 @@ A copy of real data that must send nothing out takes `TICO_REHEARSAL=1` in `serv
 (`TICO_SCHEDULER` and the other switches are then ignored); see [install.md](install.md#rehearse-a-migration).
 
 `server install` bakes these values into the launchd plist. After editing `server.env`, re-run
-`scripts/tico -e <slug> server install`, not `server restart`, or the job keeps the old values.
+`scripts/tico-computer -e <slug> server install`, not `server restart`, or the job keeps the old values.
 
 ### `runner.json`
 
@@ -90,11 +90,11 @@ convention for a bot whose checkout is elsewhere.
 
 ## The legacy default
 
-Without `-e`, `scripts/tico` uses `~/.config/tico/runner.json` (`TICO_RUNNER_CONFIG` overrides),
+Without `-e`, `scripts/tico-computer` uses `~/.config/tico/runner.json` (`TICO_RUNNER_CONFIG` overrides),
 logs under `<parent of the checkout>/runtime/`, labels `team.tico.tico-<job>`, and the hosted site
 URL compiled into the script. That is Acme's existing setup, unchanged: it has no environment
 directory, no `server` subcommand (its server is hosted), and no profiles, so every bot runs on the
-owner's own `~/.codex` and `$HOME`. `scripts/tico env list` shows it last, as
+owner's own `~/.codex` and `$HOME`. `scripts/tico-computer env list` shows it last, as
 `acme (legacy default)`, next to whatever environments exist. Nothing has to be migrated: an
 environment can be created beside it and the two do not share a label, a log or a port.
 
@@ -108,7 +108,7 @@ launchd agents live in `~/Library/LaunchAgents`, mode 0600, in the `gui/<uid>` d
 | tool snapshots | `team.tico.tico-connectors` | `team.tico.tico.<slug>.connectors` | `<env>/logs/tico-connectors.log` |
 | local server | not applicable | `team.tico.tico.<slug>.api` | `<env>/logs/api.log` |
 
-Default-environment logs are `~/.config/tico/logs/tico-<job>.log` (older installations may still use `<parent of the checkout>/runtime/tico-<job>.log`). `scripts/tico -e <slug> logs`
+Default-environment logs are `~/.config/tico/logs/tico-<job>.log` (older installations may still use `<parent of the checkout>/runtime/tico-<job>.log`). `scripts/tico-computer -e <slug> logs`
 reads the path out of the installed plist, so a job installed with an older layout still tails
 correctly. `restart` and `update` wait for runs in flight before bouncing the bot job;
 `TICO_RESTART_NOW=1` skips the wait when a hung run is the reason for restarting.
@@ -121,9 +121,9 @@ environment (another runner, which can be on the same machine). Credentials stay
 See [Computers](computers.md) for connections and browser sign-in.
 
 ```bash
-scripts/tico -e acme profile add acme                 # first one added becomes the default
-scripts/tico -e acme profile login acme codex         # interactive, the CLI owns the browser flow
-scripts/tico -e acme profile list
+scripts/tico-computer -e acme profile add acme                 # first one added becomes the default
+scripts/tico-computer -e acme profile login acme codex         # interactive, the CLI owns the browser flow
+scripts/tico-computer -e acme profile list
 ```
 
 `--share-operator` makes a profile that does not relocate anything: its bots use the owner's own
@@ -271,7 +271,7 @@ A loopback server has no identity proxy in front of it, so the owner signs in wi
   (a Strict cookie is dropped on the redirect when the link is opened from a terminal or another page), 30 days,
   path `/`, no Domain, and Secure only when the public URL is https. `next` must be a same-origin path.
   The same token also works as a `Bearer` credential for scripts.
-- `scripts/tico -e <slug> open` builds that link; the Mac app reads the token file itself, on every
+- `scripts/tico-computer -e <slug> open` builds that link; the Mac app reads the token file itself, on every
   launch, from the path in its `Info.plist`.
 - The owner email must be on the human roster, or sign-in is refused with a roster error.
 - **Loopback only.** The server refuses to start when a token file is configured and
@@ -284,7 +284,7 @@ Rotating it takes effect on the next request, and invalidates every browser sess
 ENV=~/.config/tico/environments/acme
 python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > "$ENV/local-owner.token"
 chmod 600 "$ENV/local-owner.token"
-scripts/tico -e acme open
+scripts/tico-computer -e acme open
 ```
 
 ## Trusted and isolated mode
@@ -308,7 +308,7 @@ user, and each model CLI's first unattended login under a fresh account should b
    checkout (`chmod -R a+rX <checkout>`) and let the user keep its own venv:
    `python3.15 -m venv ~/tico-venv && ~/tico-venv/bin/python -m pip install -r
    <checkout>/backend/requirements.txt` (any Python from 3.12 works; 3.15 is what the images run), then export `TICO_RUNNER_PYTHON=~/tico-venv/bin/python`.
-   A shared checkout cannot be updated by `scripts/tico update` from the unprivileged account.
+   A shared checkout cannot be updated by `scripts/tico-computer update` from the unprivileged account.
 4. As that user, run the same commands as the quick start: `env create`, `server install`,
    `enroll`, `profile add` and `profile login`, `install bot`, `doctor`.
 5. Sign in to the model CLIs as that user. Their state follows `HOME`, so nothing is shared.
@@ -327,9 +327,9 @@ computer, and the workspace, which holds the bot repositories and their history.
 Stop the server and copy, which is the simplest correct thing:
 
 ```bash
-scripts/tico -e acme server stop
+scripts/tico-computer -e acme server stop
 cp -a ~/.config/tico/environments/acme /Volumes/Backups/acme-$(date +%F)
-scripts/tico -e acme server start
+scripts/tico-computer -e acme server start
 ```
 
 Or take a consistent copy of a running database with SQLite's own backup:
@@ -376,10 +376,10 @@ a git checkout that would track it: copies stay in gitignored folders such as `r
 ## Removing an environment
 
 ```bash
-scripts/tico -e acme uninstall            # the bot, tool and Close jobs
-scripts/tico -e acme server uninstall     # the local server job; the database and blobs stay
-scripts/tico env remove acme              # refuses while data is present
-scripts/tico env remove acme --delete-data
+scripts/tico-computer -e acme uninstall            # the bot, tool and Close jobs
+scripts/tico-computer -e acme server uninstall     # the local server job; the database and blobs stay
+scripts/tico-computer env remove acme              # refuses while data is present
+scripts/tico-computer env remove acme --delete-data
 ```
 
 `remove` refuses, and names what it found, while `hub.sqlite`, `blobs/`, `profiles/`, `runner.json`
@@ -399,7 +399,7 @@ restored across environments. Restore the right registration, or enroll this env
 
 **Port already in use.** `env create` takes the first loopback port from 8770 that nothing holds
 and no other environment has claimed, but something else can take it later. The api job then fails
-to start: read `scripts/tico -e <slug> server logs`, change `port` and `url` in `environment.json`,
+to start: read `scripts/tico-computer -e <slug> server logs`, change `port` and `url` in `environment.json`,
 re-run `server install` (the plist carries the port), and rebuild the Mac app if it was built
 against the old URL.
 
@@ -412,8 +412,8 @@ is not on PATH*, *`<profile>`: ...* (that subscription is signed out or its chec
 or `model` disagrees with Settings; the simplest repository omits runtime and model entirely).
 
 **"server: not answering at .../healthz"** means the api job is not running or is crash-looping:
-`scripts/tico -e <slug> server status`, then `server logs`. **"cloud: unreachable or registration
+`scripts/tico-computer -e <slug> server status`, then `server logs`. **"cloud: unreachable or registration
 rejected"** is the runner's view: the `url` in `runner.json` is wrong or unreachable, or the runner
 was revoked in Settings. A **stale heartbeat** over 60 seconds shows the computer as offline in the
 interface. If `status` reports the runner started from a different revision than the checkout, the
-code changed under a running job: `scripts/tico -e <slug> restart`.
+code changed under a running job: `scripts/tico-computer -e <slug> restart`.

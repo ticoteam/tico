@@ -229,8 +229,8 @@ TIMINGS = ROOT / 'scripts' / 'test-timings.json'
 # gate gives them python shards 1-2 (NATIVE_SHARDS), the only python VMs that wait for the native-linux build; the rest start at once.
 NATIVE_TEST = re.compile(r'rust_binary|TICO_RUNNER_BIN|TICO_SCREEN_RELAY_BIN|target/release|"target" / "release"|'
                          r'engine\.current|screen_binary|from runner import engine|runner\.engine|'
-                         # scripts/tico runs the checkout's runner (install, status: runner/engine.py finds the binary).
-                         r'"scripts" / "tico"\)|scripts/tico"')
+                         # scripts/tico-computer runs the checkout's runner (install, status: runner/engine.py finds the binary).
+                         r'"scripts" / "tico-computer"\)|scripts/tico-computer"')
 NATIVE_BINARIES = ('runner-rs/target/release/tico-runner', 'relay-rs/target/release/tico-screen-relay')
 # A test module importing another test module (test_screen borrows test_screen_relay_contract's running_service).
 TEST_IMPORT = re.compile(r'from\s+((?:backend|runner|scripts)\.tests(?:\.\w+)*)\s+import\s+([\w, ]+)|'

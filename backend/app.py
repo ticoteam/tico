@@ -1,6 +1,7 @@
 """Authenticated, deterministic API. No runtime launch or local-machine dependency."""
 
 import asyncio
+import contextlib
 import logging
 import time
 import json
@@ -29,6 +30,7 @@ from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifecycle, mcp_oauth, recruiting, harness_actions, model_login, oidc, personal_tokens, views
 from . import outcome_stats
+from . import alias_uses
 from . import teammate_access
 from . import start_places
 from . import ask_ingest, delivery, strategy_bot, invites, owner_link
@@ -1064,6 +1066,13 @@ def create_app(settings=None):
         response = None
         try:
             response = await call_next(request)
+            # An old name's call is recorded once (backend/alias_uses.py); a failed write never fails the request.
+            form = alias_uses.form_of(request.headers)
+            if form and getattr(request.state, "identity", None) is not None:
+                command = request.headers.get(alias_uses.COMMAND_HEADER, "")
+                with contextlib.suppress(Exception):
+                    await asyncio.get_running_loop().run_in_executor(None, lambda: store.write(
+                        request.state.identity, lambda c: alias_uses.record(c, request.state.identity, form, command)))
             found = request.scope.get("route")
             route = getattr(found, "path", None) or ("static" if not route.startswith("/api") else "unmatched")
             total = (time.perf_counter() - started) * 1000

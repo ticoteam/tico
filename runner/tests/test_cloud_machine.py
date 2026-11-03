@@ -38,7 +38,7 @@ class Fake:
                 config = Path(command[command.index("--config") + 1])
                 config.parent.mkdir(parents=True, exist_ok=True)
                 config.write_text(json.dumps({"runner_id": "r1", "token": "t"}))
-        elif command[-1] == "install" and "scripts/tico" in command[-2]:
+        elif command[-1] == "install" and "scripts/tico-computer" in command[-2]:
             if self.install_ok:
                 units = self.home / ".config" / "systemd" / "user"
                 units.mkdir(parents=True, exist_ok=True)

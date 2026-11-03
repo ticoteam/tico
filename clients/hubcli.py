@@ -3945,7 +3945,37 @@ def split_human(argv):
     return argv, who
 
 
+# The verbs of the computer's own command (scripts/tico-computer). With no bot in the environment they have moved there:
+# `tico` says where, and runs nothing. A bot's turn always has its bot, so inside a turn these words are the bot's own.
+COMPUTER_VERBS = ("install", "uninstall", "restart", "status", "doctor", "logs", "update", "open", "env", "enroll",
+                  "profile", "screen", "server")
+MOVED_BY_BOT = ("TICO_BOT", "HUB_BOT", "HUB_EMPLOYEE")
+
+
+def moved_verb(argv):
+    """The computer verb `argv` names when it has moved to tico-computer, else None.
+
+    Only outside a bot's turn. `tico update` with a sub-noun is the updates command even outside a turn, and `-e ENV`
+    before the verb is skipped the way tico-computer reads it."""
+    if any(os.environ.get(name) for name in MOVED_BY_BOT):
+        return None
+    words = list(argv)
+    while words and (words[0] in ("-e", "--env") or words[0].startswith("--env=")):
+        words = words[1:] if words[0].startswith("--env=") else words[2:]
+    if words[:2] == ["bot", "create"]:
+        return "bot create"
+    if not words or words[0] not in COMPUTER_VERBS:
+        return None
+    if words[0] == "update" and len(words) > 1 and not words[1].startswith("-"):
+        return None
+    return words[0]
+
+
 def main(argv):
+    moved = moved_verb(argv)
+    if moved:
+        print(f"This moved: tico-computer {moved}", file=sys.stderr)
+        return 2
     argv, who = split_human(argv)
     old = legacy_idea(argv)
     if old:
@@ -3972,6 +4002,8 @@ def run(argv, who):
     if not getattr(args, "fn", None):
         p.print_help(sys.stderr)
         return 1
+    # The command's words without its values: the `hub` alias records them with its one request (clients/tico.py).
+    os.environ["TICO_CLI_COMMAND"] = args.fn
     try:
         if args.fn == "task create" and args.dry_run:     # never reaches remotecli: nothing to send
             return cmd_task_dry_run(args, who)

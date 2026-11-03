@@ -146,14 +146,14 @@ one `SELECT` at a time, each caller seeing only what the JSON API would show it,
 
 **Your Mac's runner** — the Rust runner `tico-runner` (`runner-rs/`), with Python helpers in `runner/` for the side
 jobs, registered once with **Add computer** in **Settings → Computers** (`scripts/setup-runner.sh`, credential in
-`~/.config/tico/runner.json`). Four launchd jobs, installed and managed with `scripts/tico`:
+`~/.config/tico/runner.json`). Four launchd jobs, installed and managed with `scripts/tico-computer`:
 
 | Job | Command | What it does |
 |---|---|---|
 | `team.tico.tico-bot` | `python -m runner run` (execs `tico-runner run`) | Heartbeats every 15 s with readiness, claims work for the bots assigned to this computer, runs each run in the bot's local repository with the local model CLI, streams output back |
 | `team.tico.tico-connectors` | `python -m runner connectors` | Publishes calendar snapshots, executes Tico-queued calendar appointments, and pushes persisted mail from local Google access (Ana's Mac, or a Linux runner that holds the Google key) |
-| `team.tico.tico-close-calls` | `python -m runner close-calls` | Every five minutes, imports available Close call and Notetaker meeting transcripts without fetching audio, using the local Close key (Ana's Mac only; `scripts/tico install close-calls`) |
-| `team.tico.tico-importers` | `python -m runner importers` | Runs the meeting importers the owner turned on for this computer (Zoom, Google Meet, Granola), using credentials kept in `secrets/` here; see [Meetings](meetings.md#meeting-importers) (`scripts/tico install importers`) |
+| `team.tico.tico-close-calls` | `python -m runner close-calls` | Every five minutes, imports available Close call and Notetaker meeting transcripts without fetching audio, using the local Close key (Ana's Mac only; `scripts/tico-computer install close-calls`) |
+| `team.tico.tico-importers` | `python -m runner importers` | Runs the meeting importers the owner turned on for this computer (Zoom, Google Meet, Granola), using credentials kept in `secrets/` here; see [Meetings](meetings.md#meeting-importers) (`scripts/tico-computer install importers`) |
 
 A Linux runner (the Docker image) has no launchd: with `TICO_SIDE_JOBS=1` (set by the image) `tico-runner run` supervises `importers` (while Tico assigns importers to this computer) and
 `close-calls` (while the Close key is in `secrets/`) and `connectors` (while `secrets/google-sa.json` is there, or
@@ -342,8 +342,8 @@ priority for this reason): a lease lapsing while the server has answered no runn
 than half a lease period gets one more period instead of expiring, and a run that did
 expire is handed back to its runner when the runner reports in within 15 minutes, as long as no
 one has reviewed the job meanwhile (`attempt.lease-restored` in the event log). The runner's log
-(`scripts/tico logs bot`) writes one timestamped line when the cloud becomes unreachable, a
-progress line at most once a minute while it stays so, and one when it is back; `scripts/tico
+(`scripts/tico-computer logs bot`) writes one timestamped line when the cloud becomes unreachable, a
+progress line at most once a minute while it stays so, and one when it is back; `scripts/tico-computer
 status` says when the running bot job predates the checkout's current commit. On a bot's Chat
 page, one line above the composer says when the bot is paused and why (a usage limit, a
 quarantine, or a Mac offline for more than ten minutes) and that messages are saved, or that a
@@ -699,7 +699,7 @@ each heartbeat, clones one repository per cycle in the background, and fetches a
 come in a later phase. Fetching uses a temporary GitHub App read token kept out of git config
 and logs. Run tokens still follow each bot's own repository access.
 
-Heartbeats and `scripts/tico doctor` report each base clone's state, last fetch, disk use and
+Heartbeats and `scripts/tico-computer doctor` report each base clone's state, last fetch, disk use and
 any error. A base clone failure does not change a bot's readiness. A clone that has been absent
 from this computer's repository list for 30 days is removed from `repos/`. Older servers without
 the repository endpoint leave this feature idle.

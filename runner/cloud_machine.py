@@ -21,7 +21,7 @@ bot needs it installs itself with sudo, and that stays on the machine's disk acr
 member bot).
 
 `boot` is that service, at every boot. Without the marker it does nothing, so it can never act on another computer.
-Not enrolled and both variables found: it enrolls once to that hub and runs `scripts/tico install` (the systemd user
+Not enrolled and both variables found: it enrolls once to that hub and runs `scripts/tico-computer install` (the systemd user
 units, which then start at every boot by themselves). Enrolled: it starts those units. Not enrolled and no code (the
 base sandbox itself): nothing. A failed enroll exits 1, and systemd tries again in 30 seconds; a retry with the same
 code gets the same runner back (the server derives the runner token from the code), so an answer lost on the way
@@ -63,7 +63,7 @@ FONT_PACKAGES = ("fonts-liberation", "fonts-noto-color-emoji")
 NODE_MAJOR = 22
 CHROME_KEY_URL = "https://dl.google.com/linux/linux_signing_key.pub"
 NODE_KEY_URL = "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
-JOBS = ("bot", "connectors", "close-calls", "importers")   # scripts/tico install's units (runner/systemd_units.py)
+JOBS = ("bot", "connectors", "close-calls", "importers")   # scripts/tico-computer install's units (runner/systemd_units.py)
 DEFAULT_USER = "user"                                       # boat's sandbox user (docs.boat.dev/machines/tools)
 URL_RE = re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$")
 CODE_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
@@ -280,9 +280,9 @@ def boot(m: Machine | None, environ: dict[str, str]) -> int:
     if environ.get(TOKEN):
         m.system("systemctl", "unset-environment", TOKEN)
     if not installed(m):
-        done = m.as_user(str(m.root / "scripts" / "tico"), "install")
+        done = m.as_user(str(m.root / "scripts" / "tico-computer"), "install")
         if done.returncode:
-            m.say("scripts/tico install failed; trying again")
+            m.say("scripts/tico-computer install failed; trying again")
             return 1
         return 0
     done = m.as_user("systemctl", "--user", "start", *(f"tico-{job}.service" for job in JOBS), timeout=120)

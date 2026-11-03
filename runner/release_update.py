@@ -25,7 +25,7 @@ LOCK_WAIT_S = 10 * 60        # for another environment's update of the same chec
 LOCK_FILE = "tico-update.lock"
 BINARY_WAIT_S = 3600         # for a release's runner binary published after it (binary_pending), then a failed update
 KINDS = ("mac", "linux", "docker")
-HELPERS = ("connectors", "close-calls", "importers")   # scripts/tico installs these as launchd jobs (systemd user units on Linux) beside the bot job
+HELPERS = ("connectors", "close-calls", "importers")   # scripts/tico-computer installs these as launchd jobs (systemd user units on Linux) beside the bot job
 
 
 def key(value):
@@ -156,7 +156,7 @@ def in_flight(directory):
 
 
 def systemd_unit(env=os.environ):
-    """The systemd user unit that runs this runner (`scripts/tico install` on Linux sets TICO_SYSTEMD_UNIT), or ""."""
+    """The systemd user unit that runs this runner (`scripts/tico-computer install` on Linux sets TICO_SYSTEMD_UNIT), or ""."""
     unit = str(env.get("TICO_SYSTEMD_UNIT") or "").strip()
     return unit if unit.endswith(".service") and "/" not in unit else ""
 
@@ -202,7 +202,7 @@ def restart_runner(pid, wait=60, env=os.environ, run=subprocess.run):
 
 
 def helper_labels(env=os.environ):
-    """The launchd label of each helper job. scripts/tico names them from the bot job's label (`team.tico.tico-bot`,
+    """The launchd label of each helper job. scripts/tico-computer names them from the bot job's label (`team.tico.tico-bot`,
     or `team.tico.tico.<env>.bot` for a company environment), and launchd gives this process that label."""
     service = env.get("XPC_SERVICE_NAME", "")
     prefix = service[:-3] if service.startswith("team.tico") and service.endswith("bot") else "team.tico.tico-"
@@ -210,7 +210,7 @@ def helper_labels(env=os.environ):
 
 
 def restart_helpers(env=os.environ, run=subprocess.run, agents=None, uid=None, say=None):
-    """Restart the helper jobs that are installed on this Mac (scripts/tico restart semantics: `launchctl kickstart -k`,
+    """Restart the helper jobs that are installed on this Mac (scripts/tico-computer restart semantics: `launchctl kickstart -k`,
     or a bootstrap when the job is installed but not loaded), so none keeps the old release in memory. A job with no
     plist is not installed and is left alone. Returns the restarted job names."""
     say = say or (lambda line: print(time.strftime("%Y-%m-%d %H:%M:%S") + " " + line, flush=True))

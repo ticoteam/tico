@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""`hub`: the company hub's CLI. See docs/history/hub-v2.md §5 and clients/hubcli.py.
+"""`hub`: the old name of `tico` (clients/hubcli.py). Runs the same command with the same arguments.
 
-Resolves the hub checkout from its own path, so the symlink in ~/.local/bin works from
-anywhere and a second checkout uses its own clients/.
+Each call says so on its first request (X-Tico-Alias, clients/tico.py), and the server records one `alias.hub_used`
+event for it (backend/alias_uses.py). Nothing is printed for it: the output would land in a model's context every call.
 """
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+os.environ["TICO_CLI_ALIAS"] = "hub"
 from clients import hubcli  # noqa: E402
 
 if __name__ == "__main__":

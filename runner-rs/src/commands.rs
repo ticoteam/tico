@@ -229,7 +229,7 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
-    /// The keys scripts/tico `summarize` reads, and not ready (exit 1) for a bot with no checkout, which is also
+    /// The keys scripts/tico-computer `summarize` reads, and not ready (exit 1) for a bot with no checkout, which is also
     /// how an unsupported harness shows: a problem on that bot's row, not a refusal to start.
     #[tokio::test]
     async fn doctor_reports_the_summarized_keys_and_a_bot_that_is_not_ready() {

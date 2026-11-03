@@ -213,7 +213,7 @@ def _runner_checks(c, settings):
                                 and update["state"] != "incompatible"
                                 and not update["error"] else
                                 f"BotOps: update the runner on {machine['label']} (Settings > Computers, or "
-                                "`scripts/tico install` once on that computer so it updates itself).",
+                                "`scripts/tico-computer install` once on that computer so it updates itself).",
                                 # Its bots are paused until it updates: bad, as Health says (runner_versions.health_check).
                                 severity=BAD if update["state"] == "incompatible" else WARN))
     cutoff = H.shift(H.now(), minutes=-health.RESTART_STUCK_MINUTES)

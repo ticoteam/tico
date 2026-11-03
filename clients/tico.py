@@ -67,6 +67,10 @@ def plain_http_host(host):
         return host == "localhost" or ("." not in host and re.fullmatch(r"[A-Za-z0-9-]+", host) is not None)
 
 
+# One alias event per process: the first request of a `hub` call carries it.
+_ALIAS_SENT = []
+
+
 class Client:
     def __init__(self, url, token, timeout=15, retries=3):
         parsed = urllib.parse.urlsplit(url)
@@ -95,6 +99,12 @@ class Client:
                 raise APIError("stale_lease", "No active Hub turn; wait for a new request", status=409)
         headers = {"Authorization": "Bearer " + token, "Accept": "application/json",
                    "User-Agent": "Tico-Client/" + CLIENT_VERSION}
+        if os.environ.get("TICO_CLI_ALIAS") and not _ALIAS_SENT:
+            # The old `hub` name ran this command: its first request says so, and the server records one event for the
+            # call (backend/alias_uses.py). A header on a request the command makes anyway, so nothing waits on it.
+            _ALIAS_SENT.append(True)
+            headers["X-Tico-Alias"] = "cli"                  # the form (backend/alias_uses.py FORMS)
+            headers["X-Tico-Alias-Command"] = os.environ.get("TICO_CLI_COMMAND", "")[:80]
         if delegate:
             # BotOps doing what the person who asked it could do: the server answers as them, or with a Confirm card.
             headers["X-Tico-On-Behalf-Of"] = delegate if isinstance(delegate, str) else "turn"

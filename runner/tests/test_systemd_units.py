@@ -1,4 +1,4 @@
-"""The systemd user units `scripts/tico install` writes for a Linux checkout runner."""
+"""The systemd user units `scripts/tico-computer install` writes for a Linux checkout runner."""
 import os
 import stat
 import subprocess
@@ -48,7 +48,7 @@ def test_a_unit_file_is_private_and_lands_where_systemd_looks(tmp_path):
     assert su.user_unit_dir({"TICO_SYSTEMD_USER_DIR": "/y"}) == Path("/y")
 
 
-# -- scripts/tico on Linux, with systemctl and loginctl faked ----------------------------------------------
+# -- scripts/tico-computer on Linux, with systemctl and loginctl faked ----------------------------------------------
 
 def fake_linux(tmp_path, linger="no"):
     if sys.platform != "linux":
@@ -76,7 +76,7 @@ def fake_linux(tmp_path, linger="no"):
 
 
 def tico(env, *args):
-    return subprocess.run([str(ROOT / "scripts" / "tico"), *args], capture_output=True, text=True, env=env, timeout=120)
+    return subprocess.run([str(ROOT / "scripts" / "tico-computer"), *args], capture_output=True, text=True, env=env, timeout=120)
 
 
 @pytest.mark.slow

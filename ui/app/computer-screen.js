@@ -67,7 +67,7 @@ const SCREEN_DOCS = `${GH}/blob/main/docs/install.md#screen`;
 // A named or --server-network runner has runner.override.yaml beside the stock file, used on every compose call
 // (install.sh, the updater); without it the command reaches the default runner's project.
 const SCREEN_DOCKER_CMD = 'sudo docker compose -f runner.compose.yaml $([ -f runner.override.yaml ] && echo -f runner.override.yaml) exec runner tico-runner --config /home/runner/runner.json screen on';
-const SCREEN_CHECKOUT_CMD = 'scripts/tico screen on';
+const SCREEN_CHECKOUT_CMD = 'scripts/tico-computer screen on';
 const screenCmdHTML = (cmd, label) => `<div class="bot-screen-cmd"><code>${esc(cmd)}</code><button class="ghost" type="button" data-screen-copy="${esc(cmd)}" aria-label="Copy the ${label} command">Copy</button></div>`;
 function botScreenRowHTML(slug) {
   const s = botScreenState(slug);

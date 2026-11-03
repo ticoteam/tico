@@ -438,7 +438,7 @@ class DependencyMap:
                 names.add(node.value)
                 if "ls-files" in node.value and (is_test(path) or "tests" in Path(path).parts or path.startswith("scripts/")):
                     self.everything.add(path)  # lists this repository (elsewhere git ls-files reads a bot's checkout)
-                # Free text (a message naming scripts/tico) only reads what it names; a lone dotted name like
+                # Free text (a message naming scripts/tico-computer) only reads what it names; a lone dotted name like
                 # "backend.app:app" or a monkeypatch target loads that module.
                 prose = len(node.value.split()) > 1
                 for token in TOKEN.findall(node.value.replace(":", " ")):
