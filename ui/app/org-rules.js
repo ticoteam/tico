@@ -447,15 +447,7 @@ function rrSearchPaint() {
 }
 
 // ----------------------------------------------------------------- the panel
-// Drawing replaces the panel, and removing a focused box fires its blur and change, whose save may draw again inside
-// this one: that draw waits for this one to finish.
-let RR_PANEL_DRAWING = false;
-function rrPanelDraw(...args) {
-  if (RR_PANEL_DRAWING) { queueMicrotask(() => rrPanelDraw(...args)); return; }
-  RR_PANEL_DRAWING = true;
-  try { rrPanelDrawNow(...args); } finally { RR_PANEL_DRAWING = false; }
-}
-function rrPanelDrawNow(note = '') {
+function rrPanelDraw(note = '') {
   const side = RU.root.querySelector('.rr-side'), R = RU.reach, p = R.party;
   if (!side) return;
   if (!p) { side.innerHTML = ''; return; }
