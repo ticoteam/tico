@@ -37,6 +37,14 @@ NEW_BOTS_DDL = """CREATE TABLE IF NOT EXISTS bots (
   cwd TEXT, host TEXT DEFAULT 'dispatcher', thread_id TEXT, token_hash TEXT,
   state TEXT DEFAULT 'active', created_at TEXT, last_turn_at TEXT);"""
 
+# runners as store.SCHEMA made it before migration 0058 split off its heartbeat state
+OLD_RUNNERS_DDL = """CREATE TABLE IF NOT EXISTS runners(
+ id TEXT PRIMARY KEY, label TEXT NOT NULL, owner_id TEXT NOT NULL REFERENCES humans(id),
+ token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_seen_at TEXT,
+ revoked_at TEXT, platform TEXT, version TEXT, capacity INTEGER NOT NULL DEFAULT 4,
+ readiness TEXT NOT NULL DEFAULT '{}', capabilities TEXT NOT NULL DEFAULT '[]',
+ awake_since TEXT, checkout TEXT, restart_requested_at TEXT, readiness_at TEXT);"""
+
 # The 14 foreign keys into bots: 11 in store.SCHEMA, bot_tool_requests, bot_files and chat_goals.
 CHILD_TABLES = ("bot_config", "bot_control", "bot_transitions", "settings_changes", "bot_session_epochs",
                 "bot_sessions", "agents", "assignments", "jobs", "mail_agent_instructions",
@@ -65,6 +73,7 @@ def _old_shape_database(path):
             unittest.mock.patch.object(migrations, "apply", lambda conn, directory=None: THREADS_SCHEMA.up(conn)):
         conn = H.connect(path)
     conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute(OLD_RUNNERS_DDL)
     for schema in (store.SCHEMA, bot_tools.SCHEMA, files.SCHEMA):
         conn.executescript(schema.replace("REFERENCES bots(id)", "REFERENCES bots(slug)"))
     return conn

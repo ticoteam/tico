@@ -52,7 +52,7 @@ def test_create_permissions_limit_old_computer_and_attach(prepared):
     assert post(api, path, {'repo': 'Acme/product'}).status_code == 403
     put(api, 'bots/cmo/repositories', {'mode': 'all', 'all_access': 'write'})
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE runner_states SET readiness='{}' WHERE id='r1'")
+        c.execute("UPDATE runner_states SET readiness='{}' WHERE runner_id='r1'")
     response = post(api, path, {'repo': 'Acme/product'})
     assert response.status_code == 409 and 'Update this computer' in response.text
     with api.app_state.store.transaction() as c:

@@ -1989,7 +1989,7 @@ def test_a_cloud_machine_stopped_when_idle_is_not_offline_on_health(cloud):
     hour_ago = H.shift(H.now(), hours=-1)
     with cloud.store.transaction() as c:
         CM.save(c, CM.SHARED, state="stopped")
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (hour_ago, shared["runner_id"]))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (hour_ago, shared["runner_id"]))
     work(cloud, "cpo")                                       # work waits for it: it starts for that, it is not silent
     checks = health_of(cloud)
     assert checks["computers"]["status"] == "ok" and "stopped until work comes" in checks["computers"]["summary"]
