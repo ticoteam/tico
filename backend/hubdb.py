@@ -3012,6 +3012,14 @@ def _pair_conversation(conn, actor, other, kind, subject="", allow_held=False):
         dm = threads._open_dm(conn, actor, [other])
         if dm:
             return conversation(conn, dm)
+    human_actor, human_other = is_human(actor), is_human(other)
+    if kind == "chat" and human_actor != human_other:
+        # A person's chat with a bot that names no room is the bot's Home, once its chats have moved (backend/bot_home_merge.py).
+        from . import bot_home_merge
+        person, bot = (actor, other) if human_actor else (other, actor)
+        home = bot_home_merge.home_for_chat(conn, person, actor_id(bot))
+        if home:
+            return conversation(conn, home)
     for row in _rows(conn.execute(
             "SELECT * FROM conversations WHERE kind=? AND closed_at IS NULL AND task_id IS NULL "
             "ORDER BY COALESCE(last_message_at, created_at) DESC LIMIT 200", (kind,))):
@@ -3368,6 +3376,13 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
                    expires_at=None, delivered_at=None, read_at=None, *, check_cap=False, decided=None):
     if actor == "bot:librarian":
         body = librarian_text(body)
+    if conv:
+        # A person's old chat with a bot is the bot's Home now: whatever writes to the room (a task's notice, a reconnect
+        # card, a run's reply) writes to the Home (backend/bot_home_merge.py).
+        from . import bot_home_merge
+        moved = bot_home_merge.home_for(conn, conv["id"])
+        if moved and moved != conv["id"]:
+            conv = conversation(conn, moved)
     if VIA.get() and is_human(actor):
         refs = {**(refs or {}), "via": VIA.get()}         # the Assistant wrote this for the person
     from . import wake_rules
@@ -5812,16 +5827,23 @@ def task_comments(conn, task_id, *, actor=None):
     row = task(conn, task_id)
     if not row or not row.get("conversation_id"):
         return []
-    # A person's old chat with the bot moved into its Home, comments and all (backend/bot_home_merge.py).
+    # A person's old chat with the bot moved into its Home, comments and all: read from where it was written and from
+    # the Home it is in now (backend/bot_home_merge.py history_ids).
     from . import bot_home_merge
-    cid = bot_home_merge.home_for(conn, row["conversation_id"]) or row["conversation_id"]
-    conv = conversation(conn, cid)
-    out, sql, args = [], "conversation_id=?", [cid]
+    cids = bot_home_merge.history_ids(conn, row["conversation_id"])
+    conv = conversation(conn, cids[-1])
+    out, clauses, args = [], [], []
     # In a bot's room, only the messages that name the task (backend/message_links.py), not the whole room.
     from .message_links import named
-    ids = named(conn, task_id, cid)
-    if ids is not None:
-        sql, args = "+conversation_id=? AND id IN (SELECT value FROM json_each(?))", args + [_dump(sorted(ids))]
+    for cid in cids:
+        ids = named(conn, task_id, cid)
+        if ids is None:
+            clauses.append("conversation_id=?")
+            args.append(cid)
+        else:
+            clauses.append("(+conversation_id=? AND id IN (SELECT value FROM json_each(?)))")
+            args += [cid, _dump(sorted(ids))]
+    sql = "(" + " OR ".join(clauses) + ")"
     if actor is not None:
         # The rows below are read in the snapshot their checks use, so each check takes the row as stored.
         privacy.snapshot(conn)

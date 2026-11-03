@@ -34,6 +34,7 @@ from . import teammate_access
 from . import start_places
 from . import ask_ingest, delivery, strategy_bot, invites, owner_link
 from . import org_rule_check
+from . import bot_home_merge
 from .roadmaps import exact_approval
 from . import login_holds
 from . import cloud_access
@@ -1489,6 +1490,8 @@ def create_app(settings=None):
                 raise Problem("reference", f"Unsupported reference kind: {kind}", 422)
 
     def send(c, who, body):
+        # A room that moved into its bot's Home names the Home before any check reads it (backend/bot_home_merge.py).
+        body.conversation_id = bot_home_merge.home_for(c, body.conversation_id) or body.conversation_id
         in_assistant_room = False
         if str(body.to).lower() == "assistant":
             if who.role not in ("human", "owner") or who.via:
@@ -3034,9 +3037,13 @@ def create_app(settings=None):
 
     def chat_place(who, bot):
         """A person's chat with a bot is the direct chat it lands in: its conversation id is the thread `where:` names.
-        The chat route names no conversation, so the check finds the open chat (none yet: a DM with no thread)."""
-        return lambda c, author, recipients: org_rule_check.place_for(
-            c, author, recipients, (views.direct_chat(c, who.actor, bot) or {}).get("id") or "")
+        The chat route names no conversation, so the check finds the open chat (none yet: a DM with no thread). Once the
+        bot's chats have moved, that chat is its Home (backend/bot_home_merge.py home_for_chat)."""
+        def place(c, author, recipients):
+            home = bot_home_merge.home_for_chat(c, who.actor, bot, create=False)
+            chat = (views.direct_chat(c, who.actor, bot) or {}).get("id") or ""
+            return org_rule_check.place_for(c, author, recipients, home or chat)
+        return place
 
     def task_place(who, tid):
         """A task comment's place: its task's conversation, the thread its comments are in (`where: thread:<id>`)."""
@@ -3214,6 +3221,12 @@ def create_app(settings=None):
         """Both checks of one message, outside the write: the rule check, then ask ingest (a held one skips it, and so
         does a saved retry, `retry`: `mutate` replays its answer without the write). `place`: the message's place when
         the route does not name a conversation (`rule_message_place`)."""
+        if body.conversation_id:
+            # A reply to a room that moved names its Home for every check below (backend/bot_home_merge.py); the sender's
+            # attempt, a private run's, still decides what the Home allows.
+            with store.read() as c:
+                body.conversation_id = (bot_home_merge.home_for(c, body.conversation_id, create=False)
+                                        or body.conversation_id)
         reach.precheck(store, who, lambda c: reach.check(
             c, who, auth.target(c, who, body.to), "chat", conversation_id=body.conversation_id,
             task_id=(body.refs or {}).get("task") or (body.refs or {}).get("task_id"), in_reply_to=body.in_reply_to))

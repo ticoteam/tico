@@ -912,10 +912,13 @@ def digest(value):
 
 def message_page(c, cid, *, before=None, since=None, limit=200):
     """Newest page, in display order; rowid breaks ties for messages in the same millisecond. A
-    deleted task comment is left out: this page is also what a bot's run is handed."""
-    clauses, args = ["conversation_id=?", "deleted_at IS NULL"], [cid]
+    deleted task comment is left out: this page is also what a bot's run is handed. `cid` may be
+    a list of conversations (a task's history across a merged room and its Home)."""
+    cids = list(cid) if isinstance(cid, (list, tuple)) else [cid]
+    where = "conversation_id IN (%s)" % ",".join("?" * len(cids))
+    clauses, args = [where, "deleted_at IS NULL"], list(cids)
     if before:
-        anchor = c.execute("SELECT rowid FROM messages WHERE id=? AND conversation_id=?", (before, cid)).fetchone()
+        anchor = c.execute("SELECT rowid FROM messages WHERE id=? AND " + where, (before, *cids)).fetchone()
         if not anchor:
             raise Problem("cursor", "Message cursor does not belong to this conversation", 422)
         clauses.append("rowid<?")
@@ -935,10 +938,11 @@ def task_message_page(c, task, **kwargs):
     """Messages about this task. A dedicated task thread returns the whole conversation;
     a shared chat room returns only rows tagged with this task id."""
     from . import bot_home_merge
-    # A person's old chat with the bot moved into its Home (backend/bot_home_merge.py): the task's messages are there.
-    cid = bot_home_merge.home_for(c, task["conversation_id"]) or task["conversation_id"]
-    page = message_page(c, cid, **kwargs)
-    conv = H.conversation(c, cid)
+    # A person's old chat with the bot moved into its Home (backend/bot_home_merge.py): the task's messages are in the
+    # room, its recorded Home and the Home it is in now. The last one is the room the task's messages belong to.
+    cids = bot_home_merge.history_ids(c, task["conversation_id"])
+    page = message_page(c, cids, **kwargs)
+    conv = H.conversation(c, cids[-1])
     if conv and conv.get("task_id") == task["id"]:
         return page
     page["messages"] = [m for m in page["messages"] if H.message_task_id(m) == task["id"]]

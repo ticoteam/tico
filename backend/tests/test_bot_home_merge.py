@@ -2,7 +2,8 @@
 and the bot's empty Home become one Home with both histories in seq order, read by anyone who reads the bot; a bot whose
 Home is its migrated shared room keeps that history's old readers; the Assistant's rooms stay; a second run changes
 nothing; `threads.home` is the merged Home, `threads._open_dm` no longer finds an old room, and a write that names an
-old room lands in the Home. Fictional people only: ana (owner), ben and cara; the bots come from the api fixture.
+old room lands in the Home, whichever path writes it: the API, the central writer, a person's new chat, a task's history.
+Fictional people only: ana (owner), ben and cara; the bots come from the api fixture.
 """
 
 import pytest
@@ -10,7 +11,9 @@ import pytest
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import bot_home_merge, rooms, threads
 from backend.store import H
-from backend.tests.test_api import api  # noqa: F401  (the fixture)
+from backend.tests.test_api import api, headers  # noqa: F401  (the fixture)
+from backend.tests.test_threads_private_execution import (  # noqa: F401  (the helper and the fixture it needs)
+    private_run, private_tasks_have_an_unrelated_manager)
 
 PEOPLE = ("human:ana", "human:ben", "human:cara")
 
@@ -20,8 +23,9 @@ def store(api):
 
 
 def room(c, person, bot):
-    """A person's personal room with a bot, as rooms.personal_room opened them before Homes."""
-    return rooms.personal_room(c, person, bot, subject="Chat with " + bot)["id"]
+    """A person's personal room with a bot, as rooms.personal_room opened them before Homes (a legacy chat)."""
+    return H.open_conversation(c, person, [person, "bot:" + bot], kind="chat", subject="Chat with " + bot,
+                               scope=rooms.PERSONAL, owner_actor=person, room_key=bot, allow_held=True)["id"]
 
 
 def say(c, sender, to, body, conversation_id, **kwargs):
@@ -44,6 +48,20 @@ def readers(c, message_id):
 
 def unread(c, person, thread_id):
     return threads.unread(c, threads.actor_viewer(c, person), thread_id)["unread"]
+
+
+class Recorded:
+    """A connection that keeps the statements it runs, so a test can count them."""
+
+    def __init__(self, c):
+        self._c, self.statements = c, []
+
+    def execute(self, sql, *args):
+        self.statements.append(sql)
+        return self._c.execute(sql, *args)
+
+    def __getattr__(self, name):
+        return getattr(self._c, name)
 
 
 @pytest.fixture
@@ -100,9 +118,9 @@ def test_two_peoples_rooms_and_an_empty_home_become_one_home_in_order(api, ops_r
         for person in ("human:ana", "human:ben"):
             assert c.execute("SELECT following FROM thread_followers WHERE thread_id=? AND actor=?",
                              (home, person)).fetchone()[0] == 1
-        # What a person had unread in their own room stays unread, and only that: cara has nothing new to read.
-        assert {p: unread(c, "human:" + p, home) for p in ("ana", "ben")} == had
-        assert unread(c, "human:cara", home) == 0
+        # The moved history is read history for everyone who reads the Home, including ben's unread reply (owner
+        # decision, Nov 3: old unread state is discarded, not carried over).
+        assert {p: unread(c, "human:" + p, home) for p in ("ana", "ben", "cara")} == {"ana": 0, "ben": 0, "cara": 0}
         assert not c.execute("SELECT 1 FROM message_deliveries WHERE thread_id IN (?,?)",
                              (ops_rooms["ana"], ops_rooms["ben"])).fetchone()
     with store(api).read() as c:
@@ -207,40 +225,139 @@ def test_a_write_that_names_an_old_room_lands_in_the_home(api, ops_rooms):
         assert not seqs(c, ops_rooms["ana"]) and not seqs(c, ops_rooms["ben"])
 
 
-def test_an_old_tasks_comments_and_quiet_bot_posts_follow_the_room(api):
-    """A task from before Oct 13 names the person's room. Its comments read from the Home; a bot's post there that did
-    not reach the person (a task's thread, H.task_post_sql) does not start counting in the Home."""
+def test_the_api_puts_a_reply_to_an_old_room_in_the_home_and_refuses_a_private_run_there(api, ops_rooms):
+    """Finding 1: the API's checks read the room a message names. A reply to a moved room names the Home from the start,
+    so a private run's reply is checked against the Home (no audience for private text) and refused, and a person's
+    reply lands in the Home."""
+    merge(api)
+    home = ops_rooms["home"]
+    sent = api.post("/api/v2/messages", json={"to": "bot:ops", "text": "Ana, late", "conversation_id": ops_rooms["ana"]},
+                    headers=headers("ana-test"))
+    assert sent.status_code == 200, sent.text
+    with store(api).read() as c:
+        assert c.execute("SELECT conversation_id FROM messages WHERE id=?", (sent.json()["id"],)).fetchone()[0] == home
+    row, attempt = private_run(api, "ops")
+    refused = api.post("/api/v2/messages", json={"to": "human:ana", "text": "Confidential reply",
+                                                 "conversation_id": ops_rooms["ana"]},
+                       headers=headers(attempt["token"]))
+    assert refused.status_code == 403, refused.text
+    refused = api.post("/api/v2/messages", json={"to": "human:ana", "text": "Confidential again", "conversation_id": home},
+                       headers=headers(attempt["token"]))
+    assert refused.status_code == 403, refused.text
+    with store(api).read() as c:
+        assert not c.execute("SELECT 1 FROM messages WHERE body LIKE 'Confidential%'").fetchone()
+        assert not seqs(c, ops_rooms["ana"])
+
+
+def test_the_central_writer_puts_a_notice_for_an_old_room_in_the_home(api, ops_rooms):
+    """Finding 2: writers that do not go through H.say (a task's notice, a reconnect card, a run's reply) name the old room
+    too. The central writer sends them to the Home, and a task is never filed in one."""
+    merge(api)
+    home = ops_rooms["home"]
+    with store(api).transaction() as c:
+        conv = H.conversation(c, ops_rooms["ana"])
+        notice = H._write_message(c, "bot:ops", "human:ana", "A notice for Ana", conv, "say", {}, None, None)
+        assert notice["conversation_id"] == home
+        auth = api.app.state.auth
+        assert rooms.task_conversation_id(c, auth, "bot:ops", "human:ana") is None
+    with store(api).read() as c:
+        assert seqs(c, home)[-1] == notice["id"]
+        assert not seqs(c, ops_rooms["ana"])
+
+
+def test_a_persons_chat_with_a_moved_bot_is_its_home_on_every_route(api, ops_rooms):
+    """Finding 3: personal_room, work_room and the chat route resolve to the Home for an ordinary bot. The Assistant's
+    rooms stay as they are."""
+    merge(api)
+    home = ops_rooms["home"]
+    auth = api.app.state.auth
+    with store(api).transaction() as c:
+        assert rooms.personal_room(c, "human:ana", "ops")["id"] == home
+        assert rooms.work_room(c, auth, "ops", "human:ana")["id"] == home
+        assert threads.home(c, "bot:coo", create=False) is None
+        assert rooms.personal_room(c, "human:ana", "coo")["id"] != home
+    sent = api.post("/api/v2/chat/ops", json={"text": "Hello from Ana"}, headers=headers("ana-test"))
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["conversation"]["id"] == home
+    with store(api).read() as c:
+        assert seqs(c, home)[-1] == sent.json()["message"]["id"]
+
+
+def test_a_moved_rooms_read_marks_are_discarded_for_root_and_sub_threads(api):
+    """Finding 4: after the move, every reader of the Home has read the moved history, root and sub-threads alike."""
+    with store(api).transaction() as c:
+        home = threads.home(c, "bot:ops", create=True)["id"]
+        ana = room(c, "human:ana", "ops")
+        asked = say(c, "human:ana", "bot:ops", "A question with a thread", ana)["id"]
+        sub = threads.sub_thread(c, "human:ana", asked)["id"]
+        threads.post(c, "bot:ops", sub, "An answer in the thread")
+        assert unread(c, "human:ana", sub) >= 1
+    merge(api)
+    with store(api).read() as c:
+        assert threads.thread_row(c, sub)["root_id"] == home
+        for person in PEOPLE:
+            assert unread(c, person, home) == 0, person
+            assert unread(c, person, sub) == 0, person
+
+
+def test_a_tasks_history_is_read_from_its_room_and_the_homes_it_is_in(api, ops_rooms):
+    """Finding 5: a task whose messages were written in a room reads them from the room, the Home they moved into, and the
+    Home it is in now, even after that Home is archived and a new one takes the writes."""
     from backend.tests.test_api import post
     task = post(api, "tasks", {"owner": "ops", "title": "Summarize", "body": "Please summarize the current work."})
     task_id = task["id"] if "id" in task else task["task"]["id"]
     with store(api).transaction() as c:
-        home = threads.home(c, "bot:ops", create=True)["id"]
-        cid = room(c, "human:ana", "ops")
-        comment = say(c, "human:ana", "bot:ops", "A note on it", cid, refs={"task": task_id, "comment": True})["id"]
-        quiet = say(c, "bot:ops", "human:ana", "Working on it", cid, refs={"task": task_id}, in_reply_to=comment)["id"]
-        waiting = [r[0] for r in c.execute("SELECT id FROM message_deliveries WHERE message_id=? AND recipient=? "
-                                           "AND state IN ('pending','delivered','read')", (quiet, "human:ana"))]
-        assert waiting
-        # The room becomes the task's room, as tasks filed before Oct 13 named it: the bot's post stops counting.
-        c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (cid, task_id))
-    summary = merge(api)
-    assert summary["rooms"] == 1 and summary["moot"] == len(waiting), summary
-    with store(api).read() as c:
-        assert comment in [m["id"] for m in H.task_comments(c, task_id)]
-        assert not c.execute("SELECT 1 FROM message_deliveries WHERE message_id=? AND recipient=? "
-                             "AND state IN ('pending','delivered','read')", (quiet, "human:ana")).fetchone()
-        assert c.execute("SELECT conversation_id FROM tasks WHERE id=?", (task_id,)).fetchone()[0] == cid
-        assert seqs(c, home)[-2:] == [comment, quiet]
-
-
-def test_a_room_whose_owner_cannot_read_the_home_stays(api):
-    """inbox is Ana's alone: cara's old room with it would put her history where she cannot read it. (Not ben: the
-    fixture makes him an admin, who reads every bot.)"""
+        c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (ops_rooms["ana"], task_id))
+        note = say(c, "human:ana", "bot:ops", "A note on it", ops_rooms["ana"],
+                   refs={"task": task_id, "comment": True})["id"]
+    merge(api)
     with store(api).transaction() as c:
-        cid = room(c, "human:cara", "inbox")
-        assert not threads.actor_viewer(c, "human:cara").can_read_home(c, "bot:inbox")
-    summary = merge(api)
-    assert summary["rooms"] == 0
-    assert any(s.get("room") == cid for s in summary["skipped"]), summary
+        c.execute("UPDATE conversations SET archived_at=? WHERE id=?", (H.now(), ops_rooms["home"]))
+        assert threads.home(c, "bot:ops", create=False) is None
+    with store(api).transaction() as c:
+        assert note in [m["id"] for m in H.task_comments(c, task_id)]
+        new_home = threads.home(c, "bot:ops", create=True)["id"]
+        assert new_home != ops_rooms["home"]
+        later = say(c, "bot:ops", "human:ana", "Later, in the new Home", new_home, refs={"task": task_id})["id"]
     with store(api).read() as c:
-        assert not threads.thread_row(c, cid)["closed_at"]
+        ids = [m["id"] for m in H.task_comments(c, task_id)]
+        assert note in ids and later in ids and ids.index(note) < ids.index(later), ids
+
+
+def test_a_bot_that_waits_on_a_person_keeps_the_install_marker_unset(api):
+    """Finding 6: a bot with two Homes that both have messages is skipped, not finished. The install is not marked done
+    while that skip stands, and the next start moves the bot once a person has sorted the Homes out."""
+    with store(api).transaction() as c:
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (bot_home_merge.KEY,))
+        first = threads.home(c, "bot:ops", create=True)["id"]
+        second = threads._insert_thread(c, H.KEEPER, title="Ops", audience="home", owner_id="bot:ops", kind="chat",
+                                        participants=["bot:ops"])["id"]
+        say(c, "bot:ops", "human:ana", "In the first Home", first)
+        say(c, "bot:ops", "human:ben", "In the second Home", second)
+        room(c, "human:ana", "ops")
+    with store(api).transaction() as c:
+        summary = bot_home_merge.run_once(c)
+        assert summary["pending"] == ["ops"], summary
+        assert summary["rooms"] == 0 and not summary["errors"], summary
+        assert not bot_home_merge.done(c)
+    with store(api).transaction() as c:
+        c.execute("UPDATE conversations SET archived_at=? WHERE id=?", (H.now(), second))
+        summary = bot_home_merge.run_once(c)
+        assert not summary["pending"] and not summary["errors"] and summary["rooms"] == 1, summary
+        assert bot_home_merge.done(c)
+
+
+def test_each_keyed_table_moves_in_one_statement_per_bot(api):
+    """Finding 7: a bot's rooms move in bulk. Each table keyed by a room is updated once for the bot, not once per room."""
+    with store(api).transaction() as c:
+        threads.home(c, "bot:ops", create=True)
+        for person in PEOPLE:
+            say(c, person, "bot:ops", "Hello", room(c, person, "ops"))
+    with store(api).transaction() as c:
+        recorded = Recorded(c)
+        summary = bot_home_merge.merge(recorded)
+    assert summary["rooms"] == 3 and not summary["errors"], summary
+    for table, _column in bot_home_merge.KEYED:
+        updates = [s for s in recorded.statements if s.startswith(f"UPDATE {table} ")]
+        assert len(updates) <= 1, (table, updates)
+    assert sum(s.startswith("UPDATE thread_followups ") for s in recorded.statements) == 1
