@@ -142,10 +142,12 @@ def _once(store, who, request, body, person, work, unknown=None):
         answer = work()
     except Problem as problem:
         # A definite refusal replays as itself. Anything else leaves the request 'sending': its outcome is unknown, so
-        # no copy of it ever asks the issuer again.
+        # no copy of it ever asks the issuer again. A person removed while the issuer was asked (no hash) keeps no
+        # refusal text that names their address.
         with store.transaction() as c:
-            c.execute("UPDATE invite_sends SET state='refused',error_code=?,error_detail=?,updated_at=? "
-                      "WHERE actor=? AND operation=? AND key=?", (problem.code, problem.detail, H.now(),
+            c.execute("UPDATE invite_sends SET state='refused',error_code=?,"
+                      "error_detail=CASE WHEN request_hash='' THEN ? ELSE ? END,updated_at=? "
+                      "WHERE actor=? AND operation=? AND key=?", (problem.code, REMOVED, problem.detail, H.now(),
                                                                   who.actor, operation, key))
         raise
     with store.transaction() as c:
