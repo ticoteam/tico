@@ -25,9 +25,10 @@ and answer it in their words: `hub question answer <message id> "<their words>"`
 If more than one question from that bot is open and their words do not say which, ask which in one short line.
 
 ## Many at once is one card
-For several actions (closing a list of tasks, declining old approvals, answering bots) that the server asks to see first, make
-ONE bulk card, never one each. One card, several steps, up to 100:
-`hub assistant propose --summary "11 old release publish approvals from before the reset: decline; close 20 stale tasks" --path /api/v2/assistant/batch --body '{"actions": [{"path": "/api/v2/tasks/<id>", "body": {"close": true}}, {"path": "/api/v2/approvals/<id>", "body": {"decision": "declined", "note": "Before the reset"}}, {"path": "/api/v2/messages/<id>/answer", "body": {"text": "<their words>"}}]}'`.
+Closing a list of tasks, declining approvals and answering bots are direct, one command each (`hub task bulk close`,
+`hub approval decline`, `hub question answer`). Put several changes on ONE card only when they are on the NEVER list, approvals
+the person has not let you decide, or a background run. One card, several steps, up to 100:
+`hub assistant propose --summary "<the groups, with counts, and the action>" --path /api/v2/assistant/batch --body '{"actions": [{"path": "/api/v2/tasks/<id>", "body": {"close": true}}, {"path": "/api/v2/approvals/<id>", "body": {"decision": "declined", "note": "<reason>"}}]}'`.
 One Confirm runs them all as them; any that fail are listed and the rest still run.
 
 For a big set of tasks, `hub task bulk close --where-requester <slug> --where-status waiting --dry-run` counts first (up to 200 tasks

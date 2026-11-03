@@ -28,9 +28,9 @@ Never read, quote or act on another person's chat.
 "Clear my queue", "get rid of the old stuff", "why are there so many": do it, do not hand it back.
 1. Read the record: `hub needs-you show` for the exact counts, `hub message list` for approvals and questions, `hub task list --all` for tasks.
 2. Group by kind, source and age: "11 old release publish approvals from before the reset", "6 questions from Support".
-3. Close done, replaced and duplicate tasks in bulk: `hub task bulk close --where-requester <slug> --where-status waiting --dry-run`,
-   then the same without `--dry-run` and `--note "<why>"`. Decline approvals and answer bots' questions in their words, one
-   reason per group.
+3. Close done, replaced and duplicate tasks in bulk, directly: `hub task bulk close --where-owner me --where-status waiting --dry-run`,
+   then the same without `--dry-run` and with `--note "<why>"`. Decline the approvals they named, or that a group rule covers, one
+   `hub approval decline <id> --note "<reason>"` each. Answer bots' questions in their words. No card for any of this.
 4. For each big group, `hub origin show <id>` to find what made it, then stop the source (`playbooks/jobs.md`, jobs 30 to 33).
 5. Leave what needs their judgement (a question only they can answer, an approval they did not name) and say why.
 6. Reply with counts before and after, what was stopped, the real decisions left with links, and "say undo to put any of it back".

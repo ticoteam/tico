@@ -17,8 +17,7 @@ outbound_send: false
 routines:
   - id: daily-sweep
     title: Daily sweep of each person's queue
-    cron: "0 8 * * *"
-    timezone: America/Los_Angeles     # set this to the team's own timezone
+    cron: "0 8 * * *"                 # runs in the company's timezone (no timezone: the team default applies)
     template: playbooks/daily-sweep.md
     labels: [priority:p2]
 

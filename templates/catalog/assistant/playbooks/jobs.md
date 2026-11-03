@@ -20,13 +20,13 @@ first 8 characters. Do not add `--on-behalf-of` except where a command requires 
 ## Queue, close, reopen
 
 11. **"Clear my queue."**: follow "Clearing a queue" in `playbooks/assistant-chat.md`. Read, group, close and decline, then say what is left.
-12. **"Close these" / "close the done ones."**: `hub task bulk close --where-requester <slug> --where-status waiting --dry-run`, then the same without `--dry-run` with `--note "<why>"`. Under 200 tasks; more needs two runs.
+12. **"Close these" / "close the done ones."**: always count first: `hub task bulk close --where-owner me --where-status waiting --where-status doing --dry-run`, then the same without `--dry-run` and with `--note "<why>"`. Narrow it with `--where-requester <slug>` or `--where-label <tag>`. Under 200 tasks; more needs two runs.
 13. **"Mark X done" / "close X."**: `hub task update <id> --status done --note "<why>"`, or `hub task close <id> --note "<why>"`.
 14. **"Reopen X."**: `hub task update <id> --status doing --note "<why>"`.
 15. **"Give X to Support."**: `hub task update <id> --owner <slug>`. Say who it went to.
 16. **"Comment on X: ..."**: `hub task comment <id> "<text>"`.
 17. **"Undo that."**: `hub assistant change list --days 7`, then `hub assistant change restore <id>` for the one they mean. Say what came back.
-18. **"Decline the old approvals."**: `hub message list` for each `refs.approval`, then one card: `hub assistant propose --summary "<count and groups>" --path /api/v2/assistant/batch --body '{"actions": [...]}'` with `/api/v2/approvals/<id>` declines.
+18. **"Decline the old approvals."**: `hub message list` for each `refs.approval`, then `hub approval decline <id> --note "<reason>"` for each one they named or that the group rule covers. Direct, no card, one command per approval.
 19. **"Answer the bot's question: yes."**: `hub message list` for the question's id, then `hub question answer <message id> "<their words>"`. A question with picks takes the pick's label.
 
 ## Approvals and decisions
@@ -44,8 +44,11 @@ first 8 characters. Do not add `--on-behalf-of` except where a command requires 
 27. **"Ask bot Y."**: `hub question ask <slug> "<question>" --wait 60`. Report the answer with its source.
 28. **"Tell bot Y ..."**: `hub message send <slug> "<text>"`. Add `--fyi` when no reply is needed.
 29. **"New bot" / "change a bot's instructions or schedule."**: `hub task create --owner botops --request-id turn --title "<ask>" --body "<their words>"`. BotOps builds it; say so.
-30. **"Pause bot Y" / "change its model, routine or schedule."**: a bot change is a task for `botops` (job 29). A person's own automation: `hub automation list`, `hub automation show <id>`, then `hub automation update <id> --file -`.
-31. **"Stop the pipeline that files X."**: `hub origin show <task id>` for what made it, then either `hub automation update <id> --file -` (pause it), `hub rules add --kind internal --text "<the rule in one sentence>"` (a rule that stops it), or a `botops` task when it is a bot's own code.
+30. **"Pause bot Y" / "resume bot Y."**: `hub bot pause <slug>` or `hub bot resume <slug>`. Say what it means for its open work.
+    **"Change bot Y's model."**: `hub settings find "model"`, then `hub settings set <key> <value> --bot <slug>`.
+    **"Change a bot's routine or automation."**: `hub automation list`, `hub automation show <id>`, then `hub automation update <id> --file -` (field edits as JSON) or `hub automation update <id> --enable` / `--disable`.
+    A bot's repository, its instructions or a new bot is a task for `botops` (job 29): that is the one thing you do not change yourself.
+31. **"Stop the pipeline that files X."**: `hub origin show <task id>` for what made it, then either `hub automation update <id> --disable --summary "<why>"` (pause it; `--enable` turns it back on), `hub rules add --kind internal --text "<the rule in one sentence>"` (a rule that stops it), or a `botops` task when it is a bot's own code.
 32. **"Undo the automation change."**: `hub automation versions <id>`, then `hub automation restore <id> <version>`.
 33. **"Show the rules."**: `hub rules list`. Add one with `hub rules add --kind internal --text "<rule>"`; retire one with `hub rules retire <id>`.
 
