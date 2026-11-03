@@ -473,7 +473,7 @@ async function botChatWays(viewport) {
         V2C = {slug: 'lead', conv: {id: 'r-lead'}, goal: null, goalSupported: true, messages: [], mine: []};
         const P = botPill('lead');
         P.el.id = 'bot-chat-pill';
-        Object.assign(P.el.style, {position: 'fixed', left: '20px', right: '20px', bottom: '20px'});
+        Object.assign(P.el.style, {position: 'fixed', left: '20px', right: '20px', top: '440px', zIndex: '50'});   // room above for the menu
         document.body.append(P.el);
         chatGoalRender(V2C);
       });
