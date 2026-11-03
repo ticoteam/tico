@@ -53,6 +53,7 @@ function route(hash = location.hash) {
   if (!S.route.startsWith(MAIL)) { MAIL_LOAD++; clearTimeout(MAIL_SEARCH); mailForget(); }
   if (!S.route.startsWith(MESSAGING)) { MESSAGING_LOAD++; MESSAGING_LIST = null; }
   decideStop();     // the Needs you card closes with its page; its waiting answer goes now
+  window.liveMeetingsStop?.();
   convStop(); meetStop(); onbStop(); TASKS_ST?.layoutAbort?.abort(); tasksKeep(TASKS_ST); TASKS_ST = null; // page-local work never outlives its page
   if (S.route !== '#/usage') USE = null;
   if (!S.route.startsWith('#/replay')) replayStop();
@@ -84,7 +85,12 @@ function route(hash = location.hash) {
   else if (S.route.startsWith('#/task/')) pageTasks('', decodeURIComponent(S.route.slice(7)));
   else if (S.route.startsWith(TASKS + '/')) { location.replace('#/task/' + S.route.slice(TASKS.length + 1).split('?')[0]); return; }   // #/tasks/<id> is the same task
   else if (S.route === CHAT) { location.hash = TASKS; return; }
-  else if (S.route === MEETINGS || S.route.startsWith(MEETINGS + '?')) pageNotes();
+  else if (S.route.startsWith(MEETINGS + '/live/')) pageLiveMeetings({pinned: decodeURIComponent(S.route.slice((MEETINGS + '/live/').length))});
+  else if (S.route === MEETINGS || S.route.startsWith(MEETINGS + '?')) {
+    const live = new URLSearchParams(S.route.split('?')[1] || '').get('live');
+    if (live) { location.replace(MEETINGS + '/live/' + encodeURIComponent(live)); return; }
+    pageNotes();
+  }
   else if (S.route.startsWith('#/bot/')) {
     // A bot's page is at its id; a link that names it by slug (typed, or from before ids) moves to the id.
     const [ref, tab] = S.route.slice(6).split('/'), found = botByRef(decodeURIComponent(ref));

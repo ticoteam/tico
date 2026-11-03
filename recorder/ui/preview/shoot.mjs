@@ -39,6 +39,9 @@ const transcript = async (page) => {
 };
 const toChat = async (page) => page.evaluate(() => document.getElementById('chat').scrollIntoView({ block: 'end' }));
 const scenes = {
+  'screen-sheet': ['live', open('m2'), async page => page.click('[data-act="share-screen"]')],
+  'screen-sharing': ['live', open('m2'), async page => { await page.click('[data-act="share-screen"]'); await page.click('[data-act="share-go"]'); await page.waitForSelector('.screen-stop'); }],
+  'link-sheet': ['meeting', open('m1'), async page => { await page.click('.people-btn'); await page.click('[data-act="copy-link"]'); }],
   library: [],
   empty: [],
   signing: [],
@@ -330,6 +333,25 @@ if (!only.length || only.includes('checks')) {
   await people.focus('.row[data-id="m1"]');
   await people.keyboard.press('Enter');
   await people.waitForSelector('.title-input', { timeout: 1000 }).catch(() => errors.push('keyboard: Enter on a row did not open it'));
+}
+// Screen/link flow uses only the mock controller. No native capture or personal library.
+{
+  const page = await browser.newPage({viewport:{width:640,height:490}});
+  await page.goto(`${base}?scene=meeting`); await open('m1')(page);
+  await page.click('.people-btn'); await page.click('[data-act="copy-link"]');
+  if (!(await page.locator('.share-sheet').textContent()).includes('transcript so far will be uploaded')) errors.push('link: missing upload disclosure');
+  await page.keyboard.press('Escape');
+  if (await page.locator('.share-sheet').count()) errors.push('link: Esc did not cancel');
+  await page.click('[data-act="share-screen"]');
+  await page.click('[data-act="share-org"][data-id="acme"]');
+  await page.click('[data-act="share-go"]'); await page.waitForSelector('.screen-stop');
+  const stop = await page.locator('.screen-stop').boundingBox();
+  if (!stop || stop.x < 0 || stop.x + stop.width > 640) errors.push('screen: Stop outside compact viewport');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.row[data-id="m1"]');
+  if (!(await page.locator('.screen-stop').textContent()).includes('Recorder hand-off')) errors.push('screen: meeting not named outside its workspace');
+  await page.click('[data-act="stop-screen"]'); await page.waitForSelector('.screen-stop', {state:'detached'});
+  await page.close();
 }
 await browser.close();
 server.close();

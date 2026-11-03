@@ -276,6 +276,7 @@ def create_app(settings=None):
         stop = asyncio.Event()
         # Always runs: local 90-day retention must not depend on the inbound key or HQ (sync itself stays off).
         inbound_task = asyncio.create_task(app.state.inbound.loop(stop))
+        meeting_screen_task = asyncio.create_task(app.state.meeting_frames.run(stop))
         screen_relay_task = None
         if settings.screen_relay_url:
             await asyncio.to_thread(screen_sessions.start)
@@ -430,6 +431,7 @@ def create_app(settings=None):
         finally:
             stop.set()
             app.state.live_meeting_routing.stop()
+            await meeting_screen_task
             if inbound_task:
                 await inbound_task
             if hook_relay_task:
@@ -777,7 +779,7 @@ def create_app(settings=None):
                 # The recorder's speech-to-text clip (backend/recorder_relay.py): up to 25 MB, from a person.
                 recorder_audio = (request.url.path == "/api/v2/recorder/audio/transcriptions"
                                   and request.state.identity.role in ("human", "owner"))
-                limit = (26_214_400 if recorder_audio else 1024 * 1024 if request.url.path == "/api/v2/team/icon" else 2 * 1024 * 1024 if request.url.path == "/api/v2/company-page/logo" else settings.upload_max_bytes if media_raw else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) or request.url.path == "/api/v2/task-questions" else MAX_REPORT_BYTES if memory_report else 27_000_000 if published else 12_000_000 if captured else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
+                limit = (1_000_000 if re.fullmatch(r"/api/v2/live-meetings/[^/]+/screen/frame", request.url.path) else 26_214_400 if recorder_audio else 1024 * 1024 if request.url.path == "/api/v2/team/icon" else 2 * 1024 * 1024 if request.url.path == "/api/v2/company-page/logo" else settings.upload_max_bytes if media_raw else settings.upload_max_bytes + 11_000_000 if streamed else 14_500_000 if re.fullmatch(r"/api/v2/tasks/[^/]+/files", request.url.path) or request.url.path == "/api/v2/task-questions" else MAX_REPORT_BYTES if memory_report else 27_000_000 if published else 12_000_000 if captured else 20_000_000 if docs_import or upload and request.state.identity.role in ("human", "owner")
                          else 2_000_000)
                 if int(size) > limit:
                     raise Problem("too_large", f"Upload exceeds the file limit of {settings.upload_max_bytes} bytes" if streamed else "Request exceeds the upload limit", 413)
@@ -1074,7 +1076,9 @@ def create_app(settings=None):
             # The flight recorder's caller kind, status and size (backend/flight.py); a raised error counts as a 500.
             who = getattr(request.state, "identity", None)
             size = response.headers.get("content-length") if response is not None else None
-            app.state.timing.end(key, request.state.auth_ms, (time.perf_counter() - started) * 1000,
+            # Screen long-polls wait for new pixels; retain SQL/lock/processing time, exclude only deliberate sleeps.
+            active_ms = max(0, (time.perf_counter() - started) * 1000 - getattr(request.state, "idle_wait_ms", 0))
+            app.state.timing.end(key, request.state.auth_ms, active_ms,
                                  flight.caller_kind(who), response.status_code if response is not None else 500,
                                  int(size) if size and size.isdigit() else 0, getattr(who, "actor", "") or "", cost)
             if cost_token is not None:

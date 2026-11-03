@@ -39,9 +39,11 @@ module.exports = async browser => {
     await page.locator('[data-act="control-live"][data-action="pause"]').click();
     await page.locator('[data-act="control-live"][data-action="resume"]').waitFor();
     assert.equal(await page.locator('[data-act="finish"]').count(), 0);
+    assert.equal(await page.locator('[data-act="share-screen"]').count(), 0, 'Paused meetings cannot start screen sharing');
     assert.equal(await page.locator('[data-act="send-item"]').first().isDisabled(), true);
     await page.locator('[data-act="control-live"][data-action="resume"]').click();
     await page.locator('[data-act="finish"]').waitFor();
+    await page.locator('[data-act="share-screen"]').waitFor();
     await page.locator('[data-act="send-item"]').first().click();
     assert.equal(await page.evaluate(() => fixtureCalls.filter(([cmd]) => cmd === 'send_item').length), 0);
     await page.locator('[data-act="confirm-item-send"]').click();
@@ -55,6 +57,7 @@ module.exports = async browser => {
     assert.equal(await page.evaluate(() => fixtureCalls.filter(([cmd, args]) => cmd === 'control_live' && args.action === 'discard').length), 0);
     await page.locator('[data-act="discard-live"]').click();
     await page.getByText('Discard pending · saved locally').waitFor();
+    assert.equal(await page.locator('[data-act="share-screen"]').count(), 0, 'A pending discard cannot restart screen sharing');
     assert.equal(await page.locator('[data-act="send-item"]').first().isDisabled(), true);
     const controls = await page.evaluate(() => fixtureCalls.filter(([cmd]) => cmd === 'control_live').map(([, args]) => args.action));
     assert.deepEqual(controls, ['pause', 'resume', 'discard']);
