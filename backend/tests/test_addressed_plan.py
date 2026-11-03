@@ -12,7 +12,7 @@ STALE = [("messages", None, "16000"), ("messages", "messages_conversation", "160
 
 
 def test_addressed_reads_the_persons_deliveries_first_even_with_stale_stats(tmp_path):
-    path = str(tmp_path / "hub.sqlite")
+    path = tmp_path / "hub.sqlite"
     Store(Settings(db_path=path)).initialize(seed_market=False)
     c = sqlite3.connect(path)
     c.execute("ANALYZE")
