@@ -292,7 +292,8 @@ def test_a_warn_delivers_a_persons_thread_post_with_the_warning_on_it(ruled):
 
 
 def test_a_group_dm_is_the_open_one_with_exactly_those_people_and_its_first_message_is_posted(api):
-    got = api.post("/api/v2/threads/dm", json={"members": ["human:ben", "human:cara"], "body": "Budget call at 3"},
+    got = api.post("/api/v2/threads/dm", json={"members": ["human:ben", "human:cara"], "body": "Budget call at 3",
+                                                         "title": "Budget"},
                    headers=headers("ana-test"))
     assert got.status_code == 200, got.text
     dm = got.json()
@@ -305,7 +306,8 @@ def test_a_group_dm_is_the_open_one_with_exactly_those_people_and_its_first_mess
 
 def test_a_group_dm_needs_write_on_each_teammate_and_a_hidden_one_is_404(api):
     set_bot_access(api, "ops", {"people": ["cara"]}, {"people": ["cara"]}, {"people": ["ben"]})
-    refused = api.post("/api/v2/threads/dm", json={"members": ["human:ben", "bot:ops"]}, headers=headers("cara-test"))
+    refused = api.post("/api/v2/threads/dm", json={"members": ["human:ben", "bot:ops"], "title": "Ops"},
+                       headers=headers("cara-test"))
     assert refused.status_code == 403 and "Write" in refused.text
     assert api.post("/api/v2/threads/dm", json={"members": ["human:ben"]}, headers=headers("cara-test")).status_code == 200
     assert api.post("/api/v2/threads/dm", json={"members": ["bot:nobody"]}, headers=headers("ana-test")).status_code == 404

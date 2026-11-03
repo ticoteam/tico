@@ -144,7 +144,7 @@ def dm_rows(api, token):
 def test_a_dm_row_names_the_others_without_a_members_read(acme):
     api, _ = acme
     one = ok(call(api, "POST", "threads/dm", "cara-test", {"members": ["human:eve"]}))
-    many = ok(call(api, "POST", "threads/dm", "cara-test", {"members": ["human:eve", "human:fay", "human:ben", "human:ana"]}))
+    many = ok(call(api, "POST", "threads/dm", "cara-test", {"members": ["human:eve", "human:fay", "human:ben", "human:ana"], "title": "Plans"}))
     rows = dm_rows(api, "cara-test")
     assert [p["actor"] for p in rows[one["id"]]["dm_with"]] == ["human:eve"] and rows[one["id"]]["dm_with_count"] == 1
     assert "human:cara" not in {p["actor"] for p in rows[many["id"]]["dm_with"]}
