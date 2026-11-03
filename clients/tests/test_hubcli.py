@@ -1283,3 +1283,27 @@ def test_approval_list_is_the_pending_default_and_the_mcp_tool_matches(monkeypat
     tool["fn"](client, {"from": "bot:finance", "since": "2026-10-01"})
     client.get.assert_called_with("approvals", status="pending", limit=20, offset=0, **{"from": "bot:finance"},
                                   since="2026-10-01")
+
+
+@pytest.mark.parametrize("alias, canonical", [
+    (["tasks", "list"], ["task", "list"]),
+    (["task", "defer", "T1", "--handled"], ["task", "later", "T1", "--handled"]),
+    (["tasks", "defer", "T1", "--handled"], ["task", "later", "T1", "--handled"]),
+    (["approvals", "list"], ["approval", "list"]),
+    (["automations", "list"], ["automation", "list"]),
+    (["bots", "show", "ops"], ["bot", "show", "ops"]),
+    (["rule", "list"], ["rules", "list"]),
+])
+def test_an_alias_runs_the_same_calls_as_the_command_it_names(alias, canonical, monkeypatch):
+    """The parser keeps the spelling typed, so dispatch renames an alias first: `hub tasks list` makes the calls of
+    `hub task list` and never reaches the "unsupported" fallback."""
+    from clients import remotecli
+    from unittest.mock import MagicMock
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    made = []
+    for words in (alias, canonical):
+        client = MagicMock()
+        monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+        remotecli.run(hubcli.parser().parse_args(words))
+        made.append(client.mock_calls)
+    assert made[0] == made[1] and made[0]

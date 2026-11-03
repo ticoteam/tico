@@ -219,9 +219,25 @@ def counsel_held(args):
         raise SystemExit(f"{fn} is not available to Counsel: it has no credentials and sends nothing")
 
 
+# The aliases hubcli.parser() declares. Argparse keeps the spelling typed (`hub tasks list` sets cmd to "tasks"), and the
+# dispatch below tests the canonical names, so each alias is renamed once, here, before anything is dispatched on it.
+COMMAND_ALIASES = {"tasks": "task", "approvals": "approval", "automations": "automation", "bots": "bot", "rule": "rules"}
+SUBCOMMAND_ALIASES = {("task", "defer"): "later"}
+
+
+def canonical_names(args):
+    """Rename an aliased command or subcommand on a parsed line to the name it stands for. `fn` is already the canonical
+    name, set by each leaf of the parser."""
+    args.cmd = COMMAND_ALIASES.get(args.cmd, args.cmd)
+    if hasattr(args, "sub"):
+        args.sub = SUBCOMMAND_ALIASES.get((args.cmd, args.sub), args.sub)
+    return args
+
+
 def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
+    canonical_names(args)
     counsel_held(args)
     # A query may run for 20 s on the server before it is stopped, a decision's providers 25 s; leave room for that.
     client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=45 if args.cmd in ("decision", "gateway") else 30 if args.cmd == "sql" else 120 if args.cmd == "listening" or args.fn == "market import" else 130 if args.cmd == "inbound" else 15)
