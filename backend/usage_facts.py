@@ -15,10 +15,12 @@ NANO = 10**9
 
 def nano(usd):
     """A USD amount as whole nanodollars, rounded half to even as Finance rounds (backend/finance/usage.py `nano`);
-    None stays None (a model with no list price)."""
-    if usd is None:
+    None stays None (a model with no list price), and so does anything that is not a finite number: a bad estimate
+    never stops a run from finishing."""
+    try:
+        return int((Decimal(repr(float(usd))) * NANO).to_integral_value(ROUND_HALF_EVEN))
+    except (TypeError, ValueError, OverflowError, ArithmeticError):
         return None
-    return int((Decimal(repr(float(usd))) * NANO).to_integral_value(ROUND_HALF_EVEN))
 
 
 def gateway_billed(model, billing):

@@ -131,3 +131,9 @@ INSERT INTO turns VALUES ('blank', 'cmo', '2025-01-02T00:00:00Z', '2025-01-02T00
     assert not conn.execute("SELECT 1 FROM sqlite_master WHERE name='turn_usage_segments'").fetchone()
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
         conn.execute("DELETE FROM usage_facts")
+
+
+def test_a_cost_becomes_exact_nanodollars_and_a_bad_one_becomes_no_cost():
+    assert [usage_facts.nano(v) for v in (0.35, 0.1 + 0.2, 1234.567891, 0.0000000005, 0.0000000015, -0.5)] == [
+        350_000_000, 300_000_000, 1_234_567_891_000, 0, 2, -500_000_000]
+    assert [usage_facts.nano(v) for v in (None, "abc", float("inf"), float("nan"))] == [None] * 4

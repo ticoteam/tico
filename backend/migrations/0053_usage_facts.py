@@ -81,18 +81,11 @@ def _runs_table(conn):
     return None, set()
 
 
-def _nano(usd):
-    try:
-        return nano(usd)
-    except (TypeError, ValueError, OverflowError, ArithmeticError):
-        return None
-
-
 def up(conn):
     conn.execute(TABLE)
     conn.execute(RUN_INDEX)
     conn.create_function("usage_family", 1, lambda model: family({"model": model}), deterministic=True)
-    conn.create_function("usage_nano", 1, _nano, deterministic=True)     # the rounding record_run uses, exactly
+    conn.create_function("usage_nano", 1, nano, deterministic=True)      # the rounding record_run uses, exactly
     stamp = H.now()
     runs, rc = _runs_table(conn)
     if runs:
