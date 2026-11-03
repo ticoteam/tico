@@ -20,7 +20,8 @@ regexes read either surface alike. An MCP call whose arguments the tool's inputS
 Checks, per sample:
   must:      regexes; each must match some logged hub call (or the reply, written "reply:<regex>")
   must_not:  regexes; none may match a logged hub call (or the reply)
-  invalid:   any hub call the real parser rejects fails the sample
+  invalid:   a hub call the real parser rejects is counted per sample, not failed (a model that recovers from a usage
+             error did fine); a case that sets `no_invalid: true` fails on any invalid call
   reply:     a rubric; Opus judges the final reply, the hub log and the canned record against it
 
 Results: out/<tag>/<case>.s<n>.json per sample, and out/<tag>/summary.md with pass rate per case.
@@ -124,11 +125,20 @@ def write_answer(words, state, mutate, argv, ids):
     if noun == "task" and verb == "close" and tid:
         if mutate:
             state["tasks"][tid] = "closed"
+            record(state, "task", tid, {"status": "closed"})
         return {"ok": True, "task": {"id": tid, "status": "closed"}}
     if noun == "task" and verb == "update" and tid:
         status = (flag_values(words, "--status") or [None])[-1]
         if mutate and status:
             state["tasks"][tid] = status
+        if mutate:
+            # Every field the update sets, from the flags: a later `task show` or `task list` shows it.
+            fields = {f: argv_flag(argv, flag)[-1] for flag, f in TASK_FIELD_FLAGS.items() if argv_flag(argv, flag)}
+            labels = argv_flag(argv, "--label") + argv_flag(argv, "--labels")
+            if labels:
+                fields["labels"] = labels
+            if fields:
+                record(state, "task", tid, fields)
         return {"ok": True, "task": {"id": tid, **({"status": status} if status else {})}}
     if noun == "task" and verb == "bulk" and len(words) > 2:
         action = words[2]
@@ -145,12 +155,48 @@ def write_answer(words, state, mutate, argv, ids):
         enabled = False if "--disable" in words else True if "--enable" in words else None
         if mutate and enabled is not None:
             state["automations"][tid] = enabled
+        if mutate:
+            fields = {"schedule": argv_flag(argv, "--schedule")[-1]} if argv_flag(argv, "--schedule") else {}
+            if enabled is not None:
+                fields["enabled"] = enabled
+            if fields:
+                record(state, "automation", tid, fields)
         return {"ok": True, "automation": {"id": tid, **({"enabled": enabled} if enabled is not None else {})}}
+    if noun == "bot" and verb in ("pause", "resume") and tid:
+        status = "paused" if verb == "pause" else "active"
+        if mutate:
+            record(state, "bot", tid, {"status": status})
+        return {"ok": True, "bot": {"id": tid, "status": status}}
     if noun == "approval" and verb == "decline" and tid:
         return {"ok": True, "approval": {"id": tid, "status": "declined"}}
     if noun == "rules" and verb == "add":
         return {"ok": True, "rule": {"id": "rule_1", "status": "active"}}
     return None
+
+
+OVERRIDE_KINDS = ("task", "automation", "bot")
+TASK_FIELD_FLAGS = {"--owner": "owner", "--status": "status", "--title": "title", "--due": "due"}
+
+
+def record(state, kind, tid, fields):
+    """Keep what a write set on one object, so later reads of that id show it (the real hub does the same)."""
+    state.setdefault("overrides", {}).setdefault(kind, {}).setdefault(tid, {}).update(fields)
+
+
+def argv_flag(argv, name):
+    return [argv[i + 1] for i, a in enumerate(argv[:-1]) if a == name]
+
+
+def apply_fields(obj, table):
+    """Set every field a write recorded on each dict in obj whose id is in table (short ids match their full id)."""
+    if isinstance(obj, list):
+        return [apply_fields(item, table) for item in obj]
+    if isinstance(obj, dict):
+        obj = {k: apply_fields(v, table) for k, v in obj.items()}
+        key = lookup(table, obj.get("id"))
+        if key is not None:
+            obj.update(table[key])
+    return obj
 
 
 def add_rows(out, rows):
@@ -237,6 +283,8 @@ def answer(argv, via, tool=None):
         out = {**created[k], "status": state["tasks"].get(k, created[k]["status"])}
     else:
         out = None
+    if out is not None and not isinstance(out, str) and words[0] in OVERRIDE_KINDS and words[1:2] in (["show"], ["list"], ["status"]):
+        out = apply_fields(out, state.get("overrides", {}).get(words[0], {}))
     if out is not None and not isinstance(out, str):
         if words[:2] == ["task", "list"]:
             keep = ("--all" in words or "closed" in flag_values(words, "--where-status")
@@ -631,8 +679,9 @@ def run_sample(case, sample, args, outdir):
             if hit:
                 fails.append(f"forbidden call {hit[0][:120]}")
     bad = [c for c in calls if c.get("invalid")]
-    for c in bad:
-        fails.append(f"invalid {c.get('via', 'cli')} call: hub {c['argv'][:100]}")
+    if case.get("no_invalid"):
+        for c in bad:
+            fails.append(f"invalid {c.get('via', 'cli')} call: hub {c['argv'][:100]}")
     verdict = judge(case, reply, judged, attached, args)
     if not verdict.get("pass"):
         fails.append(f"judge: {verdict.get('why', '')[:300]}")
@@ -718,7 +767,8 @@ def summarise(outdir, tag, model, judge, samples, surface="both"):
     md = [f"# {tag}: {passed}/{len(rows)} sample runs pass ({passed / max(len(rows), 1):.0%}), model {model}, "
           f"judge {judge}",
           f"Surface {surface}: {calls['mcp']} MCP calls ({bad['mcp']} invalid), {calls['cli']} CLI calls "
-          f"({bad['cli']} invalid).", "",
+          f"({bad['cli']} invalid).",
+          f"invalid calls per sample: {sum(r.get('invalid', 0) for r in rows) / max(len(rows), 1):.1f}", "",
           f"{len(by_case)} cases x up to {samples} samples. Score is the judge's 1-5 mean.", "",
           "| case | pass | score | turns | $ | first failure |", "|---|---|---|---|---|---|"]
     for cid in sorted(by_case):
@@ -731,7 +781,7 @@ def summarise(outdir, tag, model, judge, samples, surface="both"):
         md.append(f"| {cid} | {ok}/{len(rs)} | {score:.1f} | {turns:.0f} | {cost:.3f} | "
                   f"{first[:160].replace('|', '/')} |")
     (outdir / "summary.md").write_text("\n".join(md) + "\n")
-    return md[0] + "\n" + md[1]
+    return md[0] + "\n" + md[1] + "\n" + md[2]
 
 
 def main():

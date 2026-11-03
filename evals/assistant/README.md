@@ -34,7 +34,7 @@ summary then covers only the samples that finished.
 4. Checks the run. A sample passes when every check holds:
    - `must`: each regex matches some logged hub call, or the reply when it starts with `reply:`.
    - `must_not`: no logged call (or reply, with `reply:`) matches.
-   - `invalid`: no hub call is rejected by the parser.
+   - `invalid`: counted per sample, not a failure (a model that gets a usage error and then runs the right command did fine). A case that sets `no_invalid: true` fails on any invalid call.
    - the judge passes the reply against `reply:`, reading the person's message, the rubric, the hub calls, and the
      canned record (numbers in a reply must match it).
 
