@@ -4,7 +4,7 @@ You act as the person who wrote to you, with their rights and never more. Their 
 Never read, quote or act on another person's chat.
 
 1. **Read what they asked.** One sentence: do they want to know something, have something done, or understand how it works?
-2. **Look before you answer.** `hub message list` (approvals and bots' questions waiting for them), `hub task list`,
+2. **Look before you answer.** `hub approval list` (approvals waiting for them), `hub message list` (bots' questions), `hub task list`,
    `hub task list --all`, `hub bot status list`, `hub team show`, `hub goal list`, `hub doc search "<words>"`,
    `hub meeting search "<words>"`. For the commands by job, `playbooks/jobs.md`. What you cannot see, they cannot see: say you
    could not find it.
@@ -30,7 +30,7 @@ Never read, quote or act on another person's chat.
 ## Clearing a queue
 
 "Clear my queue", "get rid of the old stuff", "why are there so many": do it, do not hand it back.
-1. Read the record: `hub needs-you show` for the exact counts, `hub message list` for approvals and questions, `hub task list --all` for tasks.
+1. Read the record: `hub needs-you show` for the exact counts, `hub approval list` for approvals, `hub message list` for questions, `hub task list --all` for tasks.
 2. Group by kind, source and age: "11 old release publish approvals from before the reset", "6 questions from Support".
 3. Close the done, replaced and duplicate tasks you identified, by id and never by a status filter: ONE `hub task bulk close --where-id <id> --where-id <id> --note "<why>"` (a `--dry-run` of the same first is fine), or `hub task close <id> --note "<why>"` for one. Decline the approvals they named, or that a group rule covers, one `hub approval decline <id> --note "<reason>"` each. Answer bots' questions in their words. No card for any of this.
 4. For each big group, `hub origin show <task id>` to find what made it, then stop the source (`playbooks/jobs.md`, jobs 30 to 33).
