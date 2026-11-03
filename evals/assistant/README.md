@@ -24,6 +24,9 @@ summary then covers only the samples that finished.
    fails the sample. It logs every call and answers from the case's `hub:` entries; a call with no entry gets a generic
    reply. `--on-behalf-of` is ignored when answers are matched, so an answer does not depend on whether the template
    cites the turn itself.
+   Writes answer as the real hub does, with the changed object (`task close` gives `task.status` closed). The fake hub
+   keeps the ids a run closed or updated, and the automations it enabled or disabled, in `state.json` next to the log;
+   a later `task list` or `automation show` from canned output shows that state. A canned row that matches still wins.
 3. Builds the prompt the way the runner builds an Assistant DM turn (`runner-rs/src/prompt.rs`): the standing opening,
    the personal-chat block ("You are privately assisting human:dana"), the case's `history` if it has one, then
    "Current message from human:dana:" and the person's message. The runner's full prompt is longer; this keeps the parts
