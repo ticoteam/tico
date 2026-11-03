@@ -209,7 +209,13 @@ def run_now(store, auth, key, actor):
     their own thread, as when scheduled, and return True. Raises a 409 when that one is already running."""
     from .store import Problem
     at = datetime.now(timezone.utc)
-    if key in QUICK:
+    if key == "task_check_backs":
+        from . import task_check_backs
+        with SR.recording(store, key) as run:
+            checked = task_check_backs.run_pass(store, stamp(at))
+            run.did(f"{len(checked['woke'])} followed up", quiet=not any(checked.values()))
+        running = False
+    elif key in QUICK:
         QUICK[key](store, auth, at, [])
         running = False
     elif key == "stale_review":
@@ -410,6 +416,11 @@ class Scheduler:
             with locked("task_snooze") as c:
                 woken = task_snooze.wake_ended(c, stamp(at), failures)
             run.did(SR.words_of(woken, "snooze ended", "Nothing due"), quiet=not woken)
+        from . import task_check_backs
+        with SR.recording(self.store, "task_check_backs") as run:
+            checked = task_check_backs.run_pass(self.store, stamp(at), failures)
+            run.did(f"{len(checked['woke'])} followed up, {len(checked['repaired'])} repaired, {len(checked['blocked'])} blocked",
+                    quiet=not any(checked.values()))
         # Quiet tasks a run deferred to a time that has come get their run (backend/quiet_work.py).
         from . import quiet_work
         with locked("quiet_work") as c:

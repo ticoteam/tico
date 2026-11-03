@@ -4367,6 +4367,8 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *,
     # A step chosen by hand holds: the keeper re-syncs the item from its tickets when one of them moves next.
     roadmap_changed(conn, row["id"], itself=actor == KEEPER or step is None)
     if row.get("status") != effective:
+        from .task_check_backs import moved as check_back_moved
+        check_back_moved(conn, task(conn, row["id"]))
         from .ticket_notices import moved as ticket_moved
         ticket_moved(conn, actor, row["id"], row.get("status"), effective)
     if step_id and row.get("step_id") != step_id and row.get("status") is not None:
@@ -6124,7 +6126,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
                 change_paths=None, qa=None, qa_not_checkable_live=False, receipt_owner=None,
                 quiet_notice=False, from_private=False, routine=False, same=None, occurrence=None,
-                occurrence_step=None, rule_due_id=None, public_warning=""):
+                occurrence_step=None, rule_due_id=None, public_warning="", check_back_at=None, check_back_note=None):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -6344,6 +6346,12 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         # warn mode: the problem is on the record, the task still exists (the refuse week follows)
         _task_event(conn, row["id"], KEEPER, "lint", None, "; ".join(plain), "")
         event(conn, actor, "task.lint", row["id"], {"problems": plain})
+    from . import task_check_backs
+    made = task(conn, row["id"])
+    task_check_backs.ensure(conn, made)
+    if check_back_at is not None or check_back_note is not None:
+        made = task(conn, row["id"])
+        task_check_backs.set_time(conn, made, check_back_at or made["check_back_at"], check_back_note, actor=actor)
     event(conn, actor, "task.create", row["id"], {"owner": target, "title": title})
     _building(conn, None)
     if dedicated:
@@ -6478,7 +6486,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 step_rank=None, number=None, title=None, private=None, waiting_on=None, roles=None, visibility=None, public_title=None,
                 public_summary=None, approval_id=None, size=None, clear_size=False, review_prs=None, verdict=None,
                 verdict_head=None, skip_step_wake=(), review_reader=None, receipt_owner=None, public_allowance=0,
-                wake_others=True):
+                wake_others=True, check_back_at=None, check_back_note=None):
     """Rule 5. The owner may set open|doing|waiting|review|done|declined and a note; it may not close.
 
     `lane` and `labels` are a mover's to change (`mover` says whether this actor is one; the
@@ -6845,7 +6853,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     # After the status write is decided and before the parent hears of it: its wake carries the verdict.
     verdict_set = False if reopening else record_verdict(conn, actor, row, verdict, verdict_head, note)
     if not sets and not state_change and not roles and not clear_size and not verdict_set and all(
-            v is None for v in (visibility, public_title, public_summary, size)):
+            v is None for v in (visibility, public_title, public_summary, size, check_back_at, check_back_note)):
         return row
     # A person finishing it is news for every bot on it; the bots that asked it open questions are read
     # before the status write supersedes those questions.
@@ -7059,6 +7067,12 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             check_pools.safely(conn, verdict_moves.skip, after)
         else:
             check_pools.safely(conn, check_pools.entered, actor, after, review_prs)
+    from . import task_check_backs
+    task_check_backs.ensure(conn, after)
+    if check_back_at is not None or check_back_note is not None:
+        fresh = task(conn, task_id)
+        task_check_backs.set_time(conn, fresh, check_back_at or fresh["check_back_at"], check_back_note, actor=actor)
+    after = {**after, **{k: task(conn, task_id).get(k) for k in ("check_back_at", "check_back_note", "version")}}
     recount(conn, [after["owner_id"], after["requester_id"], row["owner_id"]])   # the old owner too, on a handoff
     if not closing_step:
         _parent_finished(conn, after, row["status"], actor, told=subtask_told, wake=wake_others)
@@ -7618,8 +7632,8 @@ def _task_changed(conn, task_id, actor, field, old, new, revision):
                                        **({"owner_id": new} if field == "owner" else {})}, actor, revision=revision)
 
 
-def _task_event(conn, task_id, actor, field, old, new, note=""):
-    event_id = new_id()
+def _task_event(conn, task_id, actor, field, old, new, note="", *, event_id=None):
+    event_id = event_id or new_id()
     via = VIA.get()
     if via and not any(r[1] == "via" for r in conn.execute("PRAGMA table_info(task_events)")):
         conn.execute("ALTER TABLE task_events ADD COLUMN via TEXT")
@@ -8391,18 +8405,19 @@ def _settle_undiagnosed(conn, row, cause):
           {"bot": actor_id(row["owner_id"]), "recovery_task": None, "owner": None, "cause": cause})
 
 
-def _stall_stand(conn, row):
+def _stall_stand(conn, row, exclude_actors=()):
     """What a stall check can tell moved: the task's status, step, owner, what it waits on, its relations and their
     states, and every comment from anyone but its bot. The bot's own notes ("still waiting") are not a change."""
     tid = row["id"]
+    excluded = tuple(dict.fromkeys((row["owner_id"], KEEPER, *exclude_actors)))
     parts = [row["status"], row.get("step_id"), row["owner_id"], row.get("waiting_on"),
              [list(r) for r in conn.execute(
                  "SELECT r.kind, r.from_task, r.to_task, o.status FROM task_relations r JOIN tasks o "
                  "ON o.id=CASE WHEN r.from_task=? THEN r.to_task ELSE r.from_task END "
                  "WHERE ? IN (r.from_task, r.to_task) ORDER BY r.kind, r.from_task, r.to_task", (tid, tid))],
              [list(r) for r in conn.execute(
-                 "SELECT id, edited_at, deleted_at FROM messages WHERE conversation_id=? AND sender_id NOT IN (?,?) "
-                 "ORDER BY rowid", (row["conversation_id"], row["owner_id"], KEEPER))]]
+                 "SELECT id, edited_at, deleted_at FROM messages WHERE conversation_id=? AND sender_id NOT IN (" +
+                 ",".join("?" * len(excluded)) + ") ORDER BY rowid", (row["conversation_id"], *excluded))]]
     return hashlib.sha256(json.dumps(parts, default=str).encode()).hexdigest()[:16]
 
 
@@ -8500,6 +8515,9 @@ def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
                     held.append(row["id"])
                 continue
             spot, nudged = spots.get(row["id"]), None
+            from . import task_check_backs
+            if not spot and task_check_backs.enabled(conn) and task_check_backs.pending(row, at):
+                continue  # only ordinary idle nudges defer; spot checks and diagnostic readers stay independent
             if spot:
                 nudged = conn.execute("SELECT min(created_at) FROM events WHERE action='task.stall_wake' AND target=? AND created_at>?",
                                       (row["id"], spot["progress"])).fetchone()[0]
@@ -8774,7 +8792,7 @@ def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False
     if quiet_bots and (quiet or tasks_only(conn, target)):
         refs = {**(refs or {}), "quiet": True}
     if (is_bot(target) and target == task_row.get("owner_id") and TS.snoozed(task_row)
-            and not (refs or {}).get("run_now") and (refs or {}).get("wake") != "snooze"):
+            and not (refs or {}).get("run_now") and (refs or {}).get("wake") not in ("snooze", "check_back")):
         # Nobody plans to get to a snoozed task before its date: news about it waits for its bot's next run.
         # Anyone else (a requester bot handed it for review) hears as usual.
         refs = {**(refs or {}), "quiet": True}
