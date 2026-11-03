@@ -90,10 +90,40 @@ def test_a_checkout_with_changes_is_refused_and_left_alone(repos):
     (checkout / "app.py").write_text("my local edit")
     before = head(checkout)
     result, calls = run_apply(checkout, state)
-    assert result["state"] == "blocked" and "1 changed file" in result["error"]
+    assert result["state"] == "blocked" and "1 changed file" in result["error"] and result["error"].endswith("updates itself: app.py")
     assert (checkout / "app.py").read_text() == "my local edit" and head(checkout) == before
     assert calls.restarts == 0 and ru.read_status(state)["state"] == "blocked"
     assert sh(checkout, "git", "branch", "--show-current") == "main"
+
+
+def test_a_blocked_update_names_the_first_three_changed_files(repos):
+    public, checkout, state = repos
+    names = [f"notes/{letter}.txt" for letter in "abcde"]
+    for name in names:
+        commit(checkout, name, "one")                   # tracked, so a change to it shows in status
+    for name in names:
+        (checkout / name).write_text("two")
+    result, calls = run_apply(checkout, state)
+    error = result["error"]
+    assert result["state"] == "blocked" and "5 changed files" in error
+    assert error.endswith("updates itself: notes/a.txt, notes/b.txt, notes/c.txt, and 2 more")
+    assert "notes/d.txt" not in error and "notes/e.txt" not in error and calls.restarts == 0
+
+
+def test_a_changed_file_named_like_a_disk_error_is_named_not_read_as_one(repos):
+    public, checkout, state = repos
+    commit(checkout, "tests/test_enospc.py", "one")
+    (checkout / "tests/test_enospc.py").write_text("two")
+    result, _ = run_apply(checkout, state)
+    assert result["state"] == "blocked" and result["error"].endswith("updates itself: tests/test_enospc.py")
+
+
+def test_a_renamed_file_is_named_with_both_paths(repos):
+    public, checkout, state = repos
+    # a staged rename is one status line: "R  app.py -> renamed.py"
+    sh(checkout, "git", "mv", "app.py", "renamed.py")
+    result, _ = run_apply(checkout, state)
+    assert result["state"] == "blocked" and "app.py -> renamed.py" in result["error"]
 
 
 @pytest.mark.slow
@@ -122,6 +152,57 @@ def test_a_release_whose_rust_runner_cannot_be_had_goes_back_before_any_restart(
     result, calls = run_apply(checkout, state, calls=Calls(prepare_error="could not download the Rust runner for 0.2.0"))
     assert result["state"] == "rolled_back" and result["error"].startswith("could not download the Rust runner")
     assert head(checkout) == before and calls.restarts == 1 and calls.checks == [before]   # the restart is the way back
+
+
+def runner_release(public, checkout):
+    """Release 0.3.0 changes the runner's sources, so its binary is a new build."""
+    commit(public, "runner-rs/src/main.rs", "fn main() {}")
+    sh(public, "git", "tag", "v0.3.0")
+
+
+def test_a_release_whose_new_runner_binary_is_not_published_yet_waits_without_moving(repos):
+    public, checkout, state = repos
+    runner_release(public, checkout)
+    before, asked = head(checkout), []
+    result, calls = run_apply(checkout, state, version="0.3.0", which=lambda name: None,
+                              listed=lambda version: asked.append(version) or False)
+    assert result["state"] == "waiting" and "does not have this computer's runner binary yet" in result["error"]
+    assert asked == ["0.3.0"] and head(checkout) == before and calls.restarts == 0 and calls.prepared == []
+    assert ru.read_status(state)["state"] == "waiting"
+    # Once release.yml adds the binary, the next try moves.
+    result, calls = run_apply(checkout, state, version="0.3.0", which=lambda name: None, listed=lambda version: True)
+    assert result["state"] == "healthy" and ru.checkout_release(checkout) == "0.3.0"
+
+
+def test_a_runner_binary_that_never_comes_is_a_failed_update_after_an_hour(repos):
+    public, checkout, state = repos
+    runner_release(public, checkout)
+    now = [1000.0]
+    wait = dict(version="0.3.0", which=lambda name: None, listed=lambda version: False, clock=lambda: now[0])
+    assert run_apply(checkout, state, **wait)[0]["state"] == "waiting"
+    now[0] += ru.BINARY_WAIT_S - 1
+    assert run_apply(checkout, state, **wait)[0]["state"] == "waiting"     # the wait counts from the first try
+    now[0] += 1
+    result, calls = run_apply(checkout, state, **wait)
+    assert result["state"] == "failed" and "after 60 minutes" in result["error"] and calls.restarts == 0
+
+
+def test_only_a_changed_runner_without_cargo_asks_whether_its_binary_is_published(repos):
+    public, checkout, state = repos
+    asked = []
+    listed = lambda version: asked.append(version) or False
+    result, _ = run_apply(checkout, state, which=lambda name: None, listed=listed)      # 0.2.0: same runner sources
+    assert result["state"] == "healthy" and asked == []
+    runner_release(public, checkout)
+    result, _ = run_apply(checkout, state, version="0.3.0", which=lambda name: "/usr/bin/cargo", listed=listed)
+    assert result["state"] == "healthy" and asked == []                                  # cargo builds one
+
+
+def test_a_release_whose_checksums_cannot_be_read_updates_as_before(repos):
+    public, checkout, state = repos
+    runner_release(public, checkout)
+    result, _ = run_apply(checkout, state, version="0.3.0", which=lambda name: None, listed=lambda version: None)
+    assert result["state"] == "healthy"
 
 
 def test_the_prepare_step_is_a_new_process_of_the_new_tree(tmp_path, monkeypatch):

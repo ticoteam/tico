@@ -8,11 +8,12 @@ time. Who reports to whom (`reports_to`) is a separate thing and is never touche
   rows(...)                a group's row: id, name, parent, people, bots
   create / update / delete the changes the API and the tools make
   place(...)               the team builder: bots into the groups of their templates, made if they are not there yet
+  team_groups(...)         a company file's team names as groups, one per name (company_import)
   link_bets(...)           setup's links from the groups it made to the strategy bets they serve
   migrate(c, settings)     once, for a team that had `teams`, org groups or derived departments: every one becomes a
                            group and every bot its group's member (idempotent; `groups_migrated` in the roster)
 
-Built-in bots (the Assistant, BotOps, the Librarian, the CEO Bot) and helpers stay outside groups.
+Built-in bots (the Assistant, BotOps, the Librarian, the Strategy Bot) and helpers stay outside groups.
 """
 import json
 import re
@@ -21,28 +22,29 @@ from . import access as Access
 from . import hubdb as H
 from . import models as M
 from . import people as P
+from . import task_caps
 from .store import Problem, encode
 
-SYSTEM_BOTS = ("assistant", "botops", "librarian", "goal-manager", "health-monitor", "task-manager")
+SYSTEM_BOTS = ("assistant", "botops", "librarian", "goal-manager", "health-monitor", "task-manager", "bookkeeper", H.COUNSEL)
 
 
 def _roster(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()
     return P.load(json.loads(row[0]) if row else {"people": H.humans(c)})
 
 
 def _configs(c):
     """{slug: config with its `reports_to`}: what `team_of` reads."""
     out = {}
-    for row in c.execute("SELECT bot,config_json,reports_to FROM bot_config"):
-        config = json.loads(row["config_json"] or "{}")
+    for row in c.execute("SELECT bot,config,reports_to FROM bot_config"):
+        config = json.loads(row["config"] or "{}")
         config["reports_to"] = row["reports_to"]
         out[row["bot"]] = config
     return out
 
 
 def _archived(c):
-    return {row["slug"] for row in c.execute("SELECT slug FROM bots WHERE state='archived'")}
+    return {row["id"] for row in c.execute("SELECT id FROM bots WHERE state='archived'")}
 
 
 def slug_of(text):
@@ -59,8 +61,8 @@ def outside(settings, slug, config, helpers=None):
     return str((config or {}).get("template") or "") in helpers
 
 
-def rows(roster, employees, archived=(), can_see=None):
-    """Every group in roster order: id, name, parent, and its `people` (ids) and `bots` (slugs)."""
+def rows(roster, employees, archived=(), can_see=None, leads=False):
+    """Every group in roster order: id, name, parent, and its `people` (ids) and `bots` (ids)."""
     people, bots = {}, {}
     for person in P.visible_people(roster):
         if person.get("team"):
@@ -71,9 +73,37 @@ def rows(roster, employees, archived=(), can_see=None):
         team = P.team_of(slug, employees, roster)
         if team:
             bots.setdefault(team, []).append(slug)
-    return [{"id": gid, "name": g["name"], "parent": g["parent"], "people": people.get(gid, []),
-             "bots": sorted(bots.get(gid, [])), "order": g.get("order", i), "bet_id": g.get("bet_id")}
+    return [{"id": gid, "name": g["name"], "parent": g["parent"], **({"lead": g.get("lead") or ""} if leads else {}),
+             "people": people.get(gid, []), "bots": sorted(bots.get(gid, [])), "order": g.get("order", i),
+             "bet_id": g.get("bet_id")}
             for i, (gid, g) in sorted(enumerate(roster["org_groups"].items()), key=lambda row: row[1][1].get("order", row[0]))]
+
+
+def visible_rows(c, auth, who, roster, found):
+    """Group rows without the groups and people the caller may not see (backend/teammate_access.py). An unseen group's
+    teammates and groups show in the group it is in, as far as the caller may see that one."""
+    from . import teammate_access
+    people_hidden, groups_hidden = teammate_access.unseen(c, who, auth)
+    if not people_hidden and not groups_hidden:
+        return found
+    by_id = {row["id"]: row for row in found}
+    out = []
+    for row in found:
+        if row["id"] in groups_hidden:
+            continue
+        row = dict(row, people=[pid for pid in row["people"] if pid not in people_hidden])
+        if row.get("parent"):
+            row["parent"] = teammate_access.visible_group(row["parent"], roster, groups_hidden)
+        if str(row.get("lead") or "").removeprefix("person:") in people_hidden:
+            row["lead"] = ""
+        out.append(row)
+    for gid in groups_hidden:
+        home = teammate_access.visible_group(gid, roster, groups_hidden)
+        target = next((row for row in out if row["id"] == home), None)
+        if target is not None and gid in by_id:
+            target["people"] = target["people"] + [pid for pid in by_id[gid]["people"] if pid not in people_hidden]
+            target["bots"] = sorted(set(target["bots"]) | set(by_id[gid]["bots"]))
+    return out
 
 
 def refresh_teams(c, roster=None):
@@ -89,9 +119,21 @@ def _save(c, roster, people=None):
 
 
 def _set_bot(c, slug, gid):
-    declared = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()[0] or "{}")
-    declared["team"] = gid
-    c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(declared), slug))
+    declared = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0] or "{}")
+    if declared.get("team") and declared["team"] != gid:
+        task_caps.forget(c, "bot:" + slug)      # its caps were its old group's (CONTRACT §3)
+    was, declared["team"] = declared.get("team") or "", gid
+    c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), slug))
+    _follow(c, "bot:" + slug, was, gid)
+    if was != gid:
+        from .finance import actions as FA
+        FA.revalidate_org(c)                 # a bot's team is part of the org chart Finance's grants follow (spec 7.5)
+
+
+def _follow(c, owner, was, gid):
+    """Automations go with their owner to its new group."""
+    from . import automations
+    automations.follow(c, owner, was, gid)
 
 
 def _named(groups, name, parent, skip=""):
@@ -127,8 +169,11 @@ def _place(c, roster, gid, people, bots):
     moved = []
     for i, person in enumerate(rosters):
         if person["id"] in people and person["team"] != gid:
+            if person["team"]:
+                task_caps.forget(c, "human:" + person["id"])
             rosters[i] = {**person, "team": gid}
             moved.append(rosters[i])
+            _follow(c, "person:" + person["id"], person["team"], gid)
     for slug in bots:
         _set_bot(c, slug, gid)
     return rosters, moved
@@ -136,18 +181,22 @@ def _place(c, roster, gid, people, bots):
 
 def _apply_members(c, settings, roster, gid, add, remove):
     configs = _configs(c)
-    _check_members(c, settings, roster, configs, add.people, add.bots)
+    add_bots = [(H.resolve_bot(c, slug) or {}).get("id", slug) for slug in add.bots]
+    remove_bots = [(H.resolve_bot(c, slug) or {}).get("id", slug) for slug in remove.bots]
+    _check_members(c, settings, roster, configs, add.people, add_bots)
     people = list(roster["people"])
     changed = []
     for i, person in enumerate(people):
         if person["id"] in remove.people and person["team"] == gid:
+            task_caps.forget(c, "human:" + person["id"])
             people[i] = {**person, "team": ""}
             changed.append(people[i])
-    for slug in remove.bots:
+            _follow(c, "person:" + person["id"], gid, "")
+    for slug in remove_bots:
         if P.team_of(slug, configs, roster) == gid and slug in configs:
             _set_bot(c, slug, "")
     roster = {**roster, "people": people}
-    people, moved = _place(c, roster, gid, add.people, add.bots)
+    people, moved = _place(c, roster, gid, add.people, add_bots)
     return people, changed + moved
 
 
@@ -162,12 +211,70 @@ def _finish(c, roster, people, changed):
 
 def one(c, roster, gid, can_see=None):
     configs = _configs(c)
-    return next(row for row in rows(roster, configs, _archived(c), can_see) if row["id"] == gid)
+    return next(row for row in rows(roster, configs, _archived(c), can_see, True) if row["id"] == gid)
 
 
 def _may_change(auth, who):
     if not (who.role == "owner" or auth.bot_admin(who)):
         raise Problem("forbidden", "Only an owner or an admin changes groups", 403)
+
+
+def led_groups(c, who, roster=None):
+    """The groups `who` (an actor) leads and every group below them."""
+    roster = roster or _roster(c)
+    configs = _configs(c)
+    out = set()
+    for gid in roster["org_groups"]:
+        lead = lead_of(gid, roster, configs)
+        if lead and task_caps.actor(lead) == who:
+            out |= P.group_and_below(gid, roster)
+    return out
+
+
+def _lead_move(c, who, gid, body, roster):
+    """A lead's move inside what it leads (CONTRACT §3): only an `add`, into a group it leads or one below, of teammates
+    already in such a group. Anything else from a lead who is not an admin is the owner's."""
+    if any(v is not None for v in (body.name, body.parent, body.lead, body.bet_id)) or body.remove.people \
+            or body.remove.bots or not (body.add.people or body.add.bots):
+        return False
+    return _led_add(c, who, gid, roster, body.add.people, body.add.bots)
+
+
+def _led_add(c, who, gid, roster, people=(), bots=()):
+    """Whether a lead may add these people and bots to `gid`: a group it leads or one below, and each of them already
+    in such a group. A bot being hired has no group yet, so a hire passes none and asks only about the group."""
+    led = led_groups(c, who.actor, roster)
+    if gid not in led:
+        return False
+    configs = _configs(c)
+    homes = [P.team_of((H.resolve_bot(c, slug) or {}).get("id", slug), configs, roster) for slug in bots] + \
+        [(P.person(pid, roster) or {}).get("team") for pid in people]
+    return all(home in led for home in homes)
+
+
+def may_add(c, auth, who, gid, people=(), bots=()):
+    """Refuse (403) unless `who` may add these to group `gid`, the same rule `update` applies to an add: an owner, an
+    admin, or a lead of the group or of one above it. Any route that puts a bot in a group asks this first."""
+    if who.role == "owner" or auth.bot_admin(who) or _led_add(c, who, gid, _roster(c), people, bots):
+        return
+    raise Problem("forbidden", "Only an owner, an admin or the team's lead can add to it", 403)
+
+
+def _snapshot(c):
+    """Every group's row, by id, for the audit."""
+    return {row["id"]: row for row in rows(_roster(c), _configs(c), _archived(c), leads=True)}
+
+
+def _audit(c, actor, before, via=None):
+    """One audit row per group a change touched (CONTRACT §5, object `group:<id>`): a move changes the group it left
+    and the one it joined."""
+    if before is None:
+        return
+    from . import audit_log
+    after = _snapshot(c)
+    for gid in sorted(set(before) | set(after)):
+        if before.get(gid) != after.get(gid):
+            audit_log.write(c, actor, f"group:{gid}", before.get(gid), after.get(gid), via)
 
 
 
@@ -195,8 +302,75 @@ def _next_order(groups):
     return max((group["order"] for group in groups.values()), default=-1) + 1
 
 
-def create(c, auth, settings, who, body):
+def _lead_ref(c, value):
+    """A group's lead as CONTRACT §3 writes it: `bot:<id>` or `person:<id>`; "" for none."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    kind, _, ident = text.partition(":")
+    kind = "person" if kind == "human" else kind
+    if kind not in ("bot", "person") or not ident:
+        raise Problem("validation", "The lead is bot:<slug> or person:<id>", 422)
+    if kind == "bot":
+        ident = (H.resolve_bot(c, ident) or {}).get("id", ident)
+    return f"{kind}:{ident}"
+
+
+def is_member(ref, gid, roster, configs):
+    """Whether a teammate ref (`bot:<id>`, `person:<id>`) is in the group `gid` itself."""
+    kind, _, ident = str(ref or "").partition(":")
+    if kind == "bot":
+        return ident in configs and P.team_of(ident, configs, roster) == gid
+    if kind in ("person", "human"):
+        return (P.person(ident, roster) or {}).get("team") == gid
+    return False
+
+
+def lead_of(gid, roster, configs):
+    """The group's lead while it is one of the group's teammates, else "": a lead who left leads nothing, whatever way
+    it left (CONTRACT §3)."""
+    lead = (roster["org_groups"].get(gid) or {}).get("lead") or ""
+    return lead if lead and is_member(lead, gid, roster, configs) else ""
+
+
+def _lead_check(c, roster, configs, gid, lead):
+    """A lead asked for must exist and be a teammate of the group."""
+    if not lead:
+        return
+    kind, _, ident = lead.partition(":")
+    exists = (kind == "bot" and ident in configs) or (kind == "person" and P.person(ident, roster))
+    if not exists:
+        raise Problem("not_found", "Unknown lead: " + lead, 404)
+    if not is_member(lead, gid, roster, configs):
+        raise Problem("validation", "The lead must be in the group", 422)
+
+
+def leads_follow(c, cause):
+    """A lead who left its group (an add to another group, a remove, its own
+    move) is cleared in the same write: one audit row per group, the hub's own change with `via` naming the change that
+    moved it, and one notice to the top of the org."""
+    roster, configs = _roster(c), _configs(c)
+    gone = {gid: g["lead"] for gid, g in roster["org_groups"].items()
+            if g.get("lead") and not lead_of(gid, roster, configs)}
+    if not gone:
+        return
+    before = _snapshot(c)
+    for gid in gone:
+        roster["org_groups"][gid]["lead"] = ""
+    _save(c, roster)
+    _audit(c, H.KEEPER, before, cause)
+    from .proposals import decider
+    top = decider(c)
+    for gid, lead in sorted(gone.items()):
+        if top:
+            who = task_caps.actor(lead) or lead
+            H.say(c, H.KEEPER, top, f"{task_caps._name(c, who)} left {roster['org_groups'][gid]['name']}; "
+                                    "it has no lead now.", kind="notice", refs={"group": gid})
+
+
+def create(c, auth, settings, who, body, via=None):
     _may_change(auth, who)
+    before = _snapshot(c)
     roster = _roster(c)
     groups = roster["org_groups"]
     parent = (body.parent or "").strip()
@@ -208,15 +382,22 @@ def create(c, auth, settings, who, body):
     groups[gid] = {"id": gid, "name": body.name.strip(), "reports_to": "", "parent": parent, "root": "",
                    "order": _next_order(groups)}
     _set_bet(c, who, groups[gid], body.bet_id)
+    if body.lead:
+        groups[gid]["lead"] = _lead_ref(c, body.lead)
     people, changed = _apply_members(c, settings, roster, gid, body.add, M.GroupMembers())
     roster = _finish(c, roster, people, changed)
+    _lead_check(c, roster, _configs(c), gid, groups[gid].get("lead", ""))
     H.event(c, who.actor, "group.created", gid, {"name": body.name.strip(), "parent": parent})
-    return one(c, roster, gid)
+    _audit(c, who.actor, before, via)
+    leads_follow(c, via or f"group:{gid}")
+    return one(c, _roster(c), gid)
 
 
-def update(c, auth, settings, who, gid, body):
-    _may_change(auth, who)
+def update(c, auth, settings, who, gid, body, via=None):
     roster = _roster(c)
+    if not (who.role == "owner" or auth.bot_admin(who) or _lead_move(c, who, gid, body, roster)):
+        _may_change(auth, who)
+    before = _snapshot(c)
     groups = roster["org_groups"]
     if gid not in groups:
         raise Problem("not_found", "Group not found", 404)
@@ -231,19 +412,26 @@ def update(c, auth, settings, who, gid, body):
     if body.name is not None:
         group["name"] = body.name.strip()
     _set_bet(c, who, group, body.bet_id)
+    if body.lead is not None:
+        group["lead"] = _lead_ref(c, body.lead)
     if _named(groups, group["name"], group["parent"], skip=gid):
         raise Problem("conflict", "There is already a group with that name there", 409)
     people, changed = _apply_members(c, settings, roster, gid, body.add, body.remove)
     roster = _finish(c, roster, people, changed)
+    if body.lead is not None:
+        _lead_check(c, roster, _configs(c), gid, group.get("lead", ""))
     H.event(c, who.actor, "group.updated", gid, {"name": body.name, "parent": body.parent, "bet_id": body.bet_id,
                                                   "added": {"people": body.add.people, "bots": body.add.bots},
                                                   "removed": {"people": body.remove.people, "bots": body.remove.bots}})
-    return one(c, roster, gid)
+    _audit(c, who.actor, before, via)
+    leads_follow(c, via or f"group:{gid}")
+    return one(c, _roster(c), gid)
 
 
 def delete(c, auth, who, gid):
     """The group goes; the groups and teammates in it move up to the group it was in (or to no group)."""
     _may_change(auth, who)
+    before = _snapshot(c)
     roster = _roster(c)
     groups = roster["org_groups"]
     if gid not in groups:
@@ -259,13 +447,20 @@ def delete(c, auth, who, gid):
     people, changed = [], []
     for person in roster["people"]:
         if person["team"] == gid:
+            task_caps.forget(c, "human:" + person["id"])
+            _follow(c, "person:" + person["id"], gid, up)
             person = {**person, "team": up}
             changed.append(person)
         people.append(person)
+    from . import automations
+    automations.regroup(c, gid, up)
     del groups[gid]
     c.execute("DELETE FROM subscription_assignments WHERE scope='group' AND target=?", (gid,))
+    from . import teammate_access
+    teammate_access.forget_group(c, who.actor, gid)       # a group made later with this id starts from the defaults
     _finish(c, roster, people, changed)
     H.event(c, who.actor, "group.deleted", gid, {"moved_to": up})
+    _audit(c, who.actor, before)
     return {"id": gid, "deleted": True, "moved_to": up}
 
 
@@ -341,6 +536,20 @@ def seat_teams(c, settings, templates, group_order=()):
     return out
 
 
+def team_groups(c, names):
+    """{team name: group id} for a company file's teams, `names` in file order. A name is the group with that name (any
+    case, as `ensure` finds it), else a new group made at the top with the name's id: an id is never another group's,
+    so a team named like a group of another name gets a group of its own. Made once per name."""
+    roster = _roster(c)
+    made, out = set(roster["org_groups"]), {}
+    for name in names:
+        if name not in out:
+            out[name] = ensure(roster, _new_id(roster["org_groups"], name), name)
+    if set(roster["org_groups"]) != made:
+        _save(c, roster)
+    return out
+
+
 # ----------------------------------------------------------------------------- the migration
 def migrate(c, settings):
     """Every team, org group and derived department becomes a group; every bot its group's member. Idempotent.
@@ -352,7 +561,7 @@ def migrate(c, settings):
     * every live bot then names its group in its config (`team`, "" for none), the roots go, and the roster says
       `groups_migrated`. `reports_to` is not touched.
     """
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()
     if not row:
         return False
     doc = json.loads(row[0] or "{}")
@@ -411,7 +620,7 @@ def migrate(c, settings):
                          for gid, g in groups.items()}
     doc.pop("teams", None)
     doc["groups_migrated"] = True
-    c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(doc),))
+    c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(doc),))
     for person in retagged:
         if H.human(c, person.get("id")):
             Access._sync_human(c, P._person(person))
@@ -432,7 +641,14 @@ def install(app, store, auth, mutate, settings):
         auth.domain(who)
         with store.read() as c:
             access = auth.bot_accesses(c, who)
-            return rows(_roster(c), _configs(c), _archived(c), lambda slug: access.get(slug, auth.FULL)["see"])
+            roster = _roster(c)
+            found = rows(roster, _configs(c), _archived(c), lambda slug: access.get(slug, auth.FULL)["see"], True)
+            out = visible_rows(c, auth, who, roster, found)
+            # `bots` holds ids (the key a client calls with); `bot_slugs` the same bots by the label people read.
+            slugs = {row["id"]: row["slug"] for row in c.execute("SELECT id,slug FROM bots")}
+            for group in out:
+                group["bot_slugs"] = [slugs.get(bot, bot) for bot in group["bots"]]
+            return out
 
     @app.post("/api/v2/groups")
     def group_create(request: Request, body: M.GroupCreate):

@@ -27,7 +27,7 @@ from pathlib import Path
 
 import yaml
 
-from clients.manifest import OLD_REPO_PREFIX, REPO_PREFIX, manifest_path, repo_dir
+from clients.manifest import OLD_REPO_PREFIX, REPO_PREFIX, folder_dir, manifest_path, repo_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 CARD = "card.yaml"
@@ -211,8 +211,10 @@ def set_sections(text, sections):
 
 
 def materialize(template, slug, workspace, names, answers, display_name=None, instructions=None,
-                directory=None, state=None):
-    """Copy one catalog template into `<workspace>/bot-<slug>` and commit it. Returns the path.
+                directory=None, state=None, folder=None):
+    """Copy one catalog template into `<workspace>/bot-<slug>` and commit it. Returns the path. `folder` is the folder
+    the server recorded for the bot when it registered it (a new bot whose `bot-<slug>` another bot already works in
+    gets `bot-<slug>-<part of its id>`), and wins over the slug's folder.
 
     The names fill the placeholders, the onboarding answers become `knowledge/company.md`, and
     `instructions` — what the person wrote for this bot during onboarding — replaces AGENT.md
@@ -225,8 +227,11 @@ def materialize(template, slug, workspace, names, answers, display_name=None, in
         raise ValueError("A bot slug is lowercase letters, digits, and single hyphens")
     source = template_dir(template, directory)
     target = Path(workspace).expanduser() / (REPO_PREFIX + slug)
+    recorded = folder_dir(Path(workspace).expanduser(), folder) if folder else None
+    if recorded is not None:
+        target = recorded
     # A bot made before `bot-<slug>` keeps its `emp-<slug>` folder, and is never overwritten by a second one.
-    if target.exists() or (Path(workspace).expanduser() / (OLD_REPO_PREFIX + slug)).exists():
+    elif target.exists() or (Path(workspace).expanduser() / (OLD_REPO_PREFIX + slug)).exists():
         target = repo_dir(workspace, slug)
     if target.exists():
         raise ValueError(f"{target} already exists; a bot repository is never overwritten")

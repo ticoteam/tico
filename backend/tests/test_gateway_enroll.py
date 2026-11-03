@@ -533,3 +533,15 @@ def test_the_hourly_sweep_reconnects_an_enrolled_install_with_no_invite(api, mon
         threads[0].join(10)
         assert record(api)["install"] == install and plain_key(api) in fake.keys
         assert "invite" not in fake.posts("/enroll")[-1][3]
+
+
+def test_the_contract_covers_the_key_usage_and_cap_routes_the_app_calls():
+    """The app reads a key's monthly meter and sets its self cap through these two routes (finance gateway_sync); the
+    contract names their paths, the fields the app reads and the refusals it handles."""
+    usage, cap = CONTRACT["key_usage"], CONTRACT["key_cap"]
+    assert (usage["method"], usage["path"]) == ("GET", "/v1/gateway/key/usage")
+    assert usage["fields"] == ["month", "rows", "totals", "as_of"]
+    assert usage["row_fields"] == ["model", "category", "charged", "calls", "price_usd"]
+    assert (cap["method"], cap["path"]) == ("POST", "/v1/gateway/key/cap")
+    assert cap["request"]["required"] == ["self_cap_usd"]
+    assert cap["refused"]["unknown_key"] == 401 and cap["refused"]["rate_limited"] == 429

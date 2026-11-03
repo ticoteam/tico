@@ -16,7 +16,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
 const SHOTS = process.env.REPO_SHOTS || '';
 
 const repo = (full_name, extra = {}) => ({full_name, enabled: false, bot_repo: false, default_branch: 'main',
-  setup_command: '', setup_source: null, reachable: true, last_seen: '2026-10-01T09:00:00Z', ...extra});
+  setup_command: '', setup_source: null, reachable: true, last_seen_at: '2026-10-01T09:00:00Z', ...extra});
 function fixtures() {
   return {
     repositories: [
@@ -77,7 +77,7 @@ async function open(browser, {role = 'owner', admin = false, connected = true, v
   const errors = [], writes = [];
   await page.addInitScript(t => { try { localStorage.setItem('tico.theme', t); } catch {} }, theme);
   const me = {id: role === 'owner' ? 'ana' : 'sam', role, name: role === 'owner' ? 'Ana' : 'Sam', email: 'ana@example.com', cloud: true, registered: true, bot_admin: admin};
-  const bot = {name: 'release-captain', display_name: 'Release Captain', status: 'active', state: 'active', operator: 'ana',
+  const bot = {name: 'release-captain', display_name: 'Release Captain', status: 'active', state: 'active', owner_id: 'ana',
     repo: 'bot-release-captain', can_manage: true, revision: 3, users: [{id: 'ana', name: 'Ana'}], bot_owners: [{id: 'sam', name: 'Sam'}],
     my_access: {see: true, read: true, write: true}, access_policy: {}};
   await page.route('**/*', async route => {
@@ -488,7 +488,7 @@ async function notConnected(browser) {
   const {page, errors} = await open(browser, {connected: false});
   await page.locator('#set-repos .repos-line').waitFor();
   assert.equal((await page.locator('#set-repos').innerText()).replace(/\s+/g, ' '), "Repositories The GitHub App is not connected; bots use their computers' own GitHub sign-in. Connect GitHub");
-  assert.equal(await page.locator('#set-repos a[data-repos-connect]').getAttribute('href'), '#/integrations');
+  assert.equal(await page.locator('#set-repos a[data-repos-connect]').getAttribute('href'), '#/integrations/github');
   // The bot editor has no Repositories section then.
   await page.evaluate(() => {         // note when the Repositories section has finished deciding whether to show
     const mount = botReposMount;

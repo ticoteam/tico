@@ -4,6 +4,10 @@ Six tables in the hub database. A reporter files prose.
 The Librarian (`bot:librarian`) curates: it and the company owner are the only actors who change an
 entity, an edge, a piece of evidence, or a market page. Nothing is deleted: an edge is ended, an entity is
 retired or merged, and every changed field is a `market_events` row.
+
+With the redesign on, a change made in a bot turn an automation started (a listening match's Market listening, the
+daily briefing) also names that turn and what started it (`market_turn_sources`), and the graph shows it as each
+entity's or edge's `source`: the match reaches the graph only through the Librarian's turn, and the graph says so.
 """
 
 import hashlib
@@ -18,7 +22,7 @@ from fastapi import Query, Request
 
 from . import hubdb as H
 from . import models as M
-from .store import Problem, digest, encode
+from .store import Problem
 
 # The Librarian builds the first map from what the owner gave (playbooks/market-setup.md) and keeps it
 # current from the insights everyone else reports (playbooks/curate-the-market.md).
@@ -122,11 +126,14 @@ def _event(conn, kind, subject, actor, field, old, new, insight_id=None, note=""
     """One `market_events` row. `trip=False` keeps the strategy's fit check out of it: a proposed size is not yet
     a change to what a bet rests on."""
     eid = H.new_id()
-    conn.execute("INSERT INTO market_events (id, subject_kind, subject_id, ts, actor, field, old, new, insight_id, note) "
+    # `field` is the column name when the event was written, so older rows may say last_verified, valid_from or valid_until.
+    conn.execute("INSERT INTO market_events (id, subject_kind, subject_id, created_at, actor, field, old, new, insight_id, note) "
                  "VALUES (?,?,?,?,?,?,?,?,?,?)",
                  (eid, kind, subject, H.now(), actor, field,
                   None if old is None else str(old), None if new is None else str(new),
                   insight_id, note or ""))
+    if H.RUN.get():
+        _from_turn(conn, eid, kind, subject)
     if actor != SEED_ACTOR and trip:
         # The strategy's fit check: a change to an entity or page a bet cites may show the bet is wrong.
         from . import strategy
@@ -135,6 +142,43 @@ def _event(conn, kind, subject, actor, field, old, new, insight_id=None, note=""
             with isolated(conn, "strategy_watch", subject):
                 strategy.watch(conn, market_id=subject)
     return eid
+
+
+TURN_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS market_turn_sources (event_id TEXT PRIMARY KEY, subject_kind TEXT NOT NULL, "
+    "subject_id TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS market_turn_sources_of ON market_turn_sources(subject_kind, subject_id, created_at)",
+)
+
+
+def ensure_turn_sources(c):
+    for statement in TURN_SCHEMA:
+        c.execute(statement)
+
+
+def _from_turn(conn, eid, kind, subject):
+    """A change made in an automation's bot turn names the turn and what started it (backend/automations.py)."""
+    from . import automations
+    source = automations.turn_source(conn)
+    if source:
+        conn.execute("INSERT OR IGNORE INTO market_turn_sources (event_id, subject_kind, subject_id, source, created_at) "
+                     "VALUES (?,?,?,?,?)", (eid, kind, subject, dumps(source), H.now()))
+
+
+def with_turn_sources(conn, view):
+    """The graph with each entity's and edge's newest turn source as `source`, where an automation's turn changed
+    it. Redesign only: the caller checks the setting."""
+    for kind, rows in (("entity", view.get("entities") or []), ("edge", view.get("edges") or [])):
+        ids = [row["id"] for row in rows]
+        if not ids:
+            continue
+        found = dict(conn.execute(
+            "SELECT subject_id, source FROM market_turn_sources WHERE subject_kind=? AND subject_id IN (SELECT value "
+            "FROM json_each(?)) ORDER BY created_at, rowid", (kind, dumps(ids))).fetchall())
+        for row in rows:
+            if row["id"] in found:
+                row["source"] = loads(found[row["id"]], {})
+    return view
 
 
 def _entity_row(row):
@@ -225,8 +269,8 @@ def edges_of(conn, *, src=None, dst=None, rel=None, as_of=None):
         args.extend([dst, *SYMMETRIC, dst])
     if as_of:
         day = str(as_of)[:10]
-        where.append("(since IS NULL OR substr(since,1,10)<=?)")
-        where.append("(until IS NULL OR substr(until,1,10)>=?)")
+        where.append("(valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?)")
+        where.append("(valid_until_on IS NULL OR substr(valid_until_on,1,10)>=?)")
         args.extend([day, day])
     sql = "SELECT * FROM market_edges" + (" WHERE " + " AND ".join(where) if where else "")
     return [_edge_row(r) for r in H._rows(conn.execute(sql + " ORDER BY rel, src, dst", args))]
@@ -239,7 +283,7 @@ def graph(conn, focus=OWN_COMPANY_ID, limit=250, as_of=None, fill=False, include
     limit = max(1, min(300, limit))
     day = str(as_of or datetime.now(timezone.utc).date().isoformat())[:10]
     args = {"focus": focus, "limit": limit, "day": day, "fill": int(fill), "include": dumps((include or [])[:20])}
-    current = "(since IS NULL OR substr(since,1,10)<=:day) AND (until IS NULL OR substr(until,1,10)>=:day)"
+    current = "(valid_from_on IS NULL OR substr(valid_from_on,1,10)<=:day) AND (valid_until_on IS NULL OR substr(valid_until_on,1,10)>=:day)"
     rows = H._rows(conn.execute(f"""
         WITH wanted AS (SELECT value AS id FROM json_each(:include)),
         live AS MATERIALIZED (SELECT id FROM market_entities WHERE status='active'),
@@ -270,8 +314,8 @@ def graph(conn, focus=OWN_COMPANY_ID, limit=250, as_of=None, fill=False, include
     edges = H._rows(conn.execute(f"""
         SELECT id, src, dst, rel FROM market_edges
         WHERE src IN ({marks}) AND dst IN ({marks})
-            AND (since IS NULL OR substr(since,1,10)<=?)
-            AND (until IS NULL OR substr(until,1,10)>=?)
+            AND (valid_from_on IS NULL OR substr(valid_from_on,1,10)<=?)
+            AND (valid_until_on IS NULL OR substr(valid_until_on,1,10)>=?)
         ORDER BY CASE WHEN src=? OR dst=? THEN 0 ELSE 1 END, id LIMIT ?
     """, (*ids, *ids, day, day, focus, focus, edge_limit + 1)))
     return {"entities": rows, "edges": edges[:edge_limit], "focus": focus,
@@ -295,7 +339,7 @@ def _evidence_for(conn, entity_id, edges):
 
 def _current(edge, today):
     """An edge in force on `today`: unknown ends count, a future start and a past end do not."""
-    since, until = edge.get("since"), edge.get("until")
+    since, until = edge.get("valid_from_on"), edge.get("valid_until_on")
     if since and str(since)[:10] > today:
         return False
     if until and str(until)[:10] < today:
@@ -347,7 +391,7 @@ def show(conn, entity_id, today=None):
         else:
             bucket["in"].append(item)
     events = H._rows(conn.execute(
-        "SELECT * FROM market_events WHERE subject_kind='entity' AND subject_id=? ORDER BY ts DESC LIMIT ?",
+        "SELECT * FROM market_events WHERE subject_kind='entity' AND subject_id=? ORDER BY created_at DESC LIMIT ?",
         (entity_id, EVENT_LIMIT)))
     return {"entity": row, "edges": grouped, "evidence": _evidence_for(conn, entity_id, edges), "events": events}
 
@@ -401,7 +445,7 @@ def delta(conn, since="7d"):
     raw = str(since or "7d").strip()
     window = re.fullmatch(r"(\d+)d", raw)
     bound = H.shift(H.now(), days=-int(window.group(1))) if window else raw
-    events = H._rows(conn.execute("SELECT * FROM market_events WHERE ts>=? ORDER BY ts, id", (bound,)))
+    events = H._rows(conn.execute("SELECT * FROM market_events WHERE created_at>=? ORDER BY created_at, id", (bound,)))
     groups = {}
     for ev in events:
         if ev["subject_kind"] == "edge":
@@ -435,12 +479,11 @@ def retrieve(conn, question, limit=8):
                          "text": "\n".join(p for p in (row.get("quote") or "", row.get("our_read") or "") if p)})
     tokens = [t.lower() for t in re.findall(r"[A-Za-z0-9.]{3,}", str(question or ""))[:8]]
     if tokens:
-        for doc in conn.execute("SELECT id, payload_json FROM documents WHERE collection='market' ORDER BY id"):
-            payload = json.loads(doc["payload_json"])
-            haystack = (payload.get("title", "") + "\n" + payload.get("content", "")).lower()
+        for page in conn.execute("SELECT id, title, body FROM market_pages ORDER BY id"):
+            haystack = (page["title"] + "\n" + page["body"]).lower()
             if any(token in haystack for token in tokens):
-                excerpts.append({"kind": "document", "id": doc["id"], "title": payload.get("title") or doc["id"],
-                                 "text": str(payload.get("content") or "")[:1500]})
+                excerpts.append({"kind": "document", "id": page["id"], "title": page["title"] or page["id"],
+                                 "text": page["body"][:1500]})
     return excerpts[: limit + 9]
 
 
@@ -546,7 +589,7 @@ def _resolve_existing(conn, name, aliases, external_ids):
 
 
 def create_entity(conn, actor, *, type, name, aliases=None, external_ids=None, tier=None, summary="",
-                  properties=None, last_verified=None, evidence_ids=None, force=False, insight_id=None,
+                  properties=None, last_verified_at=None, evidence_ids=None, force=False, insight_id=None,
                   entity_id=None):
     if actor != SEED_ACTOR:
         H._writer(conn, actor)
@@ -571,12 +614,12 @@ def create_entity(conn, actor, *, type, name, aliases=None, external_ids=None, t
     now = H.now()
     row = {"id": eid, "type": type, "name": name, "aliases": dumps(aliases), "external_ids": dumps(external_ids),
            "tier": tier or None, "summary": str(summary or ""), "properties": dumps(properties or {}),
-           "status": "active", "merged_into": None, "last_verified": last_verified, "created": now,
-           "created_by": actor, "updated": now}
+           "status": "active", "merged_into": None, "last_verified_at": last_verified_at, "created_at": now,
+           "created_by": actor, "updated_at": now}
     conn.execute("INSERT INTO market_entities (id, type, name, aliases, external_ids, tier, summary, properties, "
-                 "status, merged_into, last_verified, created, created_by, updated) VALUES "
+                 "status, merged_into, last_verified_at, created_at, created_by, updated_at) VALUES "
                  "(:id,:type,:name,:aliases,:external_ids,:tier,:summary,:properties,:status,:merged_into,"
-                 ":last_verified,:created,:created_by,:updated)", row)
+                 ":last_verified_at,:created_at,:created_by,:updated_at)", row)
     events = [_event(conn, "entity", eid, actor, "created", None, name, insight_id)]
     if ids:
         _cite(conn, actor, "entity", eid, ids, insight_id)
@@ -584,7 +627,7 @@ def create_entity(conn, actor, *, type, name, aliases=None, external_ids=None, t
 
 
 def update_entity(conn, actor, entity_id, *, name=None, aliases=None, external_ids=None, tier=None,
-                  summary=None, properties=None, last_verified=None, status=None, evidence_ids=None,
+                  summary=None, properties=None, last_verified_at=None, status=None, evidence_ids=None,
                   insight_id=None, clear_tier=False):
     if actor != SEED_ACTOR:
         H._writer(conn, actor)
@@ -606,8 +649,8 @@ def update_entity(conn, actor, entity_id, *, name=None, aliases=None, external_i
         changes["summary"] = str(summary)
     if properties is not None and dict(properties) != row["properties"]:
         changes["properties"] = dict(properties)
-    if last_verified is not None and str(last_verified) != (row["last_verified"] or ""):
-        changes["last_verified"] = _day(conn, last_verified, actor, "last_verified")
+    if last_verified_at is not None and str(last_verified_at) != (row["last_verified_at"] or ""):
+        changes["last_verified_at"] = _day(conn, last_verified_at, actor, "last_verified_at")
     if status is not None and status != row["status"]:
         if status not in ("active", "retired", "merged"):
             H.refuse(conn, actor, "kind", "status is active, retired or merged")
@@ -625,12 +668,12 @@ def update_entity(conn, actor, entity_id, *, name=None, aliases=None, external_i
                              dumps(old) if isinstance(old, (dict, list)) else old,
                              dumps(value) if isinstance(value, (dict, list)) else value, insight_id))
     assignments = []
-    args = {"id": entity_id, "updated": H.now()}
+    args = {"id": entity_id, "updated_at": H.now()}
     for field, value in changes.items():
         column = field
         args[column] = dumps(value) if field in ("aliases", "external_ids", "properties") else value
         assignments.append(f"{column}=:{column}")
-    conn.execute(f"UPDATE market_entities SET {', '.join(assignments)}, updated=:updated WHERE id=:id", args)
+    conn.execute(f"UPDATE market_entities SET {', '.join(assignments)}, updated_at=:updated_at WHERE id=:id", args)
     if ids and actor != SEED_ACTOR:
         _cite(conn, actor, "entity", entity_id, ids, insight_id)
     return entity(conn, entity_id), events
@@ -653,18 +696,18 @@ def create_edge(conn, actor, *, src, rel, dst, since=None, until=None, confidenc
         # One row for any span that shares a day, in either direction. An ended until
         # that falls before the new since can sit beside it.
         for found in _same_pair(conn, rel, src, dst):
-            if _overlaps(since_day, until_day, found.get("since"), found.get("until")):
+            if _overlaps(since_day, until_day, found.get("valid_from_on"), found.get("valid_until_on")):
                 return _edge_row(found), []
     eid = edge_id or H.new_id()
     if edge(conn, eid):
         return edge(conn, eid), []
     ids = [] if actor == SEED_ACTOR else _need_evidence(conn, actor, evidence_ids)
     now = H.now()
-    row = {"id": eid, "src": src, "rel": rel, "dst": dst, "since": since_day, "until": until_day,
-           "confidence": confidence, "properties": dumps(properties or {}), "created": now,
-           "created_by": actor, "updated": now}
-    conn.execute("INSERT INTO market_edges (id, src, rel, dst, since, until, confidence, properties, created, created_by, updated) "
-                 "VALUES (:id,:src,:rel,:dst,:since,:until,:confidence,:properties,:created,:created_by,:updated)", row)
+    row = {"id": eid, "src": src, "rel": rel, "dst": dst, "valid_from_on": since_day, "valid_until_on": until_day,
+           "confidence": confidence, "properties": dumps(properties or {}), "created_at": now,
+           "created_by": actor, "updated_at": now}
+    conn.execute("INSERT INTO market_edges (id, src, rel, dst, valid_from_on, valid_until_on, confidence, properties, created_at, created_by, updated_at) "
+                 "VALUES (:id,:src,:rel,:dst,:valid_from_on,:valid_until_on,:confidence,:properties,:created_at,:created_by,:updated_at)", row)
     events = [_event(conn, "edge", eid, actor, "created", None, f"{src} {rel} {dst}", insight_id)]
     if ids:
         _cite(conn, actor, "edge", eid, ids, insight_id)
@@ -690,13 +733,13 @@ def update_edge(conn, actor, edge_id, *, since=None, until=None, confidence=None
     if properties is not None and dict(properties) != row["properties"]:
         changes["properties"] = dict(properties)
     if set_since or since is not None:
-        changes["since"] = _day(conn, since, actor, "since")
+        changes["valid_from_on"] = _day(conn, since, actor, "since")
     if set_until or until is not None:
-        changes["until"] = _day(conn, until, actor, "until")
+        changes["valid_until_on"] = _day(conn, until, actor, "until")
     if not changes:
         return row, []
-    new_since = changes.get("since", row["since"])
-    new_until = changes.get("until", row["until"])
+    new_since = changes.get("valid_from_on", row["valid_from_on"])
+    new_until = changes.get("valid_until_on", row["valid_until_on"])
     if new_since and new_until and new_until < new_since:
         H.refuse(conn, actor, "date", "until must be on or after since")
     rel_now = changes.get("rel", row["rel"])
@@ -704,7 +747,7 @@ def update_edge(conn, actor, edge_id, *, since=None, until=None, confidence=None
         for found in _same_pair(conn, rel_now, row["src"], row["dst"]):
             if found["id"] == edge_id:
                 continue
-            if _overlaps(new_since, new_until, found.get("since"), found.get("until")):
+            if _overlaps(new_since, new_until, found.get("valid_from_on"), found.get("valid_until_on")):
                 H.refuse(conn, actor, "kind", "that span already has this relation")
     ids = []
     if actor != SEED_ACTOR and EVIDENCE_FIELDS & set(changes):
@@ -715,12 +758,13 @@ def update_edge(conn, actor, edge_id, *, since=None, until=None, confidence=None
         events.append(_event(conn, "edge", edge_id, actor, field,
                              dumps(old) if isinstance(old, (dict, list)) else old,
                              dumps(value) if isinstance(value, (dict, list)) else value, insight_id))
-    args = {"id": edge_id, "updated": H.now(), **{k: (dumps(v) if k == "properties" else v) for k, v in changes.items()}}
+    args = {"id": edge_id, "updated_at": H.now(), **{k: (dumps(v) if k == "properties" else v) for k, v in changes.items()}}
     sets = ", ".join(f"{k}=:{k}" for k in changes)
-    conn.execute(f"UPDATE market_edges SET {sets}, updated=:updated WHERE id=:id", args)
+    conn.execute(f"UPDATE market_edges SET {sets}, updated_at=:updated_at WHERE id=:id", args)
     if ids:
         _cite(conn, actor, "edge", edge_id, ids, insight_id)
-    return edge(conn, edge_id), events
+    after = edge(conn, edge_id)
+    return after, events
 
 
 def merge_entities(conn, actor, entity_id, into_id, insight_id=None):
@@ -733,25 +777,28 @@ def merge_entities(conn, actor, entity_id, into_id, insight_id=None):
         H.refuse(conn, actor, "kind", "an entity cannot merge into itself")
     aliases = list(dict.fromkeys([*dst["aliases"], src["name"], *src["aliases"]]))
     _event(conn, "entity", into_id, actor, "aliases", dumps(dst["aliases"]), dumps(aliases), insight_id)
-    conn.execute("UPDATE market_entities SET aliases=?, updated=? WHERE id=?", (dumps(aliases), H.now(), into_id))
+    conn.execute("UPDATE market_entities SET aliases=?, updated_at=? WHERE id=?", (dumps(aliases), H.now(), into_id))
     for row in conn.execute("SELECT * FROM market_edges WHERE src=? OR dst=?", (entity_id, entity_id)):
         item = _edge_row(row)
         new_src = into_id if item["src"] == entity_id else item["src"]
         new_dst = into_id if item["dst"] == entity_id else item["dst"]
         if new_src == new_dst:
             today = datetime.now(timezone.utc).date().isoformat()
-            conn.execute("UPDATE market_edges SET until=?, updated=? WHERE id=? AND until IS NULL",
+            conn.execute("UPDATE market_edges SET valid_until_on=?, updated_at=? WHERE id=? AND valid_until_on IS NULL",
                          (today, H.now(), item["id"]))
-            _event(conn, "edge", item["id"], actor, "until", item["until"], today, insight_id, "ended by merge")
+            _event(conn, "edge", item["id"], actor, "until", item["valid_until_on"], today, insight_id, "ended by merge")
         else:
-            conn.execute("UPDATE market_edges SET src=?, dst=?, updated=? WHERE id=?",
+            conn.execute("UPDATE market_edges SET src=?, dst=?, updated_at=? WHERE id=?",
                          (new_src, new_dst, H.now(), item["id"]))
             _event(conn, "edge", item["id"], actor, "src", item["src"], new_src, insight_id)
             _event(conn, "edge", item["id"], actor, "dst", item["dst"], new_dst, insight_id)
-    conn.execute("UPDATE market_entities SET status='merged', merged_into=?, updated=? WHERE id=?",
+    conn.execute("UPDATE market_entities SET status='merged', merged_into=?, updated_at=? WHERE id=?",
                  (into_id, H.now(), entity_id))
     _event(conn, "entity", entity_id, actor, "status", src["status"], "merged", insight_id)
     _event(conn, "entity", entity_id, actor, "merged_into", src["merged_into"], into_id, insight_id)
+    if src["type"] == "segment" and dst["type"] == "segment":
+        from . import strategy_market
+        strategy_market.follow_merge(conn, actor, entity_id, into_id)
     return entity(conn, entity_id)
 
 
@@ -774,8 +821,8 @@ def cite(conn, actor, claim_kind, claim_id, evidence_id_, insight_id=None):
     elif claim_kind == "evidence" and not evidence(conn, claim_id):
         H.refuse(conn, actor, "not-found", f"no evidence {claim_id}")
     elif claim_kind == "document":
-        doc = conn.execute("SELECT collection FROM documents WHERE id=?", (claim_id,)).fetchone()
-        if not doc:
+        page = conn.execute("SELECT 1 FROM market_pages WHERE id=?", (claim_id,)).fetchone()
+        if not page:
             H.refuse(conn, actor, "not-found", f"no document {claim_id}")
     _cite(conn, actor, claim_kind, claim_id, [evidence_id_], insight_id)
     return {"claim_kind": claim_kind, "claim_id": claim_id, "evidence_id": evidence_id_}
@@ -813,10 +860,6 @@ def report(conn, actor, *, kind, about, claim, source_url="", quote="", confiden
                  "(:id,:reported_by,:reported_at,:kind,:about,:claim,:source_url,:quote,:confidence,:urgent,"
                  ":status,:resolution,:applied_events,:resolved_at,:resolved_by,:source_ref)", row)
     if urgent:
-        from . import routines
-        routines.emit(conn, "market.insight.urgent", row["id"],
-                      {"about": row["about"], "claim": row["claim"], "reported_by": actor},
-                      title=row["about"] or row["claim"][:80])
         H.hook(conn, "market.insight.urgent", row["id"], lambda: {"id": row["id"], "about": row["about"],
                                                                   "reported_by": actor}, actor, revision=0)
     return insight(conn, row["id"])
@@ -1020,7 +1063,7 @@ def import_batch(conn, actor, text, *, source="", note="", dry_run=False, today=
 
 def is_stale(row, today):
     """Past last_verified plus 60 days, or 30 for a core company. No date is not stale by itself."""
-    raw = row.get("last_verified") if isinstance(row, dict) else None
+    raw = row.get("last_verified_at") if isinstance(row, dict) else None
     if not raw:
         return False
     try:
@@ -1038,7 +1081,7 @@ def _free_owner_title(conn, actor, owner):
     marks = ",".join("?" * len(H.LIVE_STATUSES))
     for n in range(1, 40):
         title = base if n == 1 else f"Review market insights that need a person, pass {n}"
-        if not conn.execute(f"SELECT 1 FROM tasks WHERE requester=? AND owner=? AND title=? AND status IN ({marks})",
+        if not conn.execute(f"SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status IN ({marks})",
                             (actor, owner, title, *H.LIVE_STATUSES)).fetchone():
             return title
     return base + ", pass 40"
@@ -1114,7 +1157,8 @@ def sweep(conn, actor, unverified, *, today=None, owner_email=None):
         title = "Verify " + row["name"]
         body = f"Check {row['id']}.\n\nLook for: {look}\n"
         try:
-            task = H.task_create(conn, actor, title, body, "bot:listening", deduplicate=True)
+            listener = (H.resolve_bot(conn, "listening") or {}).get("id", "listening")
+            task = H.task_create(conn, actor, title, body, "bot:" + listener, deduplicate=True)
         except H.Refused:
             # A refusal here must not roll back the owner task already inserted in this sweep.
             continue
@@ -1126,37 +1170,43 @@ def sweep(conn, actor, unverified, *, today=None, owner_email=None):
 
 # ----------------------------------------------------------------------------- narrative pages
 def read_page(conn, doc_id):
-    row = conn.execute("SELECT payload_json FROM documents WHERE id=? AND collection='market'", (doc_id,)).fetchone()
-    return json.loads(row["payload_json"]) if row else None
+    row = conn.execute("SELECT * FROM market_pages WHERE id=?", (doc_id,)).fetchone()
+    return page_payload(row) if row else None
+
+
+def list_pages(conn):
+    return [page_payload(row) for row in conn.execute("SELECT * FROM market_pages ORDER BY id")]
+
+
+def page_payload(row):
+    """A narrative page as the Market page and the ask read it: the shape the company-docs routes serve."""
+    payload = {"id": row["id"], "title": row["title"], "content": row["body"], "category": row["category"],
+               "collection": "market", "search": row["body"], "format": "markdown", "owner": CURATOR,
+               "fetched": row["updated_at"]}
+    if row["seeded"]:
+        payload["seeded"] = True    # the seed's own text: the Market page hides it while the graph is empty
+    return payload
 
 
 def write_page(conn, actor, doc_id, title, body, category, *, replace=False, insight_id=None, record=True):
     if actor != SEED_ACTOR:
         H._writer(conn, actor)
-    existing = conn.execute("SELECT payload_json FROM documents WHERE id=?", (doc_id,)).fetchone()
+    existing = conn.execute("SELECT * FROM market_pages WHERE id=?", (doc_id,)).fetchone()
     if existing and not replace:
-        return json.loads(existing["payload_json"])
-    previous = json.loads(existing["payload_json"]).get("content") if existing else None
-    if previous == body:
-        return json.loads(existing["payload_json"])
+        return page_payload(existing)
+    if existing and existing["body"] == body:
+        return page_payload(existing)
     now = H.now()
-    payload = {"id": doc_id, "title": title, "content": body, "category": category, "collection": "market",
-               "search": body, "format": "markdown", "owner": CURATOR, "fetched": now}
-    if actor == SEED_ACTOR:
-        payload["seeded"] = True    # the seed's own text: the Market page hides it while the graph is empty
-    raw = encode(payload)
-    hashed = digest(raw)
-    conn.execute("INSERT OR IGNORE INTO document_versions VALUES(?,?,?,?)", (doc_id, hashed, raw, now))
-    conn.execute("INSERT INTO documents VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
-                 "visibility=excluded.visibility, collection=excluded.collection, payload_json=excluded.payload_json, "
-                 "digest=excluded.digest, updated=excluded.updated",
-                 (doc_id, "external", "market", raw, hashed, now))
+    conn.execute("INSERT INTO market_pages(id,title,category,body,seeded,updated_at) VALUES(?,?,?,?,?,?) "
+                 "ON CONFLICT(id) DO UPDATE SET title=excluded.title, category=excluded.category, "
+                 "body=excluded.body, seeded=excluded.seeded, updated_at=excluded.updated_at",
+                 (doc_id, title, category, body, 1 if actor == SEED_ACTOR else 0, now))
     # The weekly delta is a projection of market_events. Recording that write would make the
     # next Monday refresh see a new event and rewrite the page again.
     if record:
         _event(conn, "document", doc_id, actor, "created" if not existing else "body", None, title, insight_id,
                "" if not existing else "body changed")
-    return payload
+    return page_payload(conn.execute("SELECT * FROM market_pages WHERE id=?", (doc_id,)).fetchone())
 
 
 def _listed(conn, kind):
@@ -1175,12 +1225,12 @@ def delta_body(conn, today):
     """The weekly delta page, from market_events. Seed writes this; Monday refresh writes it again."""
     start = (today - timedelta(days=7)).isoformat()
     events = H._rows(conn.execute(
-        "SELECT * FROM market_events WHERE ts>=? ORDER BY ts, id", (start,)))
+        "SELECT * FROM market_events WHERE created_at>=? ORDER BY created_at, id", (start,)))
     lines = ["# Weekly delta", "", f"Changes since {start}.", ""]
     if not events:
         lines.append("No market changes in this week.")
     for ev in events:
-        lines.append(f"- {ev['ts'][:19]} {ev['actor']} {ev['subject_kind']} {ev['subject_id']} "
+        lines.append(f"- {ev['created_at'][:19]} {ev['actor']} {ev['subject_kind']} {ev['subject_id']} "
                      f"{ev['field']}: {ev['old'] or ''} -> {ev['new'] or ''}")
     return "\n".join(lines)
 
@@ -1261,16 +1311,16 @@ def mark_seeded_pages(conn):
     outgrown, is left alone. Returns the ids it marked; a second run marks none."""
     marked = []
     weekly = re.compile(r"^# Weekly delta\n\nChanges since (\d{4}-\d{2}-\d{2})\.")
-    rows = conn.execute("SELECT id, payload_json FROM documents WHERE collection='market' AND id IN (%s)"
+    rows = conn.execute("SELECT * FROM market_pages WHERE id IN (%s)"
                         % ",".join("?" * len(PAGES)), [page[0] for page in PAGES]).fetchall()
-    documents = {row["id"]: json.loads(row["payload_json"]) for row in rows}
-    if not documents:
+    pages = {row["id"]: row for row in rows}
+    if not pages:
         return marked
     fresh = narrative(conn, datetime.now(timezone.utc).date())
-    for doc_id, payload in documents.items():
-        if payload.get("seeded") or not isinstance(payload.get("content"), str):
+    for doc_id, row in pages.items():
+        if row["seeded"]:
             continue
-        body = payload["content"]
+        body = row["body"]
         if doc_id == "market/weekly-delta":
             since = weekly.match(body)
             if not since:
@@ -1279,12 +1329,7 @@ def mark_seeded_pages(conn):
             fresh[doc_id] = f"# Weekly delta\n\nChanges since {since.group(1)}.\n\nNo market changes in this week."
         if body != fresh.get(doc_id):
             continue
-        payload["seeded"] = True
-        raw = encode(payload)
-        hashed = digest(raw)
-        now = H.now()
-        conn.execute("INSERT OR IGNORE INTO document_versions VALUES(?,?,?,?)", (doc_id, hashed, raw, now))
-        conn.execute("UPDATE documents SET payload_json=?, digest=? WHERE id=?", (raw, hashed, doc_id))
+        conn.execute("UPDATE market_pages SET seeded=1 WHERE id=?", (doc_id,))
         marked.append(doc_id)
     return marked
 
@@ -1454,7 +1499,7 @@ def _import_entity(conn, row):
         return False
     now = H.now()
     conn.execute("INSERT INTO market_entities (id, type, name, aliases, external_ids, tier, summary, properties, "
-                 "status, merged_into, last_verified, created, created_by, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                 "status, merged_into, last_verified_at, created_at, created_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  (row["id"], row.get("type") or "company", row["name"], dumps(row.get("aliases") or []),
                   dumps(row.get("external_ids") or {}), row.get("tier"), row.get("summary") or "",
                   dumps(row.get("properties") or {}), "active", None, now[:10], now, SEED_ACTOR, now))
@@ -1603,13 +1648,13 @@ def ensure_curator(conn):
     librarian = H.bot(conn, CURATOR.split(":", 1)[1])
     if librarian and librarian.get("state") != "archived":
         for key, fields in CURATOR_ROUTINES:
-            if not conn.execute("SELECT 1 FROM schedules WHERE bot=? AND routine_key=?", (librarian["slug"], key)).fetchone():
-                routines.create(conn, H.KEEPER, librarian["slug"], dict(fields), key=key)
+            if not conn.execute("SELECT 1 FROM schedules WHERE bot=? AND routine_key=?", (librarian["id"], key)).fetchone():
+                routines.create(conn, H.KEEPER, librarian["id"], dict(fields), key=key)
     old = H.bot(conn, RETIRED_CURATOR)
     if old and old.get("state") != "archived" \
             and conn.execute("SELECT 1 FROM bot_config WHERE bot=?", (RETIRED_CURATOR,)).fetchone():
         from . import settings_admin
-        successor = librarian["slug"] if librarian and librarian.get("state") != "archived" else ""
+        successor = librarian["id"] if librarian and librarian.get("state") != "archived" else ""
         settings_admin.archive_bot(conn, H.KEEPER, RETIRED_CURATOR, successor=successor)
         H.event(conn, H.KEEPER, "market.curator_retired", RETIRED_CURATOR, {"successor": successor})
     return librarian
@@ -1673,7 +1718,8 @@ def install(app, store, auth, mutate):
                    include: list[str] | None = Query(None)):
         auth.domain(request.state.identity)
         with store.read() as c:
-            return graph(c, focus, limit, as_of, focus == OWN_COMPANY_ID if fill is None else fill, include)
+            view = graph(c, focus, limit, as_of, focus == OWN_COMPANY_ID if fill is None else fill, include)
+            return with_turn_sources(c, view)
 
     @app.get("/api/v2/market/entities/{rest:path}")
     def entity_show(rest: str, request: Request, names: bool = False):
@@ -1766,7 +1812,7 @@ def install(app, store, auth, mutate):
             require_writer(who)
             row, _events = create_entity(c, who.actor, type=body.type, name=body.name, aliases=body.aliases,
                                          external_ids=body.external_ids, tier=body.tier, summary=body.summary,
-                                         properties=body.properties, last_verified=body.last_verified,
+                                         properties=body.properties, last_verified_at=body.last_verified_at,
                                          evidence_ids=body.evidence_ids, force=body.force, insight_id=body.insight_id,
                                          entity_id=body.id)
             return {"entity": row}
@@ -1791,7 +1837,7 @@ def install(app, store, auth, mutate):
                 return {"entity": retire_entity(c, who.actor, entity_id, body.insight_id)}
             row, _events = update_entity(c, who.actor, entity_id, name=body.name, aliases=body.aliases,
                                          external_ids=body.external_ids, tier=body.tier, summary=body.summary,
-                                         properties=body.properties, last_verified=body.last_verified,
+                                         properties=body.properties, last_verified_at=body.last_verified_at,
                                          status=body.status, evidence_ids=body.evidence_ids, insight_id=body.insight_id,
                                          clear_tier=body.clear_tier)
             return {"entity": row}
@@ -1866,7 +1912,7 @@ def install(app, store, auth, mutate):
             update = None
             if body.entity_id:
                 update = {"entity_id": body.entity_id}
-                for field in ("summary", "properties", "tier", "aliases", "last_verified"):
+                for field in ("summary", "properties", "tier", "aliases", "last_verified_at"):
                     value = getattr(body, field)
                     if value is not None:
                         update[field] = value
@@ -1902,11 +1948,9 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            row = c.execute("SELECT payload_json FROM documents WHERE id=? AND collection='market'",
-                            ("market/" + name,)).fetchone()
-        if not row:
+            page = read_page(c, "market/" + name)
+        if not page:
             raise Problem("not_found", f"There is no market page {name}", 404)
-        page = json.loads(row["payload_json"])
         return {"name": name, "title": page.get("title") or name, "body": page.get("content") or ""}
 
     @app.post("/api/v2/market/pages/{name}")

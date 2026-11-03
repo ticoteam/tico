@@ -1,0 +1,60 @@
+{
+ "answer": {
+  "ack_seq": 6,
+  "historical": false
+ },
+ "endpoint": "events",
+ "request": {
+  "events": [
+   {
+    "kind": "status",
+    "payload": {
+     "waiting": ""
+    },
+    "seq": 1
+   },
+   {
+    "kind": "tool",
+    "payload": {
+     "name": "Read",
+     "phase": "tool_execution_start",
+     "tool": "Read"
+    },
+    "seq": 2
+   },
+   {
+    "kind": "delta",
+    "payload": {
+     "delta_kind": "text",
+     "text": "Acme's summary"
+    },
+    "seq": 3
+   },
+   {
+    "kind": "tokens",
+    "payload": {
+     "input": 120,
+     "output": 30,
+     "total": 150
+    },
+    "seq": 4
+   },
+   {
+    "kind": "diagnostic",
+    "payload": {
+     "text": "Compacting the saved session before this turn."
+    },
+    "seq": 5
+   },
+   {
+    "kind": "message",
+    "payload": {
+     "final": false,
+     "text": "Acme's summary is ready"
+    },
+    "seq": 6
+   }
+  ]
+ },
+ "status": 200
+}

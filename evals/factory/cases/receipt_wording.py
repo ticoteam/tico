@@ -43,11 +43,11 @@ def entries(run):
     names = gated(run)
     for t in run.final:
         pr = w.pr_of(t["id"])
-        rows = w.sql("SELECT e.ts, s.name FROM task_events e JOIN task_steps s ON s.id=e.new WHERE e.task_id=? "
-                     "AND e.field='step' ORDER BY e.ts, e.rowid", (t["id"],))
+        rows = w.sql("SELECT e.created_at, s.name FROM task_events e JOIN task_steps s ON s.id=e.new WHERE e.task_id=? "
+                     "AND e.field='step' ORDER BY e.created_at, e.rowid", (t["id"],))
         for row in rows:
             if row["name"] in names and pr:
-                when = w.H.parse_ts(row["ts"])
+                when = w.H.parse_ts(row["created_at"])
                 out.append((when, t["id"], row["name"], w.head_at(pr, when), in_effect(receipts, t["id"], when)))
     return out
 
@@ -103,9 +103,9 @@ def retried_after_receipt(run):
             if not clean:
                 continue
             if tid not in rows:
-                rows[tid] = [(run.w.H.parse_ts(r["ts"]), r["name"]) for r in run.w.sql(
-                    "SELECT e.ts, s.name FROM task_events e JOIN task_steps s ON s.id=e.new WHERE e.task_id=? "
-                    "AND e.field='step' ORDER BY e.ts, e.rowid", (tid,))]
+                rows[tid] = [(run.w.H.parse_ts(r["created_at"]), r["name"]) for r in run.w.sql(
+                    "SELECT e.created_at, s.name FROM task_events e JOIN task_steps s ON s.id=e.new WHERE e.task_id=? "
+                    "AND e.field='step' ORDER BY e.created_at, e.rowid", (tid,))]
             moved = next((at for at, name in rows[tid] if name == step and at >= clean[0]), None)
             done += 1
             if not moved or (moved - clean[0]).total_seconds() > slack:

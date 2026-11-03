@@ -8,7 +8,7 @@ A small pilot is what has been measured ([sizing](docs/sizing.md)).
 
 - **A small server holds the team.** One Docker install (the server, HTTPS through Caddy or a
   Cloudflare Tunnel, Litestream backups, an optional updater) keeps tasks, chats, approvals,
-  routines, files and humans in SQLite. The server never runs a bot or a model CLI; when decisions (or Slack routing) are on, it sends the text of each
+  automations, files and humans in SQLite. The server never runs a bot or a model CLI; when decisions (or Slack routing) are on, it sends the text of each
   question to the decision model: the Tico AI Gateway on Tico HQ with a gateway key, then your own TypeSafe key if you set one, then OpenAI, Anthropic, Gemini, xAI or OpenRouter with a key stored on the server.
 - **Computers run the bots.** A Mac (the native runner) or any Linux or cloud computer (the
   `tico-runner` image) joins with a one-time code, claims work over HTTPS, and runs each bot's run
@@ -27,18 +27,21 @@ curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh 
 
 Docker Desktop must be open and running on a Mac. Tico runs at `http://127.0.0.1:8765`; open the sign-in link the
 installer prints. Then get one first result: **Content Marketer** drafts a short post about a made-up product, you review
-it, and you close the task. You need one model sign-in (a ChatGPT sign-in for Codex, a Claude sign-in for Claude Code, or an
-API key); no GitHub account or outside Tool. [Demo mode](docs/demo.md) does not run bots.
+it, and you close the task. Sign in to each model subscription you chose (a ChatGPT sign-in for Codex, a Claude sign-in for Claude Code), or use an
+API key. One signed-in model is enough for the first result; Health lists the others until you sign in. You need no GitHub account or outside Tool. [Demo mode](docs/demo.md) does not run bots.
 
 1. In **Finish setup**, choose an AI provider, name your team and pick **Marketing** with **Content Marketer** (`content`) checked.
-   Assistant, BotOps, Librarian and CEO Bot are the four built-in bots.
+   With no provider yet, write one bet and one line under **What we won't do**; any short sentence works.
+   Seven built-in bots are created: Assistant, BotOps, Librarian, Strategy Bot, Task Manager, Bookkeeper and Counsel.
 2. Use **Add computer** to join this computer, run the command shown, then **Create my team**.
 3. Open **Settings > Computers** and **Sign in** beside Codex or Claude Code; finish the provider's browser flow.
    Other harnesses and API credentials are covered in [Harnesses](docs/harnesses.md). Choose the bot's model in **Settings > Bots**.
 4. Before any real work, open **Settings > Health**: **Models** should read "Codex is signed in." (or Claude Code). If not, follow
    [first-result recovery](docs/install.md#first-result-recovery). With no spending limit set there is no cap; a limit pauses new
    work and lets a run in progress finish ([Usage](docs/usage.md)).
-5. Open Content Marketer and press **Set up**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
+5. Hire Head of Marketing first, then Content Marketer (or untick Head of Marketing in step 1): on the team chart, open each
+   seat and press **Hire** on its template. Hiring Content Marketer first fails with "Reports-to bot was not found". On
+   Content Marketer's page, press **Start onboarding**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
    to give it readers, publishing plans, topics, voice examples and privacy rules; review its first draft in chat.
 6. On **Tasks > New task**, assign it the short draft from [Your first result](docs/install.md#your-first-result). The bot marks
    it Done with the draft file on the task. Read the draft, then close the task yourself: the requester closes it, not the bot.
@@ -93,7 +96,7 @@ team on localhost with no setup ([docs/demo.md](docs/demo.md)).
 | [docs/updates.md](docs/updates.md) | Updating the server and its computers |
 | [docs/assistant.md](docs/assistant.md) | The built-in Assistant: what it does at once and what it proposes |
 | [docs/librarian.md](docs/librarian.md) | The built-in Librarian: answers from the team's docs, with citations |
-| [docs/goals-and-kpis.md](docs/goals-and-kpis.md) | Goals, KPIs and the built-in CEO Bot: automatic colours, a human's override, readings with evidence |
+| [docs/goals-and-kpis.md](docs/goals-and-kpis.md) | Goals, KPIs and the built-in Strategy Bot: automatic colours, a human's override, readings with evidence |
 | [docs/connect-an-agent.md](docs/connect-an-agent.md) | Connecting an external agent (Grok, Muse, Claude, Cursor, Codex, any MCP client) with a personal token |
 | [PRIVACY.md](PRIVACY.md), [docs/telemetry.md](docs/telemetry.md) | The anonymous usage count: exactly what is sent, and how to turn it off |
 
@@ -113,7 +116,7 @@ is one team; several can run side by side on one Mac.
 For the shortest trial, use Docker above. For a native development setup, follow [Environments](docs/environments.md)
 and [register a Mac computer](docs/install.md#mac). Open the app, complete **Finish setup**, join the
 computer and sign in to your model provider. All four built-in repositories are created automatically. Each other role waits as a Recruiting seat; a bot is created only
-when you recruit one, and it is parked in **Needs setup** until you open it and press **Set up**; then follow [Your first result](docs/install.md#your-first-result).
+when you recruit one, and it is parked in **Needs setup** until you open it and press **Start onboarding**; then follow [Your first result](docs/install.md#your-first-result).
 Bots can allow [branches](docs/creating-bots.md#branches): personal tasks and chats on your computer, following the original's instructions and repository. Independent copies keep using `hub bot copy`.
 
 See [Setup reference](docs/onboarding.md) for the wizard's saved fields and [Creating bots](docs/creating-bots.md) for custom bots.

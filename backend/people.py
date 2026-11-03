@@ -28,6 +28,10 @@ DEFAULT_PERSON = {"id": "", "name": "", "email": "", "title": "",
                   "slack": "", "slack_id": "", "github": "", "notify_slack_task_done": True,
                   "notify_slack_bot_messages": True, "slack_muted_bots": [], "phone": "", "about": "", "goals": "", "notes": "",
                   "update_draft": True,
+                  # Browser notifications for Needs you (off by default; the page asks the browser's permission).
+                  "notify_browser": False,
+                  # Email digests of the threads they follow on digest (backend/thread_digest.py): on unless turned off.
+                  "email_digest": True,
                   "directory": "", "external_id": "", "directory_left": False,
                   # What a member may do (docs/permissions.md): create bots (on by default), and add people
                   # (None = the default: coworkers in the company's email domain may, others may not).
@@ -72,6 +76,8 @@ def _person(row):
             "notify_slack_bot_messages": row.get("notify_slack_bot_messages") is not False,
             # The Assistant drafts their daily update unless they turn it off.
             "update_draft": row.get("update_draft") is not False,
+            "notify_browser": row.get("notify_browser") is True,
+            "email_digest": row.get("email_digest") is not False,
             "slack_muted_bots": _list(row.get("slack_muted_bots")),
             "phone": _clean(row.get("phone")),
             "about": _clean(row.get("about")),
@@ -106,10 +112,14 @@ def people_rows(doc, owner=None):
     return people
 
 
+def may_sign_in(person):
+    """Whether a normalised roster row may sign in at all: an address, not hidden, not left the directory, sign-in on."""
+    return bool(person["email"]) and not person["hidden"] and not person["directory_left"] and person["sign_in"]
+
+
 def signed_in_count(doc, owner=None):
     """How many roster people count toward company turn levels: email set, may sign in, not hidden or left."""
-    return sum(1 for p in people_rows(doc, owner)
-               if p["email"] and not p["hidden"] and not p["directory_left"] and p["sign_in"])
+    return sum(1 for p in people_rows(doc, owner) if may_sign_in(p))
 
 
 def load(doc, owner=None):
@@ -143,6 +153,8 @@ def load(doc, owner=None):
             groups[gid]["order"] = body["order"]
         if isinstance(body.get("bet_id"), str) and body["bet_id"].strip():
             groups[gid]["bet_id"] = body["bet_id"].strip()       # the strategy bet it serves (backend/strategy.py)
+        if _clean(body.get("lead")):
+            groups[gid]["lead"] = _clean(body["lead"])            # bot:<slug> or person:<id> (CONTRACT §3, backend/groups.py)
     for gid, root in roots.items():             # a roster written before groups: each team is a group
         group = groups.setdefault(gid, {"id": gid, "name": gid.replace("-", " ").title(), "reports_to": "",
                                         "parent": "", "root": ""})
@@ -259,16 +271,16 @@ def reports_to_person(slug, employees):
     return reports[6:] if reports.startswith("human:") else ""
 
 
-def manages(pid, kind, ident, roster, employees, archived=()):
+def manages(pid, kind, ident, roster, employees, archived=(), bare_people=False):
     """Whether `pid` sits above this person or bot on the org chart: the one permission rule for
     editing someone else's profile, bot or place in the chart (users can
-    edit their own info, or the info of their subordinate bots/humans)."""
+    edit their own info, or the info of their subordinate bots/humans). `bare_people` as in `org_parent`."""
     pid = _clean(pid)
     if not pid:
         return False
     if kind == "person" and _clean(ident) == pid:
         return True
-    parent, seen = org_parent(kind, ident, roster, employees, archived), set()
+    parent, seen = org_parent(kind, ident, roster, employees, archived, bare_people), set()
     while parent and parent not in seen:
         seen.add(parent)
         if parent == "p:" + pid:
@@ -278,9 +290,9 @@ def manages(pid, kind, ident, roster, employees, archived=()):
             group = ((roster or {}).get("org_groups") or {}).get(rest) or {}
             parent = ("p:" + _clean(group.get("reports_to"))) if _clean(group.get("reports_to")) else ""
         elif head == "p":
-            parent = org_parent("person", rest, roster, employees, archived)
+            parent = org_parent("person", rest, roster, employees, archived, bare_people)
         elif head == "b":
-            parent = org_parent("bot", rest, roster, employees, archived)
+            parent = org_parent("bot", rest, roster, employees, archived, bare_people)
         else:
             parent = ""
     return False
@@ -355,12 +367,14 @@ def org_group_under(team, lead_id, roster):
     return None
 
 
-def org_parent(kind, ident, roster, employees, archived=()):
-    """Parent key for the mixed org tree: `p:<id>`, `b:<slug>`, `g:<group>`, or '' for a root.
+def org_parent(kind, ident, roster, employees, archived=(), bare_people=False):
+    """Parent key for the mixed org tree: `p:<id>`, `b:<id>`, `g:<group>`, or '' for a root.
 
     People follow `reports_to`, except a named department under that boss becomes `g:<team>`.
     A bot follows its `reports_to` bot when that bot is still on the tree; otherwise it hangs
     under its team's department group, else the person who leads the team, else the founder.
+    `bare_people`: a bot's bare person id in `reports_to` is that person. Without it, it is a boss that is not here and
+    the bot hangs under the owner.
     """
     archived = set(archived or ())
     if kind == "person":
@@ -382,6 +396,9 @@ def org_parent(kind, ident, roster, employees, archived=()):
             return ""
         skipped.add(reports)
         reports = _clean(((employees or {}).get(reports) or {}).get("reports_to"))
+    if bare_people and reports and not reports.startswith("human:") and reports not in (employees or {}) \
+            and person(reports, roster):
+        reports = "human:" + reports      # a bare person id, the form some writers store, is that person
     if reports and not reports.startswith("human:") and reports not in archived and reports not in (employees or {}):
         # A boss that is not a bot here at all (an assistant the company chose not to have):
         # the bot hangs under the owner instead of vanishing from the chart.
@@ -425,6 +442,8 @@ def profile(person_row):
             "notify_slack_task_done": p.get("notify_slack_task_done") is not False,
             "notify_slack_bot_messages": p.get("notify_slack_bot_messages") is not False,
             "update_draft": p.get("update_draft") is not False,
+            "notify_browser": p.get("notify_browser") is True,
+            "email_digest": p.get("email_digest") is not False,
             "slack_muted_bots": list(p.get("slack_muted_bots") or []),
             "phone": p.get("phone") or "",
             "about": p.get("about") or "",
@@ -432,10 +451,10 @@ def profile(person_row):
             "notes": p.get("notes") or ""}
 
 
-def org_view(roster, employees, archived=(), person_id="", team=""):
+def org_view(roster, employees, archived=(), person_id="", team="", bare_people=False):
     """The mixed org chart for bots and the hub: visible people (with contact and goals),
     live bots, and the groups, each with an `org_parent` key
-    (`p:<id>` / `b:<slug>` / `g:<group>` / ''). A person or bot carries its group as `team`; a group carries
+    (`p:<id>` / `b:<id>` / `g:<group>` / ''). A person or bot carries its group as `team`; a group carries
     its `parent` group. `team` keeps one group and the groups under it."""
     archived = set(archived or ())
     employees = employees or {}
@@ -447,7 +466,7 @@ def org_view(roster, employees, archived=(), person_id="", team=""):
                 and "*" not in (p.get("primary_for") or []):
             continue
         row = profile(p)
-        row["org_parent"] = org_parent("person", p["id"], roster, employees, archived)
+        row["org_parent"] = org_parent("person", p["id"], roster, employees, archived, bare_people)
         people_rows.append(row)
     bot_rows = []
     for slug, entry in employees.items():
@@ -463,7 +482,7 @@ def org_view(roster, employees, archived=(), person_id="", team=""):
             "description": _clean((entry or {}).get("description")),
             "team": bot_team or "",
             "reports_to": _clean((entry or {}).get("reports_to")),
-            "org_parent": org_parent("bot", slug, roster, employees, archived),
+            "org_parent": org_parent("bot", slug, roster, employees, archived, bare_people),
             "owners": [u["id"] for u in primary_users(slug, roster, employees)],
         })
     group_rows = []
@@ -560,7 +579,7 @@ def mailboxes_below(pid, roster):
 
 
 def inbox_person(slug, roster):
-    """The person whose `inbox_bot` is this employee slug, or None."""
+    """The person whose `inbox_bot` is this employee's bot id, or None."""
     slug = _clean(slug)
     if not slug:
         return None

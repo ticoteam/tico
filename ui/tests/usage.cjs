@@ -1,6 +1,6 @@
 // Offline browser regression: the Usage page (account menu > Usage). The range switch asks for the right days, the rows
 // are sorted by spend whatever order they arrive in, a subscription's figure stays apart from spend, a bot opens to its
-// daily chart and routines and a CSV, and an empty range says so. A bot over its limit is marked in the org tree and its
+// daily chart and routines and a CSV, every limit is changed in one Limits table, and an empty range says so. A bot over its limit is marked in the org tree and its
 // page leads with a banner whose link opens Usage.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -20,6 +20,12 @@ const ROWS = [
   {bot: 'inbox', name: 'Inbox', department: null, ...figures(5, 400, 0, 50, null), share: 0, limit: limit(null, 20, 85)},
   {bot: 'coo', name: 'COO', department: 'Ops', ...figures(4, 5000, 5000, 900, 0, 2.2), share: 0.15, limit: limit(null, null)},
 ];
+// The team's limits: a default, a team cap with the old hour window, a capped group, one bot with limits of its own.
+const LIMITS = {default: {daily_usd: 20, monthly_usd: null, count_subscription: false}, may_edit_default: true,
+  bots: {support: {...limit(5, 50, 122, 'daily'), spent: {day: 6.1, month: 7.6}}, sales: {...limit(null, null), daily_usd: 20, spent: {day: 0.4}},
+         inbox: limit(null, null), coo: limit(null, null)},
+  pools: {company: {hourly_usd: 10, per_30m_usd: 4, spent: {hour: 4, '30m': 3.5}, percent: 87},
+          groups: {ops: {name: 'Ops', parent: null, daily_usd: 30, spent: {day: 3}}, revenue: {name: 'Revenue', parent: null}}}};
 const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_usd: t.est_cost_usd + (r.est_cost_usd || 0), subscription_equiv_usd: t.subscription_equiv_usd + r.subscription_equiv_usd,
                                               input_tokens: 0, cached_tokens: 0, output_tokens: 0, unpriced_runs: 0, low_estimate_runs: t.low_estimate_runs + (r.low_estimate_runs || 0)}),
                                      {runs: 0, est_cost_usd: 0, subscription_equiv_usd: 0, input_tokens: 0, cached_tokens: 0, output_tokens: 0, unpriced_runs: 0, low_estimate_runs: 0});
@@ -44,8 +50,7 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
       const config = {version: '0.2.18', update: null, app_name: 'Tico', usage_count_notice: false};
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true, registered: true, config});
       if (p === '/api/v2/config') return json(config);
-      if (p === '/api/v2/usage/limits' && req.method() === 'GET') return json({default: {daily_usd: 20, monthly_usd: null, count_subscription: false}, may_edit_default: true, bots: {},
-        pools: {company: {hourly_usd: 10, hour_spent: 4}, groups: {revenue: {name: 'Revenue', parent: null}}}});
+      if (p === '/api/v2/usage/limits' && req.method() === 'GET') return json(LIMITS);
       if (/^\/api\/v2\/usage\/(limits|pools)/.test(p) && req.method() === 'PUT') { puts.push([p, JSON.parse(req.postData())]); return json({ok: true}); }
       if (p === '/api/v2/usage') {
         const q = Object.fromEntries(url.searchParams);
@@ -73,15 +78,14 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
     await page.goto('https://tico-ui.test/#/bot/support');
     await page.waitForFunction(() => !document.querySelector('#account .account-email')?.textContent.includes('Signing in'));
 
-    // Over its limit: a marker beside the bot in the org tree, and a banner on its page that links to Usage.
+    // Over its limit: a marker beside the bot in the org tree, and a banner on its page that opens the bot in Budget.
     const mark = page.locator('#tree a.node[href="#/bot/support"] .tree-limit');
     await mark.waitFor();
     assert.equal(await mark.getAttribute('aria-label'), 'Over its daily limit');
     const banner = page.locator('#bot-limit-host .bot-limit');
     await banner.waitFor();
     assert.equal((await banner.innerText()).replace(/\s+/g, ' ').trim(), '⚠ Over its daily limit ($6.10 of $5.00). Raise limit');
-    await banner.locator('a', {hasText: 'Raise limit'}).click();
-    await page.locator('.use-row').first().waitFor();
+    assert.equal(await banner.locator('a', {hasText: 'Raise limit'}).getAttribute('href'), '#/strategy/budget/bot%3Asupport');
     asked.length = 0;
     await page.goto('https://tico-ui.test/#/updates');
 
@@ -111,33 +115,54 @@ const total = rows => rows.reduce((t, r) => ({runs: t.runs + r.runs, est_cost_us
     assert.match(await page.locator('.use-row[data-bot=inbox] .use-tok').innerText(), /450 tokens/);
     assert.equal(await page.locator('.use-row[data-bot=support] .use-share i').evaluate(e => e.style.width), '100%');
 
-    // The limit cell: the caps, a warning chip near one and a Paused chip at one; a click edits it.
+    // The limit cell: the caps, a warning chip near one and a Paused chip at one; a click opens it in Limits.
     assert.equal((await page.locator('.use-row[data-bot=support] .use-limit').innerText()).replace(/\s+/g, ' ').trim(), 'Paused $5/day · $50/mo');
     assert.equal((await page.locator('.use-row[data-bot=inbox] .use-limit').innerText()).replace(/\s+/g, ' ').trim(), '85% $20/mo');
     assert.equal((await page.locator('.use-row[data-bot=sales] .use-limit').innerText()).trim(), 'Set limit');
     await page.locator('.use-row[data-bot=sales] .use-limit').click();
-    const cap = page.locator('dialog.use-dialog');
-    assert.equal(await cap.locator('[name=daily_usd]').getAttribute('placeholder'), 'Default $20', 'the company default shows as the hint');
-    await cap.locator('[name=daily_usd]').fill('7.5');
-    await cap.locator('button[type=submit]').click();
-    await cap.waitFor({state: 'detached'});
-    assert.deepEqual(puts.at(-1), ['/api/v2/usage/limits/sales', {hourly_usd: null, daily_usd: 7.5, weekly_usd: null, monthly_usd: null}]);
-    await page.locator('#use-default').click();
-    await cap.locator('[name=monthly_usd]').fill('300');
-    await cap.locator('[name=count_subscription]').check();
-    await cap.locator('button[type=submit]').click();
-    await cap.waitFor({state: 'detached'});
-    assert.deepEqual(puts.at(-1), ['/api/v2/usage/limits', {hourly_usd: null, daily_usd: 20, weekly_usd: null, monthly_usd: 300, count_subscription: true}]);
-    // The team's and a group's combined limits: the team's cap and spend show, and a group is chosen and saved.
-    await page.locator('#use-pools').click();
-    assert.equal(await cap.locator('[name=hourly_usd]').inputValue(), '10');
-    assert.match(await cap.locator('[data-use-spent]').innerText(), /of \$10 this hour/);
-    await cap.locator('[name=scope]').selectOption('group:revenue');
-    assert.equal(await cap.locator('[name=hourly_usd]').inputValue(), '');
-    await cap.locator('[name=hourly_usd]').fill('2');
-    await cap.locator('button[type=submit]').click();
-    await cap.waitFor({state: 'detached'});
-    assert.deepEqual(puts.at(-1), ['/api/v2/usage/pools/groups/revenue', {hourly_usd: 2, daily_usd: null, weekly_usd: null, monthly_usd: null}]);
+
+    // Limits: every limit in one table. The default and the team always, then each group and bot with one of its own,
+    // and the bot just asked for. The old hour window shows only because the team still has one.
+    const lim = page.locator('#use-limits');
+    await lim.locator('[data-lim-row="bot:sales"]').waitFor();
+    assert.equal(await page.locator('#use-spend').isHidden(), true);
+    assert.deepEqual(await lim.locator('[data-lim-row]').evaluateAll(rows => rows.map(r => r.dataset.limRow)),
+                     ['default', 'company', 'group:ops', 'bot:sales', 'bot:support']);
+    assert.deepEqual(await lim.locator('.use-lim-head [role=columnheader]').allInnerTexts(), ['', '30 min', 'Hour', 'Day', 'Week', 'Month']);
+    const cell = (row, key) => lim.locator(`input[name="${row}|${key}"]`);
+    assert.equal(await page.evaluate(() => document.activeElement.name), 'bot:sales|per_30m_usd', 'the cursor lands in the bot asked for');
+    assert.equal(await cell('bot:sales', 'daily_usd').getAttribute('placeholder'), '$20', 'a bot shows the default it follows');
+    assert.equal(await cell('company', 'hourly_usd').inputValue(), '10');
+    assert.equal(await cell('bot:sales', 'hourly_usd').count(), 0, 'no new hour limits');
+    assert.match(await lim.locator('[data-lim-row=company] .pill').innerText(), /87%/);
+    assert.match(await lim.locator('[data-lim-row="bot:support"] .pill').innerText(), /Paused/);
+    assert.equal(await lim.locator('[data-lim-save]').isDisabled(), true, 'nothing to save yet');
+
+    // Several at once: a bot, the default and its switch, a group added from the picker, a bot's limits removed.
+    await cell('bot:sales', 'daily_usd').fill('7.5');
+    await cell('default', 'monthly_usd').fill('300');
+    await lim.locator('[name=count_subscription]').check();
+    await lim.locator('.use-lim-add').selectOption('group:revenue');
+    await cell('group:revenue', 'per_30m_usd').fill('2');
+    await lim.locator('[data-lim-row="bot:support"] [data-lim-remove]').click();
+    assert.equal(await cell('bot:sales', 'daily_usd').inputValue(), '7.5', 'typing survives a row added or removed');
+    assert.equal(await lim.locator('.use-money.changed').count(), 3);
+    await cell('company', 'weekly_usd').fill('abc');
+    await lim.locator('[data-lim-save]').click();
+    assert.match(await lim.locator('[data-lim-err]').innerText(), /Whole team, Week: an amount above \$0/);
+    assert.equal(puts.length, 0, 'nothing is sent while a field is wrong');
+    await cell('company', 'weekly_usd').fill('');
+    await lim.locator('[data-lim-save]').click();
+    for (const end = Date.now() + t(10000); puts.length < 4 && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
+    assert.deepEqual(puts, [
+      ['/api/v2/usage/limits', {monthly_usd: 300, count_subscription: true}],
+      ['/api/v2/usage/pools/groups/revenue', {per_30m_usd: 2}],
+      ['/api/v2/usage/limits/sales', {daily_usd: 7.5}],
+      ['/api/v2/usage/limits/support', {daily_usd: null, monthly_usd: null}],
+    ], 'only what changed, one write per row');
+    // Read back as saved, and the rows' limits with it.
+    await page.waitForFunction(() => !document.querySelector('#use-limits .changed, #use-limits .removed') && !document.querySelector('#use-body[aria-busy]'));
+    await page.locator('[data-use-view=spend]').click();
 
     // The range switch asks for the days it says.
     for (const [label, expect] of [['Today', [day(0), day(0)]], ['30 days', [day(29), day(0)]], ['This month', [day(0).slice(0, 8) + '01', day(0)]]]) {

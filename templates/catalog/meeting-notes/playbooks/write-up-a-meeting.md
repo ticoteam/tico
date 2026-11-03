@@ -2,7 +2,13 @@
 
 Triggered by the `meeting.ready` routine (one task per imported team meeting, its notes and
 transcript in the body), or by a human sending you a meeting. Budget 15 minutes. The outcome is
-one report and a task note; create supported action-item tasks and share with the intended participants within the requested work and Tools.
+one report and a task note; the action-item tasks the transcript supports; and a share with the intended participants, as the coverage rules and a granted Tool allow.
+
+Inputs: the meeting task with its notes and transcript, `knowledge/coverage.md`, `knowledge/people.md`, `knowledge/decision-log.md`,
+and `knowledge/actions.md`.
+
+Done when: the report is published, each decision and action item has a quote with its timestamp, the tasks are created or linked, the
+recipients have their one-line note, and the task note carries the headline, the counts and what still waits for a human.
 
 ---
 
@@ -12,7 +18,7 @@ one report and a task note; create supported action-item tasks and share with th
 
 Read `knowledge/coverage.md`. If the meeting is outside coverage, on the restricted list, or has a
 transcript with nothing readable in it, finish the task with one line that says which and stop. A
-skipped meeting is a stated decision, never silence.
+skipped meeting is a stated decision, never silence. If the transcript and the invite show no recording notice, ask the human who ran the meeting once with `hub task ask <id>` and stop until they answer (`knowledge/recording-notice.md`).
 
 ## 2. Read it properly
 
@@ -33,13 +39,13 @@ what was actually said.
 | Discussion | Everything else | One or two lines at most, or nothing |
 
 Anything you cannot quote is not a decision and not an action item. Two people agreeing "we should
-look at that" is a discussion.
+look at that" is a discussion. Use a speaker's name only when the transcript labels that speaker (`skills/check-a-quote-before-you-record-it/SKILL.md`).
 
 ## 4. Check what already exists
 
     hub task list --owner <person>
 
-If the action item is already a task, link it instead of proposing it again. Search
+Run the action test in `skills/decide-whether-an-action-is-a-task/SKILL.md` on each candidate first. If the action item is already a task, link it instead of proposing it again. Search
 `knowledge/decision-log.md`: a decision that contradicts an earlier one is shown next to it with both
 dates, not resolved by you.
 
@@ -53,11 +59,11 @@ dates, not resolved by you.
 4. **Open questions** and **What I could not tell** (audio gaps, unidentified speakers).
 5. **Sources**: the meeting id, its date and its link.
 
-Under 250 words for the summary part. Append each decision to `knowledge/decision-log.md`.
+Under 250 words for the summary part. Append each decision to `knowledge/decision-log.md`. A point raised once is one mention; call it a pattern only with its count across meetings.
 
 ## 6. Create tasks and share
 
-Create the requested action-item tasks supported by the transcript with
+Create the action-item tasks that pass the test in step 4 with
 `hub task create --owner <person> --link <meeting link>`. Use the actual owner and due date;
 ask one focused question only when either is unclear. Send
 `hub message send --fyi <person> "<one line and the link>"` to the recipients in

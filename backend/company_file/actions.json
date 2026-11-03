@@ -211,6 +211,7 @@
   "name": 80,
   "role": 80,
   "title": 80,
+  "team": 40,
   "reason": 300,
   "about": 4000,
   "summary": 1000,

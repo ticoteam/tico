@@ -6,14 +6,20 @@ const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 
-const makeDetail = id => ({id, title: 'Weekly sync', state: 'live', owner_actor: 'human:ana', seq: 2, event_id: 5,
+// A bot made since bots got ids: its id is a UUID, its slug only a label. The picker and the meeting's bots use the id.
+const FINANCE = '0192f0c4-7b1e-7cc2-9d1a-3f5e8a6b2c10';
+const makeDetail = id => ({id, title: 'Weekly sync', state: 'live', owner_id: 'human:ana', seq: 2, event_id: 5,
   window_ms: 30000, cooldown_ms: 60000, reply_cap: 3, imported_meeting_id: null,
-  humans: [{actor: 'human:ana', name: 'Ana'}], bots: [{bot: 'ops'}],
+  humans: [{actor: 'human:ana', name: 'Ana'}], bots: [{bot: 'ops', name: 'Operations'}],
   chunks: [{seq: 1, revision: 1, speaker: 'Ana', text: 'We should ship the new plan.'},
     {seq: 2, revision: 2, speaker: 'Ben', text: 'Ops, can you review?', start_ms: 30000}],
-  chat: [{id: 'c1', actor: 'human:ana', role: 'human', text: 'Welcome', transcript_seq: 1}],
+  chat: [{id: 'c1', actor: 'human:ana', role: 'human', text: 'Welcome', transcript_seq: 1, created_at: '2026-10-30T10:00:01.000000Z'}],
+  notices: [
+    {event_id: 3, kind: 'waiting', bot: 'ops', reason: 'runner_update', detail: 'Test Mac needs a Tico update before it can join private meetings', created_at: '2026-10-30T10:00:00.000000Z'},
+    {event_id: 4, kind: 'deferred', bot: 'ops', reason: 'busy', behind: null, created_at: '2026-10-30T10:00:02.000000Z'},
+    {event_id: 5, kind: 'failed', bot: 'ops', reason: 'private_checkout', detail: "ops can't answer in this private meeting: Test Mac couldn't make a private copy of its repository", created_at: '2026-10-30T10:00:03.000000Z'}],
   router: {windows: [{window_index: 0, start_ms: 0, end_ms: 30000, outcome: 'pass', trace: {reason: 'below threshold', answers: {ops: 0.2}}}],
-    turns: [{id: 't1', bot: 'ops', window_index: null, status: 'pending'}],
+    turns: [{id: 't1', bot: 'ops', name: 'Operations', window_index: null, status: 'pending'}],
     bypasses: [{event_id: 6, bypass: 'named', source_key: 'chunk:2', targets: ['ops'], skipped: []}]}});
 
 async function main() {
@@ -55,6 +61,7 @@ async function main() {
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true});
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}]});
+      // The viewer's roster lacks the attached UUID bot, so its teammate name can only come from the meeting's `bots`.
       if (p === '/api/employees') return json([{name: 'ops', display_name: 'Operations'}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
@@ -63,12 +70,23 @@ async function main() {
       if (p === '/api/v2/tasks') return json({tasks: []});
       if (p === '/api/v2/setup/getting-started') return json({items: [], done: 0, total: 0, complete: true, dismissed: true, tour_seen: true, cards_dismissed: [],
         can_build: true, owner: true, empty: {docs: true, market: true, tasks: true, updates: true, goals: true, meetings: true}});
-      if (p === '/api/v2/live-meetings/bot-candidates') return json({bots: [{slug: 'finance', name: 'Finance', team: 'Operations'}]});
+      if (p === '/api/v2/live-meetings/bot-candidates') return json({bots: [{id: FINANCE, slug: 'finance', name: 'Finance', team: 'Operations'}]});
       if (p === '/api/v2/live-meetings' && method === 'GET') return json({meetings: world.meetings, count: world.meetings.length});
       if (p === '/api/v2/live-meetings' && method === 'POST') {
         const body = JSON.parse(route.request().postData()); calls.push(['connect', body]);
         world.detail = makeDetail('live-1'); world.detail.title = body.title; world.meetings = [world.detail];
         return json(world.detail);
+      }
+      if (p === '/api/v2/live-meetings/denied') return route.fulfill({status:404, contentType:'application/json', body:JSON.stringify({error:{detail:'Meeting not found'}})});
+      if (p.includes('/screen/')) world.screenReads = (world.screenReads || 0) + 1;
+      if (p === '/api/v2/live-meetings/live-1/screen/status') return world.screen ? json({generation:'fixture'}) : route.fulfill({status:410});
+      if (p === '/api/v2/live-meetings/live-1/screen/frame') {
+        if (!world.screen) return route.fulfill({status:410});
+        if (url.searchParams.get('after') === 'fixture:1') {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          return route.fulfill({status:204});
+        }
+        return route.fulfill({contentType:'image/jpeg', headers:{'X-Screen-Version':'fixture:1'}, body:world.screen});
       }
       if (p === '/api/v2/live-meetings/live-1/events') return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       if (p === '/api/v2/live-meetings/live-1' && method === 'GET') {
@@ -83,7 +101,7 @@ async function main() {
         const operation = p.split('/').pop(), body = JSON.parse(route.request().postData() || '{}'); calls.push([operation, body]);
         if (method === 'DELETE' && p.includes('/bots/')) {
           world.detail.bots = world.detail.bots.filter(bot => bot.bot !== operation);
-          return json({id: 'live-1', bot: operation, removed: true, cancelled_turns: [], event_id: 10});
+          return json({id: 'live-1', bot: operation, removed: true, canceled_turns: [], event_id: 10});
         }
         if (operation === 'chat' && world.holdChat) {
           await new Promise(resolve => { world.chatWaiters.push(resolve); world.chatHeld?.resolve(); });
@@ -93,7 +111,7 @@ async function main() {
           return route.fulfill({status: 400, contentType: 'application/json', body: JSON.stringify({error: {detail: 'Chat rejected'}})});
         }
         if (operation === 'join') world.detail.humans.push({actor: 'human:ben', name: 'Ben'});
-        if (operation === 'bots') world.detail.bots.push({bot: body.bots[0]});
+        if (operation === 'bots') world.detail.bots.push({bot: body.bots[0], name: 'Finance'});
         if (operation === 'control') world.detail.state = body.action === 'end' ? 'ended' : body.action === 'resume' ? 'live' : 'paused';
         if (operation === 'finalize') world.detail.imported_meeting_id = 'meeting-imported';
         if (operation === 'chat') world.detail.chat.push({actor: 'human:ana', role: 'human', text: body.text});
@@ -102,6 +120,7 @@ async function main() {
       return json(unrouted(p));
     });
     await page.goto('https://tico-ui.test/#/meetings');
+    assert.equal(await page.locator('#meet-recorder').getAttribute('href'), 'https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg');
     await page.locator('#meet-live-now').click();
     await page.locator('#live-connect').waitFor();
     await page.locator('#live-connect input[name=title]').fill('Weekly sync');
@@ -113,6 +132,11 @@ async function main() {
     assert.equal(await page.locator('.live-chat').innerText().then(text => text.includes('Welcome')), true);
     assert.equal(await page.locator('.live-router').innerText().then(text => text.includes('pass')), true);
     assert.equal(await page.locator('.live-chat').innerText().then(text => text.includes('below threshold')), false, 'PASS trace stays out of chat');
+    assert.deepEqual(await page.locator('.live-chat > p').evaluateAll(rows => rows.map(row => row.dataset.liveNotice || 'chat')),
+      ['waiting', 'chat', 'deferred', 'failed'], 'bot notices sit in the chat in time order');
+    assert.equal(await page.locator('.live-chat [data-live-notice=failed]').getAttribute('class'), 'live-notice failed');
+    assert.equal(await page.locator('.live-chat [data-live-notice=failed] span').innerText(), "Can't answer in this private meeting: Test Mac couldn't make a private copy of its repository", 'the name is not said twice');
+    assert.equal(await page.locator('.live-chat [data-live-notice=deferred] span').innerText(), 'Busy. Will answer after its current work.');
     assert.equal(await page.locator('.live-router').innerText().then(text => text.includes('Named mentions')), true);
     await page.locator('.live-transcript-link').click();
     assert.equal(await page.evaluate(() => document.activeElement.id), 'live-chunk-1', 'chat reply links to its transcript sequence');
@@ -128,8 +152,8 @@ async function main() {
     world.detail.owner_actor = 'human:ana';
     await page.locator('[data-live-id=live-1]').click();
     await page.locator('[data-live-control=pause]').waitFor();
-    await page.locator('#live-bot-picker select option[value=finance]').waitFor();
-    await page.locator('#live-bot-picker select').selectOption('finance');
+    await page.locator(`#live-bot-picker select option[value="${FINANCE}"]`).waitFor();
+    await page.locator('#live-bot-picker select').selectOption(FINANCE);
     const draft = 'Please review this plan';
     await page.locator('#live-chat-form input').fill(draft);
     await page.locator('#live-chat-form input').evaluate(input => input.setSelectionRange(8, 14));
@@ -140,7 +164,7 @@ async function main() {
     const afterPoll = await chatBox();
     assert.deepEqual(afterPoll, {value: draft, start: 8, end: 14, focused: true});
     assert.deepEqual(await page.locator('#live-bot-picker select').evaluate(select =>
-      [...select.selectedOptions].map(option => option.value)), ['finance']);
+      [...select.selectedOptions].map(option => option.value)), [FINANCE]);
     const readsBeforeEvent = world.detailReads;
     await page.evaluate(() => LIVE_MEETINGS.sources.get('live-1').dispatchEvent(
       new MessageEvent('meeting.chat', {data: '{}', lastEventId: '8'})));
@@ -148,14 +172,14 @@ async function main() {
     const afterEvent = await chatBox();
     assert.deepEqual(afterEvent, {value: draft, start: 8, end: 14, focused: true});
     assert.deepEqual(await page.locator('#live-bot-picker select').evaluate(select =>
-      [...select.selectedOptions].map(option => option.value)), ['finance']);
+      [...select.selectedOptions].map(option => option.value)), [FINANCE]);
     await sendChat();
     await page.locator('.live-status').getByText('Message sent.').waitFor();
     const chatCalls = calls.filter(([op]) => op === 'chat');
     assert.equal(chatCalls.length, 1);
     assert.equal(chatCalls[0][1].text, draft);
     assert.deepEqual(await page.locator('#live-bot-picker select').evaluate(select =>
-      [...select.selectedOptions].map(option => option.value)), ['finance']);
+      [...select.selectedOptions].map(option => option.value)), [FINANCE]);
 
     const padded = '  Please check the totals  ';
     await page.locator('#live-chat-form input').fill(padded);
@@ -210,11 +234,12 @@ async function main() {
     assert.equal(await chatInput.inputValue(), 'Retain this rejected message', 'failed send keeps the draft');
 
     await page.locator('#live-bot-picker button').click();
-    await page.locator('[data-live-bot-remove="finance"]').waitFor();
-    assert(calls.some(([op, body]) => op === 'bots' && body.bots.includes('finance')));
-    await page.locator('[data-live-bot-remove="finance"]').click();
-    await page.locator('[data-live-bot-remove="finance"]').waitFor({state: 'detached'});
-    assert(calls.some(([op]) => op === 'finance'), 'a joined person can revoke meeting-only bot access');
+    await page.locator(`[data-live-bot-remove="${FINANCE}"]`).waitFor();
+    assert(calls.some(([op, body]) => op === 'bots' && body.bots.includes(FINANCE)));
+    assert.match(await page.locator('.live-members').innerText(), /Teammates: Operations Remove Finance Remove/, 'teammates by name, not id');
+    await page.locator(`[data-live-bot-remove="${FINANCE}"]`).click();
+    await page.locator(`[data-live-bot-remove="${FINANCE}"]`).waitFor({state: 'detached'});
+    assert(calls.some(([op]) => op === FINANCE), 'a joined person can revoke meeting-only bot access');
     await page.locator('[data-live-control=pause]').click();
     await page.locator('[data-live-control=resume]').waitFor();
     assert(calls.some(([op, body]) => op === 'control' && body.action === 'pause'));
@@ -225,8 +250,42 @@ async function main() {
     await page.locator('[data-live-finalize]').click();
     await page.locator('.live-finalized').waitFor();
     assert(calls.some(([op]) => op === 'finalize'));
+    assert.doesNotMatch(await page.locator('.live-card-head').innerText(), /From Tico Recorder/);
+    world.detail.client = 'tico-recorder';
+    // A deep link opens ended meetings absent from the active list, including the older alias.
+    world.meetings = [];
+    await page.goto('https://tico-ui.test/#/meetings?live=live-1');
+    await page.waitForURL('**/#/meetings/live/live-1');
+    await page.locator('.live-finalized').waitFor();
+    await page.locator('.live-card-head').getByText('From Tico Recorder').waitFor();
+    assert.equal(await page.evaluate(() => LIVE_MEETINGS.selected), 'live-1');
+    assert.equal(await page.evaluate(() => LIVE_MEETINGS.screen), null, 'An ended meeting never starts a screen loop');
+    const endedScreenReads = world.screenReads || 0;
+    await page.waitForTimeout(1100);
+    assert.equal(world.screenReads || 0, endedScreenReads, 'Ended meeting pages do not poll screen routes');
+    world.meetings = [makeDetail('live-1')];
+    await page.goto('https://tico-ui.test/#/meetings/live/denied');
+    await page.getByText('This meeting is not available to you, or it does not exist.').waitFor();
+    assert.equal(await page.locator('.live-card').count(), 0, 'denied link never falls through to another meeting');
+    assert.equal(await page.evaluate(() => LIVE_MEETINGS.selected), 'denied');
+    // Synthetic canvas pixels only: successful frame, expiration, and route teardown.
+    const jpeg = await page.evaluate(() => { const c = document.createElement('canvas'); c.width=80; c.height=60; c.getContext('2d').fillRect(0,0,80,60); return c.toDataURL('image/jpeg').split(',')[1]; });
+    world.screen = Buffer.from(jpeg, 'base64'); world.detail.state = 'live';
+    await page.goto('https://tico-ui.test/#/meetings/live/live-1');
+    await page.locator('.live-screen:not([hidden]) img').waitFor();
+    await page.waitForFunction(() => document.querySelector('.live-screen img')?.naturalWidth === 80);
+    await page.evaluate(() => LIVE_MEETINGS.sources.get('live-1').dispatchEvent(new MessageEvent('meeting.access', {data:'{}', lastEventId:'99'})));
+    await page.waitForTimeout(400);
+    assert(await page.locator('.live-screen').isVisible(), 'adding another person must preserve an unchanged slide');
+    await page.waitForFunction(() => document.querySelector('.live-screen img')?.naturalWidth === 80);
+    world.screen = null;
+    await page.locator('.live-screen').waitFor({state:'hidden'});
+    await page.goto('https://tico-ui.test/#/meetings');
+    await page.waitForFunction(() => LIVE_MEETINGS === null);
+    assert.equal(await page.locator('.live-screen').count(), 0, 'leaving a meeting removes its shared image');
     assert.deepEqual(errors, []);
     await context.close();
+    await require('./support/recorder-pause.cjs')(browser);
   } finally { await browser.close(); }
 }
 

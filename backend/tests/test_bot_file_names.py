@@ -17,7 +17,7 @@ def write(path, data):
 
 def test_the_readers_take_either_manifest(tmp_path):
     from clients import registry
-    from clients.remotecli import seed_routines
+    from clients.remotecli import seed_automations
     from connectors.mail import access as mail
 
     routine = {"id": "daily", "title": "Daily", "cron": "0 9 * * 1-5", "enabled": False, "instructions": "Do it"}
@@ -25,18 +25,30 @@ def test_the_readers_take_either_manifest(tmp_path):
                              ("new", {"name": "new", "routines": [routine], "tools": [{"service": "gmail", "identity": "a@x.example", "can": ["read"], "env": "NEW_KEY"}]})):
         write(tmp_path / (("emp-" if folder == "old" else "bot-") + folder) / ("employee.yaml" if folder == "old" else "bot.yaml"), manifest)
 
+    # A new bot's routines are owned by its id, which the client looks up by slug (as the real client's get does).
+    bot_ids = {"old": "0190f3a2-7c1e-7d4a-9b8e-2f6c1a5d9e10", "new": "0190f3a2-7c1e-7d4a-9b8e-2f6c1a5d9e11"}
+
     class Hub:
         def __init__(self):
-            self.posts = []
+            self.gets, self.posts = [], []
+
+        def get(self, path):
+            self.gets.append(path)
+            return {"id": bot_ids[path.removeprefix("bots/")]}
 
         def post(self, path, body):
             self.posts.append((path, body))
-            return {"routine": {"id": "r%d" % len(self.posts)}}
+            return {"id": "auto_%d" % len(self.posts)}
 
     for folder in ("old", "new"):
         hub = Hub()
-        assert seed_routines(hub, folder, M.repo_dir(tmp_path, folder)) == ["r1"]
-        assert hub.posts[0][1]["key"] == "daily" and hub.posts[0][1]["enabled"] is False
+        assert seed_automations(hub, folder, M.repo_dir(tmp_path, folder)) == ["auto_1"]
+        assert hub.gets == ["bots/" + folder]
+        path, body = hub.posts[0]
+        actor = "bot:" + bot_ids[folder]
+        assert path == "automations" and body["name"] == "Daily" and body["enabled"] is False
+        assert body["trigger"]["type"] == "schedule" and body["trigger"]["cron"] == "0 9 * * 1-5"
+        assert body["owner"] == actor and body["steps"][0]["bot"] == actor and body["steps"][0]["prompt"] == "Do it"
     merged = registry.merge_employee({"name": "old"}, {}, root=tmp_path)
     assert registry.declared_env_keys(merged) == ["OLD_KEY"]
     assert registry.declared_env_keys(registry.merge_employee({"name": "new"}, {}, root=tmp_path)) == ["NEW_KEY"]
@@ -52,9 +64,11 @@ def test_a_stored_needs_onboarding_row_becomes_needs_setup_and_readers_take_both
     store.initialize()
     with store.transaction() as c:
         assert c.execute("SELECT 1 FROM cloud_migrations WHERE version=45").fetchone()
+        c.execute("PRAGMA ignore_check_constraints=ON")     # rows an older release wrote, before the onboarding CHECK
         for slug, state in (("old", "needs_onboarding"), ("new", "needs_setup"), ("done", "onboarded")):
-            c.execute("INSERT INTO bots(slug,display_name) VALUES(?,?)", (slug, slug))
-            c.execute("INSERT INTO bot_config(bot,config_json,operator,onboarding_state) VALUES(?,?,?,?)", (slug, "{}", "morgan", state))
+            c.execute("INSERT INTO bots(id,slug,display_name) VALUES(?,?,?)", (slug, slug, slug))
+            c.execute("INSERT INTO bot_config(bot,config,owner_id,onboarding_state) VALUES(?,?,?,?)", (slug, "{}", "morgan", state))
+        c.execute("PRAGMA ignore_check_constraints=OFF")
         c.execute("DELETE FROM cloud_migrations WHERE version=45")             # the state a database is in before this release
     store.initialize()
     with store.read() as c:

@@ -1,6 +1,7 @@
 """The UI is served as one script and one stylesheet (backend/ui_bundle.py), in the order index.html lists them."""
 import os
 import re
+from pathlib import Path
 
 import pytest
 
@@ -50,6 +51,16 @@ def test_standalone_scripts_are_compressed_and_still_revalidate_privately(api):
     assert api.get(path, headers={"Accept-Encoding": "gzip"}).status_code == 401
 
 
+def test_a_versioned_font_is_kept_and_an_unversioned_one_revalidates(api):
+    # Inter's font-display is optional: a font the browser must revalidate first can miss the first paint.
+    url = re.search(r'href="(/vendor/fonts/inter-variable\.woff2\?v=[0-9a-f]{12})"',
+                    (Path(__file__).resolve().parents[2] / "ui" / "index.html").read_text()).group(1)
+    kept = api.get(url, headers=AUTH)
+    assert kept.status_code == 200 and kept.headers["content-type"] == "font/woff2"
+    assert kept.headers["cache-control"] == ui_bundle.IMMUTABLE
+    assert api.get(url.split("?")[0], headers=AUTH).headers["cache-control"] == "private, no-cache"
+
+
 def test_a_change_to_a_listed_file_changes_the_url(tmp_path):
     ui = tmp_path / "ui"
     (ui / "app").mkdir(parents=True)
@@ -71,3 +82,19 @@ def test_a_change_to_a_listed_file_changes_the_url(tmp_path):
     assert second.etag[ui_bundle.JS_PATH] != first.etag[ui_bundle.JS_PATH] and second.page != first.page
     (ui / "app/a.js").write_text("const A = 3;\n")                         # not strict: it cannot share a script
     assert bundles.get() is None
+
+
+def test_no_two_files_declare_the_same_top_level_name():
+    # The listed files share one scope (bundled or not), so a top-level const, let or class whose name another file
+    # also declares is a SyntaxError that leaves the whole app blank.
+    from pathlib import Path
+    decl = re.compile(r"^(?:async\s+)?(function\*?|const|let|class)\s+([A-Za-z_$][\w$]*)", re.M)
+    ui = Path(ui_bundle.__file__).resolve().parent.parent / "ui"
+    _, paths = ui_bundle.build(ui)
+    seen = {}
+    for path in paths:
+        if path.suffix == ".js":
+            for kind, name in decl.findall(path.read_text()):
+                seen.setdefault(name, []).append((path.name, kind))
+    clashes = {n: d for n, d in seen.items() if len(d) > 1 and any(k in ("const", "let", "class") for _, k in d)}
+    assert clashes == {}

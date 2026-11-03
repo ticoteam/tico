@@ -1,0 +1,7 @@
+{
+  "and": "prose: `hub and ...` in templates/catalog/support/software/hq-tickets",
+  "app": "prose: `hub app` in templates/catalog/chief-of-staff/knowledge/status-practice.md",
+  "command": "prose: `do not look it up with any hub command` in templates/catalog/assistant/playbooks/approvals-for-them.md",
+  "commands": "prose: `the hub commands for goal work` in templates/catalog/goal-manager/playbooks/README.md",
+  "failing": "prose: `hub failing` in templates/catalog/video-producer/software/pipeline.py"
+}

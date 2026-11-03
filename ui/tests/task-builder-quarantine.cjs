@@ -17,10 +17,10 @@ const {unrouted} = require('./support/routes.cjs');
       {id: 'building', name: 'Building', status: 'doing', position: 0},
       {id: 'shipped', name: 'Shipped', status: 'done', position: 1}]};
     const now = '2030-10-26T12:00:00Z';
-    const task = (id, owner, extra = {}) => ({id, title: id, body: 'Build the requested change.', owner,
-      requester: 'human:ana', type_id: type.id, step_id: 'building', type: {id: type.id, name: type.name}, step: type.steps[0],
+    const task = (id, owner, extra = {}) => ({id, title: id, body: 'Build the requested change.', owner_id: owner,
+      requester_id: 'human:ana', type_id: type.id, step_id: 'building', type: {id: type.id, name: type.name}, step: type.steps[0],
       status: 'doing', version: 1, lane: 'company', labels: [], links: [], parts: {total: 0, done: 0},
-      rank: 1, created: now, updated: now, ...extra});
+      rank: 1, created_at: now, updated_at: now, ...extra});
     const tasks = [task('Automatic cooldown', 'bot:builder-a'), task('Another ticket', 'bot:builder-a'),
       task('Manual quarantine', 'human:ana', {roles: {builder: ['bot:builder-b']}}), task('Healthy builder', 'bot:healthy'),
       task('General work', 'bot:builder-a', {type_id: 'general', type: {id: 'general', name: 'General'}}),
@@ -107,6 +107,7 @@ const {unrouted} = require('./support/routes.cjs');
     if (process.env.DEV595_SHOTS) await page.screenshot({path: path.join(process.env.DEV595_SHOTS, 'ticket-phone.png'), fullPage: true});
     // Manual quarantine on the ticket page, then its lift, use the same notice as cards.
     await page.goto('https://tico-ui.test/#/task/Manual%20quarantine');
+    await page.waitForFunction(() => S.route === '#/task/Manual%20quarantine');   // a page change draws a frame later (its fade)
     await modal.locator('.task-builder-notice').waitFor();
     assert.equal(await modal.locator('.task-builder-notice').innerText(), manual.quarantine.builder_notice);
     await page.evaluate(status => liveEmit('bots', {bot: status.bot, status}), active('builder-b'));

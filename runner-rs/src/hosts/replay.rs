@@ -606,7 +606,7 @@ mod record {
     fn scrub(v: &Value, secrets: &crate::redact::Redactor, paths: &[(String, &str)]) -> Value {
         match v {
             Value::String(s) => {
-                let mut s = secrets.scrub_text(s);
+                let mut s = secrets.scrub_text(s).into_owned();
                 for (from, to) in paths {
                     s = s.replace(from.as_str(), to);
                 }

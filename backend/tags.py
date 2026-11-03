@@ -39,7 +39,7 @@ def install(app, store, auth, mutate, task_views):
     def list_tags(request: Request, is_template: bool | None = None):
         auth.domain(request.state.identity)
         with store.read() as c:
-            return {"tags": [t for t in H.tags(c, is_template) if privacy.tag_readable(c, request.state.identity, t)]}
+            return {"tags": privacy.tags_readable(c, request.state.identity, H.tags(c, is_template))}
 
     @app.get("/api/v2/tags/{tag_id}")
     def show_tag(request: Request, tag_id: str, limit: int = 500, offset: int = 0):

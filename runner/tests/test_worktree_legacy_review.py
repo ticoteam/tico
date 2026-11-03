@@ -27,7 +27,7 @@ def test_legacy_add_consumes_actual_provision_response(prepared, trees, monkeypa
     if pending:
         detail.update(checkout_state='legacy_present', setup_pending=True)
     with api.app_state.store.transaction() as c:
-        c.execute('UPDATE task_links SET state=?,detail_json=? WHERE id=?',
+        c.execute('UPDATE task_links SET state=?,detail=? WHERE id=?',
                   ('pending' if pending else 'present', json.dumps(detail), link['link_id']))
     response = post(api, route, {'repo': 'Acme/product'}, 'bot-test')
     assert response.status_code == 200, response.text
@@ -91,10 +91,11 @@ def test_previously_demoted_legacy_link_recovers_only_after_runner_verification(
     if setup_pending:
         legacy_history['setup_pending'] = True
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE task_links SET state='pending',detail_json=? WHERE id=?",
+        c.execute("UPDATE task_links SET state='pending',detail=? WHERE id=?",
                   (json.dumps(legacy_history), link['link_id']))
     with api.app_state.store.read() as c:
         row = dict(c.execute('SELECT * FROM task_links WHERE id=?', (link['link_id'],)).fetchone())
+    row['detail_json'] = row.pop('detail')       # the row as runners/me/worktrees hands it out (backend/runner_wire.py)
 
     report = W.inspect(workspace, row)
     if setup_pending or missing_tracked:
@@ -108,8 +109,8 @@ def test_previously_demoted_legacy_link_recovers_only_after_runner_verification(
     response = post(api, 'runners/heartbeat', beat, 'runner-test')
     assert response.status_code == 200, response.text
     with api.app_state.store.read() as c:
-        saved = c.execute('SELECT state,detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
-    detail = json.loads(saved['detail_json'])
+        saved = c.execute('SELECT state,detail FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
+    detail = json.loads(saved['detail'])
     if setup_pending or missing_tracked:
         assert saved['state'] == 'pending'
         assert detail.get('checkout_state') != 'legacy_present'

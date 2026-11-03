@@ -49,7 +49,9 @@ async function handler(event) {
         key !== 'k1' || !matches(/^[A-Za-z0-9_-]{43}$/, signature)) return deny(403);
     try {
         // Only HQ writes this mapping; object writers never choose the tenant prefix or key.
-        const company = JSON.parse(await store.get(label));
+        // CloudFront's runtime refuses `await` inside call arguments (SyntaxError at publish time).
+        const stored = await store.get(label);
+        const company = JSON.parse(stored);
         if (company.v !== 1 || typeof company.prefix !== 'string' ||
             !matches(/^c\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/$/, company.prefix) ||
             company.signing.key_id !== key || typeof company.signing.secret !== 'string' ||

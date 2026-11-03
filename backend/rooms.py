@@ -12,28 +12,31 @@ SHARED = "shared"
 # The one private room each person has with the Assistant (backend/assistant.py); distinct from the
 # room the person's tasks for the assistant bot land in, so its history is only what they said to it.
 ASSISTANT_ROOM = "assistant"
-# The owner's chat with the CEO Bot (backend/ceo_bot.py), which the owner has in place of an Assistant room: one per
-# company, belonging to the owner seat, so a transfer of ownership moves it to the new owner (backend/assistant.py).
-CEO_ROOM = "ceo"
+# The owner's earlier chat with the Strategy Bot (backend/strategy_bot.py), from when the owner had it in place of an
+# Assistant room: one per company, belonging to the owner seat, history now (read-only under "Earlier chats",
+# backend/assistant.py). No new message goes to it; a transfer of ownership still moves it to the new owner. Its stored
+# value stays "ceo": the rows stored so far carry it.
+STRATEGY_ROOM = "ceo"
 # The one private room each person has with the Librarian (backend/librarian.py): their Ask the Librarian questions.
 DOCS_ROOM = "docs"
 
 
 def session_config(conversation, bot, config):
-    """The config a turn is handed. In the owner's CEO Bot chat it keys its session on that conversation
-    (clients/sessions.py, `session: task`), so the owner's chat is one session and the CEO Bot's goals session (its
+    """The config a turn is handed. In the owner's earlier Strategy Bot chat (a turn queued there before it became
+    history) it keys its session on that conversation
+    (clients/sessions.py, `session: task`), so the owner's chat is one session and the Strategy Bot's goals session (its
     regular checks and goal work) another, and neither shares the other's context. The bot's own `session` setting
     never applies here: `session: bot` would put the owner's chat on the thread its goals session and other bots'
     messages use. Every runner reads `session` from the turn it is handed, so none needs to know this room."""
-    from .ceo_bot import SLUG
+    from .strategy_bot import SLUG
     if (bot == SLUG and conversation and conversation.get("scope") == PERSONAL
-            and conversation.get("room_key") == CEO_ROOM):
+            and conversation.get("room_key") == STRATEGY_ROOM):
         return {**(config or {}), "session": "task"}
     return config
 
 
-def roster(c):
-    return read_cache.value(c, ("roster",), lambda: _roster(c))
+def roster(c, shared=False):
+    return read_cache.value(c, ("roster",), lambda: _roster(c), shared)
 
 
 def _roster(c):
@@ -41,20 +44,21 @@ def _roster(c):
     return P.load(json.loads(row[0])) if row else P.load({"people": H.humans(c)})
 
 
-def entries(c):
-    return read_cache.value(c, ("room_entries",), lambda: _entries(c))
+def entries(c, shared=False):
+    return read_cache.value(c, ("room_entries",), lambda: _entries(c), shared)
 
 
 def _entries(c):
     result = {}
+    slugs = {row["id"]: row["slug"] for row in c.execute("SELECT id,slug FROM bots")}
     for row in read_cache.configs(c):
-        config = json.loads(row["config_json"] or "{}")
+        config = json.loads(row["config"] or "{}")
         config.update({"description": row["description"] or "", "reports_to": row["reports_to"],
-                       "repo": row["repo"] or ("emp-" + row["bot"])})
+                       "repo": row["repo"] or ("emp-" + slugs.get(row["bot"], row["bot"]))})
         if row["thread_mode"]:
             config["thread_mode"] = row["thread_mode"]
-        if row["owner_ids_json"] is not None:
-            config["owner_ids"] = json.loads(row["owner_ids_json"])
+        if row["owner_ids"] is not None:
+            config["owner_ids"] = json.loads(row["owner_ids"])
         result[row["bot"]] = config
     return result
 
@@ -64,8 +68,8 @@ def thread_mode(c, bot, row=None):
     `row` is the bot's bot_config row when the caller has read it already."""
     if bot == "coo":
         return PERSONAL
-    row = row or c.execute("SELECT thread_mode,config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    config = json.loads(row["config_json"] or "{}") if row else {}
+    row = row or c.execute("SELECT thread_mode,config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = json.loads(row["config"] or "{}") if row else {}
     value = str((row["thread_mode"] if row else None) or config.get("thread_mode") or "").strip().lower()
     if value in (PERSONAL, SHARED):
         return value
@@ -77,8 +81,8 @@ def shared_member_ids(c, auth, bot):
     the bot: a shared room is its activity (docs/permissions.md)."""
     people, configs = roster(c), entries(c)
     members = {p["id"] for p in P.primary_users(bot, people, configs)}
-    stored = c.execute("SELECT access_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    if stored and not A.document(stored["access_json"])["read"]["everyone"]:
+    stored = c.execute("SELECT access FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    if stored and not A.document(stored["access"])["read"]["everyone"]:
         members = {pid for pid in members if auth.person_can(c, "human:" + pid, bot, "read")}
     owner_email = auth.owner_email
     owner = next((p for p in people["people"] if str(p.get("email") or "").lower() == owner_email), None)
@@ -88,7 +92,46 @@ def shared_member_ids(c, auth, bot):
 
 
 def shared_member(c, auth, actor, bot):
-    return str(actor).startswith("human:") and H.actor_id(actor) in shared_member_ids(c, auth, bot)
+    return bot in shared_member_bots(c, auth, actor, [bot])
+
+
+def shared_member_bots(c, auth, actor, slugs):
+    """The slugs in `slugs` whose shared room `actor` is a member of: `shared_member_ids` answered for
+    `actor` alone, for every bot at once. The roster and configs are read once (not per bot), the access rows
+    in one statement, and the read check runs only for `actor`, only where the bot's read is not open to everyone."""
+    slugs = list(dict.fromkeys(slugs))
+    if not slugs or not str(actor).startswith("human:"):
+        return set()
+    actor_id = H.actor_id(actor)
+    # Read only below: the snapshot's own roster and configurations, never copied (read_cache.value).
+    people, configs = roster(c, shared=True), entries(c, shared=True)
+    owner_email = auth.owner_email
+    owner = next((p["id"] for p in people["people"] if str(p.get("email") or "").lower() == owner_email), None)
+    stored = {}
+    for start in range(0, len(slugs), 500):
+        part = slugs[start:start + 500]
+        stored.update({row["bot"]: row["access"] for row in c.execute(
+            "SELECT bot,access FROM bot_config WHERE bot IN (" + ",".join("?" * len(part)) + ")", part)})
+    found, needs_read = set(), []
+    for slug in slugs:
+        if owner == actor_id:
+            found.add(slug)
+            continue
+        if actor_id not in {p["id"] for p in P.primary_users(slug, people, configs)}:
+            continue
+        if slug in stored and not A.document(stored[slug])["read"]["everyone"]:
+            needs_read.append(slug)
+        else:
+            found.add(slug)
+    if needs_read:
+        try:
+            who = auth.identity_for_actor(c, "human:" + actor_id)
+        except Problem:
+            who = None
+        if who is not None:
+            access = auth.bot_accesses(c, who, needs_read)
+            found.update(slug for slug in needs_read if access[slug]["read"])
+    return found
 
 
 def room_bot(conversation):
@@ -101,8 +144,8 @@ def room_bot(conversation):
 
 def personal_room(c, human_actor, bot="coo", subject="Private control room"):
     row = c.execute(
-        "SELECT id FROM conversations WHERE scope='personal' AND owner_actor=? AND room_key=? "
-        "AND closed_at IS NULL ORDER BY COALESCE(last_message_at,created) DESC LIMIT 1",
+        "SELECT id FROM conversations WHERE scope='personal' AND owner_id=? AND room_key=? "
+        "AND closed_at IS NULL ORDER BY COALESCE(last_message_at,created_at) DESC LIMIT 1",
         (human_actor, bot)).fetchone()
     if row:
         return H.conversation(c, row["id"])
@@ -112,7 +155,7 @@ def personal_room(c, human_actor, bot="coo", subject="Private control room"):
     for candidate in H.conversations_for(c, human_actor, limit=500):
         if (candidate["kind"] == "chat" and not candidate.get("task_id") and not candidate["closed_at"]
                 and set(candidate["participants"]) == pair):
-            c.execute("UPDATE conversations SET scope='personal',owner_actor=?,room_key=? WHERE id=?",
+            c.execute("UPDATE conversations SET scope='personal',owner_id=?,room_key=? WHERE id=?",
                       (human_actor, bot, candidate["id"]))
             return H.conversation(c, candidate["id"])
     # A person's own room opens even while the bot is paused: their message waits for it (hubdb.say).
@@ -128,11 +171,11 @@ def sync_shared_room(c, auth, bot, actor=None, create=False):
             raise Problem("forbidden", "You are not a member of this shared bot room", 403)
     participants = ["bot:" + bot] + ["human:" + pid for pid in sorted(members)]
     row = c.execute(
-        "SELECT id,participants_json FROM conversations WHERE scope='shared' AND room_key=? "
-        "AND closed_at IS NULL ORDER BY COALESCE(last_message_at,created) DESC LIMIT 1", (bot,)).fetchone()
+        "SELECT id,participants FROM conversations WHERE scope='shared' AND room_key=? "
+        "AND closed_at IS NULL ORDER BY COALESCE(last_message_at,created_at) DESC LIMIT 1", (bot,)).fetchone()
     if row:
-        if json.loads(row["participants_json"] or "[]") != participants:
-            c.execute("UPDATE conversations SET participants_json=? WHERE id=?", (encode(participants), row["id"]))
+        if json.loads(row["participants"] or "[]") != participants:
+            c.execute("UPDATE conversations SET participants=? WHERE id=?", (encode(participants), row["id"]))
             H.event(c, H.KEEPER, "conversation.members_synced", row["id"], {"participants": participants})
         return H.conversation(c, row["id"])
     if not create:
@@ -141,15 +184,15 @@ def sync_shared_room(c, auth, bot, actor=None, create=False):
     # Old CPO chats were private pairs. Archive them intact; never merge private human
     # context into the new group room.
     for old in c.execute(
-            "SELECT id,participants_json FROM conversations WHERE kind='chat' AND task_id IS NULL "
+            "SELECT id,participants FROM conversations WHERE kind='chat' AND task_id IS NULL "
             "AND closed_at IS NULL AND coalesce(scope,'direct')!='shared'").fetchall():
-        old_participants = json.loads(old["participants_json"] or "[]")
+        old_participants = json.loads(old["participants"] or "[]")
         humans = [p for p in old_participants if str(p).startswith("human:")]
         if "bot:" + bot in old_participants and len(old_participants) == 2 and len(humans) == 1:
             # Preserve the original pair as that person's private archive. Giving each
             # legacy archive its own room key avoids colliding with their active room.
             c.execute(
-                "UPDATE conversations SET scope='personal',owner_actor=?,room_key=?,closed_at=? WHERE id=?",
+                "UPDATE conversations SET scope='personal',owner_id=?,room_key=?,closed_at=? WHERE id=?",
                 (humans[0], f"{bot}:legacy:{old['id']}", H.now(), old["id"]))
             H.event(c, H.KEEPER, "conversation.archived_for_shared_room", old["id"], {"bot": bot})
     opener = actor or next((p for p in participants if p.startswith("human:")), H.KEEPER)
@@ -189,9 +232,9 @@ def work_room(c, auth, bot, requester):
         return sync_shared_room(c, auth, bot, actor=actor, create=True)
     human = requester if str(requester).startswith("human:") else None
     if not human:
-        row = c.execute("SELECT operator FROM bot_config WHERE bot=?", (bot,)).fetchone()
-        if row and row["operator"] and H.human(c, row["operator"]):
-            human = "human:" + row["operator"]
+        row = c.execute("SELECT owner_id FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        if row and row["owner_id"] and H.human(c, row["owner_id"]):
+            human = "human:" + row["owner_id"]
     if not human:
         owner = auth.owner_id(c)
         if owner:
@@ -216,8 +259,8 @@ def task_conversation_id(c, auth, owner, requester):
 
 def archive_personal_room(c, actor, bot="coo"):
     row = c.execute(
-        "SELECT id FROM conversations WHERE scope='personal' AND owner_actor=? AND room_key=? "
-        "AND closed_at IS NULL ORDER BY COALESCE(last_message_at,created) DESC LIMIT 1",
+        "SELECT id FROM conversations WHERE scope='personal' AND owner_id=? AND room_key=? "
+        "AND closed_at IS NULL ORDER BY COALESCE(last_message_at,created_at) DESC LIMIT 1",
         (actor, bot)).fetchone()
     if not row:
         return None

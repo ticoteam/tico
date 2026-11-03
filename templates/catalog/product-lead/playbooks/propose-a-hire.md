@@ -2,7 +2,7 @@
 
 Triggered when the weekly summary finds recurring product work with no owner, or when the owner asks
 "do we need someone for this?". Budget 15 minutes. The outcome is one proposal on a task for the owner,
-and a BotOps task when requested and your Tools allow it.
+A BotOps task follows only when a task asks for it and a granted Tool allows it.
 
 ---
 

@@ -81,7 +81,7 @@ print(sqlite3.connect("file:/data/hub.sqlite?mode=ro", uri=True).execute(
 last_seen() {
   dc exec -T server python -c 'import sqlite3
 print(sqlite3.connect("file:/data/hub.sqlite?mode=ro", uri=True).execute(
-    "SELECT coalesce(max(last_seen), \"\") FROM runners WHERE revoked_at IS NULL").fetchone()[0])'
+    "SELECT coalesce(max(last_seen_at), \"\") FROM runners WHERE revoked_at IS NULL").fetchone()[0])'
 }
 reconnected() { [[ "$(last_seen)" > "$before" ]]; }
 online() {
@@ -125,15 +125,20 @@ id="$(environment_id)"
 step "the tunnel's route can be written for the cloudflared container"
 # The server user owns the tico-tunnel volume, as it does in a real install, and cloudflared (another user) can read the file.
 dc exec -T -e TICO_DOMAIN=smoke.example.test server tico-entrypoint tunnel-config || fail "the server cannot write the tunnel's route"
-dc exec -T server cat /tunnel/cloudflared.yml | grep -q 'hostname: smoke.example.test' || fail "the tunnel's route names the wrong host"
-[ "$(dc exec -T server stat -c %a /tunnel/cloudflared.yml)" = 644 ] || fail "the tunnel's route is not readable by cloudflared"
+dc exec -T server cat /tunnel/ingress.yml | grep -q 'hostname: smoke.example.test' || fail "the tunnel's route names the wrong host"
+[ "$(dc exec -T server stat -c %a /tunnel/ingress.yml)" = 644 ] || fail "the tunnel's route is not readable by cloudflared"
 # A separate runner hostname is routed for the API and downloads only, ahead of the catch-all 404.
 dc exec -T -e TICO_DOMAIN=smoke.example.test -e TICO_RUNNER_URL=https://runner.smoke.example.test server tico-entrypoint tunnel-config \
   || fail "the server cannot write the tunnel's route with a runner hostname"
-route="$(dc exec -T server cat /tunnel/cloudflared.yml)"
+route="$(dc exec -T server cat /tunnel/ingress.yml)"
 printf '%s\n' "$route" | grep -A1 -x '  - hostname: runner.smoke.example.test' | grep -qF "path: '^/(?:api/v2|download)(?:/.*)?\$'" \
   || fail "the tunnel does not route the runner hostname's API and downloads"
 [ "$(printf '%s\n' "$route" | tail -1)" = "  - service: http_status:404" ] || fail "the tunnel's catch-all 404 is not last"
+# With calls on the app host, the tunnel sends LiveKit's signal to the media server ahead of the app's own route.
+dc exec -T -e TICO_DOMAIN=smoke.example.test -e TICO_MEET_URL=wss://smoke.example.test -e TICO_MEET_API_KEY=smoke \
+  -e TICO_MEET_API_SECRET=smoke server tico-entrypoint tunnel-config || fail "the server cannot write the tunnel's route with calls"
+dc exec -T server cat /tunnel/ingress.yml | head -3 | grep -qF "path: '^/rtc(?:/.*)?\$'" || fail "the tunnel has no /rtc route for calls"
+dc exec -T -e TICO_DOMAIN=smoke.example.test server tico-entrypoint tunnel-config || fail "the server cannot restore the tunnel's route"
 
 step "a malformed expected AWS account refuses to start, without calling AWS"
 out="$(dc exec -T -e TICO_EXPECTED_AWS_ACCOUNT=12345 server tico-entrypoint aws-identity 2>&1)" && fail "a malformed TICO_EXPECTED_AWS_ACCOUNT was accepted"

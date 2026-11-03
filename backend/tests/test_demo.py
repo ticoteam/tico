@@ -1,14 +1,20 @@
 """Demo mode: a fixed fictional company that passes the app's own rules, cannot be mistaken for an
 install, listens only where it may, and never touches the network."""
 
+import contextlib
+import os
+import signal
 import socket
 import sqlite3
+import tempfile
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import demo
+from backend import demo, screen_binary
+from backend import server as serving
 from backend.app import create_app
 
 NOW = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)      # a Friday, so a week in review exists
@@ -54,6 +60,21 @@ def test_saved_demo_reopens_with_edits_and_the_same_owner_session(built, monkeyp
         assert api.get("/api/v2/tasks/" + task_id).json()["task"]["title"] == "Keep this demo edit"
 
 
+def test_every_bot_has_a_profile_and_no_one_is_told_of_a_change(built):
+    """The demo is made with its bots, so a start finds no bot to give a profile to, and no owner gets the notice that
+    explains a change (it would read as just now, at the top of Threads)."""
+    _, settings = built
+    with signed_in(settings) as api:
+        assert api.get("/api/v2/tasks", params={"limit": 1}).status_code == 200    # a start has run
+    with sqlite3.connect(settings.db_path) as db:
+        told = db.execute("SELECT count(*) FROM messages WHERE body LIKE 'Tico gave each of your bots a profile%'")
+        assert told.fetchone()[0] == 0
+        from backend import profiles
+        from backend.store import H
+        configs = [H._json(config, {}) for (config,) in db.execute("SELECT config FROM bot_config")]
+        assert configs and all(profiles.name_of(config) for config in configs)
+
+
 def test_demo_refuses_existing_unrecognized_data_without_writing(tmp_path):
     database = tmp_path / "hub.sqlite"
     database.write_bytes(b"existing install or incomplete seed")
@@ -73,10 +94,20 @@ def test_a_public_demo_is_read_only(tmp_path):
     settings = demo.build(tmp_path, now=NOW, url="https://demo.example.com", public=True)
     with signed_in(settings) as api:
         api.headers["Host"] = "demo.example.com"
-        assert api.get("/api/v2/config").status_code == 200
+        assert api.get("/api/v2/config").json()["demo_public"] is True      # the strip at the top says "Read only demo"
+        # A link preview or monitor asks with HEAD and is sent to the same sign-in as a browser.
+        first = TestClient(create_app(settings), base_url="https://demo.example.com", follow_redirects=False)
+        assert first.head("/").status_code == 302 and first.head("/").headers["location"].startswith("/api/v2/local-signin")
         blocked = api.post("/api/v2/tasks", json={"title": "x", "owner": "bot:support"}, headers={"Idempotency-Key": "p1"})
         assert blocked.status_code == 403 and blocked.json()["error"]["code"] == "demo"
         assert api.post("/api/v2/updates/read", json={"ids": []}, headers={"Idempotency-Key": "p2"}).status_code == 200
+        # A read that would write (a DM page makes the DM it shows) draws its page and keeps nothing.
+        count = lambda: sqlite3.connect(settings.db_path).execute("SELECT count(*) FROM conversations").fetchone()[0]
+        before = count()
+        assert api.get("/api/v2/threads/dm", params={"with": "human:eli"}).status_code == 200
+        assert count() == before
+    # The server copies the settings to add its screen relay; the copy is checked again and must still pass.
+    assert replace(settings, screen_relay_url="http://127.0.0.1:1", screen_relay_key="k" * 32).public_url == "https://demo.example.com"
 
 
 def test_nothing_leaves_the_machine(built):
@@ -100,3 +131,45 @@ def test_nothing_leaves_the_machine(built):
     assert demo.ATTEMPTS == ["example.com", "93.184.216.34", "api.github.com"]     # only the three we tried
     with pytest.raises(OSError):                                                   # and the block is gone outside
         socket.create_connection(("192.0.2.1", 9), timeout=0.2)
+
+
+# ----------------------------------------------------------------------------- the folder a demo runs in
+ENDINGS = [("returns", None), ("ctrl-c", KeyboardInterrupt), ("sigterm", SystemExit)]
+
+
+def stub_server(monkeypatch, tmp_path, ending):
+    """Built, then 'run' in place of the relay and the server, which end the way `ending` says. Returns the folders
+    the demo ran in; temporary folders are made under tmp_path."""
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(screen_binary, "prepare", lambda: None)
+    running = []
+
+    def run(*, settings, **kw):
+        running.append(settings.db_path.parent)
+        assert settings.db_path.exists()
+        if ending == "ctrl-c":
+            raise KeyboardInterrupt
+        if ending == "sigterm":
+            os.kill(os.getpid(), signal.SIGTERM)
+
+    monkeypatch.setattr(serving, "run", run)
+    return running
+
+
+@pytest.mark.parametrize("ending,raised", ENDINGS)
+def test_the_temporary_folder_goes_when_the_demo_stops(tmp_path, monkeypatch, ending, raised):
+    running = stub_server(monkeypatch, tmp_path, ending)
+    with pytest.raises(raised) if raised else contextlib.nullcontext():
+        demo.main([])
+    [folder] = running
+    assert folder.parent == tmp_path and folder.name.startswith("tico-demo-") and not folder.exists()
+
+
+@pytest.mark.parametrize("ending,raised", ENDINGS)
+def test_a_data_dir_is_never_removed(tmp_path, monkeypatch, ending, raised):
+    running = stub_server(monkeypatch, tmp_path, ending)
+    data = tmp_path / "kept"
+    with pytest.raises(raised) if raised else contextlib.nullcontext():
+        demo.main(["--data-dir", str(data)])
+    assert running == [data] and (data / "hub.sqlite").exists()
+    assert not any(tmp_path.glob("tico-demo-*"))         # and no temporary folder was made for it

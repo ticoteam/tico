@@ -43,7 +43,8 @@ def test_the_old_lineup_still_resolves_at_its_old_price_and_is_never_offered():
     assert providers.PRICES.get("tico-mid-1.0") == (2.5, 0.25, 12.5)
     assert T.resolve("tico-decide-1.0")["old"] and T.resolve("tico-classify-1.0")["old"]
     assert not any(row["id"] in T.OLD and not row.get("deprecated") for row in providers.MODEL_CATALOG)
-    assert len([row for row in providers.MODEL_CATALOG if row["id"].startswith("tico-") and not row.get("deprecated")]) == 60
+    assert len([row for row in providers.MODEL_CATALOG if row["id"].startswith("tico-") and not row.get("deprecated")
+                and not row.get("meeting")]) == 60
 
 
 def _doc(**change):
@@ -253,14 +254,16 @@ def test_the_shipped_snapshot_matches_a_copy_of_the_gateways_own_catalog():
 
     def versions(cat, kind):
         return {v["id"]: (v["model"], v["price"], v.get("long_prompt"), v.get("inputs")) for row in cat[kind] for v in row["versions"]}
-    assert versions(ours, "models") == versions(hq, "models") and len(versions(hq, "models")) == 60
+    assert versions(ours, "models") == versions(hq, "models") and len(versions(hq, "models")) == 61
     assert versions(ours, "decisions") == versions(hq, "decisions")
     # The services that are live at Tico HQ are the same here.
     assert next(s for s in ours["services"] if s["id"] == "fetch") == next(s for s in hq["services"] if s["id"] == "fetch")
     # What each chat model reads: Claude reads text, images and PDFs; Low Fast (DeepSeek) text only.
     reads = {v["id"]: v["inputs"] for row in hq["models"] for v in row["versions"]}
     assert all(i == ["text"] for k, i in reads.items() if "-low-fast-" in k)
-    assert all(i == ["text", "image", "pdf"] for k, i in reads.items() if "-low-fast-" not in k) and len(reads) == 60
+    assert all(i == ["text"] for k, i in reads.items() if k.startswith("tico-meeting-"))   # the meeting tier: text only
+    assert all(i == ["text", "image", "pdf"] for k, i in reads.items() if "-low-fast-" not in k and not k.startswith("tico-meeting-"))
+    assert len(reads) == 61
     assert {row["id"]: row["current"] for row in ours["models"]} == {row["id"]: row["current"] for row in hq["models"]}
     # Medium and High Decide are priced like their model, so no Decide call is counted at the ceiling.
     assert T.resolve("tico-decide-high-1.0")["price"] == {"input": 5.0, "output": 25.0, "cached_input": 0.5}
@@ -339,3 +342,42 @@ def test_a_saved_task_model_on_the_old_lineup_still_runs_but_a_retired_model_doe
             why = task_models.why_not(c, store.settings, "ops", choice, "runner-1")
             assert ("is retired" in why) is is_retired, (model, why)
 
+
+
+def _meeting_row(**change):
+    """HQ's meeting tier as its `/catalog` answers it (gateway/catalog.py), with `change` applied."""
+    row = {"id": "tico-meeting", "department": None, "level": None, "fast": False, "name": "Meeting", "current": "1.0",
+           "versions": [{"version": "1.0", "id": "tico-meeting-1.0", "model": "Inception Mercury 3",
+                         "inputs": ["text"], "price": {"input": 0.30, "output": 1.05, "cached_input": 0.03},
+                         "long_prompt": None, "context": 1000000, "max_output": 128000, "released": "2026-10-29"}]}
+    row.update(change)
+    return row
+
+
+def test_the_meeting_tier_as_hq_serves_it_is_kept_beside_the_department_tiers():
+    doc = {**T.SNAPSHOT, "models": [row for row in T.SNAPSHOT["models"] if row["id"] != "tico-meeting"] + [_meeting_row()]}
+    cat = T.validate(json.loads(json.dumps(doc)))
+    meeting = next(row for row in cat["models"] if row["id"] == "tico-meeting")
+    assert meeting["department"] is None and meeting["level"] is None and meeting["fast"] is False
+    assert meeting["versions"][0]["context"] == 1000000 and meeting["versions"][0]["inputs"] == ["text"]
+    found = T.resolve("tico-meeting-1.0", cat)
+    assert found["kind"] == "chat" and found["inputs"] == ["text"] and found["department"] == ""
+    assert found["price"] == {"input": 0.30, "output": 1.05, "cached_input": 0.03}
+    assert T.row_for("tico-meeting-1.0")["efforts"][0] == "low" and T.row_for("tico-meeting")["default_effort"] == "low"
+
+
+@pytest.mark.parametrize("change", [{"level": "low"}, {"department": "general"}, {"fast": True}, {"id": "tico-meeting-x"}])
+def test_a_malformed_meeting_row_is_left_out_and_the_release_copy_stands(change):
+    doc = {**T.SNAPSHOT, "models": [row for row in T.SNAPSHOT["models"] if row["id"] != "tico-meeting"] + [_meeting_row(**change)]}
+    cat = T.validate(json.loads(json.dumps(doc)))
+    meetings = [row for row in cat["models"] if row["id"] == "tico-meeting"]
+    assert len(meetings) == 1 and meetings[0]["level"] is None and meetings[0]["department"] is None
+
+
+def test_the_meeting_tier_is_a_meeting_model_not_a_bots_pick():
+    assert [row["id"] for row in T.meeting_rows()] == ["tico-meeting-1.0"] and T.meeting_rows()[0]["meeting"] is True
+    assert not any(row["id"].startswith("tico-meeting") for row in T.listed_rows())
+    assert "tico-meeting-1.0" in {row["id"] for row in providers.MODEL_CATALOG}
+    assert "tico-meeting-1.0" not in {row["id"] for row in providers.provider_models("tico")}
+    assert "tico-meeting-1.0" in {row["id"] for row in providers.provider_models("tico", meeting=True)}
+    assert "tico-meeting" not in T.view()["tiers"]

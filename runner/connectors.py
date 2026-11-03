@@ -127,7 +127,7 @@ def mail_umask():
 
 
 class ConnectorPublisher:
-    def __init__(self, config, *, client=None, fetch=None, mail=None, event=None, google=None):
+    def __init__(self, config, *, client=None, fetch=None, mail=None, event=None, google=None, action=None):
         self.config = config
         self.client = client or Client(config["url"], config["token"], timeout=35, retries=1)
         # The script this checkout ships, not one named after a company's folder: an environment
@@ -139,6 +139,8 @@ class ConnectorPublisher:
         self.run_mail = mail or self.mail_cli
         self.create_event = event or self.calendar_event
         self.finish_google = google or self.google_finish
+        self.run_action = action or self.mail_action
+        self.mail_boxes = None          # the mailboxes this computer reads, from the last mail targets
         self.stop = threading.Event()
         self.accounts = {}
         self.mailboxes = {}
@@ -293,6 +295,45 @@ class ConnectorPublisher:
             completed += 1
         return completed
 
+    def mail_action(self, action):
+        """Run `mail.sh mail-action` for one claimed automation mail action (on stdin). Returns {ok, detail, retry,
+        ...} for the hub; a CLI that gave no answer is a failure worth a retry (a retried send never sends twice)."""
+        try:
+            result = subprocess.run([str(self.script), "mail-action", "--as", self.owner, "--json"],
+                                    cwd=self.script.parents[1], input=json.dumps(action), capture_output=True,
+                                    text=True, timeout=60, env=self.mail_env(), **mail_umask())
+            answer = json.loads(result.stdout or "{}")
+        except (subprocess.TimeoutExpired, ValueError) as exc:
+            return {"ok": False, "retry": True, "detail": "the local mail action did not answer: " + type(exc).__name__}
+        if not isinstance(answer, dict) or "ok" not in answer:
+            return {"ok": False, "retry": True, "detail": "the local mail action did not answer"}
+        return answer
+
+    def mail_action_tick(self):
+        """Carry out the mail actions automations queued for the mailboxes this computer reads, and report each.
+        The hub answers 404 while the redesign is off and 403 for a mailbox another computer reads."""
+        if self.mail_boxes is None:
+            self.mail_boxes = [box["address"] for box in self.client.get("connectors/mail/targets").get("mailboxes") or []]
+        done = 0
+        for address in self.mail_boxes:
+            if self.stop.is_set():
+                break
+            try:
+                claimed = self.client.post("automations/mail-actions/claim", {"mailbox": address})
+            except APIError as exc:
+                if exc.status in (403, 404):
+                    continue
+                raise
+            for action in claimed.get("actions") or []:
+                answer = self.run_action(action)
+                body = {"ok": bool(answer.get("ok")), "detail": str(answer.get("detail") or "")[:1000],
+                        "retry": bool(answer.get("retry", True))}
+                body.update({k: str(answer[k])[:200] for k in ("message", "draft", "thread") if answer.get(k)})
+                self.client.post(f"automations/mail-actions/{action['id']}/result", body,
+                                 key=f"mail-action-{action['id']}-{action.get('attempt', 0)}")
+                done += 1
+        return done
+
     def mail_cli(self, args):
         # The CLI talks to Gmail only. The runner holds HUB_TOKEN and posts the batch itself.
         env = self.mail_env()
@@ -399,6 +440,7 @@ class ConnectorPublisher:
         self.cycle += 1
         request = self.client.get("connectors/mail/targets")
         boxes = request.get("mailboxes") or []
+        self.mail_boxes = [box["address"] for box in boxes]
         posted = 0
         failing = []
         live = [box for box in boxes if not self.blocked(box["address"])]
@@ -476,6 +518,8 @@ class ConnectorPublisher:
                       "mail refresh working again", progress=600)
         google = Outage("Tico connectors", "Connect Google failed", "Connect Google still failing",
                         "Connect Google working again", progress=600)
+        actions = Outage("Tico connectors", "mail actions failed", "mail actions still failing",
+                         "mail actions working again", progress=600)
         from .freshness import CodeWatch
         watch = CodeWatch("Tico connectors")
         self.prepare()
@@ -496,5 +540,10 @@ class ConnectorPublisher:
                 mail.recovered()
             except Exception as exc:
                 mail.failed(exc)
+            try:
+                self.mail_action_tick()     # every pass, not every mail sync: a reply should not wait for one
+                actions.recovered()
+            except Exception as exc:
+                actions.failed(exc)
             if watch.wait(self.stop, 45):       # the checkout moved: the supervisor starts it on the new code
                 return

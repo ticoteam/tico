@@ -19,21 +19,22 @@ def _seed(api, tmp_path):
     with store.transaction() as c:
         M.seed(c, {}, Blobs(store.settings), document=M.load_snapshot(FIXTURE_REGISTRY))
         if not H.bot(c, "listening"):
-            c.execute("INSERT INTO bots (slug, display_name, runtime, model, effort, cwd, host, state, created) "
-                      "VALUES (?,?,?,?,?,?,?,?,?)",
-                      ("listening", "Listening", "grok", "grok-4.6", "high", "", "keeper", "active", H.now()))
+            c.execute("INSERT INTO bots (id, slug, display_name, effort, state, created_at) VALUES (?,?,?,?,?,?)",
+                      ("listening", "listening", "Listening", "high", "active", H.now()))
         if not c.execute("SELECT 1 FROM bot_config WHERE bot='listening'").fetchone():
-            c.execute("INSERT INTO bot_config (bot, config_json, team, operator, description, reports_to, repo) "
+            c.execute("INSERT INTO bot_config (bot, config, team, owner_id, description, reports_to, repo) "
                       "VALUES (?,?,?,?,?,?,?)",
-                      ("listening", "{}", "marketing", "ana", "Listening", "cmo", "emp-listening"))
+                      ("listening", '{"runtime":"grok","model":"grok-4.6","host":"keeper"}', "marketing", "ana",
+                       "Listening", "cmo", "emp-listening"))
 
 
 def _librarian(api):
     with api.app.state.store.transaction() as c:
         if not H.bot(c, "librarian"):
-            c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                      "VALUES('librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-            c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('librarian','{}',NULL,'ana')")
+            c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                      "VALUES('librarian','librarian','Librarian','','active',?)", (H.now(),))
+            c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('librarian',?,NULL,'ana')",
+                      ('{"runtime":"fake","host":"keeper"}',))
 
 
 def test_the_librarian_gets_the_market_routines_and_the_old_market_analyst_is_retired(api):
@@ -42,16 +43,17 @@ def test_the_librarian_gets_the_market_routines_and_the_old_market_analyst_is_re
     _librarian(api)
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                  "VALUES('market-analyst','Market Analyst','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('market-analyst','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('market-analyst','market-analyst','Market Analyst','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('market-analyst',?,NULL,'ana')",
+                  ('{"runtime":"fake","host":"keeper"}',))
         task = H.task_create(c, "human:ana", "Check Northwind pricing", "", "bot:market-analyst", lint=False)
         M.ensure_curator(c)
         keys = {r["routine_key"]: r for r in c.execute("SELECT * FROM schedules WHERE bot='librarian'")}
         assert set(keys) >= {"curate-the-market", "urgent-market-insight"}
         assert keys["urgent-market-insight"]["cron"] in ("", None)
         assert H.bot(c, "market-analyst")["state"] == "archived"
-        assert c.execute("SELECT owner FROM tasks WHERE id=?", (task["id"],)).fetchone()["owner"] == "bot:librarian"
+        assert c.execute("SELECT owner_id FROM tasks WHERE id=?", (task["id"],)).fetchone()["owner_id"] == "bot:librarian"
         c.execute("UPDATE schedules SET deleted_at=? WHERE bot='librarian' AND routine_key='curate-the-market'", (H.now(),))
         M.ensure_curator(c)
         again = c.execute("SELECT COUNT(*) FROM schedules WHERE bot='librarian' AND routine_key='curate-the-market'").fetchone()[0]
@@ -194,8 +196,8 @@ def test_a_market_ask_is_audited_and_capped_per_person_per_day(api, tmp_path, mo
     out = post(api, "market/ask", {"question": "What does Northwind sell?"})
     assert out["answer"] == "Northwind sells pricing software."
     with store.read() as c:
-        rows = [json.loads(r["detail_json"]) for r in c.execute(
-            "SELECT detail_json FROM events WHERE action='market.ask' AND actor='human:ana'")]
+        rows = [json.loads(r["detail"]) for r in c.execute(
+            "SELECT detail FROM events WHERE action='market.ask' AND actor='human:ana'")]
     assert len(rows) == 1 and rows[0]["model"] == M.ASK_MODEL and "Northwind" not in json.dumps(rows[0])
     over = api.post("/api/v2/market/ask", json={"question": "What does Northwind sell?"}, headers=headers())
     assert over.status_code == 429 and over.json()["error"]["code"] == "budget" and len(sent) == 1
@@ -264,33 +266,64 @@ def test_graph_and_entity_pages_are_bounded_and_focus_works_beyond_the_first_pag
 
 
 def test_the_daily_curate_pass_is_skipped_when_it_has_nothing_to_read(api):
-    """No new insight and no Listening for the Librarian on a weekday: no task. An insight brings it back."""
+    """No new insight and no Listening for the Librarian on a weekday: no task, the skip on record as
+    `automation.skipped`. An insight brings it back."""
+    import backend.routines as routines
     from backend.scheduler import Scheduler
     _librarian(api)
     store = api.app.state.store
     with store.transaction() as c:
         M.ensure_curator(c)
-        c.execute("UPDATE schedules SET next_due=? WHERE bot='librarian' AND routine_key='curate-the-market'",
-                  ("2026-10-12T00:00:00.000000Z",))
+        aid = routines.row(c, "librarian:curate-the-market")["automation"]       # the routine is its automation now
+        c.execute("UPDATE automations SET next_due_at=? WHERE id=?", ("2026-10-12T00:00:00.000000Z", aid))
     tick = lambda at: Scheduler(store, api.app.state.execution).tick(at)
     tick(datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc))            # Tuesday, 05:00 in Los Angeles
     with store.read() as c:
-        assert not c.execute("SELECT 1 FROM tasks WHERE owner='bot:librarian'").fetchone()
-        assert c.execute("SELECT outcome FROM schedule_occurrences").fetchone()[0] == "skipped"
-    runs = get(api, "routines/librarian:curate-the-market/occurrences")["occurrences"]
-    assert [(r["outcome"], r["task_id"], "Listening" in r["reason"]) for r in runs] == [("skipped", None, True)]
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id='bot:librarian'").fetchone()
+        assert not c.execute("SELECT 1 FROM automation_runs WHERE automation_id=?", (aid,)).fetchone()
+        skipped = [json.loads(r[0]) for r in c.execute(
+            "SELECT detail FROM events WHERE action='automation.skipped' AND target=?", (aid,))]
+    assert [("Listening" in d["reason"], d["at"]) for d in skipped] == [(True, "2026-10-12T00:00:00.000000Z")]
     with store.transaction() as c:
         c.execute("INSERT INTO market_insights(id,reported_by,reported_at,kind) VALUES('i1','bot:ops',?,'pricing')",
                   (H.now(),))
     tick(datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc))
     with store.read() as c:
-        assert c.execute("SELECT title FROM tasks WHERE owner='bot:librarian'").fetchone()[0] == "Curate the market"
-    # A team that rewrote the routine's text gave it other work: it runs with nothing new to curate.
+        assert c.execute("SELECT title FROM tasks WHERE owner_id='bot:librarian'").fetchone()[0] == "Curate the market"
+    # A team that rewrote the automation's words gave it other work: it runs with nothing new to curate.
     with store.transaction() as c:
         c.execute("UPDATE market_insights SET status='applied'")
-        c.execute("UPDATE tasks SET status='done' WHERE owner='bot:librarian'")
-        c.execute("UPDATE schedules SET playbook='Curate the market, then tidy the glossary.' "
-                  "WHERE routine_key='curate-the-market'")
+        c.execute("UPDATE tasks SET status='done' WHERE owner_id='bot:librarian'")
+    flow = get(api, f"automations/{aid}")
+    steps = [{**step, "prompt": "Curate the market, then tidy the glossary."} for step in flow["steps"]]
+    r = api.patch(f"/api/v2/automations/{aid}", json={"steps": steps}, headers=headers())
+    assert r.status_code == 200, r.text
     tick(datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc))
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM tasks WHERE owner='bot:librarian'").fetchone()[0] == 2
+        assert c.execute("SELECT count(*) FROM tasks WHERE owner_id='bot:librarian'").fetchone()[0] == 2
+
+
+def test_the_sweep_on_a_monday_reports_the_weekly_delta_refresh(api, tmp_path):
+    """The Monday sweep refreshes the weekly delta and says so: the response's delta carries `updated`."""
+    from datetime import date
+    _seed(api, tmp_path)
+    with api.app.state.store.transaction() as c:
+        out = M.sweep(c, M.SEED_ACTOR, [], today=date(2026, 11, 2))
+    assert out["delta"] == {"updated": True}
+
+
+def test_applying_an_insight_makes_an_entity_and_sets_its_verified_date(api, tmp_path):
+    _seed(api, tmp_path)
+    evidence = {"source_kind": "page-change", "source_url": "https://acme.example/pricing", "quote": "Pro is $12",
+                "our_read": "A price rise."}
+    with api.app.state.store.transaction() as c:
+        for insight in ("i1", "i2"):
+            c.execute("INSERT INTO market_insights(id,reported_by,reported_at,kind) VALUES(?,'bot:ops',?,'pricing')",
+                      (insight, H.now()))
+    post(api, "market/insights/i1/apply", {"evidence": evidence, "entity": {
+        "id": "company/contoso", "type": "company", "name": "Contoso", "last_verified_at": "2026-10-01"}})
+    post(api, "market/insights/i2/apply", {"evidence": evidence, "entity_id": "company/contoso",
+                                           "last_verified_at": "2026-10-02"})
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT last_verified_at FROM market_entities WHERE id='company/contoso'").fetchone()
+    assert row[0] == "2026-10-02"

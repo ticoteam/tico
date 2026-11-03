@@ -69,6 +69,13 @@ const UPDATE = {current: '0.1.0', latest: '0.2.0', available: true, url: 'https:
     assert.equal(await v.page.locator('#nv-scheduled').innerText(), 'Tico will update this server to v0.2.0 when idle.');
     await v.ctx.close();
 
+    // A server Tico updates from outside (a cloud company) offers the owner no Update now, and says why.
+    v = await visit({update: {...UPDATE, managed: true}});
+    await v.page.locator('#new-version').click();
+    assert.equal(await v.page.locator('#nv-managed').innerText(), 'Tico updates this server.');
+    assert.equal(await v.page.locator('#nv-update').count(), 0, 'no Update now when Tico runs updates');
+    await v.ctx.close();
+
     // A non-owner reads the changelog and cannot update.
     v = await visit({role: 'viewer'});
     await v.page.locator('#new-version').click();

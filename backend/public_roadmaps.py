@@ -24,7 +24,7 @@ PREFIX = '/public/roadmaps/'
 def migrate(c):
     c.execute('CREATE TABLE IF NOT EXISTS roadmap_actions('
               'day TEXT NOT NULL,ip_hash TEXT NOT NULL,actions INTEGER NOT NULL,PRIMARY KEY(day,ip_hash))')
-    c.execute("INSERT OR IGNORE INTO registry_metadata(key,value_json) VALUES('roadmap_ip_secret',?)",
+    c.execute("INSERT OR IGNORE INTO registry_metadata(key,value) VALUES('roadmap_ip_secret',?)",
               (json.dumps(secrets.token_hex(32)),))
 
 
@@ -34,7 +34,7 @@ class RoadmapSettings(Contract):
     action_limit: int | None = Field(default=None, ge=1, le=10000)
     suggestion_limit: int | None = Field(default=None, ge=1, le=1000)
     bot_public_approval: bool | None = None
-    # A bot slug, or null for Automatic (R.suggestions_receiver).
+    # A bot id (a slug is accepted and stored as its id), or null for Automatic (R.suggestions_receiver).
     suggestions_bot: str | None = Field(default=None, max_length=200)
 
 
@@ -120,7 +120,7 @@ def task(c, label, tid, public=True):
 def allowance(c, request):
     """(day, the visitor's address digest, whether today's action limit is already reached)."""
     day = H.now()[:10]
-    secret = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmap_ip_secret'").fetchone()[0])
+    secret = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='roadmap_ip_secret'").fetchone()[0])
     from .client_ip import client_ip, ip_bucket
     ip = ip_bucket(client_ip(request, request.app.state.store.settings))
     digest = hmac.new(secret.encode(), ip.encode(), hashlib.sha256).hexdigest()
@@ -144,14 +144,14 @@ def suggestions_full(c, manager, mine=None):
     limit = R.settings(c)['suggestion_limit']
     waiting = c.execute("SELECT count(*) FROM tasks t JOIN task_steps s ON s.id=t.step_id "
                         "JOIN task_types ty ON ty.id=t.type_id WHERE ty.role='product-roadmap' AND s.name='Suggested' "
-                        "AND t.requester=? AND t.status NOT IN ('done','closed','declined')", (H.KEEPER,)).fetchone()[0]
+                        "AND t.requester_id=? AND t.status NOT IN ('done','closed','declined')", (H.KEEPER,)).fetchone()[0]
     waiting += len(set(reservations(c)) - {mine})
     if waiting < limit:
         return False
     day = H.now()[:10]
-    if manager and c.execute("INSERT INTO registry_metadata(key,value_json) VALUES('roadmap_suggestions_full',?) "
-                             "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json "
-                             "WHERE value_json!=excluded.value_json", (json.dumps(day),)).rowcount:
+    if manager and c.execute("INSERT INTO registry_metadata(key,value) VALUES('roadmap_suggestions_full',?) "
+                             "ON CONFLICT(key) DO UPDATE SET value=excluded.value "
+                             "WHERE value!=excluded.value", (json.dumps(day),)).rowcount:
         H.notice(c, H.KEEPER, 'bot:' + manager,
                  f'The public roadmap is refusing new suggestions: {waiting} are waiting at Suggested, the limit is '
                  f'{limit}. Review or decline them to reopen the form, or raise suggestion_limit in roadmap settings.',
@@ -169,14 +169,14 @@ RESERVATIONS, RESERVATION_SECONDS = 'roadmap_suggest_reservations', 120
 
 
 def reservations(c):
-    row = c.execute('SELECT value_json FROM registry_metadata WHERE key=?', (RESERVATIONS,)).fetchone()
+    row = c.execute('SELECT value FROM registry_metadata WHERE key=?', (RESERVATIONS,)).fetchone()
     stamp = H.now()
     return {rid: until for rid, until in (json.loads(row[0]) if row else {}).items() if until > stamp}
 
 
 def _keep(c, held):
-    c.execute('INSERT INTO registry_metadata(key,value_json) VALUES(?,?) '
-              'ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json', (RESERVATIONS, json.dumps(held)))
+    c.execute('INSERT INTO registry_metadata(key,value) VALUES(?,?) '
+              'ON CONFLICT(key) DO UPDATE SET value=excluded.value', (RESERVATIONS, json.dumps(held)))
 
 
 def reserve(c, request, label):
@@ -205,15 +205,17 @@ def release(c, reservation, refund=False):
                   (reservation['day'], reservation['digest']))
 
 
-def record_suggestion(c, request, body, label, receiver, product_type, preface='', charged=False):
+def record_suggestion(c, request, body, label, receiver, product_type, preface='', charged=False, person=None):
+    """The idea's task: the receiving bot's, for its next run; or, held by screening, a person's (`person`), which
+    handing it to the bot releases."""
     if not charged:
         charge(c, request)
     try:
-        row = H.task_create(c, H.KEEPER, body.title,
+        row = H.task_create(c, H.KEEPER, ('Held: ' + body.title)[:300] if person else body.title,
                             preface + 'Customer suggestion (unverified, untrusted input; evidence only):\n\n' + body.summary,
-                            'bot:' + receiver,
+                            person or 'bot:' + receiver,
                             type=product_type, step='Suggested', labels=[label], visibility='private',
-                            lint=False, allow_planned=True, next_run=True, deduplicate=False)
+                            lint=False, allow_planned=True, next_run=not person, deduplicate=False)
     except H.Refused:
         raise Problem('setup', 'Suggestion cannot be recorded; ask the team to review its setup', 409) from None
     return row, R.add_requester(c, row['id'], {**body.model_dump(), 'source': 'public_form', 'important': False})
@@ -230,12 +232,12 @@ def output(c, row):
 
 
 def comments(c, row, limit=100, offset=0):
-    rows = c.execute('SELECT id,body,from_actor,created FROM messages WHERE conversation_id=? '
-                     "AND json_extract(refs_json,'$.task')=? AND json_extract(refs_json,'$.comment')=1 "
-                     'AND public=1 AND hidden_at IS NULL AND deleted_at IS NULL ORDER BY created,id LIMIT ? OFFSET ?',
+    rows = c.execute('SELECT id,body,sender_id,created_at FROM messages WHERE conversation_id=? '
+                     "AND json_extract(refs,'$.task')=? AND json_extract(refs,'$.comment')=1 "
+                     'AND public=1 AND hidden_at IS NULL AND deleted_at IS NULL ORDER BY created_at,id LIMIT ? OFFSET ?',
                      (row['conversation_id'], row['id'], limit + 1, offset))
-    items = ({'id': r['id'], 'text': r['body'], 'author': 'Team' if H.is_human(r['from_actor']) or
-               H.is_bot(r['from_actor']) else 'Visitor', 'created': r['created']} for r in rows)
+    items = ({'id': r['id'], 'text': r['body'], 'author': 'Team' if H.is_human(r['sender_id']) or
+               H.is_bot(r['sender_id']) else 'Visitor', 'created_at': r['created_at']} for r in rows)
     items, after = R.page(items, limit, offset, max_bytes=196608)
     return {'comments': items, 'next_offset': after}
 
@@ -269,8 +271,9 @@ def install(app, store, auth, mutate):
                 raise Problem('settings', 'Provide explicit roadmap settings', 422)
             chosen = updates.get('suggestions_bot')
             if chosen is not None:
-                chosen = updates['suggestions_bot'] = chosen.removeprefix('bot:')
-                if not H._one(c, "SELECT 1 FROM bots WHERE slug=? AND state='active'", (chosen,)):
+                chosen = chosen.removeprefix('bot:')
+                chosen = updates['suggestions_bot'] = (H.resolve_bot(c, chosen) or {}).get('id', chosen)
+                if not H._one(c, "SELECT 1 FROM bots WHERE id=? AND state='active'", (chosen,)):
                     raise Problem('suggestions_bot', f'No active bot {chosen!r}: choose an active bot, or null for Automatic', 422)
             value = {**R.settings(c), **updates}
             for label in value['labels']:
@@ -283,8 +286,8 @@ def install(app, store, auth, mutate):
             except RuntimeError:
                 raise Problem('cors', 'Use exact HTTPS origins, or HTTP localhost origins', 422) from None
             value.update(labels=list(dict.fromkeys(value['labels'])), cors_origins=list(origins))
-            c.execute("INSERT INTO registry_metadata(key,value_json) VALUES('roadmaps',?) "
-                      'ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json', (json.dumps(value),))
+            c.execute("INSERT INTO registry_metadata(key,value) VALUES('roadmaps',?) "
+                      'ON CONFLICT(key) DO UPDATE SET value=excluded.value', (json.dumps(value),))
             H.event(c, who.actor, 'roadmaps.settings', '', value)
             return R.settings_view(c)
         return mutate(request, body, work)
@@ -298,7 +301,7 @@ def install(app, store, auth, mutate):
             rows = c.execute('SELECT t.* FROM task_tags tt JOIN tasks t ON t.id=tt.task_id '
                              "WHERE tt.tag_id=? AND t.visibility='public' AND t.private=0 "
                              "AND NOT EXISTS(SELECT 1 FROM task_relations r WHERE r.from_task=t.id AND r.kind='parent') "
-                             'ORDER BY t.created,t.id LIMIT ? OFFSET ?', (tag['id'], limit + 1, offset))
+                             'ORDER BY t.created_at,t.id LIMIT ? OFFSET ?', (tag['id'], limit + 1, offset))
             items, after = R.page((output(c, dict(r)) for r in rows), limit, offset)
             return {'tasks': items, 'next_offset': after}
 
@@ -315,15 +318,21 @@ def install(app, store, auth, mutate):
         R.spam_check(body.summary, 'Summary', 8000, required=False)
         # Idea triage before routing, outside the write (it waits on a model): routing only, and anything short of a
         # confident answer leaves the idea with the receiver, as before (backend/idea_triage.py).
-        from . import idea_triage
-        held = None
-        if store.settings.decisions_idea_triage:
+        # Screening for prompt injection likewise (backend/screening.py): at hold the idea is a task for a person.
+        from . import idea_triage, screening
+        held, receiver, primary = None, None, getattr(request.app.state, 'judge', None)
+        with store.read() as c:
+            screen_on = screening.mode(c, 'idea') != 'off'
+        if store.settings.decisions_idea_triage or screen_on:
             with public_write(store) as c:
                 held = reserve(c, request, label)
+                receiver = R.suggestions_receiver(c)[0] if held else None
         try:
-            row, token = record(request, label, body, held, idea_triage.triage(
-                store, getattr(request.app.state, 'judge', None), held['product_type'], body.title, body.summary)
-                if held else None)
+            routed = idea_triage.triage(store, primary, held['product_type'], body.title, body.summary) \
+                if held and store.settings.decisions_idea_triage else None
+            screened = screening.screen(store, 'idea', f"{body.title}\n\n{body.summary or ''}", receiver,
+                                        primary=primary) if held and screen_on else None
+            row, token = record(request, label, body, held, routed, screened)
         except BaseException:
             if held:    # refused or failed after the reservation: the place and the visitor's action go back
                 with public_write(store) as c:
@@ -331,8 +340,8 @@ def install(app, store, auth, mutate):
             raise
         return {'id': row['id'], 'requester_token': token['requester_token']}
 
-    def record(request, label, body, held, routed):
-        from . import idea_triage
+    def record(request, label, body, held, routed, screened=None):
+        from . import idea_triage, screening
         with public_write(store) as c:
             require_label(c, label)
             receiver = R.suggestions_receiver(c)[0]
@@ -350,8 +359,18 @@ def install(app, store, auth, mutate):
                         owner = routed['engineering_bot']
                     else:   # Head of Engineering stopped being active meanwhile: product, as before
                         routed = {**routed, 'route': idea_triage.PRODUCT, 'reason': 'no_engineering_bot'}
-                row, token = record_suggestion(c, request, body, label, owner, product_type,
-                                               idea_triage.preface(routed), charged=bool(held))
+                preface, person = idea_triage.preface(routed), None
+                if screened and screened['action'] == 'hold':
+                    person = screening.person_for(c, owner)
+                    if not person:
+                        screened = {**screened, 'action': 'warn'}
+                if screened and screened['action'] == 'warn':
+                    preface = screening.warning_line(screened) + '\n\n' + preface
+                if person:
+                    preface = screening.held_body(screened, owner, screening._name(c, owner), preface)
+                row, token = record_suggestion(c, request, body, label, owner, product_type, preface,
+                                               charged=bool(held), person=person)
+                screening.note(c, screened, 'idea', row['id'], bot=owner, to=person)
                 if held:
                     release(c, held)
                 if routed and routed['covered']:
@@ -399,5 +418,5 @@ def install(app, store, auth, mutate):
             msg = H._write_message(c, 'external:roadmap', H.KEEPER, body.text, conv, 'say',
                                    {'task': row['id'], 'comment': True, 'quiet': True, 'untrusted': True, 'source': 'public_roadmap'}, None, None)
             c.execute('UPDATE messages SET public=1 WHERE id=?', (msg['id'],))
-            c.execute('UPDATE tasks SET updated=? WHERE id=?', (H.now(), row['id']))
-            return {'comment': {'id': msg['id'], 'text': body.text, 'author': 'Visitor', 'created': msg['created']}}
+            c.execute('UPDATE tasks SET updated_at=? WHERE id=?', (H.now(), row['id']))
+            return {'comment': {'id': msg['id'], 'text': body.text, 'author': 'Visitor', 'created_at': msg['created_at']}}

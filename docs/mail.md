@@ -69,7 +69,7 @@ Gmail and mailbox tokens; [calendar Tools](#calendar) have separate access rules
 on a two-user Docker runner. The owner can deliberately
 turn on `org_read: true` to include reports' mail; only then does `--all-mailboxes` include them.
 The Inbox Manager starts with one disabled weekday 07:30 Routine in America/Los_Angeles; Setup
-switches it on. Change its timezone in **Settings → Rules** for your team.
+switches it on. Change its time zone on its automation in **Automations**.
 
 And the record:
 
@@ -482,7 +482,7 @@ try. When Google answers `admin_policy_enforced`, Settings says so in those word
 acme.example has a policy that blocks Tico", and that only a Workspace admin can allow it (Admin console > Security >
 API controls > App access control > Tico). Google sometimes shows that block on its own page ("Access blocked: Tico is
 not approved by your admin", Error 400 `admin_policy_enforced`) and never sends the person back; it is the same block.
-A cancelled consent reads as "not approved", and a problem with Tico's own Google app says it is Tico's to fix.
+A canceled consent reads as "not approved", and a problem with Tico's own Google app says it is Tico's to fix.
 
 Reconnect and revoke:
 - If the person removes Tico at myaccount.google.com/permissions, changes their password, or the admin blocks the app
@@ -561,7 +561,7 @@ The key can act as any mailbox in the team, so bots must not be able to read it.
   A bot is a message bot to the server when it is its person's `inbox_bot`, which is what the server checks before it names any
   mailbox for a run. Making a bot from the `inbox` template does that itself: adding it in Settings, in the team builder, or
   through BotOps records the bot as the `inbox_bot` of the person the `Mailbox:` line names (by their roster email; for a bot
-  BotOps registers in chat, the person who asked), and writes that address as its `gmail` identity, or the person's own email when
+  BotOps registers in a DM, the person who asked), and writes that address as its `gmail` identity, or the person's own email when
   there is no line. A bot made before this is linked when the server starts, if it is unambiguous: a message-bot template, a
   mailbox in its instructions or its `gmail` identity, and the person whose email it is (or the only person on the roster).
   Changing it later is an owner's or admin's call, or BotOps's as the requester (a card for their click):
@@ -621,7 +621,7 @@ forward addresses) until a person turns it on or the request goes away. The owne
 a person who manages a bot sees it for that bot only. The Support Agent's `software/hq-tickets reply` reads the same
 switch before it posts a reply to an HQ ticket.
 
-To have the rules written down, ask BotOps in chat in plain words: "let my Inbox Manager reply to support senders that
+To have the rules written down, ask BotOps in a DM in plain words: "let my Inbox Manager reply to support senders that
 support has it, and forward job, partnership, investor and press mail to me at <address> with the subject `🔔 Tico
 inbound: <subject>`, plus a Needs you task". BotOps writes the rules into the bot's `playbooks/inbox-preferences.md`
 under `## Sending` and tells you which addresses to type in the switch; it never edits `outbound_send` or `forward_to`.

@@ -16,6 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile, harnesses} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 const {t} = (() => { try { return require('./support/load.cjs'); } catch { return {t: ms => ms}; } })();   // load.cjs arrives with #254
 // TICO_SCREENSHOT_DIR=<dir> saves screenshots of the first-run screens.
 // TICO_SHOT_SCHEME=dark takes them in the dark theme.
@@ -131,7 +132,8 @@ async function pastStrategy(page) {
 }
 
 // What Create leaves: the two starters are parked, one with its repository, one still being set up; the Content
-// Marketer is not a starter, so BotOps builds it.
+// Marketer is not a starter, so BotOps builds it. A new bot's id is not its slug (the Content Marketer's here).
+const CONTENT_ID = '01990000-0000-7000-8000-00000000c0de';
 const BOTS_AFTER = [
   {slug: 'coo', display_name: 'Ace', status: 'active', template: 'assistant', onboarding_state: '',
    setup_task_id: null, repository_present: false},
@@ -143,7 +145,7 @@ const BOTS_AFTER = [
    setup_task_id: null, repository_present: false},
   {slug: 'content', display_name: 'Content Marketer', status: 'planned', template: 'content', onboarding_state: '',
    setup_task_id: 'task-content', repository_present: false},
-];
+].map(bot => ({id: bot.slug === 'content' ? CONTENT_ID : bot.slug, ...bot}));
 // The chart Create leaves: Operations before Customer Support, not the order the bots were created in.
 const CHART_GROUPS = [{id: 'support', name: 'Customer Support', parent: '', order: 2}, {id: 'operations', name: 'Operations', parent: '', order: 1}];
 const CHART_TEAMS = {support: 'support', 'meeting-notes': 'operations'};
@@ -187,6 +189,8 @@ function recruitFor({department, briefing, share}) {
     const puts = [], tourPosts = [], completes = [], definitions = [], created = [], enrollments = [], chats = [], invites = [], owners = [];
     let refuseSetup = false;   // the next PUT /api/v2/setup is refused once (set on the team chart)
     const recruits = [], opened = {};
+    // Each bot's DM reads what Set up wrote to it (the chat the first message opened).
+    const dms = ['support', 'meeting-notes'].map(bot => threadsFake({bot, messages: () => opened[bot]?.messages || []}));
     let hq = {available: true, off_by: ''}, recruitHeld = null, releaseRecruit = () => {};   // a recruit answer the test holds
     let record = {
       names: {company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace'},
@@ -199,8 +203,8 @@ function recruitFor({department, briefing, share}) {
     let enrollCode = 'enroll-code';
     const me = {id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true,
                 email: 'ana@acme.example', credential_access: false, config: CONFIG};
-    const v2bots = () => BOTS_AFTER.map((bot, i) => ({slug: bot.slug, display_name: bot.display_name, state: bot.status,
-      status: bot.status, revision: i + 1, team: null, operator: 'ana', repo: 'emp-' + bot.slug, onboarding_state: bot.onboarding_state}));
+    const v2bots = () => BOTS_AFTER.map((bot, i) => ({id: bot.id, slug: bot.slug, display_name: bot.display_name, state: bot.status,
+      status: bot.status, revision: i + 1, team: null, owner_id: 'ana', repo: 'emp-' + bot.slug, onboarding_state: bot.onboarding_state}));
 
     await context.route('**/*', async route => {
       const request = route.request(), url = new URL(request.url()), p = url.pathname;
@@ -230,7 +234,7 @@ function recruitFor({department, briefing, share}) {
       if (p === '/api/employees') return json([{name: 'coo', display_name: 'Tico', status: 'active',
         reports_to: '', description: 'the point of contact', revision: 1, users: [{id: 'ana', name: 'Ana Rivera', email: 'ana@acme.example'}]},
         // After Create the two starters are on the chart, parked, each in its group (the Content Marketer is not on it yet).
-        ...(record.completed ? BOTS_AFTER.filter(bot => bot.onboarding_state).map(bot => ({name: bot.slug, display_name: bot.display_name,
+        ...(record.completed ? BOTS_AFTER.filter(bot => bot.onboarding_state).map(bot => ({id: bot.id, slug: bot.slug, name: bot.slug, display_name: bot.display_name,
           status: bot.status, reports_to: '', description: '', revision: 5, can_chat: true, can_manage: true, onboarding_state: bot.onboarding_state,
           host: 'keeper', thread_mode: 'personal', users: [], team: CHART_TEAMS[bot.slug]})) : [])]);
       if (p === '/api/issues') return json([]);
@@ -267,28 +271,21 @@ function recruitFor({department, briefing, share}) {
         return json({...record, home: 'human:ana'});
       }
       if (p === '/api/v2/setup/getting-started/state') { tourPosts.push(request.postDataJSON()); return json({tour: true, checklist: false, cards: [], skipped: []}); }
-      if (p === '/api/v2/enrollments') { enrollments.push(request.postDataJSON()); return json({code: enrollCode, expires: '2026-09-16T10:15:00Z'}); }
+      if (p === '/api/v2/enrollments') { enrollments.push(request.postDataJSON()); return json({code: enrollCode, expires_at: '2026-09-16T10:15:00Z'}); }
       if (p === '/api/v2/bots' && request.method() === 'POST') { created.push(request.postDataJSON()); return json({bot: {slug: request.postDataJSON().slug}}); }
       if (p === '/api/v2/bots') return json(v2bots());
-      // A person's chat with a bot: the first message opens it, and the bot page's Chat tab lists it from then on.
+      // A person's chat with a bot: the first message opens it, and the bot page's DM tab shows it from then on.
       if (/^\/api\/v2\/chat\/[^/]+$/.test(p)) {
         const bot = p.split('/')[4], text = request.postDataJSON().text;
         chats.push([bot, request.postDataJSON()]);
         const conversation = {id: 'chat-' + bot, kind: 'chat', scope: 'personal', task_id: null, closed_at: null,
                               participants: ['human:ana', 'bot:' + bot]};
-        const message = {id: 'msg-' + bot, conversation_id: conversation.id, from_actor: 'human:ana', to_actor: 'bot:' + bot,
-                         kind: 'say', body: text, refs: {}, created: '2026-09-16T10:05:00Z'};
+        const message = {id: 'msg-' + bot, conversation_id: conversation.id, sender_id: 'human:ana', recipient_id: 'bot:' + bot,
+                         kind: 'say', body: text, refs: {}, created_at: '2026-09-16T10:05:00Z'};
         opened[bot] = {conversation, messages: [message]};
         return json({message, conversation});
       }
-      if (p === '/api/v2/conversations') {
-        const chat = opened[url.searchParams.get('chat_with')];
-        return json({conversations: chat ? [chat.conversation] : []});
-      }
-      if (/^\/api\/v2\/conversations\/chat-[^/]+\/(snapshot|messages)$/.test(p)) {
-        const chat = opened[p.split('/')[4].slice(5)];
-        return json({messages: chat ? chat.messages : [], has_more: false, next_before: null, execution: null});
-      }
+      for (const dm of dms) { const answer = dm(p, url, request.method()); if (answer !== undefined) return json(answer); }
       if (p === '/api/v2/access/humans') { invites.push(['add', request.postDataJSON()]); return json({person: 'sam', email: 'sam@initech.test', name: 'Sam Ortiz'}); }
       if (p === '/api/v2/access/humans/sam') { invites.push(['role', request.postDataJSON()]); return json({person: 'sam'}); }
       if (/^\/api\/v2\/bots\/[^/]+\/co-owners$/.test(p)) { owners.push([p.split('/')[4], request.postDataJSON()]); return json({bot_owners: [{id: 'ana', name: 'Ana Rivera'}, {id: 'ben', name: 'Ben Cole'}], revision: 4}); }
@@ -301,8 +298,8 @@ function recruitFor({department, briefing, share}) {
       if (/^\/api\/v2\/tasks\/[^/]+\/chat$/.test(p)) return json({recipient: {slug: 'botops', name: 'BotOps', can_chat: true}, messages: [], conversation: null});
       if (p === '/api/v2/tasks' || p === '/api/v2/tasks/task-content') {
         const task = {id: 'task-content', title: 'Set up Content Marketer',
-          owner: 'bot:botops', status: 'doing', version: 1, updated: '2026-09-16T10:01:00Z',
-          created: '2026-09-16T10:00:30Z', requester: 'human:ana',
+          owner_id: 'bot:botops', status: 'doing', version: 1, updated_at: '2026-09-16T10:01:00Z',
+          created_at: '2026-09-16T10:00:30Z', requester_id: 'human:ana',
           body: 'Create the repository and the first routine.'};
         return json(p === '/api/v2/tasks' ? {tasks: [task]} : {task, events: [], children: []});
       }
@@ -399,7 +396,7 @@ function recruitFor({department, briefing, share}) {
     assert.deepEqual(await tilesOn(), ['sales', 'marketing', 'support', 'finance', 'operations', 'product', 'engineering']);
     assert.equal(await page.locator('[data-ob-tile]').count(), 9);
     // The chart is there from the start: the owner on top and each chosen department waiting. Built-in and message bots are not on it.
-    assert.match(await page.locator('#ob-chart [data-oc-ceo]').textContent(), /Ana M\. Rivera\s*CEO/);
+    assert.match(await page.locator('#ob-chart [data-oc-owner]').textContent(), /Ana M\. Rivera\s*CEO/);
     assert.doesNotMatch(await page.locator('#ob-chart').textContent(), /Ace|BotOps|Inbox Manager/);
     assert.equal(await page.locator('#ob-chart .oc-dept.oc-pending').count(), 7);
     await shot(page, 'desktop-3-departments');
@@ -751,16 +748,16 @@ function recruitFor({department, briefing, share}) {
       Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async value => { window.copied.push(value); }}}); });
     const copies = async () => {
       await page.evaluate(() => { window.copied = []; });
-      const buttons = [...await page.locator('.onb-steps [data-onb-copy]').all(),
-        ...await page.locator('#onb-other [data-onb-copy]').all(), page.locator('#onb-code-copy')];
+      const buttons = [...await page.locator('.onb-steps [data-onb-copy]:visible').all(),
+        ...await page.locator('#onb-other [data-onb-copy]:visible').all(), page.locator('#onb-code-copy')];
       for (const button of buttons) await button.click();
       await page.waitForFunction(count => window.copied.length === count, buttons.length);
       const values = await page.evaluate(() => window.copied);
-      assert.deepEqual(values, [...await page.locator('.onb-cmd code').allTextContents(), await page.locator('#onb-code-value').textContent()]);
+      assert.deepEqual(values, [...await page.locator('.onb-cmd code:visible').allTextContents(), await page.locator('#onb-code-value').textContent()]);
       return [values[0], values.at(-2), values.at(-1)];
     };
     const shown = async () => {
-      const commands = await page.locator('.onb-cmd code').allTextContents();
+      const commands = await page.locator('.onb-cmd code:visible').allTextContents();
       return [commands[0], commands.at(-1), await page.locator('#onb-code-value').textContent()];
     };
     let [installer, other, code] = await copies();
@@ -877,18 +874,18 @@ function recruitFor({department, briefing, share}) {
     // bot the chart does not list yet first, the built-ins last.
     const groups = () => page.locator('#onb-bots .onb-group').evaluateAll(els => els.map(el =>
       [el.dataset.onbGroup || '', el.querySelector('h2')?.textContent || (el.dataset.onbGroup === 'built-in' ? 'Built-in' : ''), [...el.querySelectorAll('[data-onb-bot]')].map(row => row.dataset.onbBot)]));
-    assert.deepEqual(await groups(), [['', '', ['content']], ['operations', 'Operations', ['meeting-notes']],
+    assert.deepEqual(await groups(), [['', '', [CONTENT_ID]], ['operations', 'Operations', ['meeting-notes']],
       ['support', 'Customer Support', ['support']], ['built-in', 'Built-in', ['coo', 'botops']]]);
     assert.deepEqual(await page.locator('#tree .org-group > .noderow').evaluateAll(els => els.map(el => el.dataset.org)), ['g:operations', 'g:support']);
     // One status per row: a word, or the one thing to do there.
-    const status = slug => page.locator(`[data-onb-bot=${slug}] .onb-bot-actions`).evaluate(el => [el.children.length, el.textContent.trim()]);
+    const status = id => page.locator(`[data-onb-bot="${id}"] .onb-bot-actions`).evaluate(el => [el.children.length, el.textContent.trim()]);
     assert.deepEqual(await status('coo'), [1, 'Active']);                                                  // the built-ins work at once
     assert.deepEqual(await status('botops'), [1, 'Active']);
     assert.deepEqual(await status('support'), [1, 'Set up']);                                              // its repository exists
     assert.deepEqual(await status('meeting-notes'), [1, 'Setting up']);                                    // not yet: no Set up
     assert.equal(await page.locator('[data-fr-start=meeting-notes]').count(), 0);
-    assert.deepEqual(await status('content'), [1, 'BotOps is setting it up']);                             // not a starter: BotOps builds it
-    assert.equal(await page.locator('[data-onb-bot=content] a').getAttribute('href'), '#/task/task-content');
+    assert.deepEqual(await status(CONTENT_ID), [1, 'Setting it up']);                                         // not a starter: BotOps builds it
+    assert.equal(await page.locator(`[data-onb-bot="${CONTENT_ID}"] a`).getAttribute('href'), '#/task/task-content');
     assert.equal(await page.locator('#onb-bots .pill.needs, #onb-bots p').count(), 0);
     // Show me around: the tour, once asked for; Skip is remembered.
     await page.locator('#onb-tour').click();
@@ -956,15 +953,16 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await page.locator('#bot-onboard p').count(), 0);                                    // the pill and the button, no paragraph
     assert.equal(await page.locator('#bot-start-setup').textContent(), 'Start onboarding');
     assert.equal(await page.locator('#bot-onboard [data-setup-help="bot"]').textContent(), 'Want help onboarding it?');
-    // The Chat tab shows the setup conversation: the person's line, in the chat Set up wrote to.
-    await page.locator('#conv-thread .bubble.you', {hasText: "Let's set you up."}).waitFor();
+    // The DM tab shows the setup conversation: the person's line, in the chat Set up wrote to.
+    await page.goto('https://tico-ui.test/#/bot/support/dm');
+    await page.locator('#bot-thread .th-msg.th-mine', {hasText: "Let's set you up."}).waitFor();
     // A planned starter is activated first (an owner's call), then told the same line.
     await page.goto('https://tico-ui.test/#/bot/meeting-notes');
     await page.locator('#bot-start-setup').click();
     await page.locator('#bot-start-setup', {hasText: 'Onboarding started'}).waitFor();
-    // Its Chat tab was open and empty when Set up was pressed: the message shows at once, not after a reload.
-    await page.locator('#conv-thread .bubble.you', {hasText: "Let's set you up."}).waitFor({timeout: t(3000)});
-    assert.equal(await page.locator('#conv-thread .empty').count(), 0);
+    // Start onboarding opens its DM tab, which shows the line at once, not after a reload.
+    await page.locator('#bot-thread .th-msg.th-mine', {hasText: "Let's set you up."}).waitFor({timeout: t(3000)});
+    assert.equal(await page.locator('#bot-thread .th-empty').count(), 0);
     assert.deepEqual(definitions, [{path: '/api/v2/bots/meeting-notes/definition', body: {status: 'active', expected_revision: 4}}]);
     assert.deepEqual(chats.at(-1), ['meeting-notes', {text: "Let's set you up."}]);
     // The mark clears when the bot says it is set up: the page follows the bot's state.
@@ -976,7 +974,7 @@ function recruitFor({department, briefing, share}) {
     await page.locator('#onb-tasks').waitFor();
 
     // The setup task link opens the Tasks page with that task already in full.
-    await page.locator('[data-onb-bot=content] a').click();
+    await page.locator(`[data-onb-bot="${CONTENT_ID}"] a`).click();
     await page.waitForFunction(() => location.hash === '#/task/task-content');
     await page.locator('#task-modal[open] .tmodal-title').waitFor();
     assert.equal(await page.locator('#task-modal .tmodal-title').textContent(), 'Set up Content Marketer');
@@ -990,6 +988,7 @@ function recruitFor({department, briefing, share}) {
     // ---- Settings -> Bots: the same cards, adding one bot from the catalog.
     await page.goto('https://tico-ui.test/#/settings');
     await page.locator('[data-settings-tab=devices]').click();
+    await page.locator('#machine-add-open').click();
     await page.locator('#machine-kind').selectOption('linux');
     assert.equal(await page.locator('#machine-label').inputValue(), "Ana Rivera's server");
     // The first-run enrollment step already checks the Linux server command; keep this distinct Windows installer path.
@@ -998,6 +997,7 @@ function recruitFor({department, briefing, share}) {
     await page.waitForFunction(() => /install-wsl\.ps1/.test(document.querySelector('#machine-enroll-status').textContent));
     assert.match(await page.locator('#machine-enroll-status').textContent(), /irm https:\/\/github\.com\/ticoteam\/tico\/releases\/download\/v0\.2\.0\/install-wsl\.ps1\)\)\) -Url https:\/\/initech\.test -Code 'enroll-code' -Label 'Ana Rivera''s PC' -Name tico-enrollco/);
     await page.locator('#machine-kind').selectOption('mac');
+    await page.keyboard.press('Escape');
     await page.locator('[data-settings-tab=bots]').click();
     await page.locator('#settings-add-catalog:not([disabled])').click();
     await page.locator('#catalog-picker-grid').waitFor();
@@ -1184,8 +1184,8 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await waiting.locator('#onb', {hasText: 'Waiting for a computer'}).count(), 1);
     assert.equal(await waiting.locator('#onb-bots').textContent().then(text => /computer/i.test(text)), false);
     assert.deepEqual(await waiting.locator('#onb button.primary').evaluateAll(els => els.map(el => el.textContent)), ['Add a computer']);
-    for (const slug of ['coo', 'support', 'meeting-notes', 'content'])
-      assert.equal(await waiting.locator(`[data-onb-bot=${slug}] .onb-bot-actions`).textContent().then(text => text.trim()), 'Waiting');
+    for (const id of ['coo', 'support', 'meeting-notes', CONTENT_ID])
+      assert.equal(await waiting.locator(`[data-onb-bot="${id}"] .onb-bot-actions`).textContent().then(text => text.trim()), 'Waiting');
     // Read the actual wizard pills' computed colours, including System following a light OS.
     const contrast = [];
     for (const theme of ['light', 'system', 'dark']) {
@@ -1245,7 +1245,7 @@ function recruitFor({department, briefing, share}) {
     assert.equal(await waiting.locator('[data-onb-bot=coo] .onb-bot-actions').textContent().then(text => text.trim()), 'Waiting');
     assert.equal(await waiting.locator('#onb-after > :first-child').first().getAttribute('id'), 'fr-providers');
     await waiting.locator('#fr-providers [data-gs-tab=models]').click();
-    await waiting.locator('#settings-tabs [data-settings-tab=devices][aria-selected=true]').waitFor();   // lands on Computers, where Models is
+    await waiting.locator('#settings-tabs [data-settings-tab=models][aria-selected=true]').waitFor();   // lands on Settings > Models
     CONFIG.local = true;
     await waiting.reload();
     await waiting.goto('https://tico-ui.test/#/welcome');

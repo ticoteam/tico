@@ -6,7 +6,7 @@ import pytest
 from backend import market_spend as MS
 from backend.store import H
 from backend.tests.test_api import api, get, post, put, setup_attempt  # noqa: F401
-from backend.tests.test_company import with_ceo_bot
+from backend.tests.test_company import with_strategy_bot
 from backend.tests.test_market import _librarian, _seed
 from backend.tests.test_sql import query
 from backend.tests.test_strategy import publish, ready
@@ -232,7 +232,7 @@ def test_the_tree_is_capped_and_a_segment_needs_a_defined_root(api):
 
 
 def test_an_accepted_size_change_on_a_cited_segment_trips_the_bet_once_and_a_proposed_one_does_not(api):
-    with_ceo_bot(api)
+    with_strategy_bot(api)
     first, _, _ = defined(api)
     ready(api, cites=[first], wrong_if={"kind": "thesis", "market_id": first})
     publish(api)
@@ -243,13 +243,13 @@ def test_an_accepted_size_change_on_a_cited_segment_trips_the_bet_once_and_a_pro
     post(api, f"market/sizes/{one['id']}/accept", {})
     post(api, f"market/sizes/{two['id']}/accept", {})
     with api.app.state.store.read() as c:
-        tasks = H._rows(c.execute("SELECT title, owner, body FROM tasks WHERE title LIKE 'Bet %'"))
-    assert [(t["title"], t["owner"]) for t in tasks] == [("Bet 1: may be wrong", "bot:goal-manager")]
+        tasks = H._rows(c.execute("SELECT title, owner_id, body FROM tasks WHERE title LIKE 'Bet %'"))
+    assert [(t["title"], t["owner_id"]) for t in tasks] == [("Bet 1: may be wrong", "bot:goal-manager")]
     assert first in tasks[0]["body"]
 
 
 def test_a_shared_parameter_change_trips_a_bet_on_a_segment_that_uses_it(api):
-    with_ceo_bot(api)
+    with_strategy_bot(api)
     first, _, _ = defined(api)
     proof = evidence(api)
     post(api, "market/sizes", {"segment_id": first, "method": "bottom_up", "spend_usd": 0, "low_usd": 1, "high_usd": B,
@@ -270,8 +270,8 @@ def test_asking_for_the_market_to_be_sized_files_one_task_and_asking_again_retur
     again = post(api, "market/spend/research", {"description": "A different words"})
     assert first["task_id"] == again["task_id"]
     with api.app.state.store.read() as c:
-        rows = H._rows(c.execute("SELECT owner, title, body FROM tasks WHERE title LIKE 'Size the market%'"))
-    assert len(rows) == 1 and rows[0]["owner"] == "bot:librarian" and "size-the-market.md" in rows[0]["body"]
+        rows = H._rows(c.execute("SELECT owner_id, title, body FROM tasks WHERE title LIKE 'Size the market%'"))
+    assert len(rows) == 1 and rows[0]["owner_id"] == "bot:librarian" and "size-the-market.md" in rows[0]["body"]
     assert get(api, "market/spend")["definition"]["description"] == "Software for small landlords"
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (first["task_id"],))

@@ -36,3 +36,8 @@ list it with its owner.
 `reports/YYYY-MM-DD-privacy-desk.md` in the shape of `knowledge/examples/privacy-desk.md`: the headline with the
 nearest deadline, requests, DPAs, vendors, stale records, then the not-legal-advice line.
 `hub file publish` it, commit, and `hub task update <id> --status done --note` with the nearest deadline first.
+
+## Done when
+- Every open request in `knowledge/requests.md` has its days left, its step status and its blocker, or "none".
+- Each DPA waiting has its differences, and each vendor change has its notice date or "to confirm".
+- The report is published, and the task is closed with the nearest deadline first.

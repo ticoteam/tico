@@ -51,7 +51,6 @@
   {"team": "support", "template": "retention"},
   {"team": "finance", "template": "finance-lead"},
   {"team": "finance", "template": "controller"},
-  {"team": "finance", "template": "bookkeeping", "under": "Controller"},
   {"team": "finance", "template": "ar-followup", "under": "Controller"},
   {"team": "finance", "template": "accounts-payable", "under": "Controller"},
   {"team": "finance", "template": "billing", "under": "Controller"},

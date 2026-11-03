@@ -11,6 +11,8 @@
   messages    every normalized message a sync (or an opportunistic fetch) has stored,
               so the Mac can push a batch later without holding a hub token
   sync_state  per mailbox: Gmail history cursor, last run, last error, live count
+  mail_check_misses  mails sent after their org rule check brought back no verdict, by the check's id, until Tico
+                     counts them (the id, the employee and when: nothing of the mail)
 
 Nothing here talks to Google. Tests point it at a temp file.
 """
@@ -128,6 +130,11 @@ CREATE TABLE IF NOT EXISTS sync_state (
   last_error    TEXT NOT NULL DEFAULT '',
   message_count INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS mail_check_misses (
+  id        TEXT PRIMARY KEY,
+  employee  TEXT NOT NULL,
+  created   TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS judge_cache (
   cache_key   TEXT PRIMARY KEY,
   expires_at  INTEGER NOT NULL,
@@ -140,6 +147,7 @@ CREATE INDEX IF NOT EXISTS sends_recipient ON sends(mailbox, recipient);
 CREATE INDEX IF NOT EXISTS messages_push ON messages(pushed_at, mailbox);
 CREATE INDEX IF NOT EXISTS messages_epoch ON messages(mailbox, epoch);
 CREATE INDEX IF NOT EXISTS judge_cache_expiry ON judge_cache(expires_at);
+CREATE INDEX IF NOT EXISTS mail_check_misses_employee ON mail_check_misses(employee, created);
 """
 
 
@@ -234,6 +242,34 @@ def record_audit(conn, row):
     conn.commit()
 
 
+# ---------------------------------------------------------------- org rule check misses
+
+MAIL_CHECK_MISSES_MAX = 100     # kept per employee, oldest dropped; also what one report to Tico carries
+
+
+def add_mail_check_miss(conn, employee, check_id, commit=True):
+    """A mail sent after its org rule check brought back no verdict: the check's id, for Tico to count once, later.
+    `commit` False: it lands with the caller's next commit (`finish_send`)."""
+    conn.execute("INSERT OR IGNORE INTO mail_check_misses (id, employee, created) VALUES (?,?,?)",
+                 (check_id, employee, stamp()))
+    conn.execute("DELETE FROM mail_check_misses WHERE employee=? AND id NOT IN (SELECT id FROM mail_check_misses "
+                 "WHERE employee=? ORDER BY created DESC, rowid DESC LIMIT ?)",
+                 (employee, employee, MAIL_CHECK_MISSES_MAX))
+    if commit:
+        conn.commit()
+
+
+def mail_check_misses(conn, employee):
+    return [r["id"] for r in conn.execute("SELECT id FROM mail_check_misses WHERE employee=? ORDER BY created, rowid "
+                                          "LIMIT ?", (employee, MAIL_CHECK_MISSES_MAX))]
+
+
+def drop_mail_check_misses(conn, ids):
+    """Tico counted these (its 2xx to the report that carried them)."""
+    conn.executemany("DELETE FROM mail_check_misses WHERE id=?", [(i,) for i in ids])
+    conn.commit()
+
+
 # ---------------------------------------------------------------- drafts
 
 def get_draft(conn, key):
@@ -320,9 +356,13 @@ def claim_send(conn, key, employee, mailbox, issue, recipients, subject, thread_
     return get_send(conn, key), True
 
 
-def finish_send(conn, key, message_id="", status="sent"):
+def finish_send(conn, key, message_id="", status="sent", miss=None):
+    """`miss` (employee, check id): the send went out after a failed org rule check; its miss becomes reportable in
+    this same commit, only once the send is known to have gone."""
     conn.execute("UPDATE sends SET message_id=?, status=? WHERE key=?",
                  (message_id or "", status, key))
+    if miss:
+        add_mail_check_miss(conn, *miss, commit=False)
     conn.commit()
     return get_send(conn, key)
 

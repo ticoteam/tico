@@ -1,0 +1,15 @@
+1
+00:00:00,300 --> 00:00:05,400
+Short videos from one HTML file
+
+2
+00:00:06,300 --> 00:00:11,000
+Type a name and start the trial
+
+3
+00:00:11,200 --> 00:00:15,000
+One click, then the result
+
+4
+00:00:16,200 --> 00:00:19,800
+Same input, same frames, every time

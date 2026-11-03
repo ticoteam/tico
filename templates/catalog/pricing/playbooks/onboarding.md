@@ -31,7 +31,8 @@ answers only some, record those and use the defaults for the rest, saying which 
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/our-prices.md` and `knowledge/competitor-prices.md` (URL and date read for every price).
+Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/our-prices.md` and `knowledge/competitor-prices.md` (URL and date read for every price). Write `knowledge/company.md` from the answers: what the team sells, to whom,
+and the scope of this work.
 
 ## 5. Produce the first result now
 
@@ -39,13 +40,13 @@ Follow `playbooks/monthly-pricing-review.md` on the real pages and deals. Attach
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will write this review on the 1st of every month at 09:00." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will write this review on the 1st of every month at 09:00." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

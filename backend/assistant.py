@@ -3,16 +3,13 @@
 One room per person (`rooms.ASSISTANT_ROOM`, scope personal, owner_actor the person): only they
 read it or post in it, the owner and administrators included. A message goes one of two ways:
 
-* the fast path answers on the server, from Tico's own data, with no runner turn: what is waiting
-  on you, a search, "open X", what a bot did today, how to do something (docs/*.md). The person
-  sees the answer at once (a bot turn is 30 seconds or more);
-* everything else is a turn of the assistant bot on the company's runner. That turn acts as the
-  person and never more: `Auth.authenticate` maps its token to the person (`assistant_principal`),
+* every message is a turn of the assistant bot on the company's runner, which reads the question and
+  answers it from Tico's own data (no canned answers, no keyword routing);
+* that turn acts as the person and never more: `Auth.authenticate` maps its token to the person (`assistant_principal`),
   so every hub tool it calls is checked, and audited "via assistant", exactly as if they had made
-  the call. Low-risk writes run directly (`write_allowed`); a task change, comment or link the
-  person asked for in their own words runs directly when the turn cites their message
-  (`instruction`); anything else with a side effect that matters is proposed as a pending action,
-  and only the person's own click (`confirm`) runs it, through the same routes with their own
+  the call. Low-risk writes run directly (`write_allowed`); any other write the turn makes runs as the person when the
+  turn cites the person's own message that started it (`instruction`), except what `NEVER` names; a proposal the turn
+  makes is a pending action, and only the person's own click (`confirm`) runs it, through the same routes with their own
   credential. The bot itself can never confirm.
 """
 
@@ -22,30 +19,29 @@ import re
 import secrets
 import unicodedata
 import uuid
-from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import unquote
 
 import httpx
 from fastapi import Request
 
-from . import ceo_bot
+from . import strategy_bot
 from . import models as M
 from . import visuals
 from .media import upload_contract
 from . import rooms
+from . import settings_asks
 from .store import H, Problem, digest
 
 RUNNING_TTL_S = 120                # a confirm that has not settled in two minutes failed
 CONFIRM_TTL_H = 24                 # a proposal nobody confirmed for a day is not run
 MAX_PENDING = 20
-GITHUB_DOCS = "https://github.com/ticoteam/tico/blob/main/docs/"
-DOCS_DIR = Path(__file__).resolve().parents[1] / "docs"
+MAX_BACKGROUND_PER_DAY = 5      # cards the Assistant's own background run may put in one person's chat a day
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS assistant_actions (
   id TEXT PRIMARY KEY, owner TEXT NOT NULL, conversation_id TEXT, summary TEXT NOT NULL,
-  method TEXT NOT NULL, path TEXT NOT NULL, body_json TEXT NOT NULL DEFAULT '{}',
-  status TEXT NOT NULL, proposed_via TEXT, created TEXT NOT NULL, decided_at TEXT, result_json TEXT);
+  method TEXT NOT NULL, path TEXT NOT NULL, body TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL, proposed_via TEXT, created_at TEXT NOT NULL, decided_at TEXT, result TEXT);
 CREATE INDEX IF NOT EXISTS assistant_actions_owner ON assistant_actions(owner, status);
 """
 
@@ -53,7 +49,8 @@ CREATE INDEX IF NOT EXISTS assistant_actions_owner ON assistant_actions(owner, s
 def ensure_schema(c):
     c.executescript(SCHEMA)
     have = {r[1] for r in c.execute("PRAGMA table_info(assistant_actions)")}
-    for column in ("confirm_hash", "running_since", "description", "diff_json", "proposer"):
+    # ask: the ask a card carries to someone who may (backend/settings_asks.py), settled with the card.
+    for column in ("confirm_hash", "running_since", "description", "diff", "proposer", "ask"):
         if column not in have:
             c.execute("ALTER TABLE assistant_actions ADD COLUMN %s TEXT" % column)
     if not any(r[1] == "via" for r in c.execute("PRAGMA table_info(task_events)")):
@@ -91,6 +88,21 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # checks below.
     if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/plan", path):
         return True
+    # Taking back a card the Assistant itself proposed (backend/assistant.py action_withdraw): it only ever stops one.
+    if re.fullmatch(r"/api/v2/assistant/actions/[^/]+/withdraw", path):
+        return True
+    # Undoing one of the person's own Assistant changes (backend/assistant_changes.py): the route takes a person only, and
+    # `restore` checks each change against that person's own rights, so the undo runs on the person's cited turn.
+    if re.fullmatch(r"/api/v2/assistant/changes/[^/]+/restore", path):
+        return True
+    # Asking someone who can (backend/settings_asks.py) changes nothing either: it puts a card in front of a person who
+    # may, and the route itself requires the person's cited words.
+    if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/ask", path):
+        return True
+    # The mail tool's org rule check before a send, and its report of checks Tico never answered, change nothing: a
+    # person's own mail is never checked (backend/org_rule_check.py), and the send itself meets its own checks.
+    if re.fullmatch(r"/api/v2/bots/[^/]+/mail-check(/misses)?", path):
+        return True
     try:
         fields = json.loads(body or b"{}")
     except ValueError:
@@ -103,7 +115,9 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
         return True  # free address allocation; quota and identity still apply in inbound.py
     if direct and to_bot:
         chatting = re.fullmatch(r"/api/v2/chat/([^/]+)", path)
-        if (chatting and (settings is None or chatting.group(1) not in (settings.assistant_bot, ceo_bot.SLUG))) or (
+        if (chatting and (settings is None
+                          or unquote(chatting.group(1)).removeprefix("bot:")
+                          not in (settings.assistant_bot, strategy_bot.SLUG))) or (
                 path == "/api/v2/messages" and to_bot(fields.get("to"))):
             return True
     commenting = re.fullmatch(r"/api/v2/tasks/([^/]+)/comments", path)
@@ -125,18 +139,23 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
 
 
 # ------------------------------------------------------------------ what the person asked for in their own chat
-# A task change, comment or link, declining an approval or answering a bot's question, that the person asked their
-# Assistant for in their own Assistant chat runs without a card when the turn cites that message (`X-Tico-On-Behalf-Of`:
-# its id, or `turn` for the message that started the run). The server checks the message, not the words: the person's
-# own, typed in their own Assistant room, in the last INSTRUCTION_TTL_S. The turn is the person, so their rights stay the
-# ceiling: only an approval addressed to them, only a question asked of them. A decline is undone by asking again, so it
-# is a task action. Approving (send, spend, publish, merge) is a click on a card unless the person turned on "My
-# assistant can decide approvals for me" (`decides`, below) and the team allows it; then an approval addressed to them is
-# decided on their words too (`approval_words`). Running a task now and the rest stay a click, and so does all of it
-# when the owner's rule "Assistant acts without asking" is off.
+# A write the person's own Assistant run makes runs without a card when the turn cites the message that started it: the
+# run cites it itself (`X-Tico-On-Behalf-Of` names another message, or `turn`, the one that started the run). The server
+# checks the message, not the words: the person's own, typed in their own Assistant room, in the last INSTRUCTION_TTL_S.
+# The turn is the person, so their rights stay the ceiling: the route's own checks run as them. Only what `NEVER` names
+# stays a card or the person's own tap. A decline is undone by asking again. Approving (send, spend, publish, merge) is a
+# click on a card unless the person turned on "My assistant can decide approvals for me" (`decides`, below) and the team
+# allows it; then an approval addressed to them is decided on their words too (`approval_words`). When the owner's rule
+# "Assistant acts without asking" is off, all of it is a card again.
 INSTRUCTION_TTL_S = 30 * 60
+# The steps a bulk card (`POST /api/v2/assistant/batch`) may hold: task changes, comments, links, approval decisions and
+# answers. A card is still checked against this list, whatever a turn may do on its own.
 _INSTRUCTED = [re.compile(p) for p in (r"/api/v2/tasks/[^/]+", r"/api/v2/tasks/[^/]+/(comments|links)",
                                        r"/api/v2/messages/[^/]+/answer")]
+# An automation's change and an org rule's add or retire may sit on a bulk card too (one card holds the closes and the
+# rule stop). Each runs as the person through its own route, and must pass `admits_on_turn` like any other write.
+_CARD_OTHER = [("PATCH", re.compile(r"/api/v2/automations/[^/]+")), ("POST", re.compile(r"/api/v2/rules")),
+               ("POST", re.compile(r"/api/v2/rules/[^/]+/retire"))]
 _DECIDING = re.compile(r"/api/v2/approvals/([^/]+)")
 DECIDES_KEY = "assistant.decides_approvals"
 
@@ -145,7 +164,7 @@ def decides(c, actor):
     """Whether this person's own Assistant may decide approvals addressed to them: their own switch in Settings, which
     only they turn on, and the team's rule (backend/team_rules.py), on unless the owner turned it off."""
     from . import team_rules
-    row = c.execute("SELECT value_json FROM preferences WHERE actor=? AND key=?", (actor, DECIDES_KEY)).fetchone()
+    row = c.execute("SELECT value FROM preferences WHERE actor=? AND key=?", (actor, DECIDES_KEY)).fetchone()
     on = bool(row) and json.loads(row[0]) is True
     allowed = team_rules.load(c)["assistant_approvals"]
     return {"decides_approvals": on, "team_allows": allowed, "active": on and allowed}
@@ -179,12 +198,20 @@ def _fields(body):
     return body if isinstance(body, dict) else {}
 
 
-def instructed_setting(method, path, body=None):
-    """Whether this write is one direct setting from the catalogue, exactly as `hub settings set` makes it, so it may run
-    on the person's cited words like a task action (backend/settings_catalog.py). Two settings at once, a confirm or
-    person-only one, or anything the catalogue does not list stays a card."""
+def canonical(path):
+    """The canonical spelling of a request path (`route_renames`): an old spelling (`/runners/{id}/...`) is checked as the
+    route it answers, so no gate check is skipped by using the old name. None when the path is not one."""
+    from .route_renames import new_path
+    p = normalize_path(path)
+    return (new_path(p) or p) if p else None
+
+
+def catalogue_setting(method, path, body=None):
+    """Whether this write is one setting from the catalogue, exactly as `hub settings set` makes it (backend/settings_
+    catalog.py). Its class decides it in `require_direct_setting`. Two settings at once, or anything the catalogue does
+    not list, is not one."""
     from . import settings_catalog
-    path = normalize_path(path)
+    path = canonical(path)
     if isinstance(body, (bytes, str)):
         try:
             body = json.loads(body or b"{}")
@@ -192,28 +219,197 @@ def instructed_setting(method, path, body=None):
             return False
     if not isinstance(body, dict):
         return False           # a list or a bare value is no catalogue entry's body: never read as an empty one
-    found = path and settings_catalog.matched(method, path, body)
-    return bool(found) and found[2] in ("direct", "stored")      # "stored": `require_direct_setting` reads the rule
+    return bool(path and settings_catalog.matched(method, path, body))
 
 
 def require_direct_setting(c, method, path, body, trial=None, base=""):
-    """403 unless the setting this cited write changes is direct once read against what is stored (a wake-rule update
-    keeps the stored rule's action; a repository change is tried as the person's own click, `trial`): the same class
-    `plan` gave it, with the same full link (`base`, the public URL)."""
+    """403 when the setting this cited write changes is one only the person may change themselves (class `person`). A
+    direct or a confirm setting runs on the person's cited words: the route's own check decides who may change it. The
+    class is read against what is stored (a wake-rule update keeps the stored rule's action; a repository change is tried
+    as the person's own click, `trial`), with the same full link (`base`, the public URL)."""
     from . import settings_catalog
-    found = settings_catalog.stored_class(c, method, normalize_path(path) or "", _fields(body), trial)
-    if not found or found[2] != "direct":
-        e = found[0] if found else None
-        link = e and ((base.rstrip("/") + "/" + e.card) if base else e.card)
-        raise Problem("person_only" if found and found[2] == "person" else "confirm_required",
-                      (e.why if e and e.why else "That setting needs the person's own yes") + ": open " + link
-                      if e else "That setting needs the person's own yes", 403)
+    found = settings_catalog.stored_class(c, method, canonical(path) or "", _fields(body), trial)
+    if found and found[2] != "person":
+        return
+    e = found[0] if found else None
+    if not e:
+        raise Problem("confirm_required", "That setting needs the person's own yes", 403)
+    link = (base.rstrip("/") + "/" + e.card) if base else e.card
+    raise Problem("person_only", (e.why or "That setting needs the person's own yes") + ": open " + link, 403)
+
+
+# What a person's own Assistant turn never makes as them, even on their cited words: each stays a Confirm card, or the
+# person's own tap in Tico or Settings. Every other write the turn makes is admitted (`admits_on_turn`), and the route's
+# own checks, run as the person, decide the rest. (method, route); a method of None is any method.
+NEVER = [(m, re.compile(p)) for m, p in (
+    # A personal token, a service key, a stored credential (its value, its grants, its import and its deletion) is issued,
+    # shown or revoked by the person in Settings or Credentials, never through a chat. Every route that writes a
+    # credential or a grant is here, by its canonical path (`admits_on_turn` renames the old spellings first), and
+    # tests/test_assistant_acts_as_you.py walks app.routes so a new one cannot slip past.
+    ("POST", r"/api/v2/me/tokens(/[^/]+/revoke)?"),
+    ("POST", r"/api/v2/service-keys(/[^/]+/revoke)?"),
+    (None, r"/api/v2/credentials(/.*)?"), (None, r"/api/v2/credential-set"),
+    (None, r"/api/v2/credential-imports(/.*)?"), (None, r"/api/v2/runner-credential-(migration|imports)(/.*)?"),
+    (None, r"/api/v2/credential-requests/[^/]+/save"),
+    (None, r"/api/v2/bots/[^/]+/agent-credential(/revoke)?"),
+    (None, r"/api/v2/github/app/replace-lost-key"),
+    (None, r"/api/v2/triggers/[^/]+/signing"),
+    # A computer's sign-in and its keys: its logins, logouts, shared key and keys (`model_login`, `computer_keys`), and a
+    # model subscription's connect. Its enrollment and pairing codes are the person's own tap too.
+    (None, r"/api/v2/computers/[^/]+/(shared-key|logins(/.*)?|logouts(/.*)?|keys(/.*)?)"),
+    (None, r"/api/v2/runner-logins/[^/]+/(report|subscription)"), (None, r"/api/v2/model-subscriptions(/.*)?"),
+    (None, r"/api/v2/computer-subscriptions"), (None, r"/api/v2/runner-model-subscription-refresh"),
+    ("POST", r"/api/v2/enrollments"), ("POST", r"/api/v2/runners/enroll"), ("POST", r"/api/v2/agents/pairings(/.*)?"),
+    (None, r"/api/v2/agents/pairings(/.*)?"),
+    # A message the person wrote is theirs: a turn never edits, deletes or redacts it, so a "No" cannot become a "yes"
+    # after the read-back (`instruction` and `approval_words` also refuse a message that was edited).
+    ("PATCH", r"/api/v2/messages/[^/]+"), ("DELETE", r"/api/v2/messages/[^/]+"),
+    ("POST", r"/api/v2/messages/[^/]+/redact"),
+    # A person's password and a reader's invite link: each carries a credential the chat would hold.
+    ("POST", r"/api/v2/access/(people|humans)/[^/]+/password"), (None, r"/api/v2/audiences/[^/]+/invites(/.*)?"),
+    (None, r"/api/v2/setup/company/people/[^/]+/invite"), (None, r"/api/v2/access/(humans|people)/[^/]+/invite"),
+    # A computer's adoption and removal (its enrolment is the person's own tap, and a removal ends its sign-ins).
+    (None, r"/api/v2/runners/adopt"), (None, r"/api/v2/computers/[^/]+/removals(/.*)?"),
+    # A token for GitHub, a webhook's signing secret and the wake-URL secret: credentials, never a chat's to set.
+    (None, r"/api/v2/github/token"), (None, r"/api/v2/webhooks/[^/]+/rotate"), (None, r"/api/v2/hooks/wake-url"),
+    # Connections to an outside account: a mail sign-in, the bank and the books, a meeting provider, an importer's login
+    # and the postal intake.
+    (None, r"/api/v2/mail/google/connect"), (None, r"/api/v2/finance/(connections|books/connect)(/.*)?"),
+    ("POST", r"/api/v2/live-meetings"), ("POST", r"/api/v2/meeting-importers/[^/]+"), (None, r"/api/v2/postal/intake"),
+    # Subscriptions: the owner's own tap.
+    (None, r"/api/v2/subscriptions(/.*)?"), (None, r"/api/v2/runner-subscription-refreshes(/.*)?"),
+    # Single sign-on, the directory and its SCIM token, and the OAuth sign-in of an agent.
+    (None, r"/api/v2/directory(/.*)?"), (None, r"/api/v2/oauth(/.*)?"),
+    # Handing the company to another owner.
+    (None, r"/api/v2/access/owner(/.*)?"),
+    # The Assistant's own switches: whether it decides approvals (the person's own sign-in only) and whether it is on.
+    (None, r"/api/v2/assistant/settings"), ("POST", r"/api/v2/assistant/turn-on"),
+    # The company's AI provider keys and config (a credential): the owner's own sign-in, never a chat.
+    (None, r"/api/v2/providers(/.*)?"),
+    # A raw SQL query over the database is not a chat action: the Assistant reads through its own tools, privacy-checked
+    # per run, and a query is never made for it from a turn.
+    (None, r"/api/v2/sql"),
+    # A Tico support report or ticket goes outside the company: the person's own tap.
+    (None, r"/api/v2/support/(tickets(/.*)?|feedback)"),
+    # Deleting a person, the company's server connection or its storage.
+    ("DELETE", r"/api/v2/(people|humans)/[^/]+"), ("DELETE", r"/api/v2/company/server-connection"),
+    ("DELETE", r"/api/v2/system/storage"),
+)]
+# The team's rules that decide the Assistant itself (backend/team_rules.py): only the owner's own sign-in changes them.
+ASSISTANT_RULES = ("assistant_direct", "assistant_approvals")
+
+
+# The automation actions that send something outside the company (backend/automation_actions.py): a webhook, a reply
+# sent to mail, a forward. An automation that holds one is never turned on or changed by a turn on the person's words.
+OUTSIDE_ACTIONS = ("call_webhook", "send_reply", "forward")
+
+
+def _sends(flow):
+    """Whether a flow (stored text, or the parsed JSON of a request's `flow` or `steps`) holds an outside action."""
+    text = flow if isinstance(flow, str) else json.dumps(flow or "")
+    return any(action in text for action in OUTSIDE_ACTIONS)
+
+
+def _body_sends(fields):
+    """Whether a write's body holds an outside action in the fields that become its steps. The name, trigger and batch
+    send nothing, and checking the whole body would make a rename to "Forward the invoices" a card."""
+    return any(_sends(fields.get(key)) for key in ("flow", "steps"))
+
+
+def automation_sends_outside(store, method, path, body=None):
+    """Whether this write makes or changes an automation that sends something outside (its steps hold one of
+    `OUTSIDE_ACTIONS`): a create whose body holds one, a change to a stored one (its stored flow, or the body's steps), a
+    run of one, and a restore of a version that holds one. Only the person's own tap does those, so a turn's change is a
+    card (`confirm_required`)."""
+    p = canonical(path) or ""
+    fields = _fields(body)
+    if p == "/api/v2/automations":
+        return method == "POST" and _body_sends(fields)
+    if method not in ("PATCH", "PUT", "DELETE", "POST"):
+        return False
+    restore = re.fullmatch(r"/api/v2/automations/([^/]+)/versions/(\d+)/restore", p)
+    if restore:
+        with store.read() as c:
+            row = c.execute("SELECT flow FROM automation_versions WHERE automation_id=? AND n=?",
+                            (restore.group(1), int(restore.group(2)))).fetchone()
+        return bool(row) and _sends(row["flow"])
+    m = re.fullmatch(r"/api/v2/automations/([^/]+)(?:/run|/delete)?", p)
+    if not m:
+        return False
+    with store.read() as c:
+        row = c.execute("SELECT flow FROM automations WHERE id=?", (m.group(1),)).fetchone()
+    stored = str(row["flow"] or "") if row else ""
+    return _sends(stored) or _body_sends(fields)
+
+
+def settings_route_unmatched(method, path, body=None):
+    """Whether this write goes to a settings catalogue route but is not exactly one catalogue setting (a list or a bare
+    value, two settings at once, or a key the setting does not have). Such a write is a card: the gate cannot tell
+    which setting it changes, so it cannot tell whether only the person may change it. A route can also carry writes
+    that name none of its catalogue keys (a person's reports_to on the people route, whose catalogue entry is `left`):
+    those are no setting's write, so they are admitted on the turn like any other, and the route's own checks decide."""
+    from . import settings_catalog
+    p = canonical(path)
+    if not p or not settings_catalog.routed(method, p):
+        return False
+    fields = _json(body) if isinstance(body, (bytes, str)) else body
+    if settings_catalog.matched(method, p, fields) is not None:
+        return False
+    if not isinstance(fields, dict):
+        return True
+    named = set()
+    for e, _ in settings_catalog.routed(method, p):
+        if not e.field:
+            return True           # the whole body is the value, so any object may be one: a card
+        named.add(e.field.partition(".")[0])
+        named.update(e.extra)
+    return bool(named & set(fields))
+
+
+def admits_on_turn(method, path, body=None):
+    """Whether a person's own Assistant turn may make this write as them, on their cited words. Every write is admitted
+    except what `NEVER` names, a body that carries a secret (a secret never goes through a chat: BotOps' rule, which
+    botops_act checks the same way), and the team's rules for the Assistant itself. The approvals are not decided here:
+    an approve runs only on its read-back and the person's yes (`approval_words`)."""
+    from . import botops_act, team_rules
+    path = canonical(path)
+    if not path or method not in ("POST", "PUT", "PATCH", "DELETE"):
+        return False
+    # NEVER is written against the canonical spelling: an old route (`/runners/{id}/shared-key`) answers the same way.
+    if any(m in (None, method) and p.fullmatch(path) for m, p in NEVER):
+        return False
+    parsed = _json(body)
+    # The team's rules: a turn may change the ordinary ones (`{"stale_review": false}`), never the ones that grant access to
+    # credentials, tokens, the SQL page or support, nor the Assistant's own (backend/team_rules.py).
+    if path == "/api/v2/access/rules" and isinstance(parsed, dict) and any(
+            parsed.get(k) is not None for k in ASSISTANT_RULES + team_rules.CREDENTIAL_RULES):
+        return False
+    # `secret_in_request` is the one decision for a body: on a tool route it admits a `${VAR}` placeholder that
+    # `secret_in` alone would reject, and on every other route it is `secret_in`.
+    if isinstance(parsed, dict):
+        return not botops_act.secret_in_request(method, path, parsed)
+    return botops_act.secret_in(parsed) is None
+
+
+def _json(body):
+    """A request body as JSON, whether it arrives as bytes or already parsed; a body that is not JSON is `{}`."""
+    if isinstance(body, (bytes, str)):
+        try:
+            return json.loads(body or b"{}")
+        except ValueError:
+            return {}
+    return body if body is not None else {}
 
 
 def instructed_route(method, path, body=None, decides=False):
-    """Whether this write may run on the person's cited words. `decides`: their Assistant may decide approvals."""
+    """Whether a bulk card may hold this step: a task change, comment, link or answer, or an approval decision (`decides`:
+    an approve, which the card's own click covers). A card is checked against this whatever a turn may do on its own."""
     path = normalize_path(path)
-    if method != "POST" or not path or path == "/api/v2/tasks/dry-run":
+    if not path or path == "/api/v2/tasks/dry-run":
+        return False
+    if any(m == method and p.fullmatch(path) for m, p in _CARD_OTHER):
+        return admits_on_turn(method, path, body)
+    if method != "POST":
         return False
     if _DECIDING.fullmatch(path):
         return _fields(body).get("decision") == "declined" or (decides and _fields(body).get("decision") == "approved")
@@ -239,13 +435,24 @@ def require_addressed(c, who, path, body):
     for s in steps or []:
         target = str(s.get("path") or "") if isinstance(s, dict) else ""
         if (m := _DECIDING.fullmatch(target)):
-            message_id = (H.approval(c, m.group(1)) or {}).get("message_id")
+            row = H.approval(c, m.group(1)) or {}
+            refuse_own_click(row)
+            message_id = row.get("message_id")
         elif (m := re.fullmatch(r"/api/v2/messages/([^/]+)/answer", target)):
             message_id = m.group(1)
         else:
             continue
-        if (H.message(c, message_id) or {}).get("to_actor") != who.actor:
+        if (H.message(c, message_id) or {}).get("recipient_id") != who.actor:
             raise Problem("forbidden", "That approval or question is not addressed to you", 403)
+
+
+def refuse_own_click(row):
+    """A Company page edition or stats board is decided only by the person's own click in Tico, either way, whatever
+    "My assistant can decide approvals for me" says: not on a card, not on their words (backend/company_page/editions.py)."""
+    from .company_page.editions import own_click_approval
+    if own_click_approval(row.get("payload")):
+        raise Problem("approve_own_click", "What the Company page sends outside is decided only by the person's own "
+                      "click in Tico, so leave it out and tell them it is waiting", 403)
 
 
 def require_named_approval(c, who, ref):
@@ -343,6 +550,16 @@ def approval_id(path):
     return m.group(1) if m else None
 
 
+def edited(c, msg):
+    """Whether a message was changed after it was posted: an edit or a delete (`edited_at`, a revision above zero). The
+    post itself writes revision 0 into `message_revisions` (backend/threads.py `record`), so only a row above zero counts.
+    The person's words are what they posted, so an edited message lends nothing."""
+    if msg.get("edited_at") or int(msg.get("revision") or 0) > 0:
+        return True
+    return bool(c.execute("SELECT 1 FROM message_revisions WHERE message_id=? AND revision>0 LIMIT 1",
+                          (msg["id"],)).fetchone())
+
+
 def approval_words(c, who, cited, assistant_bot, approval):
     """What an approval the Assistant decides for the person is recorded with: their words and the read-back they
     answered. The cited message must be a plain yes, the last thing anyone else said in the room before it (since the
@@ -350,25 +567,28 @@ def approval_words(c, who, cited, assistant_bot, approval):
     after it: "wait, no" takes it back. Their own sentence, words in a file, a page, a bot's message or the read-back
     alone never approve, and the Assistant never approves what it asked for itself."""
     bot = "bot:" + assistant_bot
-    if (H.approval(c, approval) or {}).get("requested_by") == bot:
+    if (H.approval(c, approval) or {}).get("requested_by_id") == bot:
         raise Problem("own_request", "You asked for this approval yourself, so it stays the person's click: propose it "
                       "on a card (`hub assistant propose`)", 403)
     msg = H.message(c, cited) or {}
+    if msg and edited(c, msg):
+        raise Problem("approve_not_asked", "That message was edited after it was posted, so it is no yes: post the "
+                      "read-back again and ask the person", 403)
     words = str(msg.get("body") or "").strip()
-    room, at = msg.get("conversation_id"), str(msg.get("created") or "")
+    room, at = msg.get("conversation_id"), str(msg.get("created_at") or "")
     back = None
-    later = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND from_actor=? AND created>? AND id<>? "
+    later = c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>? AND id<>? "
                       "AND deleted_at IS NULL LIMIT 1", (room, who.actor, at, cited)).fetchone()
     if len(words) <= 60 and AFFIRM.fullmatch(words) and not later:
-        before = c.execute("SELECT created FROM messages WHERE conversation_id=? AND from_actor=? AND created<? "
-                           "AND id<>? AND deleted_at IS NULL ORDER BY created DESC LIMIT 1",
+        before = c.execute("SELECT created_at FROM messages WHERE conversation_id=? AND sender_id=? AND created_at<? "
+                           "AND id<>? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
                            (room, who.actor, at, cited)).fetchone()
-        last = c.execute("SELECT m.id, m.from_actor, m.body, e.detail_json FROM messages m LEFT JOIN events e "
-                         "ON e.target=m.id AND e.action=? WHERE m.conversation_id=? AND m.from_actor<>? AND m.created>=? AND m.created<=? "
-                         "AND m.id<>? AND m.deleted_at IS NULL ORDER BY m.created DESC, m.rowid DESC LIMIT 1",
-                         (READ_BACK, room, who.actor, before["created"] if before else "", at, cited)).fetchone()
-        if last and last["from_actor"] == bot and last["detail_json"]:
-            back = {"body": last["body"], "approves": (json.loads(last["detail_json"]) or {}).get("approves") or []}
+        last = c.execute("SELECT m.id, m.sender_id, m.body, e.detail FROM messages m LEFT JOIN events e "
+                         "ON e.target=m.id AND e.action=? WHERE m.conversation_id=? AND m.sender_id<>? AND m.created_at>=? AND m.created_at<=? "
+                         "AND m.id<>? AND m.deleted_at IS NULL ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1",
+                         (READ_BACK, room, who.actor, before["created_at"] if before else "", at, cited)).fetchone()
+        if last and last["sender_id"] == bot and last["detail"]:
+            back = {"body": last["body"], "approves": (json.loads(last["detail"]) or {}).get("approves") or []}
     if not back or approval not in back["approves"]:
         raise Problem("approve_not_asked", "Approving needs the person's yes to your read-back: post the list with "
                       "`hub approval read-back <id>...` as your reply and end the turn; their plain yes to it approves "
@@ -389,25 +609,25 @@ def instruction(c, who, ref):
                         (who.attempt_id,)).fetchone()
         message_id = row["message_id"] if row else ""
     msg = H.message(c, message_id) if message_id else None
+    if msg and edited(c, msg):
+        refuse("That message was edited after it was posted, so it does not say what they asked")
     room = H.conversation(c, msg["conversation_id"]) if msg else None
     refs = (msg or {}).get("refs") or {}
-    # The CEO Bot's turn cites the owner's words in the CEO Bot chat, an Assistant's its person's Assistant room.
-    key = rooms.CEO_ROOM if who.task_actor == "bot:" + ceo_bot.SLUG else rooms.ASSISTANT_ROOM
-    if (not msg or msg["from_actor"] != who.actor or msg["kind"] != "say" or not refs.get("assistant")
+    # Only the person's own Assistant room: the owner's earlier Strategy Bot chat (`rooms.STRATEGY_ROOM`) is history.
+    if (not msg or msg["sender_id"] != who.actor or msg["kind"] != "say" or not refs.get("assistant")
             or refs.get("via") or not room or room.get("scope") != rooms.PERSONAL
-            or room.get("owner_actor") != who.actor or room.get("room_key") != key
-            or (key == rooms.CEO_ROOM and who.role != "owner") or room.get("closed_at")):
+            or room.get("owner_id") != who.actor or room.get("room_key") != rooms.ASSISTANT_ROOM
+            or room.get("closed_at")):
         refuse("Cite a message the person sent you in their own Assistant chat")
-    if str(msg["created"]) < H.shift(H.now(), seconds=-INSTRUCTION_TTL_S):
+    if str(msg["created_at"]) < H.shift(H.now(), seconds=-INSTRUCTION_TTL_S):
         refuse(f"That message is more than {INSTRUCTION_TTL_S // 60} minutes old; ask the person again")
     return {"for": who.actor, "cited": msg["id"], "run": "asked"}
 
 
 def require_on_task(c, auth, who, path):
-    """403 unless a task change, comment or link the person asked for is on a task they are on (its owner, requester
-    or in one of its roles): an Assistant acts only as its person, never on another person's task, even when asked
-    to. The owner's own chat (the CEO Bot's) acts as the owner, who may act on any task. A task they may not read is
-    a 404, as the route answers it: the refusal never says it is there."""
+    """A task change, comment or link the turn makes must be on a task the person may read: a task they may not read is
+    a 404, as the route answers it, and the refusal never says it is there. Being on the task is not a limit: the
+    person's own rights are, and the route checks them as the person. The owner's Assistant acts as the owner."""
     m = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(?:comments|links))?", normalize_path(path) or "")
     if not m or who.role == "owner":
         return
@@ -415,12 +635,6 @@ def require_on_task(c, auth, who, path):
     if not row:
         return          # the route answers for a task that is not there
     auth.task_row(c, who, row)
-    from . import task_roles
-    people = {row["owner"], row["requester"]} | {a for actors in task_roles.roles_of(c, row["id"]).values()
-                                                 for a in actors}
-    if who.actor not in people:
-        raise Problem("on_behalf_of", "That task is another person's: an Assistant acts only on the person's own "
-                      "tasks; ask them to message its owner or comment on it themselves", 403)
 
 
 # What may be proposed at all (method, normalized path). Anything else, and above all tokens, sign-in,
@@ -442,17 +656,36 @@ _PROPOSABLE = [(m, re.compile(p)) for m, p in (
 _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     ("PUT", r"/api/v2/access/(limits|allow)"), ("PUT", r"/api/v2/usage/limits(/[^/]+)?"),
     ("PUT", r"/api/v2/usage/pools/(company|groups/[^/]+)"),
-    ("POST", r"/api/v2/routines/[^/]+/delete"),
+    ("DELETE", r"/api/v2/automations/[^/]+"), ("POST", r"/api/v2/automations/[^/]+/delete"),
     ("POST", r"/api/v2/(?:runners|computers)/[^/]+/(member-bots|revoke|restart)"),
     ("POST", r"/api/v2/credentials/[^/]+/grants/[^/]+/revoke"), ("POST", r"/api/v2/system/update"),
     ("POST", r"/api/v2/(?:goal-proposals|proposals)/[^/]+/decide"), ("POST", r"/api/v2/support/tickets"),
     ("PUT", r"/api/v2/directory"), ("POST", r"/api/v2/directory/(sync|preview)"),
     ("POST", r"/api/v2/(slack|github/app)/disconnect"),
+    ("DELETE", r"/api/v2/files/[^/]+"),
     ("POST", r"/api/v2/access/owner"), ("POST", r"/api/v2/enrollments"), ("POST", r"/api/v2/seats/[^/]+/hire"),
     # A webhook moved to another destination while it holds secret headers (app.py `destination_card`).
     ("POST", r"/api/v2/webhooks/[^/]+/update"),
+    # Settings a person may change only with a yes (backend/settings_entries.py, confirm): none hands back a secret, and
+    # each route takes the person's tap as their own click.
+    ("POST", r"/api/v2/assistant/turn-on"), ("POST", r"/api/v2/system/usage-count/reset"),
+    ("DELETE", r"/api/v2/company/server-connection"), ("DELETE", r"/api/v2/system/storage"),
+    ("POST", r"/api/v2/system/storage/move"), ("DELETE", r"/api/v2/(?:people|humans)/[^/]+"),
+    ("POST", r"/api/v2/settings/turn-levels"), ("POST", r"/api/v2/me/tokens/[^/]+/revoke"),
+    ("POST", r"/api/v2/bots/[^/]+/budget"), ("POST", r"/api/v2/strategy-bot/(checks|level)"),
+    ("POST", r"/api/v2/bots/[^/]+/cloud-machine"), ("POST", r"/api/v2/cloud-machines/shared"),
+    ("POST", r"/api/v2/postal/orders"),
+    ("POST", r"/api/v2/github/product-repos"), ("POST", r"/api/v2/tasks/[^/]+/requesters"), ("POST", r"/api/v2/tasks/[^/]+/requesters/[^/]+"),
+    ("POST", r"/api/v2/tasks/[^/]+/requesters/[^/]+/delete"), ("POST", r"/api/v2/tasks/[^/]+/links"),
+    ("DELETE", r"/api/v2/tasks/[^/]+/links/[^/]+"),
+    ("PUT", r"/api/v2/listening/destinations/[^/]+"), ("POST", r"/api/v2/listening/destinations/[^/]+/remove"),
+    ("POST", r"/api/v2/roadmaps/settings"), ("POST", r"/api/v2/inbound/inboxes/[^/]+/release"),
+    ("POST", r"/api/v2/inbound/phone-requests(/[^/]+/accept)?"),
+    # Who reads an inbox (backend/inbound.py `set_audience`): owner and admins, on their own click.
+    ("PUT", r"/api/v2/inbound/inboxes/[^/]+/audience"),
 )]
-_SHAPE = re.compile(r"/api/v2/[A-Za-z0-9_.:\-/]+")
+# An inbox is an email address in its path (`inboxes/ana@acme.example`): the one `@` a route may carry.
+_SHAPE = re.compile(r"/api/v2/(?:inboxes/[A-Za-z0-9_.+\-]+@[A-Za-z0-9.\-]+|[A-Za-z0-9_.:+\-/]+)")
 
 
 def normalize_path(path):
@@ -473,6 +706,18 @@ def catalogue_card(method, path):
     from . import settings_catalog
     return (any(e.kind != "person" for e, _ in settings_catalog.routed(method, path))
             and valid_operation(method, path, None, "botops"))
+
+
+# Routes whose handler accepts only the person's own tap (`owner(request, tap=True)`, backend/tico_storage.py): an
+# Assistant or BotOps run of them is refused, so on a turn they are a Confirm card, never a direct run.
+TAP_ONLY_ROUTES = [(m, re.compile(p)) for m, p in (
+    ("POST", r"/api/v2/system/storage/move"), ("POST", r"/api/v2/strategy-bot/(checks|level)"),
+)]
+
+
+def needs_persons_tap(method, path):
+    path = canonical(path)
+    return any(m == method and p.fullmatch(path or "") for m, p in TAP_ONLY_ROUTES)
 
 
 def valid_operation(method, path, settings=None, proposer="assistant"):
@@ -542,15 +787,15 @@ def groups(c, steps):
         if (m := _DECIDING.fullmatch(path)):
             row = H.approval(c, m.group(1)) or {}
             verb = "Approve" if body.get("decision") == "approved" else "Decline"
-            noun, created = f"{row.get('kind') or ''} approval".strip(), row.get("created")
+            noun, created = f"{row.get('kind') or ''} approval".strip(), row.get("created_at")
         elif (m := re.fullmatch(r"/api/v2/messages/([^/]+)/answer", path)):
-            verb, noun, created = "Answer", "bot question", (H.message(c, m.group(1)) or {}).get("created")
+            verb, noun, created = "Answer", "bot question", (H.message(c, m.group(1)) or {}).get("created_at")
         else:
             m = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(comments|links))?", path)
             sub = m.group(2) if m else None
             verb = ({"comments": "Comment on", "links": "Link"}.get(sub) or ("Close" if body.get("close") else None)
                     or {"done": "Mark done", "declined": "Decline"}.get(body.get("status"), "Change"))
-            noun, created = "task", (H.task(c, m.group(1)) or {}).get("created") if m else None
+            noun, created = "task", (H.task(c, m.group(1)) or {}).get("created_at") if m else None
         days = days_old(created)
         band = next(label for limit, label in AGE_BANDS if limit is None or days < limit)
         out.setdefault((verb, noun, band), []).append(str(body.get("note") or "").strip())
@@ -566,7 +811,8 @@ def describe(c, method, path, body):
     """A one-line, server-derived description of what confirming would do (never the bot's words), and
     for a task update the exact field changes."""
     def bot(slug):
-        return (H.bot(c, slug) or {}).get("display_name") or slug
+        row = H.bot(c, slug) or {}
+        return row.get("display_name") or row.get("slug") or slug
 
     def who(actor):
         a = str(actor or "")
@@ -616,14 +862,14 @@ def describe(c, method, path, body):
         # so a long or crafted field (padding, "card; amount: 9") can't push a later one out or pose as it.
         payload = row.get("payload") or {}
         detail = "; ".join(f"{field_value(k, 40)}: “{field_value(payload[k])}”" for k in approval_fields(payload))
-        return (f"{verb} the {row['kind']} approval requested by {who(row['requested_by'])}"
-                + (f" ({detail})" if detail else "") + f", {age(row['created'])}"
+        return (f"{verb} the {row['kind']} approval requested by {who(row['requested_by_id'])}"
+                + (f" ({detail})" if detail else "") + f", {age(row['created_at'])}"
                 + (f"; reason: {preview(body['note'], 120)}" if body.get("note") else ""))
 
     def answer_line(mid):
         asked = H.message(c, mid) or {}
-        return (f"Answer {who(asked.get('from_actor'))}'s question “{preview(asked.get('body'), 80)}”"
-                + (f", {age(asked['created'])}" if asked.get("created") else "") + f": {preview(body.get('text'), 120)}")
+        return (f"Answer {who(asked.get('sender_id'))}'s question “{preview(asked.get('body'), 80)}”"
+                + (f", {age(asked['created_at'])}" if asked.get("created_at") else "") + f": {preview(body.get('text'), 120)}")
     diff = []
     m = re.fullmatch(r"/api/v2/tasks/([^/]+)", path)
     if m and (t := H.task(c, m.group(1))):
@@ -668,7 +914,8 @@ def describe(c, method, path, body):
         (r"/api/v2/repositories/([^/]+)/([^/]+)", lambda g: f"Change repository {g[1]}: " + fields(body)),
         (r"/api/v2/credentials/([^/]+)", lambda g: "Delete the stored credential “" + ((c.execute(
             "SELECT name FROM credentials WHERE id=?", (g[0],)).fetchone() or {"name": g[0]})["name"]) + "”"),
-        (r"/api/v2/(?:people|humans)/([^/]+)", lambda g: f"Edit person {who(g[0])}: " + fields(body)),
+        (r"/api/v2/(?:people|humans)/([^/]+)", lambda g: f"Delete {who('human:' + g[0])} from the team for good"
+         if method == "DELETE" else f"Edit person {who(g[0])}: " + fields(body)),
         (r"/api/v2/access/(?:people|humans)", lambda g: f"Add {body.get('name') or body.get('email', '')} ({body.get('email', '')}) "
          "to the roster, and let them sign in" + "".join(f"; {k} {body[k]}" for k in ("team", "reports_to", "title") if body.get(k))),
         (r"/api/v2/access/(?:people|humans)/([^/]+)", lambda g: "Change " + who("human:" + g[0]) + ": "
@@ -690,7 +937,44 @@ def describe(c, method, path, body):
         (r"/api/v2/support/tickets", lambda g: "Send this to the Tico team: " + preview(body.get("message"))),
         (r"/api/v2/directory(/sync|/preview)?", lambda g: "Change the people directory sync"),
         (r"/api/v2/(slack|github/app)/disconnect", lambda g: "Disconnect " + g[0].split("/")[0].title()),
-        (r"/api/v2/files/([^/]+)", lambda g: "Change a file's listing"),
+        (r"/api/v2/tasks/([^/]+)/requesters/([^/]+)/delete", lambda g: "Remove a requester from this task"),
+        (r"/api/v2/tasks/([^/]+)/requesters/([^/]+)", lambda g: "Change a requester on this task"),
+        (r"/api/v2/tasks/([^/]+)/links", lambda g: ("Remove a link from this task" if body.get("remove") else "Add a link to this task")),
+        (r"/api/v2/tasks/([^/]+)/links/([^/]+)", lambda g: "Remove a link from this task"),
+        (r"/api/v2/tasks/([^/]+)/requesters", lambda g: "Add " + (who(body.get("actor")) if body.get("actor") else (body.get("name") or body.get("email") or "a contact")) + " as a requester on this task"),
+        (r"/api/v2/files/([^/]+)", lambda g: "Delete a file for good" if method == "DELETE" else "Change a file's listing"),
+        (r"/api/v2/assistant/turn-on", lambda g: "Turn the Assistant on for the team"),
+        (r"/api/v2/system/usage-count/reset", lambda g: "Reset this Tico's install ID for the usage count"),
+        (r"/api/v2/company/server-connection", lambda g: "Disconnect this Tico from the Tico company server"),
+        (r"/api/v2/system/storage", lambda g: "Stop storing new files in company storage (files already there are "
+         "still read from it)"),
+        (r"/api/v2/system/storage/move", lambda g: "Copy every file into company storage"
+         + (f", about {format(body['expect_bytes'] / 1e9, '.2g')} GB" if isinstance(body.get("expect_bytes"), int)
+            else "") + "; nothing is deleted where it was"),
+        (r"/api/v2/settings/turn-levels", lambda g: "Change the company's turn levels: " + values(body)),
+        (r"/api/v2/me/tokens/([^/]+)/revoke", lambda g: "Revoke the API token “" + ((c.execute(
+            "SELECT label FROM human_tokens WHERE id=?", (g[0],)).fetchone() or {"label": g[0]})["label"]) + "”"),
+        (r"/api/v2/bots/([^/]+)/cloud-machine", lambda g: f"Change bot {bot(g[0])}'s cloud machine: " + values(body)),
+        (r"/api/v2/cloud-machines/shared", lambda g: "Change the shared cloud machine: " + values(body)),
+        (r"/api/v2/postal/orders", lambda g: "Order a postal address for the mailbox: " + values(body)),
+        (r"/api/v2/bots/([^/]+)/budget", lambda g: f"Change bot {bot(g[0])}'s run budget: " + values(body)),
+        (r"/api/v2/strategy-bot/checks", lambda g: ("Turn the Strategy Bot's regular checks on" if body.get("on")
+                                               else "Turn the Strategy Bot's regular checks off")),
+        (r"/api/v2/strategy-bot/level", lambda g: "Set how much the Strategy Bot does: " + {
+            1: "passive", 2: "suggests actions", 3: "acts on its own"}.get(body.get("level"), "a level")),
+        (r"/api/v2/github/product-repos", lambda g: f"Create the private, empty GitHub repository "
+         f"{body.get('org', '')}/{body.get('name', '')}"),
+        (r"/api/v2/listening/destinations/([^/]+)", lambda g: f"Change the listening destination “{g[0]}”: "
+         + values(body)),
+        (r"/api/v2/listening/destinations/([^/]+)/remove", lambda g: f"Remove the listening destination “{g[0]}”"),
+        (r"/api/v2/roadmaps/settings", lambda g: "Change the public roadmap: " + values(body)),
+        (r"/api/v2/inbound/inboxes/([^/]+)/release", lambda g: "Release the inbox " + ((c.execute(
+            "SELECT address FROM inbound_inboxes WHERE inbox_id=?", (g[0],)).fetchone()
+            if c.execute("SELECT 1 FROM sqlite_master WHERE name='inbound_inboxes'").fetchone() else None)
+            or {"address": g[0]})["address"]),
+        (r"/api/v2/inbound/phone-requests", lambda g: f"Ask for a phone number named “{body.get('name') or 'Mobile number'}”"),
+        (r"/api/v2/inbound/phone-requests/([^/]+)/accept", lambda g: "Accept the phone number's price: "
+         + (f"${body['price_micros'] / 1e6:,.2f}" if isinstance(body.get("price_micros"), int) else "the price shown")),
     )
     for pattern, fn in rules:
         if (mm := re.fullmatch(pattern, path)):
@@ -744,17 +1028,23 @@ def batch_steps(body):
                     and sent.get("decision") in ("approved", "declined"))
         if (not isinstance(sent, dict) or not (instructed_route(method, path, sent) or (method == "POST" and deciding))
                 or any(f in sent for f in PERSON_ONLY_FIELDS)):
-            raise Problem("operation", "A bulk card holds only task changes, comments and links, approval decisions and "
-                          "answers to bots' questions (POST /api/v2/tasks/<id>, /comments, /links, /api/v2/approvals/<id>, "
-                          "/api/v2/messages/<id>/answer); propose anything else on its own", 422)
+            raise Problem("operation", "A bulk card holds only task changes, comments and links, approval decisions, "
+                          "answers to bots' questions, automation changes (PATCH /api/v2/automations/<id>) and org rules "
+                          "(POST /api/v2/rules, /api/v2/rules/<id>/retire); propose anything else on its own", 422)
         out.append({"method": method, "path": path, "body": {k: v for k, v in sent.items() if k != "on_behalf_of"}})
     return out
+
+
+def teammate(who):
+    """Whether the caller may take a waiting Confirm card back: any signed-in person or bot of the company. Confirming
+    stays the card owner's own click (`/confirm`); withdrawing only stops it."""
+    return who.role in ("owner", "human", "bot")
 
 
 def covers(row, method, path):
     """Whether a confirmed proposal covers this request: its own operation, or one step of a bulk card."""
     if row["path"] == BATCH_PATH:
-        steps = json.loads(row["body_json"] or "{}").get("actions") or []
+        steps = json.loads(row["body"] or "{}").get("actions") or []
         return any(s.get("method") == method and s.get("path") == path for s in steps)
     return row["method"] == method and row["path"] == path
 
@@ -840,7 +1130,7 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
     if who.via == "assistant" and not who.confirmed and approvals_in(path, body):
         require_named_approval(c, who, asked)
     same = c.execute("SELECT * FROM assistant_actions WHERE owner=? AND status='pending' AND method=? AND path=? "
-                     "AND body_json=? AND proposer=?", (who.actor, method, path, json.dumps(body), proposer)).fetchone()
+                     "AND body=? AND proposer=?", (who.actor, method, path, json.dumps(body), proposer)).fetchone()
     if same:
         # The same card again is the same card: a retried command never leaves two to click.
         return {"action": action_view(dict(same), c), "message_id": None, "repeated": True}
@@ -865,12 +1155,12 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
     if shown is not None:
         diff = shown
     row = {"id": H.new_id(), "owner": who.actor, "conversation_id": room["id"], "summary": summary,
-           "method": method, "path": path, "body_json": json.dumps(body),
-           "status": "pending", "proposed_via": proposer, "created": H.now(),
-           "description": what, "diff_json": json.dumps(diff, default=str), "proposer": proposer}
-    c.execute("INSERT INTO assistant_actions(id,owner,conversation_id,summary,method,path,body_json,status,"
-              "proposed_via,created,description,diff_json,proposer) VALUES(:id,:owner,:conversation_id,:summary,"
-              ":method,:path,:body_json,:status,:proposed_via,:created,:description,:diff_json,:proposer)", row)
+           "method": method, "path": path, "body": json.dumps(body),
+           "status": "pending", "proposed_via": proposer, "created_at": H.now(),
+           "description": what, "diff": json.dumps(diff, default=str), "proposer": proposer}
+    c.execute("INSERT INTO assistant_actions(id,owner,conversation_id,summary,method,path,body,status,"
+              "proposed_via,created_at,description,diff,proposer) VALUES(:id,:owner,:conversation_id,:summary,"
+              ":method,:path,:body,:status,:proposed_via,:created_at,:description,:diff,:proposer)", row)
     bot = room_bot(settings, room) if proposer == "assistant" else proposer
     card = H._write_message(c, "bot:" + bot, who.actor, "Needs your OK: " + summary, room, "say",
                             {"assistant": True, "action": row["id"]}, None, None, delivered_at=H.now())
@@ -881,25 +1171,24 @@ def create_proposal(c, settings, who, room, proposer, summary, method, path, bod
 
 # ------------------------------------------------------------------ the room
 def room_bot(settings, room):
-    """The bot that talks in this person's own room: the CEO Bot in the CEO Bot chat, else the Assistant."""
-    return ceo_bot.SLUG if (room or {}).get("room_key") == rooms.CEO_ROOM else settings.assistant_bot
+    """The bot that talks in this person's own room: the Assistant, and the Strategy Bot in the owner's earlier
+    Strategy Bot chat (its old cards and their results)."""
+    return strategy_bot.SLUG if (room or {}).get("room_key") == rooms.STRATEGY_ROOM else settings.assistant_bot
 
 
 def find_room(c, actor):
-    row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND owner_actor=? AND room_key=? "
-                    "AND closed_at IS NULL ORDER BY created LIMIT 1", (actor, rooms.ASSISTANT_ROOM)).fetchone()
+    row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND owner_id=? AND room_key=? "
+                    "AND closed_at IS NULL ORDER BY created_at LIMIT 1", (actor, rooms.ASSISTANT_ROOM)).fetchone()
     return H.conversation(c, row["id"]) if row else None
 
 
 def own_room(c, who, conversation_id):
-    """Whether this conversation is the caller's own chat room: their Assistant room, or for the owner the CEO Bot chat
-    (and the caller is a person)."""
+    """Whether this conversation is the caller's own Assistant room (and the caller is a person)."""
     if not conversation_id or who.role not in ("owner", "human") or who.via:
         return False
     room = H.conversation(c, conversation_id)
-    return bool(room and room.get("scope") == rooms.PERSONAL and room.get("owner_actor") == who.actor
-                and room.get("room_key") == (rooms.CEO_ROOM if ceo_seat(c, who) else rooms.ASSISTANT_ROOM)
-                and not room.get("closed_at"))
+    return bool(room and room.get("scope") == rooms.PERSONAL and room.get("owner_id") == who.actor
+                and room.get("room_key") == rooms.ASSISTANT_ROOM and not room.get("closed_at"))
 
 
 def ensure_room(c, actor, bot):
@@ -910,82 +1199,96 @@ def ensure_room(c, actor, bot):
                                scope=rooms.PERSONAL, owner_actor=actor, room_key=rooms.ASSISTANT_ROOM)
 
 
-# ------------------------------------------------------------------ the owner's CEO Bot (docs/ceo-bot.md)
-# The owner talks to the CEO Bot (backend/ceo_bot.py) in place of an Assistant: the same page, rights, cards and
-# read-backs, in a room of its own (`rooms.CEO_ROOM`) that belongs to the owner seat. A transfer of ownership moves that
-# room to the new owner (`move_ceo_room`), and the old owner talks to their Assistant again. Everyone else, admins
-# included, keeps the Assistant. The owner's own Assistant room stays theirs: the CEO Bot tab shows it, read-only, under
-# "Earlier chats", and it goes back with them if they hand ownership on. Turns in the CEO Bot chat key a provider session
-# of their own (`rooms.session_config`), apart from the bot's goals session.
-def ceo_on(c):
-    """Whether this install has its CEO Bot (every install does once it is set up)."""
-    row = H.bot(c, ceo_bot.SLUG)
+# ------------------------------------------------------------------ one Assistant for everyone (docs/assistant.md)
+# Every person, the owner included, has one chat: their Assistant. The Strategy Bot, the Librarian and BotOps are
+# helpers it hands work to (`HELPERS`, backend/app.py task_create). The owner's earlier chat with the Strategy Bot
+# (`rooms.STRATEGY_ROOM`, one per company, belonging to the owner seat) is history: readable by the owner under
+# "Earlier chats", never written to again. A transfer of ownership still moves it to the new owner
+# (`move_strategy_room`), and `migrate` moved the cards that were waiting in it to the owner's Assistant room.
+HELPERS = ("botops", strategy_bot.SLUG, "librarian", H.COUNSEL)
+
+
+def strategy_on(c):
+    """Whether this install has its Strategy Bot (every install does once it is set up)."""
+    row = H.bot(c, strategy_bot.SLUG)
     return bool(row) and row["state"] not in ("archived", "planned")
 
 
-def ceo_seat(c, who):
-    """Whether this person talks to the CEO Bot rather than an Assistant: the owner, once the CEO Bot is there."""
-    return who.role == "owner" and H.is_human(who.actor) and ceo_on(c)
-
-
 def chat_bot(c, settings, who):
-    """The bot this person talks to in their own chat: the CEO Bot for the owner, else the Assistant."""
-    return ceo_bot.SLUG if ceo_seat(c, who) else settings.assistant_bot
+    """The bot this person talks to in their own chat: the Assistant, for everyone."""
+    return settings.assistant_bot
 
 
 def chat_name(c, settings, bot):
-    return ceo_bot.name(c) if bot == ceo_bot.SLUG else settings.assistant_name
+    return strategy_bot.name(c) if bot == strategy_bot.SLUG else settings.assistant_name
 
 
-def find_ceo_room(c, actor=None):
-    """The CEO Bot chat: the owner seat's one room. With `actor`, only while it is theirs."""
+def find_strategy_room(c, actor=None):
+    """The owner's earlier Strategy Bot chat: the owner seat's one room. With `actor`, only while it is theirs."""
     row = c.execute("SELECT id FROM conversations WHERE scope='personal' AND room_key=? AND closed_at IS NULL "
-                    "ORDER BY created LIMIT 1", (rooms.CEO_ROOM,)).fetchone()
+                    "ORDER BY created_at LIMIT 1", (rooms.STRATEGY_ROOM,)).fetchone()
     room = H.conversation(c, row["id"]) if row else None
-    return room if room and (actor is None or room.get("owner_actor") == actor) else None
+    return room if room and (actor is None or room.get("owner_id") == actor) else None
 
 
-def move_ceo_room(c, actor, to):
-    """The CEO Bot chat goes with the owner seat to `to`, the new owner: its history and what it is in the middle of.
-    The cards it put in front of the old owner are withdrawn: they ran as that person, who is no longer the owner."""
-    room = find_ceo_room(c)
-    if not room or room.get("owner_actor") == to:
+def move_strategy_room(c, actor, to):
+    """The earlier Strategy Bot chat goes with the owner seat to `to`, the new owner, as history. A card still in it
+    is withdrawn: it ran as the old owner, who is no longer the owner."""
+    room = find_strategy_room(c)
+    if not room or room.get("owner_id") == to:
         return room
-    before = room.get("owner_actor")
-    c.execute("UPDATE conversations SET owner_actor=?, participants_json=? WHERE id=?",
-              (to, json.dumps([to, "bot:" + ceo_bot.SLUG]), room["id"]))
-    c.execute("UPDATE assistant_actions SET status='cancelled', decided_at=? WHERE conversation_id=? AND owner=? "
+    before = room.get("owner_id")
+    c.execute("UPDATE conversations SET owner_id=?, participants=? WHERE id=?",
+              (to, json.dumps([to, "bot:" + strategy_bot.SLUG]), room["id"]))
+    c.execute("UPDATE assistant_actions SET status='canceled', decided_at=? WHERE conversation_id=? AND owner=? "
               "AND status='pending'", (H.now(), room["id"], before))
-    H.event(c, actor, "ceo_bot.chat_moved", room["id"], {"from": before, "to": to})
+    H.event(c, actor, "strategy_bot.chat_moved", room["id"], {"from": before, "to": to})
     return H.conversation(c, room["id"])
 
 
-def ensure_ceo_room(c, actor):
-    """The owner's CEO Bot chat, moved to them if it still names an earlier owner, opened on first use."""
-    room = move_ceo_room(c, actor, actor)
-    if room:
-        return room
-    return H.open_conversation(c, actor, [actor, "bot:" + ceo_bot.SLUG], kind="chat", subject=ceo_bot.NAME,
-                               scope=rooms.PERSONAL, owner_actor=actor, room_key=rooms.CEO_ROOM)
+def migrate(c, settings):
+    """Every start (backend/store.py), idempotent: a card still waiting in the owner's earlier Strategy Bot chat moves
+    to its owner's Assistant room, with its card posted there, so it stays where they look and its result lands there.
+    Moving is safe: a card runs only on its owner's own click, as them, whichever room it sits in, and a card of an
+    earlier owner was already withdrawn when the seat moved on (`move_strategy_room`). Each card moves once: after the
+    move none is left in that room."""
+    moved = 0
+    for row in c.execute("SELECT a.id, a.owner, a.summary FROM assistant_actions a JOIN conversations v "
+                         "ON v.id=a.conversation_id WHERE a.status='pending' AND v.scope='personal' AND v.room_key=? "
+                         "AND a.owner=v.owner_id ORDER BY a.created_at", (rooms.STRATEGY_ROOM,)).fetchall():
+        room = ensure_room(c, row["owner"], settings.assistant_bot)
+        c.execute("UPDATE assistant_actions SET conversation_id=? WHERE id=?", (room["id"], row["id"]))
+        H._write_message(c, "bot:" + settings.assistant_bot, row["owner"], "Needs your OK: " + row["summary"], room,
+                         "say", {"assistant": True, "action": row["id"]}, None, None, delivered_at=H.now())
+        moved += 1
+    if moved:
+        H.event(c, H.KEEPER, "assistant.strategy_cards_moved", "", {"cards": moved})
+    return moved
+
+
+def earlier_chat(c, settings, who):
+    """"Earlier chats" on the owner's Assistant page: their earlier Strategy Bot chat, read-only (GET
+    /api/v2/conversations/<id>/messages), once it has a message. None for anyone else."""
+    if who.role != "owner":
+        return None
+    old = find_strategy_room(c, who.actor)
+    if not old or not c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND deleted_at IS NULL LIMIT 1",
+                                (old["id"],)).fetchone():
+        return None
+    return {"room_id": old["id"], "bot": strategy_bot.SLUG, "name": strategy_bot.name(c)}
 
 
 def chat_room(c, settings, who, create=True):
-    """This person's own chat, opened with `create`: the CEO Bot chat for the owner, else their Assistant room. In a
-    transaction: the CEO Bot chat moves to the owner here if it still names an earlier one."""
-    bot = chat_bot(c, settings, who)
-    if bot == ceo_bot.SLUG:
-        return ensure_ceo_room(c, who.actor) if create else move_ceo_room(c, who.actor, who.actor)
-    return ensure_room(c, who.actor, bot) if create else find_room(c, who.actor)
+    """This person's own Assistant room, opened with `create`."""
+    return ensure_room(c, who.actor, settings.assistant_bot) if create else find_room(c, who.actor)
 
 
 def availability(c, settings, who):
     slug = chat_bot(c, settings, who)
     bot = H.bot(c, slug)
     state = bot["state"] if bot else "missing"
-    ceo = slug == ceo_bot.SLUG
-    # The CEO Bot is not turned on from here: it is always there, and its settings are Settings > CEO Bot.
-    return {"available": state == "active", "state": state, "bot": slug, "ceo": ceo, "name": chat_name(c, settings, slug),
-            "can_turn_on": not ceo and who.role == "owner" and state != "active" and state not in ("quarantined",)}
+    return {"available": state == "active", "state": state, "bot": slug, "name": chat_name(c, settings, slug),
+            "can_turn_on": who.role == "owner" and state != "active" and state not in ("quarantined",)}
 
 
 # A repository card stored before its route had a sentence: titled "PUT /api/v2/bots/x/repositories", its summary
@@ -994,25 +1297,25 @@ OLD_REPO_SUMMARY = re.compile(r"Set .+'s repository access to (own|all|chosen)\b
 
 
 def action_view(row, c=None):
-    result = json.loads(row["result_json"]) if row.get("result_json") else None
+    result = json.loads(row["result"]) if row.get("result") else None
     view = {"id": row["id"], "owner": row["owner"], "conversation_id": row["conversation_id"],
             "summary": row["summary"], "method": row["method"], "path": row["path"],
-            "body": json.loads(row["body_json"] or "{}"), "status": row["status"],
+            "body": json.loads(row["body"] or "{}"), "status": row["status"],
             "proposed_via": row["proposed_via"], "proposer": row.get("proposer") or row["proposed_via"],
-            "created": row["created"], "decided_at": row.get("decided_at"),
-            "description": row.get("description") or "", "diff": json.loads(row.get("diff_json") or "[]"),
+            "created_at": row["created_at"], "decided_at": row.get("decided_at"),
+            "description": row.get("description") or "", "diff": json.loads(row.get("diff") or "[]"),
             "result": result}
     if c is not None and view["proposer"] == "assistant" and view["conversation_id"]:
-        # A card the CEO Bot put in the owner's chat says it is the CEO Bot's, by its name.
-        if (H.conversation(c, view["conversation_id"]) or {}).get("room_key") == rooms.CEO_ROOM:
-            view["by_name"] = ceo_bot.name(c)
+        # A card the Strategy Bot put in the owner's earlier chat with it says it is the Strategy Bot's, by its name.
+        if (H.conversation(c, view["conversation_id"]) or {}).get("room_key") == rooms.STRATEGY_ROOM:
+            view["by_name"] = strategy_bot.name(c)
     m = re.fullmatch(r"/api/v2/bots/([^/]+)/repositories", view["path"] or "")
     if m and c is not None:
         # Read again from what the stored request sends (never a guess at what it would do today), and its old line,
         # which reads the mode word as English, only under the card's Details.
         if not view["description"] or re.match(r"(GET|POST|PUT|PATCH|DELETE) /", view["description"]):
             from .repositories import plain_request
-            view["description"] = plain_request((H.bot(c, m.group(1)) or {}).get("display_name") or m.group(1), view["body"])
+            view["description"] = plain_request((H.resolve_bot(c, m.group(1)) or {}).get("display_name") or m.group(1), view["body"])
         if OLD_REPO_SUMMARY.match(view["summary"] or ""):
             view["original_summary"], view["summary"] = view["summary"], ""
     return view
@@ -1026,87 +1329,8 @@ def actions_for(c, actor, ids):
     return {row["id"]: action_view(dict(row), c) for row in rows}
 
 
-# ------------------------------------------------------------------ the fast path
-STOP = set("a an the of to in on for and or is are was were be do does did i me my we our you your it its this that these "
-           "those with about from at by as how what which who where when can could should would please tell show give "
-           "get have has had there here into out up any some".split())
-KINDS = {"task": "tasks", "tasks": "tasks", "issue": "tasks", "doc": "docs", "docs": "docs", "document": "docs",
-         "documents": "docs", "meeting": "meetings", "meetings": "meetings", "call": "meetings",
-         "file": "files", "files": "files", "person": "people", "people": "people", "bot": "bots", "bots": "bots"}
-PAGES = {"tasks": "#/tasks", "board": "#/board", "meetings": "#/meetings", "updates": "#/updates",
-         "docs": "#/docs", "documentation": "#/docs", "settings": "#/settings", "help": "#/help", "goals": "#/goals",
-         "integrations": "#/integrations", "health": "#/settings", "overview": "#/overview", "changelog": "#/changelog"}
-
-WAITING = re.compile(r"\b(waiting (on|for) me|needs? (my|me)\b|need(s)? you|my (inbox|queue|to-?do)|"
-                     r"what should i (do|work on)|what do i need to|anything (for me|waiting)|pending (for|on) me)")
-GREETING = re.compile(r"^(?:hi|hello|hey|good morning|good afternoon|good evening)$")
-TASK_TYPE_INVENTORY = re.compile(
-    r"^(?:for\s+[a-z][a-z0-9&'-]{0,40},\s*)?(?:what|which)\s+(?:kind\s+of\s+)?"
-    r"(?:task\s+types?|types?\s+of\s+tasks?)\s+"
-    r"(?:do\s+we\s+use(?:\s+here)?|does\s+(?:this\s+)?(?:team|workspace)\s+use|are\s+available|exist)"
-)
-TASK_TYPE_INVENTORY_ARE = re.compile(
-    r"^(?:what|which)\s+are\s+(?:the\s+)?(?:task\s+types?|types?\s+of\s+tasks?)"
-    r"(?:\s+(?:here|in\s+this\s+workspace))?$"
-)
-NAVIGATE = re.compile(r"^(open|go to|goto|take me to|show me|where is|where's|wheres|navigate to|pull up|bring up)\b\s*(.*)$")
-SEARCH = re.compile(r"^(search( for)?|find|look ?up|look for)\b\s*(.*)$")
-HELP = re.compile(r"^(help\b[:,\s]*|how (do|can|should|would|does|to)\b|how'?s? (it|tico)\b|explain\b|what is a\b|what are\b|"
-                  r"what does .* mean|where do i\b|can i\b.*\?|what'?s the difference)")
-BOT_TODAY = re.compile(r"\b(today|this morning|last 24|yesterday|lately|so far)\b|\bwhat (did|has|have|is|was)\b.*\b(do|done|doing|up to|work)")
-ACTION_WORDS = re.compile(r"\b(create|make|add|assign|ask|tell|send|approve|decline|reject|archive|delete|remove|"
-                          r"build|set up|schedule|publish|post|change|update|rename|close|cancel|remind|clear|dismiss|answer)\b")
-
-
-def words(text):
-    return [w for w in re.findall(r"[\w'-]+", text.casefold()) if w not in STOP]
-
-
-def route(text, bots=()):
-    """(intent, arg) for the fast path, or (None, None) when the model should take it.
-
-    Keyword and structure first; a verb that asks for something to be done always goes to the model."""
-    t = re.sub(r"\s+", " ", text.strip().casefold()).strip(" ?!.")
-    if not t or len(t) > 400:
-        return None, None
-    if GREETING.fullmatch(t):
-        return "greeting", None
-    # "for <team>," can be any word, a verb too ("for create, ..."), so the action check still applies.
-    if (TASK_TYPE_INVENTORY.fullmatch(t) or TASK_TYPE_INVENTORY_ARE.fullmatch(t)) and not ACTION_WORDS.search(t):
-        return "task_types", None
-    if WAITING.search(t) and not ACTION_WORDS.search(t):     # "clear my queue" is work, not a question
-        return "waiting", None
-    named = next((b for b in bots if b["slug"] in t.split() or b["slug"].replace("-", " ") in t
-                  or b["name"].casefold() in t), None)
-    if named and BOT_TODAY.search(t) and not ACTION_WORDS.search(t):
-        return "bot_today", named["slug"]
-    m = NAVIGATE.match(t)
-    if m and m.group(2).strip():
-        return "navigate", m.group(2).strip()
-    m = SEARCH.match(t)
-    if m and m.group(3).strip() and not ACTION_WORDS.search(m.group(3)):
-        return "search", m.group(3).strip()
-    if HELP.search(t) and not re.search(r"\b(for me|on my behalf)\b", t):
-        return "help", t
-    return None, None
-
-
-def link(title, href):
-    return "[" + re.sub(r"[\[\]]", "", str(title or "Untitled")).strip()[:120] + "](" + href + ")"
-
-
-def _terms(arg):
-    hint, terms = None, []
-    for w in words(arg):
-        if w in KINDS:
-            hint = hint or KINDS[w]
-        else:
-            terms.append(w)
-    return hint, terms
-
-
-# Cards whose answer carries a one-time value for the person who taps: the route and the fields shown to them.
-SHOWN_ONCE = {"/api/v2/enrollments": ("code", "expires", "operator")}
+# ------------------------------------------------------------------ the confirm path's helpers
+SHOWN_ONCE = {"/api/v2/enrollments": ("code", "expires_at", "operator")}
 
 
 def shown_once(response, fields):
@@ -1131,8 +1355,8 @@ def outcome(response):
 
 
 class Internal:
-    """Reads Tico's own API in-process as the person, with the credential they came in with, so a
-    fast answer can show exactly what the page would: never more."""
+    """Reads Tico's own API in-process as the person, with the credential they came in with, so a confirmed
+    proposal runs exactly as the page would run it: never more."""
 
     def __init__(self, request):
         self.app = request.app
@@ -1154,7 +1378,7 @@ class Internal:
                                         params={k: v for k, v in (params or {}).items() if v is not None},
                                         headers=headers)
 
-    async def get(self, path, **params):
+    async def get(self, path, /, **params):
         try:
             response = await self.call("GET", path, params=params)
             return response.json() if response.status_code == 200 else None
@@ -1162,292 +1386,10 @@ class Internal:
             return None
 
 
-def _task_href(item):
-    return "#/task/" + quote(str(item.get("task_id") or item.get("id")), safe="")
-
-
-async def fast_waiting(api, who, bots):
-    data = await api.get("needs-you") or {}
-    items = data.get("items") or []
-    if not items:
-        return "Nothing is waiting on you.", []
-    label = {"task": "Task", "question": "Question", "declined": "Declined", "approval": "Approval"}
-    links, lines = [], []
-    for item in items[:8]:
-        href = _task_href(item) if item.get("kind") != "approval" or item.get("task_id") else "#/tasks"
-        links.append({"title": item.get("title") or "", "href": href, "kind": "task"})
-        lines.append(f"- {label.get(item.get('kind'), 'Item')}: {link(item.get('title'), href)}")
-    more = len(items) - 8
-    head = f"{len(items)} thing{'s' if len(items) != 1 else ''} waiting on you" + (":" if items else ".")
-    return head + "\n" + "\n".join(lines) + (f"\n…and {more} more in {link('Tasks', '#/tasks')}." if more > 0 else ""), links
-
-
-async def search_all(api, arg, bots, limit=4):
-    hint, terms = _terms(arg)
-    if not terms:
-        return hint, terms, {}
-    q = " ".join(terms)
-
-    def matches(*parts):
-        blob = " ".join(str(p or "") for p in parts).casefold()
-        return all(t in blob for t in terms)
-
-    async def tasks():
-        data = await api.get("tasks", limit=500) or {}
-        rows = [t for t in data.get("tasks") or [] if matches(t.get("title"), t.get("id"))]
-        rows.sort(key=lambda t: (t.get("status") in ("done", "closed", "declined"), t.get("updated") or ""), reverse=False)
-        return [{"title": t["title"], "href": _task_href(t), "note": t.get("status")} for t in rows[:limit]]
-
-    async def docs():
-        data = await api.get("context/search", q=q, source="docs", limit=limit) or {}
-        return [{"title": d.get("title"), "href": d.get("url") or "#/docs", "note": d.get("collection")}
-                for d in (data.get("results") or [])[:limit]]
-
-    async def meetings():
-        data = await api.get("meetings/search", q=q, limit=limit) or {}
-        return [{"title": m.get("title"), "href": m.get("url") or "#/meetings", "note": (m.get("started") or m.get("created") or "")[:10]}
-                for m in (data.get("results") or [])[:limit]]
-
-    async def org():
-        data = await api.get("org") or {}
-        out = {"people": [], "bots": []}
-        for p in data.get("people") or []:
-            if not p.get("hidden") and matches(p.get("name"), p.get("title"), p.get("id")):
-                out["people"].append({"title": p.get("name") or p["id"], "href": "#/person/" + quote(p["id"], safe=""),
-                                      "note": p.get("title")})
-        for b in data.get("bots") or []:
-            if b.get("status") != "archived" and matches(b.get("display_name"), b.get("id"), b.get("description")):
-                out["bots"].append({"title": b.get("display_name") or b["id"], "href": "#/bot/" + quote(b["id"], safe=""),
-                                    "note": b.get("status")})
-        return {k: v[:limit] for k, v in out.items()}
-
-    async def files():
-        found = []
-
-        async def one(bot):
-            data = await api.get(f"bots/{bot['slug']}/files", limit=50) or {}
-            for f in data.get("files") or []:
-                if matches(f.get("title"), f.get("name")):
-                    op = f.get("open") or {}
-                    href = op.get("url") if op.get("type") == "external" and str(op.get("url", "")).startswith("https://") \
-                        else "#/bot/" + quote(bot["slug"], safe="")
-                    found.append({"title": f.get("title") or f.get("name"), "href": href, "note": bot["name"]})
-        await asyncio.gather(*(one(b) for b in bots[:25]))
-        return found[:limit]
-
-    wanted = [hint] if hint else ["tasks", "docs", "meetings", "people", "bots", "files"]
-    jobs = {"tasks": tasks, "docs": docs, "meetings": meetings, "files": files}
-    results = {}
-    coros = {k: jobs[k]() for k in wanted if k in jobs}
-    if "people" in wanted or "bots" in wanted:
-        coros["org"] = org()
-    done = await asyncio.gather(*coros.values(), return_exceptions=True)
-    for key, value in zip(coros, done):
-        if isinstance(value, Exception):
-            continue
-        if key == "org":
-            for k in ("people", "bots"):
-                if k in wanted and value[k]:
-                    results[k] = value[k]
-        elif value:
-            results[key] = value
-    return hint, terms, results
-
-
-GROUP = {"tasks": "Tasks", "docs": "Docs", "meetings": "Meetings", "files": "Files", "people": "Humans", "bots": "Bots"}
-
-
-def _rows(results):
-    text, links = [], []
-    for key in ("tasks", "docs", "meetings", "files", "people", "bots"):
-        if key not in results:
-            continue
-        text.append(f"**{GROUP[key]}**")
-        for r in results[key]:
-            text.append(f"- {link(r['title'], r['href'])}" + (f" ({r['note']})" if r.get("note") else ""))
-            links.append({"title": r["title"], "href": r["href"], "kind": key})
-    return "\n".join(text), links
-
-
-async def fast_search(api, who, bots, arg):
-    hint, terms, results = await search_all(api, arg, bots)
-    if not terms:
-        return None, []
-    if not results:
-        return f"I found nothing for “{' '.join(terms)}”. Try fewer words, or ask me to look into it.", []
-    body, links = _rows(results)
-    return f"Found for “{' '.join(terms)}”:\n{body}", links
-
-
-async def fast_navigate(api, who, bots, arg):
-    page = PAGES.get(re.sub(r"^(the|my)\s+|\s+(page|tab)$", "", arg.strip()))
-    if page:
-        return f"Here it is: {link(arg.strip().title(), page)}", [{"title": arg, "href": page, "kind": "page"}]
-    hint, terms, results = await search_all(api, arg, bots, limit=3)
-    if not terms:
-        return None, []
-    flat = [(k, r) for k, rows in results.items() for r in rows]
-    if not flat:
-        return f"I could not find “{' '.join(terms)}”. Try a search: “search {' '.join(terms)}”.", []
-    kind, best = flat[0]
-    others = flat[1:5]
-    text = f"Opening the best match: {link(best['title'], best['href'])}"
-    if others:
-        text += "\nOthers:\n" + "\n".join(f"- {link(r['title'], r['href'])} ({k})" for k, r in others)
-    return text, [{"title": best["title"], "href": best["href"], "kind": kind, "open": True}] + \
-        [{"title": r["title"], "href": r["href"], "kind": k} for k, r in others]
-
-
-async def fast_bot_today(api, who, bots, slug):
-    bot = next((b for b in bots if b["slug"] == slug), None)
-    if not bot:
-        return None, []
-    since = H.shift(H.now(), hours=-24)
-    updates = await api.get("updates", bot=slug, limit=10) or {}
-    recent = [u for u in updates.get("updates") or [] if str(u.get("created") or "") >= since]
-    tasks = await api.get("tasks", owner=slug, limit=100) or {}
-    touched = [t for t in tasks.get("tasks") or [] if str(t.get("updated") or "") >= since]
-    lines, links = [], []
-    for u in recent[:3]:
-        lines.append(f"- {u.get('kind', 'update').title()} update: {link(u.get('headline') or 'Update', '#/updates')}")
-    for t in touched[:6]:
-        lines.append(f"- {link(t['title'], _task_href(t))} ({t.get('status')})")
-        links.append({"title": t["title"], "href": _task_href(t), "kind": "task"})
-    href = "#/bot/" + quote(slug, safe="")
-    links.append({"title": bot["name"], "href": href, "kind": "bots"})
-    if not lines:
-        return f"{link(bot['name'], href)} has posted no update and touched no task in the last 24 hours.", links
-    return f"{link(bot['name'], href)} in the last 24 hours:\n" + "\n".join(lines), links
-
-
-async def fast_task_types(api):
-    """List only the task types the authenticated Tico API returned for this workspace."""
-    data = await api.get("task-types")
-    rows = data.get("types") if isinstance(data, dict) else None
-    if not isinstance(rows, list) or any(not isinstance(row, dict) or not isinstance(row.get("name"), str)
-                                         or not row["name"].strip() for row in rows):
-        return "I couldn't read the task types for this Tico workspace. Please try again later.", []
-    if not rows:
-        return "No task types are configured in this Tico workspace.", []
-    return "Task types in this Tico workspace:\n" + "\n".join(f"- {row['name']}" for row in rows), []
-
-
-_SECTIONS = None
-
-
-def doc_sections():
-    """docs/*.md split at their second-level headings: (file, heading, anchor, text)."""
-    global _SECTIONS
-    if _SECTIONS is None:
-        out = []
-        try:
-            for path in sorted(DOCS_DIR.glob("*.md")):
-                text = path.read_text(errors="replace")
-                title = (re.match(r"#\s+(.+)", text) or [None, path.stem])[1]
-                parts = re.split(r"(?m)^##\s+", text)
-                out.append((path.name, title, "", parts[0]))
-                for part in parts[1:]:
-                    heading, _, body = part.partition("\n")
-                    anchor = re.sub(r"[^\w\- ]", "", heading.casefold()).strip().replace(" ", "-")
-                    out.append((path.name, heading.strip(), anchor, body))
-        except OSError:
-            out = []
-        _SECTIONS = out
-    return _SECTIONS
-
-
-def help_answer(question):
-    terms = [w for w in words(question) if w not in ("help", "explain", "tico", "use", "using")]
-    if not terms:
-        return None, []
-    scored = []
-    for file, heading, anchor, body in doc_sections():
-        h, b = heading.casefold(), body.casefold()
-        score = sum(3 * (t in h) + min(b.count(t), 3) + (2 * (t in file) if t in file else 0) for t in terms)
-        hits = sum(1 for t in terms if t in h or t in b or t in file)
-        if hits >= max(1, (len(terms) + 1) // 2) and score >= 3:
-            scored.append((score, file, heading, anchor, body))
-    if not scored:
-        return None, []
-    scored.sort(key=lambda s: -s[0])
-    _, file, heading, anchor, body = scored[0]
-    clean = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", body)
-    clean = re.sub(r"`", "", clean)
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", clean) if p.strip() and not p.strip().startswith("|")]
-    excerpt = ""
-    for p in paragraphs:
-        excerpt += ("\n\n" if excerpt else "") + re.sub(r"\s*\n\s*", " ", p) if not p.startswith(("-", "*", "1.")) else \
-            ("\n" if excerpt else "") + p
-        if len(excerpt) > 450:
-            break
-    excerpt = excerpt[:700].rstrip()
-    href = GITHUB_DOCS + file + ("#" + anchor if anchor else "")
-    links = [{"title": f"docs/{file}", "href": href, "kind": "docs"}]
-    text = f"From {link(heading, href)}:\n\n{excerpt}"
-    for _, f2, h2, a2, _b in scored[1:3]:
-        if (f2, h2) != (file, heading):
-            u = GITHUB_DOCS + f2 + ("#" + a2 if a2 else "")
-            text += f"\n\nSee also: {link(h2, u)}"
-            links.append({"title": h2, "href": u, "kind": "docs"})
-    return text, links
-
-
-INTENT_CHOICES = {"waiting": "They ask what is waiting on them, what needs their attention or decision.",
-                  "search": "They want to find or list tasks, docs, meetings, files, people or bots by a word.",
-                  "navigate": "They want to open a specific page or item, or ask where something is.",
-                  "help": "They ask how to do something in Tico or how Tico works.",
-                  "other": "Anything else: a request to do something, write something, or think something through."}
-
-
-async def decide(api, text):
-    """A `choice` decision question when the company has a decisions provider; else (None, 0)."""
-    try:
-        info = await api.get("decisions")
-        if not info or not info.get("configured") or ACTION_WORDS.search(text.casefold()) or len(text) > 200:
-            return None
-        response = await api.call("POST", "decisions", body={
-            "state": {"message": text}, "label": "assistant-intent@1",
-            "questions": {"intent": {"type": "choice", "criteria": INTENT_CHOICES,
-                                     "instructions": "What does this message to a company assistant ask for?"}}})
-        if response.status_code != 200:
-            return None
-        answer = (response.json().get("answers") or {}).get("intent") or {}
-        if answer.get("choice") in ("waiting", "search", "navigate", "help") and float(answer.get("confidence") or 0) >= 0.75:
-            return answer["choice"]
-    except (httpx.HTTPError, ValueError, TypeError):
-        return None
-    return None
-
-
-async def fast_answer(api, who, bots, text):
-    """(intent, reply text, links), or (None, None, []) when the model should answer."""
-    intent, arg = route(text, bots)
-    if intent is None:
-        intent = await decide(api, text)
-        arg = text if intent else None
-    if intent is None:
-        return None, None, []
-    if intent == "greeting":
-        reply, links = "Hi! How can I help?", []
-    elif intent == "task_types":
-        reply, links = await fast_task_types(api)
-    elif intent == "waiting":
-        reply, links = await fast_waiting(api, who, bots)
-    elif intent == "bot_today":
-        reply, links = await fast_bot_today(api, who, bots, arg)
-    elif intent == "navigate":
-        reply, links = await fast_navigate(api, who, bots, arg)
-    elif intent == "search":
-        reply, links = await fast_search(api, who, bots, arg)
-    else:
-        reply, links = help_answer(arg)
-    if not reply:
-        return None, None, []
-    return intent, reply, links
-
 
 # ------------------------------------------------------------------ the routes
 def install(app, store, auth, mutate, onboarding):
+    from . import org_rule_check
     settings = store.settings
 
     def person(request):
@@ -1462,11 +1404,6 @@ def install(app, store, auth, mutate, onboarding):
             raise Problem("forbidden", "Only the person can do this, not the " + settings.assistant_name, 403)
         return who
 
-    def bots_for(c, who):
-        access = auth.bot_accesses(c, who)
-        return [{"slug": r["slug"], "name": r["display_name"] or r["slug"]} for r in H.bots(c)
-                if r["state"] not in ("archived",) and access.get(r["slug"], auth.FULL)["see"]]
-
     def view(c, who, room):
         from .views import conversation_snapshot
         snap = conversation_snapshot(c, room["id"], settings=settings) if room else {"messages": [], "execution": None, "has_more": False,
@@ -1474,15 +1411,9 @@ def install(app, store, auth, mutate, onboarding):
         visuals.for_reader(app, settings, c, who, snap["messages"])
         ids = [m["refs"]["action"] for m in snap["messages"] if isinstance(m.get("refs"), dict) and m["refs"].get("action")]
         pending = [action_view(dict(r), c) for r in c.execute(
-            "SELECT * FROM assistant_actions WHERE owner=? AND status='pending' ORDER BY created", (who.actor,))]
+            "SELECT * FROM assistant_actions WHERE owner=? AND status='pending' ORDER BY created_at", (who.actor,))]
         info = availability(c, settings, who)
-        earlier = None
-        if info["ceo"]:
-            # "Earlier chats": the owner's own Assistant room, read-only in the CEO Bot tab (GET .../messages on it).
-            old = find_room(c, who.actor)
-            if old and c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND deleted_at IS NULL LIMIT 1",
-                                 (old["id"],)).fetchone():
-                earlier = {"room_id": old["id"], "bot": settings.assistant_bot, "name": settings.assistant_name}
+        earlier = earlier_chat(c, settings, who)
         return {**info, "room_id": room["id"] if room else None,
                 "messages": snap["messages"], "has_more": snap["has_more"], "next_before": snap["next_before"],
                 "execution": snap["execution"], "actions": actions_for(c, who.actor, ids),
@@ -1490,18 +1421,14 @@ def install(app, store, auth, mutate, onboarding):
 
     @app.get("/api/v2/assistant")
     def assistant(request: Request):
-        """The caller's own chat: the CEO Bot chat for the owner, an Assistant room for everyone else."""
+        """The caller's own chat: their Assistant room, the owner's included."""
         who = own(request)
         # Every chat load: read first, and take the write lock only when a confirm is overdue or the room needs
-        # opening or moving to this owner.
+        # opening.
         with store.read() as c:
             create = availability(c, settings, who)["available"]
-            if chat_bot(c, settings, who) == ceo_bot.SLUG:
-                room = find_ceo_room(c)
-                ready = room.get("owner_actor") == who.actor if room else not create
-            else:
-                room = find_room(c, who.actor)
-                ready = bool(room) or not create
+            room = find_room(c, who.actor)
+            ready = bool(room) or not create
             if ready and not expiring(c):
                 return view(c, who, room)
         with store.transaction() as c:
@@ -1510,39 +1437,71 @@ def install(app, store, auth, mutate, onboarding):
         with store.read() as c:
             return view(c, who, room)
 
-    def chat_bot_for(c, who, files):
-        """The bot this person's chat posts to, refusing a chat that is off, takes text only (files) or is not theirs."""
+    def chat_bot_for(c, who):
+        """The bot this person's chat posts to, refusing a chat that is off or is not theirs."""
         info = availability(c, settings, who)
         if not info["available"]:
             raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
-        if files and info["bot"] != ceo_bot.SLUG:
-            raise Problem("text_only", "The " + info["name"] + " takes text only", 422)
         auth.require_write(c, who, info["bot"])
         return info["bot"]
 
-    def post_message_sync(request, body, who, intent, reply, links, uploads=None):
+    def assistant_checks(who, bot, text):
+        """The org rule check of a person's message to their Assistant, outside the write, as `chat` checks one to a
+        bot: the chat is its place (`where:` rules), the bot its destination. Held, nothing is written (`assistant_say`).
+        None when no rule is in force, so nothing is read or called."""
+        if not text:
+            return None
+        with store.read() as c:
+            if not org_rule_check.in_force(c):
+                return None
+            room = find_room(c, who.actor)
+        room_id = (room or {}).get("id") or ""
+        return org_rule_check.preflight(store, app.state.judge, who, "assistant_message", text, ["bot:" + bot],
+                                        place=lambda c, author, recipients: org_rule_check.place_for(
+                                            c, author, recipients, room_id))
+
+    def assistant_say(c, who, bot, room, text, refs, rc, uploads=None, titles=()):
+        """One person's message to their Assistant, as the route and Send anyway write it: the org rule check's verdict
+        first (held: nothing is written and the hold is the answer), then the message with its files. `uploads` are the
+        files' digests, sizes and names, kept already; a replay carries them, so Send anyway attaches the same files.
+        Its bot turn answers it."""
+        titles = list(titles or [])
+        gate = org_rule_check.apply(c, rc, text, {"text": text, "to": "bot:" + bot, "refs": refs,
+                                                  "uploads": uploads, "titles": titles})
+        if gate and gate.get("held"):
+            return org_rule_check.held_answer(c, who, gate, auth=auth)
+        message = H.say(c, who.actor, "bot:" + bot, org_rule_check.warned_text(gate, text) if gate else text,
+                        conversation_id=room["id"], kind="say", refs=refs)
+        if uploads is not None:
+            message = app.state.uploads.attach(c, who, bot, message, uploads, titles)
+        return {"message": message, **org_rule_check.answer(gate)}
+
+    def post_message_sync(request, body, who, uploads=None, rc=None):
         def work(c):
-            bot = chat_bot_for(c, who, uploads is not None)
+            bot = chat_bot_for(c, who)
             room = chat_room(c, settings, who)
             refs = {"assistant": True}
             if getattr(body, "place", None) == "updates":
                 refs["updates"] = True        # its turn is handed the updates they may read (backend/updates_chat.py)
-            if reply is not None:
-                refs["quiet"] = True
-            message = H.say(c, who.actor, "bot:" + bot, body.text, conversation_id=room["id"],
-                            kind="say", refs=refs)
-            if uploads is not None:
-                message = app.state.uploads.attach(c, who, bot, message, uploads, body.titles)
-            out = {"message": message, "reply": None, "fast": reply is not None, "intent": intent}
-            if reply is not None:
-                out["reply"] = H._write_message(c, "bot:" + bot, who.actor, reply, room, "say",
-                                                {"assistant": True, "fast": True, "intent": intent, "links": links},
-                                                message["id"], None, delivered_at=H.now())
-                H.event(c, who.actor, "assistant.fast", message["id"], {"intent": intent})
-            return out
+            page = getattr(body, "page", None)
+            if page and page.path.startswith("#/"):
+                refs["page"] = {"path": page.path, "title": page.title}   # where they asked from (runner-rs prompt.rs)
+            return assistant_say(c, who, bot, room, body.text, refs, rc, uploads,
+                                 getattr(body, "titles", None) or [])
         if uploads is not None:
             return app.state.uploads.write(request, body, uploads, work)
         return mutate(request, body, work)
+
+    @org_rule_check.replayer("assistant_message")
+    def assistant_replay(c, who, hold, replay, ingest, gate=None):
+        """Send anyway's write: the person's message to their Assistant, as the person, with its files (kept already).
+        It is posted without a quick answer; its turn answers it."""
+        bot = chat_bot_for(c, who)
+        if "bot:" + bot != replay.get("to"):
+            raise Problem("changed", "Your " + settings.assistant_name + " changed since the message was held; send it "
+                          "again", 409)
+        return assistant_say(c, who, bot, chat_room(c, settings, who), replay["text"], replay.get("refs") or {},
+                             org_rule_check.decided(gate), replay.get("uploads"), replay.get("titles") or [])
 
     @app.post("/api/v2/assistant/messages")
     async def assistant_message(request: Request, body: M.AssistantMessage):
@@ -1550,17 +1509,15 @@ def install(app, store, auth, mutate, onboarding):
 
         def read():
             with store.read() as c:
-                return availability(c, settings, who), bots_for(c, who)
-        info, bots = await asyncio.to_thread(read)
+                return availability(c, settings, who)
+        info = await asyncio.to_thread(read)
         if not info["available"]:
             raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
-        # A question from the Updates chat is about the updates its turn is handed, which the quick answers never read.
-        intent, reply, links = (None, None, []) if body.place == "updates" else \
-            await fast_answer(Internal(request), who, bots, body.text)
-        return await asyncio.to_thread(post_message_sync, request, body, who, intent, reply, links)
+        rc = await asyncio.to_thread(assistant_checks, who, info["bot"], body.text)
+        return await asyncio.to_thread(post_message_sync, request, body, who, None, rc)
 
-    # The owner's CEO Bot chat takes pictures and files like any bot chat (a pasted screenshot attaches); an Assistant
-    # room stays text only. Files skip the quick answers, which read words only.
+    # Files and pictures in a person's own Assistant chat (the Ask panel, the Assistant page), stored on the message like
+    # any bot chat's, in their room's conversation.
     @app.post("/api/v2/uploads/assistant/messages", openapi_extra=upload_contract(M.AssistantUpload))
     async def assistant_upload(request: Request):
         who = own(request)
@@ -1568,13 +1525,20 @@ def install(app, store, auth, mutate, onboarding):
         def admit(body):
             # Before any byte is stored, so a refused send keeps nothing; the write checks again in its transaction.
             with store.read() as c:
-                chat_bot_for(c, who, True)
+                chat_bot_for(c, who)
         body, uploads = await app.state.uploads.form(request, M.AssistantUpload, admit)
-        return await asyncio.to_thread(post_message_sync, request, body, who, None, None, [], uploads)
+        def bot_of():
+            with store.read() as c:
+                return chat_bot_for(c, who)
+        bot = await asyncio.to_thread(bot_of)
+        rc = await asyncio.to_thread(assistant_checks, who, bot, body.text)
+        return await asyncio.to_thread(post_message_sync, request, body, who, uploads, rc)
 
     @app.post("/api/v2/assistant/turn-on")
     def turn_on(request: Request, body: M.Empty):
-        who = own(request)
+        who = person(request)
+        if who.via and not who.confirmed:      # the owner's own click, or their tap on a Confirm card
+            raise Problem("forbidden", "Only the person can do this, not the " + settings.assistant_name, 403)
         if who.role != "owner":
             raise Problem("forbidden", "Only the owner turns the " + settings.assistant_name + " on", 403)
         return mutate(request, body, lambda c: onboarding.turn_on_assistant(c, who))
@@ -1595,8 +1559,8 @@ def install(app, store, auth, mutate, onboarding):
 
         def work(c):
             before = decides(c, who.actor)["decides_approvals"]
-            c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES(?,?,?,?) ON CONFLICT(actor,key) "
-                      "DO UPDATE SET value_json=excluded.value_json, updated=excluded.updated",
+            c.execute("INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) ON CONFLICT(actor,key) "
+                      "DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
                       (who.actor, DECIDES_KEY, json.dumps(body.decides_approvals), H.now()))
             if before != body.decides_approvals:
                 H.event(c, who.actor, "assistant.decides_approvals", who.actor, {"on": body.decides_approvals})
@@ -1610,8 +1574,8 @@ def install(app, store, auth, mutate, onboarding):
         who = own(request)
         since = H.shift(H.now(), days=-max(1, min(days, 90)))
         with store.read() as c:
-            rows = c.execute("SELECT a.id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.decided_by=? "
-                             "AND a.decided_via='assistant' AND m.to_actor=? AND a.decided_at>=? "
+            rows = c.execute("SELECT a.id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.decided_by_id=? "
+                             "AND a.decided_via='assistant' AND m.recipient_id=? AND a.decided_at>=? "
                              "ORDER BY a.decided_at DESC LIMIT 200", (who.actor, who.actor, since)).fetchall()
             out = []
             for r in rows:
@@ -1645,13 +1609,14 @@ def install(app, store, auth, mutate, onboarding):
             lines = []
             for aid in ids:
                 row = H.approval(c, aid)
-                if not row or (H.message(c, row.get("message_id")) or {}).get("to_actor") != who.actor:
+                if not row or (H.message(c, row.get("message_id")) or {}).get("recipient_id") != who.actor:
                     raise Problem("forbidden", "That approval is not addressed to you", 403)
                 if row["decision"]:
                     raise Problem("conflict", f"Approval {aid} is already decided", 409)
-                if row["requested_by"] == "bot:" + bot:
+                if row["requested_by_id"] == "bot:" + bot:
                     raise Problem("own_request", "You asked for this approval yourself, so it stays the person's "
                                   "click: propose it on a card (`hub assistant propose`)", 403)
+                refuse_own_click(row)
                 if row["kind"] == "support":
                     raise Problem("approve_support", "A report to the Tico team is sent only on the person's own "
                                   "click, so leave it out of the read-back", 403)
@@ -1677,16 +1642,49 @@ def install(app, store, auth, mutate, onboarding):
 
     @app.post("/api/v2/assistant/actions")
     def propose(request: Request, body: M.AssistantAction):
-        who = person(request)
+        caller = request.state.identity
+        # The Assistant's own background run (its daily sweep: a routine of the Assistant bot, so `via` is never
+        # "assistant") may put a card in one person's own Assistant chat, with `for`: as that person's card, proposed by
+        # the Assistant, never approving anything. The person is resolved the way their own chat turn is (`chat_person`):
+        # an unknown, gone or suspended person is refused before any room is made, and the role is their real one.
+        background = body.for_person is not None and caller.role not in ("owner", "human")
+        if background:
+            if H.actor_id(caller.actor) != settings.assistant_bot or not H.is_human(body.for_person):
+                raise Problem("forbidden", "Only the " + settings.assistant_name + " puts a card in a person's chat, "
+                              "and only for that person", 403)
+        else:
+            caller_person = person(request)
+            if body.for_person not in (None, caller_person.actor):
+                raise Problem("forbidden", "Only the " + settings.assistant_name + " puts a card in someone else's chat, "
+                              "and only from its own background run", 403)
 
         def work(c):
+            if background:
+                from dataclasses import replace
+                found = auth.chat_person(c, body.for_person, settings.assistant_bot)
+                if not found:
+                    raise Problem("not_found", "No active person " + body.for_person + " to put a card in the chat of", 404)
+                # The card is the person's own; it is not a turn of theirs, so it carries no citation of its own.
+                who = replace(found, via="", task_actor="", attempt_id="", runner_id="")
+            else:
+                who = caller_person
             if normalize_path(body.path) == "/api/v2/seats/batch" and who.role != "owner":
                 raise Problem("forbidden", "Only the owner may confirm a chart-model re-org", 403)
-            if normalize_path(body.path) in ("/api/v2/chat/" + settings.assistant_bot, "/api/v2/chat/" + ceo_bot.SLUG) \
+            if normalize_path(body.path) in ("/api/v2/chat/" + settings.assistant_bot,
+                                             "/api/v2/chat/" + strategy_bot.SLUG) \
                     or not valid_operation(body.method, body.path, settings):
                 raise Problem("operation", "That is not something the " + settings.assistant_name
                               + " can propose: it is not on the list of routes a person confirms (never tokens, "
                               "sign-in, enrollment or this assistant)", 422)
+            if background:
+                # Never an approve, on a background card: the person decides approvals in their own chat or in Tico.
+                if _DECIDING.fullmatch(normalize_path(body.path)) or approvals_in(body.path, body.body):
+                    raise Problem("forbidden", "A background card never approves: the person decides it themselves", 403)
+                sent = c.execute("SELECT count(*) FROM assistant_actions WHERE owner=? AND proposer='assistant' AND "
+                                 "created_at>=?", (who.actor, H.shift(H.now(), seconds=-86400))).fetchone()[0]
+                if sent >= MAX_BACKGROUND_PER_DAY:
+                    raise Problem("too_many", "The " + settings.assistant_name + " has put enough cards in this person's "
+                                  "chat today", 429)
             room = chat_room(c, settings, who)
             return create_proposal(c, settings, who, room, "assistant", body.summary, body.method, body.path, body.body,
                                    request.headers.get("x-tico-on-behalf-of"), routes=request.app.routes)
@@ -1706,8 +1704,10 @@ def install(app, store, auth, mutate, onboarding):
                          (H.shift(H.now(), seconds=-RUNNING_TTL_S),)).fetchone()
 
     def expire(c):
-        """A confirm that never settled (a restart, a dropped connection) fails after two minutes."""
-        c.execute("UPDATE assistant_actions SET status='failed', decided_at=?, confirm_hash=NULL, result_json=? "
+        """A confirm that never settled (a restart, a dropped connection) fails after two minutes; an asked one also
+        settles its ask (backend/settings_asks.py), its asker told it may not have finished."""
+        settings_asks.recover(c)
+        c.execute("UPDATE assistant_actions SET status='failed', decided_at=?, confirm_hash=NULL, result=? "
                   "WHERE status='running' AND running_since<?",
                   (H.now(), json.dumps({"status_code": 0, "error": "It did not finish; ask again"}),
                    H.shift(H.now(), seconds=-RUNNING_TTL_S)))
@@ -1726,9 +1726,10 @@ def install(app, store, auth, mutate, onboarding):
 
     def settle(aid, who, status, result, note):
         with store.transaction() as c:
-            c.execute("UPDATE assistant_actions SET status=?, decided_at=?, result_json=?, confirm_hash=NULL WHERE id=?",
+            c.execute("UPDATE assistant_actions SET status=?, decided_at=?, result=?, confirm_hash=NULL WHERE id=?",
                       (status, H.now(), json.dumps(result), aid))
             row = load(c, who, aid)
+            settings_asks.settled(c, row, status, result)
             room = H.conversation(c, row["conversation_id"]) if row["conversation_id"] else None
             if room and note:
                 by = row.get("proposer") or "assistant"
@@ -1745,10 +1746,66 @@ def install(app, store, auth, mutate, onboarding):
             row = load(c, who, aid)
             if row["status"] != "pending":
                 raise Problem("state", "This proposal is already " + row["status"], 409)
-            c.execute("UPDATE assistant_actions SET status='cancelled', decided_at=? WHERE id=?", (H.now(), aid))
-            H.event(c, who.actor, "assistant.action.cancelled", aid, {})
+            c.execute("UPDATE assistant_actions SET status='canceled', decided_at=? WHERE id=?", (H.now(), aid))
+            H.event(c, who.actor, "assistant.action.canceled", aid, {})
+            settings_asks.settled(c, row, "canceled")
             return {"action": action_view(load(c, who, aid), c)}
         return mutate(request, body, work)
+
+    @app.post("/api/v2/assistant/actions/{aid}/withdraw")
+    def action_withdraw(request: Request, aid: str, body: M.AssistantWithdraw):
+        """Any signed-in teammate (a person or a bot) takes back a card that is still waiting: it never runs, and the
+        card owner's chat says who withdrew it, with the reason if given. Confirming stays the owner's own click."""
+        who = request.state.identity
+        if not teammate(who):
+            raise Problem("forbidden", "Only people and bots of the company can withdraw a proposal", 403)
+
+        def work(c):
+            row = c.execute("SELECT * FROM assistant_actions WHERE id=?", (aid,)).fetchone()
+            if not row:
+                raise Problem("not_found", "No such proposal", 404)
+            if row["status"] != "pending":
+                raise Problem("state", "This proposal is already " + row["status"], 409)
+            reason = " ".join(str(body.reason or "").split())[:300]
+            who_name = (settings_asks._name(c, who.actor) if who.actor.startswith("human:")
+                        else (H.resolve_bot(c, who.actor.removeprefix("bot:")) or {}).get("display_name")
+                        or who.actor.removeprefix("bot:"))
+            c.execute("UPDATE assistant_actions SET status='withdrawn', decided_at=? WHERE id=?", (H.now(), aid))
+            H.event(c, who.actor, "assistant.action.withdrawn", aid,
+                    {"summary": row["summary"][:200], "reason": reason, "owner": row["owner"]})
+            settings_asks.settled(c, row, "withdrawn")
+            room = H.conversation(c, row["conversation_id"]) if row["conversation_id"] else None
+            if room and not room.get("closed_at"):
+                # Said by the proposing bot (the Assistant in its own room), to the card's owner.
+                by = row["proposer"] or "assistant"
+                said = who_name + " withdrew that card, so nothing will run." + (" " + reason if reason else "")
+                H._write_message(c, "bot:" + (room_bot(settings, room) if by == "assistant" else by), row["owner"],
+                                 said, room, "say", {"assistant": True, "action_result": aid}, None, None,
+                                 delivered_at=H.now())
+            return {"action": action_view(dict(c.execute("SELECT * FROM assistant_actions WHERE id=?", (aid,))
+                                                .fetchone()), c)}
+        return mutate(request, body, work)
+
+    @app.get("/api/v2/assistant/proposals")
+    def proposals(request: Request, proposer: str = "", owner: str = ""):
+        """The Confirm cards still waiting, newest first, so a teammate can find one to withdraw: summary and what it
+        does, with its id, owner and proposer. Filter by `proposer` (botops, assistant) and/or `owner` (a person's id)."""
+        who = request.state.identity
+        if not teammate(who):
+            raise Problem("forbidden", "Only people and bots of the company can list proposals", 403)
+        # A card the Assistant made in someone's private Assistant chat is listed to that person only: its words came
+        # from a private conversation. Cards bots propose (BotOps) are team work, listed to every teammate.
+        sql, args = "SELECT * FROM assistant_actions WHERE status='pending' AND (owner=? OR coalesce(proposer,'assistant')!='assistant')", [who.actor]
+        if proposer:
+            sql += " AND proposer=?"
+            args.append(proposer)
+        if owner:
+            sql += " AND owner=?"
+            args.append(owner)
+        with store.read() as c:
+            rows = c.execute(sql + " ORDER BY created_at DESC LIMIT 100", args).fetchall()
+            return {"actions": [{"id": r["id"], "owner": r["owner"], "proposer": r["proposer"], "summary": r["summary"],
+                                 "description": r["description"], "created_at": r["created_at"]} for r in rows]}
 
     @app.post("/api/v2/assistant/actions/{aid}/confirm")
     async def action_confirm(request: Request, aid: str):
@@ -1763,9 +1820,10 @@ def install(app, store, auth, mutate, onboarding):
                 row = load(c, who, aid)
                 if row["status"] != "pending":
                     raise Problem("state", "This proposal is already " + row["status"], 409)
-                if row["created"] < H.shift(H.now(), hours=-CONFIRM_TTL_H):
+                if row["created_at"] < H.shift(H.now(), hours=-CONFIRM_TTL_H):
                     # Recorded here, raised after the transaction commits (raising inside it rolls it back).
                     c.execute("UPDATE assistant_actions SET status='expired', decided_at=? WHERE id=?", (H.now(), aid))
+                    settings_asks.settled(c, row, "expired")
                     return None
                 # Only the run that holds this secret (the in-process call below) is "confirmed".
                 c.execute("UPDATE assistant_actions SET status='running', decided_at=?, running_since=?, "
@@ -1773,13 +1831,13 @@ def install(app, store, auth, mutate, onboarding):
                 H.event(c, who.actor, "assistant.action.confirmed", aid,
                         {"summary": row["summary"][:200], "method": row["method"], "path": row["path"]})
                 # A card stored before its task change was made runnable (`runnable`) still runs, read as it is now.
-                sent = json.loads(row["body_json"] or "{}")
+                sent = json.loads(row["body"] or "{}")
                 if row["path"] == BATCH_PATH and isinstance(sent, dict) and isinstance(sent.get("actions"), list):
                     sent = {"actions": [{**s, "body": runnable(c, s.get("method") or "POST", s.get("path"), s.get("body") or {})}
                                         if isinstance(s, dict) else s for s in sent["actions"]]}
                 else:
                     sent = runnable(c, row["method"], row["path"], sent)
-                return {**row, "body_json": json.dumps(sent)}
+                return {**row, "body": json.dumps(sent)}
         row = await asyncio.to_thread(claim)
         if row is None:
             raise Problem("expired", "This proposal is more than a day old; ask again", 409)
@@ -1791,7 +1849,7 @@ def install(app, store, auth, mutate, onboarding):
                 raise Problem("operation", "This proposal is not on the list of routes a person confirms", 422)
             api = Internal(request)
             api.headers["x-tico-assistant-action"] = aid + "." + secret
-            sent = json.loads(row["body_json"] or "{}") if row["method"] != "DELETE" else None
+            sent = json.loads(row["body"] or "{}") if row["method"] != "DELETE" else None
             if isinstance(sent, dict):
                 sent = {k: v for k, v in sent.items() if k not in PERSON_ONLY_FIELDS}   # a card stored before the check
             if path == BATCH_PATH:

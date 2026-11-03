@@ -1,0 +1,58 @@
+{
+  "me": {"id": "dana", "name": "Dana Reyes", "email": "dana@acme.example", "role": "owner", "company_role": "owner", "cloud": true},
+  "people": [{"id": "dana", "name": "Dana Reyes"}, {"id": "omar", "name": "Omar Lee"}, {"id": "priya", "name": "Priya Shah"}],
+  "employees": [
+    {"name": "support", "display_name": "Support Lead", "host": "keeper", "status": "active"},
+    {"name": "eng-lead", "display_name": "Head of Engineering", "host": "keeper", "status": "active"},
+    {"name": "botops", "display_name": "BotOps", "host": "keeper", "status": "active"}
+  ],
+  "groups": [{"id": "engineering", "name": "Engineering"}],
+  "question_sets": [
+    {"id": "mail-triage@1", "questions": {
+      "bucket": {"type": "choice", "instructions": "Which bucket is this mail?", "criteria": {"needs-owner": "", "reply": "", "route": "", "archive": "", "watch": ""}},
+      "is_ask": {"type": "noul", "instructions": "Is it an ask?"}, "money": {"type": "noul", "instructions": "Is it about money?"},
+      "legal": {"type": "noul", "instructions": "Is it legal?"}}},
+    {"id": "support-triage@2", "questions": {"urgency": {"type": "score", "max": 3, "instructions": "How urgent?", "criteria": ["Low", "Medium", "High"]}}}
+  ],
+  "automations": [
+    {"id": "au_inbox", "name": "Inbox · dana@acme.example", "owner": "person:dana", "enabled": true, "builtin": false,
+     "spend_cap": {"per_30m": 5.0}, "version": 7,
+     "trigger": {"type": "message", "inbox": "dana@acme.example", "filters": []},
+     "steps": [
+       {"id": "f1", "type": "filter", "enabled": true, "rules": [
+         {"when": [{"field": "message.from", "op": "contains", "value": "newsletter"}], "match": "any", "then": ["archive"], "stop": true}]},
+       {"id": "dc1", "type": "decide", "enabled": true, "set": "mail-triage@1", "level": "medium", "out": "d1"},
+       {"id": "p1", "type": "paths", "enabled": true,
+        "paths": [
+          {"name": "Reply", "when": [{"field": "d1.bucket", "op": "is", "value": "reply", "min": 0.7}], "steps": [
+            {"id": "l1s", "type": "llm", "enabled": true, "as": "assistant:dana", "prompt": "Draft a short reply in my voice.", "out": "l1"},
+            {"id": "a1", "type": "action", "enabled": true, "do": "draft_reply", "args": {}}]},
+          {"name": "Money", "when": [{"field": "d1.money", "op": "is", "value": "yes", "min": 0.8}], "steps": [
+            {"id": "a2", "type": "action", "enabled": true, "do": "create_task", "args": {"to": "bot:support"}}]}],
+        "otherwise": {"steps": [{"id": "a3", "type": "action", "enabled": true, "do": "leave_for_you", "args": {}}]}}
+     ]},
+    {"id": "au_deploy", "name": "Deploy watch", "owner": "bot:eng-lead", "group": "group:engineering", "enabled": true, "builtin": false,
+     "version": 3, "trigger": {"type": "webhook", "id": "wh_1", "name": "deploys"},
+     "steps": [
+       {"id": "fd1", "type": "find", "enabled": true, "source": "prs", "query": "merged", "since": "last_run", "limit": 20},
+       {"id": "bt1", "type": "bot_turn", "enabled": true, "bot": "eng-lead", "prompt": "Check the deploy and post what changed."}]},
+    {"id": "au_tasks", "name": "Task triage", "owner": "bot:support", "enabled": true, "builtin": true, "version": 2,
+     "trigger": {"type": "task_received", "to": "bot:support"},
+     "steps": [{"id": "ta1", "type": "action", "enabled": true, "do": "assign", "args": {"to": "bot:support"}}]},
+    {"id": "au_listen", "name": "Pricing mentions", "owner": "person:omar", "enabled": false, "builtin": false, "version": 1,
+     "can_edit": false,
+     "trigger": {"type": "listening", "destination": "pricing"},
+     "steps": [{"id": "n1", "type": "action", "enabled": true, "do": "note", "args": {"text": "Price talk"}}]}
+  ],
+  "versions": {
+    "au_inbox": [
+      {"n": 5, "actor": "person:dana", "at": "2026-10-20T15:00:00Z"},
+      {"n": 6, "actor": "bot:support", "at": "2026-10-24T15:00:00Z"},
+      {"n": 7, "actor": "person:dana", "at": "2026-10-27T15:00:00Z"}
+    ]
+  },
+  "proposal": {
+    "summary": "Archive receipts before triage",
+    "rule": {"when": [{"field": "message.subject", "op": "contains", "value": "receipt"}], "match": "all", "then": ["archive"], "stop": true}
+  }
+}

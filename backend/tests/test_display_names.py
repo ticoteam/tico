@@ -2,7 +2,7 @@
 import pytest
 from fastapi.routing import APIRoute
 
-from backend import meetings
+from backend import meetings, threads
 from backend.store import H
 from backend.tests.test_api import api, headers, post  # noqa: F401
 
@@ -13,8 +13,9 @@ def named_data(api):
         c.execute("UPDATE humans SET name='Ana' WHERE id='ana'")
         c.execute("UPDATE bots SET display_name='Operations' WHERE slug='ops'")
         task = H.task_create(c, 'human:ana', 'Review the plan', 'Please review the plan.', 'bot:ops')
-        ask = H.say(c, 'bot:ops', 'human:ana', 'Please choose a review date.',
-                    conversation_id=task['conversation_id'], kind='ask', refs={'task': task['id']})
+        # A bot's ask in a task's thread reaches a person only by an @mention (hubdb.counts_for_person), so this one has it.
+        ask = threads.post(c, 'bot:ops', task['conversation_id'], '@ana Please choose a review date.', kind='ask',
+                           to_actor='human:ana', refs={'task': task['id']})
         notice = H.notice(c, 'bot:ops', 'human:ana', 'New task from bot:ops: Review the plan')
         meetings.snapshot({'id': 'review-meeting', 'title': 'Review the plan', 'kind': 'meeting',
                            'private': False, 'owner': 'ana@example.com', 'status': 'done'},
@@ -37,8 +38,8 @@ def test_messages_and_task_asks_have_display_names(api, named_data):
     assert inbox['actors']['human:ana'] == inbox['actor_name'] == 'Ana'
     assert inbox['actors']['bot:ops'] == 'Operations'
     message = next(m for m in inbox['messages'] if m['id'] == named_data['ask']['id'])
-    assert message['from_actor_name'] == 'Operations'
-    assert message['to_actor_name'] == 'Ana'
+    assert message['sender_name'] == 'Operations'
+    assert message['recipient_name'] == 'Ana'
     notice = next(m for m in inbox['notices'] if m['id'] == named_data['notice']['id'])
     assert notice['body'] == 'New task from Operations: Review the plan'
     assert notice['body_raw'] == 'New task from bot:ops: Review the plan'
@@ -48,6 +49,6 @@ def test_messages_and_task_asks_have_display_names(api, named_data):
     tasks = result.json()
     task = next(t for t in tasks['tasks'] if t['id'] == named_data['task']['id'])
     assert task['owner_name'] == 'Operations' and task['requester_name'] == 'Ana'
-    assert task['ask']['from_actor_name'] == 'Operations'
-    assert task['ask']['to_actor_name'] == 'Ana'
+    assert task['ask']['sender_name'] == 'Operations'
+    assert task['ask']['recipient_name'] == 'Ana'
     assert tasks['actors']['bot:ops'] == 'Operations' and tasks['actors']['human:ana'] == 'Ana'

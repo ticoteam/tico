@@ -1,0 +1,49 @@
+{
+  "live": {
+    "trigger": {
+      "type": "message",
+      "inbox": "dana@acme.example"
+    },
+    "steps": [
+      {
+        "id": "triage",
+        "type": "decide",
+        "enabled": true,
+        "set": "mail-triage@1",
+        "level": "low",
+        "out": "d1"
+      },
+      {
+        "id": "sort",
+        "type": "filter",
+        "enabled": true,
+        "rules": [
+          {
+            "when": [
+              {
+                "field": "d1.bucket",
+                "op": "is",
+                "value": "archive",
+                "min": 0.85
+              }
+            ],
+            "then": [
+              {
+                "do": "label",
+                "args": {
+                  "name": "Receipts"
+                }
+              },
+              {
+                "do": "archive",
+                "args": {}
+              }
+            ],
+            "stop": true
+          }
+        ]
+      }
+    ]
+  },
+  "pending": []
+}

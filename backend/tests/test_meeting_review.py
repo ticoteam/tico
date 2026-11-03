@@ -8,7 +8,8 @@ from backend import hubdb as H, meetings
 from backend.tests.test_api import api, as_member, get, headers, post, restrict, runner, setup_attempt  # noqa: F401
 from backend.tests.test_mcp import call
 from backend.tests.test_member_bots import botops, turn  # noqa: F401
-from backend.tests.test_routines import DEBRIEF, create, setup
+from backend.tests.test_lifecycle import debrief
+from backend.tests.test_new_bot_flows import create_bot
 
 
 def imported(api, token='ben-test', **fields):
@@ -44,7 +45,7 @@ def test_pending_hidden_from_owner_participants_bots_search_sql_and_send(api):
     # Even the filed-for person's search/export waits until sharing; the queue is their read path.
     assert get(api, 'meetings/search', 'ben-test')['results'] == []
     assert queue(api, 'ana-test')['pending_count'] == 0
-    response = api.post('/api/meetings/' + rid + '/send', json={'slug': 'ops'}, headers=headers('ben-test'))
+    response = api.post('/api/meetings/' + rid + '/send', json={'bot_id': 'ops'}, headers=headers('ben-test'))
     assert response.status_code == 409
     assert post(api, 'sql', {'sql': "SELECT target FROM events WHERE action IN ('note.created','meeting.imported')"})['rows'] == []
 
@@ -60,20 +61,19 @@ def test_manual_and_explicit_live_human_imports_but_machine_cannot_bypass(api):
 
 
 def test_approve_emits_once_and_reimports_never_undo_review_privacy(api):
-    setup(api)
-    create(api, 'ops', DEBRIEF)
+    debrief(api)
     made = imported(api, token='ana-test', send_to='coo')
     assert not get(api, 'tasks')['tasks']
     approved = review(api, made['id'], token='ana-test', private=False)
     assert approved['review_state'] == 'live' and approved['delivery']['task_id']
-    assert len([t for t in get(api, 'tasks')['tasks'] if t['owner'] == 'bot:ops']) == 1
+    assert len([t for t in get(api, 'tasks')['tasks'] if t['owner_id'] == 'bot:ops']) == 1
     review(api, made['id'], token='ana-test')
     imported(api, token='ana-test', transcript='Sam: Corrected transcript.', private=True)
     assert get(api, 'meetings/' + made['id'])['private'] is False
     post(api, f"meetings/{made['id']}/review", {'action': 'dismiss'}, expected=409)
     assert get(api, 'meetings/' + made['id'])['review_state'] == 'live'
     review(api, made['id'], token='ana-test')
-    assert len([t for t in get(api, 'tasks')['tasks'] if t['owner'] == 'bot:ops']) == 1
+    assert len([t for t in get(api, 'tasks')['tasks'] if t['owner_id'] == 'bot:ops']) == 1
 
 
 def test_dismiss_survives_sync_restore_and_batch_selection_is_atomic(api):
@@ -104,7 +104,7 @@ def test_legacy_hub_migration_backfills_live_and_cloud_restart_keeps_queue(api, 
     for version, script in enumerate(H.MIGRATIONS[:19], 1):
         H._apply(db, script)
         db.execute(f'PRAGMA user_version={version}')
-    db.execute("INSERT INTO meetings(id,title,owner,metadata_json,created,updated) VALUES(?,?,?,?,?,?)",
+    db.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?)",
                ('legacy', 'Meeting', 'ben@acme.example', json.dumps({'id': 'legacy', 'kind': 'meeting'}), H.now(), H.now()))
     H.migrate(db)
     assert db.execute('PRAGMA user_version').fetchone()[0] == len(H.MIGRATIONS)
@@ -139,7 +139,7 @@ def test_released_migrations_remain_in_place(tmp_path, version):
         H._apply(db, script)
         db.execute(f'PRAGMA user_version={i}')
     db.execute("INSERT INTO blob_locations VALUES('digest','example-bucket','2026-10-01')")
-    db.execute("INSERT INTO meetings(id,title,owner,metadata_json,created,updated) VALUES(?,?,?,?,?,?)",
+    db.execute("INSERT INTO meetings(id,title,owner,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?)",
                ('released', 'Existing notes', 'ben@acme.example', '{}', H.now(), H.now()))
     H.migrate(db)
     assert db.execute('SELECT bucket FROM blob_locations').fetchone()[0] == 'example-bucket'
@@ -181,3 +181,16 @@ def test_share_and_send_hands_the_shared_meeting_to_a_bot_once(api):
     assert task and approved['delivery']['destination'] == 'ops'
     # A repeat is harmless: the meeting stays live and keeps its one delivery.
     assert review(api, made['id'], send_to='ops')['delivery']['task_id'] == task
+
+
+def test_a_shared_meeting_goes_to_a_uuid_bot_by_id_or_slug_as_one_task(api):
+    """A bot made through the API has a UUIDv7 id. The send files its task for bot:<id>, and a repeat named by the
+    slug is the same single delivery."""
+    bot = create_bot(api, 'field-helper')
+    made = imported(api)
+    approved = review(api, made['id'], send_to=bot)
+    assert approved['review_state'] == 'live' and approved['delivery']['destination'] == bot
+    task = approved['delivery']['task_id']
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT owner_id FROM tasks WHERE id=?', (task,)).fetchone()[0] == 'bot:' + bot
+    assert review(api, made['id'], send_to='field-helper')['delivery']['task_id'] == task

@@ -19,17 +19,17 @@ from fastapi import Request
 from pydantic import Field
 
 from clients.watchers import LIMITS, MAX_EVENTS
-from . import rooms, run_triggers, support_triage
+from . import rooms, run_triggers, screening, support_triage
 from .models import Contract, Slug
 from .store import H, Problem
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS watcher_items(
- bot TEXT NOT NULL, key TEXT NOT NULL, task_id TEXT NOT NULL, created TEXT NOT NULL, PRIMARY KEY(bot, key));
+ bot TEXT NOT NULL, key TEXT NOT NULL, task_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(bot, key));
 CREATE TABLE IF NOT EXISTS watcher_refs(
  bot TEXT NOT NULL, key TEXT NOT NULL, ref TEXT NOT NULL, PRIMARY KEY(bot, key, ref));
 CREATE TABLE IF NOT EXISTS watcher_runs(
- bot TEXT NOT NULL, name TEXT NOT NULL, runner_id TEXT NOT NULL, started TEXT NOT NULL, finished TEXT NOT NULL,
+ bot TEXT NOT NULL, name TEXT NOT NULL, runner_id TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT NOT NULL,
  exit_code INTEGER NOT NULL, timed_out INTEGER NOT NULL DEFAULT 0, every INTEGER NOT NULL, output TEXT NOT NULL DEFAULT '',
  events INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(bot, name));
 """ + support_triage.SCHEMA
@@ -99,7 +99,8 @@ def _note(c, task, text):
 def deliver(c, auth, bot, event, triage=None):
     """Apply one event. Returns the id of the task it touched, or None when it changed nothing.
 
-    `triage(c, event)` is True when the event waits for support triage instead (backend/support_triage.py)."""
+    `triage(c, event)` is True when the event waits for support triage or screening instead (backend/support_triage.py,
+    backend/screening.py); screening may instead give back the event to apply, with a warning line on its body."""
     item = c.execute("SELECT task_id FROM watcher_items WHERE bot=? AND key=?", (bot, event.key)).fetchone()
     task = H.task(c, item["task_id"]) if item else None
     if event.ref and c.execute("SELECT 1 FROM watcher_refs WHERE bot=? AND key=? AND ref=?",
@@ -110,13 +111,18 @@ def deliver(c, auth, bot, event, triage=None):
     if support_triage.pending(c, bot, event.key):
         support_triage.later(c, bot, event)            # a note on its task once triage opens it
         return None
+    if screening.waiting(c, "watcher", bot, event.key):
+        screening.later(c, "watcher", bot, event)      # a note on its task once screening opens it
+        return None
     if event.op != "task" and support_triage.held(c, bot, event.key, task):
         return _note(c, task, event.text or event.note) if live(task) else None
     if event.op == "task":
         if item:
             return None
-        if triage and triage(c, event):
+        waits = triage(c, event) if triage else False
+        if waits is True:
             return None
+        event = waits or event
         task = _open(c, auth, bot, event.title or event.key, event.body, incident=event.incident)
     elif event.op == "comment":
         if live(task):
@@ -135,20 +141,23 @@ def deliver(c, auth, bot, event, triage=None):
 
 def report(c, auth, runner, body, triage=None):
     """A run of a watcher: its events, then the run itself. `triage(c, event)` holds a new HQ ticket for support
-    triage (backend/support_triage.py); without it every event applies at once."""
-    hosted = c.execute("SELECT 1 FROM assignments a JOIN bots b ON b.slug=a.bot "
-                       "WHERE a.bot=? AND a.runner_id=? AND b.state='active'", (body.bot, runner["id"])).fetchone()
+    triage (backend/support_triage.py); every other new task is screened for prompt injection (backend/screening.py).
+    Without `triage` every event applies at once."""
+    bot = (H.resolve_bot(c, body.bot) or {}).get("id", body.bot)
+    hosted = c.execute("SELECT 1 FROM assignments a JOIN bots b ON b.id=a.bot "
+                       "WHERE a.bot=? AND a.runner_id=? AND b.state='active'", (bot, runner["id"])).fetchone()
     if not hosted:
         raise Problem("forbidden", "That bot is not active on this computer", 403)
     touched = {}
     for event in body.events:
-        waits = triage if triage and support_triage.applies(body.name, event) else None
-        touched[event.key] = deliver(c, auth, body.bot, event, waits) or touched.get(event.key)
-    c.execute("INSERT INTO watcher_runs(bot,name,runner_id,started,finished,exit_code,timed_out,every,output,events) "
+        waits = (triage if support_triage.applies(body.name, event) else
+                 (lambda c, e: screening.watcher_check(c, bot, e))) if triage and event.op == "task" else None
+        touched[event.key] = deliver(c, auth, bot, event, waits) or touched.get(event.key)
+    c.execute("INSERT INTO watcher_runs(bot,name,runner_id,started_at,finished_at,exit_code,timed_out,every,output,events) "
               "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(bot,name) DO UPDATE SET runner_id=excluded.runner_id,"
-              "started=excluded.started,finished=excluded.finished,exit_code=excluded.exit_code,"
+              "started_at=excluded.started_at,finished_at=excluded.finished_at,exit_code=excluded.exit_code,"
               "timed_out=excluded.timed_out,every=excluded.every,output=excluded.output,events=excluded.events",
-              (body.bot, body.name, runner["id"], body.started, H.now(), body.exit, int(body.timed_out),
+              (bot, body.name, runner["id"], body.started, H.now(), body.exit, int(body.timed_out),
                body.every, body.output, len(body.events)))
     return {"tasks": {k: v for k, v in touched.items() if v}}
 
@@ -157,7 +166,7 @@ def problems(c, online_ids):
     """Watchers that failed their last run or have stopped running, for Health: [(bot, name, why)]."""
     out = []
     late = H.shift(H.now(), minutes=-10)
-    for r in c.execute("SELECT w.*,a.runner_id AS host FROM watcher_runs w JOIN bots b ON b.slug=w.bot AND b.state='active' "
+    for r in c.execute("SELECT w.*,a.runner_id AS host FROM watcher_runs w JOIN bots b ON b.id=w.bot AND b.state='active' "
                        "LEFT JOIN assignments a ON a.bot=w.bot ORDER BY w.bot,w.name"):
         if r["host"] != r["runner_id"]:
             continue                                   # the bot moved to another computer; its new runs replace this
@@ -165,7 +174,7 @@ def problems(c, online_ids):
             out.append((r["bot"], r["name"], "timed out"))
         elif r["exit_code"]:
             out.append((r["bot"], r["name"], f"exited {r['exit_code']}" + (": " + r["output"].strip()[-160:] if r["output"].strip() else "")))
-        elif r["host"] in online_ids and r["finished"] < min(late, H.shift(H.now(), seconds=-r["every"] * STALE_AFTER)):
+        elif r["host"] in online_ids and r["finished_at"] < min(late, H.shift(H.now(), seconds=-r["every"] * STALE_AFTER)):
             out.append((r["bot"], r["name"], "has not run lately"))
     return out
 
@@ -181,7 +190,7 @@ def install(app, store, auth, execution, mutate):
             if support_triage.engine_for(store, c, getattr(app.state, "judge", None)) is None:
                 return False                           # Decide is off: the ticket goes on at once, as before
             waited.append(event.key)
-            return support_triage.hold(c, body.bot, event)
+            return support_triage.hold(c, (H.resolve_bot(c, body.bot) or {}).get("id", body.bot), event)
 
         def work(c):
             runner = execution.runner(c, who)

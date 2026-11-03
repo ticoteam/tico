@@ -7,6 +7,7 @@ Slow: it builds the release binary once per session (cargo) and starts runner pr
 
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -83,7 +84,7 @@ class Computer:
         assign(api, self.registration, "ops")
         self.runtime = RUNTIMES.get(harness, harness)
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
+            c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
                       (encode({"name": "ops", "runtime": self.runtime, "harness": harness, "model": MODELS[harness],
                                "status": "active", **(bot or {})}),))
         if harness in GRANTED_KEYS:
@@ -168,14 +169,14 @@ class Computer:
 
     def readiness(self):
         with self.api.app.state.store.read() as c:
-            row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (self.registration["runner_id"],)).fetchone()
+            row = c.execute("SELECT readiness FROM runners WHERE id=?", (self.registration["runner_id"],)).fetchone()
         return (json.loads(row[0] or "{}") if row else {}).get("bots", {})
 
     def profiles(self):
         """The subscription profiles this computer's last heartbeat listed: {name: {runtime: state}}."""
         with self.api.app.state.store.read() as c:
             return {r[0]: json.loads(r[1] or "{}") for r in c.execute(
-                "SELECT profile, runtimes_json FROM computer_profiles WHERE runner_id=?", (self.registration["runner_id"],))}
+                "SELECT profile, runtimes FROM computer_profiles WHERE runner_id=?", (self.registration["runner_id"],))}
 
     def calls(self):
         if not self.log_path.exists():
@@ -187,14 +188,14 @@ class Computer:
 
     def attempts(self):
         with self.api.app.state.store.read() as c:
-            rows = c.execute("SELECT id, state, result_json, final_text FROM attempts WHERE runner_id=? ORDER BY created",
+            rows = c.execute("SELECT id, state, result, final_text FROM attempts WHERE runner_id=? ORDER BY created_at",
                              (self.registration["runner_id"],)).fetchall()
         return [{"id": r[0], "state": r[1], "result": terminal_result(r[2]), "text": r[3]} for r in rows]
 
     def events(self, aid):
         with self.api.app.state.store.read() as c:
             return [{"seq": r[0], "kind": r[1], "payload": json.loads(r[2])}
-                    for r in c.execute("SELECT seq, kind, payload_json FROM attempt_events WHERE attempt_id=? ORDER BY seq", (aid,))]
+                    for r in c.execute("SELECT seq, kind, payload FROM attempt_events WHERE attempt_id=? ORDER BY seq", (aid,))]
 
     def keys(self):
         with self.api.app.state.store.read() as c:
@@ -221,7 +222,70 @@ def computer(api, live, tmp_path, harness, setup, rust_binary):
 
 def reply_to(api, conversation, token="ana-test", bot="ops"):
     messages = get(api, f"conversations/{conversation}/messages", token)
-    return next((m for m in reversed(messages) if m["from_actor"] == "bot:" + bot), None)
+    return next((m for m in reversed(messages) if m["sender_id"] == "bot:" + bot), None)
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+@pytest.mark.parametrize("setup", [{"git": True, "env": {"FAKE_MEMORY_TIDY": "1"}}])
+def test_native_packet_runs_in_private_workspace_and_delivers_without_parent_turn(api, computer, tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from backend import memory_tidy_runs
+    from backend.tests.test_api import put
+    from backend.tests.test_memory_tidy import snapshot
+    from backend.tests.test_memory_tidy_controls import enable, entry
+    from backend.tests.test_memory_tidy_runs import commit
+
+    repo = tmp_path / "projects" / "bot-ops"
+    snap = snapshot()
+    for name, text in snap.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    git_env = {**os.environ, "GIT_AUTHOR_NAME": "Acme", "GIT_AUTHOR_EMAIL": "ops@acme.invalid",
+               "GIT_COMMITTER_NAME": "Acme", "GIT_COMMITTER_EMAIL": "ops@acme.invalid"}
+    for args in (["add", "-A"], ["commit", "-qm", "Synthetic memory"], ["push", "-q"]):
+        subprocess.run(["git", "-C", str(repo), *args], env=git_env, check=True, capture_output=True)
+    at = datetime(2026, 11, 2, 11, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr(H, "now", lambda: at.isoformat().replace("+00:00", "Z"))
+    computer.start()
+    enable(api)
+    model = "claude:claude-sonnet-5-5" if computer.harness == "claude" else "codex:gpt-6.1-sol"
+    put(api, "system-routines/memory_tidy", {"on": True, "pilots": [entry(model=model)]})
+    with api.app.state.store.transaction() as c:
+        commit(c)
+        memory_tidy_runs.admit(c, api.app.state.store.settings, at)
+
+    def offered():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT * FROM memory_tidy_passes WHERE status='offered'").fetchone()
+    row = until(offered, "native packet's checked attachment and reviewer card", timeout=45)
+    calls = computer.prompts()
+    assert len(calls) == 2, calls
+    if computer.harness == 'claude':
+        sessions = [call['argv'][call['argv'].index('--session-id') + 1] for call in calls]
+    else:
+        sessions = [call['thread'] for call in calls]
+    assert len(set(sessions)) == 2, "the verifier never resumes the editor's thread"
+    assert json.loads(calls[1]["prompt"])["rules"], "verification is a separately supplied rule packet"
+    assert "agent" not in json.loads(calls[0]["prompt"])
+    for call in calls:
+        assert call["authority_env_names"] == [], "packet process receives no team or repository authority"
+        custody = call["packet_custody"]
+        assert custody == {"uid": custody["uid"], "owner": custody["uid"], "mode": 0o700,
+                           "accessible": True, "files": []}, custody
+        assert call["cwd"] != str(repo) and Path(call["cwd"]).name.startswith("tico-tidy-")
+        assert not any(call["env"].get(k) for k in ("HUB_TOKEN", "HUB_API_URL", "HUB_BOT", "TICO_CRED_SOCKET"))
+        assert "Do not send to the child." not in call["prompt"] and "Outside text must not reach the child." not in call["prompt"]
+    assert row["cost_usd"] > 0
+    with api.app.state.store.read() as c:
+        assert c.execute('SELECT output_tokens FROM turns WHERE task_id=?', (row['check_task_id'],)).fetchone()[0] == 4, "both provider turns count toward pilot spend"
+        assert H.task(c, row["parent_task_id"])["status"] == H.task(c, row["check_task_id"])["status"] == "closed"
+        assert c.execute("SELECT count(*) FROM memory_tidy_cards WHERE pass_id=?", (row["id"],)).fetchone()[0] == 1
+        assets = c.execute("SELECT blob_id FROM task_assets WHERE task_id=?", (row["check_task_id"],)).fetchall()
+        assert len(assets) == 1
+        assert not c.execute("SELECT 1 FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone(), "no parent turn"
+    download = api.get('/api/v2/files/' + assets[0]['blob_id'], headers=headers())
+    assert download.status_code == 200 and download.content, "attachment stays readable after close"
 
 
 def add_bot(api, computer, tmp_path, slug, bot=None):
@@ -230,7 +294,7 @@ def add_bot(api, computer, tmp_path, slug, bot=None):
     config = {"name": slug, "runtime": computer.runtime, "harness": computer.harness, "model": MODELS[computer.harness],
               "status": "active", **(bot or {})}
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(config), slug))
+        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(config), slug))
     repo = tmp_path / "projects" / f"bot-{slug}"
     repo.mkdir(parents=True)
     (repo / "AGENT.md").write_text(f"# {slug.title()}\n\nAnswer the Acme team.\n")
@@ -252,7 +316,7 @@ def terminal_result(raw):
 
 def bot_attempts(api, computer, bot):
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT id, result_json FROM attempts WHERE runner_id=? AND bot=? ORDER BY created",
+        rows = c.execute("SELECT id, result FROM attempts WHERE runner_id=? AND bot_id=? ORDER BY created_at",
                          (computer.registration["runner_id"], bot)).fetchall()
     return [{"id": r[0], "result": terminal_result(r[1])} for r in rows]
 
@@ -362,7 +426,7 @@ def test_returning_task_model_receives_the_completed_fallback_checkpoint(api, co
     assert work in final["prompt"] and older not in final["prompt"]
 
 
-def test_a_chat_turn_streams_completes_and_resumes_the_bot_thread(api, computer):
+def test_a_chat_turn_streams_completes_and_resumes_its_own_thread_only(api, computer):
     computer.start()
     first = post(api, "chat/ops", {"text": "Please answer locally"})
     answer = until(lambda: reply_to(api, first["conversation_id"]), "the bot's reply")
@@ -377,35 +441,42 @@ def test_a_chat_turn_streams_completes_and_resumes_the_bot_thread(api, computer)
         usage = attempt["result"].get("usage") or {}
         assert usage.get("output_tokens") == 2 and usage.get("runtime") == computer.runtime
 
-    # Another person's conversation continues the bot's one thread, told only what is new.
-    second = post(api, "chat/ops", {"text": "A separate question from Ben"}, token="ben-test")
-    until(lambda: reply_to(api, second["conversation_id"], "ben-test"), "the second reply")
+    # The same thread's next turn resumes its session, told only what is new; another person's private thread has its own.
+    same = post(api, "chat/ops", {"text": "And one more thing"})
+    assert same["conversation_id"] == first["conversation_id"]
+    until(lambda: len([a for a in computer.attempts() if a["result"]]) == 2, "the follow-up's reply")
+    other = post(api, "chat/ops", {"text": "A separate question from Ben"}, token="ben-test")
+    assert other["conversation_id"] != first["conversation_id"]
+    until(lambda: reply_to(api, other["conversation_id"], "ben-test"), "the other thread's reply")
     # Only this harness's own calls: the runner's background Codex usage read logs to the same file at any moment.
     calls = computer.prompts() if computer.harness in ("claude", "pi", "cursor", "grok") else \
         [c for c in computer.calls() if c["harness"] == computer.harness]
     if computer.harness in ("claude", "gemini"):
         session = calls[0]["argv"][calls[0]["argv"].index("--session-id") + 1]
-        assert calls[-1]["argv"][calls[-1]["argv"].index("--resume") + 1] == session
+        assert calls[1]["argv"][calls[1]["argv"].index("--resume") + 1] == session
+        assert "--resume" not in calls[-1]["argv"] and session not in calls[-1]["argv"]
     elif computer.harness == "antigravity":
         # Another conversation is another warm scope: its own process and home, so a provider conversation of its own.
+        assert calls[1]["pid"] == calls[0]["pid"]
         assert calls[-1]["pid"] != calls[0]["pid"] and all("--conversation" not in c["argv"] for c in calls)
         assert calls[-1]["argv"][calls[-1]["argv"].index("--model") + 1] == "gemini-3.8-flash-low"
     elif computer.harness in ("pi", "cursor"):
-        # Pi's session id and Cursor's chat id are the thread: every turn names the first one.
+        # Pi's session id and Cursor's chat id are the thread: its turns name the first one, another thread its own.
         option = "--session-id" if computer.harness == "pi" else "--resume"
-        assert len(calls) == 2 and len({call["argv"][call["argv"].index(option) + 1] for call in calls}) == 1
+        named = [call["argv"][call["argv"].index(option) + 1] for call in calls]
+        assert len(calls) == 3 and named[0] == named[1] != named[2]
         if computer.harness == "pi":
             assert calls[0]["env"]["OPENROUTER_API_KEY"] == GRANTED_KEYS["pi"][2]
             assert calls[0]["argv"][calls[0]["argv"].index("--model") + 1] == "moonshotai/kimi-k3"
     elif computer.harness == "grok":
         # The next turn loads the ACP session the first made; a tool permission Grok asks for is always allowed.
-        assert len(calls) == 2 and calls[0]["session"] == calls[1]["session"]
+        assert len(calls) == 3 and calls[0]["session"] == calls[1]["session"] != calls[2]["session"]
         assert any(c.get("method") == "session/load" and c["session"] == calls[0]["session"] for c in computer.calls())
         assert calls[0]["permission"] == {"outcome": "selected", "optionId": "always"}
     elif computer.harness == "musecode":
-        # Every turn names the one Muse session Tico made for the thread; the launcher never updates itself.
-        sessions = {call["argv"][call["argv"].index("--session-id") + 1] for call in calls}
-        assert len(calls) == 2 and len(sessions) == 1
+        # Each thread's turns name the one Muse session Tico made for it; the launcher never updates itself.
+        named = [call["argv"][call["argv"].index("--session-id") + 1] for call in calls]
+        assert len(calls) == 3 and named[0] == named[1] != named[2]
         assert all(call["env"]["MUSE_NO_AUTO_UPDATE"] == "1" for call in calls)
         # Sessions and their locks go to Tico's own data folder, never ~/.local/share (Dev 329).
         data = computer.config.parent / f"state-{computer.registration['runner_id']}" / "musecode" / "data"
@@ -413,14 +484,16 @@ def test_a_chat_turn_streams_completes_and_resumes_the_bot_thread(api, computer)
         assert (data / "muse" / "sessions").is_dir()
     else:
         starts = [c for c in calls if c.get("method") in ("thread/start", "thread/resume")]
-        assert starts[-1] == {"harness": "codex", "method": "thread/resume", "thread": starts[0]["thread"]}
+        assert starts[1] == {"harness": "codex", "method": "thread/resume", "thread": starts[0]["thread"]}
+        assert starts[2]["method"] == "thread/start" and starts[2]["thread"] != starts[0]["thread"]
+    assert "Please answer locally" not in computer.prompts()[1]["prompt"]
     assert "Please answer locally" not in computer.prompts()[-1]["prompt"]
 
 
 def started_threads(api, computer):
     """The provider thread each of this computer's turns reported when it started, oldest first."""
     with api.app.state.store.read() as c:
-        return [r[0] for r in c.execute("SELECT thread_id FROM attempts WHERE runner_id=? ORDER BY created",
+        return [r[0] for r in c.execute("SELECT thread_id FROM attempts WHERE runner_id=? ORDER BY created_at",
                                         (computer.registration["runner_id"],))]
 
 
@@ -437,6 +510,116 @@ def from_an_old_hub(monkeypatch):
         return out
     monkeypatch.setattr(Execution, "claim", without_epochs)
     return claim
+
+
+def from_a_hub_before_threads(monkeypatch):
+    """Claims as a Hub from before native threads: no root or audience class, so every chat turn on `session: bot` keys
+    the old shared thread. Returns the undo."""
+    from backend.execution import Execution
+    claim = Execution.claim
+
+    def without_roots(self, *args, **kwargs):
+        out = claim(self, *args, **kwargs)
+        if isinstance(out, dict) and isinstance(out.get("attempt"), dict):
+            for key in ("root_id", "audience_class"):
+                (out["attempt"].get("conversation") or {}).pop(key, None)
+        return out
+    monkeypatch.setattr(Execution, "claim", without_roots)
+    return lambda: monkeypatch.setattr(Execution, "claim", claim)
+
+
+@pytest.mark.parametrize("harness", ["claude"])
+@pytest.mark.parametrize("setup", [{"bot": {"session": "bot"}}])
+def test_the_first_turn_after_the_update_gets_its_own_threads_history_and_no_other(api, computer, monkeypatch):
+    """A `session: bot` bot with an old shared thread and history. Its first chat turns after the update start fresh with
+    the conversation's latest messages: a public thread's holds no DM text and nothing kept from its readers; a DM's its
+    own. A task turn stays on the old thread."""
+    settled_count = lambda: len([a for a in computer.attempts() if a["result"]])
+    new_hub = from_a_hub_before_threads(monkeypatch)
+    computer.start()
+    dm = post(api, "chat/ops", {"text": "Private words from Ana"})["conversation_id"]
+    until(lambda: settled_count() == 1, "the old DM reply")
+    public = post(api, "threads", {"title": "Launch", "audience": "company", "body": "Earlier words in public"})
+    until(lambda: settled_count() >= 1, "the thread")
+    earlier = post(api, f"threads/{public['id']}/messages", {"text": "@ops please read the launch plan"})
+    until(lambda: settled_count() == 2, "the old public reply")
+    old_session = computer.prompts()[0]["argv"][computer.prompts()[0]["argv"].index("--session-id") + 1]
+    assert computer.prompts()[1]["argv"][computer.prompts()[1]["argv"].index("--resume") + 1] == old_session
+    kept = post(api, f"threads/{public['id']}/messages", {"text": "Kept for its old readers"})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET legacy_audience='shared:finance' WHERE id=?", (kept["id"],))
+    assert earlier["id"]
+    new_hub()
+
+    post(api, f"threads/{public['id']}/messages", {"text": "@ops what is next?"})
+    until(lambda: settled_count() == 3, "the first public turn after the update")
+    first_public = computer.prompts()[-1]
+    assert "--resume" not in first_public["argv"], "the old shared thread is not carried into a public session"
+    assert "first turn on a new session" in first_public["prompt"]
+    assert "Earlier words in public" in first_public["prompt"] and "please read the launch plan" in first_public["prompt"]
+    assert "Private words from Ana" not in first_public["prompt"]
+    assert "Kept for its old readers" not in first_public["prompt"]
+
+    post(api, f"threads/{public['id']}/messages", {"text": "@ops and after that?"})
+    until(lambda: settled_count() == 4, "the second public turn")
+    second_public = computer.prompts()[-1]
+    assert "--resume" in second_public["argv"] and "first turn on a new session" not in second_public["prompt"]
+    assert "Kept for its old readers" not in second_public["prompt"]
+
+    post(api, "chat/ops", {"text": "Back to our chat"})
+    until(lambda: settled_count() == 5, "the first DM turn after the update")
+    first_dm = computer.prompts()[-1]
+    assert reply_to(api, dm) and "--resume" not in first_dm["argv"]
+    assert "Private words from Ana" in first_dm["prompt"] and "Earlier words in public" not in first_dm["prompt"]
+
+    # Task turns stay on the old shared thread, with no pack.
+    task = post(api, "tasks", {"title": "Check the launch date", "body": "Look it up", "owner": "bot:ops"})
+    until(lambda: settled_count() == 6, "the task turn")
+    task_turn = computer.prompts()[-1]
+    assert task["id"] and task_turn["argv"][task_turn["argv"].index("--resume") + 1] == old_session
+    assert "first turn on a new session" not in task_turn["prompt"]
+
+
+@pytest.mark.parametrize("harness", ["claude"])
+def test_a_default_bots_first_public_turn_after_the_update_gets_that_threads_history(api, computer, monkeypatch):
+    """No `session:`: chat that shared the old thread now keys `root:<root>:public`, fresh once, with that root's history."""
+    settled_count = lambda: len([a for a in computer.attempts() if a["result"]])
+    new_hub = from_a_hub_before_threads(monkeypatch)
+    computer.start()
+    post(api, "chat/ops", {"text": "Private words from Ana"})
+    until(lambda: settled_count() == 1, "the old DM reply")
+    public = post(api, "threads", {"title": "Launch", "audience": "company", "body": "Earlier words in public"})
+    new_hub()
+    post(api, f"threads/{public['id']}/messages", {"text": "@ops what is next?"})
+    until(lambda: settled_count() == 2, "the first public turn")
+    turn = computer.prompts()[-1]
+    assert "--resume" not in turn["argv"] and "first turn on a new session" in turn["prompt"]
+    assert "Earlier words in public" in turn["prompt"] and "Private words from Ana" not in turn["prompt"]
+
+
+def test_a_public_session_hears_a_report_on_an_open_task_and_not_one_on_a_private_task(api, computer):
+    settled_count = lambda: len([a for a in computer.attempts() if a["result"]])
+    computer.start()
+    public = post(api, "threads", {"title": "Launch", "audience": "company", "body": "Launch week"})
+    post(api, f"threads/{public['id']}/messages", {"text": "@ops what is next?"})
+    until(lambda: settled_count() == 1, "the first public turn")
+    tasks = [post(api, "tasks", {"title": title, "body": "Look into it", "owner": "bot:ops", "private": private})
+             for title, private in (("Book the venue", False), ("Acme acquisition", True))]
+    until(lambda: settled_count() == 3, "the task turns")
+    with api.app.state.store.transaction() as c:
+        for task in tasks:
+            H.event(c, H.KEEPER, "task.started_in", task["id"], {"conversation": public["id"]})
+            assert H.task_report(c, H.task(c, task["id"]), "blocked", "Waiting on the owner"), task["title"]
+
+    post(api, f"threads/{public['id']}/messages", {"text": "@ops and now?"})
+    until(lambda: settled_count() == 4, "the public turn after the reports")
+    prompt = computer.prompts()[-1]["prompt"]
+    assert "and now?" in prompt
+    assert "Book the venue: blocked." in prompt, "the filter must not hide a report on an open task"
+    assert "Acme acquisition" not in prompt
+    # The flag is on the turn's page only: no reader's page says a message is narrower than its thread.
+    page = computer.api.get(f"/api/v2/threads/{public['id']}/timeline", headers=headers())
+    assert page.status_code == 200 and "and now?" in page.text and "audience_limited" not in page.text, page.text
 
 
 @pytest.mark.parametrize("old_hub", [False, True])
@@ -500,7 +683,7 @@ def test_a_clear_made_after_an_upgrade_before_the_chats_next_turn_still_starts_a
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
-def test_after_one_persons_clear_another_persons_chat_on_the_shared_thread_starts_a_new_one_too(api, computer):
+def test_one_persons_clear_starts_their_chat_anew_and_leaves_another_persons_chat_on_its_own_thread(api, computer):
     computer.start()
     done = lambda n: len([a for a in computer.attempts() if a["result"]]) == n  # noqa: E731
     ana = post(api, "chat/ops", {"text": "Remember the Acme code word"})["conversation_id"]
@@ -508,19 +691,18 @@ def test_after_one_persons_clear_another_persons_chat_on_the_shared_thread_start
     ben = post(api, "chat/ops", {"text": "Ben's question"}, token="ben-test")["conversation_id"]
     until(lambda: done(2), "Ben's reply")
     assert computer.api.post("/api/employees/ops/session/clear", json={}, headers=headers()).status_code == 200
-    # Ben's chat runs first after Ana's Clear: the thread they shared is not resumed, and his own history stays.
     post(api, "chat/ops", {"text": "Ben again"}, token="ben-test")
     until(lambda: done(3), "Ben's reply after Ana's clear")
-    # Ana's next turn continues that new thread, not a third.
     post(api, "chat/ops", {"text": "Ana starts over"})
     until(lambda: done(4), "Ana's reply after her clear")
     assert [a["result"]["outcome"] for a in computer.attempts()] == ["completed"] * 4
     first, second, third, fourth = started_threads(api, computer)
-    assert second == first and third and third != first and fourth == third, (first, second, third, fourth)
+    # Each person's DM is its own session (contract section 8): Ana's Clear reaches only hers.
+    assert first and second != first and third == second and fourth not in (first, second), (first, second, third, fourth)
     assert ana != ben
     if computer.harness == "codex":
         starts = [c for c in computer.calls() if c.get("harness") == "codex" and c.get("method") in ("thread/start", "thread/resume")]
-        assert [c["method"] for c in starts] == ["thread/start", "thread/resume", "thread/start", "thread/resume"]
+        assert [c["method"] for c in starts] == ["thread/start", "thread/start", "thread/resume", "thread/start"]
 
 
 @pytest.mark.parametrize("harness", ["gemini", "antigravity"])
@@ -531,7 +713,7 @@ def test_a_second_message_reuses_the_warm_process_or_resumes_the_session(api, co
     second = post(api, "chat/ops", {"text": "and once more"})
     assert second["conversation_id"] == first["conversation_id"]
     until(lambda: len([m for m in get(api, f"conversations/{first['conversation_id']}/messages")
-                       if m["from_actor"] == "bot:ops"]) == 2, "the second reply")
+                       if m["sender_id"] == "bot:ops"]) == 2, "the second reply")
     calls = computer.prompts()
     tokens = {a["id"]: a for a in computer.attempts()}
     assert [a["result"]["outcome"] for a in tokens.values()] == ["completed", "completed"]
@@ -785,8 +967,9 @@ def test_a_fallback_chain_stops_before_a_third_usage_segment(api, computer):
     assert [s["runtime"] for s in made["segments"]] == segments
 
 
-# Steering and subscription profiles are Claude Code and Codex features (runner-rs/src/profiles.rs, steer in drive).
-@pytest.mark.parametrize("harness", ["claude", "codex"])
+# Steering is a Claude Code, Codex and pi feature (steer in drive); subscription profiles are Claude Code and Codex
+# ones (runner-rs/src/profiles.rs).
+@pytest.mark.parametrize("harness", ["claude", "codex", "pi"])
 @pytest.mark.parametrize("setup", [{"env": {"FAKE_SLOW": "8"}}])
 def test_a_message_sent_mid_turn_is_steered_into_it_once(api, computer):
     computer.start()
@@ -839,7 +1022,7 @@ def test_the_signed_in_account_reaches_readiness_without_anything_token_like(api
 
     def account():
         with api.app.state.store.read() as c:
-            row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (computer.registration["runner_id"],)).fetchone()
+            row = c.execute("SELECT readiness FROM runners WHERE id=?", (computer.registration["runner_id"],)).fetchone()
         return json.loads(row[0] or "{}").get("runtimes", {}).get(computer.runtime, {}).get("account")
 
     got = until(account, "the account in readiness", timeout=40)
@@ -850,13 +1033,13 @@ def test_the_signed_in_account_reaches_readiness_without_anything_token_like(api
     else:
         assert got == {"email": "ops@acme.example", "plan": "max", "org": "Acme Ltd"}
     with api.app.state.store.read() as c:
-        stored = json.dumps([list(r) for r in c.execute("SELECT readiness_json FROM runners")])
+        stored = json.dumps([list(r) for r in c.execute("SELECT readiness FROM runners")])
     assert "sk-ant-oat01" not in stored and "acme-org-0001" not in stored
 
 
 def runtime_row(api, computer):
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (computer.registration["runner_id"],)).fetchone()
+        row = c.execute("SELECT readiness FROM runners WHERE id=?", (computer.registration["runner_id"],)).fetchone()
     return json.loads(row[0] or "{}").get("runtimes", {}).get(computer.runtime, {})
 
 
@@ -1085,7 +1268,7 @@ def test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_it
     git(base, "remote", "set-url", "origin", "https://github.com/org/product.git")
     git(base, "worktree", "add", "-q", "-b", "tico/feature", str(projects / "work" / "product"))
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
+        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
                   (encode({"name": "ops", "runtime": computer.harness, "model": MODELS[computer.harness],
                            "status": "active", "session": "task"}),))
     computer.start()
@@ -1100,11 +1283,11 @@ def test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_it
     def certified():
         # Each config change is a full readiness pass, which inspects the computer's worktrees.
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.touched',?) WHERE bot='ops'",
+            c.execute("UPDATE bot_config SET config=json_set(config,'$.touched',?) WHERE bot='ops'",
                       (time.monotonic(),))
-            row = c.execute("SELECT state, detail_json FROM task_links WHERE id=?", (link["link_id"],)).fetchone()
+            row = c.execute("SELECT state, detail FROM task_links WHERE id=?", (link["link_id"],)).fetchone()
         time.sleep(0.5)
-        return row["state"] == "present" and json.loads(row["detail_json"])["checkout_state"] == "ready"
+        return row["state"] == "present" and json.loads(row["detail"])["checkout_state"] == "ready"
     until(certified, "the attached worktree reported ready", timeout=60)
 
     post(api, f"tasks/{task['id']}/chat", {"text": "REMEMBER what the build taught you"})
@@ -1163,7 +1346,7 @@ def test_a_completed_turn_publishes_the_bots_report_as_a_tico_file(api, computer
 
     def published():
         with api.app.state.store.read() as c:
-            return [tuple(r) for r in c.execute("SELECT title, kind FROM bot_files WHERE bot='ops'")]
+            return [tuple(r) for r in c.execute("SELECT title, kind FROM bot_files WHERE bot_id='ops'")]
     assert until(published, "the published file") == [("acme.md", "document")]
 
 
@@ -1174,11 +1357,11 @@ def test_python_m_runner_run_is_the_rust_runner_and_says_so_in_readiness(api, li
     try:
         machine.start()
         with api.app.state.store.read() as c:
-            row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (machine.registration["runner_id"],)).fetchone()
+            row = c.execute("SELECT readiness FROM runners WHERE id=?", (machine.registration["runner_id"],)).fetchone()
         from runner.engine import source_id
         reported = json.loads(row[0])["engine"]
         assert (reported["name"], reported["build"]) == ("rust", source_id(ROOT))
-        assert "Tico runner 0" in machine.output.read_text() and "(rust) started" in machine.output.read_text()
+        assert re.search(r"Tico runner \S+ \(rust\) started", machine.output.read_text())
     finally:
         machine.stop()
 

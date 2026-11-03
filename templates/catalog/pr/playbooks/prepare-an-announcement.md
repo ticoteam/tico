@@ -28,11 +28,14 @@ Under 500 words.
 
 ## 4. Choose the reporters and write the pitches
 
+Read `skills/pick-reporters-for-a-story/SKILL.md`, then `skills/write-a-reporter-pitch/SKILL.md` for each pitch.
 Five to ten from `knowledge/media-list.md` whose recent work fits the angle. One pitch each in
 `reports/<announcement>/pitches.md`: why them (their article, dated), the news in one line, what you
 can offer, the embargo if the owner agreed one. Under 150 words each.
 
 ## 5. Brief the spokesperson
+
+If a known risk could land on this announcement, use `skills/write-a-holding-statement/SKILL.md` and link it.
 
 `reports/<announcement>/briefing.md`: the three messages, likely questions with suggested answers,
 what not to discuss, numbers they may use.

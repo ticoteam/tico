@@ -45,7 +45,7 @@ class ImporterService:
         rows = (self.client.get("runners/importers") or {}).get("importers") or []
         return [r["source"] for r in rows if isinstance(r, dict) and r.get("source") in REGISTRY]
 
-    def report(self, source, **body):
+    def report(self, source, /, **body):
         try:
             self.client.post("imports/sources/" + source + "/status", body)
         except Exception:

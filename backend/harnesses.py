@@ -72,6 +72,13 @@ def harness_caps(harness, runtime=None):
     return manifests.caps(harness) or manifests.caps(runtime)
 
 
+def bot_keyed(runtime):
+    """Whether `runtime` signs each bot in with that bot's own key (`api_keys = "bot"`: pi and the Gemini CLI). A
+    provider's refusal of such a key is that bot's alone, as the runner's signin.bot_keyed decides it."""
+    return bool(runtime) and any(row["runtime"] == runtime and row["capabilities"].get("api_keys") == "bot"
+                                 for row in HARNESS_CATALOG)
+
+
 def bot_key(config, runtime=None):
     """The API key the bot must hold as its own Credential: the first key of its primary or fallback harness whose
     keys belong to each bot (`api_keys = "bot"`, the Gemini CLI and pi), else ''. With `runtime`, only the

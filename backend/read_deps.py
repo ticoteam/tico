@@ -54,7 +54,7 @@ TURN = ("id", "meeting_id", "bot")
 
 def _turn_rooms(side):
     """The rooms of the keeper inputs naming this turn, as nodes; the partial index holds only such inputs."""
-    turn = "json_extract(m.refs_json,'$.live_meeting.turn_id')"
+    turn = "json_extract(m.refs,'$.live_meeting.turn_id')"
     return f"SELECT 'c:'||m.conversation_id FROM messages m WHERE {turn} IS NOT NULL AND {turn}={side}.id"
 
 
@@ -62,7 +62,7 @@ def _changed(columns):
     return " OR ".join(f"OLD.{c} IS NOT NEW.{c}" for c in columns)
 
 
-MESSAGE = ("id", "conversation_id", "refs_json", "in_reply_to", "from_actor", "to_actor")
+MESSAGE = ("id", "conversation_id", "refs", "in_reply_to", "sender_id", "recipient_id")
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS read_index(key TEXT PRIMARY KEY) WITHOUT ROWID",
     "CREATE TABLE IF NOT EXISTS read_deps(dep TEXT NOT NULL, key TEXT NOT NULL, PRIMARY KEY(dep, key)) WITHOUT ROWID",
@@ -72,8 +72,8 @@ SCHEMA = (
     "CREATE TRIGGER IF NOT EXISTS read_deps_message_insert AFTER INSERT ON messages BEGIN "
     "INSERT OR IGNORE INTO read_dirty VALUES('m:'||NEW.id); " + _touch("'m:'||NEW.id") + _touch("'t:'||NEW.id") +
     "INSERT OR IGNORE INTO read_dirty SELECT key FROM read_deps WHERE dep='c:'||NEW.conversation_id "
-    "AND instr(coalesce(NEW.refs_json,''),'live_meeting')>0; "
-    "DELETE FROM read_index WHERE instr(coalesce(NEW.refs_json,''),'live_meeting')>0 AND key IN "
+    "AND instr(coalesce(NEW.refs,''),'live_meeting')>0; "
+    "DELETE FROM read_index WHERE instr(coalesce(NEW.refs,''),'live_meeting')>0 AND key IN "
     "(SELECT key FROM read_deps WHERE dep='c:'||NEW.conversation_id); END",
     f"CREATE TRIGGER IF NOT EXISTS read_deps_message_update AFTER UPDATE OF {','.join(MESSAGE)} ON messages "
     f"WHEN {_changed(MESSAGE)} BEGIN INSERT OR IGNORE INTO read_dirty VALUES('m:'||NEW.id); "
@@ -97,8 +97,8 @@ SCHEMA = (
     + _touch("'t:'||OLD.id") + _touch("'a:'||OLD.carried_by") + "END",
     "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_insert AFTER INSERT ON attempts BEGIN "
     "INSERT OR IGNORE INTO read_dirty VALUES('a:'||NEW.id); " + _touch("'a:'||NEW.id") + "END",
-    "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_update AFTER UPDATE OF id, bot, job_id, state ON attempts "
-    f"WHEN {_changed(('id', 'bot', 'job_id', 'state'))} BEGIN " + _touch("'a:'||OLD.id") + _touch("'a:'||NEW.id") + "END",
+    "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_update AFTER UPDATE OF id, bot_id, job_id, state ON attempts "
+    f"WHEN {_changed(('id', 'bot_id', 'job_id', 'state'))} BEGIN " + _touch("'a:'||OLD.id") + _touch("'a:'||NEW.id") + "END",
     "CREATE TRIGGER IF NOT EXISTS read_deps_attempt_delete AFTER DELETE ON attempts BEGIN " + _touch("'a:'||OLD.id") + "END",
     "CREATE TRIGGER IF NOT EXISTS read_deps_input_insert AFTER INSERT ON attempt_inputs BEGIN "
     + _touch("'a:'||NEW.attempt_id") + "END",
@@ -171,29 +171,43 @@ class Walk:
         index.string_sources = index._string_sources
         index.message_sources = index._message_sources
         index.attempt_sources = self._attempt
+        # aid -> (sources, nodes). Every message of a turn names its run, and a run's state change re-queues them all:
+        # each walked the run again, two events reads a message (1.4M a day on Tico Team). A Walk lives for one write
+        # transaction (`_settle_some`), where no source row changes, so a run is walked once and its nodes replayed.
+        self.runs = {}
 
     def _message(self, mid):
         self.nodes.add("m:" + str(mid))
         return H.message(self.c, mid, include_deleted=True)
 
     def _attempt(self, aid):
-        self.nodes.add("a:" + str(aid))
-        sources = self.index._attempt_sources(aid)
-        # The meeting check also walks each input moved off this run (live_privacy `_attempt_from`), its room and its
-        # ancestors, where the task walk only reads the moved event: walk them here so a change there unsettles the run.
-        for detail, in self.c.execute("SELECT detail_json FROM events WHERE action='attempt.input.moved' AND target=?",
-                                      (aid,)):
-            detail = H._json(detail, {}) or {}
-            if isinstance(detail, dict) and isinstance(detail.get("message_id"), str):
-                self.index.sources(self._message(detail["message_id"]), include_run=False)
-        return sources
+        known = self.runs.get(aid)
+        if known is None:
+            outer = set(self.nodes)
+            self.nodes.clear()          # the same set the index's recorders hold, so cleared, not replaced
+            try:
+                self.nodes.add("a:" + str(aid))
+                sources = self.index._attempt_sources(aid)
+                # The meeting check also walks each input moved off this run (live_privacy `_attempt_from`), its room
+                # and its ancestors, where the task walk only reads the moved event: walk them here so a change there
+                # unsettles the run.
+                for detail, in self.c.execute("SELECT detail FROM events WHERE action='attempt.input.moved' "
+                                              "AND target=?", (aid,)):
+                    detail = H._json(detail, {}) or {}
+                    if isinstance(detail, dict) and isinstance(detail.get("message_id"), str):
+                        self.index.sources(self._message(detail["message_id"]), include_run=False)
+                known = self.runs[aid] = (sources, frozenset(self.nodes))
+            finally:
+                self.nodes.update(outer)
+        self.nodes.update(known[1])
+        return known[0]
 
     def message(self, row):
         """(settled, nodes) for one messages row."""
         self.nodes.clear()
         self.nodes.add("m:" + row["id"])
         self.nodes.add("c:" + str(row["conversation_id"]))
-        msg = {"id": row["id"], "conversation_id": row["conversation_id"], "refs_json": row["refs_json"],
+        msg = {"id": row["id"], "conversation_id": row["conversation_id"], "refs": row["refs"],
                "in_reply_to": row["in_reply_to"]}
         try:
             self.index.sources(msg)
@@ -212,12 +226,13 @@ class Walk:
         return not meeting, set(self.nodes)
 
 
-def settle(conn, keys):
-    """Walk these rows now and record what they touched; the caller holds the write transaction."""
+def settle(conn, keys, walk=None):
+    """Walk these rows now and record what they touched; the caller holds the write transaction. `walk`: one Walk
+    for the whole transaction, so its runs are walked once."""
     keys = list(dict.fromkeys(keys))
     if not keys:
         return
-    walk = Walk(conn)
+    walk = walk or Walk(conn)
     for start in range(0, len(keys), 500):
         chunk = keys[start:start + 500]
         marks = ",".join("?" * len(chunk))
@@ -228,7 +243,7 @@ def settle(conn, keys):
     messages = [k[2:] for k in keys if k.startswith("m:")]
     for start in range(0, len(messages), 500):
         chunk = messages[start:start + 500]
-        for row in conn.execute("SELECT id,conversation_id,refs_json,in_reply_to FROM messages WHERE id IN (%s)"
+        for row in conn.execute("SELECT id,conversation_id,refs,in_reply_to FROM messages WHERE id IN (%s)"
                                 % ",".join("?" * len(chunk)), chunk):
             ok, nodes = walk.message(row)
             deps.extend((node, "m:" + row["id"]) for node in nodes)
@@ -267,10 +282,10 @@ def _settle_some(conn, keys, gate=None):
     settled = [0]
 
     def work():
-        start = time.monotonic()
+        start, walk = time.monotonic(), Walk(conn)
         while settled[0] < len(keys):
             piece = keys[settled[0]:settled[0] + SLICE]
-            settle(conn, piece)
+            settle(conn, piece, walk)
             settled[0] += len(piece)
             if (time.monotonic() - start) * 1000 >= HOLD_MS:
                 break
@@ -278,11 +293,15 @@ def _settle_some(conn, keys, gate=None):
     return settled[0]
 
 
-def sweep(conn, batch=BATCH, span=SPAN, stop=None, gate=None):
+def sweep(conn, batch=BATCH, span=SPAN, stop=None, gate=None, searched=None):
     """Settle the queued rows, then every message and run no pass has walked yet (a row any pass walked has a node of
     its own in `read_deps`). Each `batch` is walked and written in short write transactions (`_settle_some`), each
     admitted through `gate` (the server's writer queue) when one is given; the search reads `span` rowids at a time
-    outside the write lock. Returns how many rows it walked."""
+    outside the write lock. Returns how many rows it walked.
+
+    `searched` ({table: rowid}), kept by the caller between passes, is how far a pass has walked every row. A walked
+    row keeps its node, and a row inserted later is queued by its trigger, so the next pass searches only past it
+    rather than every row again (about 90 ms per 20,000 rows, each pass)."""
     def stopped():
         return stop is not None and stop.is_set()
     done = 0
@@ -292,7 +311,7 @@ def sweep(conn, batch=BATCH, span=SPAN, stop=None, gate=None):
             break
         done += _settle_some(conn, keys, gate)
     for table, prefix in (("messages", "m:"), ("attempts", "a:")):
-        after = 0
+        after = (searched or {}).get(table, 0)
         top = conn.execute(f"SELECT coalesce(max(rowid), 0) FROM {table}").fetchone()[0]
         while after < top and not stopped():
             keys = [prefix + r[0] for r in conn.execute(
@@ -304,16 +323,22 @@ def sweep(conn, batch=BATCH, span=SPAN, stop=None, gate=None):
                     return done
                 settled = _settle_some(conn, keys[:batch], gate)
                 keys, done = keys[settled:], done + settled
+            if searched is not None:
+                searched[table] = min(after, top)
     return done
 
 
 def loop(store, stop, seconds=10):
     """`sweep` on its own connection beside the server until it stops; a failed pass is retried on the next."""
     import logging
+    searched, file = {}, None
     while not stop.is_set():
         try:
             with store.read() as conn:
-                sweep(conn, stop=stop, gate=store.writer)
+                if getattr(conn, "pool_file", None) != file:
+                    # A restored or replaced database file is searched from its first row again.
+                    searched, file = {}, getattr(conn, "pool_file", None)
+                sweep(conn, stop=stop, gate=store.writer, searched=searched)
         except Exception as exc:
             logging.getLogger("tico.read_deps").error("Settling history reads failed: %s", type(exc).__name__)
         stop.wait(seconds)

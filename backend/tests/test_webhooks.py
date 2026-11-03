@@ -76,12 +76,12 @@ def run(api, net, rehearsal=False):
 
 def due(api):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE webhook_sends SET next_attempt='1970-01-01T00:00:00.000000Z' WHERE state='ready'")
+        c.execute("UPDATE webhook_sends SET next_attempt_at='1970-01-01T00:00:00.000000Z' WHERE state='ready'")
 
 
 def sends(api, hook_id=None):
     with api.app.state.store.read() as c:
-        sql = "SELECT * FROM webhook_sends" + (" WHERE webhook_id=?" if hook_id else "") + " ORDER BY created, id"
+        sql = "SELECT * FROM webhook_sends" + (" WHERE webhook_id=?" if hook_id else "") + " ORDER BY created_at, id"
         return [dict(r) for r in c.execute(sql, (hook_id,) if hook_id else ())]
 
 
@@ -161,7 +161,7 @@ def test_retries_follow_the_schedule_then_give_up_once_and_say_so_once_a_day(api
     assert all(r["last_status"] == 302 for r in rows)                 # a redirect is a failed try and is never followed
     assert {r.url.host for r in net.seen} == {"93.184.216.34"}
     with api.app.state.store.read() as c:
-        events = c.execute("SELECT detail_json FROM events WHERE action='webhook.exhausted'").fetchall()
+        events = c.execute("SELECT detail FROM events WHERE action='webhook.exhausted'").fetchall()
         notices = c.execute("SELECT id FROM tasks WHERE title LIKE 'Webhook % is not receiving events'").fetchall()
     assert len(events) == 2 and "order" not in events[0][0] and len(notices) == 1
     health = get(api, "health")["checks"]
@@ -179,7 +179,7 @@ def test_an_abort_answer_cancels_and_a_server_error_does_not(api, net):
     post(api, f"webhooks/{made['id']}/send", {"type": "custom.a"})
     net.reply = lambda request: httpx.Response(410, headers={"webhook-delivery": "abort-message"})
     run(api, net)
-    assert sends(api)[0]["state"] == "cancelled"
+    assert sends(api)[0]["state"] == "canceled"
     post(api, f"webhooks/{made['id']}/send", {"type": "custom.b"})
     net.reply = lambda request: httpx.Response(503)
     run(api, net)
@@ -281,6 +281,16 @@ def test_a_private_task_is_never_published_to_an_endpoint_whose_owner_cannot_rea
     assert envelope["links"]["app"].endswith("#/task/" + public["id"])
 
 
+def test_a_task_event_names_its_owner_and_requester_as_the_api_does_with_real_values(api, net):
+    hook = make(api, events=["task.*"])
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ben", "Plan the launch", "Details.", "bot:cpo", lint=False)
+    data = json.loads(next(s for s in sends(api, hook["id"]) if s["type"] == "task.created")["body"])["data"]
+    assert data["id"] == task["id"]
+    assert data["owner_id"] == "bot:cpo" and data["requester_id"] == "human:ben"
+    assert "owner" not in data and "requester" not in data   # the API names, nothing beside them
+
+
 def test_task_changes_are_published_with_their_own_names_and_a_retried_write_sends_nothing_twice(api, net):
     made = make(api, events=["task.done", "task.state_changed", "task.assigned"])
     task = _post(api, "tasks", {"owner": "ops", "title": "Ship it", "body": "Ship it."})
@@ -311,17 +321,17 @@ def test_catalog_examples_have_the_top_level_keys_their_producers_send(api, net)
         assert set(data) == set(catalog.EVENTS[name].example), name
 
 
-def test_the_ceo_bot_and_a_bot_without_the_send_switch_are_refused(api):
+def test_the_strategy_bot_and_a_bot_without_the_send_switch_are_refused(api):
     made = make(api)
     assert publish(api, "custom.x", "s", {}, "bot:goal-manager") == 0       # the broad path never raises, and sends nothing
     with api.app.state.store.transaction() as c:
-        with pytest.raises(W.Refused, match="CEO"):
+        with pytest.raises(W.Refused, match="Strategy Bot"):
             W.publish(c, "custom.x", "s", {}, "bot:goal-manager", only=made["id"])
         with pytest.raises(W.Refused, match="switch is off"):
             W.publish(c, "custom.x", "s", {}, "bot:ops", only=made["id"])
         with pytest.raises(W.Refused, match="does not exist"):
             W.publish(c, "custom.x", "s", {}, "human:ana", only="ep_missing")
-        c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to_json,updated,updated_by) VALUES('ops',1,'[]',?,?)",
+        c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to,updated_at,updated_by) VALUES('ops',1,'[]',?,?)",
                   (H.now(), "human:ana"))
         assert W.publish(c, "custom.x", "s", {}, "bot:ops", only=made["id"]) == 1
     post(api, f"webhooks/{made['id']}/pause", {})
@@ -367,7 +377,7 @@ def test_people_manage_their_own_endpoints_and_the_owner_all(api, net):
     post(api, f"webhooks/{mine['id']}/example", {"type": "task.done"}, token="ben-test")
     assert {s["type"] for s in sends(api, mine["id"])} == {"custom.x", "task.done"}
     gone = post(api, f"webhooks/{mine['id']}/delete", {}, token="ben-test")
-    assert gone["cancelled"] == 2 and {s["state"] for s in sends(api, mine["id"])} == {"cancelled"}
+    assert gone["canceled"] == 2 and {s["state"] for s in sends(api, mine["id"])} == {"canceled"}
     get(api, f"webhooks/{mine['id']}", token="ben-test", expected=404)
 
 
@@ -381,9 +391,9 @@ def test_the_list_counts_seven_days_and_the_send_log_shows_state_attempts_and_ne
     assert listed["last_7_days"] == {"delivered": 1, "failed": 0, "pending": 2}
     log = get(api, f"webhooks/{made['id']}/sends")
     states = {row["type"]: row for row in log["items"]}
-    assert states["custom.a"]["state"] == "delivered" and states["custom.a"]["next_attempt"] is None
+    assert states["custom.a"]["state"] == "delivered" and states["custom.a"]["next_attempt_at"] is None
     assert states["custom.b"]["state"] == "ready" and states["custom.b"]["attempts"] == 1
-    assert states["custom.b"]["last_status"] == 500 and states["custom.b"]["next_attempt"]
+    assert states["custom.b"]["last_status"] == 500 and states["custom.b"]["next_attempt_at"]
     assert log["more"] is False
     only = get(api, f"webhooks/{made['id']}/sends?state=delivered")["items"]
     assert [row["type"] for row in only] == ["custom.a"]
@@ -416,7 +426,7 @@ def test_an_hourly_rate_makes_sends_wait_and_never_drops_them(api, net):
         post(api, f"webhooks/{made['id']}/send", {"type": f"custom.n{n}"})
     assert run(api, net) == 2
     waiting = [s for s in sends(api) if s["state"] == "ready"]
-    assert len(waiting) == 1 and waiting[0]["next_attempt"] > H.now()
+    assert len(waiting) == 1 and waiting[0]["next_attempt_at"] > H.now()
 
 
 def test_a_copy_for_rehearsal_sends_nothing_and_says_so(api, net):
@@ -443,15 +453,15 @@ def test_the_hourly_cleanup_keeps_a_month_of_sends_and_two_hundred_attempts(api,
     old = H.shift(H.now(), days=-31)
     with api.app.state.store.transaction() as c:
         for n in range(3):
-            c.execute("INSERT INTO webhook_events(id,type,subject,created) VALUES(?,?,?,?)", (f"e{n}", "custom.x", "s", old if n < 2 else H.now()))
-        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt,created) VALUES('old','e0',?,'custom.x','{}','delivered',?,?)",
+            c.execute("INSERT INTO webhook_events(id,type,subject,created_at) VALUES(?,?,?,?)", (f"e{n}", "custom.x", "s", old if n < 2 else H.now()))
+        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt_at,created_at) VALUES('old','e0',?,'custom.x','{}','delivered',?,?)",
                   (made["id"], old, old))
-        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt,created) VALUES('new','e2',?,'custom.x','{}','delivered',?,?)",
+        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt_at,created_at) VALUES('new','e2',?,'custom.x','{}','delivered',?,?)",
                   (made["id"], H.now(), H.now()))
-        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt,created) VALUES('wait','e1',?,'custom.x','{}','ready',?,?)",
+        c.execute("INSERT INTO webhook_sends(id,event_id,webhook_id,type,body,state,next_attempt_at,created_at) VALUES('wait','e1',?,'custom.x','{}','ready',?,?)",
                   (made["id"], old, old))
         for n in range(250):
-            c.execute("INSERT INTO webhook_attempts(send_id,webhook_id,n,at,timestamp_sent) VALUES('new',?,?,?,0)",
+            c.execute("INSERT INTO webhook_attempts(send_id,webhook_id,n,created_at,timestamp_sent) VALUES('new',?,?,?,0)",
                       (made["id"], n + 1, H.shift(H.now(), seconds=n)))
         D.prune(c)
         assert [r[0] for r in c.execute("SELECT id FROM webhook_sends ORDER BY id")] == ["new", "wait"]
@@ -488,11 +498,11 @@ def test_publish_to_one_endpoint_checks_the_actor_against_that_endpoint(api):
         assert W.publish(c, "custom.x", "s", {}, "human:ben", only=bens["id"]) == 1
         assert W.publish(c, "custom.y", "s", {}, "human:ana", only=bens["id"]) == 1     # an admin may
         assert W.publish(c, "custom.z", "s", {}, H.KEEPER, only=bens["id"]) == 1
-        c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to_json,updated,updated_by) VALUES('ops',1,'[]',?,?)",
+        c.execute("INSERT INTO bot_mail_settings(bot,outbound_send,forward_to,updated_at,updated_by) VALUES('ops',1,'[]',?,?)",
                   (H.now(), "human:ana"))
         narrow = W.publish(c, "custom.w", "s", {}, "bot:ops", only=bens["id"])
         assert narrow == 1
-        c.execute("UPDATE webhooks SET events_json='[\"task.*\"]' WHERE id=?", (bens["id"],))
+        c.execute("UPDATE webhooks SET events='[\"task.*\"]' WHERE id=?", (bens["id"],))
         with pytest.raises(W.Refused, match="does not listen"):
             W.publish(c, "custom.v", "s", {}, "bot:ops", only=bens["id"])
 
@@ -560,3 +570,55 @@ def test_endpoints_that_cannot_read_an_event_do_not_use_up_its_fan_out_places(ap
         private = H.task_create(c, "human:ben", "Review the sensitive packet", "Details.", "bot:cpo", private=True, lint=False)
     assert [s["subject"] for s in sends(api, ben["id"]) if s["type"] == "task.created"] == [private["id"]]
     assert all(sends(api, b["id"]) == [] for b in blind)
+
+
+def test_a_held_message_reaches_only_the_people_who_can_read_its_thread(api):
+    """An owner or admin hears of a held message only where they could read its thread. Ana owns the company and is in
+    neither the room nor the DM, so she hears of neither; the members and the DM's two people do."""
+    from backend import threads
+    with api.app.state.store.transaction() as c:
+        room = threads.create(c, "human:ben", title="Launch", audience="members", members=["human:priya"])
+        dm = threads.dm(c, "human:ben", ["human:priya"], title="")
+        for thread in (room, dm):
+            data = {"thread_id": thread["id"], "id": "m-held", "from_actor": "human:ben", "rule": "no-prices",
+                    "hold": "h-1"}
+            heard = {who: W.view_for(c, who, "message.held", "m-held", data, {}) is not None
+                     for who in ("human:ana", "human:ben", "human:priya")}
+            assert heard == {"human:ana": False, "human:ben": True, "human:priya": True}, thread["audience"]
+
+
+# ----------------------------------------------------------------------------- thread producers (backend/thread_webhooks.py)
+def test_a_committed_thread_write_queues_its_event_once_and_a_rolled_back_one_queues_none(api, net):
+    from backend import threads
+    ben = make(api, events=["thread.*", "message.*"], token="ben-test")
+    with api.app.state.store.transaction() as c:
+        room = threads.create(c, "human:ben", title="Launch", audience="members", members=["human:priya"])
+        said = threads.post(c, "human:ben", room["id"], "Kickoff at noon")
+    kinds = [(s["type"], s["subject"]) for s in sends(api, ben["id"])]
+    assert kinds == [("thread.created", room["id"]), ("message.created", said["id"])]
+    with pytest.raises(RuntimeError):
+        with api.app.state.store.transaction() as c:
+            threads.post(c, "human:ben", room["id"], "Never sent")
+            threads.create(c, "human:ben", title="Gone", audience="members", members=[])
+            raise RuntimeError("rolled back")
+    assert len(sends(api, ben["id"])) == 2, "a rolled-back write queues nothing"
+
+
+def test_a_held_post_tells_only_the_people_who_can_read_its_thread(api, net, monkeypatch):
+    from backend import org_rule_check, threads
+    ben = make(api, events=["message.*"], token="ben-test")
+    owner = make(api, events=["message.*"])                        # Ana owns the company and is not in the thread
+    with api.app.state.store.transaction() as c:
+        room = threads.create(c, "human:ben", title="Pricing", audience="members", members=["human:priya"])
+    gate = {"held": {"id": "hold-1"}, "rule": {"id": "no-prices", "text": "No prices"}, "hold_id": "hold-1"}
+    monkeypatch.setattr(org_rule_check, "apply", lambda c, v, p=None, r=None, **_: gate)
+    with api.app.state.store.transaction() as c:
+        threads.post(c, "human:ben", room["id"], "The price is $10", checked={"outcome": "broken"})
+        threads.post(c, "human:ben", None, "$10", checked={"outcome": "broken"},
+                     start={"title": "New", "audience": "members", "members": ["human:priya"]})
+    held = [s for s in sends(api, ben["id"]) if s["type"] == "message.held"]
+    assert [s["subject"] for s in held] == ["hold-1"], "a held first message has no thread readers to tell"
+    body = json.loads(held[0]["body"])
+    assert body["data"]["rule"] == "no-prices" and body["data"]["thread_id"] == room["id"]
+    assert "$10" not in held[0]["body"], "a held event never carries the words"
+    assert [s for s in sends(api, owner["id"]) if s["type"] == "message.held"] == []

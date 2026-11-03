@@ -5,7 +5,7 @@ import pytest
 from backend import market_watch as W
 from backend.store import H
 from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
-from backend.tests.test_company import with_ceo_bot
+from backend.tests.test_company import with_strategy_bot
 from backend.tests.test_market import _librarian, _seed
 from backend.tests.test_strategy import add_bet, publish, write
 
@@ -54,7 +54,7 @@ def test_a_name_that_resolves_to_a_private_address_is_blocked_when_read(seeded, 
     watch(seeded)
     assert check(seeded) == {"read": 1, "changed": 0, "errors": 1}
     row = get(seeded, "market/watches")["watches"][0]
-    assert row["last_status"] == "blocked" and row["checked"]
+    assert row["last_status"] == "blocked" and row["checked_at"]
     assert counts(seeded)["market_insights"] == 0
 
 
@@ -151,13 +151,13 @@ def test_the_same_page_twice_and_the_cap_on_active_watches_are_409(seeded):
     store = seeded.app.state.store
     with store.transaction() as c:
         for n in range(W.MAX_ACTIVE - 1):
-            c.execute("INSERT INTO market_watches (id, entity_id, url, kind, active, created) VALUES (?,?,?,?,1,?)",
+            c.execute("INSERT INTO market_watches (id, entity_id, url, kind, active, created_at) VALUES (?,?,?,?,1,?)",
                       (f"w{n}", "company/northwind", f"https://northwind.example/p{n}", "other", H.now()))
     assert watch(seeded, url="https://northwind.example/over", expected=409)["error"]["code"] == "limit"
 
 
 def test_a_page_change_trips_a_cited_bet_only_once_the_insight_is_applied(seeded, monkeypatch):
-    with_ceo_bot(seeded)
+    with_strategy_bot(seeded)
     write(seeded, summary="Acme runs rentals with bots.", sections={"not": "No enterprise deals."})
     add_bet(seeded, cites=["company/northwind"], wrong_if={"kind": "thesis", "market_id": "company/northwind"})
     publish(seeded)
@@ -168,7 +168,7 @@ def test_a_page_change_trips_a_cited_bet_only_once_the_insight_is_applied(seeded
 
     def bet_tasks():
         with seeded.app.state.store.read() as c:
-            return [(t["title"], t["owner"]) for t in H._rows(c.execute("SELECT title, owner FROM tasks WHERE title LIKE 'Bet %'"))]
+            return [(t["title"], t["owner_id"]) for t in H._rows(c.execute("SELECT title, owner_id FROM tasks WHERE title LIKE 'Bet %'"))]
     assert bet_tasks() == []                       # a raw diff may be layout or wording: no fit check yet
     with seeded.app.state.store.read() as c:
         insight_id = c.execute("SELECT id FROM market_insights WHERE source_ref LIKE 'watch:%'").fetchone()[0]

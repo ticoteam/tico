@@ -29,7 +29,7 @@ def parked(c, prerequisite_owner="bot:ops"):
 
 def jobs(c, slug):
     return [dict(r) for r in c.execute(
-        "SELECT m.body, m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=?", (slug,))]
+        "SELECT m.body, m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=?", (slug,))]
 
 
 def test_an_active_bot_owning_the_blocker_is_accepted_and_holds_the_task_without_storing_a_person(c):
@@ -57,7 +57,7 @@ def test_the_prerequisite_resolving_wakes_the_owner_once_with_the_outcome(c, out
     woke = jobs(c, "cpo")
     assert len(woke) == 1 and woke[0]["body"].startswith("Unblocked: Ship the receipt gate")
     assert words in woke[0]["body"]
-    assert json.loads(woke[0]["refs_json"])["blocker_status"] == outcome
+    assert json.loads(woke[0]["refs"])["blocker_status"] == outcome
     assert H.wait_detail(c, H.task(c, task["id"])) is None   # eligible again: nothing holds it
 
 
@@ -115,7 +115,7 @@ def test_a_bot_wait_after_a_person_wait_keeps_their_ask_open(c):
     # The screen finds that ask among the blockers the task view serves (ui/app/tasks.js taskBotWait).
     served = TR.grouped(c, [task["id"]])[task["id"]]
     assert "parent" not in served
-    assert [b["owner"] for b in served["blocks"] if b["direction"] == "in"] == ["bot:ops", "human:ana"]
+    assert [b["owner_id"] for b in served["blocks"] if b["direction"] == "in"] == ["bot:ops", "human:ana"]
     other = H.task_create(c, "human:ana", "Write the launch post", "", "bot:cpo", lint=False)
     H.task_update(c, "bot:cpo", other["id"], status="waiting", waiting_on="ana",
                   note="Approve the launch post? I'll publish it after.")

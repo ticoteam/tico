@@ -4,6 +4,10 @@ Triggered by a human asking "what did we decide about X?", "what is still open f
 call?" or "what did Dana commit to?". Budget 10 minutes. The outcome is a short answer with citations,
 or an honest "not found".
 
+Inputs: the question, `knowledge/decision-log.md`, and the meetings from the last 90 days.
+
+Done when: the first line answers the question, every decision carries its meeting, date and timestamp, the log is corrected if it was wrong, and the task is closed with that answer.
+
 ---
 
 ## 1. Look in your own log first
@@ -12,7 +16,7 @@ or an honest "not found".
 
 Then search meetings from the last 90 days:
 
-    hub meeting search "<topic>" --since <90 days ago> --person <name>
+    hub meeting search "<topic>" --since <90 days ago>
 
 ## 2. Read the passage, not the summary
 

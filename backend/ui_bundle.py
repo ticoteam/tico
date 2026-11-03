@@ -56,7 +56,7 @@ def _etag(data):
 def build(ui_dir):
     ui_dir = Path(ui_dir)
     html = (ui_dir / "index.html").read_text()
-    parts, files = {}, {"js": [], "css": []}
+    files = {"js": [], "css": []}
     for m in REGION.finditer(html):
         kind, body = m.group(1), m.group(2)
         for ref in REF.findall(body):

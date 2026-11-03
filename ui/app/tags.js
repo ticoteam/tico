@@ -238,10 +238,13 @@ async function renderTags(host) {
     // The release checklist starter: the way to begin when there are no templates, a small button once there are.
     const starter = label => `<button type="button" class="ghost" data-release-starter>${label}</button>`;
     const templates = list(true);
+    // A refresh landing after someone opened Advanced on the new tag form keeps it open.
+    const advanced = !!$('[data-tag-create] .tag-advanced[open]', host);
     host.innerHTML = `<section class="card"><header><h2>Templates</h2>${templates ? starter('Release checklist') : ''}</header>${templates
         || `<div class="empty tags-empty">No templates. ${starter('Start with a release checklist')}</div>`}</section>
       <section class="card"><header><h2>Tags</h2></header>${list(false) || '<div class="empty">None yet</div>'}</section>
       <section class="card"><header><h2>New tag</h2></header>${tagCreateForm()}</section>`;
+    if (advanced) $('[data-tag-create] .tag-advanced', host).open = true;
     bindTagCreate(host);
     $('[data-release-starter]', host).onclick = async event => {
       const button = event.currentTarget;

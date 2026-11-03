@@ -19,12 +19,18 @@
   };
 })();
 // The icon font swaps in rather than blocking, so its ligature names would show as words while it loads: base.css hides
-// icon glyphs until this marks the page. Settled either way (or after 3s, the old block period) they show.
+// icon glyphs until this marks the page. They show once the font settles (loaded, or failed), or after 10s: a slow first
+// load leaves holes rather than words ("bolt" read "ol" in a 20px box), and the glyphs swap in when the font lands.
 (() => {
   const ready = () => document.documentElement.classList.add('icons-ready');
   if (!document.fonts?.load) { ready(); return; }
-  setTimeout(ready, 3000);
-  // the @font-face rule exists once the stylesheets are parsed; the font itself is preloaded by index.html
-  const check = () => document.fonts.load('20px "Material Symbols Outlined"', 'home').then(ready, ready);
+  setTimeout(ready, 10000);
+  // the @font-face rule exists once the stylesheets are parsed; the font itself is preloaded by index.html. A load that
+  // found no face (the stylesheet not in yet) asks again once the page has loaded.
+  const load = () => document.fonts.load('20px "Material Symbols Outlined"', 'bolt');
+  const check = () => load().then(faces => {
+    if (faces.length || document.readyState === 'complete') ready();
+    else addEventListener('load', () => load().then(ready, ready), {once: true});
+  }, ready);
   if (document.readyState === 'loading') addEventListener('DOMContentLoaded', check, {once: true}); else check();
 })();

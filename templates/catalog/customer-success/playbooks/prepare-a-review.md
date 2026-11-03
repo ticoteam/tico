@@ -3,6 +3,12 @@
 Triggered by a task that names an account and a review date. Budget 45 minutes. The outcome is a
 one-to-two page pack for the account owner. Nothing goes to the customer.
 
+Inputs: the account note in `knowledge/accounts/<account>.md`, the renewal date in `knowledge/renewals.md`, the calls
+and tickets since the last review, and the usage reading if one is in your access.
+
+Done when: each number in the pack has a source and date or is marked unknown, the open issues each have an owner, the agenda
+has five items at most, and the pack is published and attached to the task.
+
 ---
 
 ## 1. Read the account
@@ -30,5 +36,4 @@ renewal timeline with a gap for any commercial term. Draft the follow-up note th
 
 ## 5. Hand over
 
-Write `reports/YYYY-MM-DD-<account>-review.md`, `hub file publish` it, attach it to the task, and `hub
-task update <id> --status done --note`: the pack's headline and what you could not read.
+Write `reports/YYYY-MM-DD-<account>-review.md`, `hub file publish` it, attach it to the task, and `hub task update <id> --status done --note "..."`: the pack's headline and what you could not read.

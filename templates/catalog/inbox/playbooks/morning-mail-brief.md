@@ -6,6 +6,8 @@ what needs the human, what is drafted, what you would file. Nothing is sent whil
 (team domain, the sender you are answering, the `forward_to:` addresses). Nothing is filed while
 `Filing` is Off.
 
+Done when: the brief is on the task with the counts, every mailbox read that failed is named with its refusal, and the task is closed, so no open scheduled task is left to absorb the next pass.
+
 ---
 
 ## 1. Read the task and the preferences
