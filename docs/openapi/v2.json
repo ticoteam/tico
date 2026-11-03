@@ -62670,6 +62670,22 @@
           },
           "can_edit": {
             "type": "boolean"
+          },
+          "reports_now": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "until": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "until"
+            ],
+            "additionalProperties": true
           }
         },
         "required": [

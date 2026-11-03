@@ -889,7 +889,8 @@ def test_what_can_go_on_the_board_is_names_only_and_never_a_private_line(books):
     lines = [item for item in found if item["source_kind"] == "finance_line"]
     assert account(c, "6000") in {item["ref_id"] for item in lines}
     assert pay not in {item["ref_id"] for item in lines} and "Payroll" not in json.dumps(found)
-    assert "Old one" not in json.dumps(found) and "4242" not in json.dumps(found) and "42424" not in json.dumps(found)
+    labels = json.dumps([item["label"] for item in found])     # ref_ids are random UUIDs: one can hold "4242"
+    assert "Old one" not in labels and "4242" not in labels and "42424" not in labels
 
 
 def test_built_ins_are_seeded_once_disabled_and_cant_be_deleted(store):

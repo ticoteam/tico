@@ -5628,6 +5628,12 @@ def update_settings(api, args):
                     {k: flag(args[k]) for k in ("daily", "weekly") if args.get(k) is not None}, key=_key(args))
 
 
+@tool("hub_bot_show", "One bot: its profile (name, role, who runs it, who it reports to, who it works for), and for "
+      "one who may read it also its status, machine, queue and goals.", {"slug": _s("The bot's slug")}, required=("slug",))
+def bot_show(api, args):
+    return _as_person(api).get(f"bots/{args['slug']}")
+
+
 @tool("hub_bot_status_list", "Every bot you may see with its live status.",
       {"team": _s("Only this team")})
 def status_list(api, args):

@@ -68,7 +68,10 @@ def task_writes(c, since):
     for r in c.execute(f"SELECT s.task_id, s.sender, s.receiver, s.sent_at, t.requester_id, {parent} AS parent_id, "
                        "t.created_at FROM task_cap_log s LEFT JOIN tasks t ON t.id=s.task_id "
                        "WHERE s.sender LIKE 'bot:%' AND s.sent_at>=? ORDER BY s.sent_at", (since,)):
-        made = r["requester_id"] == r["sender"] and (r["created_at"] or "")[:19] == r["sent_at"][:19]
+        # Made by this bot when its creation and this send are the same write: within a couple of seconds, not the
+        # same second (the clock can tick between the task row and its send log).
+        made = (r["requester_id"] == r["sender"] and bool(r["created_at"])
+                and abs((H.parse_ts(r["sent_at"]) - H.parse_ts(r["created_at"])).total_seconds()) < 2)
         # A new task is checked against its parent (what the route does); a hand-off against the task itself.
         out.append({"kind": "task", "at": r["sent_at"], "sender": r["sender"], "receiver": r["receiver"],
                     "task_id": r["parent_id"] if made else r["task_id"], "what": "made" if made else "handed",
