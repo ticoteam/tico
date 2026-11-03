@@ -15,7 +15,8 @@ import pytest
 
 from backend import diagnostics, health_monitor, providers, routines, support
 from backend.auth import Identity
-from backend.store import H
+from backend.store import H, encode
+from backend.tests.test_api import api  # noqa: F401  (fixture)
 from backend.tests.test_goal_manager import BASE
 from backend.tests.test_onboarding import as_person, draft, environment, machine, signed_in  # noqa: F401
 from backend.tests.test_support import FakeHQ
@@ -682,3 +683,25 @@ def test_the_scan_reads_its_findings_outside_the_write_lock(environment, monkeyp
     assert health_monitor.check(store, api.app.state.auth, store.settings) == [key]
     assert holders == [0]
     assert health_monitor.check(store, api.app.state.auth, store.settings) == []
+
+
+def test_the_monitor_files_for_botops_and_a_task_for_a_person_is_refused(api):
+    # The Health Monitor gives its fixes to BotOps only (docs/health-monitor.md): a task for a person, and a hand-off to
+    # one, are refused with where to file it and nothing is written; the same task for BotOps is accepted.
+    with api.app.state.store.transaction() as c:
+        for slug in ("health-monitor", "botops"):
+            c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES(?,?,?,'active')", (slug, slug, slug))
+            c.execute("UPDATE bots SET state='active' WHERE id=?", (slug,))
+            c.execute("INSERT OR IGNORE INTO bot_config(bot,config,owner_id) VALUES(?,?,'ana')",
+                      (slug, encode({"name": slug, "runtime": "fake", "status": "active"})))
+        title, body = "Wake Support Agent (cloud) and check it reports in", "Its last check-in was 40 minutes ago."
+        with pytest.raises(H.Refused) as refused:
+            H.task_create(c, "bot:" + health_monitor.SLUG, title, body, "human:ana", lint=False)
+        assert refused.value.rule == "botops-only" and "--owner botops" in str(refused.value)
+        assert c.execute("SELECT count(*) FROM tasks WHERE title=?", (title,)).fetchone()[0] == 0
+        fix = H.task_create(c, "bot:" + health_monitor.SLUG, title, body, "botops", lint=False)
+        assert H.task(c, fix["id"])["owner_id"] == "bot:botops"
+        with pytest.raises(H.Refused) as handed:
+            H.task_update(c, "bot:" + health_monitor.SLUG, fix["id"], owner="human:ana")
+        assert handed.value.rule == "botops-only"
+        assert H.task(c, fix["id"])["owner_id"] == "bot:botops"

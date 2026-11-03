@@ -292,13 +292,15 @@ async function askLoad(chat) {
     else if (!working && tick) { clearInterval(tick); tick = null; }
     const html = rows.join('') || `<div class="ask-empty">${ASSISTANT_HINTS.map(h =>
       `<button class="ghost" type="button" data-ask-hint="${esc(h)}">${esc(h)}</button>`).join('')}</div>`;
-    if (html !== rendered) {
+    // Compared without the messages' "2m ago" (format.js agoStill): those move in place.
+    if (agoStill(html) === rendered) agoTick(thread);
+    else {
       stickScroll(thread).update(() => {
         thread.innerHTML = html;
         if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast, reload: snapshot, assistantName: askName()});
       }, {fresh: !!rendered});
       askRowsIn(thread, seenRows, !!rendered);
-      rendered = html;
+      rendered = agoStill(html);
       fbSync();                         // the Assistant's replies' 👍 / 👎, read for this panel too (ui/app/feedback.js)
     }
     const wl = working && thread.querySelector('[data-ask-working]');

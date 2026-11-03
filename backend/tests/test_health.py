@@ -853,7 +853,7 @@ def test_quarantine_refused_words_keep_manager_access_and_mask_secrets(environme
 
 
 def test_an_interrupted_run_fence_explains_a_busy_bot_queue(environment, monkeypatch):
-    from backend import execution, health
+    from backend import execution, health, start_places
 
     api = environment()
     runner = enrolled(api)
@@ -892,7 +892,8 @@ def test_an_interrupted_run_fence_explains_a_busy_bot_queue(environment, monkeyp
         assert without_override["reason"] == "busy"
         monkeypatch.setattr(health, "_fenced_queue_reason", original)
 
-        # With every slot occupied, no_slot is the truthful immediate wait reason, while dead stays explicit.
+        # With every slot occupied, no_slot is the truthful immediate wait reason, while dead stays explicit. One running
+        # turn fills the computer's only place, so it is full at the default claim bound (2 x the limit, not reached).
         c.execute("UPDATE runner_states SET capacity=1 WHERE runner_id=?", (runner,))
         [full] = health._waiting(c, online)[1]
         assert (full["reason"], full["wait_reason"]) == ("busy", "no_slot") and full["dead"] >= 1
@@ -1143,7 +1144,7 @@ def test_roadmap_suggestions_warn_from_the_routing_rule_and_only_to_administrato
     assert health(pm="archived", headers=as_person(api, "quinn")) is None
 
 
-def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment):
+def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment, monkeypatch):
     api = environment()
     runner = enrolled(api)
     add_bot(api, "helper")
@@ -1184,6 +1185,8 @@ def test_health_names_queued_bot_and_stalled_tasks_for_bot_reader(environment):
         c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                   "VALUES('helper-running',?,'helper',?,1,'x','running',?,?)",
                   (job, runner, H.shift(H.now(), hours=1), H.now()))
+    from backend import start_places
+    monkeypatch.setattr(start_places, "LIVE_CAP_FACTOR", 1)     # one running turn fills the computer
     queue = health_of(api, headers)[1]['queue']
     assert queue['status'] == 'info' and not queue.get('items')
     issues = api.get('/api/v2/health/issues', headers=headers).json()['issues']

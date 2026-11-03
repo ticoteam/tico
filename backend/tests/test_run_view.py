@@ -264,6 +264,38 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
     assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": None, "wakes": False, "mention": []}, "no bot gets it"
 
 
+def test_a_persons_message_carried_to_another_bot_in_a_task_reads_as_the_person(api, monkeypatch):
+    """A person's message to a bot that neither owns nor asked the task reaches that bot as a keeper carrier. The task's
+    line reads it as the person's: `from_person` and the queued label take the carried message's person, so a bot's
+    computer hold does not stand for it."""
+    from backend import views
+    from backend.tests.test_scheduler import _wake_by_hand
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    assign(api, machine, "coo")
+    ready(api, machine, ["ops", "coo"])
+    tid, attempt = task_attempt(api, machine)
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Counted.", "last_seq": 0},
+         machine["token"])
+    assert get(api, f"tasks/{tid}")["execution"]["run_id"] == attempt["id"]
+    humans = []
+    queued_label = views.queued_label
+    monkeypatch.setattr(views, "queued_label",
+                        lambda *a, **kw: humans.append(kw.get("human")) or queued_label(*a, **kw))
+    with api.app.state.store.transaction() as c:
+        cid = H.task(c, tid)["conversation_id"]
+        c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
+                  "VALUES('msg-ana',?,'human:ana','bot:coo','chat','Check the April numbers','{}',?)", (cid, H.now()))
+        c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
+                  "VALUES('msg-carry',?,'keeper','bot:coo','notice','coo: Check the April numbers',?,?)",
+                  (cid, json.dumps({"carries": "msg-ana", "from": "human:ana", "wake": "thread", "reason": "mention"}),
+                   H.now()))
+        _wake_by_hand(c, "msg-carry", "coo")
+    shown = get(api, f"tasks/{tid}")["execution"]
+    assert (shown["message_id"], shown["bot_id"], shown["state"], shown["from_person"]) == ("msg-carry", "coo", "queued", True)
+    assert humans and all(h is True for h in humans), "the carried message is a person's: no bot's computer hold applies"
+
+
 def test_an_opt_in_login_queue_names_the_holder_only_to_who_may_see_it(api, queued_login):
     from backend.tests.test_api import as_member, restrict
     as_member(api, "ben@acme.example")
