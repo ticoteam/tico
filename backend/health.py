@@ -582,7 +582,7 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
         "SELECT bot_id, count(*) n, min(created_at) oldest FROM jobs WHERE state='queued' AND held=0 GROUP BY bot_id")}
     asked = {r["bot_id"]: r["oldest"] for r in c.execute(
         "SELECT j.bot_id, min(j.created_at) oldest FROM jobs j JOIN messages m ON m.id=j.message_id "
-        "WHERE j.state='queued' AND m.sender_id LIKE 'human:%' GROUP BY j.bot_id")}
+        f"WHERE j.state='queued' AND {H.person_sent_sql()} GROUP BY j.bot_id")}
     assigned = {r["bot"]: (r["runner_id"], r["label"], r["readiness"]) for r in c.execute(
         "SELECT a.bot, a.runner_id, r.label, r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
         "WHERE r.revoked_at IS NULL")}
