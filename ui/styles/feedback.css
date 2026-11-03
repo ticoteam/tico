@@ -1,0 +1,86 @@
+/* ui/styles/feedback.css — 👍 / 👎 on a bot's work (ui/app/feedback.js). Nothing shows until the server is known to
+   have feedback (body.fb-on). The thumbs sit in each surface's own hover row; a rated item keeps a small mark. */
+.fb-ctl,.fb-copy{display:none}
+body.fb-on .fb-ctl{display:inline-flex;align-items:center;gap:2px}
+body.fb-on .fb-copy{display:inline-grid}
+.fb-btn{display:inline-grid;place-items:center;width:24px;height:24px;padding:0;border:0;border-radius:5px;background:transparent;
+  font-size:13px;line-height:var(--lh-none);cursor:pointer;filter:grayscale(1);opacity:.7}
+.fb-btn:hover{background:var(--surface2);opacity:1;filter:none}
+.fb-btn[aria-pressed="true"]{filter:none;opacity:1;background:var(--surface2)}
+.fb-mark{display:none}
+body.fb-on .fb-mark:not(:empty){display:inline-flex;vertical-align:middle}
+.fb-mark-i{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 2px;border:0;border-radius:9px;background:var(--surface2);
+  font-size:10px;line-height:var(--lh-none);cursor:default}
+button.fb-mark-i{cursor:pointer}
+button.fb-mark-i:hover{background:var(--hover)}
+[data-fb-press]{-webkit-touch-callout:none}
+
+/* The chat: the thumbs join Copy beside a bot's reply. With a pointer they stand in a column at its lower corner,
+   inside the room kept for Copy; on touch they are on the line a tap opens under it (chat.css). */
+.chat-message-actions .fb-ctl{gap:0}
+@media not (pointer:coarse){
+  body.fb-on .bubble.bot>.chat-message-actions:has(.fb-ctl){display:flex;flex-direction:column-reverse;align-items:center}
+  body.fb-on .bubble.bot>.chat-message-actions .fb-ctl{flex-direction:column}
+  .chat-message-actions .fb-btn{opacity:0;transition:opacity var(--dur-fast) var(--ease)}
+  .bubble:hover .chat-message-actions .fb-btn,.chat-message-actions:focus-within .fb-btn{opacity:.7}   /* a rating at rest shows as the mark under the reply */
+  .chat-message-actions .fb-btn:hover,.chat-message-actions:focus-within .fb-btn:focus-visible{opacity:1}
+  .chat-message-actions:focus-within .chat-message-copy{opacity:1}
+}
+@media (pointer:coarse){
+  .bubble.acts .chat-message-actions .fb-btn{width:40px;height:30px;font-size:15px}
+}
+body.fb-on .bubble>.fb-mark:not(:empty){display:flex;margin-top:4px}
+
+/* Threads: in the message's hover row with Acknowledge and ⋯; a phone has only ⋯ there, and a long press. */
+.th-acts .fb-ctl{gap:2px}
+.th-acts .fb-btn,.th-acts .fb-copy{width:28px;height:28px;border-radius:6px}
+body.fb-on .th-main>.fb-mark:not(:empty){display:flex;margin-top:4px}
+@media (hover:none){.th-acts .fb-ctl,.th-acts .fb-copy{display:none !important}}
+
+/* A task row: a mark after the title; with a pointer the pair shows on hover at the row's end, over the age. */
+.tl-title+.fb-mark:not(:empty){margin-left:6px}
+.tl-row>.fb-ctl{position:absolute;right:6px;top:50%;transform:translateY(-50%);padding:1px;border:1px solid var(--line);border-radius:7px;
+  background:var(--surface);visibility:hidden}
+.tl-row:hover>.fb-ctl,.tl-row>.fb-ctl:focus-within{visibility:visible}
+.tl-row>.fb-ctl .fb-btn{filter:none;opacity:1}
+@media (hover:none){.tl-row>.fb-ctl{display:none !important}}
+
+/* A Decide card: a small pair in its header; the task window: beside its age. */
+.dc-who .fb-ctl,.tmodal-head .fb-ctl{flex:none}
+.dc-who .fb-mark,.tmodal-head .fb-mark{display:none !important}
+
+/* The sheets: a small dialog with a pointer, a bottom sheet on a phone. */
+dialog.fb-sheet{box-sizing:border-box;width:min(380px,calc(100vw - 32px));padding:14px 16px 16px;border:1px solid var(--line);border-radius:14px;
+  background:var(--surface);color:var(--ink);box-shadow:0 20px 60px rgba(0,0,0,.45)}
+dialog.fb-sheet::backdrop{background:rgba(0,0,0,.35)}
+.fb-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+.fb-head h2{margin:0;font-size:var(--t-md);font-weight:600}
+.fb-x{border-color:transparent !important;color:var(--muted);min-width:28px;height:28px;padding:0 6px}
+.fb-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.fb-chip{max-width:100%;padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--ink);
+  font:inherit;font-size:var(--t-sm);line-height:var(--lh-tight);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fb-chip:hover{background:var(--surface2)}
+.fb-chip[aria-pressed="true"]{background:var(--surface2);border-color:var(--muted)}
+.fb-why,.fb-rule-text{display:block;min-height:64px}
+.fb-nudge{margin:8px 0 0;font-size:var(--t-sm);color:var(--wait-ink)}
+.fb-all{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:var(--t-base)}
+.fb-acts{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+.fb-reason{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.fb-out{margin:6px 0 0;font-size:var(--t-sm)}
+.fb-out a{color:var(--link)}
+dialog.fb-menu{width:auto;padding:8px}
+.fb-menu-row{display:flex;gap:6px}
+.fb-menu-row button{display:grid;place-items:center;width:56px;height:48px;padding:0;border:1px solid var(--line);border-radius:10px;
+  background:transparent;color:var(--ink);font-size:20px;cursor:pointer}
+.fb-menu-row button[aria-pressed="true"]{background:var(--surface2);border-color:var(--muted)}
+.fb-menu-row .nav-icon{font-size:20px}
+@media (max-width:760px){
+  dialog.fb-sheet{margin:auto 0 0;width:100vw;max-width:100vw;border-width:1px 0 0;border-radius:16px 16px 0 0;
+    padding:14px 16px calc(16px + env(safe-area-inset-bottom))}
+  .fb-chip{padding:8px 12px;font-size:var(--t-base)}
+  .fb-why,.fb-rule-text{font-size:16px}
+  .fb-acts button{flex:1;min-height:40px}
+  dialog.fb-menu{padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
+  .fb-menu-row{justify-content:center;gap:12px}
+  .fb-menu-row button{flex:1;max-width:96px;height:56px}
+}

@@ -203,6 +203,7 @@ function taskPropFocus(d) {
 }
 // `full`: the task as GET /v2/tasks/{id} answers it (list rows leave out what the rail's Code section needs).
 function taskModalBind(d, task, full = false) {
+  fbSync();                     // the task's own 👍 / 👎 in the header, when a bot asked for it
   tfAdopt(d, task);
   taskPagesAdopt(d, task);      // the task's pages, as cards at its top (ui/app/pages.js)
   ruleHoldsAdopt(d, task);      // a rule review's held outputs and their actions (ui/app/org-rule-holds.js)
@@ -582,11 +583,13 @@ function commentLineHTML(x, i, all, files = [], taskId = '', canAnswer = true) {
   // As in a bot's chat with several people: a person's line is a bubble on the right under their name (yours needs
   // none), the bot's reads as page text under its own.
   const person = !!actorPerson(m.sender_id), me = m.sender_id === myActor();
+  // A bot's comment takes 👍 / 👎 beside Copy, as in a chat (ui/app/feedback.js).
+  const fb = m.id && String(m.sender_id || '').startsWith('bot:') ? fbKey('message', m.id) : '';
   return `<div class="tcomment tmsg${person ? ' you' : ''}${me ? ' from-me' : ''}${String(m.sender_id || '').startsWith('bot:') ? ' bot' : ''}" data-message="${esc(m.id || '')}"><div class="tcomment-head"><span class="tcomment-who">${commentAuthor(m.sender_id, m.refs?.via)}</span>${kind}${roadmapCommentMark(m, taskId)}
       ${m.refs?.quiet ? '<span class="muted" title="Saved for the bot\'s next run on this task">saved</span>' : ''}
       <span class="spacer"></span>${m.edited_at ? `<span class="muted" title="Edited ${esc(fmt(m.edited_at))}">edited</span>` : ''}<time class="muted tnum" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div>
-    <div class="bubble ${person ? 'you' : 'bot'}">${body ? `<div class="md">${safeMd(body)}</div>` : ''}
-    ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, askTargetOf(m), m.sender_id, taskId, files, canAnswer) : ''}</div>${taskStepsHTML(m)}</div>`;
+    <div class="bubble ${person ? 'you' : 'bot'}"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>${body ? `<div class="md">${safeMd(body)}</div>` : ''}
+    ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, askTargetOf(m), m.sender_id, taskId, files, canAnswer) : ''}${fb ? fbMarkHTML(fb) + chatCopyHTML(m.body || '', fb) : ''}</div>${taskStepsHTML(m)}</div>`;
 }
 // A bot's work on this task stopped on an account (backend/reconnects.py): its one line, the fix for the person who
 // can make it, and Reconnected once it works. A missing secret's fix is its credential card (ui/credential-card.js).
@@ -873,6 +876,7 @@ function taskCommentsRender(state, data, sent = '') {
     const liveSteps = $('details.run-steps[data-live][open]', thread);
     if (liveSteps) void taskStepsOpen(liveSteps);
     roadmapCommentsBind(state);
+    fbSync();
     if (thread.querySelector('[data-credential-host]')) void window.credentialCards?.mount(thread, {get, post, esc, toast,
       reload: () => taskChatRead(state)});
     state.rendered = html;
@@ -1059,6 +1063,7 @@ function hubModalHTML(t, it, opts = {}) {
       ? `<button type="button" class="tl-due wake tchip-snoozed" data-task-unsnooze title="Snoozed until ${esc(fmt(snooze.until))} by ${esc(actorLabel(snooze.by))}${snooze.reason ? ` · ${esc(snooze.reason)}` : ''}${rights.snooze ? '. Click to bring it back now' : ''}"${rights.snooze ? '' : ' disabled'}>Snoozed to ${esc(snoozeDay(t))}${chipNoteHTML(snooze.reason)}</button>` : ''}
       ${finished ? '' : taskScreenLinkHTML(t.owner_id)}
       <span class="spacer"></span>${pos ? `<span class="peek-pos tnum" title="J / K or ↑ / ↓ move to the next or previous task">${esc(pos)}</span>` : ''}
+      ${fbButtonsHTML(fbTaskKey(t))}
       <span class="muted tnum tmodal-age" title="${esc(`${taskSourceLine(t)}${t.created_at ? ' ' + fmt(t.created_at) : ''} · Updated ${fmt(it.updated_at)}`)}">${esc(ago(it.updated_at))}</span>
       ${canDone ? `<button class="ghost tmodal-act" type="button" data-task-finish="done" title="Mark this task done">${PROP_ICON.check}<span>Done</span></button>` : ''}
       ${canClose ? `<button class="ghost tmodal-act" type="button" data-task-finish="close" title="Close this task">Close task</button>` : ''}
