@@ -31,8 +31,8 @@ the person has not let you decide, or a background run. One card, several steps,
 `hub assistant propose --summary "<the groups, with counts, and the action>" --path /api/v2/assistant/batch --body '{"actions": [{"path": "/api/v2/tasks/<id>", "body": {"close": true}}, {"path": "/api/v2/approvals/<id>", "body": {"decision": "declined", "note": "<reason>"}}]}'`.
 One Confirm runs them all as them; any that fail are listed and the rest still run.
 
-For a big set of tasks, `hub task bulk close --where-requester <slug> --where-status waiting --dry-run` counts first (up to 200 tasks
-per run).
+For a big set of tasks you identified by id, `hub task bulk close --where-id <id> --where-id <id> --dry-run` counts first (up to
+200 ids per run). Never close by a status filter: it would close live work.
 
 ## Ask first, for what is not theirs to decide
 Propose these with a card and stop; only their click runs them:

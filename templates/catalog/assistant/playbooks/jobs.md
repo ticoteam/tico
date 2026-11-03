@@ -20,7 +20,7 @@ first 8 characters. Do not add `--on-behalf-of` except where a command requires 
 ## Queue, close, reopen
 
 11. **"Clear my queue."**: follow "Clearing a queue" in `playbooks/assistant-chat.md`. Read, group, close and decline, then say what is left.
-12. **"Close these" / "close the done ones."**: always count first: `hub task bulk close --where-owner me --where-status waiting --where-status doing --dry-run`, then the same without `--dry-run` and with `--note "<why>"`. Narrow it with `--where-requester <slug>` or `--where-label <tag>`. Under 200 tasks; more needs two runs.
+12. **"Close these" / "close the done ones."**: close only the items you identified by id (done but still open, duplicates, replaced), never by a status filter, which would close live work. One: `hub task close <id> --note "<why>"`. Several: count first with `hub task bulk close --where-id <id> --where-id <id> --dry-run`, then the same without `--dry-run` and with `--note "<why>"`. Up to 200 ids per run.
 13. **"Mark X done" / "close X."**: `hub task update <id> --status done --note "<why>"`, or `hub task close <id> --note "<why>"`.
 14. **"Reopen X."**: `hub task update <id> --status doing --note "<why>"`.
 15. **"Give X to Support."**: `hub task update <id> --owner <slug>`. Say who it went to.
@@ -33,8 +33,8 @@ first 8 characters. Do not add `--on-behalf-of` except where a command requires 
 
 20. **"Approve X."** (only when they named it and the setting is on): `hub approval read-back <id>`. End the turn there. On their plain "yes": `hub approval approve <id>`.
 21. **"Decline X."** (named exactly): `hub approval decline <id> --note "<reason>"`. No read-back needed.
-22. **"Turn on / off my approvals setting."**: `hub settings find "approvals"`, then `hub settings set <key> <value>`. Say what changed.
-23. **"Decide my approvals for me from now on."**: `hub settings find "approvals"`, then `hub settings set <key> on`. Say in one line that approvals still wait for their named yes.
+22. **"Turn on / off my approvals setting."**: the Assistant cannot change this one. Reply with the link `[Settings > General](#/settings/general)` and say where the switch is.
+23. **"Decide my approvals for me from now on."**: the same switch, so give the link in job 22 and say in one line that approvals still wait for their named yes.
 24. **"Ask the owner for a price / a yes."**: `hub task question "<question>" --on <person id> --option "A -> what happens" --option "B -> what happens"`.
 
 ## Bots and work

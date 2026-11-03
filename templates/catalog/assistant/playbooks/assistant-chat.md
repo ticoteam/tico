@@ -10,11 +10,14 @@ Never read, quote or act on another person's chat.
    could not find it.
 3. **Do it.** Whatever the server allows, do it as them, then reply with a link to the result and how to undo it. Never say only
    a click can do it. If a refusal says they may not, say so plainly.
-4. **Cards, for what the server will not do for you.** Tokens, sign-in, credentials, transferring ownership, the person's own
-   "decide approvals" setting, the team's assistant rules, a support report to the Tico team, and deleting a person, storage or
-   a server connection. Put these on one card with `hub assistant propose --summary "<what happens on confirm>" --path <path>
-   --body '<json>'`, and say in one line what happens if they confirm. A `confirm_required` answer from the server means the same:
-   a card is in their chat; say so and stop. A Confirm card from BotOps is theirs to tap; never try to confirm it for them.
+4. **A `confirm_required` refusal.** The server refused a write that can be proposed. That refusal creates no card. Propose the
+   same operation yourself: `hub assistant propose --summary "<what happens on confirm>" --path <path> --body '<json>'`. Then tell
+   them a card is in their chat and what happens if they confirm. Never say a card exists before you have proposed it.
+   **Not proposable** (sign-ins, tokens, credentials, transferring ownership, the team's assistant rules, deleting a person, storage
+   or a server connection, and the person's own "decide approvals" setting): no card. Give one sentence and the link: sign-ins and
+   people `[Settings](#/settings/people)`, tokens, credentials and servers `[Settings](#/settings)`, approvals
+   `[Settings > General](#/settings/general)`. A support report: `[Message the Tico team](#/support)`. A Confirm card from BotOps is
+   theirs to tap; never try to confirm it for them.
 5. **Several changes are ONE card when the server asks for a card.** `hub assistant propose` with `/api/v2/assistant/batch`, one
    summary with counts. Never one card each.
 6. **Approvals** follow the rule in `AGENT.md` (read-back, then their plain yes, only when the setting is on). Declines and answers
@@ -28,8 +31,8 @@ Never read, quote or act on another person's chat.
 "Clear my queue", "get rid of the old stuff", "why are there so many": do it, do not hand it back.
 1. Read the record: `hub needs-you show` for the exact counts, `hub message list` for approvals and questions, `hub task list --all` for tasks.
 2. Group by kind, source and age: "11 old release publish approvals from before the reset", "6 questions from Support".
-3. Close done, replaced and duplicate tasks in bulk, directly: `hub task bulk close --where-owner me --where-status waiting --dry-run`,
-   then the same without `--dry-run` and with `--note "<why>"`. Decline the approvals they named, or that a group rule covers, one
+3. Close the done, replaced and duplicate tasks you identified by id, directly and never by a status filter: `hub task close <id>
+   --note "<why>"` each, or `hub task bulk close --where-id <id> --where-id <id> --dry-run` first, then without `--dry-run`. Decline the approvals they named, or that a group rule covers, one
    `hub approval decline <id> --note "<reason>"` each. Answer bots' questions in their words. No card for any of this.
 4. For each big group, `hub origin show <id>` to find what made it, then stop the source (`playbooks/jobs.md`, jobs 30 to 33).
 5. Leave what needs their judgement (a question only they can answer, an approval they did not name) and say why.
