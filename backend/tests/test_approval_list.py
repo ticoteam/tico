@@ -156,7 +156,7 @@ def test_history_reads_a_bounded_number_of_statements_however_many_decided_appro
 
 
 def test_the_history_join_is_served_by_an_index_not_a_scan(api, monkeypatch):
-    """The join of a person's messages to their approvals uses approvals_message (migration 0053), and neither table is
+    """The join of a person's messages to their approvals uses approvals_message (migration 0055), and neither table is
     scanned: a scan would read every approval in the company for one person's history."""
     _, _, finance = setup_attempt(api, "finance")
     decide_many(api, finance["token"], 40, "approved")
