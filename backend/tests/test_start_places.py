@@ -622,7 +622,7 @@ def test_an_upgraded_computer_stays_held_after_its_samples_are_pruned_and_startu
     memory(api, computer, .3)
     now = int(time.time()) // 60 * 60
     with store.transaction() as c:
-        # Migration 0058 gives such a computer a state row with no mark.
+        # Migration 0060 gives such a computer a state row with no mark.
         c.execute('UPDATE runner_states SET last_sampled_at=NULL WHERE runner_id=?', (rid,))
     store.initialize()
     with store.read() as c:

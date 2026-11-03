@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS agent_pairings(
  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, decided_by TEXT, decided_at TEXT,
  token_key TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS agent_pairings_client ON agent_pairings(client_hash, created_at);
--- runners, runner_states and runners_with_state are migration 0058's (backend/migrations).
+-- runners, runner_states and runners_with_state are migration 0060's (backend/migrations).
 CREATE TABLE IF NOT EXISTS model_logins(
  id TEXT PRIMARY KEY, runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL,
  profile TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, url TEXT NOT NULL DEFAULT '',
@@ -1240,7 +1240,7 @@ class Store:
                 # Performance diagnostics: on unless a person turns them off (backend/performance.py).
                 H.add_column(c, "runners", "performance", "TEXT NOT NULL DEFAULT 'on'")
                 # The memory hold, last sample time and a restart under way are runner_states columns (migration
-                # 0058); a computer that sampled before its last-sample mark existed takes its newest kept sample's.
+                # 0060); a computer that sampled before its last-sample mark existed takes its newest kept sample's.
                 _performance.backfill_last_sampled(c)
                 # A starter bot is `needs_onboarding` until it says its setup is done, then
                 # `onboarded`; NULL for every other bot (backend/onboarding.py).
@@ -1434,7 +1434,7 @@ class Store:
                         c.execute("ALTER TABLE schedules ADD COLUMN event_name TEXT")
                     c.execute("INSERT INTO cloud_migrations VALUES(14,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=15").fetchone():
-                    # `awake_since` (`backend/execution.py waking`) is a runner_states column now (migration 0058).
+                    # `awake_since` (`backend/execution.py waking`) is a runner_states column now (migration 0060).
                     c.execute("INSERT INTO cloud_migrations VALUES(15,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=16").fetchone():
                     from .harnesses import backfill_config
@@ -1570,7 +1570,7 @@ class Store:
                     # connect; the marker makes the contract visible to release checks.
                     c.execute("INSERT INTO cloud_migrations VALUES(38,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=39").fetchone():
-                    # The runner's checkout against origin/main (#492) is a runner_states column now (migration 0058).
+                    # The runner's checkout against origin/main (#492) is a runner_states column now (migration 0060).
                     c.execute("INSERT INTO cloud_migrations VALUES(39,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=40").fetchone():
                     # `runners.restart_requested_at`: a person pressed Restart for that computer; its
@@ -1671,7 +1671,7 @@ class Store:
                     H.migrate_task_privacy(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(57,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=58").fetchone():
-                    # runner_states.capabilities (migration 0058).
+                    # runner_states.capabilities (migration 0060).
                     c.execute("INSERT INTO cloud_migrations VALUES(58,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=59").fetchone():
                     H._apply(c, H.WAITING_ON_SCHEMA)

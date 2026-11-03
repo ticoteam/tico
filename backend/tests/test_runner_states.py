@@ -1,4 +1,4 @@
-"""A computer's identity (`runners`) and its runtime state (`runner_states`, migration 0058): an existing file keeps every
+"""A computer's identity (`runners`) and its runtime state (`runner_states`, migration 0060): an existing file keeps every
 state value when the columns move, the move runs once, and a heartbeat writes only the state row."""
 import sqlite3
 
@@ -19,7 +19,7 @@ SEEN = ("2026-11-01T10:00:00.000000Z", "2026-11-01T08:00:00.000000Z", "1.2.3", 6
 def test_an_existing_file_moves_every_state_value_off_runners_once(tmp_path):
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
-        # The file as it was before 0058: state columns on runners, no state table, view or trigger.
+        # The file as it was before 0060: state columns on runners, no state table, view or trigger.
         c.execute("DROP VIEW runners_with_state")
         c.execute("DROP TRIGGER runner_states_new_runner")
         c.execute("DROP TABLE runner_states")
@@ -32,7 +32,7 @@ def test_an_existing_file_moves_every_state_value_off_runners_once(tmp_path):
                   SEEN)
         c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) "
                   "VALUES('r2','Acme box','h1','hash-2','2026-01-01T00:00:00Z')")
-        c.execute("DELETE FROM schema_migrations WHERE version='0058_runner_states'")
+        c.execute("DELETE FROM schema_migrations WHERE version='0060_runner_states'")
     boot(path)
     with sqlite3.connect(path) as c:
         columns = {row[1] for row in c.execute("PRAGMA table_info(runners)")}
