@@ -184,7 +184,8 @@ the bot's display name, `icon_emoji`/`icon_url` come from `slack_icon`/`slack_ic
 bot's registry entry when set, and the last line is `(sent from <display name>)`, or
 `(sent from <display name> on #<number> <task title>)` linked to the task when the reply is about one. Slack still
 shows the APP badge. Without the `chat:write.customize` scope the post goes out as Tico with the
-footer alone, and the log says so once.
+footer alone, and the log says so once. When the task has a **Follow up by** time, a second footer line reads
+`Follow up by` and that time.
 
 A reply with visuals (pictures, SVG, visual pages, video, audio) keeps its text and adds one line,
 **1 visual - view in Tico** (or **N visuals**), linking to the message in Tico; no visual is posted to Slack. A

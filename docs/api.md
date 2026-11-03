@@ -174,6 +174,13 @@ checks and reviews, does not), and `brief=true` to leave out bodies and acceptan
 `ids=<id>,<id>,...` (up to 100 ids, short ids or numbers) reads several tasks in one call instead of one
 `GET /api/v2/tasks/{id}` each; the answer adds `missing`, the ids that are unknown or not yours to read.
 
+## Task follow-ups
+
+`POST /api/v2/tasks/{tid}/check-back` with `{"at": "45m", "note": "Read the returned result"}` sets the task's
+**Follow up by** time. `at` takes a duration such as `45m`, or an ISO date-time with its timezone. The answer includes
+the task's new `check_back` object. A bot sets a follow-up at least five minutes ahead and within 14 days. See
+[Following up bot work](tasks.md#following-up-bot-work) for the rollout switch.
+
 ## Task comments
 
 `POST /api/v2/tasks/{tid}/comments/{mid}` with `{"text": "..."}` changes the text of a comment the caller

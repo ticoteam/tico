@@ -1228,7 +1228,7 @@ Changed state or a missing checkpoint leaves the check eligible under the usual 
 wake the bot as before ([details](hub-sql.md#what-woke-each-run-and-what-it-did)). A running session is not sent status
 checks or retries; they resume once its turn ends without progress.
 
-With the team's **Stalled task check** switched on (Settings > System routines, on by default, needs Tico Decide), a
+With the team's **Stalled task check** switched on (**Settings → System**, on by default, needs Tico Decide), a
 stalled task that stands as at its owner's last checkpoint is no longer left silent. Decide reads its last six messages
 once for that state and answers one of four things. *Waiting on someone*: the wait it names is set (a task the messages
 mention as a blocker, a date they mention as a snooze, or a person they name as the owner's own waiting-on, with a
@@ -1681,8 +1681,6 @@ and after `--apply`, and each `task.purged` event names the ones its task left.
 
 Open **Settings → Tasks → Task settings** to see what Tico does when a task is created, enters a step, finishes, or is checked on a schedule. Choose a task type to see its steps. Each action shows its source, whether it wakes a bot or stays quiet, and its current state. Edit and Add action open the existing Rules editor with that task type and trigger selected. Built-ins marked Always on have no switch.
 
-
-
 ## Following up bot work
 
 Every unfinished task whose requester or owner is a bot records **Follow up by** and what result to inspect.
@@ -1699,14 +1697,17 @@ hub task check-back <task-id> --at 2026-12-02T15:00:00-08:00 --for "Read the ret
 Task create/update also accept `check_back_at` and `check_back_note`; omitted times get a provisional default.
 Read responses include these fields and a compact `check_back` object with the time, expected result, responsible
 bot and whether it is due. When follow-up delivery is enabled, the web, phone and desktop task properties show
-**Follow up by** and let task parties reschedule it. While disabled, the fields remain available through the API and CLI and Health shows shadow counts. Explicit bot appointments are at least five minutes ahead and within 14 days; a person's dated
-snooze can be longer. A human snooze takes precedence over an earlier inspection.
+**Follow up by** and let task parties reschedule it. While disabled, the fields remain available through the API and
+CLI, and the **Task follow-ups** check in **Settings → Health** shows shadow counts. Explicit bot appointments are at
+least five minutes ahead and within 14 days; a person's dated snooze can be longer. A human snooze takes precedence
+over an earlier inspection.
 
-Enable **Task check-backs** under Automations > System routines for the staged rollout. It starts off: dates are
-stored, but existing stall recovery stays in force until enabled. Enabling backfills missing appointments in
-bounded batches, and the server scheduler delivers due appointments through the existing task session queue.
-No second session starts beside a running task. A paused, offline or limited bot retains its queued obligation;
-Health reports missing or overdue follow-ups. Turning the rollout off does not suppress existing recovery.
+To start the rollout, open **Settings → System** and turn on **Task check-backs** under **What Tico runs on its
+own**. It starts off: dates are stored, but existing stall recovery stays in force until enabled. Enabling backfills
+missing appointments in bounded batches, and the server scheduler delivers due appointments through the existing task
+session queue. No second session starts beside a running task. A paused, offline or limited bot retains its queued
+obligation; the **Task follow-ups** check reports missing or overdue follow-ups. Turning the rollout off does not
+suppress existing recovery.
 
 On the wake, inspect the actual PR link, assignment/reservation, result and blocker. A missing readable child is
 not proof that a private child does not exist: check routing before creating a duplicate. Repair routine handoffs

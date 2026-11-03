@@ -253,7 +253,7 @@ write (`own_write`), news about a task that waits on something (`parked`), a sta
 (`same_state`; Stalled task check can let one wake through, see [Tasks](tasks.md)) and a plain bot-to-bot message (`bot_to_bot`) wait for the bot's next run; a deferred item waits too, until its deadline (`deferred`, [Steer, queue or defer](using-tico.md#steer-queue-or-defer)); a finished request and a
 person's review comments are batched (`batch_*`); one check finishing is ignored (`pr_check`) and a head whose checks
 all finished wakes the ticket's owner at a working step (`pr_checks_done`) or is a note (`pr_checks_note`); work wakes
-(an assignment, a review request, a blocker, a routine, a due date, a finished subtask, a published release) and anything
+(an assignment, a review request, a blocker, a routine, a due date, a follow-up time that has come (even on a task that waits on a handoff, see [Following up bot work](tasks.md#following-up-bot-work)), a finished subtask, a published release) and anything
 no rule names waits as a note (`default_note`). Teams, task types, departments, bots and
 single tasks can override these with rules of their own (the **What wakes** automations on the Automations page). Every message to a bot records the
 rule that decided it, and every run records the rule that woke it, so `rule_weekly` in `hub sql` shows runs, tokens and

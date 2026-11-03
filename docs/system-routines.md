@@ -41,7 +41,7 @@ The list refreshes when you open the tab and at most once a minute while it stay
 | **Stale ticket review**, **Nightly learnings**, **Still wanted?**, **KPI stale asks**, **Ask go-ahead** | Owner or admin | On or off, schedule presets, **Run now** |
 | **Health scan** | Owner only | On or off, schedule presets, **Run now** |
 | **Task Manager report** | Owner or admin | On or off, schedule presets, **Run now** |
-| **Start fresh when the topic changes**, **Stalled task check** | Owner or admin | On or off |
+| **Start fresh when the topic changes**, **Stalled task check**, **Task check-backs** | Owner or admin | On or off |
 | Housekeeping and other fixed built-ins | No switch or schedule editor on this page | Fixed operation; housekeeping cannot be switched off |
 
 A department tag on a built-in does not grant permission to change it. Task rules have no separate view-only role within their department. People outside that department can read the list without gaining editing rights.
@@ -132,6 +132,7 @@ Built-ins appear in one flat list. This table gives their default schedules; sav
 | **Rules digest** | Once a week, opens the Bookkeeper's "Rules digest" task for the posting rules made in the last seven days. No new rules is a quiet run. Not a switch. | Weekly |
 | **Nightly learnings** (AI) | Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember. See [Learnings](learnings.md). | Nightly at 03:00 |
 | **Due reminders** | Tells a bot when one of its tasks reaches its due time. | Every 10 seconds |
+| **Task check-backs** | Sends a bot back to unfinished work when its **Follow up by** time passes, to verify the handoff or read the result. Off until an owner or admin turns it on; see [Following up bot work](tasks.md#following-up-bot-work). | When a follow-up is due |
 | **Ask go-ahead** | A bot's question past its deadline goes ahead on its default answer, or expires. | Hourly |
 | **Follow-ups** | Nudges a person once, in their thread, when a bot's ask to them stays unanswered for a day. Plain code: no model is called, and nothing to nudge is a quiet run. See [Thread helper](thread-helper.md). Not a switch. | Every 15 minutes |
 | **Email digest** | Emails a person once an hour the threads they follow on digest that have new messages: each title, its unread count and a link, never the messages. Nothing new is a quiet run. Each person turns theirs off under Email digests. See [Thread helper](thread-helper.md). Not a switch. | Hourly |
