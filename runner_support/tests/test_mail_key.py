@@ -7,8 +7,8 @@ from unittest import mock
 
 import pytest
 
-from runner import credential_socket as C, isolation, mail_key
-from runner.connectors import mail_secret_path
+from runner_support import credential_socket as C, isolation, mail_key
+from runner_support.connectors import mail_secret_path
 
 
 @pytest.fixture
@@ -103,7 +103,7 @@ def test_the_computer_holds_the_key_only_when_isolated_with_the_key_and_the_conn
 
 
 def test_the_connectors_job_writes_group_writable_files_only_in_the_two_user_layout(monkeypatch):
-    from runner.connectors import mail_umask
+    from runner_support.connectors import mail_umask
     monkeypatch.setattr(isolation, "identity", lambda: (10003, 10002))
     assert mail_umask() == {"umask": 0o002}
     monkeypatch.setattr(isolation, "identity", lambda: None)
@@ -235,7 +235,7 @@ def test_connected_account_grants_alone_give_mail_access_and_stay_out_of_the_bot
     assert moved.read_text() == '{"grants": {}}' and stat.S_IMODE(moved.stat().st_mode) == 0o600
     assert not (secrets / mail_key.GRANTS).exists() and not (home / "state-r1" / mail_key.FILE).exists()
     assert mail_key.status(config) == "protected" and mail_key.held_by_computer(config)
-    from runner.connectors import mail_credential_present, mail_grants_path
+    from runner_support.connectors import mail_credential_present, mail_grants_path
     assert mail_grants_path(config) == moved and mail_credential_present(config)
 
 

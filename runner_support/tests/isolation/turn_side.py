@@ -1,7 +1,7 @@
 """Runs inside the runner image as the supervisor (ticorun with ambient capabilities, via the entrypoint), for test_isolation_docker.py.
 
 It plays the runner: a credential socket for one attempt, a fake GitHub that only accepts that bot's
-token, and a "turn" process dropped to the bot user exactly as runner/isolation.py does it. It prints
+token, and a "turn" process dropped to the bot user exactly as runner_support/isolation.py does it. It prints
 one JSON object of what the turn could and could not do.
 """
 import base64
@@ -13,7 +13,7 @@ import sys
 import threading
 
 sys.path.insert(0, "/opt/tico")
-from runner import credential_socket, git_credentials, isolation  # noqa: E402
+from runner_support import credential_socket, git_credentials, isolation  # noqa: E402
 
 HOME = "/home/runner"
 BOT_TOKEN = "ghs_fake_alpha_token"

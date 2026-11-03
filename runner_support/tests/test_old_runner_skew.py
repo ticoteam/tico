@@ -18,9 +18,9 @@ from pathlib import Path
 
 import pytest
 
-from runner.tests.test_threads_e2e_turns import *  # noqa: F401,F403  (the threads turn tests)
+from runner_support.tests.test_threads_e2e_turns import *  # noqa: F401,F403  (the threads turn tests)
 from backend.tests.threads_e2e import call, create_thread, ok, require_threads_api, say
-from runner.tests.test_conformance import (  # noqa: F401
+from runner_support.tests.test_conformance import (  # noqa: F401
     test_a_chat_turn_streams_completes_and_resumes_its_own_thread_only,
     test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_its_run,
 )

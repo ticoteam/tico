@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A stand-in for every model CLI, for test_isolation_docker.py: mounted as each harness's executable.
 
-/fake/spec.json, written by the test from runner/harnesses/*.toml, says per executable which wire format it speaks
+/fake/spec.json, written by the test from runner-rs/harnesses/*.toml, says per executable which wire format it speaks
 (the manifest's `host`), what `--version` prints and how its sign-in check is answered. A turn speaks just enough
 of that format for the runner to finish it, and its final answer is `probe <json>`: what bot code could do from
 where the runner started it (its user and capabilities, whether it reaches the runner's registration, state and

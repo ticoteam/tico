@@ -8,7 +8,7 @@ import hashlib
 import sys
 from pathlib import Path
 
-DIRS = ("backend", "clients", "runner", "ui")
+DIRS = ("backend", "clients", "runner", "runner_support", "ui")
 SKIP = {"__pycache__", "node_modules", "tests"}
 
 

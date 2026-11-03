@@ -1,10 +1,10 @@
-"""runner/version.py names the Rust runner's protocol version, which the shim matches against the binary's `--version`.
+"""runner_support/version.py names the Rust runner's protocol version, which the shim matches against the binary's `--version`.
 The release is separate: build.rs stamps it from TICO_VERSION and `tico-runner --release` prints it (runner-rs/src/runner.rs
 RUNNER_RELEASE), so releases need no source bump."""
 import re
 from pathlib import Path
 
-from runner.version import RUNNER_VERSION
+from runner_support.version import RUNNER_VERSION
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -27,4 +27,4 @@ def test_the_release_checks_read_the_release_not_the_source_version():
     ci = (ROOT / ".github/workflows/ci.yml").read_text()
     dockerfile = (ROOT / "Dockerfile").read_text()
     assert "tico-runner --release" in ci and "tico-runner --release" in dockerfile
-    assert "runner/version.py" not in ci and "Cargo.toml must say" not in ci
+    assert "runner_support/version.py" not in ci and "Cargo.toml must say" not in ci

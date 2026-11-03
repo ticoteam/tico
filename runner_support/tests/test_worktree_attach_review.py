@@ -1,8 +1,8 @@
 """Regressions for inspecting API-attached worktrees without losing readiness proof."""
 import json
 
-from runner import worktrees as W
-from runner.tests.test_worktrees import git, trees  # noqa: F401
+from runner_support import worktrees as W
+from runner_support.tests.test_worktrees import git, trees  # noqa: F401
 
 
 def _api_attached(row):

@@ -1,4 +1,4 @@
-"""`python -m runner run` is a shim: it execs this checkout's Rust runner (runner-rs/). launchd plists and systemd
+"""`python -m runner_support run` is a shim: it execs this checkout's Rust runner (runner-rs/). launchd plists and systemd
 units from every install start it, and the binary's path changes with the checkout, so no unit names the binary.
 
 The binary is $TICO_RUNNER_BIN (the Docker image's), else this checkout's runner-rs/target/release/tico-runner, else
@@ -10,8 +10,8 @@ otherwise, with cargo on PATH, it is built now, behind a lock. When neither work
 launchd or systemd starts it again. `"engine": "python"` in runner.json and TICO_RUNNER_ENGINE=python are ignored with
 a warning: there is no Python runner any more.
 
-`python -m runner.engine prepare` gets the binary ready (scripts/tico install, a release update) and exits non-zero
-with the reason when it cannot; `python -m runner.engine path` prints the ready binary's path.
+`python -m runner_support.engine prepare` gets the binary ready (scripts/tico install, a release update) and exits non-zero
+with the reason when it cannot; `python -m runner_support.engine path` prints the ready binary's path.
 """
 
 import fcntl
@@ -69,13 +69,13 @@ def version_of(binary):
 def source_id(root):
     """The source fingerprint runner-rs/build.rs stamps into the binary, or "" when this tree has no runner-rs:
     the first 16 hex digits of the SHA-256 of `path \0 length \0 bytes` for every file of runner-rs/build.rs,
-    Cargo.toml, Cargo.lock, runner-rs/src/** and runner/harnesses/*.toml, sorted by path from `root`."""
+    Cargo.toml, Cargo.lock, runner-rs/src/** and runner-rs/harnesses/*.toml, sorted by path from `root`."""
     root = Path(root)
     if not (root / "runner-rs" / "src").is_dir():
         return ""
     paths = [root / "runner-rs" / name for name in ("build.rs", "Cargo.toml", "Cargo.lock")]
     paths += [p for p in (root / "runner-rs" / "src").rglob("*")]
-    paths += list((root / "runner" / "harnesses").glob("*.toml"))
+    paths += list((root / "runner-rs" / "harnesses").glob("*.toml"))
     digest = hashlib.sha256()
     for name, path in sorted((p.relative_to(root).as_posix(), p) for p in paths if p.is_file()):
         data = path.read_bytes()
@@ -263,10 +263,10 @@ def exec_binary(argv, config_path=None, env=None, execv=os.execve, root=ROOT):
 
 
 def main(argv=None):
-    """`python -m runner.engine prepare|path`: get this checkout's Rust runner now / print where it is."""
+    """`python -m runner_support.engine prepare|path`: get this checkout's Rust runner now / print where it is."""
     args = sys.argv[1:] if argv is None else argv
     if args not in (["prepare"], ["path"]):
-        print("usage: python -m runner.engine prepare|path", file=sys.stderr)
+        print("usage: python -m runner_support.engine prepare|path", file=sys.stderr)
         return 2
     env = dict(os.environ)
     if args == ["path"]:

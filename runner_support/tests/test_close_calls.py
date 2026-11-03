@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from clients.tico import APIError
-from runner import close_calls as CC
-from runner.state import State
+from runner_support import close_calls as CC
+from runner_support.state import State
 
 NOW = datetime(2026, 9, 19, 20, 0, tzinfo=timezone.utc)
 CREATED = "2026-09-19T18:00:00+00:00"

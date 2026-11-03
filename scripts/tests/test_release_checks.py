@@ -43,7 +43,7 @@ def test_isolation_uses_the_candidate_image_only_after_successful_builds(tmp_pat
         assert release_checks.release(SimpleNamespace(previous=None)) == (0 if builds_ok else 1)
         output = capsys.readouterr().out
         python_command = calls['all-python'][0]
-        isolation_file = 'runner/tests/test_isolation_docker.py'
+        isolation_file = 'runner_support/tests/test_isolation_docker.py'
         assert f'--ignore={isolation_file}' in python_command
         assert python_command[python_command.index('-n') + 1] == workers
         assert calls['all-browser'][1].get('TICO_UI_JOBS') == browser_jobs

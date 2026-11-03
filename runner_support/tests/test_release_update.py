@@ -1,4 +1,4 @@
-"""A checkout follows its server's release: the update process (python -m runner.release_update) against a temp repository."""
+"""A checkout follows its server's release: the update process (python -m runner_support.release_update) against a temp repository."""
 import fcntl
 import subprocess
 import threading
@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from runner import release_update as ru
+from runner_support import release_update as ru
 
 
 def sh(cwd, *args):
@@ -212,11 +212,11 @@ def test_the_prepare_step_is_a_new_process_of_the_new_tree(tmp_path, monkeypatch
         seen.append((cmd, kw["cwd"]))
         return subprocess.CompletedProcess(cmd, 1, "", "Tico runner: no Rust runner for this checkout: cargo is not on PATH\n")
     assert ru.prepare_binary(tmp_path, run=run) == "" and not seen      # a tree from before the shim gets its own
-    (tmp_path / "runner").mkdir()
-    (tmp_path / "runner" / "engine.py").write_text("")
+    (tmp_path / "runner_support").mkdir()
+    (tmp_path / "runner_support" / "engine.py").write_text("")
     monkeypatch.setattr(ru.sys, "executable", "/opt/env-python/bin/python3")
     assert "cargo is not on PATH" in ru.prepare_binary(tmp_path, run=run)
-    assert seen == [(["/opt/env-python/bin/python3", "-m", "runner.engine", "prepare"], str(tmp_path))]
+    assert seen == [(["/opt/env-python/bin/python3", "-m", "runner_support.engine", "prepare"], str(tmp_path))]
 
 
 # -- runners that share one checkout -------------------------------------------------------------

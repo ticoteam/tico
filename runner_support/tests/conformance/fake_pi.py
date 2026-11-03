@@ -1,7 +1,7 @@
-"""A stand-in for the Pi coding agent (`pi`), for the runner conformance suite (runner/tests/test_conformance.py).
+"""A stand-in for the Pi coding agent (`pi`), for the runner conformance suite (runner_support/tests/test_conformance.py).
 
 `--version` answers as pi 0.70.0. `--mode rpc` stays up and reads JSON commands from stdin, as pi does: each
-`prompt` gets its reply and then the JSON lines runner-rs/src/hosts/pi.rs reads (runner/tests/fixtures/pi/turn.jsonl):
+`prompt` gets its reply and then the JSON lines runner-rs/src/hosts/pi.rs reads (runner-rs/tests/fixtures/pi/turn.jsonl):
 two text deltas, the assistant message's end with its usage, `turn_end`, `agent_end` and `agent_settled`. Every prompt
 is appended to $FAKE_LOG as one JSON line (argv, the prompt, the granted variables, the pid), and every steer as
 {"harness": "pi", "steer": text}. A prompt containing HANG streams one delta and then waits, once per $FAKE_LOG, until

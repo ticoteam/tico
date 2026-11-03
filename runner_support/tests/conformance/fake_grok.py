@@ -1,4 +1,4 @@
-"""A stand-in for Grok Build's `grok agent stdio`, for the runner conformance suite (runner/tests/test_conformance.py).
+"""A stand-in for Grok Build's `grok agent stdio`, for the runner conformance suite (runner_support/tests/test_conformance.py).
 
 `--version` answers as grok 1.0.25. `agent ... stdio` speaks ACP (JSON-RPC 2.0, one message per line) the way
 runner-rs/src/hosts/grok.rs drives it: `initialize`, `session/new` and `session/load` (of a session this home made),

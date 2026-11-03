@@ -10,7 +10,7 @@ from unittest import mock
 import pytest
 
 from clients.tico import APIError
-from runner.repositories import FETCH_INTERVAL, GB, REMOVE_AFTER, Repositories
+from runner_support.repositories import FETCH_INTERVAL, GB, REMOVE_AFTER, Repositories
 
 
 @pytest.fixture
@@ -55,7 +55,7 @@ def cycle(manager):
 
 
 def test_first_sync_is_lazy_tokens_not_saved_and_fetch_interval_survives_restart(repos):
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=fake_git) as git, mock.patch('runner.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
+    with mock.patch('runner_support.repositories.Repositories.run_git', side_effect=fake_git) as git, mock.patch('runner_support.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
         cycle(repos)
         first_count = git.call_count
         assert first_count > 1
@@ -71,7 +71,7 @@ def test_first_sync_is_lazy_tokens_not_saved_and_fetch_interval_survives_restart
         assert 'synthetic-install-token' not in (repos.path('org/one') / '.git/config').read_text()
         restarted = Repositories(repos.root.parent, repos.state_file, repos.client)
         try:
-            with mock.patch('runner.repositories.time.time', return_value=time.time() + FETCH_INTERVAL + 1):
+            with mock.patch('runner_support.repositories.time.time', return_value=time.time() + FETCH_INTERVAL + 1):
                 cycle(restarted)
                 assert git.call_count > both_count
                 fetches = [call.args[0] for call in git.call_args_list[both_count:] if 'fetch' in call.args[0]]
@@ -83,7 +83,7 @@ def test_first_sync_is_lazy_tokens_not_saved_and_fetch_interval_survives_restart
 @pytest.mark.parametrize('total,free,needed,size_kb', [(100 * GB, 8 * GB, '9 GB', 2 * 1024 * 1024)])
 def test_disk_floor_reports_and_does_not_mint_or_clone(repos, total, free, needed, size_kb):
     repos.client.get.return_value["repositories"][0]["size_kb"] = size_kb
-    with mock.patch('runner.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(total, total-free, free)), mock.patch('runner.repositories.Repositories.run_git') as git:
+    with mock.patch('runner_support.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(total, total-free, free)), mock.patch('runner_support.repositories.Repositories.run_git') as git:
         cycle(repos)
         row = repos.report()[0]
         assert row['state'] == 'disk_low'
@@ -94,7 +94,7 @@ def test_disk_floor_reports_and_does_not_mint_or_clone(repos, total, free, neede
 
 
 def test_removal_waits_30_days_and_never_follows_paths_outside_repos(repos, tmp_path):
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=fake_git), mock.patch('runner.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
+    with mock.patch('runner_support.repositories.Repositories.run_git', side_effect=fake_git), mock.patch('runner_support.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
         cycle(repos)
         cycle(repos)
     outside = tmp_path / 'bot-existing'
@@ -104,12 +104,12 @@ def test_removal_waits_30_days_and_never_follows_paths_outside_repos(repos, tmp_
     (repos.root / 'org__two').symlink_to(outside, target_is_directory=True)
     repos.client.get.return_value = {'repositories': []}
     now = time.time()
-    with mock.patch('runner.repositories.isolation.run', side_effect=fake_git), mock.patch('runner.repositories.time.time', return_value=now):
+    with mock.patch('runner_support.repositories.isolation.run', side_effect=fake_git), mock.patch('runner_support.repositories.time.time', return_value=now):
         cycle(repos)
-    with mock.patch('runner.repositories.isolation.run', side_effect=fake_git), mock.patch('runner.repositories.time.time', return_value=now + REMOVE_AFTER - 1):
+    with mock.patch('runner_support.repositories.isolation.run', side_effect=fake_git), mock.patch('runner_support.repositories.time.time', return_value=now + REMOVE_AFTER - 1):
         cycle(repos)
         assert repos.path('org/one').exists()
-    with mock.patch('runner.repositories.isolation.run', side_effect=fake_git), mock.patch('runner.repositories.time.time', return_value=now + REMOVE_AFTER + 1):
+    with mock.patch('runner_support.repositories.isolation.run', side_effect=fake_git), mock.patch('runner_support.repositories.time.time', return_value=now + REMOVE_AFTER + 1):
         cycle(repos)
         assert not repos.path('org/one').exists()
         assert (outside / 'keep').read_text() == 'keep'
@@ -130,11 +130,11 @@ def test_old_server_and_transient_error_do_nothing(repos):
 
 
 def test_clone_failure_redacts_and_does_not_stall_next_repo(repos):
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=ValueError('synthetic-install-token was rejected')), mock.patch('runner.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
+    with mock.patch('runner_support.repositories.Repositories.run_git', side_effect=ValueError('synthetic-install-token was rejected')), mock.patch('runner_support.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
         cycle(repos)
     assert repos.report()[0]['state'] == 'failed'
     assert 'synthetic-install-token' not in json.dumps(repos.report())
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=fake_git), mock.patch('runner.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
+    with mock.patch('runner_support.repositories.Repositories.run_git', side_effect=fake_git), mock.patch('runner_support.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
         cycle(repos)
     assert repos.rows['org/two']['state'] == 'cloned'
 
@@ -195,7 +195,7 @@ def test_real_git_clone_keeps_token_out_of_config_and_fetches_default_branch(rep
         args = [source.as_uri() if a.startswith('https://github.com/') and 'config' not in args else ('protocol.file.allow=always' if a == 'protocol.file.allow=never' else a) for a in args]
         return original_git(args, **kwargs)
 
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=local_git), mock.patch('runner.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
+    with mock.patch('runner_support.repositories.Repositories.run_git', side_effect=local_git), mock.patch('runner_support.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
         cycle(repos)
         assert repos.report()[0]['state'] == 'cloned'
         config = (repos.path('org/one') / '.git/config').read_text()
@@ -245,7 +245,7 @@ def test_real_git_clone_keeps_token_out_of_config_and_fetches_default_branch(rep
         (source / 'README.md').write_text('second')
         subprocess.run(['git', '-C', str(source), 'add', '.'], check=True)
         subprocess.run(['git', '-C', str(source), '-c', 'user.name=Example', '-c', 'user.email=example@example.com', 'commit', '-qm', 'second'], check=True)
-        with mock.patch('runner.repositories.time.time', return_value=time.time() + FETCH_INTERVAL + 1):
+        with mock.patch('runner_support.repositories.time.time', return_value=time.time() + FETCH_INTERVAL + 1):
             cycle(repos)
         head = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
         fetched = subprocess.check_output(['git', '-C', str(repos.path('org/one')), 'rev-parse', 'origin/main'], text=True).strip()
@@ -266,7 +266,7 @@ def test_slow_git_does_not_block_heartbeat_poll(repos):
         assert release.wait(timeout=5)
         return fake_git(args, **kwargs)
 
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=slow_git) as git, mock.patch('runner.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
+    with mock.patch('runner_support.repositories.Repositories.run_git', side_effect=slow_git) as git, mock.patch('runner_support.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
         try:
             repos.poll()
             assert entered.wait(timeout=5)
@@ -296,7 +296,7 @@ def test_shutdown_interrupts_git_and_its_children(repos, tmp_path):
     real_popen = subprocess.Popen
     def stalled(command, **kwargs):
         return real_popen([command[0], *command[3:]], **kwargs)
-    with mock.patch('runner.repositories.subprocess.Popen', side_effect=stalled):
+    with mock.patch('runner_support.repositories.subprocess.Popen', side_effect=stalled):
         thread = threading.Thread(target=run)
         thread.start()
         deadline = time.monotonic() + 5
@@ -341,7 +341,7 @@ def test_broken_managed_clone_keeps_local_work_with_filtered_environment(repos, 
             assert kwargs['bot']
             return subprocess.CompletedProcess(args, 128, '', '')
         return fake_git(args, **kwargs)
-    with mock.patch.object(repos, 'run_git', side_effect=git), mock.patch('runner.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
+    with mock.patch.object(repos, 'run_git', side_effect=git), mock.patch('runner_support.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
         cycle(repos)
     assert repos.rows['org/one']['state'] == 'failed'
     assert (path / 'broken').read_text() == 'local work'
@@ -353,7 +353,7 @@ def test_mirror_symlinks_are_refused_before_tokens_or_git(repos, tmp_path):
     victim = tmp_path / 'victim'
     victim.write_text('keep')
     (mirror / 'FETCH_HEAD').symlink_to(victim)
-    with mock.patch.object(repos, 'run_git') as git, mock.patch('runner.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
+    with mock.patch.object(repos, 'run_git') as git, mock.patch('runner_support.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB)):
         cycle(repos)
     assert repos.rows['org/one']['state'] == 'failed'
     assert 'symlink' in repos.rows['org/one']['error']
@@ -363,12 +363,12 @@ def test_mirror_symlinks_are_refused_before_tokens_or_git(repos, tmp_path):
 
 def test_isolated_state_exposes_only_mirrors(tmp_path, monkeypatch):
     import os
-    from runner.state import State
+    from runner_support.state import State
     directory = tmp_path / 'state'
     directory.mkdir()
     private = directory / 'previous.json'
     private.write_text('private state')
-    monkeypatch.setattr('runner.isolation.enabled', lambda: True)
+    monkeypatch.setattr('runner_support.isolation.enabled', lambda: True)
     old_umask = os.umask(0o022)
     try:
         state = State(directory)
@@ -385,7 +385,7 @@ def test_isolated_mirrors_reject_bot_writable_files_and_parent(repos, monkeypatc
     (mirror / 'config').write_text('[core]\nbare = true\n')
     repos.mirror_permissions(mirror)
     repos.mirrors.chmod(0o755)
-    monkeypatch.setattr('runner.isolation.enabled', lambda: True)
+    monkeypatch.setattr('runner_support.isolation.enabled', lambda: True)
     (mirror / 'config').chmod(0o664)
     with pytest.raises(ValueError, match='writable'):
         repos.mirror_path('org/one')
@@ -396,7 +396,7 @@ def test_isolated_mirrors_reject_bot_writable_files_and_parent(repos, monkeypatc
 
 
 def test_git_in_bot_directories_uses_isolation_launcher(repos):
-    with mock.patch('runner.repositories.isolation.popen', wraps=subprocess.Popen) as launch:
+    with mock.patch('runner_support.repositories.isolation.popen', wraps=subprocess.Popen) as launch:
         result = repos.run_git(['git', '--version'], env={'PATH': __import__('os').environ['PATH']}, timeout=10, bot=True)
     assert result.returncode == 0
     assert launch.call_count == 1
@@ -405,8 +405,8 @@ def test_git_in_bot_directories_uses_isolation_launcher(repos):
 def test_real_isolated_mirror_is_readable_but_not_writable(monkeypatch):
     import os
     import tempfile
-    from runner import isolation
-    from runner.state import State
+    from runner_support import isolation
+    from runner_support.state import State
     if not __import__('sys').platform.startswith('linux') or os.geteuid() != 0 or not Path(isolation.SETPRIV).exists():
         pytest.skip('Requires a Linux supervisor able to switch Unix users')
     old_umask = os.umask(0o022)
@@ -455,7 +455,7 @@ TURN_TOKEN = 'ghs_' + 'T' * 36
 
 def failing_clone(stderr='', returncode=128, raise_timeout=False, leave='partial'):
     """isolation.run for worktree_base: the clone leaves a half-made folder and fails as GitHub would."""
-    from runner import repositories as R
+    from runner_support import repositories as R
     def run(args, **kwargs):
         if 'clone' in args:
             path = Path(args[-1])
@@ -478,8 +478,8 @@ def failing_clone(stderr='', returncode=128, raise_timeout=False, leave='partial
      'RPC failed; HTTP 500'),
 ])
 def test_turn_clone_failure_names_gits_reason_and_removes_the_partial_clone(tmp_path, stderr, wanted):
-    from runner import repositories as R
-    with mock.patch('runner.repositories.isolation.run', side_effect=failing_clone(stderr)):
+    from runner_support import repositories as R
+    with mock.patch('runner_support.repositories.isolation.run', side_effect=failing_clone(stderr)):
         with pytest.raises(ValueError) as caught:
             R.worktree_base(tmp_path, {'full_name': 'acme/web'}, {'GH_TOKEN': TURN_TOKEN, 'PATH': os.environ['PATH']})
     message = str(caught.value)
@@ -489,15 +489,15 @@ def test_turn_clone_failure_names_gits_reason_and_removes_the_partial_clone(tmp_
 
 
 def test_turn_clone_timeout_says_so_and_removes_the_partial_clone(tmp_path):
-    from runner import repositories as R
-    with mock.patch('runner.repositories.isolation.run', side_effect=failing_clone(raise_timeout=True)):
+    from runner_support import repositories as R
+    with mock.patch('runner_support.repositories.isolation.run', side_effect=failing_clone(raise_timeout=True)):
         with pytest.raises(ValueError, match=r'Git clone of acme/web timed out after 120 seconds'):
             R.worktree_base(tmp_path, {'full_name': 'acme/web'}, {'PATH': os.environ['PATH']})
     assert not (tmp_path / 'repos' / R.base_folder('acme/web')).exists()
 
 
 def test_turn_clone_never_removes_a_folder_it_did_not_make(tmp_path):
-    from runner import repositories as R
+    from runner_support import repositories as R
     target = tmp_path / 'repos' / R.base_folder('acme/web')
     def appeared(args, **kwargs):
         if 'clone' in args:
@@ -505,24 +505,24 @@ def test_turn_clone_never_removes_a_folder_it_did_not_make(tmp_path):
             (target / 'someone-elses-work').write_text('keep')
             return subprocess.CompletedProcess(args, 128, '', f"fatal: destination path '{target}' already exists and is not an empty directory.\n")
         return subprocess.CompletedProcess(args, 0, '', '')
-    with mock.patch('runner.repositories.isolation.run', side_effect=appeared):
+    with mock.patch('runner_support.repositories.isolation.run', side_effect=appeared):
         with pytest.raises(ValueError, match='already exists'):
             R.worktree_base(tmp_path, {'full_name': 'acme/web'}, {'PATH': os.environ['PATH']})
     assert (target / 'someone-elses-work').read_text() == 'keep'
 
 
 def test_partial_clone_with_a_registered_worktree_is_kept(tmp_path):
-    from runner.repositories import discard_failed_clone
+    from runner_support.repositories import discard_failed_clone
     path = tmp_path / 'base'
     (path / '.git' / 'worktrees' / 'task').mkdir(parents=True)
-    with mock.patch('runner.repositories.base_kept', side_effect=ValueError('cannot prune')):
+    with mock.patch('runner_support.repositories.base_kept', side_effect=ValueError('cannot prune')):
         discard_failed_clone(path, fresh=True)
     assert path.exists()
 
 
 # ---------------------------------------------------------------- a computer base clone that fails
 def roomy():
-    return mock.patch('runner.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB))
+    return mock.patch('runner_support.repositories.shutil.disk_usage', return_value=shutil._ntuple_diskusage(100 * GB, 0, 100 * GB))
 
 
 def mirror_fetch_fails(stderr):
@@ -541,7 +541,7 @@ def test_base_clone_failure_reports_gits_reason_without_the_token(repos):
     only_one(repos)
     stderr = ("remote: Repository not found.\nfatal: repository "
               "'https://x-access-token:synthetic-install-token@github.com/org/one.git/' not found\n")
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=mirror_fetch_fails(stderr)), roomy():
+    with mock.patch('runner_support.repositories.Repositories.run_git', side_effect=mirror_fetch_fails(stderr)), roomy():
         cycle(repos)
     row = repos.report()[0]
     assert row['state'] == 'failed'
@@ -560,7 +560,7 @@ def test_real_git_reason_reaches_the_report(repos, tmp_path):
         args = [missing.as_uri() if a.startswith('https://github.com/') else
                 ('protocol.file.allow=always' if a == 'protocol.file.allow=never' else a) for a in args]
         return original_git(args, **kwargs)
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=local_git), roomy():
+    with mock.patch('runner_support.repositories.Repositories.run_git', side_effect=local_git), roomy():
         cycle(repos)
     error = repos.report()[0]['error']
     assert error.startswith('Git mirror fetch of org/one failed: fatal: ')
@@ -570,7 +570,7 @@ def test_real_git_reason_reaches_the_report(repos, tmp_path):
 def test_retry_starts_at_minutes_doubles_and_stops_at_six_hours(repos):
     only_one(repos)
     delays = []
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=mirror_fetch_fails('fatal: unable to access: HTTP 500')), roomy():
+    with mock.patch('runner_support.repositories.Repositories.run_git', side_effect=mirror_fetch_fails('fatal: unable to access: HTTP 500')), roomy():
         for _ in range(9):
             repos.rows.setdefault('org/one', {'full_name': 'org/one', 'state': 'cloning'}).update(attempted_at=0)
             cycle(repos)
@@ -581,12 +581,12 @@ def test_retry_starts_at_minutes_doubles_and_stops_at_six_hours(repos):
 
 def test_restarting_the_runner_retries_a_failed_clone_at_once(repos):
     only_one(repos)
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=mirror_fetch_fails('fatal: HTTP 500')), roomy():
+    with mock.patch('runner_support.repositories.Repositories.run_git', side_effect=mirror_fetch_fails('fatal: HTTP 500')), roomy():
         for _ in range(4):
             repos.rows.setdefault('org/one', {'full_name': 'org/one'}).update(attempted_at=0)
             cycle(repos)
     assert repos.rows['org/one']['retry_delay'] == 2400
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=fake_git) as git, roomy():
+    with mock.patch('runner_support.repositories.Repositories.run_git', side_effect=fake_git) as git, roomy():
         cycle(repos)
         assert not git.called                           # still waiting out the backoff
         restarted = Repositories(repos.root.parent, repos.state_file, repos.client)
@@ -603,13 +603,13 @@ def test_restarting_the_runner_retries_a_failed_clone_at_once(repos):
 def test_token_refusal_names_the_cause(repos):
     only_one(repos)
     repos.client.post.side_effect = APIError('github_repo_not_accessible', 'org/one is not reachable; check the GitHub App installation', 409)
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=fake_git), roomy():
+    with mock.patch('runner_support.repositories.Repositories.run_git', side_effect=fake_git), roomy():
         cycle(repos)
     assert 'Tico could not get a GitHub token for org/one: the GitHub App is not installed on it' in repos.rows['org/one']['error']
     repos.client.post.side_effect = None
     repos.client.post.return_value = {'token': 'synthetic-install-token', 'repositories': ['org/two']}
     repos.rows['org/one']['attempted_at'] = 0
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=fake_git), roomy():
+    with mock.patch('runner_support.repositories.Repositories.run_git', side_effect=fake_git), roomy():
         cycle(repos)
     assert 'Tico could not get a GitHub read token for org/one: the GitHub App is not installed on it' in repos.rows['org/one']['error']
 
@@ -620,7 +620,7 @@ def test_a_clone_stopped_halfway_is_removed_and_cloned_again(repos):
     (path / '.git' / 'objects').mkdir(parents=True)
     (path / '.git' / 'objects' / 'tmp_pack_partial').write_text('half a pack')
     repos.rows['org/one'] = {'full_name': 'org/one', 'state': 'cloning', 'managed': True, 'partial': True}
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=fake_git), roomy():
+    with mock.patch('runner_support.repositories.Repositories.run_git', side_effect=fake_git), roomy():
         cycle(repos)
     assert repos.rows['org/one']['state'] == 'cloned'
     assert 'partial' not in repos.rows['org/one']
@@ -634,7 +634,7 @@ def test_a_failed_clone_leaves_no_half_made_folder(repos):
             (Path(args[-1]) / '.git').mkdir(parents=True)
             return subprocess.CompletedProcess(args, 128, '', 'error: unable to create file a: Filename too long\nfatal: unable to checkout working tree\n')
         return fake_git(args, **kwargs)
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=clone_fails), roomy():
+    with mock.patch('runner_support.repositories.Repositories.run_git', side_effect=clone_fails), roomy():
         cycle(repos)
     row = repos.rows['org/one']
     assert 'Filename too long' in row['error'] and 'unable to checkout working tree' in row['error']
@@ -660,7 +660,7 @@ def from_local(repos, source, before=None):
         assert not any(a.startswith(('https://', 'http://')) for a in args if 'config' not in args)
         answer = before(args) if before else None
         return answer if answer is not None else original_git(args, **kwargs)
-    return mock.patch('runner.repositories.Repositories.run_git', side_effect=local_git)
+    return mock.patch('runner_support.repositories.Repositories.run_git', side_effect=local_git)
 
 
 def test_a_mirror_the_bot_cannot_clone_is_rebuilt_and_the_clone_succeeds(repos, tmp_path):
@@ -696,7 +696,7 @@ def test_a_corrupt_mirror_is_rebuilt_when_its_fetch_fails(repos, tmp_path):
         subprocess.run(['git', '-C', str(source), '-c', 'user.name=Example', '-c', 'user.email=example@example.com',
                         'commit', '-qam', 'second'], check=True)
         first = subprocess.check_output(['git', '-C', str(repos.path('org/one')), 'rev-parse', 'origin/main'], text=True).strip()
-        with mock.patch('runner.repositories.time.time', return_value=time.time() + FETCH_INTERVAL + 1), \
+        with mock.patch('runner_support.repositories.time.time', return_value=time.time() + FETCH_INTERVAL + 1), \
                 mock.patch.object(repos, 'discard_mirror', wraps=repos.discard_mirror) as discard:
             cycle(repos)
     row = repos.rows['org/one']
@@ -713,7 +713,7 @@ def test_a_mirror_that_stays_broken_reports_both_reasons(repos):
         if 'clone' in args:
             return subprocess.CompletedProcess(args, 128, '', 'error: Could not read 0123abcd\nfatal: remote did not send all necessary objects\n')
         return fake_git(args, **kwargs)
-    with mock.patch('runner.repositories.Repositories.run_git', side_effect=clone_always_fails) as git, roomy():
+    with mock.patch('runner_support.repositories.Repositories.run_git', side_effect=clone_always_fails) as git, roomy():
         cycle(repos)
     error = repos.rows['org/one']['error']
     assert error.startswith('Cloning the local mirror of org/one failed: ')
@@ -724,7 +724,7 @@ def test_a_mirror_that_stays_broken_reports_both_reasons(repos):
 
 
 def test_turn_clone_falls_back_to_github_when_the_mirror_cannot_be_copied(tmp_path):
-    from runner import repositories as R
+    from runner_support import repositories as R
     clones = []
     def run(args, **kwargs):
         if 'clone' in args:
@@ -736,14 +736,14 @@ def test_turn_clone_falls_back_to_github_when_the_mirror_cannot_be_copied(tmp_pa
             assert args[-2] == 'https://github.com/acme/web.git'
         return subprocess.CompletedProcess(args, 0, '', '')
     repo = {'full_name': 'acme/web', '_mirror_refresh': {'mirror': (tmp_path / 'mirror.git').as_uri(), 'default_branch': 'main'}}
-    with mock.patch('runner.repositories.isolation.run', side_effect=run):
+    with mock.patch('runner_support.repositories.isolation.run', side_effect=run):
         path, branch = R.worktree_base(tmp_path, repo, {'PATH': os.environ['PATH']})
     assert branch == 'main' and len(clones) == 2 and path.exists()
     assert "Could not copy this computer's mirror of acme/web; cloned from GitHub instead" == repo['fetch_warning']
 
 
 def test_turn_clone_reports_both_reasons_when_mirror_and_github_fail(tmp_path):
-    from runner import repositories as R
+    from runner_support import repositories as R
     def run(args, **kwargs):
         if 'clone' in args:
             if 'tico-mirror' in args:
@@ -751,7 +751,7 @@ def test_turn_clone_reports_both_reasons_when_mirror_and_github_fail(tmp_path):
             return subprocess.CompletedProcess(args, 128, '', 'remote: Repository not found.\nfatal: repository not found\n')
         return subprocess.CompletedProcess(args, 0, '', '')
     repo = {'full_name': 'acme/web', '_mirror_refresh': {'mirror': (tmp_path / 'mirror.git').as_uri(), 'default_branch': 'main'}}
-    with mock.patch('runner.repositories.isolation.run', side_effect=run):
+    with mock.patch('runner_support.repositories.isolation.run', side_effect=run):
         with pytest.raises(ValueError) as caught:
             R.worktree_base(tmp_path, repo, {'PATH': os.environ['PATH']})
     assert str(caught.value) == ('Git clone of acme/web failed: fatal: remote did not send all necessary objects; cloning from '
@@ -811,18 +811,18 @@ def test_a_half_clone_with_only_the_mirror_remote_is_removed_and_cloned_again(re
 
 
 def test_where_bots_run_as_a_separate_user_their_half_clone_is_still_tico_s(repos, tmp_path, monkeypatch):
-    from runner.repositories import tico_half_clone
+    from runner_support.repositories import tico_half_clone
     path = tmp_path / 'half'
     subprocess.run(['git', 'init', '-q', str(path)], check=True)
     subprocess.run(['git', '-C', str(path), 'remote', 'add', 'tico-mirror', 'file:///mirror'], check=True)
     bot = os.stat(path).st_uid
     # The runner is another user; the folder was made by the bot user the clone ran as.
-    monkeypatch.setattr('runner.repositories.os.geteuid', lambda: bot + 1)
-    monkeypatch.setattr('runner.repositories.isolation.identity', lambda: (bot, bot))
-    monkeypatch.setattr('runner.repositories.isolation.run', subprocess.run)  # no setpriv on a test machine
+    monkeypatch.setattr('runner_support.repositories.os.geteuid', lambda: bot + 1)
+    monkeypatch.setattr('runner_support.repositories.isolation.identity', lambda: (bot, bot))
+    monkeypatch.setattr('runner_support.repositories.isolation.run', subprocess.run)  # no setpriv on a test machine
     assert tico_half_clone(path)
     # Made by neither the runner nor its bot user: someone else's, never Tico's.
-    monkeypatch.setattr('runner.repositories.isolation.identity', lambda: (bot + 2, bot + 2))
+    monkeypatch.setattr('runner_support.repositories.isolation.identity', lambda: (bot + 2, bot + 2))
     assert not tico_half_clone(path)
 
 
@@ -841,9 +841,9 @@ def test_a_mac_takes_over_a_clone_of_the_same_repository_and_keeps_its_origin(re
     # No longer wanted here: Tico forgets it, and the person's clone stays.
     repos.client.get.return_value = {'repositories': []}
     now = time.time()
-    with mock.patch('runner.repositories.time.time', return_value=now):
+    with mock.patch('runner_support.repositories.time.time', return_value=now):
         cycle(repos)
-    with mock.patch('runner.repositories.time.time', return_value=now + REMOVE_AFTER + 1):
+    with mock.patch('runner_support.repositories.time.time', return_value=now + REMOVE_AFTER + 1):
         cycle(repos)
         cycle(repos)
     assert (path / 'notes.txt').read_text() == 'my uncommitted notes'
@@ -871,5 +871,5 @@ def test_a_computer_that_isolates_bots_never_takes_over_a_folder(repos, tmp_path
     only_one(repos)
     source = local_source(tmp_path)
     own_clone(repos, source)
-    monkeypatch.setattr('runner.repositories.isolation.enabled', lambda: True)
+    monkeypatch.setattr('runner_support.repositories.isolation.enabled', lambda: True)
     assert 'separate user' in repos.adoption_problem(repos.root / 'org__one', 'org/one')

@@ -1,4 +1,4 @@
-"""Register and operate a local machine: python -m runner --help."""
+"""Register and operate a local machine: python -m runner_support --help."""
 
 import argparse
 import fcntl
@@ -11,8 +11,9 @@ from clients.tico import Client
 from . import importers, mail_key
 
 
-# The Rust runner's own commands: `python -m runner <one>` execs it with the same arguments (runner/engine.py), so
-# launchd plists, systemd units and older docs that say `python -m runner run|doctor|...` keep working.
+# The Rust runner's own commands: `python -m runner_support <one>` execs it with the same arguments (engine.py), so
+# launchd plists and systemd units that say `python -m runner_support run|doctor|...` (or `python -m runner ...`, from
+# earlier releases: runner/__main__.py) keep working.
 BINARY = ("enroll", "profile", "status", "doctor", "adopt", "run")
 
 

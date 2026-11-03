@@ -1,4 +1,4 @@
-"""A stand-in for the Antigravity `agy` CLI, for the runner conformance suite (runner/tests/test_conformance.py).
+"""A stand-in for the Antigravity `agy` CLI, for the runner conformance suite (runner_support/tests/test_conformance.py).
 
 `--version` answers as agy 1.3.5. With `--input-format stream-json` it is one persistent process that runs a turn
 for each user line on stdin, the way runner-rs/src/hosts/antigravity.rs reads it: `init` with the conversation id, text

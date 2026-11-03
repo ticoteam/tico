@@ -1,7 +1,7 @@
 """Moves a checkout to the release its server runs (docs/updates.md).
 
 The Rust runner decides when (runner-rs/src/follow.rs) and starts this as a separate process
-(`python -m runner.release_update`). It has to outlive the runner it restarts, and it is the one thing
+(`python -m runner_support.release_update`). It has to outlive the runner it restarts, and it is the one thing
 that can put the old code back when the new code does not come up. Nothing here discards local work:
 a checkout with changes is left alone and the reason goes to Health.
 """
@@ -111,11 +111,11 @@ def pip_install(root, old, new, run=subprocess.run):
 def prepare_binary(root, run=subprocess.run):
     """The checkout's Rust runner, ready before the restart, so a release with none fails here and goes back. A new
     process: this one still has the old code in memory. Returns an error or "". A tree from before the shim
-    (runner/engine.py without `prepare`) is left to get its own."""
-    if not (Path(root) / "runner" / "engine.py").is_file():
+    (runner_support/engine.py without `prepare`) is left to get its own."""
+    if not (Path(root) / "runner_support" / "engine.py").is_file():
         return ""
     try:
-        done = run([sys.executable, "-m", "runner.engine", "prepare"], cwd=str(root), capture_output=True, text=True,
+        done = run([sys.executable, "-m", "runner_support.engine", "prepare"], cwd=str(root), capture_output=True, text=True,
                    timeout=2400, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError) as exc:
         return f"could not get the Rust runner ready ({type(exc).__name__})"
@@ -436,7 +436,7 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="python -m runner.release_update")
+    parser = argparse.ArgumentParser(prog="python -m runner_support.release_update")
     parser.add_argument("--root", default=str(ROOT))
     parser.add_argument("--version", required=True)
     parser.add_argument("--state-dir", required=True)

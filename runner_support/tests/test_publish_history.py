@@ -2,7 +2,7 @@
 (`git_credentials.publish_history`), with that bot's scoped token and never a force push."""
 import subprocess
 
-from runner import git_credentials as G
+from runner_support import git_credentials as G
 
 REPO = "Acme/emp-cpo"
 URL = f"https://github.com/{REPO}.git"

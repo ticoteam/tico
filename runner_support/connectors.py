@@ -30,7 +30,7 @@ def owner_handle(config=None):
 
 def mail_secret_path(config=None):
     """The Google service-account key: GOOGLE_SA_KEY, else the supervisor's own copy where bots cannot
-    read it (runner/mail_key.py), else <projects_dir>/secrets/google-sa.json."""
+    read it (runner_support/mail_key.py), else <projects_dir>/secrets/google-sa.json."""
     named = os.environ.get("GOOGLE_SA_KEY")
     if named:
         return Path(named).expanduser()
@@ -52,7 +52,7 @@ def mail_credential_present(config=None):
 
 
 def mail_cli_env(config, key_path):
-    """The local mail CLI's environment (this job and the supervisor's mint-token, runner/mail_key.py): the runner's
+    """The local mail CLI's environment (this job and the supervisor's mint-token, runner_support/mail_key.py): the runner's
     without the hub token, the key at `key_path`, and the server and this computer's registration, which only the
     Connect Google refresh uses (connectors/mail/oauth.py broker): the client secret stays on the server."""
     from connectors.mail.oauth import BROKER_AUTH_ENV, BROKER_URL_ENV          # noqa: PLC0415

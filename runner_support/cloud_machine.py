@@ -63,7 +63,7 @@ FONT_PACKAGES = ("fonts-liberation", "fonts-noto-color-emoji")
 NODE_MAJOR = 22
 CHROME_KEY_URL = "https://dl.google.com/linux/linux_signing_key.pub"
 NODE_KEY_URL = "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
-JOBS = ("bot", "connectors", "close-calls", "importers")   # scripts/tico install's units (runner/systemd_units.py)
+JOBS = ("bot", "connectors", "close-calls", "importers")   # scripts/tico install's units (runner_support/systemd_units.py)
 DEFAULT_USER = "user"                                       # boat's sandbox user (docs.boat.dev/machines/tools)
 URL_RE = re.compile(r"^https?://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$")
 CODE_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
@@ -232,9 +232,9 @@ def enroll(m: Machine, code: str, hub: str) -> bool:
         for attempt in range(1, ATTEMPTS + 1):
             if m.config.exists():
                 return True
-            binary = m.as_user(str(m.python), "-m", "runner.engine", "path", timeout=60)
+            binary = m.as_user(str(m.python), "-m", "runner_support.engine", "path", timeout=60)
             if binary.returncode or not (binary.stdout or "").strip():
-                m.say("no Rust runner in this checkout: rebuild the base image (python3 -m runner.cloud_machine base)")
+                m.say("no Rust runner in this checkout: rebuild the base image (python3 -m runner_support.cloud_machine base)")
                 return False
             done = m.as_user((binary.stdout or "").strip().splitlines()[-1], "--config", str(m.config), "enroll",
                              "--url", hub, "--code-file", code_file, "--label", "cloud machine",
@@ -292,7 +292,7 @@ def boot(m: Machine | None, environ: dict[str, str]) -> int:
 # -- base -------------------------------------------------------------------------------------------------------------
 
 def sudoers_text(user: str) -> str:
-    return (f"# Tico cloud machine (runner/cloud_machine.py base): its bots are one trust group, so its runner may "
+    return (f"# Tico cloud machine (runner_support/cloud_machine.py base): its bots are one trust group, so its runner may "
             f"use sudo.\n"
             f"{user} ALL=(ALL) NOPASSWD:ALL\n")
 
@@ -309,7 +309,7 @@ def unit_text(m: Machine) -> str:
         "[Service]",
         "Type=oneshot",
         f"WorkingDirectory={m.root}",
-        f"ExecStart={m.python} -m runner.cloud_machine boot",
+        f"ExecStart={m.python} -m runner_support.cloud_machine boot",
         "Restart=on-failure",
         "RestartSec=30",
         "Environment=PYTHONUNBUFFERED=1",
@@ -386,7 +386,7 @@ def tool_commands(arch: str, apt: Path = APT) -> list[tuple[str, list[str] | dic
 def tools(m: Machine, *, arch: str, apt: Path = APT) -> None:
     """The tools every bot's computer needs, installed as root by `base` (see the module docstring). Node stays because
     the runner installs each harness its bots use (Claude Code, Codex, Pi, Gemini, Grok) with npm, even over a copy the
-    image left on PATH (runner-rs/src/harness_tools.rs, runner/harnesses/*.toml). Nothing else is here: a bot that needs
+    image left on PATH (runner-rs/src/harness_tools.rs, runner-rs/harnesses/*.toml). Nothing else is here: a bot that needs
     ffmpeg or a toolchain installs it itself. A failed step refuses the base."""
     m.say(f"installing the tools bots need: {browser_package(arch)}, Xvfb, Node.js {NODE_MAJOR} or newer")
     for what, argv in tool_commands(arch, apt):
@@ -404,7 +404,7 @@ def tools(m: Machine, *, arch: str, apt: Path = APT) -> None:
 
 
 def checkout_release(root: Path, run=subprocess.run) -> str:
-    from runner import release_update
+    from runner_support import release_update
     return release_update.checkout_release(root, run=run)
 
 
@@ -443,7 +443,7 @@ def base(m: Machine, *, release: str, sudoers: Path = SUDOERS, unit_dir: Path = 
     steps += [
         ("its packages", [str(m.python), "-m", "pip", "install", "--disable-pip-version-check", "-q",
                           "-r", str(m.root / "backend" / "requirements.txt")]),
-        ("the Rust runner of this release", [str(m.python), "-m", "runner.engine", "prepare"]),
+        ("the Rust runner of this release", [str(m.python), "-m", "runner_support.engine", "prepare"]),
     ]
     for what, command in steps:
         m.say(f"installing {what}")
@@ -474,14 +474,14 @@ def base(m: Machine, *, release: str, sudoers: Path = SUDOERS, unit_dir: Path = 
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="python3 -m runner.cloud_machine", description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(prog="python3 -m runner_support.cloud_machine", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
     b = sub.add_parser("base", help="prepare the sandbox a base snapshot is saved from (as root, once)")
     b.add_argument("--user", default=DEFAULT_USER, help=f"the user the runner runs as (default {DEFAULT_USER})")
     sub.add_parser("boot", help="the boot service: enroll once, then start the runner")
     args = parser.parse_args(argv)
     if os.geteuid() != 0:
-        print(f"{args.cmd} runs as root (sudo python3 -m runner.cloud_machine {args.cmd})", file=sys.stderr)
+        print(f"{args.cmd} runs as root (sudo python3 -m runner_support.cloud_machine {args.cmd})", file=sys.stderr)
         return 2
     try:
         if args.cmd == "base":

@@ -2,7 +2,7 @@
 sections 4.3 to 4.5 and 8).
 
 The Computer, its fake harnesses on PATH and the release binary are the conformance suite's own
-(runner/tests/test_conformance.py): every test starts a real `tico-runner run` against the live API, and the fake
+(runner_support/tests/test_conformance.py): every test starts a real `tico-runner run` against the live API, and the fake
 `claude` or `codex` records each provider turn it is given. The tests here answer the threads questions: who a
 wake starts, which sub-thread the reply lands in, when the loop guard holds a wake, and which provider session a
 turn continues. A peer bot whose turns the test finishes by hand (cpo) makes bot-caused wakes without a second
@@ -20,7 +20,7 @@ import pytest
 from backend.tests.live import live  # noqa: F401  (the live fixture the Computer listens through)
 from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
 from backend.tests.threads_e2e import call, create_thread, home_id, ok, require_threads_api, say, timeline
-from runner.tests.test_conformance import Computer, computer, harness, rust_binary, setup, until  # noqa: F401
+from runner_support.tests.test_conformance import Computer, computer, harness, rust_binary, setup, until  # noqa: F401
 
 pytestmark = pytest.mark.slow
 
@@ -216,7 +216,7 @@ def test_the_first_turn_after_an_update_starts_fresh_and_recovers_only_its_roots
 def test_the_fresh_root_thread_is_replayed_its_roots_earlier_messages(api, computer):
     _kind, _thread, prompt, _elsewhere = fresh_root_turn(api, computer)
     # The fresh thread is replayed this root's earlier messages inline, oldest first (runner-rs/src/fallback.rs
-    # first_turn_pack). An old runner gives a fresh thread no history; see runner/tests/test_old_runner_skew.py.
+    # first_turn_pack). An old runner gives a fresh thread no history; see runner_support/tests/test_old_runner_skew.py.
     assert "ROOM-B note: launch is Tuesday" in prompt, "the fresh thread is replayed this root's earlier messages"
 
 
@@ -255,5 +255,5 @@ def test_a_public_turn_never_carries_a_direct_message_or_legacy_text(api, comput
 @pytest.mark.parametrize("harness", ["claude"])
 def test_a_public_turn_is_replayed_its_threads_public_history(api, computer):
     _kind, prompt, _seen = public_turn(api, computer)
-    # An old runner gives a fresh thread no history; see runner/tests/test_old_runner_skew.py.
+    # An old runner gives a fresh thread no history; see runner_support/tests/test_old_runner_skew.py.
     assert "PUBLIC-ROOM note: launch is Tuesday" in prompt, "a public turn is replayed its thread's public history"

@@ -9,8 +9,8 @@ from unittest import mock
 import pytest
 
 from clients.tico import APIError
-from runner import worktrees as W
-from runner.repositories import GB
+from runner_support import worktrees as W
+from runner_support.repositories import GB
 
 
 def git(path, *args):
@@ -171,7 +171,7 @@ def test_disk_floor_paths_old_server_and_setup_failure(trees, monkeypatch):
 
 @pytest.mark.slow
 def test_unselected_base_with_linked_worktree_is_not_deleted(trees):
-    from runner.repositories import Repositories, REMOVE_AFTER
+    from runner_support.repositories import Repositories, REMOVE_AFTER
     workspace, base, remote, row, client = trees
     W.command(client, 'add', 'org/product')
     manager = Repositories(workspace, workspace / 'state.json', client)
@@ -363,7 +363,7 @@ def test_missing_folder_registration_is_pruned_for_restore_and_base_cleanup(tree
     shutil.rmtree(path)
     git(base, 'worktree', 'prune', '--expire', 'now')
     git(base, 'branch', '-D', row['branch'])
-    from runner.repositories import Repositories, REMOVE_AFTER
+    from runner_support.repositories import Repositories, REMOVE_AFTER
     manager = Repositories(workspace, workspace / 'state.json', client)
     manager.rows = {'org/product': {'full_name': 'org/product', 'managed': True, 'left_at': 0}}
     try:
@@ -533,7 +533,7 @@ def test_a_write_refusal_names_what_the_server_listed_for_the_run():
 
 @pytest.mark.slow
 def test_unlisted_managed_base_is_adopted_and_clone_failure_cleans_partial_folder(trees, monkeypatch):
-    from runner.repositories import Repositories
+    from runner_support.repositories import Repositories
     workspace, base, remote, row, client = trees
     (base / '.git' / 'tico-managed').touch()
     client.get.return_value = {'repositories': []}
@@ -743,8 +743,8 @@ def test_snapshot_skipped_is_reported_and_branch_check_ignores_cwd(trees, monkey
 
 @pytest.mark.slow
 def test_full_mirror_base_offline_commit_push_cleanup_recreate(trees, monkeypatch):
-    from runner.repositories import Repositories, REMOVE_AFTER
-    from runner import credential_socket
+    from runner_support.repositories import Repositories, REMOVE_AFTER
+    from runner_support import credential_socket
     workspace, base, remote, row, client = trees
     shutil.rmtree(base)
     supervisor = mock.Mock()
@@ -825,7 +825,7 @@ def test_full_mirror_base_offline_commit_push_cleanup_recreate(trees, monkeypatc
 
 @pytest.mark.slow
 def test_retirement_keeps_local_branches_and_broken_bases(trees):
-    from runner.repositories import Repositories, REMOVE_AFTER
+    from runner_support.repositories import Repositories, REMOVE_AFTER
     workspace, base, remote, row, client = trees
     manager = Repositories(workspace, workspace / 'state.json', client)
     manager.rows = {'org/product': {'full_name': 'org/product', 'managed': True, 'left_at': 0}}
@@ -874,7 +874,7 @@ def test_claims_skip_only_bot_under_maintenance(light):
 @pytest.mark.parametrize('use_file_url', [False])
 def test_no_app_clone_add_snapshot_cleanup_restore_and_retirement(trees, use_file_url, monkeypatch):
     monkeypatch.delenv('GH_TOKEN', raising=False)       # a bot's own shell may carry one; check only what the runner adds
-    from runner.repositories import Repositories, REMOVE_AFTER, base_folder
+    from runner_support.repositories import Repositories, REMOVE_AFTER, base_folder
     workspace, base, remote, row, client = trees
     shutil.rmtree(base)
     value = remote.as_uri() if use_file_url else 'org/product'
@@ -954,7 +954,7 @@ def test_heartbeat_creation_refreshes_mirror_before_cloning(trees):
 @pytest.mark.slow
 @pytest.mark.parametrize('kind', ['untracked', 'stash'])
 def test_retirement_keeps_all_local_work(trees, kind):
-    from runner.repositories import base_kept
+    from runner_support.repositories import base_kept
     workspace, base, remote, row, client = trees
     if kind == 'untracked':
         (base / 'untracked').write_text('local work')

@@ -1,6 +1,6 @@
 """The runner's contract: the Rust `tico-runner run` (runner-rs/), run as a real process against a real listening API,
 with fake `claude`, `codex`, `gemini`, `agy`, `muse`, `pi`, `cursor-agent` and `grok` executables first on PATH
-(runner/tests/conformance/). Every scenario runs on every harness, and checks the result through the server: the claim, the streamed events, the completion and its Idempotency-Keys, granted
+(runner_support/tests/conformance/). Every scenario runs on every harness, and checks the result through the server: the claim, the streamed events, the completion and its Idempotency-Keys, granted
 credentials and their redaction, session resume, and recovery after the runner is killed mid-turn.
 
 Slow: it builds the release binary once per session (cargo) and starts runner processes."""
@@ -22,7 +22,7 @@ import pytest
 from backend.store import H, encode
 from backend.tests.test_api import api, assign, get, headers, post, runner, settled  # noqa: F401
 from backend.tests.live import live  # noqa: F401
-from runner import engine
+from runner_support import engine
 
 pytestmark = pytest.mark.slow
 
@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FAKES = Path(__file__).resolve().parent / "conformance"
 MODELS = {"claude": "claude-sonnet-5", "codex": "gpt-5.5", "gemini": "gemini-3.8-flash", "antigravity": "gemini-3.8-flash",
           "musecode": "muse-spark-1.3", "pi": "kimi-k3", "cursor": "cursor-auto", "grok": "grok-4.6"}
-# Each fake executable on PATH and the script behind it (runner/tests/conformance/fake_<name>.py).
+# Each fake executable on PATH and the script behind it (runner_support/tests/conformance/fake_<name>.py).
 FAKE_PROGRAMS = {"claude": "claude", "codex": "codex", "gemini": "gemini", "agy": "agy", "muse": "muse", "pi": "pi",
                  "cursor-agent": "cursor", "grok": "grok"}
 # The model key each harness signs in with, granted to the bot as the server does (readiness wants the grant).
@@ -76,7 +76,7 @@ def until(check, what, timeout=30.0):
 
 
 class Computer:
-    """One registration, its workspace, and the runner process running it (`python -m runner run` with `shim`)."""
+    """One registration, its workspace, and the runner process running it (`python -m runner_support run` with `shim`)."""
 
     def __init__(self, api, live, tmp_path, harness, binary, bot=None, registration=None, git=False, env=None, shim=False):
         self.api, self.harness, self.binary, self.shim = api, harness, binary, shim
@@ -1351,14 +1351,14 @@ def test_a_completed_turn_publishes_the_bots_report_as_a_tico_file(api, computer
 
 
 def test_python_m_runner_run_is_the_rust_runner_and_says_so_in_readiness(api, live, tmp_path, rust_binary):
-    """What launchd, systemd and the image start: `python -m runner run` with no engine setting execs the Rust runner,
+    """What launchd, systemd and the image start: `python -m runner_support run` with no engine setting execs the Rust runner,
     which reports its engine and build, and follows the server's release (it reports one)."""
     machine = Computer(api, live, tmp_path, "claude", rust_binary, shim=True, env={"TICO_RUNNER_BIN": str(rust_binary)})
     try:
         machine.start()
         with api.app.state.store.read() as c:
             row = c.execute("SELECT readiness FROM runners WHERE id=?", (machine.registration["runner_id"],)).fetchone()
-        from runner.engine import source_id
+        from runner_support.engine import source_id
         reported = json.loads(row[0])["engine"]
         assert (reported["name"], reported["build"]) == ("rust", source_id(ROOT))
         assert re.search(r"Tico runner \S+ \(rust\) started", machine.output.read_text())

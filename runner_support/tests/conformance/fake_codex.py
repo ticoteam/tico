@@ -1,4 +1,4 @@
-"""A stand-in for the `codex` CLI, for the runner conformance suite (runner/tests/test_conformance.py):
+"""A stand-in for the `codex` CLI, for the runner conformance suite (runner_support/tests/test_conformance.py):
 `--version`, `login status`, `app-server generate-json-schema` (the protocol files that say goals, compact and
 review are there), and `app-server` speaking the part of the JSON-RPC protocol runner-rs/src/hosts/codex.rs uses
 (scripts/journey-fake-codex.py, plus token usage, native goals, steering, `account/read` and `account/rateLimits/read`).
