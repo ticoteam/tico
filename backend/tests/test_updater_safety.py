@@ -538,7 +538,7 @@ def test_a_service_that_does_not_restart_after_a_healthy_update_is_named_and_the
     assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.2.0"]     # the new version is still running
 
 
-def test_a_service_list_that_runs_over_after_a_healthy_update_is_named_and_the_update_is_kept(monkeypatch, tmp_path):
+def test_a_service_list_that_runs_over_after_a_healthy_update_says_the_other_services_are_unknown_and_keeps_the_update(monkeypatch, tmp_path):
     updater = load(monkeypatch, "", tmp_path)
     docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
     monkeypatch.setattr(updater, "healthy", lambda seconds: True)
@@ -555,7 +555,9 @@ def test_a_service_list_that_runs_over_after_a_healthy_update_is_named_and_the_u
     monkeypatch.setattr(updater, "docker_run", stall)
     updater.update("v0.2.0")
     assert updater.status["state"] == "healthy"
-    assert updater.status["message"] == "Updated, but the other services did not start: Reading the server's services exceeded 600 seconds."
+    assert updater.status["message"] == ("Updated, but the status of the other services is unknown: "
+                                         "Reading the server's services exceeded 600 seconds.")
+    assert "did not start" not in updater.status["message"]
     assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.2.0"]
 
 

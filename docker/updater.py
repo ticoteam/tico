@@ -1257,7 +1257,8 @@ def update(version, running=""):
                 with step("Reading the server's services"):
                     names = other_services()
             except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
-                notes.append(kept_note("the other services did not start", exc))
+                # The list is unread, so which services are running is unknown: say so, never that they are not started.
+                notes.append(kept_note("the status of the other services is unknown", exc))
                 names = []
             for name in names:
                 if name == "caddy" or name in tunnel:   # front doors were reconciled above; do not enable another profile
