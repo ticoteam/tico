@@ -4053,6 +4053,10 @@ export type SeatDetail = {
   description_by?: "chart" | "person";
   id: string;
   kind: "seat";
+  reports_now?: {
+  name: string;
+  until: string;
+};
   reports_to: string;
   stage: "recruiting";
   team?: string;
