@@ -1360,8 +1360,12 @@ def create_app(settings=None):
         step_since = step_age.since_map(c, rows)
         hold_marks = task_holds.marks(c, rows)
         result = []
+        from . import task_check_backs
+        check_backs_on = task_check_backs.enabled(c)
         for row in rows:
             value = task_view(row, pipelines=pipelines, hold_marks=hold_marks)
+            if value.get("check_back"):
+                value["check_back"]["enabled"] = check_backs_on
             value.pop("checkpoint", None)    # up to a page of text per task; the full task view carries it
             value.update({
                 "relations": relations[row["id"]],

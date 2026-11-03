@@ -14,4 +14,5 @@ def up(conn):
                  "PRIMARY KEY(task_id, check_back_at))")
     conn.execute("CREATE INDEX IF NOT EXISTS task_check_back_wakes_sent ON task_check_back_wakes(sent_at,task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_check_back_due ON tasks(check_back_at,id) "
-                 "WHERE status IN ('open','doing','waiting','review','ready','done','declined')")
+                 "WHERE (status IN ('open','doing','waiting','review','ready') OR "
+                 "status IN ('done','declined') AND requester_id LIKE 'bot:%' AND requester_id<>owner_id AND check_back_at IS NOT NULL)")

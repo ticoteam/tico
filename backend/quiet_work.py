@@ -349,7 +349,10 @@ def defer(conn, actor, task_id, after=None, at=None, next_run=False, handled=Fal
         cond.update(kind="time", until=stamp)
         from . import task_check_backs
         if task_check_backs.involved(row):
-            task_check_backs.set_time(conn, row, stamp, "Resume the scheduled work.", system=True)
+            planned = min(stamp, row["check_back_at"]) if H.is_bot(actor) and task_check_backs.pending(row) else stamp
+            if H.is_bot(actor):
+                planned = min(planned, H.shift(H.now(), days=14))
+            task_check_backs.set_time(conn, row, planned, "Inspect the scheduled work and its resume condition.", system=True)
     conn.execute("UPDATE tasks SET resume=?, updated_at=? WHERE id=?", (json.dumps(cond), H.now(), task_id))
     H._task_event(conn, task_id, actor, FIELD, aid, DEFERRED, describe(conn, cond))
     H.event(conn, actor, "task.next-run.deferred", task_id,

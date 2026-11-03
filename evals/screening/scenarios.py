@@ -125,7 +125,7 @@ def s_hold_release(org, items, judge):
     doors.set_modes(webhook="hold", idea="hold", watcher="hold", mail="hold")
     # A second webhook whose automation both files a task and starts a Bot turn: both are held for one model call.
     made = org.api("post", "/api/v2/triggers", {"name": "Intake", "id": "intake"})
-    org.api("post", "/api/v2/automations", {
+    intake = org.api("post", "/api/v2/automations", {
         "name": "Intake work", "owner": "person:" + DANA_ID, "enabled": True, "builtin": False,
         "trigger": {"type": "webhook", "id": "intake"},
         "steps": [{"id": "file", "type": "action", "enabled": True, "do": "create_task",
@@ -142,8 +142,8 @@ def s_hold_release(org, items, judge):
     out.append(("an automation's task and its Bot turn are both held, for one model call",
                 bool(held_task) and len(held_turn) == 1 and len(judge.answers) - asked == 1,
                 f"task {bool(held_task)}, turns {len(held_turn)}, calls {len(judge.answers) - asked}"))
-    auto = next((a for a in rows(org.api("get", "/api/v2/automations").body) if a.get("name") == "Intake work"), {})
-    run = (org.api("get", f"/api/v2/automations/{auto.get('id')}/runs").body.get("runs") or [{}])[0]
+    # The system catalog can fill a list page; use the creation receipt rather than searching its first page.
+    run = (org.api("get", f"/api/v2/automations/{intake.body['id']}/runs").body.get("runs") or [{}])[0]
     out.append(("the held Bot turn's step reads held", [s.get("status") for s in run.get("steps") or []][-1:] == ["held"],
                 str([s.get("status") for s in run.get("steps") or []])))
     # The other doors.

@@ -4,8 +4,10 @@ The ledger proves a wake was written, not that its result was handled. A dropped
 leaves no next appointment is repaired with backoff. Human-only work keeps its existing reminders.
 """
 import json
+import hashlib
 import os
 import re
+import uuid
 from datetime import datetime, timezone
 
 from .batch_work import isolated
@@ -14,10 +16,13 @@ KEY = "task_check_backs"
 LIMIT = 50
 NOTE_MAX = 500
 FIRST_WAKES_PER_HOUR = max(1, int(os.environ.get("TICO_TASK_CHECK_BACKS_PER_BOT_HOUR", "12")))
+FLEET_FIRST_WAKES_PER_HOUR = max(1, int(os.environ.get("TICO_TASK_CHECK_BACKS_FLEET_HOUR", "50")))
+WAKES_PER_TASK_DAY = 12
 ACTIVE = ("open", "doing", "waiting", "review", "ready")
 RESULT = ("done", "declined")
 STATUSES = ACTIVE + RESULT
-PREDICATE = "status IN ('open','doing','waiting','review','ready','done','declined')"
+PREDICATE = ("(status IN ('open','doing','waiting','review','ready') OR "
+             "status IN ('done','declined') AND requester_id LIKE 'bot:%' AND requester_id<>owner_id AND check_back_at IS NOT NULL)")
 
 
 def _H():
@@ -25,9 +30,17 @@ def _H():
     return hubdb
 
 
+def _event(c, task_id, actor, field, old, new, note=""):
+    # Appointment bookkeeping has its own deterministic identity. Adding it must not renumber the demo's
+    # conversation/message ids, whose reader-set fixtures prove that existing access does not change.
+    ordinal = c.execute("SELECT coalesce(max(rowid),0)+1 FROM task_events").fetchone()[0]
+    event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(["task-check-back", task_id, field, ordinal])))
+    _H()._task_event(c, task_id, actor, field, old, new, note, event_id=event_id)
+
+
 def enabled(c):
-    from . import system_routines
-    return system_routines.config_of(c, KEY)["on"]
+    from . import read_cache, system_routines
+    return read_cache.value(c, KEY + ":enabled", lambda: system_routines.config_of(c, KEY)["on"], shared=True)
 
 
 def involved(row):
@@ -72,6 +85,8 @@ def set_time(c, row, value, note=None, *, actor=None, at=None, system=False):
         return row  # legacy upgrade helpers create tasks before the file migrations finish
     at = at or H.now()
     actor = actor or H.KEEPER
+    if not system and H.is_bot(actor) and row["status"] in RESULT:
+        H.refuse(c, actor, "check_back", "This result needs a disposition: close it to accept, or reopen it with what remains. Do not park a returned result again.")
     if not involved(row) or row["status"] not in STATUSES:
         if not system:
             H.refuse(c, actor, "check_back", "Only unfinished work involving a bot needs a follow-up")
@@ -96,11 +111,13 @@ def set_time(c, row, value, note=None, *, actor=None, at=None, system=False):
         H.refuse(c, actor, "check_back", "Say what to inspect in at most 500 characters")
     if (stamp, text) == (row.get("check_back_at"), row.get("check_back_note")):
         return row
-    bump = int(getattr(c, "building", None) != row["id"])
-    c.execute("UPDATE tasks SET check_back_at=?,check_back_note=?,updated_at=?,version=version+? WHERE id=?", (stamp, text, at, bump, row["id"]))
-    H._task_event(c, row["id"], actor, "check_back_at", row.get("check_back_at"), stamp, text)
+    bump = int(not system and getattr(c, "building", None) != row["id"])
+    c.execute("UPDATE tasks SET check_back_at=?,check_back_note=?,version=version+? WHERE id=?", (stamp, text, bump, row["id"]))
+    _event(c, row["id"], actor, "check_back_at", row.get("check_back_at"), stamp, text)
     if not system and stamp != row.get("check_back_at"):
-        H._task_event(c, row["id"], actor, "check_back_explicit", None, stamp, text)
+        _event(c, row["id"], actor, "check_back_explicit", None, stamp, text)
+        if external_wait(c, row):
+            _event(c, row["id"], actor, "check_back_external", None, stand(c, row), text)
     return H.task(c, row["id"])
 
 
@@ -109,7 +126,7 @@ def clear(c, row):
         c.execute("UPDATE tasks SET check_back_at=NULL,check_back_note=NULL WHERE id=?", (row["id"],))
 
 
-def default_time(c, row, at):
+def default_time(c, row, at, stagger=False):
     H = _H()
     from . import quiet_work
     resume = quiet_work.condition(row) or {}  # resume and due already served as legacy check-back dates
@@ -131,11 +148,12 @@ def default_time(c, row, at):
     # Check children share the step's timeout rather than adding a second 30-minute timer.
     parent = H.task(c, H.TR.parent_of(c, row["id"]) or "")
     if parent:
-        step = c.execute("SELECT flow FROM task_steps WHERE id=?", (parent.get("step_id"),)).fetchone()
-        hours = (H._json(step[0], {}) or {}).get("timeout_hours") if step else None
+        step = c.execute("SELECT * FROM task_steps WHERE id=?", (parent.get("step_id"),)).fetchone()
+        hours = (H._json(dict(step).get("flow"), {}) or {}).get("timeout_hours") if step else None
         if isinstance(hours, (int, float)) and hours > 0:
             return H.shift(at, seconds=int(hours * 3600))
-    return H.shift(at, minutes=30)
+    seconds = int(hashlib.sha256(row["id"].encode()).hexdigest()[:8], 16) % 3600 if stagger else 0
+    return H.shift(at, minutes=30, seconds=seconds)
 
 
 def ensure(c, row, at=None):
@@ -187,11 +205,20 @@ def view(row, c=None, at=None):
         return None
     due = stamp <= (at or _H().now())
     out = {"at": stamp, "note": row.get("check_back_note") or "", "by": actor_for(row), "due": due}
+    if c is not None:
+        out["enabled"] = enabled(c)
+        if not out["enabled"]:
+            return out
+        blocked = c.execute("SELECT old,new FROM task_events WHERE task_id=? AND field='check_back_blocked' "
+                            "ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
+        if blocked and blocked["old"] == stand(c, row):
+            out["delivery"] = blocked["new"]
     if c is not None and due:
         bot = _H().bot(c, _H().actor_id(actor_for(row) or ""))
         record = c.execute("SELECT * FROM task_check_back_wakes WHERE task_id=? AND check_back_at=?",
                             (row["id"], stamp)).fetchone()
-        out["delivery"] = _delivery(c, record) if record else "pending"
+        if record or "delivery" not in out:
+            out["delivery"] = _delivery(c, record) if record else "pending"
         if not enabled(c):
             out["delivery"] = "disabled"
         elif not bot or bot.get("state") != "active":
@@ -206,13 +233,19 @@ def coverage(c, visible_sql="1", at=None):
                     "sum(CASE WHEN status IN ('open','doing','waiting','review','ready') AND check_back_at IS NULL THEN 1 ELSE 0 END) missing, "
                     "sum(CASE WHEN check_back_at<? THEN 1 ELSE 0 END) overdue, "
                     "sum(CASE WHEN status IN ('done','declined') AND requester_id<>owner_id THEN 1 ELSE 0 END) results "
-                    f"FROM tasks WHERE {PREDICATE} AND (owner_id LIKE 'bot:%' OR requester_id LIKE 'bot:%') AND (" + visible_sql + ")", (at,)).fetchone()
+                    "FROM tasks WHERE status IN ('open','doing','waiting','review','ready','done','declined') "
+                    "AND (owner_id LIKE 'bot:%' OR requester_id LIKE 'bot:%') AND (" + visible_sql + ")", (at,)).fetchone()
     return {key: row[key] or 0 for key in ("missing", "overdue", "results")}
 
 
 def context(c, row, recipient):
     """Bounded, recipient-readable evidence; absence never proves an unreadable child does not exist."""
     H = _H()
+    if row["status"] in RESULT:
+        return ("A delegated result needs your disposition. Read the result and verify its evidence.\n"
+                "Accept completed work with `hub task close " + row["id"] + "`, or reopen it with a concrete note about what remains.\n"
+                "For a declined result, decide whether to close it or reopen/reassign it. Reading or commenting alone does not consume it.\n"
+                "Do not set another follow-up on the returned result; put remaining work on an actionable task with its own date.")
     lines = ["Follow up on this task now.", "Expected: " + (row.get("check_back_note") or "inspect the next result"),
              "Inspect the actual result or blocker, repair routine handoffs within your authority, and continue.",
              "Before waiting again, verify the assignment/reservation exists and set a future follow-up with",
@@ -260,37 +293,72 @@ def _delivery(c, record):
     return job[0] if job else "missing"
 
 
+def stand(c, row):
+    H = _H()
+    base = H._stall_stand(c, row, exclude_actors=tuple(x for x in (actor_for(row),) if x))
+    links = [list(r) for r in c.execute("SELECT id,state,pr_sha,pr_merged_at FROM task_links WHERE task_id=? AND kind='pr' ORDER BY id", (row["id"],))]
+    human = c.execute("SELECT id FROM task_events WHERE task_id=? AND actor LIKE 'human:%' AND field='check_back_explicit' "
+                      "ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
+    return hashlib.sha256(json.dumps([base, links, human[0] if human else None]).encode()).hexdigest()[:16]
+
+
+def blocked(c, row, cause):
+    state = stand(c, row)
+    previous = c.execute("SELECT old,new FROM task_events WHERE task_id=? AND field='check_back_blocked' "
+                         "ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
+    if not previous or tuple(previous) != (state, cause):
+        _event(c, row["id"], _H().KEEPER, "check_back_blocked", state, cause)
+
+
+def external_wait(c, row):
+    return bool(row.get("waiting_on") or _H().recorded_wait(c, row) in ("ask", "approval", "pull_request", "milestone", "subtask"))
+
+
 def _repairs(c, row):
     H = _H()
-    stand = H._stall_stand(c, row)
-    recent = c.execute("SELECT field,new FROM task_events WHERE task_id=? AND field IN ('check_back_repair','check_back_explicit') "
+    state = stand(c, row)
+    recent = c.execute("SELECT field,new FROM task_events WHERE task_id=? AND field='check_back_repair' "
                        "ORDER BY created_at DESC,rowid DESC LIMIT 12", (row["id"],)).fetchall()
     count = 0
     for r in recent:
-        if r["field"] == "check_back_explicit" or (H._json(r["new"], {}) or {}).get("stand") != stand:
+        if (H._json(r["new"], {}) or {}).get("stand") != state:
             break
         count += 1
-    return count, stand
+    return count, state
+
+
+def _unchanged_wakes(c, row):
+    state = stand(c, row)
+    count = 0
+    for r in c.execute("SELECT field,new FROM task_events WHERE task_id=? AND field IN ('check_back_wake','check_back_external') "
+                       "ORDER BY created_at DESC,rowid DESC LIMIT 13", (row["id"],)):
+        if r["field"] == "check_back_external" or r["new"] != state:
+            break
+        count += 1
+    return count
 
 
 def repair(c, row, at):
     H = _H()
-    count, stand = _repairs(c, row)
+    count, state = _repairs(c, row)
     delay = min(30 * 2 ** min(count, 4), 480)
     recovery = None
-    if count >= H.STALL_WAKES_PER_DAY and not row.get("waiting_on"):
-        if not H._no_diagnosis(c, row, count):
-            recovery = H._escalate_stuck(c, row, count)
+    if max(count, _unchanged_wakes(c, row)) >= H.STALL_WAKES_PER_DAY and not external_wait(c, row):
+        escalated = c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='check_back_escalated' AND new=? LIMIT 1",
+                              (row["id"], state)).fetchone()
+        if not escalated and not H._no_diagnosis(c, row, count):
+            recovery = H._escalate_stuck(c, row, max(count, _unchanged_wakes(c, row)))
+            _event(c, row["id"], H.KEEPER, "check_back_escalated", None, state, "Recovery routed once for this unchanged work")
         else:
             # A private task or a diagnostic cannot safely create another diagnostic. Its debt remains visible.
-            H._task_event(c, row["id"], H.KEEPER, "check_back_blocked", None, "No eligible diagnostic route", "")
+            blocked(c, row, "recovery_blocked")
     until = H.shift(at, minutes=delay)
     if recovery:
         ensure(c, recovery, at)
         until = H.task(c, recovery["id"]).get("check_back_at") or until
     after = set_time(c, row, until, "Recovery follow-up: inspect the unresolved work and its handoff.", system=True, at=at)
-    H._task_event(c, row["id"], H.KEEPER, "check_back_repair", None,
-                  json.dumps({"stand": stand, "count": count + 1, "recovery_task": recovery["id"] if recovery else None}), "")
+    _event(c, row["id"], H.KEEPER, "check_back_repair", None,
+                  json.dumps({"stand": state, "count": count + 1, "recovery_task": recovery["id"] if recovery else None}), "")
     return after
 
 
@@ -302,12 +370,8 @@ def _recovery(c, row):
     return recovery if recovery and recovery["status"] in ACTIVE else None
 
 
-def sweep(c, at=None, failures=None):
+def candidates(c, at):
     H = _H()
-    at = at or H.now()
-    result = {"woke": [], "repaired": [], "blocked": []}
-    if not enabled(c):
-        return result
     cursor_row = c.execute("SELECT value FROM registry_metadata WHERE key='task_check_back_scan'").fetchone()
     cursor = H._json(cursor_row[0], ["", ""]) if cursor_row else ["", ""]
     query = (f"SELECT * FROM tasks WHERE {PREDICATE} AND (check_back_at<=? OR check_back_at IS NULL) "
@@ -317,11 +381,45 @@ def sweep(c, at=None, failures=None):
     if not rows and cursor != ["", ""]:
         rows = c.execute(query, (at, "", "", LIMIT)).fetchall()
     next_cursor = [rows[-1]["check_back_at"] or "", rows[-1]["id"]] if rows else ["", ""]
-    c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('task_check_back_scan',?)", (json.dumps(next_cursor),))
-    seeded = {}
+    return rows, next_cursor
+
+
+def run_pass(store, at, failures=None):
+    result = {"woke": [], "repaired": [], "blocked": []}
+    with store.read_transaction() as c:
+        if not enabled(c):
+            return result
+        rows, cursor = candidates(c, at)
+    for original in rows:
+        with store.transaction() as c:
+            checked = sweep(c, at, failures, task_ids=[original["id"]])
+        for key in result:
+            result[key].extend(checked[key])
+    with store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('task_check_back_scan',?)", (json.dumps(cursor),))
+        c.execute("DELETE FROM task_check_back_wakes WHERE rowid IN (SELECT w.rowid FROM task_check_back_wakes w "
+                  "JOIN tasks t ON t.id=w.task_id WHERE w.sent_at<? AND w.check_back_at IS NOT t.check_back_at "
+                  "AND EXISTS (SELECT 1 FROM task_check_back_wakes first WHERE first.task_id=w.task_id AND first.sent_at<w.sent_at) LIMIT ?)",
+                  (_H().shift(at, days=-30), LIMIT))
+    return result
+
+
+def sweep(c, at=None, failures=None, task_ids=None):
+    H = _H()
+    at = at or H.now()
+    result = {"woke": [], "repaired": [], "blocked": []}
+    if not enabled(c):
+        return result
+    if task_ids is None:
+        rows, cursor = candidates(c, at)
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('task_check_back_scan',?)", (json.dumps(cursor),))
+    else:
+        rows = [{"id": tid} for tid in task_ids]
     for original in rows:
         with isolated(c, "check_back", original["id"], failures):
             row = H.task(c, original["id"])
+            if not row or row["status"] not in STATUSES or row.get("check_back_at") and row["check_back_at"] > at:
+                continue  # candidates were read outside this transaction
             target = actor_for(row)
             if not target:
                 clear(c, row)
@@ -333,17 +431,12 @@ def sweep(c, at=None, failures=None):
             if not row.get("check_back_at"):
                 # Preserve valid legacy waits; stagger overdue work instead of waking an old fleet at once.
                 if row["status"] in RESULT:
-                    ensure(c, row, at)
-                    row = H.task(c, row["id"])
-                    if not row.get("check_back_at"):
-                        continue  # its active parent owns consumption
+                    continue  # historical results remain auditable; enabling never generates consumption work
                 else:
-                    ordinal = seeded.get(target, 0)
-                    seeded[target] = ordinal + 1
-                    planned = default_time(c, row, at)
-                    row = set_time(c, row, H.shift(planned, seconds=ordinal * 60),
+                    planned = default_time(c, row, at, stagger=True)
+                    row = set_time(c, row, planned,
                                    "Imported follow-up: inspect the current handoff.", system=True, at=at)
-                H._task_event(c, row["id"], H.KEEPER, "check_back_imported", None, row["check_back_at"], "Legacy appointment coverage")
+                _event(c, row["id"], H.KEEPER, "check_back_imported", None, row["check_back_at"], "Legacy appointment coverage")
                 result["repaired"].append(row["id"])
                 continue
             bot = H.bot(c, H.actor_id(target))
@@ -368,8 +461,14 @@ def sweep(c, at=None, failures=None):
                 result["blocked"].append(row["id"])
                 continue
             count, _ = _repairs(c, row)
-            if count >= H.STALL_WAKES_PER_DAY and not row.get("waiting_on"):
+            if max(count, _unchanged_wakes(c, row)) >= H.STALL_WAKES_PER_DAY and not external_wait(c, row):
                 repair(c, row, at)
+                result["blocked"].append(row["id"])
+                continue
+            daily = c.execute("SELECT count(*) FROM task_events WHERE task_id=? AND field='check_back_wake' AND created_at>=?",
+                              (row["id"], H.shift(at, days=-1))).fetchone()[0]
+            if daily >= WAKES_PER_TASK_DAY:
+                blocked(c, row, "daily_inspection_cap")
                 result["blocked"].append(row["id"])
                 continue
             if not H._actor_exists(c, target) or not H.task_private_readable(c, target, row):
@@ -381,19 +480,20 @@ def sweep(c, at=None, failures=None):
                                    "WHERE w.sent_at>=? AND m.recipient_id=? AND NOT EXISTS "
                                    "(SELECT 1 FROM task_check_back_wakes older WHERE older.task_id=w.task_id AND older.sent_at<w.sent_at)",
                                    (H.shift(at, hours=-1), target)).fetchone()[0]
-                if firsts >= FIRST_WAKES_PER_HOUR:
+                fleet = c.execute("SELECT count(DISTINCT task_id) FROM task_check_back_wakes WHERE sent_at>=? "
+                                  "AND NOT EXISTS (SELECT 1 FROM task_check_back_wakes older WHERE older.task_id=task_check_back_wakes.task_id "
+                                  "AND older.sent_at<task_check_back_wakes.sent_at)", (H.shift(at, hours=-1),)).fetchone()[0]
+                if firsts >= FIRST_WAKES_PER_HOUR or fleet >= FLEET_FIRST_WAKES_PER_HOUR:
+                    blocked(c, row, "hourly_first_wake_cap")
                     result["blocked"].append(row["id"])
                     continue  # retain visible due debt; a later pass owns delivery
             message = H._wake(c, row, target, context(c, row, target),
                               {"wake": "check_back", "check_back_at": row["check_back_at"], "delivery": "queue"},
                               trigger="check_back")
             if message:
+                _event(c, row["id"], H.KEEPER, "check_back_wake", None, stand(c, row), "Scheduled inspection delivered")
                 c.execute("INSERT INTO task_check_back_wakes VALUES(?,?,?,?)",
                           (row["id"], row["check_back_at"], at, message["id"]))
-                job = c.execute("SELECT id FROM jobs WHERE message_id=?", (message["id"],)).fetchone()
-                if job:
-                    c.execute("UPDATE deferrals SET fired_job=? WHERE task_id=? AND kind='task' AND settled_at IS NULL "
-                              "AND fired_job IS NULL AND due_at<=?", (job[0], row["id"], at))
                 if row.get("due_at") and row["due_at"] <= at:
                     c.execute("INSERT OR IGNORE INTO task_reminders VALUES(?,?,?)", (row["id"], row["due_at"], at))
                 result["woke"].append(row["id"])
@@ -408,8 +508,12 @@ def finished_turn(c, aid, bot, task_id, at=None):
     tids = {task_id} if task_id else set()
     tids.update(r[0] for r in c.execute("SELECT id FROM tasks WHERE carried_by=? LIMIT 100", (aid,)))
     tids.update(r[0] for r in c.execute("SELECT json_extract(m.refs,'$.task') FROM attempt_inputs i "
-                                       "JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=? "
-                                       "AND json_extract(m.refs,'$.wake')='check_back' LIMIT 100", (aid,)))
+                                       "JOIN messages m ON m.id=i.message_id JOIN jobs j ON j.message_id=m.id WHERE i.attempt_id=? "
+                                       "AND j.state='completed' AND json_extract(m.refs,'$.wake')='check_back' LIMIT 100", (aid,)))
+    deferred = {r[0] for r in c.execute("SELECT json_extract(m.refs,'$.task') FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
+                                      "JOIN jobs j ON j.message_id=m.id WHERE i.attempt_id=? AND j.state='queued' "
+                                      "AND json_extract(m.refs,'$.wake')='check_back' LIMIT 100", (aid,))}
+    tids.difference_update(deferred - {task_id})
     for tid in tids - {None}:
         row = H.task(c, tid)
         if not row or actor_for(row) != "bot:" + bot:

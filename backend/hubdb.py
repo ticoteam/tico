@@ -6803,7 +6803,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     # After the status write is decided and before the parent hears of it: its wake carries the verdict.
     verdict_set = False if reopening else record_verdict(conn, actor, row, verdict, verdict_head, note)
     if not sets and not state_change and not roles and not clear_size and not verdict_set and all(
-            v is None for v in (visibility, public_title, public_summary, size)):
+            v is None for v in (visibility, public_title, public_summary, size, check_back_at, check_back_note)):
         return row
     # A person finishing it is news for every bot on it; the bots that asked it open questions are read
     # before the status write supersedes those questions.
@@ -7582,8 +7582,8 @@ def _task_changed(conn, task_id, actor, field, old, new, revision):
                                        **({"owner_id": new} if field == "owner" else {})}, actor, revision=revision)
 
 
-def _task_event(conn, task_id, actor, field, old, new, note=""):
-    event_id = new_id()
+def _task_event(conn, task_id, actor, field, old, new, note="", *, event_id=None):
+    event_id = event_id or new_id()
     via = VIA.get()
     if via and not any(r[1] == "via" for r in conn.execute("PRAGMA table_info(task_events)")):
         conn.execute("ALTER TABLE task_events ADD COLUMN via TEXT")
@@ -8355,18 +8355,19 @@ def _settle_undiagnosed(conn, row, cause):
           {"bot": actor_id(row["owner_id"]), "recovery_task": None, "owner": None, "cause": cause})
 
 
-def _stall_stand(conn, row):
+def _stall_stand(conn, row, exclude_actors=()):
     """What a stall check can tell moved: the task's status, step, owner, what it waits on, its relations and their
     states, and every comment from anyone but its bot. The bot's own notes ("still waiting") are not a change."""
     tid = row["id"]
+    excluded = tuple(dict.fromkeys((row["owner_id"], KEEPER, *exclude_actors)))
     parts = [row["status"], row.get("step_id"), row["owner_id"], row.get("waiting_on"),
              [list(r) for r in conn.execute(
                  "SELECT r.kind, r.from_task, r.to_task, o.status FROM task_relations r JOIN tasks o "
                  "ON o.id=CASE WHEN r.from_task=? THEN r.to_task ELSE r.from_task END "
                  "WHERE ? IN (r.from_task, r.to_task) ORDER BY r.kind, r.from_task, r.to_task", (tid, tid))],
              [list(r) for r in conn.execute(
-                 "SELECT id, edited_at, deleted_at FROM messages WHERE conversation_id=? AND sender_id NOT IN (?,?) "
-                 "ORDER BY rowid", (row["conversation_id"], row["owner_id"], KEEPER))]]
+                 "SELECT id, edited_at, deleted_at FROM messages WHERE conversation_id=? AND sender_id NOT IN (" +
+                 ",".join("?" * len(excluded)) + ") ORDER BY rowid", (row["conversation_id"], *excluded))]]
     return hashlib.sha256(json.dumps(parts, default=str).encode()).hexdigest()[:16]
 
 
@@ -8416,9 +8417,6 @@ def recorded_wait(conn, row, at=None):
     same whatever the owner's profile says about sweeps, so a list of stuck work reads a reviewer's waits too."""
     from . import wake_rules
     at = at or now()
-    from . import task_check_backs
-    if task_check_backs.enabled(conn) and task_check_backs.pending(row, at):
-        return "check_back"
     if unanswered_ask(conn, row):
         return "ask"
     if TS.snoozed(row, at):
@@ -8467,6 +8465,9 @@ def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
                     held.append(row["id"])
                 continue
             spot, nudged = spots.get(row["id"]), None
+            from . import task_check_backs
+            if not spot and task_check_backs.enabled(conn) and task_check_backs.pending(row, at):
+                continue  # only ordinary idle nudges defer; spot checks and diagnostic readers stay independent
             if spot:
                 nudged = conn.execute("SELECT min(created_at) FROM events WHERE action='task.stall_wake' AND target=? AND created_at>?",
                                       (row["id"], spot["progress"])).fetchone()[0]

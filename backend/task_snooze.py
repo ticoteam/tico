@@ -116,7 +116,7 @@ def snooze(conn, actor, task_id, until, mover=False, note=None):
     after = H.task(conn, task_id)
     from . import task_check_backs
     if task_check_backs.involved(after):
-        planned = stamp if H.is_human(actor) else min(stamp, after.get("check_back_at") or stamp)
+        planned = min(stamp, after["check_back_at"]) if H.is_bot(actor) and task_check_backs.pending(after) else stamp
         task_check_backs.set_time(conn, after, planned, note, system=True)
         after = H.task(conn, task_id)
     # The owner learns nobody expects it before then; a bot reads it on its next real run, not now.
@@ -140,6 +140,12 @@ def unsnooze(conn, actor, task_id, mover=False):
         return row
     left = row.get("snoozed_note")
     after = _clear(conn, actor, row, "unsnoozed")
+    from . import task_check_backs
+    if task_check_backs.enabled(conn) and task_check_backs.involved(after):
+        soon = H.shift(H.now(), minutes=30)
+        task_check_backs.set_time(conn, after, min(soon, after["check_back_at"]) if task_check_backs.pending(after) else soon,
+                                  "Inspect the resumed work and continue.", system=True)
+        after = H.task(conn, task_id)
     if after["owner_id"] != actor and after["status"] in H.ACTIVE_STATUSES:
         H._wake(conn, after, after["owner_id"], f"Unsnoozed: {after['title']}" + _note_line(left),
                 _wake_refs({"wake": "snooze"}, left))

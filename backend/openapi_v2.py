@@ -769,6 +769,7 @@ SCHEMAS = {
                  "updated_at": "s", "due_at": "n", "check_back_at": {"type": ["string", "null"]},
                  "check_back_note": {"type": ["string", "null"]}, "check_back": {"oneOf": [
                      obj({"at": "s", "note": "s", "by": {"type": ["string", "null"]}, "due": "b"},
+                         enabled={"type": "boolean", "description": "Whether follow-up delivery is enabled for this install"},
                          delivery={"type": "string", "description": "Due delivery state from the existing queue, or pending, disabled, bot_unavailable"}),
                      {"type": "null"}]},
                  "version": "i", "lane": "s", "labels": items({"type": "string"}),

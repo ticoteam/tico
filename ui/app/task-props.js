@@ -78,7 +78,7 @@ function taskPropsHTML(t, opts = {}) {
     {edit: r.edit, empty: !dueAt, popup: 'dialog', words: dueWords || 'none',
       extra: (r.edit ? `<input type="date" class="prop-date" data-prop-date tabindex="-1" aria-hidden="true" value="${esc(dueISO)}">` : '')
         + (r.edit && dueAt ? `<button type="button" class="prop-x" data-prop-clear="due" aria-label="Clear the due date" title="Clear">${TL_ICON.x}</button>` : '')}));
-  if (t.check_back_at) {
+  if (t.check_back_at && t.check_back?.enabled !== false) {
     const when = fmt(t.check_back_at);
     const edit = r.edit || (r.reopen && ['done', 'declined'].includes(t.status));
     rows.push(row('check_back', 'Follow up by', txt(when), {edit, words: when,

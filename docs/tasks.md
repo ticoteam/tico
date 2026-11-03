@@ -1698,8 +1698,8 @@ hub task check-back <task-id> --at 2026-12-02T15:00:00-08:00 --for "Read the ret
 `hub_task_check_back` and `POST /api/v2/tasks/{id}/check-back` take `at` (a duration or timestamp) and `note`.
 Task create/update also accept `check_back_at` and `check_back_note`; omitted times get a provisional default.
 Read responses include these fields and a compact `check_back` object with the time, expected result, responsible
-bot and whether it is due. The web, phone and desktop task properties show **Follow up by** and let task parties
-reschedule it. Explicit bot appointments are at least five minutes ahead and within 14 days; a person's dated
+bot and whether it is due. When follow-up delivery is enabled, the web, phone and desktop task properties show
+**Follow up by** and let task parties reschedule it. While disabled, the fields remain available through the API and CLI and Health shows shadow counts. Explicit bot appointments are at least five minutes ahead and within 14 days; a person's dated
 snooze can be longer. A human snooze takes precedence over an earlier inspection.
 
 Enable **Task check-backs** under Automations > System routines for the staged rollout. It starts off: dates are
@@ -1712,10 +1712,13 @@ On the wake, inspect the actual PR link, assignment/reservation, result and bloc
 not proof that a private child does not exist: check routing before creating a duplicate. Repair routine handoffs
 within your existing authority, then continue or set the next follow-up naming the actual wait. Waiting on a
 child never removes the parent bot's responsibility. A ledger entry or status comment is not proof the work ran.
-Dropped deliveries and completed follow-up turns without a next date are repaired with bounded backoff; repeated
-omissions use existing stuck diagnostics when authorized, otherwise leave visible debt rather than leaking private
+Dropped deliveries and completed follow-up turns without a next date are repaired with bounded backoff. Three
+unchanged inspections route one diagnostic when authorized; rewriting the date or the bot’s own comment does not
+reset that count. An explicit date for a recorded external wait is allowed, with a separate cap of 12 inspections
+per task per day. Repeated omissions otherwise leave visible debt rather than leaking private
 work or repeatedly asking a person. Done/declined results belong to the requester: a suitable parent's check carries
-them, otherwise a bot requester receives a consumption check. Human acceptance keeps its existing question/Close
+them, otherwise a bot requester receives a consumption check. The requester must close/accept or reopen the result
+with remaining work; a bot cannot keep re-parking a Done/Declined result. Human acceptance keeps its existing question/Close
 flow. Self-requested completed work does not create a perpetual consumption loop.
 
 Check-backs never broaden permissions or waive review/QA policy, and do not postpone the existing untouched-human-ask
@@ -1723,7 +1726,12 @@ auto-close. Snooze-end and an already-due task deadline can share the follow-up 
 
 The rollout is bounded to 50 inspected tasks per scheduler pass. Old appointments preserve future snooze,
 resume and deadline dates; otherwise they receive staggered provisional dates. At most 12 first follow-up
-wakes per bot are delivered in an hour (`TICO_TASK_CHECK_BACKS_PER_BOT_HOUR` changes that cap).
-Due work beyond the cap stays visible and is delivered by a later pass. Historical Done/Declined results
-are included without assuming age proves acceptance. Health shows missing dates, overdue work and returned
+wakes per bot and 50 first wakes across the fleet are delivered in an hour (`TICO_TASK_CHECK_BACKS_PER_BOT_HOUR`
+and `TICO_TASK_CHECK_BACKS_FLEET_HOUR` change those caps). Due work beyond a cap stays visible and is delivered by a
+later pass. Historical Done/Declined results remain in audit counts without automatically waking their requesters;
+new result transitions and explicit new activity establish consumption recovery. Age never proves acceptance. Health shows missing dates, overdue work and returned
 results even while the feature is in shadow mode; it never publishes unreadable task details.
+
+System appointment repairs do not refresh a task’s human-idle clock or edit version. Scheduler candidates are read
+outside the write lock and each task is rechecked in its own short transaction. Old delivery occurrences are pruned
+after 30 days in bounded batches, preserving the first occurrence and the current obligation.

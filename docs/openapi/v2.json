@@ -64657,6 +64657,10 @@
                   "due": {
                     "type": "boolean"
                   },
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "Whether follow-up delivery is enabled for this install"
+                  },
                   "delivery": {
                     "type": "string",
                     "description": "Due delivery state from the existing queue, or pending, disabled, bot_unavailable"
@@ -64667,6 +64671,7 @@
                   "by",
                   "delivery",
                   "due",
+                  "enabled",
                   "note"
                 ],
                 "additionalProperties": true
