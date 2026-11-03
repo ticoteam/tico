@@ -85,7 +85,7 @@ const deliveryBody = mode => {
 // The menu: Steer now, Queue, Defer with its durations, then Set as goal apart. `current` is checked; `deferFor` is
 // the duration the Defer row itself picks.
 function deliveryMenuHTML({steer = true, queue = true, goal = false, current = 'queue', deferFor = '24h'}) {
-  const row = (val, label, on) => `<button type="button" role="menuitemradio" aria-checked="${on}" data-deliver="${esc(val)}"><span>${esc(label)}</span>${
+  const row = (val, label, on) => `<button type="button" role="menuitemradio" aria-checked="${on}" data-deliver="${esc(val)}"><span class="p-way-i">${SEND_WAY_ICONS[deliveryWay(val)] || ''}</span><span>${esc(label)}</span>${
     on ? '<span class="tick" aria-hidden="true">✓</span>' : ''}</button>`;
   const way = deliveryWay(current), f = way === 'defer' ? deliveryFor(current) : '';
   const chips = DELIVERY_FOR.map(d => `<button type="button" role="menuitemradio" aria-checked="${f === d}" aria-label="Defer ${esc(deliveryForWord(d))}" data-deliver="defer:${d}">${esc(deliveryForWord(d))}</button>`).join('');
@@ -101,6 +101,84 @@ function deliveryMenuKeys(menu, ev) {
   if (i < 0) return;
   ev.preventDefault();
   all[(i + (ev.key === 'ArrowDown' || ev.key === 'ArrowRight' ? 1 : -1) + all.length) % all.length].focus();
+}
+
+// ----------------------------------------------------------------- the remembered way to send
+// One Send whose icon is the way it sends: Steer the arrow, Queue the arrow over stacked lines, Defer a clock with its
+// deadline, Set as goal the target. The way is the person's, kept on the server (preference compose.send_way: 'steer',
+// 'queue' or 'defer:<for>'), so every composer and device starts from it. Set as goal is one send and never kept.
+// The web sends the shown way every time; a caller that names none (API, CLI, MCP, Slack) gets the server's default.
+const SEND_WAY_PREF = 'compose.send_way';
+const sendWayOk = mode => mode === 'steer' || mode === 'queue'
+  || typeof mode === 'string' && /^defer:[^:]+$/.test(mode) && DELIVERY_FOR.includes(deliveryFor(mode));
+let SEND_WAY = 'steer', SEND_WAY_TIMER = null;
+const SEND_WAY_PAINT = new Set();          // repaint hooks of the composers on screen that show the way
+const svgIcon = body => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+const SEND_WAY_ICONS = {
+  steer: ICON_SEND,
+  queue: svgIcon('<path d="M4 6h8M4 18h8M4 12h14M14 8l4 4-4 4"/>'),
+  defer: svgIcon('<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>'),
+  goal: svgIcon('<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".9" fill="currentColor"/>'),
+};
+// What Send says it will do, to a screen reader and on hover.
+function sendWayLabel(mode) {
+  const way = deliveryWay(mode), f = deliveryFor(mode);
+  if (way === 'defer') return f && f !== 'never' ? `Send, defer ${f}` : 'Send, defer';
+  return {queue: 'Send, queue', goal: 'Set as goal'}[way] || 'Send';
+}
+// Send's icon for `mode`, and a badge with Defer's deadline. The contents change only when the way does: a redraw
+// between press and release loses the click.
+function sendWayPaint(btn, mode) {
+  if (!btn) return;
+  const way = deliveryWay(mode) || 'steer', f = way === 'defer' ? deliveryFor(mode) : '';
+  const key = way + ':' + f;
+  if (btn.dataset.shows !== key) {
+    btn.innerHTML = (SEND_WAY_ICONS[way] || ICON_SEND) + (f && f !== 'never' ? `<span class="p-way-badge">${esc(f)}</span>` : '');
+    btn.dataset.shows = key;
+  }
+  const label = sendWayLabel(mode);
+  btn.dataset.word = label;
+  if (!btn.disabled) { btn.setAttribute('aria-label', label); btn.title = label; }      // a busy Send says why instead
+}
+// A pick from a menu: kept for every composer, written to the server a moment later (several picks in a row are one
+// write), and every composer on screen repaints.
+function sendWayPick(mode) {
+  if (!sendWayOk(mode)) return;
+  const changed = mode !== SEND_WAY;
+  SEND_WAY = mode;
+  if (changed) for (const paint of SEND_WAY_PAINT) paint();
+  if (typeof S === 'undefined' || !S.me?.cloud) return;
+  clearTimeout(SEND_WAY_TIMER);
+  SEND_WAY_TIMER = setTimeout(() => {
+    SEND_WAY_TIMER = null;
+    void post('/v2/preferences/' + SEND_WAY_PREF, {value: SEND_WAY}).catch(() => {});
+  }, 600);
+}
+// The kept way, read once the page knows who is signed in. A pick still waiting to be written wins.
+async function sendWaySync() {
+  if (typeof S === 'undefined' || !S.me?.cloud) return;
+  const v = (await v2Get('/v2/preferences/' + SEND_WAY_PREF))?.value;
+  if (!sendWayOk(v) || SEND_WAY_TIMER || v === SEND_WAY) return;
+  SEND_WAY = v;
+  for (const paint of SEND_WAY_PAINT) paint();
+}
+// The menu also opens from Send itself: a right-click, or a long press on a touch screen. The click a long press ends
+// in does not send. `can` says whether this composer has ways right now.
+function sendWayHold(btn, open, can = () => true) {
+  let timer = 0, held = 0;
+  const cancel = () => { clearTimeout(timer); timer = 0; };
+  btn.addEventListener('contextmenu', ev => { if (!can()) return; ev.preventDefault(); cancel(); open(); });
+  btn.addEventListener('pointerdown', ev => {
+    if (ev.pointerType === 'mouse' || btn.disabled || !can()) return;
+    cancel();
+    timer = setTimeout(() => { timer = 0; held = Date.now(); open(); }, 450);
+  });
+  for (const type of ['pointerup', 'pointercancel', 'pointerleave']) btn.addEventListener(type, cancel);
+  btn.addEventListener('click', ev => {
+    if (!held || Date.now() - held > 1500) return;
+    held = 0;
+    ev.preventDefault(); ev.stopImmediatePropagation();
+  }, true);
 }
 
 // A phone or tablet typing on its screen keyboard: a coarse pointer, or touch on a narrow screen.
