@@ -3063,6 +3063,12 @@ def create_app(settings=None):
             return org_rule_check.place_for(c, author, recipients, home or chat)
         return place
 
+    def home_place(home):
+        """A place that is one Home: a write there is in `where: thread:<home>`, and its kind is a thread."""
+        def place(c, author, recipients):
+            return org_rule_check.place_for(c, author, recipients, home)
+        return place
+
     def task_place(who, tid):
         """A task comment's place: its task's conversation, the thread its comments are in (`where: thread:<id>`)."""
         def place(c, author, recipients):
@@ -3256,6 +3262,23 @@ def create_app(settings=None):
             # cannot reach a Home the checks never named.
             with store.transaction() as c:
                 body.conversation_id = named_destination(c, who, body)
+        elif str(body.to).startswith("bot:"):
+            # A person's message to a bot that names no room is written to the bot's personal room (rooms.chat_room), which
+            # is the chat's Home once the bot's chats have moved (rooms.personal_room). The checks name that Home too, so
+            # `where: thread:<home>` sees it, and it is made first when archived, as the write would make it. A shared
+            # bot's shared room is not a Home: a member's message there is checked where it is written.
+            from .shared_bots import route as shared_route
+            with store.read() as c:
+                target = H.actor_id(shared_route(c, who.actor, body.to))
+                personal = not (rooms.thread_mode(c, target) == rooms.SHARED
+                                and rooms.shared_member(c, auth, who.actor, target))
+                make = personal and bot_home_merge.chat_home_missing(c, who.actor, target)
+                home = None if make or not personal else bot_home_merge.home_for_chat(c, who.actor, target, create=False)
+            if make:
+                with store.transaction() as c:
+                    home = bot_home_merge.home_for_chat(c, who.actor, target)
+            if home and place is None:
+                place = home_place(home)
         reach.precheck(store, who, lambda c: reach.check(
             c, who, auth.target(c, who, body.to), "chat", conversation_id=body.conversation_id,
             task_id=(body.refs or {}).get("task") or (body.refs or {}).get("task_id"), in_reply_to=body.in_reply_to))

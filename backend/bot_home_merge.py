@@ -154,6 +154,28 @@ def home_for_chat(c, person, bot_ref, *, create=True):
     return home_id
 
 
+def chat_home_missing(c, person, bot_ref):
+    """Whether a person's chat with this bot moved and has no Home to go into now: the bot's Home is archived, so the
+    next chat makes it again (`home_for_chat` with create). False for a bot the move never reached (one lookup)."""
+    return (_covered_bot(c, str(bot_ref or "").strip().removeprefix("bot:")) is not None
+            and home_for_chat(c, person, bot_ref, create=False) is None)
+
+
+def named_home(store, conversation_id):
+    """The room a write that names `conversation_id` lands in, named before any check reads it: a moved room's Home,
+    made first when the one it went into is archived, else the room itself. One read for a room that did not move."""
+    if not conversation_id:
+        return conversation_id
+    with store.read() as c:
+        if _moved(c, conversation_id) is None:
+            return conversation_id
+        home = home_for(c, conversation_id, create=False)
+    if home is None:
+        with store.transaction() as c:
+            home = home_for(c, conversation_id)
+    return home or conversation_id
+
+
 def home_missing(c, conversation_id):
     """Whether a moved room has no open Home to write to: its Home is archived, and the next write makes the bot's Home
     again (`home_for` with create). False for a room that did not move."""
@@ -172,6 +194,20 @@ def history_ids(c, conversation_id):
     return [conversation_id] + older + ([current] if current else [])
 
 
+def histories(c, conversation_ids):
+    """{room id: history_ids(c, room id)} for many rooms: one read for the rooms that moved, and a room that did not
+    move has only itself."""
+    ids = list(dict.fromkeys(cid for cid in conversation_ids if cid))
+    moved = set()
+    for part in H.chunks(ids):
+        try:
+            moved |= {r[0] for r in c.execute(
+                f"SELECT conversation_id FROM home_merges WHERE conversation_id IN ({','.join('?' * len(part))})", part)}
+        except sqlite3.OperationalError:      # a database from before migration 0062
+            break
+    return {cid: history_ids(c, cid) if cid in moved else [cid] for cid in ids}
+
+
 def _bot_homes(c, bot_id, recorded):
     """Every Home of a bot, open or archived, oldest first: those stored under the bot's id or slug, the ones a moved room
     went into (home_merges), and the one recorded for this room."""
@@ -188,7 +224,7 @@ def _covered_bot(c, ref):
     try:
         bot = H._one(c, "SELECT b.id, b.slug, EXISTS(SELECT 1 FROM home_merges m WHERE m.bot_id=b.id) AS covered "
                         "FROM bots b WHERE b.id=? OR b.slug=? LIMIT 1", (ref, ref))
-    except sqlite3.OperationalError:      # a database from before migration 0060
+    except sqlite3.OperationalError:      # a database from before migration 0062
         return None
     return bot if bot and bot.get("covered") else None
 
@@ -199,7 +235,7 @@ def _moved(c, conversation_id):
         return c.execute("SELECT m.home_id, m.bot_id, h.closed_at, h.archived_at FROM home_merges m "
                          "LEFT JOIN conversations h ON h.id=m.home_id WHERE m.conversation_id=?",
                          (conversation_id,)).fetchone()
-    except sqlite3.OperationalError:      # a database from before migration 0060
+    except sqlite3.OperationalError:      # a database from before migration 0062
         return None
 
 

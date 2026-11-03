@@ -11,7 +11,7 @@ import pytest
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import bot_home_merge, rooms, threads
 from backend.store import H, task_message_page
-from backend.tests.test_api import api, headers  # noqa: F401  (the fixture)
+from backend.tests.test_api import api, headers, post  # noqa: F401  (the fixture; post is a helper)
 from backend.tests.test_threads_private_execution import (  # noqa: F401  (the helper and the fixture it needs)
     private_run, private_tasks_have_an_unrelated_manager)
 
@@ -481,3 +481,64 @@ def test_a_second_chat_resolution_in_a_transaction_costs_less_than_the_first(api
     # the read cache (backend/read_cache.py), so it costs fewer statements.
     assert len(first.statements) <= 18, first.statements
     assert len(second.statements) < len(first.statements), second.statements
+
+
+def body_id(api, text):
+    with store(api).read() as c:
+        return c.execute("SELECT id FROM messages WHERE body=? AND deleted_at IS NULL", (text,)).fetchone()[0]
+
+
+def test_a_task_comment_on_a_moved_room_is_edited_and_deleted_by_its_author(api, ops_rooms):
+    """A task keeps the room it was written in, and that room moved: the task's comments are found in every room and Home
+    of its history (hubdb.comment_on), so the author edits or deletes one written before the move and one written after it,
+    through the redirect. A comment carried by the move keeps its `moved_home` mark, which is_comment allows."""
+    task_id = post(api, "tasks", {"owner": "ops", "title": "Summarize", "body": "Please summarize the work."})["id"]
+    with store(api).transaction() as c:
+        c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (ops_rooms["ana"], task_id))
+        old = say(c, "human:ana", "bot:ops", "An old note", ops_rooms["ana"],
+                  refs={"task": task_id, "comment": True})["id"]
+    merge(api)
+    post(api, f"tasks/{task_id}/comments", {"text": "A note after the move"})
+    new = body_id(api, "A note after the move")
+    with store(api).read() as c:
+        assert H.is_comment(H.message(c, old)) and H.message(c, old)["refs"].get("moved_home")
+        assert H.message(c, new)["conversation_id"] == ops_rooms["home"]
+    post(api, f"tasks/{task_id}/comments/{old}", {"text": "An old note, edited"})
+    post(api, f"tasks/{task_id}/comments/{new}", {"text": "A note after the move, edited"})
+    with store(api).read() as c:
+        texts = {m["id"]: m["body"] for m in H.task_comments(c, task_id)}
+        assert texts[old] == "An old note, edited" and texts[new] == "A note after the move, edited", texts
+    post(api, f"tasks/{task_id}/comments/{new}/delete", {})
+    with store(api).read() as c:
+        listed = [m["id"] for m in H.task_comments(c, task_id)]
+        assert new not in listed and old in listed
+
+
+def test_a_question_on_a_moved_task_stays_open_before_and_after_the_move(api, ops_rooms):
+    """A task's open questions are read from its history too: one asked before its room moved, and one asked after, through
+    the redirect. Each is listed for its own task only, and the batch read agrees with the single one for every reader."""
+    questions = [{"id": "q1", "header": "Pick", "question": "Which one?", "options": [], "multi": False, "other": True}]
+    first = post(api, "tasks", {"owner": "ops", "title": "First", "body": "Pick for the first."})["id"]
+    second = post(api, "tasks", {"owner": "ops", "title": "Second", "body": "Pick for the second."})["id"]
+    with store(api).transaction() as c:
+        c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (ops_rooms["ana"], first))
+        c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (ops_rooms["ben"], second))
+        before = say(c, "bot:ops", "human:ana", "Which one for the first?", ops_rooms["ana"], kind="ask",
+                     refs={"task": first, "questions": questions})["id"]
+        other = say(c, "bot:ops", "human:ben", "Which one for the second?", ops_rooms["ben"], kind="ask",
+                    refs={"task": second, "questions": questions})["id"]
+    merge(api)
+    with store(api).transaction() as c:
+        after = say(c, "bot:ops", "human:ana", "Which one for the first, again?", ops_rooms["ana"], kind="ask",
+                    refs={"task": first, "questions": questions})["id"]
+        assert H.message(c, after)["conversation_id"] == ops_rooms["home"]
+    with store(api).read() as c:
+        row_first, row_second = H.task(c, first), H.task(c, second)
+        assert {a["id"] for a in H.open_task_asks(c, row_first)} == {before, after}
+        assert [a["id"] for a in H.open_task_asks(c, row_second)] == [other]
+        for actor in ("human:ana", "human:ben"):
+            batch = H.open_tasks_asks(c, [row_first, row_second], actor=actor)
+            for row in (row_first, row_second):
+                assert [a["id"] for a in batch[row["id"]]] == \
+                    [a["id"] for a in H.open_task_asks(c, row, actor=actor)], (actor, row["id"])
+        assert {a["id"] for a in H.open_tasks_asks(c, [row_first], actor="human:ana")[first]} == {before, after}

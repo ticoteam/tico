@@ -161,6 +161,7 @@ def _shared(c, v, actor, *, cursor=None, limit=None):
 
 def install(app, store, auth, mutate, rule_check):
     from .media import upload_contract
+    from . import bot_home_merge
 
     def recipients(c, who, thread_id, to):
         """Who a thread write is for, as the org-rule check reads it (`org_rule_check.thread_people`). The recipient and
@@ -341,6 +342,8 @@ def install(app, store, auth, mutate, rule_check):
         """A message in the thread (in its sub-thread with `parent_message_id`). A person's or a bot's message passes the
         org-rule check first, outside the write; a held one writes nothing but its hold."""
         who = request.state.identity
+        # A room that moved is checked and written as its Home (bot_home_merge.named_home), named before the check.
+        thread_id = bot_home_merge.named_home(store, thread_id)
         rc = check(who, thread_id, body)
 
         def work(c):
@@ -482,6 +485,7 @@ def install(app, store, auth, mutate, rule_check):
         from .views import human_only
         who = request.state.identity
         human_only(who)
+        thread_id = bot_home_merge.named_home(store, thread_id)     # as post_message names it: the Home, before the check
         checked = {}
 
         def admit(body):

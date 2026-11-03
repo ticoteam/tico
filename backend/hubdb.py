@@ -5926,14 +5926,17 @@ def review_answers(conn, message_id, *, actor=None):
 
 def open_task_asks(conn, task_row, *, actor=None):
     from . import task_privacy as privacy
+    from . import bot_home_merge
     conv = (task_row or {}).get("conversation_id")
     if not conv:
         return []
+    # The task's history (bot_home_merge.history_ids): its asks in its room, and those written in the Homes the room's
+    # messages moved into, a question asked after the move included.
     asks = _rows(conn.execute(
         "SELECT m.* FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-        f"WHERE m.conversation_id=? AND m.kind='ask' AND {MESSAGE_TASK_SQL}=? "
+        f"WHERE m.conversation_id IN (SELECT value FROM json_each(?)) AND m.kind='ask' AND {MESSAGE_TASK_SQL}=? "
         f"AND {OPEN_ASK_SQL} ORDER BY m.rowid DESC",
-        (conv, task_row["id"])))
+        (_dump(bot_home_merge.history_ids(conn, conv)), task_row["id"])))
     if actor is not None:
         asks = [ask for ask in asks if privacy.message_readable(conn, actor, ask)]
     for ask in asks:
@@ -5945,15 +5948,20 @@ def open_tasks_asks(conn, task_rows, *, actor):
     """{task id: open_task_asks(conn, row, actor=actor)} for many tasks: their open asks read in one query per 500
     tasks and checked together (task_privacy.readable_messages), each by the same rule open_task_asks applies."""
     from . import task_privacy as privacy
+    from . import bot_home_merge
     rows = [row for row in task_rows if row.get("conversation_id")]
     out = {row["id"]: [] for row in task_rows}
     asks = []
     for part in chunks(rows):
+        # (task, room) pairs over each task's history (bot_home_merge.histories): one query for the part.
+        known = bot_home_merge.histories(conn, [row["conversation_id"] for row in part])
+        pairs = [[row["id"], cid] for row in part for cid in known[row["conversation_id"]]]
         found = _rows(conn.execute(
-            "SELECT m.*,t.id AS ask_task_id FROM tasks t JOIN messages m ON m.conversation_id=t.conversation_id "
-            f"JOIN conversations cv ON cv.id=m.conversation_id WHERE t.id IN ({','.join('?' * len(part))}) "
-            f"AND m.kind='ask' AND {MESSAGE_TASK_SQL}=t.id "
-            f"AND {OPEN_ASK_SQL} ORDER BY m.rowid DESC", [row["id"] for row in part]))
+            "SELECT m.*, json_extract(p.value,'$[0]') AS ask_task_id FROM json_each(?) AS p "
+            "JOIN messages m ON m.conversation_id=json_extract(p.value,'$[1]') "
+            "JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE m.kind='ask' AND {MESSAGE_TASK_SQL}=json_extract(p.value,'$[0]') "
+            f"AND {OPEN_ASK_SQL} ORDER BY m.rowid DESC", (_dump(pairs),)))
         asks.extend(found)
     tasks = [ask.pop("ask_task_id") for ask in asks]
     shown = {id(ask) for ask in privacy.readable_messages(conn, actor, asks)}
@@ -5967,8 +5975,12 @@ def open_tasks_asks(conn, task_rows, *, actor):
 def comment_on(conn, task_row, message_id):
     """The message `message_id` when it is on this task's thread the way `task_comments` finds it
     (deleted or not, any kind), else None."""
+    from . import bot_home_merge
     msg = message(conn, message_id, include_deleted=True)
-    if not msg or not task_row or msg["conversation_id"] != task_row.get("conversation_id"):
+    if not msg or not task_row or not task_row.get("conversation_id"):
+        return None
+    # The task's history: its room, and the Homes a person's old chat moved into (bot_home_merge.history_ids).
+    if msg["conversation_id"] not in bot_home_merge.history_ids(conn, task_row["conversation_id"]):
         return None
     return msg if message_task_id(msg, conversation(conn, msg["conversation_id"])) == task_row["id"] else None
 
@@ -5977,9 +5989,10 @@ def is_comment(msg):
     """Written by `task_comment`: a say tagged `comment`. Not a question, an answer, a notice, an
     approval, a bot's reply to its run or a chat message that only mentions the task."""
     refs = msg.get("refs") or {}
+    # `moved_home`: the mark a comment in a room that moved into a Home carries (bot_home_merge._mark_moved).
     return (msg.get("kind") == "say" and bool(refs.get("comment"))
             and not (set(refs) - {"task", "comment", "quiet", "via", "rule", "wake_immediate",
-                                         "delivery"}))
+                                         "delivery", "moved_home"}))
 
 
 
