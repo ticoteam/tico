@@ -1688,15 +1688,21 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check('assigned_not_started', 'Assigned, not started', 'warn',
                              _diagnostic_summary('Assignments still unstarted two hours after a recovery wake.', assigned),
                              items=assigned))
-    refused = []
-    for row in refused_queues(c, settings):
-        if not auth.bot_accesses(c, who, [row['bot']]).get(row['bot'], auth.FULL)['read']:
-            continue
-        msg = c.execute("SELECT m.* FROM jobs j JOIN messages m ON m.id=j.message_id "
-                        "WHERE j.id=? AND j.bot_id=? AND j.state='queued' AND j.held=0",
-                        (row['job'], row['bot'])).fetchone()
-        from . import task_privacy
-        if not msg or not task_privacy.message_readable(c, who.actor, msg):
+    from . import task_privacy
+    refused, queued = [], refused_queues(c, settings)
+    # One access check for every refused bot, and one query a chunk of jobs for their oldest queued messages.
+    readable = auth.bot_accesses(c, who, sorted({row['bot'] for row in queued})) if queued else {}
+    queued = [row for row in queued if readable.get(row['bot'], auth.FULL)['read']]
+    found = {}
+    for part in H.chunks(sorted({row['job'] for row in queued})):
+        for job in c.execute("SELECT j.id AS job_id, j.bot_id AS job_bot, m.* FROM jobs j JOIN messages m ON m.id=j.message_id "
+                             f"WHERE j.id IN ({','.join('?' * len(part))}) AND j.state='queued' AND j.held=0", part):
+            found[(job['job_id'], job['job_bot'])] = job
+    msgs = [found[(row['job'], row['bot'])] for row in queued if (row['job'], row['bot']) in found]
+    shown = {m['id'] for m in task_privacy.readable_messages(c, who.actor, msgs)} if msgs else set()
+    for row in queued:
+        msg = found.get((row['job'], row['bot']))
+        if msg is None or msg['id'] not in shown:
             continue
         refused.append({**row, 'text': f"{row['name']}: oldest queued job refused for over 12 hours; {row['reason']}.",
                         'fixes': [_fix(*RUNS)]})
