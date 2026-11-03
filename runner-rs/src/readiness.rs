@@ -97,9 +97,10 @@ async fn runtime_readiness_from(
             state
         }
     };
-    // Claude Code's features for its turns are read here, when its version is new, so a turn starts no process for them.
-    if runtime == "claude" && exe.is_some() {
-        crate::hosts::claude::note_version(&[crate::harness_tools::executable_for(runtime)], &version).await;
+    // A host's per-version facts (Claude Code's features) are read here, when its version is new, so a turn starts no
+    // process for them.
+    if exe.is_some() {
+        crate::hosts::note_version(runtime, &version).await;
     }
     // Signed in but unable to save a session (Muse Code's data folder): no turn could run, so not ready, and no
     // fallback hop picks it. `data_problem` tells it from a sign-in that could not be checked, so the Computers page
