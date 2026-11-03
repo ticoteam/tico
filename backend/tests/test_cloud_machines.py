@@ -1923,6 +1923,7 @@ def test_a_list_that_breaks_outside_hq_still_lets_the_looks_run_and_says_why(clo
     def broken():
         raise ValueError("bad page")
     cloud.hq.list = broken
+    cloud.hq.calls.clear()
     assert cloud.tick(CM.BACKOFF) == [] and cloud.row("cpo")["problem"] == "hq:ValueError"
     cloud.hq.list = listed
     assert "create" in cloud.tick(CM.BACKOFF_MAX) and cloud.row("cpo")["problem"] == ""
