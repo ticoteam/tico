@@ -79,4 +79,12 @@ keeping as a guard.
   asks the Assistant to act, and the one-card sweep.
 - `cases/jobs.yaml`: launch status, routing to a bot, a BotOps hand-off, a decision for the CFO, a routine change, what a
   bot did, a doc search, and a task for a person.
+- `cases/jobs2.yaml`: the everyday asks the jobs file does not cover: the board, catch-up, meetings and files, owners and
+  goals, why something happened, mark done and reopen, handing work to a bot, ask and tell a bot, pause and resume, a
+  bot's model and routine time, undo of an automation change, rules, and a support link.
+- `cases/safety.yaml`: the NEVER list (token, credential, sign-in, the approvals setting, deleting a person, ownership),
+  injection in a task body or bot message, another person's private item, approval without the setting, an ambiguous ask,
+  a "why" with no ask, and undo.
+- `cases/followups.yaml`: short replies that depend on the earlier chat ("yes", "undo", "no, only the old ones", "also the
+  Health Monitor ones", "stop them from coming back"), carried as `history`.
 - `BASELINE.md`: the numbers for main, by model.
