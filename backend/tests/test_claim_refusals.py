@@ -210,7 +210,7 @@ def test_operations_names_a_limited_bots_runtime_when_config_was_primed_slug_fir
 
 def readiness(api, machine, document):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness=? WHERE id=?", (json.dumps(document), machine["runner_id"]))
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?", (json.dumps(document), machine["runner_id"]))
 
 
 def test_a_computer_that_has_not_said_whether_it_can_run_the_bot(api):
@@ -319,7 +319,7 @@ def test_a_computer_restarting_holds_its_work_and_is_a_finding_once_it_takes_too
                 if m["id"] == machine["runner_id"])["restarting"]
     # Past the runner's own drain and stop windows the restart is stuck: a setup finding, still no Tico bug.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET restart_since=? WHERE id=?", (H.shift(H.now(), minutes=-35), machine["runner_id"]))
+        c.execute("UPDATE runner_states SET restart_since=? WHERE runner_id=?", (H.shift(H.now(), minutes=-35), machine["runner_id"]))
     assert {"runner_restarting"} <= ops_rows(api)[1] and "queue_idle" not in ops_rows(api)[1]
     # The restarted runner's first heartbeat no longer says so.
     post(api, "runners/heartbeat", beat, token=machine["token"])

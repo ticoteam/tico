@@ -13,7 +13,7 @@ from clients import gateway, sessions
 
 from . import auto_tasks, start_places, org_turns, app_delivery, check_models, learned, rooms, rules as wake_rule_engine, updates_chat, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
-from . import browser_exit, claim_holds, claim_loads, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, runner_wire, runs, thread_bot_digest, turn_budgets
+from . import browser_exit, claim_holds, claim_loads, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, runner_states, runner_wire, runs, thread_bot_digest, turn_budgets
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
@@ -856,7 +856,7 @@ def retry_facts(c, job, started, finished):
     update = None if timeout else cut_by_update(c, job['attempt_id'])
     restart = restart_reported(c, job['attempt_id'])
     attempt = c.execute('SELECT state,thread_id,runner_id FROM attempts WHERE id=?', (job['attempt_id'],)).fetchone()
-    computer = c.execute('SELECT capabilities FROM runners WHERE id=?', (attempt['runner_id'],)).fetchone() if attempt else None
+    computer = c.execute('SELECT capabilities FROM runners_with_state WHERE id=?', (attempt['runner_id'],)).fetchone() if attempt else None
     # Only a negotiated strict continuation may bypass the legacy late-result grace. Unknown tools and
     # an already-final answer still need their original safety/settlement path.
     final = c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? AND kind='message' "
@@ -1714,7 +1714,7 @@ def bot_repository(c, settings, bot, rows=None, app=None):
 
 
 def _reported(c, runner_id, bot):
-    row = c.execute("SELECT label,readiness FROM runners WHERE id=?", (runner_id,)).fetchone()
+    row = c.execute("SELECT label,readiness FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
     report = (readiness_document(row["readiness"]).get("bots") or {}).get(bot) if row else None
     return (row["label"] if row else "a computer"), report if isinstance(report, dict) else {}
 
@@ -1743,13 +1743,13 @@ def stranded(c, settings, bot, source_id, target_id):
 def forget_report(c, runner_id, bot):
     """Drop a computer's stored report on a bot it no longer hosts, so a move never leaves the old computer
     claiming the bot is ready there until that computer's next heartbeat says what it holds now."""
-    row = c.execute("SELECT readiness FROM runners WHERE id=?", (runner_id,)).fetchone()
+    row = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
     if not row:
         return
     document = readiness_document(row["readiness"])
     if bot in (document.get("bots") or {}):
         del document["bots"][bot]
-        c.execute("UPDATE runners SET readiness=? WHERE id=?", (encode(document), runner_id))
+        runner_states.save(c, runner_id, readiness=encode(document))
 
 
 # The runner appends these after the bot's own words when it holds back a commit (runner-rs/src/execute.rs).
@@ -1986,7 +1986,7 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     hold = login_holds.get(c, runner_id, own, primary)
     if bot in hold.get("stuck", []) or (hold.get("failed_fallback") or {}).get(bot) == fallback_mark(config):
         return None
-    row = c.execute("SELECT readiness FROM runners WHERE id=?", (runner_id,)).fetchone()
+    row = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
     ready = readiness_document(row["readiness"]) if row else {}
     if named.get("harness"):
         if not named.get("model"):
@@ -2270,7 +2270,7 @@ def bot_refusal(c, settings, runner_id, bot):
     return bot_claimable(c, settings, runner_id, bot)[0]
 
 
-RUNNER_SQL = "SELECT * FROM runners WHERE id=?"
+RUNNER_SQL = "SELECT * FROM runners_with_state WHERE id=?"
 CLAIM_CONFIG_SQL = (f"SELECT bc.config,{DRAINING_SQL.replace('a.bot', 'bc.bot')} draining "
                     "FROM bot_config bc WHERE bc.bot=?")
 
@@ -2500,7 +2500,7 @@ class Execution:
         self.refuse_in_rehearsal()
         if who.role != "runner":
             raise Problem("identity", "A registered runner is required", 403)
-        return c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL",
+        return c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL",
                          (who.runner_id,)).fetchone()
 
     @staticmethod
@@ -2570,7 +2570,7 @@ class Execution:
             cloud_bot = cloud_machines.enrolling(c, digest(body.code))
             label = cloud_machines.label_for(c, cloud_bot) if cloud_bot else body.label
             if row["consumed_at"]:
-                runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL",
+                runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL",
                                    (row["runner_id"],)).fetchone()
                 if not runner or (runner["label"] != body.label and not cloud_bot):
                     raise Problem("enrollment", "Enrollment code was already used", 409)
@@ -2600,6 +2600,7 @@ class Execution:
         self.record_contact(now)
         offered_before = screen.available(row)
         stored = (row["version"], row["platform"], row["capacity"], row["readiness"], row["capabilities"])
+        restart_since, checkout_before = row["restart_since"], row["checkout"]
         del row
         from .subscriptions import record
         record(c, who.runner_id, body.profiles, body.readiness)
@@ -2656,14 +2657,35 @@ class Execution:
         # report from one before a change by it).
         reported = (body.version, stored[1] or body.platform, body.capacity, encode(readiness),
                     encode(sorted(set(body.capabilities))))
-        if reported == stored:
-            c.execute("UPDATE runners SET last_seen_at=?,awake_since=?,readiness_at=? WHERE id=?",
-                      (now, awake_since, now, who.runner_id))
+        # The beat's state is one upsert into runner_states (the runner's contact, the restart under way, its checkout and,
+        # when the report changed, the report). The identity row changes only when it has no platform yet.
+        state = {"last_seen_at": now, "awake_since": awake_since, "readiness_at": now}
+        # A restart under way is kept until the heartbeat that no longer carries it: the restarted runner's first. A time
+        # ahead of the server's clock reads as now.
+        if body.restart:
+            since = H.parse_ts(body.restart.since)
+            since = since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ") if since and since.tzinfo else now
+            state["restart_since"] = restart_since if restart_since is not None else min(since, now)
         else:
-            c.execute("UPDATE runners SET last_seen_at=?,awake_since=?,version=?,platform=coalesce(nullif(platform,''),?),"
-                      "capacity=?,readiness=?,capabilities=?,readiness_at=? WHERE id=?",
-                      (now, awake_since, body.version, body.platform, body.capacity, reported[3], reported[4], now,
-                       who.runner_id))
+            state["restart_since"] = None
+        if body.checkout:
+            # How long it has been behind is the server's to remember: a runner checks every ten minutes.
+            checkout = body.checkout.model_dump()
+            before = H._json(checkout_before, {}) or {}
+            if checkout["behind"]:
+                checkout["behind_since"] = before.get("behind_since") if before.get("behind") else now
+            state["checkout"] = encode(checkout)
+        elif body.release:
+            # A runner that reports its release and no checkout follows the server's release now, not main: an old
+            # "behind main" note is stale (backend/runner_versions.py).
+            state["checkout"] = None
+        if reported != stored:
+            state.update(version=body.version, capacity=body.capacity, readiness=reported[3], capabilities=reported[4])
+        runner_states.save(c, who.runner_id, **state)
+        if reported != stored:
+            if not stored[1] and body.platform:
+                c.execute("UPDATE runners SET platform=? WHERE id=? AND coalesce(platform,'')=''",
+                          (body.platform, who.runner_id))
             # A login it now reports signed in ends the reconnect cards that waited on it (backend/reconnects.py).
             reconnects.login_report(c, who.runner_id, readiness)
         if not offered_before and screen.CAPABILITY in body.capabilities:
@@ -2674,22 +2696,6 @@ class Execution:
             self.readiness_reported(c, who.runner_id, readiness)
         if body.release:
             runner_versions.record(c, who.runner_id, body)
-        # A restart under way is kept until the heartbeat that no longer carries it: the restarted runner's first. A time
-        # ahead of the server's clock reads as now.
-        if body.restart:
-            since = H.parse_ts(body.restart.since)
-            since = since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ") if since and since.tzinfo else now
-            c.execute("UPDATE runners SET restart_since=? WHERE id=? AND restart_since IS NULL", (min(since, now), who.runner_id))
-        else:
-            c.execute("UPDATE runners SET restart_since=NULL WHERE id=? AND restart_since IS NOT NULL", (who.runner_id,))
-        if body.checkout:
-            # How long it has been behind is the server's to remember: a runner checks every ten minutes.
-            checkout = body.checkout.model_dump()
-            before = H._json((c.execute("SELECT checkout FROM runners WHERE id=?", (who.runner_id,)).fetchone()
-                              or {"checkout": None})["checkout"], {}) or {}
-            if checkout["behind"]:
-                checkout["behind_since"] = before.get("behind_since") if before.get("behind") else now
-            c.execute("UPDATE runners SET checkout=? WHERE id=?", (encode(checkout), who.runner_id))
         if body.mail_agent_instructions:
             from .views import roster
             people = roster(c)
@@ -2794,7 +2800,7 @@ class Execution:
         if external_harness(c, bot):
             raise Problem("harness", "This bot is run by an external agent; it has no computer to "
                           "assign. Give it an agent credential in Settings instead", 422)
-        runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL",
+        runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL",
                            (body.runner_id,)).fetchone()
         if not runner:
             raise Problem("not_found", "Computer is not registered", 404)
@@ -3108,7 +3114,7 @@ class Execution:
         """Record the refusal now; the runner's next heartbeat repeats it and later lifts it. On a bot-keyed runtime with
         no profile (pi, the Gemini CLI) the refused key is `bot`'s own, so only that bot is marked and the runtime's row
         is left as the runner reports it."""
-        record = c.execute("SELECT readiness FROM runners WHERE id=?", (runner_id,)).fetchone()
+        record = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
         ready = readiness_document(record[0] if record else None)
         row = (ready.get("runtimes") or {}).get(runtime)
         if not isinstance(row, dict):
@@ -3137,7 +3143,7 @@ class Execution:
                 runtimes[runtime] = {"signed_in": False}
                 c.execute("UPDATE computer_profiles SET runtimes=?,updated_at=? WHERE runner_id=? AND profile=?",
                           (json.dumps(runtimes), H.now(), runner_id, profile))
-        c.execute("UPDATE runners SET readiness=? WHERE id=?", (json.dumps(ready), runner_id))
+        runner_states.save(c, runner_id, readiness=json.dumps(ready))
 
     def candidate(self, c, who, body, runner, *, job_id=None, people_only=False, failed=None, skip=()):
         """The queued job this runner would be given next, or None. Reads only. `people_only`: only a person's own
@@ -3406,8 +3412,7 @@ class Execution:
             H.event(c, H.KEEPER, "runner.waking", who.runner_id,
                     {"last_seen_at": runner["last_seen_at"], "awake_since": awake_since})
         if self.stamp_due(runner, now):
-            c.execute("UPDATE runners SET last_seen_at=?,awake_since=? WHERE id=?",
-                      (now, awake_since, who.runner_id))
+            runner_states.save(c, who.runner_id, last_seen_at=now, awake_since=awake_since)
         return awake_since
 
     def stamp_due(self, runner, now):
@@ -4465,7 +4470,7 @@ class Execution:
         if row["state"] != "running":
             raise Problem("not_running", "This attempt is not running", 409)
         if body.source_pending or body.source_continuation:
-            computer = c.execute('SELECT capabilities FROM runners WHERE id=?', (row['runner_id'],)).fetchone()
+            computer = c.execute('SELECT capabilities FROM runners_with_state WHERE id=?', (row['runner_id'],)).fetchone()
             if SOURCE_CONTINUE not in json.loads(computer[0] or '[]'):
                 raise Problem('capability', 'Saved fallback sessions require source continuation support', 409)
             if body.source_pending:
@@ -4516,7 +4521,7 @@ class Execution:
                            include_deleted=True)
         origin_task = work_task_id(origin, H.conversation(c, origin["conversation_id"]))
         origin_notice = wake_rule_engine.notice_only(origin)
-        capabilities = c.execute("SELECT capabilities FROM runners WHERE id=?", (attempt["runner_id"],)).fetchone()
+        capabilities = c.execute("SELECT capabilities FROM runners_with_state WHERE id=?", (attempt["runner_id"],)).fetchone()
         lanes, roots = lanes_on(capabilities), roots_on(capabilities)
         if lanes:
             from .shared_bots import follow
@@ -5042,7 +5047,7 @@ class Execution:
                            **({"held_reply": True} if held else {})}), aid))
         quota_continue = False
         if source_pause and not body.fallback and row['thread_id'] and worked:
-            computer = c.execute('SELECT capabilities FROM runners WHERE id=?', (row['runner_id'],)).fetchone()
+            computer = c.execute('SELECT capabilities FROM runners_with_state WHERE id=?', (row['runner_id'],)).fetchone()
             quota_continue = capacity_continue_on(computer)
             if quota_continue:
                 c.execute("UPDATE attempts SET result=json_set(result,'$.quota_continue',json('true')) WHERE id=?", (aid,))
@@ -5089,7 +5094,7 @@ class Execution:
                       "'$.capacity_continue',json('true')) WHERE id=?", (aid,))
         source = body.source_continuation
         if (source_pause or continues) and source and body.fallback and source.harness == body.fallback and not notice_only:
-            computer = c.execute('SELECT capabilities FROM runners WHERE id=?', (row['runner_id'],)).fetchone()
+            computer = c.execute('SELECT capabilities FROM runners_with_state WHERE id=?', (row['runner_id'],)).fetchone()
             if computer and SOURCE_CONTINUE in json.loads(computer[0] or '[]'):
                 c.execute("UPDATE attempts SET result=json_set(result,'$.source_continue',json('true')) WHERE id=?", (aid,))
         limited = limited and not busy_acted or continues

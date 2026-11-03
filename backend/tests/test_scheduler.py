@@ -213,7 +213,7 @@ def test_claim_query_matches_old_python_oracle_on_200_rows(api):
                       refs={'task': refs[(i // 12) % len(refs)]})
             c.execute("UPDATE jobs SET created_at=?,state=? WHERE message_id=?", ('2026-09-01T00:00:00Z' if i % 5 == 0 else '2026-09-02T00:00:00Z', 'uncertain' if i % 17 == 0 else 'queued', m['id']))
         c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot='finance'")
-        readiness = readiness_document(c.execute('SELECT readiness FROM runners WHERE id=?', (r['runner_id'],)).fetchone()[0])
+        readiness = readiness_document(c.execute('SELECT readiness FROM runners_with_state WHERE id=?', (r['runner_id'],)).fetchone()[0])
         # The old candidate's Python predicate, with readiness and onboarding gates.
         def old_claimable(job):
             check = bot_readiness(readiness, job['bot_id'])

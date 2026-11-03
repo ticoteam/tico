@@ -23,8 +23,8 @@ def team(api, seen=None):
                       "status": "active", **({"profile": "reviewer"} if slug.startswith("rev-") else {})}
             c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,?,?) ON CONFLICT(bot) DO UPDATE "
                       "SET config=excluded.config", (slug, encode(config), "engineering", "ana"))
-        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,last_seen_at) VALUES('r1','box','ana','h',?,?)",
-                  (H.now(), seen or H.now()))
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','box','ana','h',?)", (H.now(),))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r1'", (seen or H.now(),))
         for slug in ("rev-a", "rev-b", "rev-c"):
             c.execute("INSERT INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, "r1", H.now()))
 
@@ -329,8 +329,8 @@ def test_same_company_is_a_fallback_and_an_offline_reviewer_is_passed_over(api):
     busy(api, "rev-b")
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:rev-c", first["id"], status="done", note=f"VERDICT: approve PR #412 head {HEAD}")
-        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,last_seen_at) VALUES('r2','old','ana','h2',?,?)",
-                  (H.now(), H.shift(H.now(), hours=-2)))
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r2','old','ana','h2',?)", (H.now(),))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r2'", (H.shift(H.now(), hours=-2),))
         c.execute("UPDATE assignments SET runner_id='r2' WHERE bot='rev-a'")
     task = get(api, "tasks/" + task["id"])["task"]
     assert move(api, task, "Review 2").status_code == 200
@@ -657,7 +657,7 @@ def test_a_task_model_that_cannot_run_counts_the_bots_own_model_for_require(api)
     task = qa_ticket(api)
     task_model(api, "rev-c", "gpt-6.1-sol", "codex")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness=? WHERE id='r1'",
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'",
                   (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {"codex": {"installed": False}}}),))
     set_pool(api, task, "In QA", ["rev-c", "rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
@@ -699,7 +699,7 @@ def test_a_task_model_held_at_its_usage_limit_counts_the_bots_own_model_for_requ
     task_model(api, "rev-c", "gpt-6.1-sol", "codex")
     task_model(api, "rev-a", "claude-haiku-5-5", "claude")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness=? WHERE id='r1'", (json.dumps({"schema_version": 1, "bots": {},
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'", (json.dumps({"schema_version": 1, "bots": {},
                   "runtimes": {"codex": {"installed": True}, "claude": {"installed": False}}}),))
         login_holds.record(c, "r1", login_holds.canonical(c, "r1", "", "codex"), "codex", H.now(),
                            reset=H.shift(H.now(), hours=2))
@@ -725,7 +725,7 @@ def test_a_task_model_that_cannot_run_counts_only_the_turns_on_the_bots_own_mode
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES('earlier','rev-a',?,?,?)",
                   (H.now(), H.now(), own["id"]))
         segment(c, 'earlier', model='claude-haiku-5-5', provider='anthropic')
-        c.execute("UPDATE runners SET readiness=? WHERE id='r1'",
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'",
                   (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {"claude": {"installed": False}}}),))
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
@@ -745,7 +745,7 @@ def test_a_task_that_fell_back_to_the_builders_company_keeps_a_require_check_off
         c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES('fell','rev-a',?,?,?)",
                   (H.now(), H.now(), own["id"]))
         segment(c, 'fell', model='claude-sonnet-5-5', provider='anthropic')
-        c.execute("UPDATE runners SET readiness=? WHERE id='r1'",
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id='r1'",
                   (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {"claude": {"installed": False}}}),))
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")

@@ -13,6 +13,7 @@ import json
 import re
 import secrets
 import sqlite3
+import threading
 from email.parser import BytesParser
 from email.policy import HTTP
 from typing import Annotated
@@ -21,7 +22,7 @@ from urllib.parse import quote, urlsplit
 from fastapi import Query, Request
 from pydantic import Field, StringConstraints
 
-from . import docs_import
+from . import docs_import_run
 from . import manual
 from . import models as M
 from .names import lookup
@@ -781,14 +782,17 @@ class Docs:
             raise Problem("validation", "Send a file in a `file` field", 422)
         return upload[0], upload[1], fields
 
-    def convert(self, filename, data, fields):
-        """The DocImport body and the Markdown the file becomes, before any write."""
+    def convert(self, filename, data, fields, cancel=None):
+        """The DocImport body and the Markdown the file becomes, before any write. The conversion runs in a worker
+        with its time and memory budgets; a cancelled one raises docs_import_run.Cancelled and writes nothing."""
         try:
-            text, guess = docs_import.to_markdown(filename, data)
+            text, guess = docs_import_run.to_markdown(filename, data, max_chars=MAX_BODY, cancel=cancel)
+        except docs_import_run.Busy as exc:
+            raise Problem("imports_busy", str(exc), 503, retryable=True) from exc
+        except docs_import_run.Cancelled as exc:
+            raise Problem("import_cancelled", "The import was cancelled before it was saved.", 409) from exc
         except ValueError as exc:
             raise Problem("import_failed", str(exc), 422) from exc
-        if len(text) > MAX_BODY:
-            raise Problem("import_failed", "That file is too long to import (over a million characters)", 422)
         stem = re.sub(r"\.[A-Za-z0-9]+$", "", filename.replace("\\", "/").rsplit("/", 1)[-1]).strip()
         heading = re.match(r"#\s+(.+)", text)
         title = (fields.get("title") or "").strip() or (heading.group(1).strip() if heading else "") or guess or stem or "Imported doc"
@@ -869,7 +873,23 @@ def install_docs(app, store, auth, mutate):
         # Parsing up to 20 MB and the write both block: off the event loop, like the conversion.
         filename, data, fields = await asyncio.to_thread(docs.upload, request.headers.get("content-type", ""),
                                                          await request.body())
-        item, text = await asyncio.to_thread(docs.convert, filename, data, fields)
+        # A person who drops the request stops the conversion at its next check; nothing is written for it.
+        cancel = threading.Event()
+
+        async def stop_when_dropped():
+            # Starlette has no event for a dropped request, so it is asked twice a second.
+            while not await request.is_disconnected():  # noqa: ASYNC110
+                await asyncio.sleep(0.5)
+            cancel.set()
+
+        watcher = asyncio.create_task(stop_when_dropped())
+        try:
+            item, text = await asyncio.to_thread(docs.convert, filename, data, fields, cancel)
+        except asyncio.CancelledError:
+            cancel.set()
+            raise
+        finally:
+            watcher.cancel()
         return await asyncio.to_thread(
             lambda: mutate(request, item, docs.create(request, create_body(item, text), imported=item.filename)))
 
