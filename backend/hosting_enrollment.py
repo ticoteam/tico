@@ -38,6 +38,6 @@ def enrollment(store, auth, request_id, code_hash, label, owner, status=False):
         # never becomes a second computer, even after its original expiry.
         if not status and not e['consumed_at']:
             c.execute("UPDATE enrollments SET expires_at=? WHERE code_hash=?", (H.shift(H.now(), minutes=15), code_hash))
-        runner = c.execute("SELECT last_seen_at,revoked_at FROM runners WHERE id=?", (e['runner_id'],)).fetchone()
+        runner = c.execute("SELECT last_seen_at,revoked_at FROM runners_with_state WHERE id=?", (e['runner_id'],)).fetchone()
         return {"online": bool(runner and not runner['revoked_at'] and runner['last_seen_at']
                                and runner['last_seen_at'] > H.shift(H.now(), minutes=-2))}

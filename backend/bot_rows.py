@@ -30,7 +30,7 @@ class BotRows:
         self.configs.update({r["bot"]: r for r in read_cache.configs(c, sources)})
         self.humans = {row["id"]: row for row in H.humans(c)}
         self.assignments = _by(c, "SELECT a.bot,a.runner_id,a.generation,r.label,r.owner_id,r.last_seen_at,"
-                                  "r.revoked_at FROM assignments a JOIN runners r ON r.id=a.runner_id "
+                                  "r.revoked_at FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                                   "WHERE a.bot IN ({})", read)
         self.draining = set(_by(c, "SELECT bot FROM bot_control WHERE draining=1 AND bot IN ({})", read))
         self.scopes = {bot: row["claim_task"] for bot, row in _by(

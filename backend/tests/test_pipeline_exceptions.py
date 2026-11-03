@@ -19,8 +19,8 @@ def board(c, profile="manager"):
     c.execute("UPDATE bot_config SET config=? WHERE bot='coo'",
               (encode({"name": "coo", "runtime": "fake", "status": "active", "profile": profile}),))
     if not c.execute("SELECT 1 FROM runners WHERE id='r1'").fetchone():
-        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,last_seen_at) VALUES('r1','box','ana','h',?,?)",
-                  (H.now(), H.now()))
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','box','ana','h',?)", (H.now(),))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id='r1'", (H.now(),))
     return H.type_get(c, typ["id"])
 
 

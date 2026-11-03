@@ -94,13 +94,7 @@ CREATE TABLE IF NOT EXISTS agent_pairings(
  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, decided_by TEXT, decided_at TEXT,
  token_key TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS agent_pairings_client ON agent_pairings(client_hash, created_at);
-CREATE TABLE IF NOT EXISTS runners(
- id TEXT PRIMARY KEY, label TEXT NOT NULL, owner_id TEXT NOT NULL REFERENCES humans(id),
- token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_seen_at TEXT,
- revoked_at TEXT, platform TEXT, version TEXT, capacity INTEGER NOT NULL DEFAULT 4,
- readiness TEXT NOT NULL DEFAULT '{}', capabilities TEXT NOT NULL DEFAULT '[]',
- awake_since TEXT, checkout TEXT,
- restart_requested_at TEXT, readiness_at TEXT);
+-- runners, runner_states and runners_with_state are migration 0062's (backend/migrations).
 CREATE TABLE IF NOT EXISTS model_logins(
  id TEXT PRIMARY KEY, runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL,
  profile TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, url TEXT NOT NULL DEFAULT '',
@@ -1215,7 +1209,7 @@ class Store:
             c.executescript(_slack_channels.SCHEMA)
             from . import flight as _flight
             c.executescript(_flight.SCHEMA)
-            for column, kind in (("sql_ms", "REAL"), ("wait_ms", "REAL"), ("queries", "INTEGER")):
+            for column, kind in (("sql_ms", "REAL"), ("wait_ms", "REAL"), ("queries", "INTEGER"), ("top", "TEXT")):
                 H.add_column(c, "flight_slow", column, kind)
             from . import performance as _performance
             c.executescript(_performance.SCHEMA)
@@ -1245,15 +1239,9 @@ class Store:
                 H.add_column(c, "runners", "screen_default_pending", "INTEGER NOT NULL DEFAULT 0")
                 # Performance diagnostics: on unless a person turns them off (backend/performance.py).
                 H.add_column(c, "runners", "performance", "TEXT NOT NULL DEFAULT 'on'")
-                # Memory hold on a computer: its newest sample at 85% or more sets it, below 80% clears it
-                # (backend/performance.py ingest; backend/start_places.py computer_hold).
-                H.add_column(c, "runners", "memory_hold", "INTEGER NOT NULL DEFAULT 0")
-                # The newest sample's time, kept with the computer: sample retention drops old rows, not this mark.
-                H.add_column(c, "runners", "last_sampled_at", "INTEGER")
+                # The memory hold, last sample time and a restart under way are runner_states columns (migration
+                # 0062); a computer that sampled before its last-sample mark existed takes its newest kept sample's.
                 _performance.backfill_last_sampled(c)
-                # When a computer said it is restarting after a person pressed Restart, from its heartbeat; NULL once
-                # a heartbeat no longer says so (backend/health.py `restarting`).
-                H.add_column(c, "runners", "restart_since", "TEXT")
                 # A starter bot is `needs_onboarding` until it says its setup is done, then
                 # `onboarded`; NULL for every other bot (backend/onboarding.py).
                 H.add_column(c, "bot_config", "onboarding_state", "TEXT")
@@ -1446,13 +1434,7 @@ class Store:
                         c.execute("ALTER TABLE schedules ADD COLUMN event_name TEXT")
                     c.execute("INSERT INTO cloud_migrations VALUES(14,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=15").fetchone():
-                    # When a machine returns from a silence it must report in steadily before it
-                    # is given work (`backend/execution.py waking`). NULL means a machine that has
-                    # been here all along, so every enrolled machine keeps working through this
-                    # migration and only a real disappearance starts a new waking period.
-                    columns = {row[1] for row in c.execute("PRAGMA table_info(runners)")}
-                    if "awake_since" not in columns:
-                        c.execute("ALTER TABLE runners ADD COLUMN awake_since TEXT")
+                    # `awake_since` (`backend/execution.py waking`) is a runner_states column now (migration 0062).
                     c.execute("INSERT INTO cloud_migrations VALUES(15,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=16").fetchone():
                     from .harnesses import backfill_config
@@ -1588,11 +1570,7 @@ class Store:
                     # connect; the marker makes the contract visible to release checks.
                     c.execute("INSERT INTO cloud_migrations VALUES(38,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=39").fetchone():
-                    # `runners.checkout`: how a runner's own checkout stands against
-                    # origin/main, from its heartbeat (#492).
-                    columns = {row[1] for row in c.execute("PRAGMA table_info(runners)")}
-                    if "checkout" not in columns:
-                        c.execute("ALTER TABLE runners ADD COLUMN checkout TEXT")
+                    # The runner's checkout against origin/main (#492) is a runner_states column now (migration 0062).
                     c.execute("INSERT INTO cloud_migrations VALUES(39,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=40").fetchone():
                     # `runners.restart_requested_at`: a person pressed Restart for that computer; its
@@ -1679,9 +1657,6 @@ class Store:
                 H.add_column(c, "task_types", "bots", "TEXT")
                 # Sign out / Switch account / Use the shared key ride the sign-in relay (backend/model_login.py).
                 H.add_column(c, "model_logins", "kind", "TEXT NOT NULL DEFAULT 'sign_in'")
-                # When readiness was last reported (last_seen is any contact): the app waits for a report newer than a
-                # sign-out or switch before it stops looking.
-                H.add_column(c, "runners", "readiness_at", "TEXT")
                 # The owner's "Turns at once" for a computer (NULL: automatic, its own capacity).
                 H.add_column(c, "runners", "turns_at_once", "INTEGER")
                 # Clear key: a computer that missed its job (offline) clears its key copy at its next key fetch.
@@ -1696,7 +1671,7 @@ class Store:
                     H.migrate_task_privacy(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(57,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=58").fetchone():
-                    H.add_column(c, "runners", "capabilities", "TEXT NOT NULL DEFAULT '[]'")
+                    # runner_states.capabilities (migration 0062).
                     c.execute("INSERT INTO cloud_migrations VALUES(58,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=59").fetchone():
                     H._apply(c, H.WAITING_ON_SCHEMA)

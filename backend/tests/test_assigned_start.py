@@ -22,7 +22,7 @@ def clock(monkeypatch):
 def advance(api, clock, hours):
     clock[0] = H.shift(clock[0], hours=hours)
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET last_seen_at=?', (H.now(),))
+        c.execute('UPDATE runner_states SET last_seen_at=?', (H.now(),))
 
 
 def sweep(api):
@@ -272,7 +272,7 @@ def observe_for(api, clock, hours):
     with store.transaction() as c:
         while clock[0] < until:
             clock[0] = min(until, H.shift(clock[0], seconds=queue_refusals.MAX_GAP_SECONDS))
-            c.execute('UPDATE runners SET last_seen_at=?', (H.now(),))
+            c.execute('UPDATE runner_states SET last_seen_at=?', (H.now(),))
             queue_refusals.observe(c, store.settings)
 
 
@@ -644,8 +644,9 @@ def fleet(store, bots, tasks, attempts, *, days=30):
     with store.transaction() as c:
         c.execute("INSERT INTO conversations(id,kind,subject,created_at,last_message_at) VALUES('fleet-conv','task','',?,?)",
                   (now, now))
-        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,last_seen_at,readiness) "
-                  "VALUES('fleet-runner','fleet','ana','fleet-token',?,?,'{}')", (now, now))
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) "
+                  "VALUES('fleet-runner','fleet','ana','fleet-token',?)", (now,))
+        c.execute("UPDATE runner_states SET last_seen_at=?,readiness='{}' WHERE runner_id='fleet-runner'", (now,))
         for slug in slugs:
             c.execute("INSERT INTO bots(id,slug,display_name,state,created_at) VALUES(?,?,?,'active',?)",
                       (slug, slug, slug, now))

@@ -126,7 +126,7 @@ def fleet(api, prefix, count):
                 "ready": n % 2 == 0, "runtime": "codex",
                 "problems": [] if n % 2 == 0 else ["Codex is not signed in"],
                 "tools": [{"env": "STRIPE_KEY", "credential": "missing", "service": "stripe"}]}
-        c.execute("UPDATE runners SET readiness=?, last_seen_at=? WHERE id=?",
+        c.execute("UPDATE runner_states SET readiness=?, last_seen_at=? WHERE runner_id=?",
                   (json.dumps(doc), H.now(), machine["runner_id"]))
     for n in range(count):                                    # computers that check in: where a bot could move
         heartbeat(api, runner(api, label=f"{prefix} Mac {n:02d}")["runner_id"], seconds_ago=5, runtimes=RUNTIMES)

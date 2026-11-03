@@ -52,7 +52,7 @@ def _addresses(values):
 
 def requested(c, bot):
     """What bot.yaml asks, from the computer the bot is assigned to; None when it asks nothing or says nothing."""
-    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                     "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
     return _requested(bot, readiness_document(row["readiness"])) if row else None
 
@@ -127,7 +127,7 @@ def alerts(c):
     out, saved, documents = [], {r["bot"]: r for r in c.execute("SELECT * FROM bot_mail_settings")}, {}
     # One read of each table and one parse a computer, not three statements and a parse for every bot.
     for row in c.execute("SELECT a.bot,r.id runner,r.readiness FROM assignments a JOIN bots b ON b.id=a.bot "
-                         "LEFT JOIN runners r ON r.id=a.runner_id AND r.revoked_at IS NULL "
+                         "LEFT JOIN runners_with_state r ON r.id=a.runner_id AND r.revoked_at IS NULL "
                          "WHERE b.state<>'archived' ORDER BY a.bot"):
         if row["runner"] is None:
             continue

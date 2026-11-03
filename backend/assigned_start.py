@@ -295,7 +295,7 @@ def _bot_state(c, bot, settings):
         return owner['state'], None
     config = c.execute(f"SELECT bc.config,{E.DRAINING_SQL.replace('a.bot', 'bc.bot')} draining "
                        "FROM bot_config bc WHERE bc.bot=?", (bot,)).fetchone()
-    runner = c.execute('SELECT r.* FROM assignments a JOIN runners r ON r.id=a.runner_id '
+    runner = c.execute('SELECT r.* FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id '
                        'WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
     if not runner:
         return 'no_computer', None
