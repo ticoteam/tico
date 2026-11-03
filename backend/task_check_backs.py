@@ -307,18 +307,29 @@ def _notice_in_flight(c, task_id, target):
 
 
 def _computer_out(c, bot, at):
-    """Whether the bot's assigned computer cannot take a start now: silent past REACHABLE_SECONDS (asleep, offline), or
-    holding new starts for memory or a stale sample, as start_places.computer_hold reports. CPU overload is not held
-    here, and a bot with no assigned computer is not gated."""
-    from . import start_places
+    """Whether the bot's assigned computer should take no new notice now.
+
+    A cloud machine sleeps when idle and is started by queued work for its bot (cloud_machines.bot_want), so its silence
+    never gates: the notice queues and wakes it. Only its memory hold gates, and only while it is running and reporting.
+    Any other computer is out while silent past REACHABLE_SECONDS (asleep, offline), or holding new starts for memory or
+    a stale sample (start_places.computer_hold). CPU overload is not held here, and a bot with no assigned computer is
+    not gated."""
+    from . import cloud_machines, start_places
     H = _H()
     place = c.execute("SELECT r.id,r.last_seen_at FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?",
                       (bot,)).fetchone()
     if not place:
         return False
-    if not place["last_seen_at"] or place["last_seen_at"] < H.shift(at, seconds=-REACHABLE_SECONDS):
+    reporting = bool(place["last_seen_at"]) and place["last_seen_at"] >= H.shift(at, seconds=-REACHABLE_SECONDS)
+    machine = cloud_machines.home(c, bot)
+    if machine is not None:
+        if machine["state"] != "running" or not reporting:
+            return False  # a stopped or starting machine takes the notice in its queue, and its want starts it
+        hold = start_places.computer_hold(c, place["id"])  # reads the real clock, as every other caller does
+        return bool(hold) and hold[0] == start_places.MEMORY_HOLD
+    if not reporting:
         return True
-    hold = start_places.computer_hold(c, place["id"])  # reads the real clock, as every other caller does
+    hold = start_places.computer_hold(c, place["id"])
     return bool(hold) and hold[0] in (start_places.NOT_REPORTING, start_places.MEMORY_HOLD)
 
 

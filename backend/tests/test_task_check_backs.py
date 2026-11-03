@@ -7,6 +7,7 @@ from backend import task_check_backs as CB
 from backend import wake_rules as W
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.test_cloud_machines import cloud  # noqa: F401
 
 
 @pytest.fixture
@@ -529,3 +530,38 @@ def test_idle_reachable_bot_is_woken_a_bounded_number_of_times(followups, monkey
         assert 1 <= len(woke) <= 3
         gaps = [(H.parse_ts(b) - H.parse_ts(a)).total_seconds() for a, b in zip(woke, woke[1:])]
         assert all(gap >= 30 * 60 for gap in gaps)
+
+
+def test_a_stopped_cloud_machine_is_started_by_one_followup_and_gets_no_more(cloud):  # noqa: F811
+    """A cloud machine sleeps when idle and is started by queued work for its bot. Its silence must not hold the
+    follow-up: the one notice queues, the machine's want sees it and starts the machine, and a later sweep adds none."""
+    from backend import cloud_machines as CM
+    from backend.tests.test_cloud_machines import enrolled
+    store = cloud.store
+    with store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('system_routines',?)", (json.dumps({CB.KEY: {"on": True}}),))
+    enrolled(cloud)
+    cloud.hq.calls.clear()
+    cloud.manager.synced = None
+    cloud.tick()
+    with store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")  # the enrolling chat is not why it stays on
+    cloud.at[0] = cloud.row()["active_at"] + 299
+    cloud.tick()
+    cloud.tick(1)
+    assert cloud.row()["state"] == "stopped"
+    with store.transaction() as c:
+        runner_id = CM.row(c, "ops")["runner_id"]
+        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), minutes=-10), runner_id))  # asleep
+        row = due(c, H.task_create(c, "human:ana", "Inspect the cloud result", "x", "bot:ops", lint=False))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        [wake] = wakes(c, row["id"])
+        job = c.execute("SELECT id,state FROM jobs WHERE message_id=?", (wake["id"],)).fetchone()
+        assert job["state"] == "queued"
+        assert CM.bot_want(c, store.settings, "ops", runner_id, cloud.at[0])[1] == "job:" + job["id"]
+    cloud.hq.calls.clear()
+    assert "start" in cloud.tick()
+    with store.transaction() as c:
+        assert CB.sweep(c)["woke"] == []
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone()[0] == 1
+        assert len(wakes(c, row["id"])) == 1
