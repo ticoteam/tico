@@ -112,7 +112,7 @@ function v2NeedsOne(id) {
 const needsOneHeld = id => NEEDS_ONE.get(String(id))?.it || null;
 // A question to the person is delivered once their Needs you holds it, and read once they open its card or its task
 // (POST /v2/needs-you/seen, /v2/tasks/{id}/seen): a question withdrawn later tells its bot whether they had seen it.
-// Each is sent once per page load; one that fails is sent again with the next list.
+// Delivery is sent once per question per page load; one that fails is sent again with the next list.
 const ASKS_SENT = {seen: new Set(), read: new Set()};
 const askToMe = a => a?.id && actorPerson(a.recipient_id || '') === S.me?.id;
 function needsSeen(items) {
@@ -122,11 +122,17 @@ function needsSeen(items) {
   ids.forEach(id => ASKS_SENT.seen.add(id));
   post('/v2/needs-you/seen', {asks: ids}).catch(() => ids.forEach(id => ASKS_SENT.seen.delete(id)));
 }
-function taskAsksRead(id) {
+// Reads a task's open questions to the person (the server marks each open one). A card that shows one question sends
+// once per page load for that question (askId), so repaints stay quiet; opening the full task always sends, because a
+// question asked after an earlier open is read only by a request made then.
+function taskAsksRead(id, askId) {
   const key = String(id);
-  if (!key || ASKS_SENT.read.has(key)) return;
-  ASKS_SENT.read.add(key);
-  post(`/v2/tasks/${encodeURIComponent(key)}/seen`, {}).catch(() => ASKS_SENT.read.delete(key));
+  if (!key) return;
+  if (askId) {
+    if (ASKS_SENT.read.has('ask:' + askId)) return;
+    ASKS_SENT.read.add('ask:' + askId);
+  }
+  post(`/v2/tasks/${encodeURIComponent(key)}/seen`, {}).catch(() => { if (askId) ASKS_SENT.read.delete('ask:' + askId); });
 }
 function needsTake(needs) {
   NEEDS_ONE.clear();

@@ -355,12 +355,12 @@ function decidePaintBody(st) {
   const html = c.type === 'memory_tidy' ? decideMemoryTidyHTML(st, c) : c.type === 'approve' ? decideApprovalHTML(c) : c.type === 'stale' ? decideStaleHTML(c)
     : (c.type === 'pick' ? decidePickHTML(st, c) : c.type === 'ask' ? decideAskHTML(c) : decideTaskHTML(st, c)) + foldedHTML(c.it) + decideClarifyHTML(c);
   if (body.dataset.html !== html) body.innerHTML = body.dataset.html = html;
-  if (c.type === 'ask' || c.type === 'task') decideAskRead(c.it);
+  if (c.type === 'ask' || c.type === 'task' || c.type === 'pick') decideAskRead(c.it);   // an option card reads its question too
 }
 // Showing a question on its card reads it: a loose one by itself, a task's through the task (hub-v2.js taskAsksRead).
 function decideAskRead(it) {
   if (!askToMe(it?.ask) || it.ask.read_at) return;
-  if (it.kind !== 'ask') return taskAsksRead(it.id);
+  if (it.kind !== 'ask') return taskAsksRead(it.id, it.ask.id);
   if (ASKS_SENT.read.has(it.id)) return;
   ASKS_SENT.read.add(it.id);
   post(`/v2/messages/${encodeURIComponent(it.id)}/ack`, {}).catch(() => ASKS_SENT.read.delete(it.id));
