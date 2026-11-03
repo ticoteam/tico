@@ -11,10 +11,17 @@ from fastapi.testclient import TestClient
 
 from backend import routines
 from backend.app import create_app
-from backend.tests.test_onboarding import environment  # noqa: F401  (the fixture)
+from backend.tests.test_onboarding import ASSISTANT_AGENT, ASSISTANT_CARD, BOTOPS_CARD, environment  # noqa: F401  (the fixture)
 
 COO = {"coo": {"name": "Coo", "status": "active", "template": "assistant"}}
 SWEEP = "coo:daily-sweep"
+BOOKKEEPER = {"bk": {"name": "Bk", "status": "active", "template": "bookkeeper"}}
+BOOKKEEPER_CARD = {"template": "bookkeeper", "slug": "bk", "name": "Bookkeeper", "required": False, "bootstrap": True,
+                   "summary": "Keeps the books.", "owns": ["the books"], "never": ["pays bills"],
+                   "reasoning_effort": "high", "recommend_when": ["always"]}
+BOOKKEEPER_AGENT = "# {{bot_name}}\n\nYou keep {{company_name}}'s books.\n"
+MONTHLY = {"id": "monthly-report", "title": "Monthly finance report", "cron": "0 9 3 * *",
+           "timezone": "America/Los_Angeles", "template": "playbooks/monthly-report.md"}
 
 
 def _write_assistant_routines(api):
@@ -126,6 +133,26 @@ def test_a_person_edited_routine_is_untouched(environment):
         assert routines.row(c, SWEEP)["enabled"] == 0
     assert auto["name"] == "My sweep" and auto["enabled"] == 0
     assert len(_rows(api)) == 1
+    api.__exit__(None, None, None)
+
+
+def test_at_startup_only_the_assistant_gets_a_routine_a_bootstrap_bot_with_routines_gets_none(environment):
+    """The backfill is the Assistant's daily sweep alone. The bookkeeper's monthly report (enabled in its template) is
+    set up with the bot, so an install whose bookkeeper has none keeps none: the startup path does not switch it on."""
+    api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""), (BOOKKEEPER_CARD, BOOKKEEPER_AGENT)],
+                      seed={**COO, **BOOKKEEPER})
+    _write_assistant_routines(api)
+    folder = Path(api.app.state.store.settings.catalog_dir) / "bookkeeper"
+    (folder / "playbooks").mkdir(exist_ok=True)
+    (folder / "bot.yaml").write_text(yaml.safe_dump({"name": "bookkeeper", "routines": [MONTHLY]}))
+    (folder / "playbooks" / "monthly-report.md").write_text("Report {{company_name}}'s month.\n")
+    assert _ensure(api) == [("coo", "daily-sweep")]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM schedules WHERE bot='bk'").fetchone()[0] == 0
+    api = _restart(api)
+    assert _ensure(api) == []
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM schedules WHERE bot='bk'").fetchone()[0] == 0
     api.__exit__(None, None, None)
 
 

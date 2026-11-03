@@ -198,7 +198,7 @@ def create_app(settings=None):
                 onboarding.ensure_counsel(c)
         except Exception as exc:
             telemetry.capture("librarian", exc)
-        # An active built-in bot gets its template's routines it has never had (backend/onboarding.py): once, never back.
+        # The active Assistant gets its daily sweep if it has never had it (backend/onboarding.py): once, never back.
         try:
             with store.transaction() as c:
                 onboarding.ensure_builtin_routines(c)
