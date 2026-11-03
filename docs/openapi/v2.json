@@ -11540,7 +11540,7 @@
         ]
       },
       "get": {
-        "summary": "Everyone's feedback on these subjects (subject_ids, comma-separated, at most 200) that the caller reads",
+        "summary": "On these subjects the caller reads (subject_ids, comma-separated, at most 200): the caller's own feedback and everyone's up/down counts",
         "operationId": "listFeedbackMarkers",
         "parameters": [
           {
@@ -47597,9 +47597,33 @@
             "items": {
               "$ref": "#/components/schemas/Feedback"
             }
+          },
+          "counts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "subject_id": {
+                  "type": "string"
+                },
+                "up": {
+                  "type": "integer"
+                },
+                "down": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "down",
+                "subject_id",
+                "up"
+              ],
+              "additionalProperties": true
+            }
           }
         },
         "required": [
+          "counts",
           "items"
         ],
         "additionalProperties": true

@@ -273,17 +273,41 @@ def give(c, auth, who, body):
               "attempt_id=excluded.attempt_id,model=excluded.model,harness=excluded.harness,"
               "subject_revision=excluded.subject_revision,rating=excluded.rating,reason=excluded.reason,"
               "outcome=excluded.outcome,note_id=excluded.note_id,updated_at=excluded.updated_at", row)
-    # Counts and kinds only: the reason is the person's words and stays in its row.
-    H.event(c, who.actor, "feedback.given", row["id"], {"subject_type": row["subject_type"], "rating": row["rating"],
-                                                        "bot": row["bot_id"], "told_bot": bool(body["tell_bot"])})
+    # Kinds only: the reason is the person's words and stays in its row.
+    _event(c, auth, who, "feedback.given", row, subj, {"rating": row["rating"], "bot": row["bot_id"],
+                                                 "told_bot": bool(body["tell_bot"])})
     return view(c, _row(c, row["id"]))
+
+
+def _private(c, subject_type, subject_id, subj):
+    """Whether the rated work is narrower than the company: a private thread (an Assistant chat, a members or
+    participants thread), a message tied to a private task or meeting, or a private task."""
+    if subject_type == "task" and H.task_private(c, H.task(c, subject_id) or {}):
+        return True
+    if subject_type == "approval":
+        approval = c.execute("SELECT task_id FROM approvals WHERE id=?", (subject_id,)).fetchone()
+        if approval and approval["task_id"] and H.task_private(c, H.task(c, approval["task_id"]) or {}):
+            return True
+    source, thread, root = threads._note_source(c, {"message_id": subj["note_message_id"]})
+    return source is not None and threads._source_private(c, source, thread, root)
+
+
+def _event(c, auth, who, action, row, subj, detail):
+    """The audit event, with the rated subject as its target so the SQL event gate (backend/privacy_index.py event)
+    applies that subject's provenance. None on private work: the owner reads the audit trail whole, and who rated a
+    private Assistant reply, and how, is that person's alone. The feedback row itself is the record."""
+    if subj is None:
+        subj = subject(c, auth, who, row["subject_type"], row["subject_id"])
+    if _private(c, row["subject_type"], row["subject_id"], subj):
+        return
+    H.event(c, who.actor, action, row["subject_id"], {"feedback": row["id"], "subject_type": row["subject_type"], **detail})
 
 
 def remove(c, auth, who, feedback_id):
     row = own_row(c, auth, who, feedback_id)
     _cancel_waiting(c, who, row["note_id"])
     c.execute("DELETE FROM feedbacks WHERE id=?", (row["id"],))
-    H.event(c, who.actor, "feedback.removed", row["id"], {"subject_type": row["subject_type"], "bot": row["bot_id"]})
+    _event(c, auth, who, "feedback.removed", row, None, {"bot": row["bot_id"]})
     return {"ok": True, "id": row["id"]}
 
 
@@ -296,13 +320,15 @@ def make_rule(c, auth, who, feedback_id, body):
     scope = {"all_bots": True} if body.get("all_bots") else {"bots": [row["bot_id"]]}
     rule = O.add_rule(c, auth, who, {"kind": "internal", "text": body["text"], "who": scope, "if_broken": RULE_IF_BROKEN})
     c.execute("UPDATE feedbacks SET outcome='rule', org_rule_id=?, updated_at=? WHERE id=?", (rule["id"], H.now(), row["id"]))
-    H.event(c, who.actor, "feedback.rule", row["id"], {"rule": rule["id"], "status": rule.get("status")})
+    _event(c, auth, who, "feedback.rule", row, None, {"rule": rule["id"], "status": rule.get("status")})
     return {"feedback": view(c, _row(c, row["id"])), "rule": rule}
 
 
 # ----------------------------------------------------------------------------- reads
 def markers(c, auth, who, subject_type, subject_ids):
-    """Every person's feedback on these subjects, for those the viewer reads."""
+    """On each of these subjects the viewer reads: the viewer's own feedback (`items`) and everyone's 👍/👎 tally
+    (`counts`, subjects with none left out). Other people's rows stay in /list, which is paged and byte-capped; here
+    one subject with hundreds of ratings costs one count row."""
     auth.domain(who)
     if subject_type not in SUBJECTS:
         raise Problem("validation", "subject_type is message, task or approval", 422)
@@ -312,10 +338,14 @@ def markers(c, auth, who, subject_type, subject_ids):
         raise Problem("validation", f"Ask for at most {IDS_MAX} subjects at once", 422)
     seen = [i for i in ids if readable(c, auth, who, subject_type, i)]
     if not seen:
-        return {"items": []}
-    rows = c.execute("SELECT * FROM feedbacks WHERE subject_type=? AND subject_id IN (%s) ORDER BY created_at, id"
-                     % ",".join("?" * len(seen)), [subject_type, *seen]).fetchall()
-    return {"items": [view(c, r) for r in rows]}
+        return {"items": [], "counts": []}
+    marks = ",".join("?" * len(seen))
+    rows = c.execute("SELECT * FROM feedbacks WHERE person_id=? AND subject_type=? AND subject_id IN (%s) "
+                     "ORDER BY created_at, id" % marks, [who.actor, subject_type, *seen]).fetchall()
+    counts = c.execute("SELECT subject_id, sum(rating='up') AS up, sum(rating='down') AS down FROM feedbacks "
+                       "WHERE subject_type=? AND subject_id IN (%s) GROUP BY subject_id ORDER BY subject_id" % marks,
+                       [subject_type, *seen]).fetchall()
+    return {"items": [view(c, r) for r in rows], "counts": [dict(r) for r in counts]}
 
 
 def _cursor(value):
@@ -447,7 +477,7 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/feedback")
     def feedback_markers(request: Request, subject_type: str, subject_ids: str = ""):
-        """Everyone's feedback on these subjects (comma-separated ids, at most 200) that the caller reads."""
+        """My feedback on these subjects (comma-separated ids, at most 200) that I read, and everyone's counts."""
         with store.read() as c:
             return markers(c, auth, request.state.identity, subject_type, subject_ids)
 
