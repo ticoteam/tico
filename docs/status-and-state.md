@@ -377,7 +377,7 @@ Values: NULL (open, no decision yet), `approved`, `declined`, `withdrawn`.
 Transitions (`backend/hubdb.py`):
 
 - NULL to `approved` or `declined`: a person or a bot with the right decides (`decided_by`, `decided_via`).
-- NULL to `withdrawn`: an undecided approval nobody needs any more, after the 14-day expiry or when its task ended.
+- NULL to `withdrawn`: an undecided approval nobody needs any more, after the 14-day expiry, when its task ended, or when a release of its version or a newer one shipped in its channel (a release publish ask only).
 - Any to NULL: reopen, which clears `decided_by` and `decided_at`.
 
 Enforcement: CHECK (installed by this branch; the base schema had none). Nullable, because NULL is the open state.
