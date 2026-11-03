@@ -292,24 +292,32 @@ pub async fn environment_with(ctx: &EnvContext<'_>, attempt: &Value, vault: &mut
     let path = env.get("PATH").cloned().unwrap_or_else(|| "/usr/bin:/bin".into());
     let py_dir = python().parent().map(|p| p.display().to_string()).unwrap_or_default();
     let projects = ctx.projects_dir.display().to_string();
-    for (k, v) in [
-        ("HUB_API_URL", ctx.url.to_string()),
-        ("HUB_TOKEN", token.to_string()),
-        ("HUB_BOT", bot.to_string()),
-        ("HUB_EMPLOYEE", bot.to_string()),
-        ("HUB_TASK_ID", task_id),
-        ("HUB_DIR", root.display().to_string()),
-        ("HUB_WORKSPACE", projects.clone()),
-        ("TICO_PROJECTS_DIR", projects),
-        ("PATH", format!("{py_dir}:{}:{path}", root.join("scripts").display())),
+    // Each name goes out as TICO_ and, during the rename overlap, as the HUB_ name it replaces, with one value.
+    for (name, v) in [
+        ("API_URL", ctx.url.to_string()),
+        ("TOKEN", token.to_string()),
+        ("BOT", bot.to_string()),
+        ("EMPLOYEE", bot.to_string()),
+        ("TASK_ID", task_id),
+        ("DIR", root.display().to_string()),
+        ("WORKSPACE", projects.clone()),
     ] {
-        env.insert(k.to_string(), v);
+        env.insert(format!("TICO_{name}"), v.clone());
+        env.insert(format!("HUB_{name}"), v);
     }
+    env.insert("TICO_PROJECTS_DIR".into(), projects);
+    env.insert("PATH".into(), format!("{py_dir}:{}:{path}", root.join("scripts").display()));
     // The bot's own checkout folder, as recorded (crate::sessions::named_folder): a bot made with a UUID id is not in
-    // bot-<HUB_BOT>, and a rename keeps its folder, so the connectors that read its manifest find it by this.
+    // bot-<BOT>, and a rename keeps its folder, so the connectors that read its manifest find it by this.
     match crate::sessions::named_folder(&attempt["config"]) {
-        Some(folder) => env.insert("HUB_BOT_FOLDER".into(), folder),
-        None => env.remove("HUB_BOT_FOLDER"),
+        Some(folder) => {
+            env.insert("TICO_BOT_FOLDER".into(), folder.clone());
+            env.insert("HUB_BOT_FOLDER".into(), folder)
+        }
+        None => {
+            env.remove("TICO_BOT_FOLDER");
+            env.remove("HUB_BOT_FOLDER")
+        }
     };
     // Headed browsers and computer use draw on the computer's screen, where people can watch (crate::screen).
     if let Some(display) = crate::screen::display() {

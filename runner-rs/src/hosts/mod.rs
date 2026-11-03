@@ -185,7 +185,8 @@ pub fn background_wait(config: &Value) -> Option<std::time::Duration> {
     (s > 0.0 && s.is_finite()).then(|| std::time::Duration::from_secs_f64(s))
 }
 
-const HUB_MCP_ENV: &[&str] = &["HUB_API_URL", "HUB_TOKEN", "HUB_BOT", "HUB_EMPLOYEE", "HUB_DIR"];
+const HUB_MCP_ENV: &[&str] = &["TICO_API_URL", "TICO_TOKEN", "TICO_BOT", "TICO_EMPLOYEE", "TICO_DIR", "HUB_API_URL",
+    "HUB_TOKEN", "HUB_BOT", "HUB_EMPLOYEE", "HUB_DIR"];
 
 /// The hub as a stdio MCP server for one turn (`hub_mcp_server`), or None outside a turn.
 pub fn hub_mcp_server(env: &Env) -> Option<Value> {

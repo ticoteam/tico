@@ -378,7 +378,7 @@ pub fn codex_config(servers: &[Value], env: &Env, process_env: &Env) -> Map<Stri
 /// takes a `tico_` prefix, so a bot's table never merges into a disabled stub.
 pub fn codex_merge(servers: &mut Map<String, Value>, remote: Map<String, Value>) {
     for (name, table) in remote {
-        let key = if servers.contains_key(&name) || name == "hub" { format!("tico_{name}") } else { name };
+        let key = if servers.contains_key(&name) || name == "tico" || name == "hub" { format!("tico_{name}") } else { name };
         servers.insert(key, table);
     }
 }
@@ -431,7 +431,7 @@ impl Reach {
     pub fn status(&self, bot: &str, row: &Value, entry: &Value) -> String {
         let mcp = &row["mcp"];
         let needs: Vec<String> = mcp["headers"].as_object().into_iter().flatten().flat_map(|(_, v)| placeholders(&text_of(v))).collect();
-        if !needs.is_empty() && entry.get("vault").and_then(|v| v.as_str()) != Some("hub") {
+        if !needs.is_empty() && !crate::declared_access::is_tico_vault(entry) {
             return "unchecked".into();
         }
         let (url, transport) = (text_of(&mcp["url"]), text_of(&mcp["transport"]));
@@ -541,7 +541,10 @@ mod tests {
         remote.insert("hub".into(), json!({"url": "b"}));
         remote.insert("new".into(), json!({"url": "c"}));
         codex_merge(&mut stubs, remote);
-        assert_eq!(stubs.keys().cloned().collect::<Vec<_>>(), ["svc", "tico_svc", "tico_hub", "new"]);
+        let mut again = Map::new();
+        again.insert("tico".into(), json!({"url": "d"}));
+        codex_merge(&mut stubs, again);
+        assert_eq!(stubs.keys().cloned().collect::<Vec<_>>(), ["svc", "tico_svc", "tico_hub", "new", "tico_tico"]);
     }
 
     #[tokio::test]

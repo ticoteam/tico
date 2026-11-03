@@ -221,7 +221,7 @@ pub fn mcp_json(settings: &Settings, env: &Env) -> Value {
     servers.extend(crate::mcp::pi_config(&settings.mcp_servers));
     if let Some(hub) = hub_mcp_server(env) {
         let vars: serde_json::Map<String, Value> = hub["env"].as_object().into_iter().flatten().map(|(k, _)| (k.clone(), json!(format!("${{{k}}}")))).collect();
-        servers.insert("hub".into(), json!({"command": hub["command"], "args": hub["args"], "env": vars, "exposure": "direct"}));
+        servers.insert("tico".into(), json!({"command": hub["command"], "args": hub["args"], "env": vars, "exposure": "direct"}));
     }
     // pi starts a stdio server with the whole process environment, so the Gateway key (hidden from bash by
     // settings.json), the model keys and the hub token would reach it. An empty value in the server's own env
@@ -230,7 +230,7 @@ pub fn mcp_json(settings: &Settings, env: &Env) -> Value {
     for (name, row) in servers.iter_mut() {
         if row.get("command").is_some() {
             let mut own = row["env"].as_object().cloned().unwrap_or_default();
-            for key in MCP_BLANKED_ENV.iter().copied().filter(|k| *k != "HUB_TOKEN" || name.as_str() != "hub") {
+            for key in MCP_BLANKED_ENV.iter().copied().filter(|k| !k.ends_with("_TOKEN") || name.as_str() != "tico") {
                 if !own.contains_key(key) {
                     own.insert(key.into(), json!(""));
                 }
@@ -244,7 +244,7 @@ pub fn mcp_json(settings: &Settings, env: &Env) -> Value {
 
 /// The variables a stdio MCP server is started without: the model provider keys a pi turn may hold, and the hub's token
 /// (every server but the hub, which gets it through `${HUB_TOKEN}`). The Gateway key is blanked separately, always.
-const MCP_BLANKED_ENV: &[&str] = &["OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "HUB_TOKEN"];
+const MCP_BLANKED_ENV: &[&str] = &["OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "HUB_TOKEN", "TICO_TOKEN"];
 
 /// Loopback hosts, added to NO_PROXY for a Gateway turn. pi sends every request through the environment's proxy
 /// (a CONNECT tunnel, even for plain http), so a proxy without a loopback bypass would carry a plain-http local
@@ -945,7 +945,7 @@ fn fingerprint(argv: &[String], env: &Env, s: &Settings) -> String {
     if let Some(at) = argv.iter().position(|a| a == "--thinking") {
         argv.drain(at..(at + 2).min(argv.len()));
     }
-    let rest: Env = env.iter().filter(|(k, _)| *k != "HUB_TOKEN").map(|(k, v)| (k.clone(), v.clone())).collect();
+    let rest: Env = env.iter().filter(|(k, _)| !matches!(k.as_str(), "HUB_TOKEN" | "TICO_TOKEN")).map(|(k, v)| (k.clone(), v.clone())).collect();
     // A leased user's checkout groups are its process's from the start (crate::checkout_groups).
     let groups = s.identity.map(|(uid, _)| crate::checkout_groups::granted(uid));
     let text = json!([argv, rest, s.cwd, s.identity, groups, mcp_json(s, env), s.compact_at, s.gateway_inputs]).to_string();
@@ -1135,6 +1135,7 @@ impl PiHost {
         let file = home.join("lease-token");
         crate::warm::write_token_for(&file, &token, t.settings.identity);
         env.insert("HUB_TOKEN".into(), format!("tico-file:{}", file.display()));
+        env.insert("TICO_TOKEN".into(), format!("tico-file:{}", file.display()));
         let proc = self.spawn(&argv, &t.settings, &env, key, home, thinking).map_err(|e| e.to_string())?;
         self.inner().procs.insert(thread_id.into(), proc.clone());
         Ok(proc)

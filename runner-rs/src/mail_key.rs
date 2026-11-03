@@ -285,6 +285,7 @@ async fn mint(how: &Mint, service: &str, mailbox: &str) -> Result<Value, String>
     cmd.args(["mint-token", "--mailbox", mailbox, "--service", service])
         .current_dir(crate::env::root())
         .env_remove("HUB_TOKEN")
+        .env_remove("TICO_TOKEN")
         .env_remove("TICO_GOOGLE_BROKER_URL")
         .env_remove("TICO_GOOGLE_BROKER_AUTH")
         .env("GOOGLE_SA_KEY", &how.key)

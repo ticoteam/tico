@@ -41,6 +41,7 @@ impl Runner {
                 let token = uuid::Uuid::new_v4().simple().to_string();
                 s.register(&token, &bot);
                 env.insert("HUB_TOKEN".into(), token.clone());
+                env.insert("TICO_TOKEN".into(), token.clone());
                 token
             });
             let socket = self.socket.as_ref().map(|s| s.path.clone());

@@ -579,7 +579,7 @@ impl ClaudeHost {
         argv.extend(STREAM_ARGS.iter().map(|s| s.to_string()));
         let mut servers = crate::mcp::claude_config(&t.settings.mcp_servers);
         if let Some(hub) = hub_mcp_server(&t.settings.env) {
-            servers.insert("hub".into(), hub);
+            servers.insert("tico".into(), hub);
         }
         // Only the hub, the bot's declared servers and the bot repo's own `.mcp.json`, for every bot:
         // `--strict-mcp-config` keeps out the operator's own servers (~/.claude.json, user settings, plugins,
@@ -598,6 +598,9 @@ impl ClaudeHost {
             .and_then(|v| v.get("mcpServers").and_then(Value::as_object).cloned())
             .unwrap_or_default();
         let mut merged = project;
+        if servers.contains_key("tico") {
+            merged.remove("hub");                    // the name every earlier release wrote, never served beside this one
+        }
         merged.extend(servers);
         servers = merged;
         if !servers.is_empty() {
@@ -1717,7 +1720,8 @@ mod tests {
         assert!(argv.contains(&"--strict-mcp-config".to_string()) && !argv.contains(&"--setting-sources".to_string()));
         let config: Value = serde_json::from_str(&argv[argv.iter().position(|a| a == "--mcp-config").unwrap() + 1]).unwrap();
         assert_eq!(config["mcpServers"]["repo"]["command"], "x");
-        assert_ne!(config["mcpServers"]["hub"]["command"], "stale");
+        assert!(config["mcpServers"]["tico"]["command"].as_str().is_some_and(|c| c != "stale"));
+        assert!(config["mcpServers"].get("hub").is_none());
         let env = turn_env(&settings);
         assert_eq!(env["ENABLE_CLAUDEAI_MCP_SERVERS"], "false");
         // Every bot's turn, with branches or not, and over an inherited setting that would turn it on.

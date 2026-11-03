@@ -70,7 +70,8 @@ pub fn scope(attempt: &Value) -> String {
 
 /// The environment without HUB_TOKEN, hashed: a change means the process must start again.
 pub fn fingerprint(env: &Env) -> String {
-    let rest: serde_json::Map<String, Value> = env.iter().filter(|(k, _)| *k != "HUB_TOKEN").map(|(k, v)| (k.clone(), json!(v))).collect();
+    let rest: serde_json::Map<String, Value> = env.iter().filter(|(k, _)| !matches!(k.as_str(), "HUB_TOKEN" | "TICO_TOKEN"))
+        .map(|(k, v)| (k.clone(), json!(v))).collect();
     sha256_hex(&ascii_dumps(&Value::Object(rest)))
 }
 
@@ -151,6 +152,7 @@ impl WarmSessions {
         let token_file = home.join("lease-token");
         let mut turn_env = env.clone();
         let token = turn_env.insert("HUB_TOKEN".into(), format!("tico-file:{}", token_file.display())).unwrap_or_default();
+        turn_env.insert("TICO_TOKEN".into(), format!("tico-file:{}", token_file.display()));
         let mut entries = self.entries();
         if entries.get(&key).is_some_and(|e| e.busy) {
             return Err("Conversation already has an active turn".into());

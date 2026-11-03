@@ -87,9 +87,15 @@ pub fn env_name(entry: &Value) -> String {
     String::new()
 }
 
+/// Whether a declared entry takes its credential from Tico's own vault: `vault: tico`, or `vault: hub`, the name
+/// every earlier release wrote.
+pub fn is_tico_vault(entry: &Value) -> bool {
+    matches!(entry.get("vault").and_then(|v| v.as_str()), Some("tico") | Some("hub"))
+}
+
 /// present | missing | hub-vault | not-declared. Presence only; the value is never read into the report.
 pub fn credential_state(entry: &Value, name: &str, environment: &Env) -> &'static str {
-    if entry.get("vault").and_then(|v| v.as_str()) == Some("hub") {
+    if is_tico_vault(entry) {
         return "hub-vault";
     }
     if name.is_empty() {

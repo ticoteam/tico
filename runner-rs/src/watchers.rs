@@ -523,6 +523,7 @@ impl Watchers {
                              "computer_label": entry.get("computer_label").cloned().unwrap_or(Value::Null)});
         let mut env = crate::env::environment_with(&env_ctx, &attempt, vault, Some(granted)).await?;
         env.remove("HUB_TOKEN");
+        env.remove("TICO_TOKEN");
         Ok(env)
     }
 
@@ -551,9 +552,13 @@ impl Watchers {
         for (k, v) in [
             ("TICO_WATCHER", spec.name.clone()),
             ("TICO_WATCHER_STATE", state.display().to_string()),
+            ("TICO_BOT", bot.clone()),
             ("HUB_BOT", bot.clone()),
+            ("TICO_EMPLOYEE", bot.clone()),
             ("HUB_EMPLOYEE", bot.clone()),
+            ("TICO_API_URL", ctx.url.clone()),
             ("HUB_API_URL", ctx.url.clone()),
+            ("TICO_WORKSPACE", ctx.projects_dir.display().to_string()),
             ("HUB_WORKSPACE", ctx.projects_dir.display().to_string()),
             ("PATH", path_var),
         ] {
