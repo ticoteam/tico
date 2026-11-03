@@ -197,6 +197,12 @@ def create_app(settings=None):
                 onboarding.ensure_counsel(c)
         except Exception as exc:
             telemetry.capture("librarian", exc)
+        # An active built-in bot gets its template's routines it has never had (backend/onboarding.py): once, never back.
+        try:
+            with store.transaction() as c:
+                onboarding.ensure_builtin_routines(c)
+        except Exception as exc:
+            telemetry.capture("builtin_routines", exc)
         # Finance on every install (backend/finance/setup.py): idempotent, after the migrations, one short transaction.
         try:
             from .finance import actions as finance
