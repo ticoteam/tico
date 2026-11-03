@@ -1170,6 +1170,30 @@ def test_rules_withdraw_posts_an_empty_body_to_the_hold_withdraw_route(monkeypat
     client.post.assert_called_once_with("rule-holds/h7/withdraw", {}, key=None)
 
 
+def test_assistant_withdraw_posts_the_reason_to_the_card_route(monkeypatch):
+    """`hub assistant withdraw <id> --reason ...` runs `hub_assistant_withdraw`: POST assistant/actions/{id}/withdraw."""
+    from clients import remotecli
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.return_value = {"actor": "bot:botops"}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["assistant", "withdraw", "a7", "--reason", "Wrong person"]))
+    client.post.assert_called_once_with("assistant/actions/a7/withdraw", {"reason": "Wrong person"}, key=None)
+
+
+def test_assistant_proposals_lists_the_callers_waiting_cards(monkeypatch):
+    """`hub assistant proposals` runs `hub_assistant_proposals`: GET assistant/proposals."""
+    from clients import remotecli
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.return_value = {"actions": []}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["assistant", "proposals"]))
+    client.get.assert_called_with("assistant/proposals")
+
+
 def test_connection_list_reaches_the_connections_route_with_its_paging(monkeypatch):
     """`hub connections list --limit 5 --cursor c2` runs `hub_connections_list`: GET connections with the page."""
     from clients import remotecli
