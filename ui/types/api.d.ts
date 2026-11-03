@@ -1030,6 +1030,11 @@ export type ConversationList = {
   conversations: Array<Conversation>;
 };
 
+export type CorrectionRef = {
+  bot: string;
+  evidence: string;
+};
+
 export type DmCreate = {
   body?: string | null;
   members: Array<string>;
@@ -3193,6 +3198,10 @@ export type MemoryTidyCards = {
   cards: Array<MemoryTidyCard>;
 };
 
+export type MemoryTidyCorrectionResult = {
+  recorded: boolean;
+};
+
 export type MemoryTidyDecision = {
   decision: "keep" | "discard";
 };
@@ -3201,6 +3210,37 @@ export type MemoryTidyPilot = {
   bot: string;
   effort?: "low";
   model: string;
+};
+
+export type MemoryTidyReportResult = {
+  markdown: string;
+  report: {
+  as_of: string;
+  baseline_end: string;
+  baseline_start: string;
+  bots: Array<{
+  baseline: Record<string, unknown>;
+  bot: string;
+  goal_pass: boolean;
+  slug: string;
+  thresholds: Record<string, unknown>;
+  two_week: Record<string, unknown>;
+  two_week_complete: boolean;
+  unknown: Array<string>;
+  weekly: Record<string, unknown>;
+}>;
+  estimated_pilot_cost_usd: number;
+  goal_pass: boolean;
+  note: string;
+  pilot_start: string;
+  spend_stop_usd: number;
+  spend_stopped: boolean;
+  title: string;
+  week: number;
+  window_end: string;
+  window_start: string;
+  working_rules_target_characters: number;
+};
 };
 
 export type Message = {
@@ -5735,6 +5775,13 @@ export type backend__inbound__Edit = {
   used_for?: string | null;
 };
 
+export type backend__memory_tidy_report__Correction = {
+  bot: string;
+  evidence: string;
+  occurred_at: string;
+  reason: string;
+};
+
 /** POST /api/v2/stale-review/accept-all */
 export type AcceptAllStaleSuggestionsParams = {
   "Idempotency-Key": string;
@@ -7263,6 +7310,14 @@ export type GetMemoryTidyCardParams = {
 };
 export type GetMemoryTidyCardBody = never;
 export type GetMemoryTidyCardResponse = MemoryTidyCardResult;
+
+/** GET /api/v2/memory-tidy/report */
+export type GetMemoryTidyReportParams = {
+  pilot_start: string;
+  week?: number;
+};
+export type GetMemoryTidyReportBody = never;
+export type GetMemoryTidyReportResponse = MemoryTidyReportResult;
 
 /** GET /api/v2/messages/{mid} */
 export type GetMessageParams = {
@@ -8937,6 +8992,13 @@ export type RecordLocalHealthFindingParams = {
 export type RecordLocalHealthFindingBody = LocalFinding;
 export type RecordLocalHealthFindingResponse = unknown;
 
+/** POST /api/v2/memory-tidy/corrections */
+export type RecordMemoryTidyCorrectionParams = {
+  "Idempotency-Key": string;
+};
+export type RecordMemoryTidyCorrectionBody = backend__memory_tidy_report__Correction;
+export type RecordMemoryTidyCorrectionResponse = MemoryTidyCorrectionResult;
+
 /** POST /api/v2/strategy-bot/level3-offer */
 export type RecordStrategyBotLevel3OfferParams = {
   "Idempotency-Key": string;
@@ -9098,6 +9160,13 @@ export type RemoveFeedbackParams = {
 };
 export type RemoveFeedbackBody = never;
 export type RemoveFeedbackResponse = FeedbackRemoved;
+
+/** DELETE /api/v2/memory-tidy/corrections */
+export type RemoveMemoryTidyCorrectionParams = {
+  "Idempotency-Key": string;
+};
+export type RemoveMemoryTidyCorrectionBody = CorrectionRef;
+export type RemoveMemoryTidyCorrectionResponse = MemoryTidyCorrectionResult;
 
 /** DELETE /api/v2/model-subscriptions/{sid} */
 export type RemoveModelSubscriptionParams = {

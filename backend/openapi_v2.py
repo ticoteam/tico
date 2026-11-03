@@ -2473,6 +2473,12 @@ SCHEMAS['SlackLinkList'] = obj({'links': items(ref('SlackLink')), 'next_cursor':
 # Independent reviewer cards: task closure never changes this audience or lifetime.
 TAGS['Memory tidy'] = "Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks."
 STABLE.extend([
+    ('/api/v2/memory-tidy/report', 'get', 'Memory tidy', 'getMemoryTidyReport',
+     'Owner and named reviewer only. Weekly pass cohort and two-week Goal read from persisted evidence, with explicit unknown coverage. Read again for late decisions or reversions.', 'MemoryTidyReportResult'),
+    ('/api/v2/memory-tidy/corrections', 'post', 'Memory tidy', 'recordMemoryTidyCorrection',
+     'A person with bot read access or the named reviewer tags correction evidence with bot, date, link and one-line reason. The same bot/evidence link counts once; no text inference.', 'MemoryTidyCorrectionResult'),
+    ('/api/v2/memory-tidy/corrections', 'delete', 'Memory tidy', 'removeMemoryTidyCorrection',
+     'Remove an incorrect correction tag by bot/evidence link. Its recorder, owner or named reviewer only. Refreshed reports reflect the removal.', 'MemoryTidyCorrectionResult'),
     ('/api/v2/memory-tidy/cards', 'get', 'Memory tidy', 'listMemoryTidyCards',
      'The named reviewer’s open cards; diffs are fetched on opening a card. Human and bot reviewers.', 'MemoryTidyCards'),
     ('/api/v2/memory-tidy/cards/{ident}', 'get', 'Memory tidy', 'getMemoryTidyCard',
@@ -2489,6 +2495,14 @@ SCHEMAS['MemoryTidyCard'] = obj({
              'created_at', 'expires_at', 'status', 'reason', 'keep_available'])
 SCHEMAS['MemoryTidyCards'] = obj({'cards': items(ref('MemoryTidyCard'))})
 SCHEMAS['MemoryTidyCardResult'] = obj({'card': ref('MemoryTidyCard')})
+SCHEMAS['MemoryTidyReportResult'] = obj({'report': obj({
+    'title': 's', 'pilot_start': 's', 'week': 'i', 'window_start': 's', 'window_end': 's', 'as_of': 's',
+    'baseline_start': 's', 'baseline_end': 's', 'bots': items(obj({
+        'bot': 's', 'slug': 's', 'weekly': 'o', 'two_week': 'o', 'baseline': 'o', 'goal_pass': 'b',
+        'thresholds': 'o', 'unknown': items({'type': 'string'}), 'two_week_complete': 'b'})),
+    'estimated_pilot_cost_usd': 'f', 'spend_stop_usd': 'i', 'spend_stopped': 'b',
+    'working_rules_target_characters': 'i', 'goal_pass': 'b', 'note': 's'}), 'markdown': 's'})
+SCHEMAS['MemoryTidyCorrectionResult'] = obj({'recorded': 'b'})
 
 # A bot's Dream (backend/dream.py): a cleanup task over its own memory, with up to three questions to its requester.
 STABLE.extend([

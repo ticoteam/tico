@@ -24,6 +24,7 @@ from . import task_privacy as privacy
 from .shared_bots import copies, declared, source_of
 from .store import H, Problem, repo_url
 from .views import human_only
+from .memory_tidy_report import HistoryCommit
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bot_memory_updates(
@@ -68,6 +69,8 @@ class MemoryReport(M.Contract):
     commits: list[MemoryCommit] = Field(default_factory=list, max_length=50)
     documents: dict[str, str] = Field(default_factory=dict, max_length=len(DOCUMENTS))
     oversized: list[str] = Field(default_factory=list, max_length=len(DOCUMENTS))
+    tidy_history: list[HistoryCommit] = Field(default_factory=list, max_length=40)
+    tidy_complete_from: str | None = Field(default=None, max_length=40)
 
 
 def family(c, bot):
@@ -100,6 +103,9 @@ def record(c, who, bot, report):
     if not c.execute("SELECT 1 FROM assignments WHERE bot=? AND runner_id=?", (bot, who.runner_id)).fetchone():
         raise Problem("forbidden", "That bot is not assigned to this computer", 403)
     now, changed = H.now(), 0
+    if report.tidy_history or report.tidy_complete_from:
+        from .memory_tidy_report import record_history
+        record_history(c, bot, report.tidy_history, report.tidy_complete_from)
     for commit in report.commits:
         files = [f for f in commit.files if f.startswith(FOLDERS) and ".." not in f.split("/")]
         at = H.parse_ts(commit.committed)

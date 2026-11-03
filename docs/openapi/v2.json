@@ -24250,6 +24250,190 @@
         ]
       }
     },
+    "/api/v2/memory-tidy/corrections": {
+      "post": {
+        "summary": "A person with bot read access or the named reviewer tags correction evidence with bot, date, link and one-line reason. The same bot/evidence link counts once; no text inference.",
+        "operationId": "recordMemoryTidyCorrection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/backend__memory_tidy_report__Correction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryTidyCorrectionResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Memory tidy"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Remove an incorrect correction tag by bot/evidence link. Its recorder, owner or named reviewer only. Refreshed reports reflect the removal.",
+        "operationId": "removeMemoryTidyCorrection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectionRef"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryTidyCorrectionResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Memory tidy"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/memory-tidy/report": {
+      "get": {
+        "summary": "Owner and named reviewer only. Weekly pass cohort and two-week Goal read from persisted evidence, with explicit unknown coverage. Read again for late decisions or reversions.",
+        "operationId": "getMemoryTidyReport",
+        "parameters": [
+          {
+            "name": "pilot_start",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pilot Start"
+            }
+          },
+          {
+            "name": "week",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "title": "Week"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryTidyReportResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Memory tidy"
+        ]
+      }
+    },
     "/api/v2/messages": {
       "post": {
         "summary": "Send a message to a person or bot",
@@ -46632,6 +46816,29 @@
         ],
         "additionalProperties": true
       },
+      "CorrectionRef": {
+        "properties": {
+          "bot": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Bot"
+          },
+          "evidence": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Evidence"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "bot",
+          "evidence"
+        ],
+        "title": "CorrectionRef"
+      },
       "DmCreate": {
         "properties": {
           "members": {
@@ -57361,6 +57568,18 @@
         ],
         "additionalProperties": true
       },
+      "MemoryTidyCorrectionResult": {
+        "type": "object",
+        "properties": {
+          "recorded": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "recorded"
+        ],
+        "additionalProperties": true
+      },
       "MemoryTidyDecision": {
         "properties": {
           "decision": {
@@ -57407,6 +57626,134 @@
           "model"
         ],
         "title": "MemoryTidyPilot"
+      },
+      "MemoryTidyReportResult": {
+        "type": "object",
+        "properties": {
+          "report": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "pilot_start": {
+                "type": "string"
+              },
+              "week": {
+                "type": "integer"
+              },
+              "window_start": {
+                "type": "string"
+              },
+              "window_end": {
+                "type": "string"
+              },
+              "as_of": {
+                "type": "string"
+              },
+              "baseline_start": {
+                "type": "string"
+              },
+              "baseline_end": {
+                "type": "string"
+              },
+              "bots": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "bot": {
+                      "type": "string"
+                    },
+                    "slug": {
+                      "type": "string"
+                    },
+                    "weekly": {
+                      "type": "object"
+                    },
+                    "two_week": {
+                      "type": "object"
+                    },
+                    "baseline": {
+                      "type": "object"
+                    },
+                    "goal_pass": {
+                      "type": "boolean"
+                    },
+                    "thresholds": {
+                      "type": "object"
+                    },
+                    "unknown": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "two_week_complete": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "baseline",
+                    "bot",
+                    "goal_pass",
+                    "slug",
+                    "thresholds",
+                    "two_week",
+                    "two_week_complete",
+                    "unknown",
+                    "weekly"
+                  ],
+                  "additionalProperties": true
+                }
+              },
+              "estimated_pilot_cost_usd": {
+                "type": "number"
+              },
+              "spend_stop_usd": {
+                "type": "integer"
+              },
+              "spend_stopped": {
+                "type": "boolean"
+              },
+              "working_rules_target_characters": {
+                "type": "integer"
+              },
+              "goal_pass": {
+                "type": "boolean"
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "as_of",
+              "baseline_end",
+              "baseline_start",
+              "bots",
+              "estimated_pilot_cost_usd",
+              "goal_pass",
+              "note",
+              "pilot_start",
+              "spend_stop_usd",
+              "spend_stopped",
+              "title",
+              "week",
+              "window_end",
+              "window_start",
+              "working_rules_target_characters"
+            ],
+            "additionalProperties": true
+          },
+          "markdown": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "markdown",
+          "report"
+        ],
+        "additionalProperties": true
       },
       "Message": {
         "type": "object",
@@ -70994,6 +71341,42 @@
           "name"
         ],
         "title": "Edit"
+      },
+      "backend__memory_tidy_report__Correction": {
+        "properties": {
+          "bot": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Bot"
+          },
+          "evidence": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Evidence"
+          },
+          "occurred_at": {
+            "type": "string",
+            "maxLength": 40,
+            "title": "Occurred At"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "bot",
+          "evidence",
+          "occurred_at",
+          "reason"
+        ],
+        "title": "Correction"
       }
     },
     "securitySchemes": {

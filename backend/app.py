@@ -8288,6 +8288,8 @@ def create_app(settings=None):
     install_cards(app, store, auth, mutate, settings, task_view)
     from . import memory_tidy_cards
     memory_tidy_cards.install(app, store, auth, mutate)
+    from . import memory_tidy_report
+    memory_tidy_report.install(app, store, auth, mutate)
     from . import memory_tidy_transport
     memory_tidy_transport.install(app, store, execution, mutate)
     turn_work.install(app, store, auth)

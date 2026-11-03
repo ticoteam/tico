@@ -101,6 +101,9 @@ def test_keep_one_commit_checkout_untouched_replay_and_next_rules(repos):
     assert 'Checked diary.' in body and 'Skipped edits: none.' in body
     text = git(remote, 'show', 'main:' + C.LEARNINGS)
     assert 'Day write 1.' in text and 'General rule.' in text
+    assert result['metrics']['parent_commit'] == git(remote, 'rev-parse', 'main^')
+    assert result['metrics']['before'] == C.snapshot_metrics(Git(remote).snapshot('main^'))
+    assert result['metrics']['after'] == C.snapshot_metrics(Git(remote).snapshot('main'))
     assert before == (git(local, 'rev-parse', 'HEAD'), (local / C.LEARNINGS).read_bytes(), git(local, 'status', '--porcelain'))
     (local / 'state.md').write_text('New uncommitted day write')
     assert apply(local, request) == result  # recovery precedes new dirty-checkout refusal

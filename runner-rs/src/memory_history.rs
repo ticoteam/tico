@@ -106,6 +106,31 @@ async fn details(root: &Path, sha: &str, with_diff: bool) -> (Vec<String>, Strin
     (files, cut(&diff, MAX_DIFF), truncated)
 }
 
+/// The complete bounded range on the pushed branch, including previously sent
+/// commits. Missing/truncated messages cannot establish a zero revert count.
+async fn tidy_history(root: &Path) -> Option<(Vec<Value>, String)> {
+    let out = git_out(root, &["log", "-n40", "--format=%H%x1f%ct%x1f%B%x1e", "@{u}", "--", "memory", "knowledge"]).await?;
+    parse_tidy_history(&out)
+}
+
+fn parse_tidy_history(out: &str) -> Option<(Vec<Value>, String)> {
+    let mut rows = vec![];
+    let mut oldest = String::new();
+    for record in out.split('\x1e').filter(|r| !r.trim().is_empty()) {
+        let parts: Vec<&str> = record.trim_start_matches('\n').splitn(3, '\x1f').collect();
+        if parts.len() != 3 || parts[0].len() != 40 || !parts[0].bytes().all(|b| b.is_ascii_hexdigit())
+            || parts[2].chars().count() > 16_000 { return None; }
+        let seconds = parts[1].parse::<i64>().ok()?;
+        // Git supplies integer commit seconds; reuse the runner's UTC formatter.
+        // Out-of-range dates cannot establish report coverage.
+        if !(0..=253_402_300_799).contains(&seconds) { return None; }
+        let stamp = crate::util::text_of(&crate::util::iso(&json!(seconds))).replace("+00:00", ".000000Z");
+        if oldest.is_empty() || stamp < oldest { oldest = stamp.clone(); }
+        rows.push(json!({"sha": parts[0], "committed": stamp, "message": parts[2]}));
+    }
+    if rows.is_empty() || rows.len() > 40 { None } else { Some((rows, oldest)) }
+}
+
 /// Python's `json.dumps(value, sort_keys=True)`: ASCII only, `", "` and `": "`.
 pub fn dumps_sorted(v: &Value) -> String {
     fn string(s: &str, out: &mut String) {
@@ -242,6 +267,12 @@ pub async fn report(state: &State, client: &Client, bot: &str, root: &Path, atte
     }
     rows.truncate(50);
     let mut body = json!({"commits": rows, "documents": documents});
+    if upstream {
+        if let Some((history, since)) = tidy_history(root).await {
+            body["tidy_history"] = json!(history);
+            body["tidy_complete_from"] = json!(since);
+        }
+    }
     if !oversized.is_empty() {
         body["oversized"] = json!(oversized);
     }
@@ -277,6 +308,19 @@ pub async fn report(state: &State, client: &Client, bot: &str, root: &Path, atte
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tidy_history_keeps_revert_body_and_refuses_incomplete_ranges() {
+        let sha = "a".repeat(40);
+        let body = format!("{sha}\x1f1793667600\x1fRevert\n\nThis reverts commit {}.\nReason: lost a rule\nLost-rule: keep sources\nEvidence: https://acme.example/task/1\n\x1e\n", "b".repeat(40));
+        let (rows, since) = parse_tidy_history(&body).unwrap();
+        assert_eq!(since, "2026-11-03T01:00:00.000000Z");
+        assert!(rows[0]["message"].as_str().unwrap().contains("Lost-rule: keep sources"));
+        assert!(parse_tidy_history("broken\x1e").is_none());
+        assert!(parse_tidy_history(&format!("{sha}\x1fnot-a-time\x1fbody\x1e")).is_none());
+        assert!(parse_tidy_history(&format!("{sha}\x1f253402300800\x1fbody\x1e")).is_none());
+        assert!(parse_tidy_history(&format!("{sha}\x1f1793667600\x1f{}\x1e", "x".repeat(16_001))).is_none());
+    }
 
     fn sh(dir: &Path, script: &str) {
         let out = std::process::Command::new("/bin/sh").arg("-c").arg(script).current_dir(dir).env("GIT_CONFIG_GLOBAL", "/dev/null").output().unwrap();
