@@ -7,6 +7,11 @@ Updates, tasks in every state, a decision that needs you, strategy and goals, gr
 learnings, chats, meetings with transcripts, docs, files with versions, sample email and Slack threads, and two
 connected computers. No domain, no DNS, no sign-in, no model account.
 
+The latest completed Learnings night includes the next projector sample's sourcing review: ten working rules saved
+by Procurement, Operations, Finance, Scene Design and Legal. The practical brightness target is about 1,000 documented
+ANSI/ISO lumens; earlier dim or unqualified sample baskets are superseded. The source task distinguishes requirements,
+research and prepared video files from purchases and physical tests. This is part of the fictional demo scenario.
+
 ```bash
 docker run --rm -p 127.0.0.1:8765:8765 ghcr.io/ticoteam/tico:latest demo
 ```

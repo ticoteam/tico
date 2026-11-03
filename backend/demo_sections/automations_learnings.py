@@ -246,6 +246,58 @@ CONTENT = {
                           "summary": "Read the packet. Saved the flat-surface correction as a working rule."}]},
         ],
     },
+    # The next sample's sourcing review, adapted into Acme's fictional company. These are requirements and research
+    # lessons, not a record of physical tests, supplier replies or purchases.
+    "projector": {
+        "task": "projector-sample-review", "title": "Review the next projector sample requirements",
+        "body": "Sample research review: apply these working rules to the next projector sample. "
+                "The practical brightness target is about 1,000 lumens. Earlier budget baskets are superseded. "
+                "No sample has been ordered or physically tested for this program.",
+        "author": "human:ana", "owner": "ops-manager",
+        "label": "Ana in Review the next projector sample requirements",
+        "note": "Saved the sourcing lessons. Reopen brightness qualification and costing before recommending a purchase.",
+        "bots": [
+            {"bot": "procurement", "subject": "Qualify brightness, startup and the exact projector before buying",
+             "rules": [
+                 "The next sample targets about 1,000 lumens. Use a working sourcing floor of 1,000 documented ANSI "
+                 "or ISO 21118 lumens, retaining method and picture mode. Unspecified or LED/source lumens do not "
+                 "qualify. The 60 ANSI-lumen candidate fails; the budget candidate without a standardized rating "
+                 "remains unqualified. Validate the intended room as well.",
+                 "Card playback, automatic video start, gapless looping and projector power-on after mains "
+                 "restoration are separate checks. A player can start while the projector still needs its power button.",
+                 "Check the exact model and revision across sellers. Manufacturer and retail stock may differ; "
+                 "resolve native-resolution conflicts. A public In Stock label does not confirm destination delivery."],
+             "summary": "Saved three projector sourcing rules. No sample ordered or tested."},
+            {"bot": "ops-manager", "subject": "Replace stale purchase baskets and keep a sample evidence trail",
+             "rules": [
+                 "The 1,000-lumen target supersedes the earlier projector purchase baskets. Retain their prices as "
+                 "historical research and reopen sourcing and costing before a new purchase recommendation.",
+                 "Track proposed purchase, approval, order confirmation, receipt, assembly revision and measured "
+                 "test result separately for SAMPLE-001. A shopping list or prepared video is not a hardware test; "
+                 "public demo summaries must distinguish evidence from illustrative content."],
+             "summary": "Saved the requirement-change and sample-record rules."},
+            {"bot": "finance-lead", "subject": "Reprice the qualifying projector system before proposing a budget",
+             "rules": [
+                 "Compare complete systems only after brightness and playback qualify. The earlier $78.98 and "
+                 "$253.96 research subtotals do not price a qualifying 1,000-lumen rig. Reprice before proposing a cap.",
+                 "Separate MSRP, observed retail price, accessories, tax, freight, returns and actual spend. "
+                 "Unknown costs remain unknown; a sample order or payment needs its own evidence."],
+             "summary": "Saved two cost and purchase-evidence rules."},
+            {"bot": "scene-designer", "subject": "Separate verified video files from room and projector tests",
+             "rules": [
+                 "Local full decoding and checksums verify the original 720p30 H.264 Baseline test files on the "
+                 "computer. Exact player compatibility, physical looping and projection quality still need bench tests.",
+                 "Compare warm glow, water and aurora concepts using the same qualified projector, image size, "
+                 "surface, ambient light and picture mode. Record fan noise and perceived brightness; the lumen "
+                 "target does not promise the same result in every room."],
+             "summary": "Saved the file-verification limit and controlled room-comparison method."},
+            {"bot": "legal-review", "subject": "Keep the projector name provisional until clearance",
+             "rules": [
+                 "A creative name shortlist and exact web searches do not establish trademark availability. "
+                 "Document similar marks, related goods and common-law uses before recommending final clearance."],
+             "summary": "Saved the distinction between a name shortlist and trademark clearance."},
+        ],
+    },
     # Tico release updates: two bots subscribe to the Tico feed, and hear about each release after its first.
     "feed": {
         "subscribed_days": 6,
@@ -437,11 +489,15 @@ def _learn(b):
     today = learnings.local(b.now).date()
     previous = None
     work_after = timedelta(minutes=CONTENT["learnings"]["work_after_minutes"])
-    for spec in CONTENT["learnings"]["nights"]:
+    finished = [spec for spec in CONTENT["learnings"]["nights"]
+                if datetime.combine(today - timedelta(days=spec["days"]), time(learnings.HOUR),
+                                    tzinfo=learnings.ZONE).astimezone(timezone.utc)
+                + work_after + WORK_WINDOW <= b.now]
+    for index, spec in enumerate(finished):
         day = today - timedelta(days=spec["days"])
         run_at = datetime.combine(day, time(learnings.HOUR), tzinfo=learnings.ZONE).astimezone(timezone.utc)
-        if run_at + work_after + WORK_WINDOW > b.now:
-            break   # this night, and any after it, has not finished (and its bots worked their packets) yet
+        if index == len(finished) - 1:
+            spec = _projector_packet(b, spec, run_at)
         if previous:
             b.clock.at = run_at - timedelta(hours=2)
             _finish_packets(b, previous)
@@ -450,6 +506,30 @@ def _learn(b):
         for learned in spec.get("learned", []):
             b.clock.at = run_at + work_after
             _run(b, learned["bot"], dict(previous["deliveries"])[learned["bot"]], learned["summary"], learned)
+
+
+def _projector_packet(b, night, run_at):
+    """Put the sample review in the latest completed night, including builds before today's 03:00 run.
+
+    Copy the spec rather than mutating CONTENT: a second deterministic build must not duplicate the packet.
+    """
+    spec = CONTENT["projector"]
+    b.clock.at = run_at - timedelta(hours=6)
+    body = spec["body"] + "\n\n" + "\n\n".join(
+        row["bot"] + ":\n" + "\n".join("- " + rule for rule in row["rules"]) for row in spec["bots"])
+    task = b.call("POST", "tasks", {"title": spec["title"], "body": body,
+                                    "owner": spec["owner"]})["task"]
+    b.tasks[spec["task"]] = task["id"]
+    b.write(lambda c: H.task_update(c, H.bot_actor(_bot(c, spec["owner"])), task["id"],
+                                   status="done", note=spec["note"]))
+    items, learned = [], []
+    for row in spec["bots"]:
+        text = "\n".join(row["rules"])
+        items.append({"task": spec["task"], "author": spec["author"], "hours": 6,
+                      "label": spec["label"], "text": text, "learnable": 0.95,
+                      "scores": {row["bot"]: 0.95}})
+        learned.append({**row, "source": f'task {spec["label"]}: "{text}"'})
+    return {**night, "items": [*night["items"], *items], "learned": [*night.get("learned", []), *learned]}
 
 
 def _night(b, spec, night, run_at):
@@ -494,8 +574,14 @@ def _run(b, slug, task, summary, learned):
         mine = (claim.get("task") or {}).get("id") == task
         b.call("POST", f"attempts/{aid}/started", {"thread_id": claim["conversation"]["id"]}, token=b.mac["token"])
         if mine:
-            b.call("POST", f"bots/{slug}/memory/report", {"commits": [_commit(slug, learned, aid, b.clock.at)]},
-                   token=b.mac["token"])
+            commit = _commit(slug, learned, aid, b.clock.at)
+            report = {"commits": [commit]}
+            if "rules" in learned:
+                current = b.call("GET", f"bots/{slug}/memory")["documents"].get(
+                    "memory/learnings.md", "## Working rules\n")
+                added = "\n".join(line[1:] for line in commit["diff"].splitlines() if line.startswith("+- "))
+                report["documents"] = {"memory/learnings.md": current.rstrip() + "\n" + added + "\n"}
+            b.call("POST", f"bots/{slug}/memory/report", report, token=b.mac["token"])
         b.call("POST", f"attempts/{aid}/complete",
                {"outcome": "completed", "text": summary if mine else "", "last_seq": 0}, token=b.mac["token"])
         if mine:
@@ -525,9 +611,12 @@ def _claim(b, slug):
 
 
 def _commit(slug, learned, aid, at):
-    """The memory commit a bot's run makes: one working rule in memory/learnings.md, sourced to the item it came from."""
-    diff = ("--- a/memory/learnings.md\n+++ b/memory/learnings.md\n@@ -1 +1,2 @@\n## Working rules\n"
-            f"+- {learned['rule']} [source: {learned['source']}]\n")
+    """The memory commit a bot's run makes, with each rule sourced to its packet."""
+    rules = learned["rules"] if "rules" in learned else [learned["rule"]]
+    source = learned["source"].replace("\n", " ")
+    diff = ("--- a/memory/learnings.md\n+++ b/memory/learnings.md\n"
+            f"@@ -1 +1,{len(rules) + 1} @@\n## Working rules\n"
+            + "".join(f"+- {rule} [source: {source}]\n" for rule in rules))
     return {"sha": hashlib.sha1(f"{slug}|{learned['subject']}|{at.isoformat()}".encode()).hexdigest(),
             "subject": learned["subject"], "author": slug, "committed": _stamp(at),
             "files": ["memory/learnings.md"], "diff": diff, "attempt": aid}

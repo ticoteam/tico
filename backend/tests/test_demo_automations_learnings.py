@@ -82,15 +82,42 @@ def test_last_night_shows_the_routed_correction_with_its_source(built):
     with signed_in(settings) as api:
         nights = api.get("/api/v2/learnings").json()["nights"]
         last = nights[0]
-        assert last["night"] == "2026-09-25" and last["updates"] == 1
+        assert last["night"] == "2026-09-25" and last["updates"] == 6
         detail = api.get(f"/api/v2/learnings/{last['id']}").json()
-        [bot] = detail["sections"]["bots"]
+        [bot] = [row for row in detail["sections"]["bots"] if row["id"] == "technical-support"]
         assert bot["id"] == "technical-support" and "1 task" in bot["saw"]
         [entry] = bot["entries"]
         assert "flat surface" in entry["title"]
         [source] = [s for s in entry["sources"] if "Correction" in s["quote"]]
         assert source["label"].startswith("task Ben in Call back owners whose calibration failed twice")
         assert "Before calibrating" in entry["change"]["diff"]
+
+
+def projector_rules(api):
+    latest = api.get("/api/v2/learnings").json()["nights"][0]
+    detail = api.get(f"/api/v2/learnings/{latest['id']}").json()
+    return {bot["id"]: bot for bot in detail["sections"]["bots"]
+            if bot["id"] != "technical-support"}
+
+
+def test_sample_rules_are_saved_in_bot_memory_with_readable_source_tasks(built):
+    _, settings = built
+    with signed_in(settings) as api:
+        bots = projector_rules(api)
+        assert set(bots) == {"procurement", "ops-manager", "finance-lead", "scene-designer", "legal-review"}
+        added = []
+        for bot in bots.values():
+            [entry] = bot["entries"]
+            assert entry["sources"], "each memory change links back to readable source evidence"
+            assert api.get(f"/api/v2/tasks/{bot['task_id']}").status_code == 200
+            memory = api.get(f"/api/v2/bots/{bot['id']}/memory").json()
+            assert memory["documents"]["memory/learnings.md"], "the bot's own Learnings panel has its current rules"
+            diff = entry["change"]["diff"]
+            lines = [line for line in diff.splitlines() if line.startswith("+- ")]
+            assert all(line[1:] in memory["documents"]["memory/learnings.md"] for line in lines)
+            added += lines
+        assert len(added) == 10
+        assert "1,000" in bots["procurement"]["entries"][0]["change"]["diff"]
 
 
 def test_the_night_before_saves_a_smaller_change(built):
@@ -236,3 +263,10 @@ def test_a_night_that_has_not_finished_is_not_seeded(early):
         nights = [night["night"] for night in api.get("/api/v2/learnings").json()["nights"]]
         assert len(nights) == 6 and "2026-09-25" not in nights
         assert len(runs_of(api, automation_ids(api)["Nightly orders to bookkeeping"])[0]) == 6
+
+
+def test_sample_rules_survive_a_build_before_todays_learning_run(early):
+    _, settings = early
+    with signed_in(settings) as api:
+        assert set(projector_rules(api)) == {
+            "procurement", "ops-manager", "finance-lead", "scene-designer", "legal-review"}
