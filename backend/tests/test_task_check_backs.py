@@ -563,5 +563,8 @@ def test_a_stopped_cloud_machine_is_started_by_one_followup_and_gets_no_more(clo
     assert "start" in cloud.tick()
     with store.transaction() as c:
         assert CB.sweep(c)["woke"] == []
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone()[0] == 1
+        queued = c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued' "
+                           "AND json_extract(m.refs,'$.wake')='check_back' AND json_extract(m.refs,'$.task')=?",
+                           (row["id"],)).fetchone()[0]
+        assert queued == 1
         assert len(wakes(c, row["id"])) == 1
