@@ -3356,93 +3356,6 @@ def trigger_list(api, args):
             for t in api.get("triggers")["triggers"]]
 
 
-# ----------------------------------------------------------------------------- federation: peers and shared threads
-PEERING = {"peering": _s("The peering's id from hub_peer_list")}
-PEER_INSTALL = {"install": _s("The other install's id: gi_ and 24 hex digits")}
-PEER_THREAD = {"thread": _s("The thread's id: a thread this install owns")}
-
-
-@tool("hub_peer_list", "This install's federation with other Tico installs: its key id (no key material), the Gateway it goes "
-      "through, its peerings (newest first) and the threads you may read that it shares or was given (members listed for the "
-      "ones it owns, with how many messages each company has not taken). Owner or admin.", {})
-def peer_list(api, args):
-    return _as_person(api).get("federation")
-
-
-@tool("hub_peer_key", "Make this install's federation key and register it with Tico HQ. Does nothing when the install has "
-      "one. Owner or admin.", {}, writes=True)
-def peer_key(api, args):
-    return _as_person(api).post("federation/keys", {}, key=_key(args))
-
-
-@tool("hub_peer_rotate_key", "Give this install a new federation key and retire the old one. Every peering needs approving "
-      "again, on both sides. Owner or admin.", {}, writes=True)
-def peer_rotate_key(api, args):
-    return _as_person(api).post("federation/keys/rotate", {}, key=_key(args))
-
-
-@tool("hub_peer_request", "Ask another install to peer with this one. It approves on its side; then you approve here. "
-      "Owner or admin.", PEER_INSTALL, required=("install",), writes=True)
-def peer_request(api, args):
-    return _as_person(api).post("federation/peerings", {"peer": args["install"]}, key=_key(args))
-
-
-@tool("hub_peer_approve", "Approve a peering, having checked the other install's key: from now on its envelopes must be signed "
-      "with that key. The peering is active once both installs approve. Owner or admin.", PEERING, required=("peering",), writes=True)
-def peer_approve(api, args):
-    return _as_person(api).post(f"federation/peerings/{args['peering']}/approve", {}, key=_key(args))
-
-
-@tool("hub_peer_pause", "The kill switch: pause a peering. While it is paused nothing crosses it, in either direction. "
-      "Owner or admin.", PEERING, required=("peering",), writes=True)
-def peer_pause(api, args):
-    return _as_person(api).post(f"federation/peerings/{args['peering']}/pause", {"paused": True}, key=_key(args))
-
-
-@tool("hub_peer_resume", "Resume a paused peering. What was missed while it was paused is caught up. Owner or admin.",
-      PEERING, required=("peering",), writes=True)
-def peer_resume(api, args):
-    return _as_person(api).post(f"federation/peerings/{args['peering']}/pause", {"paused": False}, key=_key(args))
-
-
-@tool("hub_peer_revoke", "End a peering. Nothing more crosses it; a new request starts over and needs both approvals again. "
-      "Owner or admin.", PEERING, required=("peering",), writes=True)
-def peer_revoke(api, args):
-    return _as_person(api).post(f"federation/peerings/{args['peering']}/revoke", {}, key=_key(args))
-
-
-@tool("hub_peer_share", "Share a thread this install owns with an install it has an active peering with. That install gets "
-      "the thread from now on, not its history. You must read and manage the thread. Owner or admin.",
-      {**PEER_THREAD, **PEER_INSTALL}, required=("thread", "install"), writes=True)
-def peer_share(api, args):
-    return _as_person(api).post(f"federation/threads/{quote(str(args['thread']), safe='')}/installs",
-                                {"install": args["install"]}, key=_key(args))
-
-
-@tool("hub_peer_unshare", "Take an install out of a thread this install owns. It gets the removal and nothing after. You must "
-      "read and manage the thread. Owner or admin.", {**PEER_THREAD, **PEER_INSTALL}, required=("thread", "install"), writes=True)
-def peer_unshare(api, args):
-    return _as_person(api).call("DELETE", f"federation/threads/{quote(str(args['thread']), safe='')}/installs/"
-                                          f"{quote(str(args['install']), safe='')}", None, _key(args))
-
-
-@tool("hub_peer_retry", "Send again now what another install has not taken from a shared thread (Needs you lists it). "
-      "Whoever manages the thread.", {"thread": _s("The thread's id on this install"), **PEER_INSTALL},
-      required=("thread", "install"), writes=True)
-def peer_retry(api, args):
-    return _as_person(api).post(f"federation/threads/{quote(str(args['thread']), safe='')}/installs/"
-                                f"{quote(str(args['install']), safe='')}/retry", {}, key=_key(args))
-
-
-@tool("hub_peer_add_reader", "Let a person on this install read a shared copy of a thread. Until an admin who reads it adds "
-      "them, only the accepting admin reads a copy. Owner or admin.",
-      {"thread": _s("The thread's id on this install (a shared copy)"), "actor": _s("The person, as human:<name>")},
-      required=("thread", "actor"), writes=True)
-def peer_add_reader(api, args):
-    return _as_person(api).post(f"federation/threads/{quote(str(args['thread']), safe='')}/readers", {"actor": args["actor"]},
-                                key=_key(args))
-
-
 TRIGGER = {"id": _s("The trigger's id from hub_trigger_list")}
 
 
@@ -7685,7 +7598,7 @@ COUNSEL_TOOLS = frozenset({"hub_rules_list", "hub_rules_get", "hub_rules_add", "
 # not offered to the Assistant either, so the live Assistant is shown what its gate admits and nothing else.
 ASSISTANT_HIDDEN = frozenset({
     "hub_credential_grant", "hub_credential_revoke", "hub_credential_delete", "hub_credential_set", "hub_credential_import",
-    "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_call_token", "hub_peer_key", "hub_peer_rotate_key",
+    "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_call_token",
     "hub_sql", "hub_support_file", "hub_support_report", "hub_support_send", "hub_trigger_sign", "hub_message_redact",
 })
 
