@@ -16,7 +16,7 @@ MAIL_BATCH = 100
 CALENDAR_FIELDS = ("occurrence_id", "event_id", "title", "start", "end", "attendees", "meeting_url")
 MAIL_FIELDS = ("thread_id", "epoch", "date", "from_addr", "from_header", "to", "cc", "subject",
                "snippet", "labels", "body", "body_truncated", "attachments", "list_id",
-               "is_internal", "has_unsubscribe", "rule_hits")
+               "is_internal", "has_unsubscribe", "rule_hits", "known_sender")
 
 
 def owner_handle(config=None):
