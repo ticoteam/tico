@@ -90,7 +90,7 @@ def test_health_statements_do_not_grow_with_history(api):
     history(api, 3)
     bulk(api)
     health(api)                                   # first-time reads
-    _, small = health(api)
+    small = health(api)[1]
     seed(api, "many", 34)
     history(api, 40)
     from backend.tests.test_api import post
@@ -99,6 +99,10 @@ def test_health_statements_do_not_grow_with_history(api):
             post(api, f"chat/few-{n:02d}", {"text": f"More {round_}"})
         for n in range(34):
             post(api, f"chat/many-{n:02d}", {"text": f"More {round_}"})
+    if os.environ.get("OFFLINE"):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE runners SET last_seen_at=?", (H.shift(H.now(), hours=-3),))
+            c.execute("UPDATE jobs SET created_at=?", (H.shift(H.now(), hours=-3),))
     _, large = health(api)
     for sql, n in collections.Counter(shape(s) for s in large).most_common(25):
         print(n, sql)
