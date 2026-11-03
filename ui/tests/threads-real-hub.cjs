@@ -125,13 +125,20 @@ async function restrictPerson(hub) {
       null, {timeout: t(15000)});
     await bot.context().close();
 
-    // Omar, desktop: the company thread is on his thread rail; the members-only one is not, and its text is not on the page.
+    // Omar, desktop: he reads the company thread but is not in it, so Browse threads offers it and his rail does not list it;
+    // the members-only one is in neither, and its text is not on the page.
     // Opened by direct URL, the members-only thread is "Not found", and the bot he may only see has no Home tab.
     const omar = await pageAs(browser, hub, 'omar');
     await omar.goto(hub.url + '/#/threads');
-    await omar.locator('#thread-rail .tr-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
-    assert.equal(await omar.locator('#thread-rail .tr-title', {hasText: 'Pricing war room'}).count(), 0,
+    await omar.locator('#thread-rail [data-tr-browse]:not([hidden])').click({timeout: t(15000)});
+    const browse = omar.locator('#thread-browse');
+    await browse.locator(`li[data-thread="${plan.id}"]`).waitFor({timeout: t(15000)});
+    assert.equal(await browse.locator(`li[data-thread="${secret.id}"]`).count(), 0, 'Browse does not offer a members-only thread');
+    assert.equal(await omar.locator(`#thread-rail a.tr-row[data-thread="${plan.id}"]`).count(), 0,
+      'a thread Omar only reads is not on his rail');
+    assert.equal(await omar.locator(`#thread-rail a.tr-row[data-thread="${secret.id}"]`).count(), 0,
       'a members-only thread Omar is not in is not on his rail');
+    await omar.keyboard.press('Escape');
     await omar.goto(hub.url + '/#/thread/' + secret.id);
     await omar.getByText('Not found').waitFor({timeout: t(15000)});
     assert.ok(!(await omar.content()).includes(SECRET), 'the members-only text is not on Omar\'s page');
@@ -172,6 +179,8 @@ async function restrictPerson(hub) {
 
     // Priya, phone: the Threads tab in the bottom bar opens the rail, which lists the company thread; tapping it opens
     // the thread with its composer, and the page does not scroll sideways.
+    // Priya follows the company thread first: the rail lists only threads she is in.
+    await api(hub, 'priya', 'PUT', `/v2/threads/${plan.id}/follow`, {notify: 'live'});
     const priya = await pageAs(browser, hub, 'priya', {phone: true});
     await priya.goto(hub.url + '/#/tasks');
     await priya.locator('#mobile-threads:not([hidden])').waitFor({timeout: t(15000)});
