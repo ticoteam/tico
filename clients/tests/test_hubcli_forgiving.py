@@ -101,3 +101,52 @@ def test_an_unknown_flag_suggests_the_closest_flag_of_that_command(capsys):
     code, err = parse_failure(capsys, ["task", "list", "--where-status", "closed"])
     assert code == 2
     assert "Did you mean --status?" in err
+
+
+def _leaves(p, skip_aliases):
+    """Every command parser under `p`. With `skip_aliases`, an alias (the same parser under another name) is left out."""
+    import argparse
+    found = []
+    for action in p._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            seen = set()
+            for name, sub in action.choices.items():
+                if skip_aliases and id(sub) in seen:
+                    continue
+                seen.add(id(sub))
+                found.extend(_leaves(sub, skip_aliases) or [sub])
+    return found
+
+
+@pytest.mark.parametrize("words, command", [
+    (["tasks", "list"], "task list"),
+    (["approvals", "show", "x"], "approval show"),
+    (["automations", "list"], "automation list"),
+    (["bots", "status", "list"], "bot status list"),
+    (["rule", "list"], "rules list"),
+])
+def test_plural_nouns_parse_to_the_same_command(words, command, capsys):
+    assert hubcli.parse(hubcli.parser(), words).fn == command
+    assert capsys.readouterr().err == ""
+
+
+def test_aliases_add_no_mcp_tool():
+    from clients import remotecli
+    root = hubcli.parser()
+    with_aliases = {remotecli.tool_name(sub._defaults["fn"]) for sub in _leaves(root, skip_aliases=False)
+                    if "fn" in sub._defaults}
+    without = {remotecli.tool_name(sub._defaults["fn"]) for sub in _leaves(root, skip_aliases=True)
+               if "fn" in sub._defaults}
+    assert with_aliases == without
+
+
+def test_approval_list_points_at_the_walk_and_exits_two(capsys):
+    assert hubcli.run(["approval", "list"], None) == 2
+    err = capsys.readouterr().err
+    assert "needs-you start" in err and "approval show" in err
+
+
+def test_a_flag_the_command_does_not_take_lists_the_ones_it_does(capsys):
+    code, err = parse_failure(capsys, ["automation", "list", "--all"])
+    assert code == 2
+    assert "It takes: --cursor, --limit, --owner" in err

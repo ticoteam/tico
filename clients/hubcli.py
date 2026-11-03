@@ -892,7 +892,11 @@ def command_paths(p, prefix=()):
     paths = []
     for action in p._actions:
         if isinstance(action, argparse._SubParsersAction):
+            seen = set()
             for name, sub in action.choices.items():
+                if id(sub) in seen:                  # an alias: the same command as the name before it
+                    continue
+                seen.add(id(sub))
                 paths.extend(command_paths(sub, prefix + (name,)) or [prefix + (name,)])
     return paths
 
@@ -928,6 +932,9 @@ def unknown_flag_hint(p, argv, unknown):
             flags += difflib.get_close_matches(flag, list(node._option_string_actions), n=1, cutoff=0.6)
     if flags:
         return f" Did you mean {', '.join(flags)}?"
+    takes = [flag for flag in node._option_string_actions if flag.startswith("--") and flag != "--help"]
+    if takes and words:
+        return f" It takes: {', '.join(sorted(takes))}"
     return did_you_mean(words, [" ".join(path) for path in command_paths(p)]) if words else ""
 
 
@@ -1530,7 +1537,7 @@ def parser():
     s.add_argument("--owner")
     s.set_defaults(fn="tag update")
 
-    task = sub.add_parser("task").add_subparsers(dest="sub")
+    task = sub.add_parser("task", aliases=["tasks"]).add_subparsers(dest="sub")
     s = task.add_parser("child", help="create a subtask")
     s.add_argument("parent")
     s.add_argument("--owner", help="who does it; a --check-model subtask is your own (`me`)")
@@ -2155,7 +2162,7 @@ def parser():
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help="turn or the message id of the owner's plain yes to a goal read-back")
     s.set_defaults(fn="proposal decide")
 
-    rules = sub.add_parser("rules", help="org rules: what teammates follow (internal) and what someone outside requires "
+    rules = sub.add_parser("rules", aliases=["rule"], help="org rules: what teammates follow (internal) and what someone outside requires "
                                          "(external), and their due dates").add_subparsers(dest="sub")
     s = rules.add_parser("list", help="the rules in force; --mine: your bot's rules and its settings as sentences")
     s.add_argument("--kind", choices=["internal", "external"])
@@ -2731,7 +2738,7 @@ def parser():
     s.add_argument("id", help="the tool id from `hub tool list --bot`")
     s.set_defaults(fn="tool remove")
 
-    auto = sub.add_parser("automation", help="automations: a trigger and steps").add_subparsers(dest="sub")
+    auto = sub.add_parser("automation", aliases=["automations"], help="automations: a trigger and steps").add_subparsers(dest="sub")
     s = auto.add_parser("list")
     s.add_argument("--owner", help="person:<id>, bot:<slug> or group:<id>")
     s.add_argument("--limit", type=int)
@@ -2992,7 +2999,9 @@ def parser():
     s.add_argument("--writer", help="the Technical Writer's bot slug; empty finds it by starter template")
     s.set_defaults(fn="release schedule")
 
-    appr = sub.add_parser("approval").add_subparsers(dest="sub")
+    appr = sub.add_parser("approval", aliases=["approvals"]).add_subparsers(dest="sub")
+    s = appr.add_parser("list", help="no list: the approvals waiting for you are in `needs-you start`")
+    s.set_defaults(fn="approval list")
     s = appr.add_parser("request",
                         help="ask for a yes; if the owner already said send, mail send --approve <their message id>")
     s.add_argument("--kind", required=True, choices=list(APPROVAL_KINDS))
@@ -3381,7 +3390,7 @@ def parser():
     s.set_defaults(fn="doc fetch")
     sub.add_parser("template", help="the bot templates this company can pick from").add_subparsers(dest="sub").add_parser(
         "list", help="the bot templates this company can pick from").set_defaults(fn="template list")
-    bot = sub.add_parser("bot", help="build a bot from a template (BotOps), change it, place it, its status").add_subparsers(dest="sub")
+    bot = sub.add_parser("bot", aliases=["bots"], help="build a bot from a template (BotOps), change it, place it, its status").add_subparsers(dest="sub")
     s = bot.add_parser("create", help="build a bot from a template in the workspace and register it; --record-only only registers")
     s.add_argument("slug", nargs="?", help="leave out: Tico picks one from --name, else the template's name")
     s.add_argument("--template", help="a template from `hub template list`")
@@ -4099,6 +4108,10 @@ def run(argv, who):
         p.print_help(sys.stderr)
         return 1
     try:
+        if args.fn == "approval list":           # no list route; the approvals waiting for a person are in the needs-you walk
+            print("hub: no approval list; `hub needs-you start` walks the approvals waiting for you, and "
+                  "`hub approval show <id>` reads one", file=sys.stderr)
+            return 2
         if args.fn == "task create" and args.dry_run:     # never reaches remotecli: nothing to send
             return cmd_task_dry_run(args, who)
         if args.fn == "decision ask" and args.list:    # the sets are files in this checkout, no API needed
