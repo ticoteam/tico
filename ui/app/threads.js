@@ -67,7 +67,9 @@ function threadMarkHTML(t, size = 18) {
 const threadUnread = t => Number(t?.me?.unread) || 0;
 const threadActivity = t => !threadUnread(t) && !!t?.me?.activity;
 const threadsCountText = n => n > 99 ? '99+' : String(n);
-const threadsByTitle = (a, b) => threadTitle(a).localeCompare(threadTitle(b), undefined, {sensitivity: 'base'});
+// The server's order (contract §10.1): by title, case-insensitively, unnamed last, then id.
+const threadsByTitle = (a, b) => (!a.title - !b.title) || String(a.title || '').localeCompare(String(b.title || ''), undefined, {sensitivity: 'base'})
+  || String(a.id).localeCompare(String(b.id));
 
 // ----------------------------------------------------------------- loading
 // The rail when the server has it; else the plain list, its threads and group DMs by title, with no pins or Catch up.

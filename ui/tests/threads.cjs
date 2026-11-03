@@ -264,6 +264,9 @@ async function themed(page, name, phone = false) {
   if (!phone) await page.setViewportSize({width: 1280, height: 800});
   for (const theme of ['dark', 'light']) {
     await page.evaluate(t => { document.documentElement.dataset.theme = t; }, theme);
+    // A dialog that just opened may still be animating in.
+    await page.evaluate(() => Promise.race([new Promise(r => setTimeout(r, 1000)),
+      Promise.all(document.getAnimations().filter(a => a.effect?.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {})))]));
     await page.waitForTimeout(80);
     await shot(page, `${name}-${phone ? 'phone' : 'desktop'}-${theme}`);
   }
@@ -619,6 +622,7 @@ let browser = null;
     assert.deepEqual(await nt.locator('.nt-chip').evaluateAll(els => els.map(e => e.dataset.actor)), ['human:bea', 'human:cy']);
     assert.equal(await nt.locator('.nt-why').textContent(), 'Group chats need a name.');
     assert.equal(await nt.locator('[type=submit]').isDisabled(), true);
+    await nt.locator('#nt-name').focus();      // the shot shows the form, not the suggestions
     await themed(page, 'new-thread');
     await nt.locator('#nt-name').fill('#launch-review');
     assert.equal(await nt.locator('.nt-why').textContent(), '');
@@ -739,6 +743,8 @@ let browser = null;
     await page.getByText('And churn was low.').waitFor();
     assert.equal(await page.locator('#thread-rail').isVisible(), false);
     assert.ok(await sideways(page) <= 390, 'no sideways scroll on a thread');
+    const head = await page.locator('.tr-pane .thv-titleline').boundingBox();
+    assert.ok(head.height <= 48, 'the phone header is one line: ' + head.height);
     await themed(page, 'rail-thread', true);
     await page.locator('.thv-back-rail').tap();
     await page.waitForFunction(() => location.hash === '#/threads');
