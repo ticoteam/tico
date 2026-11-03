@@ -279,3 +279,37 @@ def test_the_built_in_helpers_are_reached_and_the_health_monitor_is_not_exempt(a
     for slug in ("botops", "tico-counsel", "bookkeeper", "task-manager"):
         assert reach.decide(found, "bot:product-design", "bot:" + slug).why == "helper", slug
     assert not reach.decide(found, "bot:health-monitor", "human:cara").allowed
+
+
+def test_an_edit_of_a_message_not_the_bots_own_is_the_edits_own_answer_not_a_refusal(api):
+    chart(api)
+    with api.app.state.store.transaction() as c:
+        for tid, audience in (("t-cara-home", "home"), ("t-cara-own", "personal")):
+            c.execute("INSERT INTO conversations(id, kind, subject, audience, owner_id) VALUES(?, 'thread', 'Home', ?, "
+                      "'human:cara')", (tid, audience))
+            c.execute("INSERT INTO messages(id, conversation_id, sender_id, body, created_at) VALUES"
+                      "(?, ?, 'human:cara', 'Note to self', ?)", ("m-" + tid, tid, H.now()))
+    # Cara's Home message: 403 (not its author), never a 409 that names whose Home it is.
+    r = api.patch("/api/v2/messages/m-t-cara-home", json={"text": "@finance numbers?"}, headers=headers("pd-test"))
+    assert r.status_code == 403 and "Cara" not in r.text, r.text
+    # One it cannot read: 404, as if it were not there.
+    r = api.patch("/api/v2/messages/m-t-cara-own", json={"text": "@finance numbers?"}, headers=headers("pd-test"))
+    assert r.status_code == 404 and "Cara" not in r.text, r.text
+    with api.app.state.store.read() as c:
+        assert H.message(c, "m-t-cara-home")["body"] == H.message(c, "m-t-cara-own")["body"] == "Note to self"
+
+
+def test_a_cap_of_one_allows_one_legacy_message(api):
+    chart(api)
+    r = api.put("/api/v2/reach/settings/bot:product-design", json={"chats_per_day": 1}, headers=headers())
+    assert r.status_code == 200, r.text
+    message(api, "pd-test", "bot:finance", "First numbers.")
+    assert message(api, "pd-test", "bot:finance", "More numbers.", expected=409)["error"]["code"] == "reach_cap"
+    r = api.put("/api/v2/reach/settings/bot:product-design", json={"chats_per_day": None}, headers=headers())
+    assert r.status_code == 200, r.text
+    # A line that allows one allows one.
+    r = api.post("/api/v2/reach/lines", json={"sender": "bot:product-design", "receiver": "human:cara", "per_day": 1},
+                 headers=headers())
+    assert r.status_code == 200, r.text
+    message(api, "pd-test", "human:cara", "Can you look at this?")
+    assert message(api, "pd-test", "human:cara", "And this?", expected=409)["error"]["code"] == "reach_line"

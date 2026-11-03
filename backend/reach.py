@@ -731,31 +731,33 @@ def _in(column, actors, args):
     return f"{column} IN ({','.join('?' * len(actors))})" if actors else "0=1"
 
 
-def counted(c, ctx, sender, scope, since=None, until=None):
+def counted(c, ctx, sender, scope, since=None, until=None, exclude=None):
     """What `sender` already sent today (or between `since` and `until`): its tasks to someone else, or its chats
     (messages that reached another teammate outside task threads and its own Home), or, for a line, every task, chat
-    and note from the line's sender side to its receiver side."""
+    and note from the line's sender side to its receiver side. `exclude`: the message being checked after its own
+    insert, which is not one already sent."""
     since = since or midnight()
     until = until or "9999"
+    exclude = exclude or ""
     if scope[0] == "task":
         return c.execute("SELECT COUNT(*) FROM task_cap_log WHERE sender=? AND sent_at>=? AND sent_at<?",
                          (sender, since, until)).fetchone()[0]
     if scope[0] == "chat":
         return c.execute(
             "SELECT COUNT(*) FROM messages m LEFT JOIN conversations v ON v.id=m.conversation_id WHERE m.sender_id=? "
-            "AND m.created_at>=? AND m.created_at<? AND v.task_id IS NULL AND coalesce(v.owner_id,'')<>? AND EXISTS("
+            "AND m.created_at>=? AND m.created_at<? AND m.id<>? AND v.task_id IS NULL AND coalesce(v.owner_id,'')<>? AND EXISTS("
             "SELECT 1 FROM message_deliveries d WHERE d.message_id=m.id AND d.recipient<>? "
             "AND (d.recipient LIKE 'bot:%' OR d.recipient LIKE 'human:%'))",
-            (sender, since, until, sender, sender)).fetchone()[0]
+            (sender, since, until, exclude, sender, sender)).fetchone()[0]
     line = scope[1]
     froms, tos = members(ctx, line["sender_id"]), members(ctx, line["receiver_id"])
     total = 0
     args = [since, until]
     total += c.execute(f"SELECT COUNT(*) FROM task_cap_log WHERE sent_at>=? AND sent_at<? AND sender<>receiver AND "
                        f"{_in('sender', froms, args)} AND {_in('receiver', tos, args)}", args).fetchone()[0]
-    args = [since, until]
+    args = [since, until, exclude]
     total += c.execute(f"SELECT COUNT(*) FROM message_deliveries d JOIN messages m ON m.id=d.message_id WHERE "
-                       f"m.created_at>=? AND m.created_at<? AND d.recipient<>m.sender_id AND "
+                       f"m.created_at>=? AND m.created_at<? AND m.id<>? AND d.recipient<>m.sender_id AND "
                        f"{_in('m.sender_id', froms, args)} AND {_in('d.recipient', tos, args)}", args).fetchone()[0]
     args = [since, until]
     total += c.execute(f"SELECT COUNT(*) FROM notes WHERE created_at>=? AND created_at<? AND message_id IS NULL AND "
@@ -784,7 +786,8 @@ def _sender(who):
     return None if getattr(who, "agent", "") == REPLAY_AGENT else who.actor
 
 
-def check(c, who, receiver, kind="task", *, task_id=None, conversation_id=None, in_reply_to=None, ctx=None):
+def check(c, who, receiver, kind="task", *, task_id=None, conversation_id=None, in_reply_to=None, ctx=None,
+          exclude=None):
     """Refuse (409, nothing written) a bot's task, hand-off, question or message to a teammate out of its reach. The
     exemptions that need the database (a task they share, a teammate who came to the bot first) are read only when the
     write would be refused without them."""
@@ -798,7 +801,7 @@ def check(c, who, receiver, kind="task", *, task_id=None, conversation_id=None, 
     def count(scope):
         key = (scope[0], scope[1]["id"]) if scope[0] == "line" else scope
         if key not in memo:
-            memo[key] = counted(c, ctx, sender, scope)
+            memo[key] = counted(c, ctx, sender, scope, exclude=exclude)
         return memo[key]
 
     found = decide(ctx, sender, receiver, kind, count=count)
@@ -871,14 +874,16 @@ def check_thread(c, who, thread_id, text, to=None, parent_message_id=None):
                in_reply_to=parent_message_id)
 
 
-def check_edit(c, who, message_id, text):
+def check_edit(c, who, message_id, text, viewer=None):
     """A bot's edit of its own message: the teammates it @mentions now and did not before get the message, so each
-    must be in its reach, as on a post."""
+    must be in its reach, as on a post. The message must first be one the bot reads and wrote (`viewer`, as the edit
+    itself checks): anything else is the edit's 404 or 403, never a refusal that names who it would reach."""
     from . import threads as T
     if not _sender(who):
         return
-    message = H.message(c, message_id)
-    thread = T.thread_row(c, message["conversation_id"]) if message else None
+    actor, v = T._actor_of(viewer if viewer is not None else who)
+    message = T._own_say(c, actor, v, message_id)
+    thread = T.thread_row(c, message["conversation_id"])
     if thread is None:
         return
     had = {r[0] for r in c.execute("SELECT actor FROM message_mentions WHERE message_id=? AND in_audience=1",
@@ -901,9 +906,9 @@ def check_delivered(c, who, message_id, task_id=None, conversation_id=None, in_r
         f"SELECT DISTINCT recipient FROM message_deliveries WHERE message_id=? AND reason IN ({marks})",
         (message_id, *DELIVERED))]
     ctx = context(c) if receivers else None
-    for receiver in receivers:
+    for receiver in receivers:        # it is already written: today's counts leave it out, so a cap of 1 allows one
         check(c, who, receiver, "chat", task_id=task_id, conversation_id=conversation_id, in_reply_to=in_reply_to,
-              ctx=ctx)
+              ctx=ctx, exclude=message_id)
 
 
 # ----------------------------------------------------------------------------------------------- HTTP

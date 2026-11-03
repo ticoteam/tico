@@ -69,7 +69,8 @@ A bot's write is checked on:
   delivered to, its @mentions and a DM's members, in the same write), a note (`POST /api/v2/notes`), and a thread post
   or new thread or DM (`/api/v2/threads...`): the one it is addressed to, those it @mentions who can read the thread, a
   DM's other members and the bot whose Home it is;
-- an edit of its own message (`PATCH /api/v2/messages/{id}`): those it @mentions now and did not before.
+- an edit of its own message (`PATCH /api/v2/messages/{id}`): those it @mentions now and did not before. A message
+  that is not its own, or one it cannot read, gets the edit's own 403 or 404 first, never a refusal.
 
 `hub_task_dry_run` reports the refusal a task would get.
 

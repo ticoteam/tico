@@ -354,10 +354,13 @@ def install(app, store, auth, mutate, rule_check):
         """An edit of one's own message. Its new text is checked as `threads_edit` in the message's thread; a held edit
         changes nothing and Send anyway makes it."""
         who = request.state.identity
+        viewer = threads.viewer(auth, who)
         with store.read() as c:
-            thread_id = (H.message(c, message_id) or {}).get("conversation_id") or ""
+            # Only one's own message one can read is edited: anything else is the 404/403 before any check, so neither
+            # the reach check nor the rule check reads (or names who reads) a message hidden from the caller.
+            thread_id = threads._own_say(c, *threads._actor_of(viewer), message_id).get("conversation_id") or ""
         # A bot's edit that @mentions someone new out of its reach is refused before the rule check spends judgment.
-        reach.precheck(store, who, lambda c: reach.check_edit(c, who, message_id, body.text))
+        reach.precheck(store, who, lambda c: reach.check_edit(c, who, message_id, body.text, viewer))
         rc = rule_check(who, "threads_edit", body.text, lambda c: recipients(c, who, thread_id, None), "",
                         {"message_id": message_id}, place=thread_place(who, thread_id)) if thread_id else None
 
@@ -369,8 +372,8 @@ def install(app, store, auth, mutate, rule_check):
                               retryable=True)
             if gate and gate.get("held"):
                 return org_rule_check.held_answer(c, who, gate, auth=auth)
-            reach.check_edit(c, who, message_id, body.text)
-            edited = threads.edit_message(c, threads.viewer(auth, who), message_id, body.text)
+            reach.check_edit(c, who, message_id, body.text, viewer)
+            edited = threads.edit_message(c, viewer, message_id, body.text)
             return {**_thread_message(edited), **org_rule_check.answer(gate)}
         return mutate(request, body, work)
 
