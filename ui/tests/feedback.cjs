@@ -343,7 +343,11 @@ async function taskRows(browser) {
   const {writes, reads} = await feedbackFake(page);
   await page.evaluate(() => { FB.on = null; FB.asked.clear(); tasksRender(TASKS_ST); });     // as in decideCard
   await page.waitForFunction(() => document.body.classList.contains('fb-on'));
-  assert.deepEqual(reads.filter(r => r.type), [{type: 'task', ids: ['t-bot']}], 'one read, only for the task a bot asked for');
+  // The first render may already have asked before the reset above; each read still names only the bot's task.
+  const asked = reads.filter(r => r.type);
+  assert.ok(asked.length >= 1, 'a read for the task a bot asked for');
+  assert.deepEqual([...new Set(asked.map(r => JSON.stringify(r)))], [JSON.stringify({type: 'task', ids: ['t-bot']})],
+    'reads only for the task a bot asked for');
   assert.equal(await page.locator('[data-task-key="tt-person"] [data-fb]').count(), 0);
   const row = page.locator('#task-body [data-task-key="tt-bot"]');
   const up = row.getByRole('button', {name: 'Good', exact: true});
