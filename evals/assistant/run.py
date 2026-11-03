@@ -664,18 +664,23 @@ def run_sample(case, sample, args, outdir):
     attached = {k: v for c in calls for k, v in (c.get("files") or {}).items()}
     fails = []
     must_lines = lines if case.get("must_allow_failed") else worked
+
+    def visible(rx, line):
+        """A dry run changes nothing, so a dry-run call matches a check only when the regex itself names --dry-run."""
+        return "dry-run" in rx or "--dry-run" not in line
+
     for rx in case.get("must") or []:
         if rx.startswith("reply:"):
             if not re.search(rx[6:], reply, re.I | re.S):
                 fails.append(f"reply missing /{rx[6:]}/")
-        elif not any(re.search(rx, l) for l in must_lines):
+        elif not any(re.search(rx, l) for l in must_lines if visible(rx, l)):
             fails.append(f"no call /{rx}/" + ("" if case.get("must_allow_failed") else " that worked"))
     for rx in case.get("must_not") or []:
         if rx.startswith("reply:"):
             if re.search(rx[6:], reply, re.I | re.S):
                 fails.append(f"reply has /{rx[6:]}/")
         else:
-            hit = [l for l in lines if re.search(rx, l)]
+            hit = [l for l in lines if visible(rx, l) and re.search(rx, l)]
             if hit:
                 fails.append(f"forbidden call {hit[0][:120]}")
     bad = [c for c in calls if c.get("invalid")]
