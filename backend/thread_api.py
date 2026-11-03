@@ -14,7 +14,7 @@ import json
 from fastapi import Query, Request
 from pydantic import BaseModel, Field
 
-from . import org_rule_check, teammate_access, thread_search, threads
+from . import org_rule_check, reach, teammate_access, thread_search, threads
 from .store import H, Problem
 
 
@@ -200,7 +200,10 @@ def install(app, store, auth, mutate, rule_check):
         return place
 
     def check(who, thread_id, body):
-        """The org-rule check of one message, for a person or a bot alike (operation `threads`), outside the write."""
+        """The org-rule check of one message, for a person or a bot alike (operation `threads`), outside the write. A
+        bot's post to someone out of its reach is refused first (reach.check_thread), so it spends no judgment."""
+        reach.precheck(store, who, lambda c: reach.check_thread(c, who, thread_id, body.text, body.to,
+                                                                body.parent_message_id))
         return rule_check(who, "threads", body.text, lambda c: recipients(c, who, thread_id, body.to), "",
                           {"thread_id": thread_id}, place=thread_place(who, thread_id))
 
@@ -306,11 +309,11 @@ def install(app, store, auth, mutate, rule_check):
                 if not parent:
                     raise Problem("not_found", "Message not found", 404)
                 posted = threads.post(c, v, parent["conversation_id"], body.body,
-                                      parent_message_id=body.parent_message_id, checked=rc)
+                                      parent_message_id=body.parent_message_id, checked=rc, reach=True)
             else:
                 # A new thread's first message: post makes the thread only once the message goes through, so a held
                 # first message leaves no thread behind.
-                posted = threads.post(c, v, None, body.body, checked=rc, start=start)
+                posted = threads.post(c, v, None, body.body, checked=rc, start=start, reach=True)
             if "id" not in posted:          # held: no thread is made, its first message is the hold
                 return posted
             return {**threads.get(c, v, posted["conversation_id"]), "message": _thread_message(posted)}
@@ -340,7 +343,7 @@ def install(app, store, auth, mutate, rule_check):
 
         def work(c):
             message = threads.post(c, threads.viewer(auth, who), thread_id, body.text, kind=body.kind, refs=body.refs,
-                                   parent_message_id=body.parent_message_id, to_actor=body.to, checked=rc)
+                                   parent_message_id=body.parent_message_id, to_actor=body.to, checked=rc, reach=True)
             if "id" not in message:         # held: post wrote nothing and answers with the hold
                 return message
             return _thread_message(message)
@@ -351,8 +354,13 @@ def install(app, store, auth, mutate, rule_check):
         """An edit of one's own message. Its new text is checked as `threads_edit` in the message's thread; a held edit
         changes nothing and Send anyway makes it."""
         who = request.state.identity
+        viewer = threads.viewer(auth, who)
         with store.read() as c:
-            thread_id = (H.message(c, message_id) or {}).get("conversation_id") or ""
+            # Only one's own message one can read is edited: anything else is the 404/403 before any check, so neither
+            # the reach check nor the rule check reads (or names who reads) a message hidden from the caller.
+            thread_id = threads._own_say(c, *threads._actor_of(viewer), message_id).get("conversation_id") or ""
+        # A bot's edit that @mentions someone new out of its reach is refused before the rule check spends judgment.
+        reach.precheck(store, who, lambda c: reach.check_edit(c, who, message_id, body.text, viewer))
         rc = rule_check(who, "threads_edit", body.text, lambda c: recipients(c, who, thread_id, None), "",
                         {"message_id": message_id}, place=thread_place(who, thread_id)) if thread_id else None
 
@@ -364,7 +372,8 @@ def install(app, store, auth, mutate, rule_check):
                               retryable=True)
             if gate and gate.get("held"):
                 return org_rule_check.held_answer(c, who, gate, auth=auth)
-            edited = threads.edit_message(c, threads.viewer(auth, who), message_id, body.text)
+            reach.check_edit(c, who, message_id, body.text, viewer)
+            edited = threads.edit_message(c, viewer, message_id, body.text)
             return {**_thread_message(edited), **org_rule_check.answer(gate)}
         return mutate(request, body, work)
 
@@ -430,7 +439,7 @@ def install(app, store, auth, mutate, rule_check):
             if not body.body:
                 return threads.dm(c, v, body.members, title=body.title)
             # The open DM with these people gets the message, or a new one is made with it: a held message makes none.
-            posted = threads.post(c, v, None, body.body, checked=rc, start=start)
+            posted = threads.post(c, v, None, body.body, checked=rc, start=start, reach=True)
             if "id" not in posted:          # held: no DM is made, its first message is the hold
                 return posted
             return {**threads.get(c, v, posted["conversation_id"]), "message": _thread_message(posted)}
