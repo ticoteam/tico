@@ -2,13 +2,13 @@
 
 Acme's 55 bots work about eight hours a day each, the most on support, operations and marketing queues. Against
 4 people at 40 hours a week that is about 20 bot hours for each human hour in the last 7 days, and less in the weeks
-before, as the team grew. Each run is one turn its bot finished on its subscription and is priced at $0, so the spend
-the Usage page and Strategy › Budget read does not change.
+before, as the team grew. Each run is one turn its bot finished on its subscription, priced at list price like any
+subscription run; it comes before Budgets, which sizes the limits from this spend.
 """
 
 from datetime import timedelta
 
-from .. import demo_content as D, hubdb
+from .. import demo_content as D, hubdb, providers
 from ..store import P
 
 TARGET = 20.0                 # bot hours per human hour over the last 7 days
@@ -47,7 +47,7 @@ def seed(b):
             hubdb.turn_finish(c, hubdb.KEEPER, turn["id"], "completed", SUMMARY,
                               usage={"input_tokens": tokens_in - cached, "cached_tokens": cached,
                                      "output_tokens": tokens_out, "model": model, "provider": provider,
-                                     "est_cost_usd": 0.0,
+                                     "est_cost_usd": providers.estimate_cost(model, tokens_in - cached, cached, tokens_out),
                                      "billing": "subscription"})
         # A finish stamps the bot's last turn; the newer runs seeded before these keep theirs.
         for slug, at in kept.items():
