@@ -113,6 +113,27 @@ def test_immediate_wakes_are_never_held_and_a_duplicate_wakes_once(api, name):
     assert sum(j["wake_class"] == "duplicate" for j in rows) == 4
 
 
+def test_a_repeated_send_while_its_turn_runs_shows_that_turn_not_a_dismissal(api):
+    # The duplicate trigger dismisses a send repeated while its turn runs; the chat keeps showing the turn still going.
+    # A send dismissed for any other reason still reads "Delivery dismissed".
+    machine, first, attempt = setup_attempt(api, "ops")
+    start(api, machine, attempt)
+    text = "Please summarize the current work."
+    again = post(api, "chat/ops", {"text": text})                        # the same words, sent again while it runs
+    assert again["conversation_id"] == first["conversation_id"]
+    [run, duplicate] = [j for j in jobs(api) if j["body"] == text]
+    assert (run["state"], run["wake_class"]) == ("running", None)
+    assert (duplicate["state"], duplicate["wake_class"]) == ("canceled", "duplicate")
+    snapshot = f"conversations/{first['conversation_id']}/snapshot?limit=1"
+    execution = get(api, snapshot)["execution"]
+    assert (execution["state"], execution["label"]) == ("running", "Working")
+    assert (execution["message_id"], execution["attempt_id"]) == (first["id"], attempt["id"])
+    other = post(api, "chat/ops", {"text": "And one more thing."})
+    with api.app.state.store.transaction() as c:                         # dismissed for another reason
+        c.execute("UPDATE jobs SET state='canceled' WHERE message_id=?", (other["id"],))
+    assert get(api, snapshot)["execution"]["label"] == "Delivery dismissed"
+
+
 @pytest.mark.parametrize("name,window", [("token_saver", 1800), ("performance", 60)])
 def test_an_unchanged_webhook_queues_nothing_and_the_preset_is_its_only_timer(api, name, window):
     preset(api, "ops", name)
