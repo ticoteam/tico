@@ -630,8 +630,8 @@ def test_a_company_task_whose_bot_hides_its_activity_from_the_asker_is_not_offer
     assert second["owner_id"] == "human:ben" and [i["merged_into"] for i in items(api)] == [None]
 
 
-@pytest.mark.parametrize("how", ["private", "access"])
-def test_an_item_unreadable_between_judgment_and_write_names_no_source(gate, how):
+@pytest.mark.parametrize("how", ["private", "access", "plate"])
+def test_an_item_lost_between_judgment_and_write_names_no_source(gate, how):
     api, model, token = gate
     first = add_task(api, "bot:cmo", "Vendor escrow terms", "human:ben", private=False)["id"]
 
@@ -639,14 +639,20 @@ def test_an_item_unreadable_between_judgment_and_write_names_no_source(gate, how
         if how == "private":
             with api.app.state.store.transaction() as c:
                 c.execute("UPDATE tasks SET private=1 WHERE id=?", (first,))
+        elif how == "plate":            # still open and readable, but no longer the person's: handed to Ana
+            with api.app.state.store.transaction() as c:
+                c.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (first,))
         else:
             restrict(api, "cmo")
     model.before, model.covered = lose_access, "Vendor escrow terms"
     second = file(api, token, "Escrow terms for the vendor?", "Which escrow term do we take?")
     assert model.calls, "the repeat was judged"
+    with api.app.state.store.read() as c:
+        assert H.task(c, first)["status"] in H.ACTIVE_STATUSES, "the source stays open: only the lost right fails"
     assert "Vendor escrow terms" not in json.dumps(second), "no title in the write's reply"
     assert second["task"]["owner_id"] == "human:ben", "the fallback is the ordinary fail-open path"
     [row] = [i for i in items(api) if i["ref"] == second["task"]["id"]]
+    # covered_gone can only follow a merge the model picked: the offered source was the one it chose
     assert (row["outcome"], row["reason"], row["merged_into"]) == (A.FAILED_OPEN, "covered_gone", None)
 
 
