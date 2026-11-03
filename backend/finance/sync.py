@@ -319,6 +319,7 @@ def balances(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
             if a is not None:
                 banking.set_balance(ctx, str(m["id"]), _cents(a.get("currentBalance")),
                                     _cents(a.get("availableBalance")), now)
+            banking.tidy_name(ctx, str(m["id"]))
     return []
 
 
