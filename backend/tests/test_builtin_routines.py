@@ -27,9 +27,17 @@ def _write_assistant_routines(api):
 
 
 def _rows(api):
+    """Every schedule row the key has (a deleted or moved one stays, with deleted_at set)."""
     with api.app.state.store.read() as c:
         return [dict(row) for row in c.execute(
             "SELECT id, cron, deleted_at FROM schedules WHERE bot='coo' AND routine_key='daily-sweep'")]
+
+
+def _row(api):
+    """The routine as the person sees it: a routine written the new way moves to an automation at once
+    (redesign_migration.adopt), and its schedule row is then soft-deleted; `routines.row` reads the automation."""
+    with api.app.state.store.read() as c:
+        return routines.row(c, SWEEP)
 
 
 def _created(api):
@@ -57,8 +65,9 @@ def test_the_coo_assistant_on_an_install_without_daily_sweep_gets_it_once(enviro
     _write_assistant_routines(api)
     assert _rows(api) == []
     assert _ensure(api) == [("coo", "daily-sweep")]
-    (row,) = _rows(api)
-    assert row["id"] == SWEEP and row["cron"] == "0 8 * * *" and row["deleted_at"] is None
+    assert len(_rows(api)) == 1
+    row = _row(api)
+    assert row["id"] == SWEEP and row["cron"] == "0 8 * * *" and row["deleted_at"] is None and row["enabled"] == 1
 
 
 def test_a_second_startup_creates_nothing(environment):
@@ -80,7 +89,7 @@ def test_after_the_person_deletes_it_startup_does_not_recreate_it(environment):
         who = api.app.state.auth.owner_identity(c)
         routines.remove(c, who.actor, SWEEP)
     api = _restart(api)
-    assert [r["deleted_at"] is not None for r in _rows(api)] == [True]     # still deleted, no new row
+    assert len(_rows(api)) == 1 and _row(api)["deleted_at"] is not None     # still deleted, no new row
     api.__exit__(None, None, None)
 
 
@@ -89,7 +98,8 @@ def test_a_routine_whose_row_is_gone_is_still_not_recreated(environment):
     api = environment(seed=COO)
     _write_assistant_routines(api)
     _ensure(api)
-    with api.app.state.store.transaction() as c:
+    with api.app.state.store.transaction() as c:           # a schedule row gone (its config row goes with it)
+        c.execute("DELETE FROM schedule_config WHERE schedule_id=?", (SWEEP,))
         c.execute("DELETE FROM schedules WHERE id=?", (SWEEP,))
     api = _restart(api)
     assert _rows(api) == []
@@ -104,11 +114,15 @@ def test_a_person_edited_routine_is_untouched(environment):
         who = api.app.state.auth.owner_identity(c)
         routines.update(c, who.actor, SWEEP, {"title": "My sweep", "cron": "0 7 * * 1", "enabled": False})
     with api.app.state.store.read() as c:
-        before = dict(c.execute("SELECT * FROM schedules WHERE id=?", (SWEEP,)).fetchone())
+        auto = _automation(c, _row(api)["automation"])
     api = _restart(api)
     with api.app.state.store.read() as c:
-        after = dict(c.execute("SELECT * FROM schedules WHERE id=?", (SWEEP,)).fetchone())
-        enabled = routines.row(c, SWEEP)["enabled"]
-    assert after == before and after["title"] == "My sweep" and after["cron"] == "0 7 * * 1"
-    assert enabled == 0
+        assert _automation(c, auto["id"]) == auto           # the same automation, unchanged by startup
+        assert routines.row(c, SWEEP)["enabled"] == 0
+    assert "My sweep" in auto["flow"] and "0 7 * * 1" in auto["flow"]
+    assert len(_rows(api)) == 1
     api.__exit__(None, None, None)
+
+
+def _automation(c, aid):
+    return dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())
