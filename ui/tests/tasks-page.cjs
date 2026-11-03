@@ -938,8 +938,10 @@ async function wakeNotes(browser) {
   // The year shows only off this year, so a snooze two years out can't read as a date already past.
   const years = await page.evaluate(() => {
     const y = new Date().getFullYear(), day = (yr, mo, d) => snoozeDay({holds: [{kind: 'snoozed', until: new Date(yr, mo, d, 12).toISOString()}]});
-    return {y, next: day(y + 1, 9, 20), now: day(y, 5, 15)};
+    const due = (yr, mo, d) => taskDueInfo({status: 'open', owner_id: 'human:ana', due_at: new Date(yr, mo, d, 12).toISOString()}).words;
+    return {y, next: day(y + 1, 9, 20), now: day(y, 5, 15), dueNext: due(y + 1, 9, 20), duePast: due(y - 1, 9, 20)};
   });
+  assert.ok(years.dueNext.includes(String(years.y + 1)) && years.duePast.includes(String(years.y - 1)), `due dates off this year show the year: ${years.dueNext} / ${years.duePast}`);
   assert.ok(years.next.includes(String(years.y + 1)), `next year's snooze shows its year: ${years.next}`);
   assert.ok(!/\d{4}/.test(years.now), `this year's snooze hides the year: ${years.now}`);
   const noted = await chips('tt-noted', 'Noted snooze');

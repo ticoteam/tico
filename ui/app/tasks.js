@@ -277,6 +277,10 @@ function parseServerTime(value) {
 // An occurrence of a due routine (backend/automation_actions.py) is due at the last second of its due day in the
 // trigger's zone, and that day is the routine's due_on: it reads as that calendar day in any viewer's zone. A step that
 // set its own due keeps the instant, as any task does. Null for other tasks.
+// "Oct 20", with the year only when it isn't this one ("Oct 20, 2028"), so a far-off date can't pass for a past one.
+function shortDay(at) {
+  return at.toLocaleDateString(undefined, {month: 'short', day: 'numeric', ...(at.getFullYear() === new Date().getFullYear() ? {} : {year: 'numeric'})});
+}
 function occurrenceDay(t) {
   const m = /:(\d{4}-\d{2}-\d{2})$/.exec(t?.occurrence || ''), due = String(t?.due_at || '');
   if (!m || !due.startsWith(m[1] + 'T23:59:59')) return null;
@@ -287,7 +291,7 @@ function taskDueInfo(t) {
   if (!t?.due_at || taskFinished(t)) return null;
   const at = parseServerTime(t.due_at); if (!at) return null;
   const shown = occurrenceDay(t) || new Date(at);
-  const day = shown.toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+  const day = shortDay(shown);
   if (actorSlug(t.owner_id) && !t.occurrence) return {at, day, kind: 'wake', late: false, words: at > Date.now() ? `Wakes ${day}` : `Woke ${day}`};
   const late = at < Date.now();
   // Within the coming week a deadline reads as its weekday ("Due Wed"), further out as its date.
@@ -301,10 +305,8 @@ function taskSnoozed(t) {
   const until = taskHold(t, 'snoozed')?.until;
   return !!until && !taskFinished(t) && parseServerTime(until) > Date.now();
 }
-// The year shows only when it isn't this one ("Oct 20, 2028"), so a far-off snooze can't pass for a past date.
 function snoozeDay(t) {
-  const at = new Date(parseServerTime(taskHold(t, 'snoozed')?.until));
-  return at.toLocaleDateString(undefined, {month: 'short', day: 'numeric', ...(at.getFullYear() === new Date().getFullYear() ? {} : {year: 'numeric'})});
+  return shortDay(new Date(parseServerTime(taskHold(t, 'snoozed')?.until)));
 }
 function snoozeChip(t) {
   return taskSnoozed(t) ? `<span class="tl-due wake" title="Snoozed until ${esc(fmt(taskHold(t, 'snoozed').until))}">Snoozed to ${esc(snoozeDay(t))}</span>` : '';
