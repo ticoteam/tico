@@ -207,8 +207,8 @@ def _sent(c, person, since):
     """The batch messages this person sent since `since`, each with the item keys it carried."""
     rows = c.execute("SELECT m.id, m.recipient_id, m.refs, b.id AS batch, b.items, b.report, "
                      "b.message_id AS first "
-                     "FROM messages m JOIN batches b ON b.id=json_extract(m.refs,'$.live.batch') "
-                     "WHERE m.sender_id=? AND json_extract(m.refs,'$.live.kind')='batch' "
+                     "FROM message_refs m JOIN batches b ON b.id=json_extract(m.refs,'$.live.batch') "
+                     "WHERE m.sender_id=? AND m.ref_live_kind='batch' "
                      "AND m.created_at>=? ORDER BY m.created_at DESC", (person, since)).fetchall()
     return [dict(r) for r in rows]
 

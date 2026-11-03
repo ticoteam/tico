@@ -19,28 +19,8 @@ from . import hubdb as H
 from . import idempotency_messages
 from . import message_links
 from . import people as P
-from .harnesses import EXTERNAL_HARNESSES
 
-
-# A person's own spoken Tico turns, spoken decisions and what a live tool did are history,
-# not work: they never queue a job. A live ask does; that is how the text Tico is reached.
-# A bot run by an external agent (a Hermes profile) has no runner to claim a job: the message
-# waits in its inbox until the agent reads it, so no job is queued for it. A synced bot delivered
-# through its platform's desktop app on a computer (backend/app_delivery.py) is the exception while
-# that computer is registered: the computer's runner takes the message as a job.
-EXTERNAL_BOT_SQL = ("EXISTS (SELECT 1 FROM bot_config WHERE bot=substr(NEW.recipient_id,5) AND "
-                    "json_extract(config,'$.harness') IN ("
-                    + ",".join("'" + h + "'" for h in EXTERNAL_HARNESSES) + ") AND NOT EXISTS ("
-                    "SELECT 1 FROM runners r WHERE r.id=json_extract(config,'$.app_delivery.computer') "
-                    "AND r.revoked_at IS NULL))")
-QUEUE_TRIGGER = (
-    "CREATE TRIGGER IF NOT EXISTS queue_bot_message AFTER INSERT ON messages "
-    "WHEN NEW.recipient_id LIKE 'bot:%' AND COALESCE(NEW.sender_id, '') != NEW.recipient_id "
-    "AND COALESCE(json_extract(NEW.refs,'$.live.kind'), '') NOT IN ('transcript','decision','tool') "
-    "AND COALESCE(json_extract(NEW.refs,'$.quiet'), 0) = 0 "
-    "AND NOT " + EXTERNAL_BOT_SQL + " BEGIN "
-    "INSERT INTO jobs(id,message_id,bot_id,created_at) "
-    "VALUES(NEW.id,NEW.id,substr(NEW.recipient_id,5),NEW.created_at); END")
+# A message to a bot queues its job in Python, in the writer's transaction: backend/enqueue.py.
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cloud_migrations(version INTEGER PRIMARY KEY, applied TEXT NOT NULL);
@@ -357,7 +337,7 @@ CREATE TABLE IF NOT EXISTS learnings(
  id TEXT PRIMARY KEY, integration TEXT NOT NULL, actor TEXT NOT NULL, text TEXT NOT NULL,
  created_at TEXT NOT NULL, deleted_at TEXT);
 CREATE INDEX IF NOT EXISTS learnings_by_integration ON learnings(integration,created_at);
-""" + QUEUE_TRIGGER + ";\n"
+"""
 
 # The Slack gateway's own tables (backend/slack_gateway.py, docs/slack-gateway.md). An event is
 # persisted before its envelope is acknowledged and is unique on Slack's event id and on the
@@ -1423,14 +1403,7 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=8").fetchone():
                     # A bot cannot usefully execute a message it sent to itself. The former
                     # trigger queued those rows and could turn an accidental task ask into a
-                    # reply cascade. Replace it explicitly because IF NOT EXISTS above does
-                    # not update a trigger already present in an existing cloud database.
-                    c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
-                    c.execute("CREATE TRIGGER queue_bot_message AFTER INSERT ON messages "
-                              "WHEN NEW.recipient_id LIKE 'bot:%' "
-                              "AND COALESCE(NEW.sender_id, '') != NEW.recipient_id BEGIN "
-                              "INSERT INTO jobs(id,message_id,bot_id,created_at) "
-                              "VALUES(NEW.id,NEW.id,substr(NEW.recipient_id,5),NEW.created_at); END")
+                    # reply cascade; backend/enqueue.py queues no job for one.
                     c.execute("UPDATE jobs SET state='completed' WHERE state='queued' AND EXISTS "
                               "(SELECT 1 FROM messages m WHERE m.id=jobs.message_id "
                               "AND m.sender_id=m.recipient_id)")
@@ -1456,16 +1429,11 @@ class Store:
                     c.execute("INSERT INTO cloud_migrations VALUES(10,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=11").fetchone():
                     # Native live transcripts are written into the room without queueing a
-                    # runner turn. Replace the trigger explicitly; IF NOT EXISTS above leaves
-                    # an existing cloud database's older definition in place.
-                    c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
-                    c.execute(QUEUE_TRIGGER)
+                    # runner turn. The queue rule is backend/enqueue.py (migration 0052 dropped the trigger).
                     c.execute("INSERT INTO cloud_migrations VALUES(11,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=12").fetchone():
                     # Spoken decisions and live tool lines join transcripts as room history
-                    # that never queues a turn. Same explicit replacement as migration 11.
-                    c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
-                    c.execute(QUEUE_TRIGGER)
+                    # that never queues a turn (backend/enqueue.py).
                     c.execute("INSERT INTO cloud_migrations VALUES(12,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=13").fetchone():
                     # `import_refs` makes "one recording per outside call" a uniqueness
@@ -1508,9 +1476,7 @@ class Store:
                     c.execute("INSERT INTO cloud_migrations VALUES(18,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=19").fetchone():
                     # A bot run by an external agent gets no job for a message (it reads its
-                    # inbox itself). The trigger text changed, and IF NOT EXISTS keeps the old one.
-                    c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
-                    c.execute(QUEUE_TRIGGER)
+                    # inbox itself): backend/enqueue.py.
                     c.execute("INSERT INTO cloud_migrations VALUES(19,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=20").fetchone():
                     # The Slack gateway's queue tables (SLACK_SCHEMA): CREATE TABLE IF NOT EXISTS
@@ -1555,7 +1521,7 @@ class Store:
                     # pipeline, a rank is the place in the owner's queue, labels stand in for
                     # projects (blockers are task_relations rows now, migration 60). task_links and
                     # preferences are created above. A comment tagged `quiet` never queues a
-                    # turn (same explicit trigger replacement as migration 11).
+                    # turn (backend/enqueue.py).
                     columns = {row[1] for row in c.execute("PRAGMA table_info(tasks)")}
                     if "lane" not in columns:
                         c.execute("ALTER TABLE tasks ADD COLUMN lane TEXT NOT NULL DEFAULT 'company'")
@@ -1573,8 +1539,6 @@ class Store:
                     c.execute(f"UPDATE tasks SET lane='product' WHERE status IN ({marks}) AND owner_id IN "
                               f"(SELECT 'bot:' || bot FROM bot_config WHERE team IN ({','.join('?' * len(H.LANE_TEAMS))}))",
                               (*H.ACTIVE_STATUSES, *H.LANE_TEAMS))
-                    c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
-                    c.execute(QUEUE_TRIGGER)
                     c.execute("INSERT INTO cloud_migrations VALUES(29,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=30").fetchone():
                     # main_pushes (backend/github.py): CREATE TABLE IF NOT EXISTS above installs it;
@@ -2078,14 +2042,6 @@ class Store:
                 from .meetings import retire_capture
                 retire_capture(c)
                 retire_health_rows(c)
-                # Whenever the queue trigger's SQL changes (an external harness added, a rule changed) the
-                # stored trigger is rebuilt; no migration number, so no collision with another branch's.
-                # SQLite keeps the statement as written, less "IF NOT EXISTS".
-                stored = c.execute("SELECT sql FROM sqlite_master WHERE type='trigger' "
-                                   "AND name='queue_bot_message'").fetchone()
-                if not stored or stored[0] != QUEUE_TRIGGER.replace(" IF NOT EXISTS", "", 1):
-                    c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
-                    c.execute(QUEUE_TRIGGER)
                 if seed_market and not self.settings.test_identities:
                     from . import market as Market
                     from .blobs import Blobs
@@ -2475,8 +2431,9 @@ class Store:
         ring(self, seq)
 
     def enqueue_existing(self):
+        from .enqueue import external_bot_sql
         with self.transaction() as c:
             c.execute("INSERT OR IGNORE INTO jobs(id,message_id,bot_id,created_at) "
-                      "SELECT id,id,substr(recipient_id,5),created_at FROM messages NEW "
-                      "WHERE recipient_id LIKE 'bot:%' AND delivered_at IS NULL AND deleted_at IS NULL AND NOT "
-                      + EXTERNAL_BOT_SQL)
+                      "SELECT m.id,m.id,substr(m.recipient_id,5),m.created_at FROM messages m "
+                      "WHERE m.recipient_id LIKE 'bot:%' AND m.delivered_at IS NULL AND m.deleted_at IS NULL AND NOT "
+                      + external_bot_sql("m.recipient_id"))
