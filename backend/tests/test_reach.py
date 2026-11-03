@@ -106,7 +106,7 @@ def test_the_map_has_the_contract_shape(api):
     made = add_line(api, {"sender": "bot:finance", "receiver": "human:eve", "per_day": 3})["line"]
     found = reach(api)
     assert {"defaults", "settings", "effective", "lines", "may_edit"} <= set(found)
-    assert found["defaults"] == {"mode": "open", "chats_per_day": 999, "tasks_per_day": 999}
+    assert found["defaults"] == {"mode": "nearby", "chats_per_day": 999, "tasks_per_day": 999, "person_mode": "open"}
     assert {"party", "mode", "chats_per_day", "tasks_per_day"} <= set(found["settings"][0])
     assert {"mode", "chats_per_day", "tasks_per_day", "from"} <= set(found["effective"]["*"])
     line = next(row for row in found["lines"] if row["id"] == made["id"])

@@ -275,6 +275,16 @@ def task_dry_run(c, auth, who, body):
     if not target or target == H.KEEPER:
         problems.append(f"{body.owner} is not a bot or a person on the roster")
     else:
+        from . import reach
+        parents = [r.task for r in body.relations if r.kind == "parent"]
+        try:
+            parent = auth.resolve_task(c, who, parents[0]) if parents else None
+        except Problem:        # an unknown parent is the create's own refusal, not reach's
+            parent = None
+        try:
+            reach.check(c, who, target, "task", task_id=parent)
+        except reach.Refused as exc:
+            problems.append(exc.detail)
         if H.is_bot(target):
             state = (H.bot(c, H.actor_id(target)) or {}).get("state")
             if state in H.INACTIVE_STATES:
@@ -307,7 +317,6 @@ def task_dry_run(c, auth, who, body):
         # The create's own privacy refusals, word for word (task_privacy.require_create): private work handed to
         # someone who cannot read it, or a private task's guest refused.
         from . import task_privacy as privacy
-        from .store import Problem
         try:
             parents = [r.task for r in body.relations if r.kind == "parent"]
             parent = H.task(c, auth.task(c, who, auth.resolve_task(c, who, parents[0]))["id"]) if parents else None

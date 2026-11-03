@@ -2040,14 +2040,17 @@ def remote_member(c, root, actor):
 
 
 def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None, via=None,
-         origin=None, checked=None, attachments=None, as_actor=None, start=None, in_reply_to=None):
+         origin=None, checked=None, attachments=None, as_actor=None, start=None, in_reply_to=None, reach=False):
     """Write a message (contract §3.1). Inside the caller's write transaction; `checked` is the org-rule verdict its
     preflight returned outside it. `as_actor`: a remote author (federation, spec §7.2), only for the keeper writing
     `via="peer"`, and only in the signing install's namespace (`<kind>:<name>@<origin install>`).
 
     A post that would make a thread (`start`: a new thread's `create` arguments, or `{"dm": [...], "title"}`, with
     `thread_id` None; or a `parent_message_id` with no sub-thread yet) is checked first: a held message makes
-    nothing, and its Send anyway replays this same post."""
+    nothing, and its Send anyway replays this same post.
+
+    `reach`: the post is a bot's own write through the API, so whoever it reaches must be in the bot's reach
+    (backend/reach.py check_post); a run's reply to what woke it, and a held post a person sends anyway, are not."""
     actor, v = _actor_of(principal)
     if as_actor is not None:
         install = str((origin or {}).get("install") or "")
@@ -2123,6 +2126,10 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
     elif audience_of(root_of(c, thread)) in ("personal", "participants") and not thread.get("parent_id"):
         others = [a for a in _dm_members(c, root_of(c, thread)) if a != actor]
         target = others[0] if len(others) == 1 else None
+    if reach and v is not None and as_actor is None:
+        from . import reach as R
+        R.check_post(c, v.who, thread, [a for a, _ in found], target if target and not str(target).startswith(
+            OUTSIDE_PREFIXES) else None, in_reply_to=in_reply_to)
     if checked is not None:
         # The org-rule verdict its preflight returned, applied inside the write: a hold writes nothing (no message, no
         # delivery) and answers with the hold; a warning goes on the recipients' copy. The payload is the body the
