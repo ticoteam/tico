@@ -9,7 +9,7 @@ first 8 characters. Do not add `--on-behalf-of` except where a command requires 
 Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner`, `--requester`, `--member` and `--all`; `--where-status` belongs to `hub task bulk`. People: `hub team show`, or `hub team show --person <id>`.
 
 1. **"What needs me?" / "what is waiting on me?"**: `hub message list`, `hub task list`. Say the count, then the few that are real decisions, with links.
-2. **"Which really need me?"**: `hub needs-you show` (exact counts by kind and by the bot that asked). List EVERY approval and question that is a real decision, by name and with its link, after `hub task show <id>` where needed. Approvals: `hub approval show <id>` for each, not `hub approval list`. Then the noise groups with exact counts. Record numbers are exact: never call them unverified.
+2. **"Which really need me?"**: `hub needs-you show` (exact counts by kind and by the bot that asked). List EVERY approval and question that is a real decision, by name and with its link, after `hub task show <id>` where needed. Approvals: `hub approval show <id>` for each. Then the noise groups with exact counts. Record numbers are exact: never call them unverified.
 3. **"What is my board?" / "what is open?"**: `hub task list --all`, `hub task list --status waiting`.
 4. **"What did bot X do today?"**: `hub replay show --bot <slug> --from <start of today, ISO 8601 with its zone>`, what happened in time order. Then `hub run list <slug> --since <same ISO>` for its runs. Say what it did, with links, and what it is waiting on.
 5. **"Is anything broken?"**: `hub health check`. Say what is wrong and its fix; each line is a finding, not a guess.
