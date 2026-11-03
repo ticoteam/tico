@@ -2117,6 +2117,10 @@ class Store:
                 # Every bot gets a profile by its name, once; a bot that has one is left alone (backend/profiles.py).
                 from . import profiles as Profiles
                 Profiles.migrate(c)
+                # Stale ticket review's converted automation (a no-op) is undone, once, and its team rule set from it
+                # (backend/redesign_migration.py repair_stale_review). Idempotent by its marker.
+                from . import redesign_migration as Redesign
+                Redesign.repair_stale_review(c)
                 from . import releases as Releases
                 Releases.record_start(c, H.now())
                 from .credentials import FILE_MIGRATION, HUB_MIGRATION
