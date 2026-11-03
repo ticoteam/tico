@@ -1209,9 +1209,11 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
     fields = {"changed_by": who.actor, "enroll_fails": 0}        # a person's choice lets a machine be made again
     if before["problem"] == "no_enroll":
         fields["problem"] = ""
-    if mode is not None:
+    # The same choice again is no change: a refusal it has (a start HQ said no to) and its wake guard stay, so a repost
+    # that only reads the view does not hide why the machine is not running.
+    if mode is not None and mode != before["mode"]:
         fields.update(mode=mode, wake_key=None, problem="")
-    if placement is not None:
+    if placement is not None and placement != before["placement"]:
         fields.update(placement=placement, wake_key=None, problem="")
     if size is not None:
         fields["size"] = size

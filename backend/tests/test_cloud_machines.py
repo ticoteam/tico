@@ -791,6 +791,49 @@ def test_a_resume_right_after_a_stop_retries_soon_without_counting_a_failure(clo
     assert cloud.tick(5) == ["start", "start"] and cloud.row()["state"] == "starting"
 
 
+def test_a_same_choice_reposted_keeps_the_start_refusal_and_its_wake_guard(cloud):
+    enrolled(cloud)
+    cloud.tick(400)
+    work(cloud, text="More")
+    cloud.hq.fail["start"] = [CM.Refused("starts_full", 429)]
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == ["start"] and cloud.row()["problem"] == "hq:starts_full" and cloud.row()["wake_key"]
+    refused = cloud.row()
+    # Re-posting the choice a bot already has (a script reading the view it returns) changes none of it.
+    for body in ({"mode": "cloud"}, {"mode": "cloud", "placement": "own"}):
+        post(cloud.api, "bots/ops/cloud-machine", body)
+        assert employee(cloud.api)["cloud_machine"]["problem"] == "Didn't start (starts_full): trying again"
+        after = cloud.row()
+        assert (after["problem"], after["problem_at"], after["wake_key"], after["mode"], after["placement"]) == (
+            refused["problem"], refused["problem_at"], refused["wake_key"], "cloud", "own")
+
+
+def test_a_same_choice_reposted_does_not_wake_a_machine_whose_work_already_stuck(cloud):
+    enrolled(cloud)
+    cloud.tick(400)                                             # the chat was never claimed there: idle, stopped
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == [] and cloud.tick(600) == [] and cloud.row()["problem"] == "stuck"
+    post(cloud.api, "bots/ops/cloud-machine", {"mode": "cloud"})
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == [] and cloud.tick(600) == [] and cloud.row()["problem"] == "stuck"
+
+
+def test_a_real_change_of_placement_still_clears_the_refusal_and_its_wake_guard(cloud):
+    enrolled(cloud)
+    cloud.tick(400)
+    work(cloud, text="More")
+    cloud.hq.fail["start"] = [CM.Refused("starts_full", 429)]
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == ["start"] and cloud.row()["problem"] == "hq:starts_full" and cloud.row()["wake_key"]
+    idle(cloud)
+    post(cloud.api, "bots/ops/cloud-machine", {"placement": "shared"})
+    assert cloud.row()["placement"] == "shared" and cloud.row()["problem"] == "" and cloud.row()["wake_key"] is None
+    with cloud.store.transaction() as c:                        # a refusal and a wake guard on its row, moving back
+        CM.save(c, "ops", problem="hq:starts_full", problem_at=H.now(), wake_key="job:old")
+    post(cloud.api, "bots/ops/cloud-machine", {"placement": "own"})
+    assert cloud.row()["placement"] == "own" and cloud.row()["problem"] == "" and cloud.row()["wake_key"] is None
+
+
 def test_a_machine_hq_no_longer_has_is_made_again_and_replaces_the_old_computer(cloud):
     first = enrolled(cloud)
     cloud.tick(400)
