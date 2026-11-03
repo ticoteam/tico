@@ -38,7 +38,7 @@ from .store import H, Problem
 
 log = logging.getLogger("tico.health_monitor")
 
-SLUG = "health-monitor"
+SLUG = H.HEALTH_MONITOR
 NAME = "Health Monitor"
 RULE = "health_monitor_reports"
 SCHEMA = """

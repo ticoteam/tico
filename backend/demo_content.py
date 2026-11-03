@@ -614,7 +614,7 @@ TASKS = [
      "bot:devops", "bot:cloud", "done", 3.8, 3.4, "Clean-up deployed; the disk is at 41 percent.", "render-stall"),
     ("render-read", "Read the render stall report and confirm the fix",
      "Read the report and say whether the fix is enough for the holiday load.",
-     "human:eli", "bot:health-monitor", "closed", 3.6, 3.2,
+     "human:eli", "bot:botops", "closed", 3.6, 3.2,
      "Confirmed. Close it once the holiday load is checked.", None),
     ("render-scale", "Scale the render workers for the holiday load",
      "Two more workers for the holiday peak, starting Friday.",
