@@ -1,5 +1,6 @@
 """Release isolation checks must use the runner image built from the candidate."""
 import json
+from collections import defaultdict
 from types import SimpleNamespace
 
 import pytest
@@ -97,7 +98,8 @@ def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
     monkeypatch.setattr(release_checks, 'tempfile', SimpleNamespace(mkdtemp=lambda **kwargs: str(tmp_path)))
     monkeypatch.setattr(release_checks, 'free_port', lambda: 12345)
     monkeypatch.setattr(release_checks, 'shard_files', lambda index, total, env, native_first=False, counts=None: [f'group{index}of{total}.py'])
-    monkeypatch.setattr(release_checks, 'collected_counts', lambda env, selection: {'all.py': 1})
+    # every file the stubbed shards list weighs one test; only all.py is collected for the whole-suite runs
+    monkeypatch.setattr(release_checks, 'collected_counts', lambda env, selection: defaultdict(lambda: 1, {'all.py': 1}))
     monkeypatch.setattr(release_checks, 'browser_shard', lambda index, total: [f'page{index}of{total}'])
     calls, edge_checks = {}, []
     monkeypatch.setattr(release_checks, 'edge_networks', lambda: edge_checks.append(len(calls)) or (True, 'ok'))
