@@ -93,6 +93,8 @@ def test_parked_logins_hold_their_places_so_another_login_waits_until_one_ends(a
     rid = computer['runner_id']
     assign(api, computer, 'finance')
     ready(api, computer, ['ops', 'finance'])
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE runners SET capacity=40 WHERE id=?', (rid,))
     post(api, 'chat/finance', {'text': 'Independent work on another login'})
     with api.app.state.store.read() as c:
         assert sum(start_places.live(c, rid).values()) == 40
