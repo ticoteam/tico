@@ -165,11 +165,13 @@ def test_each_person_has_a_draft_update_for_every_day_and_the_friday_review(ana)
 
 
 def test_ana_sidebar_leaves_unread_only_the_decisions_she_still_owes(ana):
+    # Task news is not a chat (hubdb.task_news): the decisions she owes wait in Needs you, not as unread task threads.
     listing = ana.get("/api/v2/threads?limit=200").json()
     rows = listing["threads"] + listing["dms"] + listing["attention"]
     unread = {row["title"] for row in rows if row.get("kind") == "task" and (row.get("me") or {}).get("unread")}
     assert unread <= set(D.KEEP_UNREAD), sorted(unread - set(D.KEEP_UNREAD))
-    assert {"Raise Home Pro from $449 to $479 for December?", "Sign the FCC filing for Home Pro 2"} <= unread
+    owed = {item["title"] for item in ana.get("/api/v2/needs-you").json()["items"]}
+    assert {"Raise Home Pro from $449 to $479 for December?", "Sign the FCC filing for Home Pro 2"} <= owed
 
 
 def test_the_price_decision_leads_needs_you_with_a_short_reason(ana):
