@@ -391,8 +391,16 @@ def old_stale_automation(api, enabled=True, rule_on=False):
 
 
 def stale_automations(api):
-    return rows(api, "SELECT id, enabled, deleted_at FROM automations WHERE json_extract(flow,'$.source.id')=?",
-                ("job:stale_review",))
+    return rows(api, "SELECT id, enabled, deleted_at, json_array_length(json_extract(flow,'$.steps')) AS steps, "
+                "json_extract(flow,'$.readonly') AS readonly FROM automations WHERE json_extract(flow,'$.source.id')=? "
+                "ORDER BY created_at, id", ("job:stale_review",))
+
+
+def stale_mirror(api):
+    """The live read-only mirror of the job: no steps, nothing it runs itself."""
+    (mirror,) = [r for r in stale_automations(api) if not r["deleted_at"]]
+    assert mirror["steps"] == 0 and mirror["readonly"] == 1
+    return mirror
 
 
 def repair(api):
@@ -409,13 +417,12 @@ def test_stale_review_stays_the_built_in_job_on_a_fresh_install(api):
     with db(api).transaction() as c:
         team_rules.save(c, "human:ana", {"stale_review": True})
     first_start(api)
-    assert stale_automations(api) == []                       # no find-automation, the job itself runs
+    mirror = stale_mirror(api)                                # a read-only mirror, like every built-in job; the job runs
     assert stale_rule(api) is True                            # the cutover does not switch the rule off
-    assert ("system_job", "job:stale_review") not in marks(api)
+    assert marks(api)[("system_job", "job:stale_review")]["automation"] == mirror["id"]
     with db(api).read() as c:
-        assert all(i["id"] != "job:stale_review" or i["now"] == "unchanged" for i in M.inventory(c))
-        assert M.pending(c).get("system_job") is None
-    assert repair(api) == [] and stale_rule(api) is True      # nothing to repair here, and the marker is set
+        assert [i["now"] for i in M.inventory(c) if i["id"] == "job:stale_review"] == ["runs as before"]
+    assert repair(api) == [] and stale_rule(api) is True      # a mirror is not the no-op: nothing to repair
 
 
 def test_the_repair_turns_the_rule_on_for_an_enabled_no_op_automation_once(api):
@@ -423,27 +430,27 @@ def test_the_repair_turns_the_rule_on_for_an_enabled_no_op_automation_once(api):
     assert stale_rule(api) is False
     assert repair(api) == [aid]
     assert stale_rule(api) is True
-    (gone,) = stale_automations(api)
+    gone = next(r for r in stale_automations(api) if r["id"] == aid)
     assert gone["deleted_at"] and gone["enabled"] == 0        # removed through automations.remove, on record
     with db(api).read() as c:
         assert c.execute("SELECT 1 FROM audit_log WHERE object=? AND via=?", ("automation:" + aid, "migration repair")).fetchone()
-    assert marks(api)[("system_job", "job:stale_review")]["outcome"] == "kept"
-    assert marks(api)[("system_job", "job:stale_review")]["automation"] is None
+    mirror = stale_mirror(api)                                # in its place the read-only mirror
+    assert marks(api)[("system_job", "job:stale_review")]["outcome"] == "converted"
+    assert marks(api)[("system_job", "job:stale_review")]["automation"] == mirror["id"]
     # Once: a second start changes nothing, and the cutover run again (its done bookkeeping) makes no automation.
     before = stale_automations(api)
     assert repair(api) == [] and stale_rule(api) is True
     first_start(api)
     assert stale_automations(api) == before and stale_rule(api) is True
-    assert [i for i in rows(api, "SELECT id FROM automations WHERE deleted_at IS NULL "
-                                 "AND json_extract(flow,'$.source.id')='job:stale_review'")] == []
 
 
 def test_the_repair_with_the_old_automation_off_removes_it_and_leaves_the_rule_off(api):
     aid = old_stale_automation(api, enabled=False, rule_on=False)
     assert repair(api) == [aid]
     assert stale_rule(api) is False
-    (gone,) = stale_automations(api)
+    gone = next(r for r in stale_automations(api) if r["id"] == aid)
     assert gone["deleted_at"] and gone["enabled"] == 0
+    stale_mirror(api)
     assert repair(api) == [] and stale_rule(api) is False
 
 
