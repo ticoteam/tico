@@ -326,7 +326,6 @@ REVIEWED = {
     "POST /api/v2/credential-requests/{rid}/cancel": "cancels that ask; writes no credential",
     "POST /api/v2/decisions": "asks the LLM judge; 'provider' is the model provider",
     "POST /api/v2/judge": "asks the LLM judge; 'provider' is the model provider",
-    "POST /api/v2/market/ask": "asks the market model on the server's enabled key and counts a usage event; 'provider' is in its comment, and no credential is read or written",
     "POST /api/v2/rules/read": "reads a rules document with the company's model provider; writes nothing",
     "POST /api/v2/market/ask": "reads the market graph and asks the company's already-set model provider; writes no credential or provider setting",
     "POST /api/v2/bots/{bot}/tools": "registers a bot's tool manifest; clients/access_entry refuses any credential in it",
