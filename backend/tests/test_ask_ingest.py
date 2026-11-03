@@ -194,7 +194,7 @@ def test_a_status_line_is_fyi_and_stays_with_the_bot(gate):
 
 
 def test_a_stored_rehearsal_reads_and_acts_as_on(gate):
-    """Rehearsal is gone: a setting still stored as 'rehearsal' (before migration 0062 moved it) reads as On, and the item
+    """Rehearsal is gone: a setting still stored as 'rehearsal' (before migration 0063 moved it) reads as On, and the item
     acts as On does."""
     api, model, token = gate
     with api.app.state.store.transaction() as c:
@@ -208,10 +208,10 @@ def test_a_stored_rehearsal_reads_and_acts_as_on(gate):
     assert (item["mode"], item["outcome"], item["would"]) == ("on", A.SENT_BACK, A.SENT_BACK)
 
 
-def test_migration_0062_moves_a_stored_rehearsal_to_on_and_leaves_the_rest():
-    """backend/migrations/0062_ask_filter_no_rehearsal.py: a person's or the team default's 'rehearsal' becomes 'on'; the
+def test_migration_0063_moves_a_stored_rehearsal_to_on_and_leaves_the_rest():
+    """backend/migrations/0063_ask_filter_no_rehearsal.py: a person's or the team default's 'rehearsal' becomes 'on'; the
     other modes stay. A database without the table (a new one) is left alone."""
-    migration = importlib.import_module("backend.migrations.0062_ask_filter_no_rehearsal")
+    migration = importlib.import_module("backend.migrations.0063_ask_filter_no_rehearsal")
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE ask_ingest_settings(person TEXT PRIMARY KEY, mode TEXT NOT NULL)")
     conn.executemany("INSERT INTO ask_ingest_settings VALUES(?,?)",
@@ -1073,6 +1073,21 @@ def test_a_replay_shows_an_admin_only_the_titles_they_may_read(gate, monkeypatch
     assert "salary" not in admin.text and "doctor" not in admin.text
     own = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": day}, headers=headers("ben-test"))
     assert {"Ben's private salary review", "Which doctor do you see?"} <= {i["title"] for i in own.json()["items"]}
+
+
+def test_a_replay_hides_a_private_task_the_filter_kept_with_its_bot(gate):
+    """A private task sent back stays the bot's: the person is no party to it, so their own replay shows no title."""
+    api, model, token = gate
+    plate(api, 15)
+    model.kind = "own_work"
+    r = api.post("/api/v2/tasks", json={"owner": "ben", "title": "Bot-only vendor margin", "body": "x", "private": True},
+                 headers=headers(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["task"]["owner_id"] == "bot:ops" and r.json()["ingest"]["outcome"] == A.SENT_BACK
+    own = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": H.now()[:10]}, headers=headers("ben-test"))
+    assert own.status_code == 200, own.text
+    assert [i for i in own.json()["items"] if i["title"] == "" and i["ref"] is None], "replayed, title hidden"
+    assert "margin" not in own.text and r.json()["task"]["id"] not in own.text
 
 
 @pytest.mark.parametrize("actor,role,via,expected", [

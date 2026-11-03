@@ -96,7 +96,7 @@ def _row_settings(row):
         criteria = [str(x) for x in json.loads(row["criteria"] or "[]")][:MAX_CRITERIA]
     except (TypeError, ValueError):
         criteria = list(DEFAULTS["criteria"])
-    # A stored mode that is not Off or On reads as the default, On: a retired 'rehearsal' (migration 0062 moves it).
+    # A stored mode that is not Off or On reads as the default, On: a retired 'rehearsal' (migration 0063 moves it).
     return {"mode": row["mode"] if row["mode"] in MODES else DEFAULTS["mode"], "budget": int(row["budget"]),
             "chores_budget": int(row["chores_budget"]), "criteria": criteria}
 
@@ -850,14 +850,15 @@ def open_items_at(c, person, at, leave_out="", asker=""):
 
 
 def _shown(c, viewer, person, it):
-    """Whether `viewer` may read a replayed item's title: the person always; anyone else (an owner or admin) only a
-    task they may read, never a bot's question to the person outside any task."""
-    if viewer in (None, person):
-        return True
+    """Whether `viewer` may read a replayed item's title: the person their own tasks and questions, and a task the
+    filter kept with its bot only if they may read it; anyone else (an owner or admin) only a task they may read, never
+    a bot's question to the person outside any task."""
     if it["kind"] == "loose":
-        return False
+        return viewer in (None, person)
     task = H.task(c, it["ref"])
-    return bool(task) and H.task_private_readable(c, viewer, task)
+    # A task the filter kept with its bot may be private to it: the person sees its title only if they may read it.
+    return bool(task) and (task["owner_id"] == person and viewer in (None, person)
+                           or H.task_private_readable(c, viewer or person, task))
 
 
 def replay(store, primary, person, start, end, offset=0, limit=REPLAY_PAGE, viewer=None):
