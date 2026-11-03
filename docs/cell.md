@@ -78,6 +78,7 @@ python3 -m setup cell status --company boatyard --json
 python3 -m setup cell stop|start --company boatyard --json
 python3 -m setup cell sleep --company boatyard [--wake-at 2026-10-30T18:00:00Z] --json
 python3 -m setup cell set-sleep --company boatyard --minutes N|default --json
+python3 -m setup cell set-page-host --company boatyard --host boatyard.tico.page|"" --json
 python3 -m setup cell wake --company boatyard [--timeout 300] --json
 python3 -m setup cell update --company boatyard --version vX.Y.Z --json
 python3 -m setup cell remove --company boatyard [--keep-data] --json
@@ -287,6 +288,8 @@ python3 -m setup cell add --company ticoteam --own-domain --domain hub.tico.team
   out keeps the host; `--page-host ""` clears it and keeps the folder. `remove` deletes the folder unless
   `--keep-data` is given. `list` and `status` show `page_host` and `page_url` when one is set.
   A host under the page domain needs no route of its own; any other host gets one, as an alias does.
+  For a company that already runs, `set-page-host --host HOST` sets the same host without add's sign-in settings:
+  the server restarts with it. `--host ""` clears it; the same host again changes nothing.
 - **`--env-file F`** (0600, `KEY=VALUE` lines, keys `[A-Z][A-Z0-9_]*`, values on one line): settings the cell does not
   write, such as `TICO_RUNNER_URL`, `TICO_VISUAL_ORIGIN`, `TICO_BLOB_BUCKET`, `TICO_BLOB_REGION`, `TICO_INBOUND_KEY`,
   `TYPESAFE_API_KEY`, `TICO_STALE_REVIEW`, `TICO_SUPPORT_ACCESS`, `TICO_OIDC_ALLOWED_DOMAINS`. They are kept in
