@@ -104,7 +104,7 @@ def unsettled(c):
     return c.execute(
         "SELECT 1 FROM memory_tidy_passes p JOIN turns t ON t.task_id=p.check_task_id "
         "WHERE t.finished_at IS NULL OR (t.usage_reason IS NOT NULL AND "
-        "NOT EXISTS(SELECT 1 FROM turn_usage_segments s WHERE s.turn_id=t.id) "
+        "NOT EXISTS(SELECT 1 FROM usage_facts f WHERE f.run_id=t.id AND f.source='estimate') "
         "AND coalesce(t.input_tokens,0)+coalesce(t.output_tokens,0)=0 "
         "AND (NOT EXISTS(SELECT 1 FROM attempts a WHERE a.id=t.id) OR "
         "EXISTS(SELECT 1 FROM attempts a WHERE a.id=t.id AND a.started_at IS NOT NULL))) LIMIT 1").fetchone() is not None

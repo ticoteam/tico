@@ -104,6 +104,11 @@ def snapshot(c: sqlite3.Connection, payload: Mapping[str, object], *, fetched_at
                      "calls": calls if isinstance(calls, int) and not isinstance(calls, bool) else 0,
                      "price_nano": price, "line": line})
     as_of = stamp(payload.get("as_of"), fetched_at)
+    charged: dict[str, int] = {}
+    for r in kept:
+        model = str(r["model"])
+        charged[model] = charged.get(model, 0) + int(str(r["price_nano"]))
+    tico.record_meter(c, month, as_of, charged, fetched_at)
     remember(c, month, by, fetched_at)
     if fetched_at >= _final_after(month):
         _final_read(c, month, by, fetched_at)   # an unchanged final read still closes the month
@@ -282,6 +287,8 @@ def _post_one(ctx: Ctx, snap: Mapping[str, object], by: str) -> list[dict[str, o
         else:
             _absorb_into_last(ctx, prefix, holds[line], release=False)
         report[line] = {"meter_nano": meter[line], "posted": SU.posted_on(c, ctx.book.id, account, prefix)}
+    # Each model's estimate beside its meter (backend/usage_facts.py), so a drift between them shows per model.
+    report["models"] = tico.usage_reconciled(c, month)
     SU.mark_posted(c, month, as_of, ctx.at)
     fetched = str(snap["created_at"])
     if fetched >= _final_after(month):
@@ -377,7 +384,8 @@ def months_to_fetch(c: sqlite3.Connection, today: date) -> list[str]:
 
 
 def reconcile(c: sqlite3.Connection) -> dict[str, object]:
-    """The last reconcile per recent month: {month: {as_of, ai: {meter_nano, posted}, video: {...}}}."""
+    """The last reconcile per recent month: {month: {as_of, ai: {meter_nano, posted}, video: {...}, models: {model:
+    {estimated_nano, metered_nano, amount_nano}}}}."""
     stored = SL.setting(c, RECONCILE_KEY)
     return dict(cast(dict[str, object], stored)) if isinstance(stored, dict) else {}
 

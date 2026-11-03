@@ -1,5 +1,8 @@
 """Spend limits: an hourly, daily, weekly and monthly cap in estimated USD, for a bot, a group and the whole team
-(docs/usage.md).
+(docs/usage.md). Each cap is a budget node (`budget_nodes`): an amount in nanodollars, a period and a scope, `bot`,
+`team` (a group) or `company`; a `company` node with `per_bot` set is the default for each bot with no cap of its own.
+What counts against one is the usage facts of the runs in the period (backend/usage_facts.py, read through
+backend/usage_records.py RUNS).
 
 A bot's own limit wins; a bot with none follows the company default; the default is no limit. A pool is a cap on the
 combined spend of several bots: `company` covers every bot, `group:<id>` the bots in that group and in the groups nested
@@ -27,10 +30,11 @@ import json
 import logging
 import math
 from datetime import datetime, timedelta, timezone
+from decimal import ROUND_HALF_EVEN, Decimal
 
 from .store import H
 
-KEY = "usage_limits"                       # the company default, in registry_metadata
+KEY = "usage_limits"                       # the default's count_subscription switch, in registry_metadata
 WARN = 80
 MAX_USD = 10_000_000
 PERIODS = (("per_30m", "30m"), ("hourly", "hour"), ("daily", "day"), ("weekly", "week"), ("monthly", "month"))
@@ -39,20 +43,73 @@ COMPANY = "company"                        # the pool every bot is in
 # How a period reads in a sentence (the key is what the data calls it).
 WORDS = {"per_30m": "30-minute", "hourly": "hourly", "daily": "daily", "weekly": "weekly", "monthly": "monthly"}
 
-SCHEMA = (
-    "CREATE TABLE IF NOT EXISTS usage_pools (scope TEXT PRIMARY KEY, hourly_usd REAL, daily_usd REAL, "
-    "weekly_usd REAL, monthly_usd REAL, updated_at TEXT, updated_by TEXT)",
-)
+NANO = 10**9
+NODES_SQL = "SELECT * FROM budget_nodes"
+DEFAULT = ("default",)                     # the company default, applied to each bot
 
 
-def ensure(c):
-    """The 30-minute, hourly and weekly columns on a bot's own limits and the pools table; safe to run on any database."""
-    from .hubdb import add_column
-    for column in ("hourly_usd", "weekly_usd", "per_30m_usd"):
-        add_column(c, "usage_limits", column, "REAL")
-    for statement in SCHEMA:
-        c.execute(statement)
-    add_column(c, "usage_pools", "per_30m_usd", "REAL")
+def _key(row):
+    """Which caps a node belongs to: ("bot", id), the DEFAULT, or ("pool", COMPANY | "group:<id>")."""
+    if row["scope"] == "bot":
+        return ("bot", row["bot_id"])
+    if row["scope"] == "team":
+        return ("pool", "group:" + row["team_id"])
+    return DEFAULT if row["per_bot"] else ("pool", COMPANY)
+
+
+def _target(key):
+    """(scope, team_id, bot_id, per_bot) of a caps key."""
+    if key[0] == "bot":
+        return "bot", None, key[1], 0
+    if key == DEFAULT:
+        return "company", None, None, 1
+    if key[1] == COMPANY:
+        return "company", None, None, 0
+    return "team", key[1].split(":", 1)[1], None, 0
+
+
+def nodes(c):
+    """{caps key: {period_usd: amount}} for every budget node, read once per snapshot (backend/read_cache.py)."""
+    from .read_cache import value
+
+    def build():
+        found = {}
+        for row in c.execute(NODES_SQL):
+            found.setdefault(_key(row), {})[row["period"] + "_usd"] = round(row["amount_nano"] / NANO, 6)
+        return found
+    return value(c, ("budget_nodes",), build, shared=True)
+
+
+def _caps(found):
+    return {name: (found or {}).get(name) for name in KEYS}
+
+
+def _stored(c, key):
+    return _caps(nodes(c).get(key))
+
+
+def nano(amount):
+    """A cap in USD (at most six decimals, as `_amount` keeps it) as whole nanodollars, exactly: 0.35 is 350000000.
+    `amount_nano / NANO` rounded to six decimals reads back the same float."""
+    return int((Decimal(repr(float(amount))) * NANO).to_integral_value(ROUND_HALF_EVEN))
+
+
+def save_caps(c, key, caps, actor):
+    """Set the caps of one scope: a period with an amount gets that node, one with none loses its node."""
+    scope, team, bot, per_bot = _target(key)
+    where = ("scope=? AND coalesce(team_id, bot_id, '')=? AND per_bot=? AND period=?")
+    at = H.now()
+    for name, _ in PERIODS:
+        args = (scope, team or bot or "", per_bot, name)
+        amount = _amount(caps.get(name + "_usd"))
+        if amount is None:
+            c.execute(f"DELETE FROM budget_nodes WHERE {where}", args)
+            continue
+        if not c.execute(f"UPDATE budget_nodes SET amount_nano=?, updated_at=?, updated_by_id=? WHERE {where}",
+                         (nano(amount), at, actor, *args)).rowcount:
+            c.execute("INSERT INTO budget_nodes(id, scope, team_id, bot_id, per_bot, period, amount_nano, created_at, "
+                      "updated_at, updated_by_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                      (H.new_id(), scope, team, bot, per_bot, name, nano(amount), at, at, actor))
 
 
 def half(value):
@@ -91,7 +148,14 @@ def company(c):
     except ValueError:
         stored = {}
     stored = stored if isinstance(stored, dict) else {}
-    return Default({**{key: _amount(stored.get(key)) for key in KEYS}, "count_subscription": stored.get("count_subscription") is not False})
+    return Default({**_stored(c, DEFAULT), "count_subscription": stored.get("count_subscription") is not False})
+
+
+def save_default(c, caps, count_subscription, actor):
+    """The company default's caps and whether subscription runs count against every limit."""
+    save_caps(c, DEFAULT, caps, actor)
+    c.execute("INSERT INTO registry_metadata(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+              (KEY, json.dumps({"count_subscription": bool(count_subscription)})))
 
 
 def _amount(value):
@@ -102,33 +166,19 @@ def _amount(value):
     return round(number, 6) if 0 < number <= MAX_USD else None
 
 
-def _caps(row):
-    return {key: (row[key] if row and key in row.keys() else None) for key in KEYS}
-
-
-OWN_SQL = "SELECT * FROM usage_limits WHERE bot=?"
-
-
 def own(c, bot):
-    from .read_cache import one
-    return _caps(one(c, OWN_SQL, (bot,)))
+    return _stored(c, ("bot", bot))
 
 
 def own_many(c, bots):
-    """{bot: its own limits, as own returns them} for every bot in `bots`, read in set queries (the claim checks each)."""
-    from .hubdb import chunks
-    rows = {}
-    for part in chunks(bots):
-        for row in c.execute(f"SELECT * FROM usage_limits WHERE bot IN ({','.join('?' * len(part))})", part):
-            rows[row["bot"]] = row
-    return {bot: _caps(rows.get(bot)) for bot in bots}
+    """{bot: its own limits, as own returns them} for every bot in `bots`, from one read of the budget nodes (the claim
+    checks each)."""
+    found = nodes(c)
+    return {bot: _caps(found.get(("bot", bot))) for bot in bots}
 
 
-def prime_own(c, bots):
-    """Every bot's own limits read in one statement, for a page that asks for many bots in one snapshot."""
-    from .read_cache import prime
-    found = {row["bot"]: row for row in c.execute("SELECT * FROM usage_limits")}
-    prime(c, OWN_SQL, {(bot,): found.get(bot) for bot in bots})
+def save_own(c, bot, caps, actor):
+    save_caps(c, ("bot", bot), caps, actor)
 
 
 def effective(c, bot, default=None, mine=None):
@@ -188,29 +238,16 @@ def pools(c, default=None):
     """{scope: caps} for every pool with a cap set: `company` and `group:<id>`."""
     memo = default.memo if isinstance(default, Default) else {}
     if "pools" not in memo:
-        from .read_cache import rows
-        found = {}
-        for row in rows(c, "SELECT * FROM usage_pools"):
-            caps = _caps(row)
-            if any(caps.values()):
-                found[row["scope"]] = caps
-        memo["pools"] = found
+        memo["pools"] = {key[1]: _stored(c, key) for key in nodes(c) if key[0] == "pool"}
     return memo["pools"]
 
 
 def pool(c, scope):
-    return _caps(c.execute("SELECT * FROM usage_pools WHERE scope=?", (scope,)).fetchone())
+    return _stored(c, ("pool", scope))
 
 
 def save_pool(c, scope, caps, actor):
-    if not any(caps.values()):
-        c.execute("DELETE FROM usage_pools WHERE scope=?", (scope,))
-        return
-    marks = ",".join("?" * len(KEYS))
-    c.execute(f"INSERT INTO usage_pools(scope, {', '.join(KEYS)}, updated_at, updated_by) VALUES(?,{marks},?,?) "
-              "ON CONFLICT(scope) DO UPDATE SET " + ", ".join(f"{key}=excluded.{key}" for key in KEYS) +
-              ", updated_at=excluded.updated_at, updated_by=excluded.updated_by",
-              (scope, *(caps[key] for key in KEYS), H.now(), actor))
+    save_caps(c, ("pool", scope), caps, actor)
 
 
 def groups(c, default=None):

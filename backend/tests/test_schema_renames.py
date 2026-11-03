@@ -71,9 +71,10 @@ def restore(path):
 # Dropped as redundant by backend/migrations/0042_drop_unused_indexes.sql, and kpis_goal by
 # backend/migrations/0044_drop_kpi_goal_columns.py with kpis.goal_id, the column it indexes.
 DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "tasks_private_parties", "kpis_goal"}
-# Dropped by backend/migrations/0035_growth_rethink.py after the renames ran on them.
+# Dropped after the renames ran on them: by backend/migrations/0035_growth_rethink.py, 0053_usage_facts.py (its rows
+# are usage facts) and 0054_budget_nodes.py (its rows are budget nodes).
 RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",
-           "gtm_versions", "gtm_drafts"}
+           "gtm_versions", "gtm_drafts", "turn_usage_segments", "usage_limits", "usage_pools"}
 
 
 @pytest.fixture(scope="module")
