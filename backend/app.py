@@ -855,7 +855,7 @@ def create_app(settings=None):
                     on_turn = request.state.identity.via == "assistant" and not approves
                     unmatched = on_turn and assistant_mod.settings_route_unmatched(request.method, request.url.path, raw)
                     outside = on_turn and await asyncio.to_thread(
-                        assistant_mod.automation_sends_outside, store, request.method, request.url.path)
+                        assistant_mod.automation_sends_outside, store, request.method, request.url.path, raw)
                     admitted = (request.state.identity.via == "assistant" and assistant_direct()
                                 and (approves or (not unmatched and not outside
                                                   and assistant_mod.admits_on_turn(request.method, request.url.path, raw))))

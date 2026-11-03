@@ -326,7 +326,7 @@ def raw_refusal(c, auth, who, method, path, body=None, base=""):
 
 
 def plan(c, auth, who, e, value, target=None, base="", propose=None, card_direct=False,
-         can_card=None, card_words=None):
+         can_card=None, card_words=None, direct_ok=False):
     """The exact request that sets `e` to `value` for `target`, after the entry's own checks: `{"run": {...}}` to
     make with the caller's rights; for BotOps or the Assistant acting for a person, a confirm entry's Confirm card
     (`propose`) or a person-only entry's reason and link. `card_direct`: a direct entry is a card too (the Assistant,
@@ -336,6 +336,9 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, card_direct
     or the refusal that click would get (then no card is made); None for any other entry."""
     link = (base.rstrip("/") + "/" + e.card) if base else e.card
     acting_for = who.via in ACTING_FOR
+    # `direct_ok`: the Assistant's own turn cites the person's words and the owner's rule allows it, so a direct or a confirm
+    # entry runs here on that citation. A person-only entry is refused above; a change that needs a card by what it does to
+    # stored state (`card_words`) still gets one.
 
     def person_only():
         why = e.why or f"{e.name} is changed only by the person themselves"
@@ -366,7 +369,10 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, card_direct
         kind = e.when_held if tried[0] else "direct"
     # The plan is never what a card runs (the card runs the route itself), so BotOps acting for a person always gets
     # the card here, and with no way to make one it gets nothing it could run.
-    if acting_for and (kind == "confirm" or (kind == "direct" and card_direct)):
+    needs_card = kind == "confirm" or (kind == "direct" and card_direct)
+    if direct_ok and not (tried and tried[0]):
+        needs_card = False
+    if acting_for and needs_card:
         if propose is None or (can_card and not can_card(e.method, "/api/v2/" + request["path"])):
             raise Problem("unavailable", f"{e.name} needs your yes on a Confirm card, which can't be made here: open "
                           + link, 503, extra={"link": link})
@@ -521,16 +527,19 @@ def install(app, store, auth, settings):
                                 made(c, who, method, path, data, summary[:300], what=what))
         with store.transaction() as c:
             card_direct = False
+            direct_ok = False
             if assistant:
                 from . import assistant as assistant_mod, team_rules
+                # The turn that asked is the citation when no header names one: a person's own turn cites its message.
                 try:
-                    cited = bool(asked) and bool(assistant_mod.instruction(c, who, asked))
+                    cited = bool(assistant_mod.instruction(c, who, asked or "turn"))
                 except Problem:
                     cited = False
-                card_direct = not (cited and team_rules.load(c)["assistant_direct"])
+                direct_ok = cited and bool(team_rules.load(c)["assistant_direct"])
+                card_direct = not direct_ok
 
             return plan(c, auth, who, e, body.value, target, settings.public_url, propose=propose,
-                        card_direct=card_direct,
+                        card_direct=card_direct, direct_ok=direct_ok,
                         can_card=lambda method, path: valid_operation(method, path, settings,
                                                                       "assistant" if assistant else "botops"),
                         card_words=words)
