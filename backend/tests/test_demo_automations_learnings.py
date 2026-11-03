@@ -135,6 +135,15 @@ def occurrences_between(trigger, start, end):
     return found
 
 
+def sweep_automation_id(settings):
+    """The Assistant's daily sweep (routine key daily-sweep, templates/catalog/assistant/bot.yaml) as its automation:
+    a routine moves to an automation (redesign_migration.adopt), and redesign_migrated keeps the pair."""
+    with sqlite3.connect(settings.db_path) as db:
+        [(aid,)] = db.execute("SELECT m.automation FROM redesign_migrated m JOIN schedules s ON s.id = m.id "
+                              "WHERE m.kind='routine' AND s.routine_key='daily-sweep'").fetchall()
+    return aid
+
+
 def test_every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_future(built):
     _, settings = built
     with signed_in(settings) as api:
@@ -142,10 +151,19 @@ def test_every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_fu
         enabled = {row["name"]: row["enabled"] for row in rows}
         assert enabled["Weekday inbox sweep"] is False
         schedules = [row for row in rows if row["enabled"] and row["trigger"]["type"] == "schedule"]
-        assert len(schedules) == 16
+        # 16 on main, and the Assistant's daily sweep is the one new enabled schedule (backend/onboarding.py).
+        assert len(schedules) == 17
+        sweep = sweep_automation_id(settings)
         week_start = NOW - timedelta(days=7)
         for row in schedules:
             trigger = row["trigger"]
+            if row["id"] == sweep:
+                # Created at boot after the demo window (onboarding.ensure_builtin_routines), on the real clock, so it
+                # has no run in the window. It is next at its first time after its creation.
+                made = at_time(row["created_at"])
+                assert at_time(row["next_run"]) > made, row["name"]
+                assert at_time(row["next_run"]) == next_due(trigger["cron"], made, trigger["tz"]), row["name"]
+                continue
             # Next is the schedule's first time after the build's now.
             assert at_time(row["next_run"]) > NOW, row["name"]
             assert at_time(row["next_run"]) == next_due(trigger["cron"], NOW, trigger["tz"]), row["name"]

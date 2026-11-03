@@ -993,6 +993,11 @@ def install(app, store, service):
                 plain = plain_change(name, before, result)
                 return propose(c, who, 'PUT', '/api/v2/bots/' + bot + '/repositories', body.model_dump(exclude_none=True),
                                plain[:300], what=plain)
+            if gains and who.via == 'assistant':
+                # The person's Assistant cannot make this change on its words: it is their card in Settings, or one
+                # proposed (`hub assistant propose`) for them to confirm.
+                raise Problem('confirm_required', 'That lets a bot run workflows, edit workflow files or create product '
+                              'repositories: the person confirms it in Settings > Repositories', 403)
             if gains:
                 raise Problem('forbidden', 'Only an Owner or admin lets a bot run workflows, edit workflow files or '
                               'create product repositories, themselves in Settings > Repositories', 403)

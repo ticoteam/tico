@@ -335,6 +335,7 @@ STABLE = [
     ("/api/v2/stale-review/{suggestion_id}", "post", "Needs you", "decideStaleSuggestion",
      "Accept or skip one suggestion on your Stale tickets card; accept sends the task version it showed "
      "(409 version_conflict otherwise)", None),
+    ("/api/v2/approvals", "get", "Needs you", "listApprovals", "The approvals addressed to you: pending (what Needs you counts), approved or declined", None),
     ("/api/v2/approvals/{aid}", "get", "Needs you", "getApproval", "One approval request", None),
     ("/api/v2/approvals/{aid}", "post", "Needs you", "decideApproval", "Approve or reject", None),
     ("/api/v2/approvals/{aid}/undo", "post", "Needs you", "undoApproval",
@@ -3003,6 +3004,30 @@ STABLE.extend([
     ("/api/v2/reader-messages", "get", "Company page", "listReaderMessages",
      "What readers sent the page (replies and requests), newest first; they never wake a bot", None),
 ])
+
+
+# What the Assistant did for you, the Needs you summary and why an item is here (docs/assistant.md).
+STABLE.extend([
+    ("/api/v2/needs-you/summary", "get", "Needs you", "getNeedsYouSummary",
+     "The Needs you count split by kind and by the bot that put each item there, with this week's and older counts; "
+     "the same query as the board, so the numbers match it (`limit` caps the list of bots)", "NeedsSummary"),
+    ("/api/v2/origins/{ref}", "get", "Needs you", "getOrigin",
+     "Why a task, bot question or approval is on your list: who made it, its cause (automation, rule, parent task or bot), "
+     "its siblings in the last seven days and up to three commands that would stop the source; 404 when you cannot read it", "Origin"),
+    ("/api/v2/assistant/changes", "get", "Assistant", "listAssistantChanges",
+     "What your Assistant changed for you in the last `days` (default 30), newest first, each with the words it acted on "
+     "and whether it can still be undone; paged with `limit` and `before`", "AssistantChangeList"),
+    ("/api/v2/assistant/changes/{cid}/restore", "post", "Assistant", "restoreAssistantChange",
+     "Undo one change your Assistant made for you where the record allows it; repeating it answers `already: true`", "AssistantChangeResult"),
+])
+SCHEMAS.update({
+    "NeedsSummary": obj({"actor": "s", "total": "i", "this_week": "i", "by_kind": "o", "by_bot": items({"type": "object"}),
+                         "bots_left": "i"}),
+    "Origin": obj({"ref": "s", "kind": "s", "id": "s", "title": "s", "created_at": "s", "made_by": "o",
+                   "task": {"type": ["string", "null"]}, "cause": "o", "siblings": "o", "stop": items({"type": "object"})}),
+    "AssistantChangeList": obj({"changes": items({"type": "object"}), "next": {"type": ["string", "null"]}}),
+    "AssistantChangeResult": obj({"id": "s", "restored": "b", "already": "b", "object": "s"}),
+})
 
 
 def generate():

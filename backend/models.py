@@ -2638,6 +2638,8 @@ class AssistantAction(Contract):
     method: Literal["POST", "PUT", "PATCH", "DELETE"] = "POST"
     path: Annotated[str, Field(min_length=9, max_length=300)]
     body: dict = Field(default_factory=dict)
+    # The Assistant's own background run puts the card in this person's Assistant chat (`for`); otherwise it is the caller's.
+    for_person: Annotated[str, Field(min_length=1, max_length=200)] | None = Field(default=None, alias="for")
 
 
 class InboxOnly(Contract):

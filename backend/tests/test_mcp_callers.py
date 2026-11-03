@@ -31,7 +31,9 @@ def test_each_caller_is_offered_only_the_tools_it_can_use(api, botops):
     everything = {n for n, t in hubtools.BY_NAME.items() if not t["local"]}
     for who, names in lists.items():
         assert names < everything, who                                   # nobody is offered every tool
-        assert "hub_assistant_propose" not in names, who                 # the Assistant's own
+        # The Assistant's own: offered to bots (its background run is a bot, and a listing cannot tell it apart), and the
+        # server refuses a `for` from any bot but the Assistant (backend/assistant.py `propose`).
+        assert "hub_assistant_propose" not in names or who == "bot", who
         assert {"hub_whoami", "hub_task_list", "hub_message_send", "hub_doc_search", "hub_sql"} <= names, who
     for who in ("owner", "admin", "member"):
         assert HUMANS_ONLY <= lists[who] and not BOTS_ONLY & lists[who] and not BOTOPS_ONLY & lists[who], who
@@ -67,5 +69,7 @@ def test_a_tool_that_is_not_offered_is_refused_when_it_is_called(api, botops):
 def test_the_assistant_is_offered_reads_its_own_writes_and_its_proposal_tool():
     names = {t["name"] for t in hubtools.listing(kind="assistant")}
     assert "hub_assistant_propose" in names and "hub_task_create" in names and "hub_health_check" in names
-    assert not {"hub_sql", "hub_api", "hub_message_send", "hub_update_create", "hub_bot_update"} & names
+    # Only the NEVER tools are hidden from an Assistant turn (hubtools.ASSISTANT_HIDDEN): the server's gate decides the rest.
+    assert not set(hubtools.ASSISTANT_HIDDEN) & names and "hub_sql" not in names
+    assert "hub_message_send" in names and "hub_update_create" not in names
     assert {t["name"] for t in hubtools.listing()} >= names                # no kind: everything, the server decides

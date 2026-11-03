@@ -65,6 +65,7 @@ export type Assistant = {
 
 export type AssistantAction = {
   body?: Record<string, unknown>;
+  for?: string | null;
   method?: "POST" | "PUT" | "PATCH" | "DELETE";
   path: string;
   summary: string;
@@ -74,6 +75,18 @@ export type AssistantActionResult = {
   action: Record<string, unknown>;
   message_id?: string;
   shown_once?: Record<string, unknown>;
+};
+
+export type AssistantChangeList = {
+  changes: Array<Record<string, unknown>>;
+  next: string | null;
+};
+
+export type AssistantChangeResult = {
+  already: boolean;
+  id: string;
+  object: string;
+  restored: boolean;
 };
 
 export type AssistantMessage = {
@@ -3316,6 +3329,15 @@ export type Moderate = {
   action: string;
 };
 
+export type NeedsSummary = {
+  actor: string;
+  bots_left: number;
+  by_bot: Array<Record<string, unknown>>;
+  by_kind: Record<string, unknown>;
+  this_week: number;
+  total: number;
+};
+
 export type NeedsYou = {
   actor: string;
   bots?: Record<string, number>;
@@ -3400,6 +3422,19 @@ export type OrgModelSeat = {
 
 export type OrgModels = {
   models: Array<OrgModel>;
+};
+
+export type Origin = {
+  cause: Record<string, unknown>;
+  created_at: string;
+  id: string;
+  kind: string;
+  made_by: Record<string, unknown>;
+  ref: string;
+  siblings: Record<string, unknown>;
+  stop: Array<Record<string, unknown>>;
+  task: string | null;
+  title: string;
 };
 
 export type Page = {
@@ -7284,6 +7319,13 @@ export type GetNeedsYouParams = {
 export type GetNeedsYouBody = never;
 export type GetNeedsYouResponse = NeedsYou;
 
+/** GET /api/v2/needs-you/summary */
+export type GetNeedsYouSummaryParams = {
+  limit?: number;
+};
+export type GetNeedsYouSummaryBody = never;
+export type GetNeedsYouSummaryResponse = NeedsSummary;
+
 /** GET /api/v2/openapi.json */
 export type GetOpenApiParams = Record<string, never>;
 export type GetOpenApiBody = never;
@@ -7297,6 +7339,13 @@ export type GetOrgParams = {
 };
 export type GetOrgBody = never;
 export type GetOrgResponse = Org;
+
+/** GET /api/v2/origins/{ref} */
+export type GetOriginParams = {
+  ref: string;
+};
+export type GetOriginBody = never;
+export type GetOriginResponse = Origin;
 
 /** GET /api/v2/pages/{fid} */
 export type GetPageParams = {
@@ -7696,6 +7745,27 @@ export type ListAllAutomationRunsParams = {
 };
 export type ListAllAutomationRunsBody = never;
 export type ListAllAutomationRunsResponse = AutomationOverviewRuns;
+
+/** GET /api/v2/approvals */
+export type ListApprovalsParams = {
+  before?: string | null;
+  from?: string | null;
+  limit?: number;
+  offset?: number;
+  since?: string | null;
+  status?: string;
+};
+export type ListApprovalsBody = never;
+export type ListApprovalsResponse = unknown;
+
+/** GET /api/v2/assistant/changes */
+export type ListAssistantChangesParams = {
+  before?: string | null;
+  days?: number;
+  limit?: number;
+};
+export type ListAssistantChangesBody = never;
+export type ListAssistantChangesResponse = AssistantChangeList;
 
 /** GET /api/v2/assistant/decisions */
 export type ListAssistantDecisionsParams = {
@@ -9323,6 +9393,14 @@ export type ResolveTaskQuestionParams = {
 };
 export type ResolveTaskQuestionBody = TaskAskResolve;
 export type ResolveTaskQuestionResponse = CommentResult;
+
+/** POST /api/v2/assistant/changes/{cid}/restore */
+export type RestoreAssistantChangeParams = {
+  "Idempotency-Key": string;
+  cid: string;
+};
+export type RestoreAssistantChangeBody = Empty;
+export type RestoreAssistantChangeResponse = AssistantChangeResult;
 
 /** POST /api/v2/automations/{aid}/versions/{n}/restore */
 export type RestoreAutomationVersionParams = {
