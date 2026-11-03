@@ -94,12 +94,12 @@ def test_long_unicode_summaries_stay_under_the_byte_cap_and_paging_reaches_every
     _, _, finance = setup_attempt(api, "finance")
     made = {approval_for_ana(api, token=finance["token"],
                              payload={"amount": n, "account": "ads", "what": ("漢字🙂ü " * 200) + str(n)})["id"]
-            for n in range(60)}
+            for n in range(100)}
     first = api.get("/api/v2/approvals?limit=100", headers=headers("ana-test"))
     assert first.status_code == 200 and len(first.content) <= 64 * 1024
     body = first.json()
-    assert "漢字" in body["approvals"][0]["summary"] and body["total"] == 60
-    assert body["next"] is not None and len(body["approvals"]) < 60
+    assert "漢字" in body["approvals"][0]["summary"] and body["total"] == 100
+    assert body["next"] == len(body["approvals"]) and len(body["approvals"]) < 100
     seen, offset = [r["id"] for r in body["approvals"]], body["next"]
     while offset is not None:
         page_body = listed(api, f"limit=100&offset={offset}")
