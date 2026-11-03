@@ -16,6 +16,7 @@ import json
 
 from . import access as Access
 from . import hubdb as H
+from . import invites
 from .store import Problem
 
 KEEPS = "Has history; stays as left"
@@ -106,9 +107,11 @@ def remove(c, actor, roster, person):
         c.execute("UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE id=?", (heir, H.now(), str(actor), seat_id))
         H.event(c, actor, "seat.updated", seat_id, {"fields": ["reports_to"]})
     c.execute("DELETE FROM human_tokens WHERE human=?", (pid,))
-    c.execute("DELETE FROM invite_sends WHERE person=?", (pid,))
+    # The invite bindings stay, so a repeat of an invite request answers from them and never invites the person again
+    # (invites.replay). What names them goes: the hash of the address, and any refusal text that carries it.
+    c.execute("UPDATE invite_sends SET request_hash='' WHERE person=?", (pid,))
+    c.execute("UPDATE invite_sends SET error_detail=? WHERE person=? AND state='refused'", (invites.REMOVED, pid))
     c.execute("DELETE FROM humans WHERE id=?", (pid,))
-    from . import invites
     sent = invites.sent(c)
     if pid in sent:
         sent.pop(pid)
