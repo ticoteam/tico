@@ -148,7 +148,7 @@ def listing(c, settings, who=None, auth=None, now=None):
     return [row(c, settings, dict(r), who, auth, now) for r in c.execute("SELECT * FROM task_rules ORDER BY created_at,id")]
 
 
-HISTORY_ACTIVITY_SQL = "NOT (actor='keeper' AND field='github')"
+HISTORY_ACTIVITY_SQL = "NOT (actor='keeper' AND (field='github' OR field GLOB 'check_back_*'))"
 MESSAGE_ACTIVITY_SQL = "m.sender_id<>'keeper'"
 
 

@@ -265,11 +265,12 @@ const ruSel = id => ruQuery().get('rule') === id;
 // with, coloured by its count (0 red, N amber, a rule alone blue and dashed), with its chip. The panel beside it reads
 // and changes the party's settings, lists the rules it follows and its lines. On a phone the map gives way to a list.
 // GET /v2/reach holds it all; each change writes one setting or one line, then reads it again.
-const RR_DEFAULTS = {mode: 'open', chats_per_day: 999, tasks_per_day: 999};
+// Bots, teams and Everyone start nearby; a person's own mode starts open (people are never refused).
+const RR_DEFAULTS = {mode: 'nearby', chats_per_day: 999, tasks_per_day: 999, person_mode: 'open'};
 const RR_MAX = 100000;
 const RR_MATCHES = 8;      // the header search's list
 const RR_ADD_MATCHES = 7;  // + Add exception's list
-const RR_MODES = [['open', 'Can reach anyone'], ['closed', "Only who's listed"]];
+const RR_MODES = [['open', 'Can reach anyone'], ['nearby', 'Nearby'], ['closed', "Only who's listed"]];
 
 function rrNormal(d) {
   return {defaults: {...RR_DEFAULTS, ...(d?.defaults || {})}, settings: d?.settings || [], effective: d?.effective || {},
@@ -299,9 +300,9 @@ function rrEff(p) {
   const R = RU.reach;
   if (R.effective[p]) return {...R.defaults, ...R.effective[p]};
   const chain = [p, ...rrTeams(p).map(id => 'group:' + id), ...(p === '*' ? [] : ['*'])], out = {};
-  for (const f of Object.keys(RR_DEFAULTS)) {
+  for (const f of ['mode', 'chats_per_day', 'tasks_per_day']) {
     const at = chain.find(q => rrOwn(q)[f] != null);
-    out[f] = at ? rrOwn(at)[f] : R.defaults[f];
+    out[f] = at ? rrOwn(at)[f] : f === 'mode' && rrKind(p) === 'human' ? R.defaults.person_mode : R.defaults[f];
   }
   return out;
 }

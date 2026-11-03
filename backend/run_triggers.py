@@ -44,7 +44,7 @@ trigger or purpose is not known reads `unknown` for that field, and is still cou
 import re
 
 TRIGGERS = ("comment", "status_or_relation", "pr_checks", "stall_check", "schedule", "person_message",
-            "background_done", "release_published", "other")
+            "background_done", "release_published", "check_back", "other")
 OUTCOMES = ("acted", "no_change", "nothing_to_do")
 # What a person (or another bot) did with an acted run's result: `turn_result`.
 TASK_OUTCOMES = ("accepted", "edited", "overridden")
@@ -54,7 +54,7 @@ UNKNOWN = "unknown"
 # What a run is for when no caller said, by what woke it. The label is the work, not the wake, and stays short.
 TRIGGER_PURPOSES = {
     "comment": "answer comment", "status_or_relation": "react to task change", "pr_checks": "handle PR checks",
-    "stall_check": "check stalled task", "schedule": "run routine", "person_message": "answer person message",
+    "check_back": "follow up task", "stall_check": "check stalled task", "schedule": "run routine", "person_message": "answer person message",
     "background_done": "resume after background work", "release_published": "follow up a release",
 }
 # Bots whose work is one thing: a reviewer woken by a task change or a PR's checks is reviewing that PR.

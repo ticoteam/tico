@@ -92,10 +92,7 @@ export type AssistantReadBack = {
 };
 
 export type AssistantSent = {
-  fast: boolean;
-  intent?: string | null;
   message: Message;
-  reply?: Record<string, unknown> | null;
 };
 
 export type AssistantSettings = {
@@ -448,6 +445,22 @@ export type BotDetail = {
   template?: string;
   template_version?: string;
   turns_at_once?: number | null;
+};
+
+export type BotDreamView = {
+  dream: {
+  closed_at: string | null;
+  questions: {
+  message_id: string;
+  mine: boolean;
+  text: string;
+} | null;
+  started_at: string;
+  state: "starting" | "dreaming" | "asking" | "done" | "stopped";
+  status: string;
+  summary: string | null;
+  task: string;
+} | null;
 };
 
 export type BotFile = {
@@ -4602,6 +4615,16 @@ export type TakeRecommendation = {
 export type Task = {
   acceptance_criteria?: Array<string>;
   body?: string;
+  check_back?: {
+  at: string;
+  by: string | null;
+  delivery: string;
+  due: boolean;
+  enabled: boolean;
+  note: string;
+} | null;
+  check_back_at?: string | null;
+  check_back_note?: string | null;
   cover?: {
   height: number | null;
   url: string;
@@ -4756,6 +4779,11 @@ export type TaskCaps = {
   proposals: Array<TaskCapProposal>;
 };
 
+export type TaskCheckBack = {
+  at: string;
+  note?: string | null;
+};
+
 export type TaskComment = {
   approval_id?: string | null;
   ask?: ReviewAsk | null;
@@ -4776,6 +4804,8 @@ export type TaskCreate = {
   blocker?: TaskBlocker | null;
   body: string;
   change_paths?: Array<string>;
+  check_back_at?: string | null;
+  check_back_note?: string | null;
   check_model?: string | null;
   check_role?: "review" | "check" | null;
   defer_for?: string | null;
@@ -5025,6 +5055,8 @@ export type TaskTypeUpdate = {
 export type TaskUpdate = {
   approval_id?: string | null;
   body?: string | null;
+  check_back_at?: string | null;
+  check_back_note?: string | null;
   close?: boolean;
   due?: string | null;
   goal_id?: string | null;
@@ -6718,6 +6750,13 @@ export type GetBotBudgetParams = {
 };
 export type GetBotBudgetBody = never;
 export type GetBotBudgetResponse = BotBudgetState;
+
+/** GET /api/v2/bots/{bot}/dream */
+export type GetBotDreamParams = {
+  bot: string;
+};
+export type GetBotDreamBody = never;
+export type GetBotDreamResponse = BotDreamView;
 
 /** GET /api/v2/bots/{bot}/instructions */
 export type GetBotInstructionsParams = {
@@ -9852,6 +9891,14 @@ export type SetTaskCapParams = Record<string, never>;
 export type SetTaskCapBody = TaskCap;
 export type SetTaskCapResponse = TaskCapWrite;
 
+/** POST /api/v2/tasks/{tid}/check-back */
+export type SetTaskCheckBackParams = {
+  "Idempotency-Key": string;
+  tid: string;
+};
+export type SetTaskCheckBackBody = TaskCheckBack;
+export type SetTaskCheckBackResponse = TaskResult;
+
 /** POST /api/v2/tasks/{tid}/model */
 export type SetTaskModelParams = {
   "Idempotency-Key": string;
@@ -9935,6 +9982,14 @@ export type SnoozeTaskParams = {
 };
 export type SnoozeTaskBody = TaskSnooze;
 export type SnoozeTaskResponse = TaskResult;
+
+/** POST /api/v2/bots/{bot}/dream */
+export type StartBotDreamParams = {
+  "Idempotency-Key": string;
+  bot: string;
+};
+export type StartBotDreamBody = Empty;
+export type StartBotDreamResponse = BotDreamView;
 
 /** POST /api/v2/threads/{thread_id}/calls */
 export type StartCallParams = {

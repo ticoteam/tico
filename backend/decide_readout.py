@@ -33,9 +33,7 @@ RUN = {"learnings-route": "run"}     # backend/learnings.py audits a night's run
 def _inline_sets():
     """The sets the code asks without a questions/ file: {set id: {question id: fixed options or None}}."""
     from clients.hubtools import CLASSIFY_OPTIONS
-    from .assistant import INTENT_CHOICES
-    return {"support-text": {"verdict": tuple(CLASSIFY_OPTIONS)}, "assistant-intent": {"intent": tuple(INTENT_CHOICES)},
-            "live-meeting-route": {}}
+    return {"support-text": {"verdict": tuple(CLASSIFY_OPTIONS)}, "live-meeting-route": {}}
 
 
 def known_sets(registry_dir=None):

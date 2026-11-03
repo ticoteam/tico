@@ -87,6 +87,7 @@ def _addressed(c, me):
         "JOIN messages m ON m.id=d.message_id JOIN conversations cv ON cv.id=m.conversation_id "
         "WHERE d.recipient=? AND d.reason IN ('mention','ask','assign','addressed') "
         "AND d.state IN ('pending','delivered','read') AND m.sender_id<>? "
+        f"AND {H.delivery_counts_sql('m', 'd.recipient')} "
         "AND (m.sender_id LIKE 'human:%' OR m.kind='ask' OR d.reason='mention') "
         "AND m.deleted_at IS NULL AND m.superseded_at IS NULL "
         "AND (m.kind<>'ask' OR m.answered_by_id IS NULL) "

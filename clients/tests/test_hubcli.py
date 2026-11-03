@@ -1205,3 +1205,21 @@ def test_connection_list_reaches_the_connections_route_with_its_paging(monkeypat
     remotecli.run(hubcli.parser().parse_args(["connections", "list", "--limit", "5", "--cursor", "c2"]))
     from unittest.mock import call
     assert call("connections", limit=5, cursor="c2") in client.get.call_args_list
+
+
+def test_task_check_back_reaches_the_same_api_from_cli_and_mcp(monkeypatch):
+    from clients import hubtools, remotecli
+    calls = []
+    class Api:
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False
+        def get(self, path, **query):
+            return {"actor": "human:ana"}
+        def post(self, path, body=None, key=None):
+            calls.append((path, body))
+            return {"task": {"id": "t1", "check_back_at": "2026-11-03T10:00:00Z"}}
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    remotecli.run(hubcli.parser().parse_args(["task", "check-back", "t1", "--in", "45m", "--for", "Inspect the result."]))
+    hubtools.task_check_back(Api(), {"id": "t1", "at": "45m", "note": "Inspect the result."})
+    assert calls == [("tasks/t1/check-back", {"at": "45m", "note": "Inspect the result."})] * 2

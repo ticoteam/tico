@@ -20,6 +20,8 @@ class TaskRow(TypedDict):
     owner_id: str | None
     status: str | None
     due_at: str | None
+    check_back_at: str | None
+    check_back_note: str | None
     conversation_id: str | None
     created_at: str | None
     updated_at: str | None
@@ -72,6 +74,14 @@ class TaskRow(TypedDict):
     request_id: str | None
     version: int
     acceptance: str
+
+
+class TaskCheckBackWakeRow(TypedDict):
+    """A reminder occurrence; jobs and attempts retain all execution state."""
+    task_id: str
+    check_back_at: str
+    sent_at: str
+    message_id: str | None
 
 
 class AttemptRow(TypedDict):

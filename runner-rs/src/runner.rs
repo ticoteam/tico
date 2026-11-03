@@ -230,7 +230,7 @@ impl Runner {
             while let Some(ev) = rx.recv().await {
                 if ev["kind"] == "diagnostic" && ev.get("stderr_tail").is_some() {
                     let text = crate::util::text_of(&ev["stderr_tail"]);
-                    let text = redactor.as_ref().map_or(text.clone(), |r| r.scrub_text(&text));
+                    let text = redactor.as_ref().map_or(text.clone(), |r| r.scrub_text(&text).into_owned());
                     let text = crate::redact::scrub_credentials(&text, &[]);
                     let id = aid.clone();
                     let _ = state.off(move |s| s.stderr(&id, &text)).await;

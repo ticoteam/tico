@@ -286,6 +286,9 @@ STABLE = [
      "keeps it and changes only what is named, and a null `model` clears it so the bot's task model runs the task "
      "again. Whoever may change the bot's model may change this; a bot never does. Its `readiness` says whether the bot's "
      "computer can run it now", "TaskRunModelResult"),
+    ("/api/v2/tasks/{tid}/check-back", "post", "Tasks", "setTaskCheckBack",
+     "Set a future follow-up appointment on bot work. Accepts an offset timestamp or duration such as 45m; "
+     "human snoozes take precedence and human-only work is excluded", "TaskResult"),
     ("/api/v2/tasks/{tid}/snooze", "post", "Tasks", "snoozeTask",
      "Set a task aside until `until` (an ISO-8601 date or date-time): off lists and Needs you, and quiet, until "
      "then, when its owner bot is woken once. Its requester, owner, anyone on it by role, or a mover", "TaskResult"),
@@ -430,9 +433,8 @@ STABLE = [
      "and what waits for their OK",
      "Assistant"),
     ("/api/v2/assistant/messages", "post", "Assistant", "sendAssistantMessage",
-     "Say something to the Assistant. A lookup is answered at once (fast: true, with the reply); anything else "
-     "is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. `place: updates` (the Updates "
-     "chat) always takes a turn, handed the recent updates the caller may read", "AssistantSent"),
+     "Say something to the Assistant. It is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. "
+     "`place: updates` (the Updates chat) is handed the recent updates the caller may read", "AssistantSent"),
     ("/api/v2/assistant/turn-on", "post", "Assistant", "turnOnAssistant",
      "Owner only: restore the archived assistant, or add it from the catalog, and activate it", None),
     ("/api/v2/assistant/actions", "post", "Assistant", "proposeAssistantAction",
@@ -763,7 +765,13 @@ SCHEMAS = {
     "TaskTypeList": obj({"types": items(ref("TaskType"))}),
     "TaskTypeResult": obj({"type": ref("TaskType")}),
     "Task": obj({"private": "b", "id": "s", "title": "s", "body": "s", "requester_id": "s", "owner_id": "s", "status": "s", "created_at": "s",
-                 "updated_at": "s", "due_at": "n", "version": "i", "lane": "s", "labels": items({"type": "string"}),
+                 "updated_at": "s", "due_at": "n", "check_back_at": {"type": ["string", "null"]},
+                 "check_back_note": {"type": ["string", "null"]}, "check_back": {"oneOf": [
+                     obj({"at": "s", "note": "s", "by": {"type": ["string", "null"]}, "due": "b"},
+                         enabled={"type": "boolean", "description": "Whether follow-up delivery is enabled for this install"},
+                         delivery={"type": "string", "description": "Due delivery state from the existing queue, or pending, disabled, bot_unavailable"}),
+                     {"type": "null"}]},
+                 "version": "i", "lane": "s", "labels": items({"type": "string"}),
                  "acceptance_criteria": items({"type": "string"}),
                  "occurrence": {"type": ["string", "null"], "description": "A due-date routine's occurrence, \"<automation_id>:<due_on>\", on the task it opened: the due is its deadline, not a wake date."}},
                 required=["id", "title", "requester_id", "owner_id", "status", "created_at", "updated_at", "due_at", "version", "lane", "labels", "holds"],
@@ -1158,8 +1166,7 @@ SCHEMAS = {
     "LibrarianSetup": obj({"available": "b",
                            "docs": obj({"show": "b", "empty": "b", "skipped": "b", "task": {"type": ["object", "null"]}}),
                            "market": ref("LibrarianMarketSetup")}),
-    "AssistantSent": obj({"message": ref("Message"), "reply": {"type": ["object", "null"]}, "fast": "b", "intent": "n"},
-                         required=["message", "fast"]),
+    "AssistantSent": obj({"message": ref("Message")}, required=["message"]),
     "AssistantActionResult": obj({"action": {"type": "object", "description": "id, summary, method, path, body, status "
                                             "(pending, running, done, failed, canceled, expired), result"}, "message_id": "s",
                                   "shown_once": {"type": "object", "description": "Confirm only, on a card that makes a "
@@ -2482,6 +2489,21 @@ SCHEMAS['MemoryTidyCard'] = obj({
              'created_at', 'expires_at', 'status', 'reason', 'keep_available'])
 SCHEMAS['MemoryTidyCards'] = obj({'cards': items(ref('MemoryTidyCard'))})
 SCHEMAS['MemoryTidyCardResult'] = obj({'card': ref('MemoryTidyCard')})
+
+# A bot's Dream (backend/dream.py): a cleanup task over its own memory, with up to three questions to its requester.
+STABLE.extend([
+    ('/api/v2/bots/{bot}/dream', 'get', 'Bots', 'getBotDream',
+     "The bot's open dream, or else its newest one finished in the last day; dream is null otherwise", 'BotDreamView'),
+    ('/api/v2/bots/{bot}/dream', 'post', 'Bots', 'startBotDream',
+     'Start a dream: a `dream` task for the bot, with the rights `POST /api/v2/tasks` needs. Its open dream is returned '
+     'instead of a second; 409 stateless for a bot that keeps no memory', 'BotDreamView'),
+])
+SCHEMAS['BotDreamView'] = obj({'dream': {'oneOf': [obj({
+    'task': 's', 'status': 's', 'state': {'enum': ['starting', 'dreaming', 'asking', 'done', 'stopped']},
+    'questions': {'oneOf': [obj({'message_id': 's', 'text': 's', 'mine': {
+        'type': 'boolean', 'description': 'The question is put to the caller, who answers it at POST /api/v2/messages/{mid}/answer'}}),
+        {'type': 'null'}]},
+    'summary': 'n', 'closed_at': 'n', 'started_at': 's'}), {'type': 'null'}]}})
 
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "
