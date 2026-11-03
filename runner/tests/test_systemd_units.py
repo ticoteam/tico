@@ -80,7 +80,7 @@ def fake_linux(tmp_path, linger="no"):
 
 
 def tico(env, *args):
-    return subprocess.run([str(ROOT / "scripts" / "tico-computer"), *args], capture_output=True, text=True, env=env, timeout=120)
+    return subprocess.run([str(ROOT / "scripts" / "tico-computer"), *args], capture_output=True, text=True, env=env, timeout=900)  # the first call builds the Rust runner
 
 
 @pytest.mark.slow
