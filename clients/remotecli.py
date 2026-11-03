@@ -967,7 +967,7 @@ def bots(client, args):
             return hubtools.BY_NAME["hub_bot_update"]["fn"](client, fields)
         except ValueError as exc:
             raise APIError("not_found", str(exc)) from None
-    if args.fn in ("bot access", "bot mail", "bot owners", "bot setup-done", "bot ready", "bot place", "bot go-live", "bot model", "bot pause",
+    if args.fn in ("bot show", "bot access", "bot mail", "bot owners", "bot setup-done", "bot ready", "bot place", "bot go-live", "bot model", "bot pause",
                    "bot resume", "bot scope", "bot restore", "bot archive", "bot budget", "bot release", "bot profile",
                    "bot task-model") or (args.fn == "bot create" and args.record_only):
         from clients import hubtools
