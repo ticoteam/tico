@@ -69,7 +69,12 @@ def test_python_dash_m_runner_engine_keeps_its_exit_codes_and_answers():
     env = {**os.environ, "TICO_RUNNER_BIN": str(ROOT / "no-such-tico-runner")}
     old, new = run("-m", "runner.engine", "path", env=env), run("-m", "runner_support.engine", "path", env=env)
     assert (old.returncode, old.stdout, old.stderr) == (new.returncode, new.stdout, new.stderr)
-    assert old.returncode == 1 and "no Rust runner for this checkout" in old.stderr
+    # `path` finds any current runner (the checkout's own build or download counts), so this checkout may have one:
+    # TICO_RUNNER_BIN alone does not make it absent. Either way the answer is the one runner_support gives.
+    if old.returncode == 1:
+        assert "no Rust runner for this checkout" in old.stderr
+    else:
+        assert old.returncode == 0 and Path(old.stdout.strip()).is_file(), old.stderr
 
 
 @pytest.mark.parametrize("module", ["release_update", "cloud_machine", "systemd_units", "git_credentials"])
