@@ -111,7 +111,7 @@ def home_for(c, conversation_id):
         row = c.execute("SELECT m.home_id, m.bot_id, h.closed_at, h.archived_at FROM home_merges m "
                         "LEFT JOIN conversations h ON h.id=m.home_id WHERE m.conversation_id=?",
                         (conversation_id,)).fetchone()
-    except sqlite3.OperationalError:      # a database from before migration 0057
+    except sqlite3.OperationalError:      # a database from before migration 0059
         return None
     if row is None:
         return None

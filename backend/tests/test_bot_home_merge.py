@@ -234,9 +234,11 @@ def test_an_old_tasks_comments_and_quiet_bot_posts_follow_the_room(api):
 
 
 def test_a_room_whose_owner_cannot_read_the_home_stays(api):
-    """inbox is Ana's alone: ben's old room with it would put his history where he cannot read it."""
+    """inbox is Ana's alone: cara's old room with it would put her history where she cannot read it. (Not ben: the
+    fixture makes him an admin, who reads every bot.)"""
     with store(api).transaction() as c:
-        cid = room(c, "human:ben", "inbox")
+        cid = room(c, "human:cara", "inbox")
+        assert not threads.actor_viewer(c, "human:cara").can_read_home(c, "bot:inbox")
     summary = merge(api)
     assert summary["rooms"] == 0
     assert any(s.get("room") == cid for s in summary["skipped"]), summary
