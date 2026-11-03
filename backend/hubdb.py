@@ -102,6 +102,28 @@ HUB_DIR = Path(__file__).resolve().parent.parent
 ROOT = HUB_DIR.parent                       # employees are siblings of the hub
 DEFAULT_DB = ROOT / "runtime" / "hub.db"
 KEEPER = "keeper"
+
+
+def task_news(sender_id, refs):
+    """A keeper message about a task: started, finished, a nudge, a still-wanted question. It is the task's own history,
+    shown on the task, and it never reaches a person (no delivery, so no unread, Inbox row, digest or push): people are
+    not chatted about their own tasks. Bots still get it, as before."""
+    return sender_id == KEEPER and isinstance(refs, dict) and bool(refs.get("task"))
+
+
+def task_news_sql(m="m"):
+    """SQL: the messages row `m` is task news (`task_news`)."""
+    refs = f"CASE WHEN json_valid({m}.refs) THEN {m}.refs END"
+    return f"({m}.sender_id='{KEEPER}' AND COALESCE(json_extract({refs},'$.task'),'')<>'')"
+
+
+def delivery_counts_sql(m, recipient):
+    """SQL: a delivery of message `m` to `recipient` is a reason for a person to see it: TRUE unless the recipient is a
+    person and the message is task news. One rule for the write side (threads' primary delivery trigger) and every
+    read side (unread, the Inbox, the sidebar, digests), so old notices already delivered stop counting too."""
+    return f"NOT ({recipient} LIKE 'human:%' AND {task_news_sql(m)})"
+
+
 REVIEW_OWNER = "coo"                        # rule 8's first review task
 FLEET_MAINTAINER = "botops"                 # sweeps every bot's stuck tasks and may start them
 STUCK_HOURS = 24                            # an open bot task untouched this long is stuck
@@ -9499,7 +9521,8 @@ WAITING_TERMS = "d.state IN ('pending','delivered','capped','held')"
 # Paged on the delivery's own (created_at, rowid), which the waiting index holds in order: no sort.
 UNREAD_PAGE_SQL = ("SELECT d.rowid AS _seq, d.created_at AS _at, m.* FROM message_deliveries d "
                    "JOIN messages m ON m.id=d.message_id WHERE d.recipient=? AND " + WAITING_TERMS + " "
-                   "AND m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at > ?) AND d.created_at<=? "
+                   "AND " + delivery_counts_sql("m", "d.recipient") + " AND m.deleted_at IS NULL "
+                   "AND (m.expires_at IS NULL OR m.expires_at > ?) AND d.created_at<=? "
                    "AND (d.created_at<? OR d.rowid<?) ORDER BY d.created_at DESC, d.rowid DESC LIMIT ?")
 
 

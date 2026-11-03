@@ -267,7 +267,8 @@ def _triggers():
             "WHERE id=NEW.conversation_id;"),
         # The primary recipient's delivery: one row per message addressed to someone, in every writer's transaction.
         "threads_primary_delivery": (
-            f"AFTER INSERT ON messages WHEN COALESCE(NEW.recipient_id,'')<>'' AND NOT {_carrier_sql('NEW')}",
+            f"AFTER INSERT ON messages WHEN COALESCE(NEW.recipient_id,'')<>'' AND NOT {_carrier_sql('NEW')} "
+            f"AND {H.delivery_counts_sql('NEW', 'NEW.recipient_id')}",
             "INSERT OR IGNORE INTO message_deliveries(id,message_id,recipient,thread_id,root_id,mode,reason,cause,"
             "state,revision,delivered_at,read_at,created_at,updated_at,unsolicited) VALUES(lower(hex(randomblob(16))),NEW.id,"
             "NEW.recipient_id,NEW.conversation_id,(SELECT COALESCE(root_id,id) FROM conversations "
@@ -1405,9 +1406,11 @@ def _deliver_person(c, thread, root, message, person, reason, replay, warnings):
             return None
         unsolicited = True
     did = _insert_delivery(c, message, person, thread, root, "queue", reason if reason in REASONS else "member")
-    if unsolicited:
+    if unsolicited and did:
         c.execute("UPDATE message_deliveries SET unsolicited=1 WHERE id=?", (did,))
     _follow(c, thread["id"], person, "mentioned" if reason == "mention" else "joined", (message.get("seq") or 1) - 1)
+    if did is None:
+        return None
     return {"recipient": person, "mode": "queue", "reason": reason}
 
 
@@ -1550,6 +1553,10 @@ def _outside(c, thread_id):
 
 
 def _insert_delivery(c, message, recipient, thread, root, mode, reason, *, state="pending"):
+    """One delivery row, or None when the message is task news a person gets no delivery for (hubdb.task_news): it stays
+    in the task's conversation only. Every person's delivery in Python passes here (_deliver_person, task_opened)."""
+    if recipient.startswith("human:") and H.task_news(message.get("sender_id"), message.get("refs")):
+        return None
     did = _new_id()
     now = _now()
     c.execute("INSERT OR IGNORE INTO message_deliveries(id,message_id,recipient,thread_id,root_id,mode,reason,cause,"
@@ -2960,9 +2967,8 @@ def _read_to(c, row, actor, seq):
 
 def task_opened(c, conversation, actor, requester, notice):
     """A task's own thread, as hubdb.task_create makes it (a thread of its own, not a chat it was filed from). Its maker
-    reads the thread up to now, so the notice their own action wrote is not unread for them. A requester who did not
-    make the task hears of it as new: a silent delivery (mode none, which wakes and pushes nothing), so the thread
-    lists in the sidebar until they read it."""
+    reads the thread up to now, so the notice their own action wrote is not unread for them. The requester gets no
+    delivery for the "New task from" notice: it is task news (hubdb.task_news), shown on the task only."""
     row = thread_row(c, conversation["id"])
     if row is None:
         return
@@ -2992,7 +2998,8 @@ def unread_message_sql(m="m"):
     that counts unread (the thread, the sidebar, DMs, email digests) reads this one rule."""
     return (f"{m}.deleted_at IS NULL AND {m}.sender_id<>? AND NOT {_backfill_sql(m)} "
             f"AND ({m}.sender_id LIKE 'human:%' OR EXISTS (SELECT 1 "
-            f"FROM message_deliveries unread_d WHERE unread_d.message_id={m}.id AND unread_d.recipient=?))")
+            f"FROM message_deliveries unread_d WHERE unread_d.message_id={m}.id AND unread_d.recipient=? "
+            f"AND {H.delivery_counts_sql(m, 'unread_d.recipient')}))")
 
 
 def unread(c, v, thread_id, *, follower=None):
@@ -3436,7 +3443,8 @@ def _branch_stats(c, v, branches, below):
             f"WITH cut(tid,below,mark) AS (VALUES {cuts}) SELECT cut.tid, COUNT(*), SUM(m.seq<cut.below), "
             "SUM(m.seq<cut.below AND m.seq>cut.mark AND m.sender_id<>?), "
             "SUM(m.seq>cut.mark AND m.sender_id<>? AND (m.sender_id LIKE 'human:%' OR EXISTS (SELECT 1 FROM "
-            "message_deliveries d WHERE d.message_id=m.id AND d.recipient=?))) "
+            "message_deliveries d WHERE d.message_id=m.id AND d.recipient=? "
+            f"AND {H.delivery_counts_sql('m', 'd.recipient')}))) "
             "FROM cut JOIN messages m ON m.conversation_id=cut.tid WHERE m.seq IS NOT NULL AND m.deleted_at IS NULL "
             "AND m.restricted=0 AND m.legacy_audience IS NULL GROUP BY cut.tid", (*args, me, me, me)):
         stats[r[0]].update(count=r[1], older=r[2] or 0, unseen=r[3] or 0, unread=r[4] or 0)
@@ -3746,6 +3754,7 @@ def _sidebar_page(c, v, cursor, limit, sort):
     to_viewer = ("r.id IN (SELECT s.root_id FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
                  "JOIN conversations s ON s.id=d.thread_id LEFT JOIN thread_followers f ON f.thread_id=s.id "
                  "AND f.actor=d.recipient WHERE d.recipient=:me AND d.state IN ('pending','delivered','capped','held') "
+                 f"AND {H.delivery_counts_sql('m', 'd.recipient')} "
                  f"AND {_SUBTREE_OPEN} AND m.seq>{mark} AND m.sender_id<>:me AND m.deleted_at IS NULL)")
     place = f"CASE WHEN {is_needing} THEN 0 WHEN NOT {is_history} AND ({by_person} OR {to_viewer}) THEN 1 ELSE 2 END"
     from . import thread_rank

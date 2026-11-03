@@ -480,10 +480,12 @@ threads.unread(c, viewer, thread_id) -> {"unread": n, "activity": bool}
 ```
 - Join: read up to now. Deletes and backfill (imports, migration, replays) are never unread. Losing access: the
   follower row is dropped on the next read. A task's own thread is read up to now by its maker when the task is made
-  (`threads.task_opened`), and a requester who did not make it gets its first notice as a silent delivery (mode `none`).
+  (`threads.task_opened`). Task news (a keeper message with `refs.task`, `hubdb.task_news`) is the task's own history:
+  it is written to the task's conversation and no person gets a delivery for it, so the requester who did not make the
+  task hears nothing in the thread (no unread, Inbox row, digest or push). Bots still get it as a delivery.
 - Unread count for a viewer = messages in the thread with `seq > last_read_seq` that are human-authored or
-  addressed to that viewer (a delivery row for them), excluding their own. Other bot posts are **activity** (a
-  dot, never a count).
+  addressed to that viewer (a delivery row for them, except task news, which no person has a delivery for), excluding
+  their own. Other bot posts are **activity** (a dot, never a count).
 
 Retention: a root may set `conversations.retention_days` (1 to `RETENTION_MAX_DAYS`; null keeps messages for good;
 never on a task or meeting thread). `backend/thread_retention.py` deletes what is past it in the root and its sub-threads,
