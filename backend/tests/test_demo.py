@@ -94,7 +94,7 @@ def test_a_public_demo_is_read_only(tmp_path):
     settings = demo.build(tmp_path, now=NOW, url="https://demo.example.com", public=True)
     with signed_in(settings) as api:
         api.headers["Host"] = "demo.example.com"
-        assert api.get("/api/v2/config").status_code == 200
+        assert api.get("/api/v2/config").json()["demo_public"] is True      # the strip at the top says "Read only demo"
         # A link preview or monitor asks with HEAD and is sent to the same sign-in as a browser.
         first = TestClient(create_app(settings), base_url="https://demo.example.com", follow_redirects=False)
         assert first.head("/").status_code == 302 and first.head("/").headers["location"].startswith("/api/v2/local-signin")
