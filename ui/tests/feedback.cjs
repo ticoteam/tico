@@ -303,7 +303,13 @@ async function decideCard(browser, {phone, theme = 'dark'}) {
   await page.evaluate(async () => { FB.on = null; FB.asked.clear(); await v2Refresh(); tasksRender(TASKS_ST); decideOpen('approval:ap-1'); });
   const card = page.locator('#need-card .dc-card[data-key="approval:ap-1"]');
   await card.waitFor();
-  await page.waitForFunction(() => document.body.classList.contains('fb-on'));
+  // A read sent before the fake can still answer 404 after the reset and turn feedback off for good (slow VMs): reset
+  // and read again until the fake's answer turns it on.
+  await page.waitForFunction(() => {
+    if (document.body.classList.contains('fb-on')) return true;
+    if (FB.on === false) { FB.on = null; FB.asked.clear(); fbSync(); }
+    return false;
+  }, null, {polling: 250});
   const up = card.getByRole('button', {name: 'Good', exact: true});
   assert.equal(await up.isVisible(), true, 'a small pair on the card');
   await up.click();
