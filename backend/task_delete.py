@@ -43,7 +43,7 @@ TASK_ROWS = ("history_events", "task_links", "task_tags", "task_delegations", "t
              "service_key_tasks", "task_roles", "task_assets", "task_requesters", "task_milestone_waits",
              "task_check_models", "task_run_models")
 # A table whose rows name the task other than by `task_id`: its column and the rows of it that are a task's. A task's
-# history is the shared history table's task rows (backend/migrations/0059_history_events.py).
+# history is the shared history table's task rows (backend/migrations/0061_history_events.py).
 TASK_KEYS = {"history_events": ("subject_id", "subject_type='task'")}
 # Rows that are work done on the task: any one of them refuses the run.
 TASK_WORK = ("turns", "approvals", "bot_tool_requests", "meeting_deliveries", "schedule_occurrences",

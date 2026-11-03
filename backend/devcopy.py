@@ -147,6 +147,10 @@ KEEP = frozenset((
     "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
     "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
     "usage_facts", "usage_meter_reads", "budget_nodes", "task_caps", "reach_settings", "reach_lines",
+    # The five change logs before migration 0061 moved them into history_events. A copy of a database from before that
+    # migration still holds them: kept, so the copy's first start moves their rows (it is pruned before it is migrated).
+    # 0061 drops them, so they are named here only until then.
+    "task_events", "goal_events", "market_events", "company_events", "strategy_events",
     # A copy of a database from before migrations 0053/0054 still holds these: kept, so the dev server's first start
     # moves them into usage_facts and budget_nodes (the copy is pruned before it is migrated).
     "turn_usage_segments", "usage_limits", "usage_pools",
