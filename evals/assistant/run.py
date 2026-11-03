@@ -188,7 +188,8 @@ def run_sample(case, sample, args, outdir):
         data = {"result": f"(harness error: {e})", "is_error": True}
     reply = str(data.get("result") or "")
     calls = [json.loads(l) for l in logf.read_text().splitlines() if l.strip()]
-    lines = [c["argv"] for c in calls]
+    # A `--help` lookup is not a call that changes anything: it is left out of the checks and the judge's list.
+    lines = [c["argv"] for c in calls if not c.get("help")]
     attached = {k: v for c in calls for k, v in (c.get("files") or {}).items()}
     fails = []
     for rx in case.get("must") or []:
