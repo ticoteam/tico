@@ -2272,14 +2272,21 @@ class Store:
                 c.provenance_start = provenance_clock.current(c)
                 yield c
                 message_links.refresh_dirty(c)
+                H.owed_sync(c)
                 c.commit()
                 # Work that must see the committed rows (a delivery worker's doorbell) runs once the write is durable.
-                for after in c.after_commit:
+                # A barrier (hubdb.durable_commit's WAL sync) runs first and its error is the request's: the write is
+                # not answered as done until it is on disk.
+                hooks = sorted(c.after_commit, key=lambda after: not getattr(after, "barrier", False))
+                c.after_commit.clear()
+                for after in hooks:
+                    if getattr(after, "barrier", False):
+                        after()
+                        continue
                     try:
                         after()
                     except Exception:
                         logging.getLogger(__name__).exception("after-commit callback failed")
-                c.after_commit.clear()
             except BaseException:
                 c.rollback()
                 c.after_commit.clear()
@@ -2352,13 +2359,14 @@ class Store:
             "SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
             (self._principal(identity), operation, key)).fetchone() is not None
 
-    def mutate(self, identity, operation, key, body, fn, check=None):
+    def mutate(self, identity, operation, key, body, fn, check=None, durable=False):
         if not key or len(key) > 200:
             raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
         hashed = digest(encode(body))
         principal = self._principal(identity)
         refusal = logged = None
-        with self.transaction() as c:
+        # Only a money write asks for the durable commit; every other keyed write keeps the plain call.
+        with (self.transaction(durable=True) if durable else self.transaction()) as c:
             # Authenticate leases again under the same write lock as the mutation.
             from .auth import validate_identity
             validate_identity(c, identity)

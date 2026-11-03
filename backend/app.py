@@ -1148,7 +1148,7 @@ def create_app(settings=None):
             raise Problem("forbidden", "Request timings are for the owner and BotOps", 403)
         return app.state.timing.summary()
 
-    def mutate(request, body, fn, check=None):
+    def mutate(request, body, fn, check=None, durable=False):
         def current_access(c):
             # Privacy can narrow after middleware preflight, including before a cached retry.
             source = getattr(request.state, "privacy_source", request.state.identity)
@@ -1172,8 +1172,11 @@ def create_app(settings=None):
             finally:
                 org_rule_check.PATH.reset(path)
                 H.PRIVATE_WRITE.reset(token)
+        # Money writes and approval decisions pass `durable`; every other keyed write keeps the call it always made.
+        money = {"durable": True} if durable else {}
         result = store.mutate(request.state.identity, request.url.path,
-                              request.headers.get("idempotency-key"), body.model_dump(), protected_write, check=current_access)
+                              request.headers.get("idempotency-key"), body.model_dump(), protected_write,
+                              check=current_access, **money)
 
         if isinstance(result, dict) and "_refusal" in result:
             refusal = result["_refusal"]
@@ -3679,7 +3682,7 @@ def create_app(settings=None):
             rows, notes, _ = batch.candidates(c, who.actor, views.needs_items(c, auth, who, task_view))
             line = batch.lineup(c, who.actor, notes + rows)
             return {**out, "lineup": line, "up_next": batch.up_next(line, out["scope"])}
-        result = mutate(request, body, work)
+        result = mutate(request, body, work, durable=True)     # a batch can approve a payment
         from .company_page import editions
         for board in boards:
             editions.release_board(store, board)                 # after the commit, as the decide route does
@@ -5646,7 +5649,7 @@ def create_app(settings=None):
                 from .finance import actions as finance
                 finance.approval_decided(c, aid)                 # Finance acts on it in the same transaction
             return decided
-        result = mutate(request, body, work)
+        result = mutate(request, body, work, durable=True)     # approving a payment moves money: durable, like every decision
         from .company_page import editions
         for board in boards:
             editions.release_board(store, board)                 # after the commit: the rebuild takes its own transaction
