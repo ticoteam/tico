@@ -1916,6 +1916,47 @@ def needs_actor(it, me):
     return actor
 
 
+NEEDS_SUMMARY_ITEMS = 10     # the newest items listed under each bot (at most)
+NEEDS_SUMMARY_BOTS = 25      # the bots listed, most waiting first; the rest are counted in `bots_left`
+
+
+def needs_summary(c, auth, who, task_view, limit):
+    """What the caller's Needs you holds, counted the way the list counts it (`count=1`): the total, the number per kind,
+    and per bot (`by_bot`): its count, the ones made this week and the ones older than three days, and its newest
+    `limit` items. A finished task that still holds an open ask is `done_but_open`. Items no bot put there are grouped
+    under `other`. Ages are days from each item's `created_at`."""
+    items = needs_items(c, auth, who, task_view, count_only=True)
+    now = H.now()
+    week, older = H.shift(now, days=-7), H.shift(now, days=-3)
+    groups, kinds, this_week = {}, {}, 0
+    for it in items:
+        key = needs_actor(it, who.actor) or "other"
+        created = it.get("created_at") or now
+        kinds[it["kind"]] = kinds.get(it["kind"], 0) + 1
+        this_week += created >= week
+        group = groups.setdefault(key, {"count": 0, "this_week": 0, "older_than_3_days": 0, "items": []})
+        group["count"] += 1
+        group["this_week"] += created >= week
+        group["older_than_3_days"] += created < older
+        group["items"].append({"id": str(it["id"]), "short_id": str(it["id"])[:8], "kind": it["kind"],
+                               "title": _clip(it.get("title"), 80), "created_at": created,
+                               "age_days": round(age_days(created, now), 1),
+                               "done_but_open": it.get("status") in ("done", "closed") and bool(it.get("open_asks"))})
+    ordered = sorted(groups.items(), key=lambda kv: (-kv[1]["count"], kv[0]))
+    by_bot = []
+    for key, group in ordered[:NEEDS_SUMMARY_BOTS]:
+        group["items"].sort(key=lambda x: x["created_at"], reverse=True)
+        by_bot.append({"bot": key, "name": H.actor_name(c, key) if key != "other" else "Other",
+                       **{k: v for k, v in group.items() if k != "items"}, "items": group["items"][:limit]})
+    return {"actor": who.actor, "total": len(items), "this_week": this_week, "by_kind": kinds, "by_bot": by_bot,
+            "bots_left": max(0, len(ordered) - len(by_bot))}
+
+
+def age_days(created, now):
+    """Whole-day age in days (fractions kept) from an ISO time to `now`; 0 when it does not parse."""
+    start, end = H.parse_ts(created), H.parse_ts(now)
+    return max(0.0, (end - start).total_seconds() / 86400) if start and end else 0.0
+
 def fleet_snapshot(c, auth, identity, task_view):
     """One live, actor-scoped control-plane snapshot for Tico's private room."""
     privacy.snapshot(c)
@@ -2792,6 +2833,15 @@ def install_views(app, store, auth, mutate, task_view):
                     out["restart"] = True
             needs_visuals(c, who, out["items"])
             return out
+
+    @app.get("/api/v2/needs-you/summary")
+    def needs_summary_route(request: Request, limit: int = NEEDS_SUMMARY_ITEMS):
+        """What the Needs you list holds, counted as the board counts it: the total, per kind and per bot, with each
+        bot's newest `limit` items (at most 10). `hub needs-you show` over MCP. A person only: the list is theirs."""
+        who = request.state.identity
+        human_only(who)
+        with store.read_transaction() as c:
+            return needs_summary(c, auth, who, task_view, max(0, min(int(limit), NEEDS_SUMMARY_ITEMS)))
 
     def needs_visuals(c, who, items):
         """A question's files under review (backend/file_reviews.py) as this reader sees them, with fresh addresses,

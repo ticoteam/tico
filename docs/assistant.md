@@ -156,6 +156,29 @@ expires before start ten times since the server started, Tico marks it failed an
 Assistant DM naming the Computer and asking you to check it. Only a Computer below the server's minimum runner release
 is asked to update its Tico. Later messages can start new jobs.
 
+## Undo
+
+Every change your Assistant makes for you is listed with the words it acted on: `hub assistant change list [--days N]`
+(last 30 days by default; `GET /api/v2/assistant/changes`). Each row has an `id`, what it did, the words it acted on,
+the object it touched and whether it can still be undone (`undoable`, or `why_not`). `hub assistant change restore <id>`
+takes one back as you: a task it closed reopens with its old status, an approval it decided goes back to waiting for you
+(before the decision is spent), an automation it changed goes back to its old version, and a rule it added is retired.
+A message it sent stays sent. Restoring the same change again answers `already: true` and changes nothing. You can only
+restore your own changes (another person's is `404`).
+
+## Why is this here
+
+`hub origin show <ref>` (`GET /api/v2/origins/{ref}`) says why a task, a bot's question or an approval is on your list.
+The ref is a task id (or its first eight characters), a message id or an approval id. The answer names who made it, its
+cause (the automation that opened it, the org rule that asked for it, the parent task it came from, or the bot that filed
+it), how many items that cause made in the last seven days and how many are still open, and up to three commands that
+would stop the source: turn an automation off, retire a rule, close what a bot filed, pause the bot, or file a task for
+BotOps to fix the bot's source. Each command is a `hub` line you can run as it is. A ref you cannot read is `404`.
+
+`hub needs-you show [--by bot|kind]` gives the same count as the Needs you board, split by kind (task, question,
+approval) and by the bot that put each item there, with this week's and older counts. Use it first when the list looks
+too long: the numbers come from the same query as the board.
+
 ## Letting it decide your approvals
 
 Off by default. Turn on **My assistant can decide approvals for me** in **Settings > General** (only you can, signed in
@@ -295,6 +318,10 @@ own session, not a personal token.
 | `POST /api/v2/assistant/actions/{id}/cancel` | Drops it. |
 | `GET /api/v2/assistant/settings` | `{"decides_approvals", "team_allows", "active", "where"}`: whether your Assistant decides your approvals. |
 | `POST /api/v2/assistant/settings` `{"decides_approvals"}` | Your own session only (`403` for the Assistant, a bot or turning it on with a personal token). |
+| `GET /api/v2/assistant/changes?days=&limit=&before=` | `{"actor", "days", "changes": [{"id", "at", "what", "words", "object", "undoable", "why_not"?}], "next"}`: what the Assistant did for you, newest first. |
+| `POST /api/v2/assistant/changes/{id}/restore` | Undoes one of those changes as you: `{"id", "restored", "already", "object"}`. `409 not_undoable` with the reason when the record does not allow it; `404` for another person's change. |
+| `GET /api/v2/needs-you/summary?limit=` | `{"actor", "total", "this_week", "by_kind", "by_bot": [{"bot", "count", ...}], "bots_left"}`: the board's own count, split. |
+| `GET /api/v2/origins/{ref}` | `{"ref", "kind", "id", "title", "created_at", "made_by", "task", "cause", "siblings", "stop": [{"how", "command", "note"}]}`: why an item is on your list. |
 | `GET /api/v2/assistant/decisions` | `{"decisions": [{"id", "kind", "decision", "what", "decided_at", "decided_for", "consumed_at", "can_undo"}]}`, the last 30 days. |
 | `POST /api/v2/assistant/read-back` `{"approvals": [ids]}` | The Assistant only: posts its list in your DM, `{"message_id", "approves", "text"}`. `403 own_request` for one it asked for, `403 approve_support` for a report to the Tico team, `409` if one is already decided or `approve_too_long` if one of its fields can't be shown in full. |
 | `POST /api/v2/approvals/{id}/undo` | Puts a decision your Assistant made back to waiting for you, before it is spent. Not the Assistant. |

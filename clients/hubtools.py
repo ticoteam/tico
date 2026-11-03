@@ -6554,6 +6554,52 @@ def batch_abandon(api, args):
     return api.post("batch/" + args["batch"] + "/abandon", {}, key=_key(args))
 
 
+@tool("hub_needs_you_show", "What is on the person's Needs you, counted as the board counts it: the total, the number "
+      "per kind (task, question, approval, ...), and per bot: how many it put there, how many are from this week and how "
+      "many are older than 3 days, with its newest items (title, age, and `done_but_open` for a finished task that still "
+      "holds an open ask). Use it to see the pile and where it comes from, before closing or stopping anything.",
+      {"by": _s("bot (the default) or kind: what the answer is about; both come back"),
+       "limit": {"type": "integer", "minimum": 0, "maximum": 10,
+                 "description": "The newest items listed under each bot (default 5, at most 10)"}})
+def needs_you_show(api, args):
+    by = args.get("by") or "bot"
+    view = api.get("needs-you/summary", limit=args.get("limit") or 5)
+    if by == "kind":
+        return {k: view[k] for k in ("actor", "total", "this_week", "by_kind")}
+    return view
+
+
+@tool("hub_origin_show", "Why an item is on the person's list: the task, the bot's question or the approval it names. "
+      "Answers who made it, its cause (the automation that opened it, the org rule that asked for it, the parent task, or "
+      "the bot that filed it), how many items that cause made this week and how many are still open, and up to three "
+      "ready-to-run commands that would stop the source. Read-only; a ref the person cannot read is not found.",
+      {"ref": _s("A task id (or its first 8 or more characters), a message id (a bot's question) or an approval id")},
+      required=("ref",))
+def origin_show(api, args):
+    return api.get("origins/" + args["ref"])
+
+
+@tool("hub_assistant_change_list", "What the person's Assistant did for them, newest first (last 30 days by default): "
+      "each change's `what` in one line, the `words` of the person it acted on, its `object` (task:, approval:, "
+      "automation:, org_rule:, message:), and `undoable` with `why_not` when it cannot be taken back. Use it when the "
+      "person asks what was done for them or wants something undone.",
+      {"days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "How far back (default 30)"},
+       "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Changes per page (default 50)"},
+       "before": _s("The `next` of the page before, to read older changes")})
+def assistant_change_list(api, args):
+    return api.get("assistant/changes", days=args.get("days"), limit=args.get("limit"), before=args.get("before"))
+
+
+@tool("hub_assistant_change_restore", "Undo one change the person's Assistant made for them (its id from "
+      "hub_assistant_change_list): a task's status or owner goes back to what it was, an approval goes back to waiting "
+      "for the person, an automation goes back to its earlier version, an org rule it added is retired. A message sent "
+      "stays sent. Restoring one again changes nothing.",
+      {"id": _s("The change's id from hub_assistant_change_list")},
+      required=("id",), writes=True)
+def assistant_change_restore(api, args):
+    return api.post(f"assistant/changes/{args['id']}/restore", {}, key=_key(args))
+
+
 # ----------------------------------------------------------------------------- the Librarian (docs/librarian.md)
 @tool("hub_doc_ask", "Ask the Librarian a question about the team's docs and wait for its answer. Returns "
       "`answer` (short, answer first), `citations` ([{type: internal|external|linked|manual, title, url_or_id}]) and `covered` "
@@ -7484,6 +7530,7 @@ ASSISTANT_WRITES = {"hub_goal_read_back", "hub_goal_save", "hub_goal_create", "h
                     "hub_question_answer",
                     "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn",
                     "hub_assistant_withdraw",
+                    "hub_assistant_change_restore",
                     "hub_settings_set", "hub_rules_read", "hub_rules_ask"}
 AUDIENCE = {
     # Task caps (CONTRACT §1): people read and set them; a bot's own change is a proposal a person decides.
@@ -7532,6 +7579,9 @@ AUDIENCE = {
     "hub_approval_decline": HUMANS_AND_ASSISTANT,         # only a person decides an approval
     "hub_approval_approve": HUMANS_AND_ASSISTANT,         # ... or their own Assistant, when they let it
     "hub_assistant_read": PEOPLE, "hub_assistant_send": PEOPLE,
+    "hub_needs_you_show": HUMANS_AND_ASSISTANT,            # views.human_only: a person's own list
+    "hub_assistant_change_list": HUMANS_AND_ASSISTANT,     # what the person's Assistant did for them
+    "hub_assistant_change_restore": HUMANS_AND_ASSISTANT,  # taking one back, as the person
     # A person's own layers (backend/learned.py): the person, or their own chat's turn; never a bot of its own.
     "hub_assistant_learn": HUMANS_AND_ASSISTANT, "hub_assistant_learned": HUMANS_AND_ASSISTANT,
     # Humans only (views.human_only and the batch routes refuse a bot); a bot's own posts are the other way round.

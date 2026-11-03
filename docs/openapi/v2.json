@@ -798,6 +798,156 @@
         ]
       }
     },
+    "/api/v2/assistant/changes": {
+      "get": {
+        "summary": "What your Assistant changed for you in the last `days` (default 30), newest first, each with the words it acted on and whether it can still be undone; paged with `limit` and `before`",
+        "operationId": "listAssistantChanges",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 30,
+              "title": "Days"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantChangeList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Assistant"
+        ]
+      }
+    },
+    "/api/v2/assistant/changes/{cid}/restore": {
+      "post": {
+        "summary": "Undo one change your Assistant made for you where the record allows it; repeating it answers `already: true`",
+        "operationId": "restoreAssistantChange",
+        "parameters": [
+          {
+            "name": "cid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Cid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantChangeResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Assistant"
+        ]
+      }
+    },
     "/api/v2/assistant/decisions": {
       "get": {
         "summary": "The approvals your Assistant decided for you, with your words and whether each can still be undone",
@@ -25209,6 +25359,59 @@
         ]
       }
     },
+    "/api/v2/needs-you/summary": {
+      "get": {
+        "summary": "The Needs you count split by kind and by the bot that put each item there, with this week's and older counts; the same query as the board, so the numbers match it (`limit` caps the list of bots)",
+        "operationId": "getNeedsYouSummary",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NeedsSummary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Needs you"
+        ]
+      }
+    },
     "/api/v2/notices": {
       "get": {
         "summary": "Notices from Tico Team, newest first, each once (any signed-in person)",
@@ -25530,6 +25733,58 @@
         },
         "tags": [
           "Team chart"
+        ]
+      }
+    },
+    "/api/v2/origins/{ref}": {
+      "get": {
+        "summary": "Why a task, bot question or approval is on your list: who made it, its cause (automation, rule, parent task or bot), its siblings in the last seven days and up to three commands that would stop the source; 404 when you cannot read it",
+        "operationId": "getOrigin",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ref"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Origin"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Needs you"
         ]
       }
     },
@@ -42101,6 +42356,52 @@
         ],
         "additionalProperties": true
       },
+      "AssistantChangeList": {
+        "type": "object",
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "changes",
+          "next"
+        ],
+        "additionalProperties": true
+      },
+      "AssistantChangeResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "restored": {
+            "type": "boolean"
+          },
+          "already": {
+            "type": "boolean"
+          },
+          "object": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "already",
+          "id",
+          "object",
+          "restored"
+        ],
+        "additionalProperties": true
+      },
       "AssistantMessage": {
         "properties": {
           "text": {
@@ -57900,6 +58201,41 @@
         ],
         "title": "Moderate"
       },
+      "NeedsSummary": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "this_week": {
+            "type": "integer"
+          },
+          "by_kind": {
+            "type": "object"
+          },
+          "by_bot": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "bots_left": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "actor",
+          "bots_left",
+          "by_bot",
+          "by_kind",
+          "this_week",
+          "total"
+        ],
+        "additionalProperties": true
+      },
       "NeedsYou": {
         "oneOf": [
           {
@@ -58284,6 +58620,60 @@
         },
         "required": [
           "models"
+        ],
+        "additionalProperties": true
+      },
+      "Origin": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "made_by": {
+            "type": "object"
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cause": {
+            "type": "object"
+          },
+          "siblings": {
+            "type": "object"
+          },
+          "stop": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "cause",
+          "created_at",
+          "id",
+          "kind",
+          "made_by",
+          "ref",
+          "siblings",
+          "stop",
+          "task",
+          "title"
         ],
         "additionalProperties": true
       },
