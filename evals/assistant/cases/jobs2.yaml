@@ -149,7 +149,7 @@
 
 - id: jobs2-who-owns
   group: jobs2
-  prompt: "Who owns the website preview deploy? Is it moving?"
+  prompt: "Who owns the website preview deploy, and is it making progress?"
   hub:
     - match: '^team show'
       out:
@@ -185,7 +185,7 @@
     - '^message send(?! -h\b| --help)'
   reply: |
     Says the Website bot owns the preview deploy task (its owner on the record), that it reports to Dana, and that the task was
-    opened by Engineering Lead on Oct 14 and has had no event since. On "is it moving", it says what the record shows (no progress
+    opened by Engineering Lead on Oct 14 and has had no event since. On progress, it says what the record shows (no progress
     since Oct 14) and does not claim progress it cannot see. It links the task. It changes nothing.
 
 - id: jobs2-my-goal
@@ -196,6 +196,12 @@
       out:
         goals:
           - {id: goal_4f2a9c1b, title: "Paid trials to 400 a month by year end", owner: "human:dana", status: at_risk, bet: "Self-serve trials", kpis: [{name: "Paid trials per month", latest: 318, target: 400, as_of: "2026-10-31"}]}
+        next: null
+    - match: '^goal checkin(-| )list goal_4f2a9c1b'
+      out:
+        goal_id: goal_4f2a9c1b
+        checkins:
+          - {at: "2026-10-31T09:00:00Z", by: "human:dana", signal: at_risk, text: "Paid trials are behind plan; the spring campaign starts late."}
         next: null
     - match: '^goal show goal_4f2a9c1b\S*'
       out:
@@ -209,7 +215,8 @@
   must:
     - '^goal (list|show)\b'
   must_not:
-    - '^goal (save|create|update|refresh|status|checkin)(?![-\w])(?! -h\b| --help)'
+    - '^goal (save|create|update|refresh|status)(?![-\w])(?! -h\b| --help)'
+    - '^goal checkin (?!list\b)'
     - '^message send(?! -h\b| --help)'
   reply: |
     Names Dana's goal, "Paid trials to 400 a month by year end", with its status (at risk) and its number from the record: 318 a
@@ -306,6 +313,8 @@
           body: "Final annual prices and the one-line price for the launch email. The email copy quotes the price line from this page."
         events: []
         comments: []
+      after:
+        - {when: '^task (update 5b8e0d11\S* .*--status done|done 5b8e0d11)', out: {task: {id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4, title: 'Spring launch: pricing page', status: done, owner: human:dana, requester: human:dana, body: 'Final annual prices and the one-line price for the launch email. The email copy quotes the price line from this page.'}, events: [], comments: []}}
     - match: '^task (update|done|close) 5b8e0d11\S*'
       out:
         ok: true
@@ -555,6 +564,8 @@
       out:
         - {slug: website, display_name: Website, state: paused, focus: "Paused by its owner"}
         - {slug: copywriter, display_name: Copywriter, state: active, focus: "Launch email draft 2"}
+      after:
+        - {when: '^bot resume website', out: [{slug: website, display_name: Website, state: active, focus: "Active again after the resume"}, {slug: copywriter, display_name: Copywriter, state: active, focus: "Launch email draft 2"}]}
     - match: '^task list'
       out:
         tasks:
@@ -595,13 +606,21 @@
         key: "bot.model"
         bot: "copywriter"
         value: "claude-sonnet-5-5"
-    - match: '^bot model copywriter'
+    - match: '^bot model copywriter claude-sonnet-5-5'
       out:
         ok: true
         slug: copywriter
         model: "claude-sonnet-5-5"
+    - match: '^bot model copywriter (?!claude-sonnet-5-5\b)\S+'
+      out: "error: not one of this bot's models: claude-haiku-5-5, claude-sonnet-5-5"
+      exit: 1
+    - match: '^bot model copywriter\s*$'
+      out:
+        slug: copywriter
+        model: "claude-haiku-5-5"
+        models: ["claude-haiku-5-5", "claude-sonnet-5-5"]
   must:
-    - '^(settings set \S*model\S* \S+ .*--bot copywriter|bot model copywriter)\b'
+    - '^(settings set \S*model\S* \S+ .*--bot copywriter|bot model copywriter claude-sonnet-5-5)\b'
   must_not:
     - '^(bot (archive|update)|task (close|bulk close))(?! -h\b| --help)'
     - '^message send(?! -h\b| --help)'
@@ -621,6 +640,8 @@
           - {id: auto_keeper_nightly, name: "Keeper nightly tidy", owner: "bot:keeper", trigger: "daily at 02:00 UTC", enabled: true, runs_7d: 7, creates: "one tidy summary a night"}
           - {id: auto_health_pings, name: "Health Monitor runner queue ping", owner: "bot:health-monitor", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}
         next: null
+      after:
+        - {when: '^automation update auto_keeper_nightly --file -', out: {automations: [{id: auto_keeper_nightly, name: "Keeper nightly tidy", owner: "bot:keeper", trigger: "daily at 06:00 UTC", enabled: true, runs_7d: 7, creates: "one tidy summary a night"}, {id: auto_health_pings, name: "Health Monitor runner queue ping", owner: "bot:health-monitor", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}], next: null}}
     - match: '^automation show auto_keeper_nightly'
       out:
         automation:
@@ -631,6 +652,8 @@
           steps: [{action: "keeper.tidy"}]
           enabled: true
           version: 3
+      after:
+        - {when: '^automation update auto_keeper_nightly --file -', out: {automation: {id: auto_keeper_nightly, name: "Keeper nightly tidy", owner: "bot:keeper", trigger: {kind: "schedule", cron: "0 6 * * *", tz: "UTC"}, steps: [{action: "keeper.tidy"}], enabled: true, version: 4}}}
     - match: '^automation update auto_keeper_nightly'
       out:
         ok: true
@@ -673,6 +696,8 @@
           trigger: {kind: "release.published"}
           enabled: false
           version: 5
+      after:
+        - {when: '^automation (restore auto_docs_release 4|update auto_docs_release --enable)', out: {automation: {id: auto_docs_release, name: "Docs and release notes for each release", owner: "bot:technical-writer", trigger: {kind: "release.published"}, enabled: true, version: 6}}}
     - match: '^automation restore auto_docs_release 4'
       out:
         ok: true
