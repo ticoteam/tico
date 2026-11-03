@@ -9,7 +9,7 @@ from backend.tests.test_api import api, post, setup_attempt
 import pytest
 
 
-def test_store_replaces_legacy_queue_trigger_and_drains_queued_self_messages(tmp_path):
+def test_store_drops_legacy_queue_trigger_and_drains_queued_self_messages(tmp_path):
     settings = Settings(db_path=tmp_path / "old-queue.sqlite")
     store = Store(settings)
     store.initialize()
@@ -17,7 +17,9 @@ def test_store_replaces_legacy_queue_trigger_and_drains_queued_self_messages(tmp
         H.sync_registry(c, {"coo": {"name": "coo", "status": "active"}},
                         {"people": []})
         c.execute("DELETE FROM cloud_migrations WHERE version=8")
-        c.execute("DROP TRIGGER queue_bot_message")
+        # A database as an older release left it: it never recorded migration 0052, and still has the trigger.
+        c.execute("DELETE FROM schema_migrations WHERE version='0052_drop_queue_bot_message'")
+        c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
         c.execute("CREATE TRIGGER queue_bot_message AFTER INSERT ON messages "
                   "WHEN NEW.recipient_id LIKE 'bot:%' BEGIN "
                   "INSERT INTO jobs(id,message_id,bot_id,created_at) "
@@ -29,12 +31,18 @@ def test_store_replaces_legacy_queue_trigger_and_drains_queued_self_messages(tmp
                          (self_message["id"],)).fetchone()[0] == "queued"
     store.initialize()
     with store.transaction() as c:
+        # The start ran 0052 again (it was not recorded): the trigger is gone, and cloud step 8 drained the self message.
+        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='queue_bot_message'").fetchone()
         assert c.execute("SELECT state FROM jobs WHERE message_id=?",
                          (self_message["id"],)).fetchone()[0] == "completed"
-        H._write_message(c, "bot:coo", "bot:coo", "ignored by trigger",
+        H._write_message(c, "bot:coo", "bot:coo", "ignored by enqueue",
                          conversation, "say", {}, None, None)
         assert c.execute("SELECT count(*) FROM jobs").fetchone()[0] == 1
         assert c.execute("SELECT 1 FROM cloud_migrations WHERE version=8").fetchone()
+    store.initialize()
+    with store.read() as c:
+        # A later start recreates nothing: backend/enqueue.py queues in Python.
+        assert not c.execute("SELECT 1 FROM sqlite_master WHERE name='queue_bot_message'").fetchone()
 
 
 def test_restore_fences_credentials_and_preserves_uncertain_effects(api, tmp_path):

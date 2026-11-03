@@ -59,6 +59,12 @@ def seed(c, bots="INSERT"):
     for n in (1, 2):
         c.execute(f"INSERT INTO messages({names}) VALUES(?,?,?,?,?,?,?)",
                   (f"m{n}", "c1", "human:ana", coo, "message", f"hello {n}", TS))
+    # The job each message to the bot queued: an older release's trigger made it, and a database that still has the
+    # trigger makes its own. On one without it (a fresh build), backend/enqueue.py makes them, as the writers do.
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='queue_bot_message'").fetchone():
+        from backend.enqueue import enqueue_stored
+        for n in (1, 2):
+            enqueue_stored(c, f"m{n}")
     names = _cols(c, "tasks", "id", "title", "body", ("requester_id", "requester"), ("owner_id", "owner"), "status",
                   "conversation_id", created, ("updated_at", "updated"))
     for n in (1, 2, 3):

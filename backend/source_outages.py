@@ -136,11 +136,10 @@ def _finish(c, key, value):
 def batch_waiters(c, bot):
     from . import wake_presets
     groups = {}
-    for row in c.execute("SELECT j.*,m.conversation_id,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
+    for row in c.execute("SELECT j.*,m.conversation_id,m.refs FROM jobs j JOIN message_refs m ON m.id=j.message_id "
                          "WHERE j.bot_id=? AND j.state='queued' AND j.attempt_id IS NULL AND j.redirect=0 "
                          "AND m.sender_id=? AND m.kind='notice' AND m.deleted_at IS NULL "
-                         "AND coalesce(json_extract(m.refs,'$.quiet'),0)=0 "
-                         "AND coalesce(json_extract(m.refs,'$.command'),0)=0 "
+                         "AND m.ref_quiet=0 AND m.ref_command=0 "
                          "ORDER BY j.created_at,j.rowid", (bot, H.KEEPER)).fetchall():
         refs = H._json(row['refs'], {}) or {}
         if refs.get('caused_by', '').startswith('human:') or refs.get('wake_digest'):

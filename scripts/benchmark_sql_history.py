@@ -30,7 +30,7 @@ def test_bot_history_queries_finish_within_the_existing_timeout(api, provenance)
         c.execute('UPDATE attempts SET lease_until=? WHERE id=?',
                   (H.shift(now, hours=1), attempt['id']))
         # Bulk fixture loading must not queue actual runs or construct message links.
-        for trigger in ('message_links_insert', 'queue_bot_message', 'wake_preset_hold', 'message_links_update'):
+        for trigger in ('message_links_insert', 'wake_preset_hold', 'message_links_update'):
             c.execute('DROP TRIGGER IF EXISTS ' + trigger)
         c.executemany('INSERT INTO tasks(id,title,owner_id,requester_id,private,status,created_at,updated_at) '
                       "VALUES(?,'Synthetic task','bot:ops','human:ana',0,'done',?,?)",
