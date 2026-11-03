@@ -417,7 +417,9 @@ def explicit(c, row):
 
 def changed(c, row):
     """Whether anyone but the bot moved the task since its last delivered check-back wake. No recorded wake counts as
-    changed, and so does a notice a moved due time canceled before delivery: the bot never received it."""
+    changed, and so does a notice a moved due time canceled before delivery: the bot never received it. A message on the
+    task counts too, even a comment: stand() skips the owner's messages, and a comment writes no task event."""
+    H = _H()
     seen = c.execute("SELECT created_at,new FROM task_events WHERE task_id=? AND field='check_back_wake' "
                      "ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
     if not seen or seen["new"] != stand(c, row):
@@ -425,6 +427,9 @@ def changed(c, row):
     last = c.execute("SELECT j.state FROM task_check_back_wakes w JOIN jobs j ON j.message_id=w.message_id "
                      "WHERE w.task_id=? ORDER BY w.sent_at DESC LIMIT 1", (row["id"],)).fetchone()
     if last and last["state"] == "canceled":
+        return True
+    if c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND created_at>=? AND deleted_at IS NULL "
+                 "AND sender_id NOT IN (?,?) LIMIT 1", (row["conversation_id"], seen["created_at"], actor_for(row), H.KEEPER)).fetchone():
         return True
     return bool(c.execute("SELECT 1 FROM task_events WHERE task_id=? AND created_at>=? AND field NOT LIKE 'check_back%' "
                           "AND actor IS NOT ? LIMIT 1", (row["id"], seen["created_at"], actor_for(row))).fetchone())

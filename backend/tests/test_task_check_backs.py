@@ -702,6 +702,21 @@ def test_repeat_wake_goes_out_once_a_person_adds_a_message_or_event(followups, c
         assert len(wakes(c, row["id"])) == 2
 
 
+def test_a_person_reply_on_a_bot_requested_task_wakes_the_bot_at_the_keepers_repeat(followups):
+    """A person owns a task a bot requested. Her reply is a message, not a task event, and stand() skips the owner's
+    messages, so only the conversation shows it: the keeper's re-park must still wake the requesting bot."""
+    with followups.app.state.store.transaction() as c:
+        row = due(c, H.task_create(c, "bot:ops", "Ask Ana about the rename", "Ask before renaming.", "human:ana", lint=False))
+        assert row["requester_id"] == "bot:ops" and CB.actor_for(row) == "bot:ops"
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        handled(c, row["id"])
+        H.task_comment(c, "human:ana", row["id"], "Use the new name.", wake=False)
+        CB.set_time(c, H.task(c, row["id"]), "45m", system=True)  # the keeper's repeat, nothing else moved
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        assert len(wakes(c, row["id"])) == 2
+
+
 def test_hourly_cap_counts_repeat_wakes_as_well_as_first_ones(followups, monkeypatch):
     monkeypatch.setattr(CB, "WAKES_PER_BOT_HOUR", 1)
     with followups.app.state.store.transaction() as c:
