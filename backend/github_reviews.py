@@ -104,12 +104,10 @@ def throttled(response):
     return bool(re.search(r"rate[\s_-]*limit|abuse", message, re.I))
 
 
-def install_reviews(app, store, primary, reviewer):
-    with store.transaction() as c:
-        c.execute("CREATE TABLE IF NOT EXISTS github_review_operations("
-                  "actor TEXT NOT NULL,key TEXT NOT NULL,request_hash TEXT NOT NULL,response TEXT,"
-                  "PRIMARY KEY(actor,key))")
+REVIEW_PATH = "/api/v2/github/reviews"
 
+
+def install_reviews(app, store, primary, reviewer):
     def permitted_repository(c, who, name):
         from . import repositories as R
         validate_identity(c, who)
@@ -124,7 +122,7 @@ def install_reviews(app, store, primary, reviewer):
             raise Problem("forbidden", "Submitting a review requires an existing repository grant (write for the primary App)", 403)
         return grant["full_name"]
 
-    @app.post("/api/v2/github/reviews")
+    @app.post(REVIEW_PATH)
     def review(request: Request, body: ReviewRequest):
         who = request.state.identity
         if who.role != "bot" or who.task_actor or who.agent:
@@ -138,7 +136,8 @@ def install_reviews(app, store, primary, reviewer):
         bot = H.actor_id(who.actor)
         with store.read_transaction() as c:
             repository = permitted_repository(c, who, body.repository)
-            previous = c.execute("SELECT * FROM github_review_operations WHERE actor=? AND key=?", (who.actor, key)).fetchone()
+            previous = c.execute("SELECT * FROM idempotency WHERE binding='github_review' AND actor=? AND operation=? AND key=?",
+                                 (who.actor, REVIEW_PATH, key)).fetchone()
             if previous:
                 if previous["request_hash"] != hashed:
                     raise Problem("idempotency_conflict", "This review key was used for different content", 409)
@@ -161,8 +160,10 @@ def install_reviews(app, store, primary, reviewer):
         # Commit the claim before the external write: an ambiguous response must not submit twice.
         with store.transaction() as c:
             permitted_repository(c, who, repository)
-            inserted = c.execute("INSERT OR IGNORE INTO github_review_operations VALUES(?,?,?,NULL)",
-                                 (who.actor, key, hashed)).rowcount
+            stamp = H.now()
+            inserted = c.execute("INSERT OR IGNORE INTO idempotency(actor,operation,key,request_hash,response,created_at,"
+                                 "updated_at,binding,subject,state) VALUES(?,?,?,?,NULL,?,?,'github_review','','pending')",
+                                 (who.actor, REVIEW_PATH, key, hashed, stamp, stamp)).rowcount
             if not inserted:
                 raise Problem("github_review_unknown", "This review operation is already claimed; read its receipt before retrying", 409)
         response = issuer._call("POST", path + "/reviews", headers=headers,
@@ -171,8 +172,8 @@ def install_reviews(app, store, primary, reviewer):
             if response.status_code in (400, 403, 404, 422):
                 # A definite refusal created no review. Ambiguous responses retain the fence.
                 with store.transaction() as c:
-                    c.execute("DELETE FROM github_review_operations WHERE actor=? AND key=? AND response IS NULL",
-                              (who.actor, key))
+                    c.execute("DELETE FROM idempotency WHERE binding='github_review' AND actor=? AND operation=? AND key=? "
+                              "AND response IS NULL", (who.actor, REVIEW_PATH, key))
                     if response.status_code == 403 and not throttled(response):
                         # A permission blocker: DevOps fixes it, not Head of Engineering (backend/blockers.py).
                         from . import blockers
@@ -190,8 +191,9 @@ def install_reviews(app, store, primary, reviewer):
         receipt = {"repository": repository, "number": body.number, "head": body.head, "event": event,
                    "review_id": result.get("id"), "url": result.get("html_url"), "verdict": body.verdict}
         with store.transaction() as c:
-            c.execute("UPDATE github_review_operations SET response=? WHERE actor=? AND key=?",
-                      (encode(receipt), who.actor, key))
+            c.execute("UPDATE idempotency SET response=?,state='completed',updated_at=? "
+                      "WHERE binding='github_review' AND actor=? AND operation=? AND key=?",
+                      (encode(receipt), H.now(), who.actor, REVIEW_PATH, key))
             H.event(c, who.actor, "github.review", repository,
                     {"number": body.number, "head": body.head, "event": event, "review_id": result.get("id")})
         return receipt

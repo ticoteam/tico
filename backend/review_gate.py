@@ -414,7 +414,7 @@ def notify(c, actor, notice):
         return
     conv = H.conversation(c, row["conversation_id"])
     key = {k: notice[k] for k in ("kind", "head")}
-    if c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND json_extract(refs,'$.task')=? "
+    if c.execute("SELECT 1 FROM message_refs WHERE conversation_id=? AND ref_task_id=? "
                  "AND json_extract(refs,'$.review_gate')=? LIMIT 1",
                  (conv["id"], row["id"], json.dumps(key, sort_keys=True))).fetchone():
         return

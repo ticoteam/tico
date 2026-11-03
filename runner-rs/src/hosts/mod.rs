@@ -1030,6 +1030,14 @@ pub fn use_own_config_home(runtime: &str, profile: Option<&crate::profiles::Prof
     }
 }
 
+/// A runtime's version the probe just read, for a host that keeps per-version facts (Claude Code's features): read
+/// here, when the version is new, so a turn starts no process for them.
+pub async fn note_version(runtime: &str, version: &str) {
+    if runtime == "claude" {
+        claude::note_version(&[crate::harness_tools::executable_for(runtime)], version).await;
+    }
+}
+
 /// A folder the host's turns write that the bot user cannot (Muse Code's data home), as a readiness problem.
 pub fn data_problem(runtime: &str, profile: Option<&crate::profiles::Profile>) -> Option<String> {
     match runtime {

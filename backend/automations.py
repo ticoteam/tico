@@ -993,7 +993,7 @@ def _absorbed(c, row):
     flow = flow_of(row)
     if (flow.get("trigger") or {}).get("type") != "schedule" or _finds(flow["steps"]):
         return False
-    last = c.execute("SELECT json_extract(refs,'$.task') AS task FROM messages "
+    last = c.execute("SELECT ref_task_id AS task FROM message_refs "
                      "WHERE json_extract(refs,'$.automation')=? ORDER BY created_at DESC LIMIT 1", (row["id"],)).fetchone()
     open_task = c.execute("SELECT id FROM tasks WHERE id=? AND status IN ('open','doing','waiting','review','ready')",
                           (last["task"],)).fetchone() if last and last["task"] else None

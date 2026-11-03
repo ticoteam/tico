@@ -3247,7 +3247,7 @@ def _held_queue_drains(actor, target, refs_json):
     pending stored row. A bot's message to itself, a quiet message nothing carries (a wake=False comment, a
     same-state skip) and live run output are never handed over, and charging them would fill the cap for good."""
     if actor == target:
-        return False                       # store.QUEUE_TRIGGER queues no job for a bot's message to itself
+        return False                       # enqueue queues no job for a bot's message to itself
     try:
         refs = refs_json if isinstance(refs_json, dict) else json.loads(refs_json or "{}")
     except ValueError:
@@ -3268,8 +3268,8 @@ def _held_queue_settled_sql(conn):
     if _has_table(conn, "jobs"):
         # A runner-delivered bot gets a held message only through its job, so one finished or canceled (a
         # duplicate wake) is never handed over. An external harness's inbox still holds it whatever its job did.
-        from .store import EXTERNAL_BOT_SQL
-        settled.append("(NOT " + EXTERNAL_BOT_SQL.replace("NEW.", "m.") + " AND EXISTS(SELECT 1 FROM jobs j "
+        from .enqueue import external_bot_sql
+        settled.append("(NOT " + external_bot_sql("m.recipient_id") + " AND EXISTS(SELECT 1 FROM jobs j "
                        "WHERE j.message_id=m.id) AND NOT EXISTS(SELECT 1 FROM jobs j "
                        "WHERE j.message_id=m.id AND j.state NOT IN ('completed','canceled')))")
     waiting = NOTE_WAITING_SQL if _has_table(conn, "attempts") else "n.canceled_at IS NULL"
@@ -3415,6 +3415,8 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         "legacy_audience) VALUES (:id, :conversation_id, :sender_id, :recipient_id, :kind, :body, :refs, "
         ":in_reply_to, :created_at, :delivered_at, :read_at, :expires_at, :wait_s, :origin_id, :revision, "
         ":restricted, :legacy_audience)", row)
+    from .enqueue import enqueue
+    enqueue(conn, row)                      # the job it starts, in this transaction (backend/enqueue.py)
     conn.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (row["created_at"], conv["id"]))
     # A mention outside the audience grants nothing and warns the author (contract §2): carried on the result.
     mention_warnings = (threads.record(conn, message(conn, row["id"]), conv) or {}).get("warnings") or []
@@ -3438,7 +3440,7 @@ def feed(conn, target, body, conv, refs=None):
     """Context the system hands a bot to read: a Slack channel digest (backend/slack_gateway.py).
 
     Written by the keeper, not by a bot or a person: nobody said it. It is a turn for the bot
-    (the queue trigger fires, as for any message to a bot), but it is quoted Slack text, so the
+    (enqueue queues its job, as for any message to a bot), but it is quoted Slack text, so the
     escape and lint rules a bot's own words go through do not apply; what it quotes was said
     in a channel the bot is in. Rule 2 still holds: the bot must be active.
     """
@@ -4778,7 +4780,7 @@ def _unblock(conn, done_task, told=()):
         # Only a blocker still open holds the wake: a kept, finished ticket blocks nothing. A kept ticket that finishes
         # again (reopened, then done) does not wake the item's owner twice.
         waits = TR.live_blocker(conn, row["id"], ACTIVE_STATUSES) or kept and _one(
-            conn, "SELECT 1 FROM messages WHERE conversation_id=? AND json_extract(refs,'$.task')=? "
+            conn, "SELECT 1 FROM message_refs WHERE conversation_id=? AND ref_task_id=? "
                   "AND json_extract(refs,'$.trigger_source')=? AND body LIKE 'Unblocked: %' LIMIT 1",
             (row["conversation_id"], row["id"], done_task["id"]))
         if row["status"] in ACTIVE_STATUSES and not waits and row["id"] not in told:
@@ -4984,9 +4986,25 @@ RESUME_COMMAND = re.compile(r"^(?:cd \S+ && )?(claude|codex|gemini|grok|pi|curso
 
 def _session_detail(link):
     try:
-        return json.loads(link.get("detail") or "{}")
+        detail = json.loads(link.get("detail") or "{}")
     except ValueError:
         return {}
+    return detail if isinstance(detail, dict) else {}
+
+
+def _with_thread(link):
+    """A session link as the API shows it: the provider thread id joins its detail. The url is the one place the
+    thread is stored (`session:<bot>/<thread>`, or the resume command it came from), so the detail does not repeat it."""
+    if not link or link.get("kind") != "session":
+        return link
+    detail, url = _session_detail(link), str(link.get("url") or "")
+    thread = None
+    if detail.get("bot") and url.startswith(f"session:{detail['bot']}/"):
+        thread = url[len(f"session:{detail['bot']}/"):]
+    elif detail.get("harness") and url.startswith("session:"):
+        resume = RESUME_COMMAND.match(url[len("session:"):])
+        thread = resume.group(2) if resume else None
+    return {**link, "detail": json.dumps({**detail, "thread_id": thread})} if thread else link
 
 
 def _task_session_link(conn, actor, task_id, value, title):
@@ -4998,9 +5016,9 @@ def _task_session_link(conn, actor, task_id, value, title):
     url = value if re.match(r"^https?://\S+$", value) else "session:" + value
     have = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND url=?", (task_id, url))
     if have:
-        return have
+        return _with_thread(have)
     resume = RESUME_COMMAND.match(value)
-    detail = {"primary": False, **({"harness": resume.group(1), "thread_id": resume.group(2)} if resume else {})}
+    detail = {"primary": False, **({"harness": resume.group(1)} if resume else {})}
     title = str(title or "").strip() or (urlsplit(value).netloc if url == value else
                                          f"{resume.group(1)} {resume.group(2)[:8]}" if resume else value[:60])
     link = {"id": new_id(), "task_id": task_id, "url": url, "title": title[:200], "added_by": actor,
@@ -5010,7 +5028,7 @@ def _task_session_link(conn, actor, task_id, value, title):
     _task_event(conn, task_id, actor, "link", None, url, title)
     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))
     event(conn, actor, "task.link", task_id, {"url": url, "kind": "session"})
-    return _one(conn, "SELECT * FROM task_links WHERE id=?", (link["id"],))
+    return _with_thread(_one(conn, "SELECT * FROM task_links WHERE id=?", (link["id"],)))
 
 
 def _demote_sessions(conn, task_id, owner=None):
@@ -5102,7 +5120,7 @@ def task_session_started(conn, bot, lane, message_id, thread_id, runtime):
     if not thread_id or not row or row["owner_id"] != "bot:" + bot:
         return
     url = f"session:{bot}/{thread_id}"
-    detail = json.dumps({"primary": True, "harness": runtime, "thread_id": thread_id, "bot": bot})
+    detail = json.dumps({"primary": True, "harness": runtime, "bot": bot})
     links = _rows(conn.execute("SELECT * FROM task_links WHERE task_id=? AND kind='session'", (task_id,)))
     # The row this thread already has, else the bot's primary from an earlier thread (a reset, a
     # compaction), which this one replaces in place.
@@ -5539,7 +5557,8 @@ def _private_followups(conn, task_id):
 
 
 def task_links(conn, task_id):
-    return _rows(conn.execute("SELECT * FROM task_links WHERE task_id=? ORDER BY created_at", (task_id,)))
+    return [_with_thread(link) for link in _rows(conn.execute(
+        "SELECT * FROM task_links WHERE task_id=? ORDER BY created_at", (task_id,)))]
 
 
 
@@ -5947,7 +5966,7 @@ def _refresh_comment_replies(conn, msg):
     # By index (backend/idempotency_messages.py): reading every stored answer here held the write lock for 35 s.
     rows = idempotency_messages.quoting(conn, msg["id"]) if _has_table(conn, "idempotency_messages") else None
     if rows is None:        # not indexed yet: an older file, or before its first start's backfill finished
-        rows = conn.execute("SELECT rowid,response FROM idempotency WHERE instr(response,?)>0",
+        rows = conn.execute("SELECT rowid,response FROM idempotency WHERE binding IS NULL AND instr(response,?)>0",
                             (msg["id"],)).fetchall()
     for row in rows:
         conn.execute("UPDATE idempotency SET response=? WHERE rowid=?",
@@ -6977,6 +6996,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         if is_human(after["requester_id"]):
             # Keep completion notices out of ordinary Slack reply mirroring, including quiet
             # updates. One eligible notice per task/status also covers reopen/retry cycles.
+            # messages, not message_refs: store.py's slack_task_completion_notices index is on json_extract(refs,'$.task').
             duplicate = _one(conn, "SELECT 1 FROM messages WHERE json_extract(refs,'$.task')=? "
                              "AND json_extract(refs,'$.task_completion.status')=? "
                              "AND json_extract(refs,'$.task_completion.notify')=1 LIMIT 1",
@@ -7664,7 +7684,9 @@ def message_task_id(message, conversation=None):
 
 
 def _task_ref_sql(path):
-    """The SQL twin of `_task_ref` for one `$.key` of `m.refs`: an array yields its first element."""
+    """The SQL twin of `_task_ref` for one `$.key` of `m.refs`: an array yields its first element. A query that reads
+    the message alone reads `message_refs.ref_task_id` (migration 0051), the same value for `$.task`; this stays for
+    MESSAGE_TASK_SQL, which callers splice under other aliases."""
     return (f"CASE WHEN json_type(m.refs,'{path}')='array' THEN json_extract(m.refs,'{path}[0]') "
             f"ELSE json_extract(m.refs,'{path}') END")
 

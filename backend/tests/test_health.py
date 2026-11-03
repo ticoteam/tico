@@ -9,6 +9,7 @@ from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_getting_started import SIGNED_IN, add_bot, enrolled, heartbeat  # noqa: F401
 from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
+from backend.enqueue import enqueue_stored
 from backend.tests.usage_rows import segment
 
 
@@ -111,10 +112,11 @@ def silent_computer(api, seconds_ago):
         c.execute("UPDATE runners SET owner_id='riley' WHERE id=?", (runner,))
         c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
                   (runner, H.now()))
-        # A chat message in a conversation, as the product writes them: the trigger queues its job, and Pipeline counts it.
+        # A chat message in a conversation, as the product writes them: it queues its job, and Pipeline counts it.
         c.execute("INSERT INTO conversations(id,kind,participants,created_at) VALUES('cv1','chat','[]',?)", (H.now(),))
         c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at) "
-                  "VALUES('m1','cv1','human:ana','bot:helper','chat','hi',?)", (H.now(),))       # queues its job
+                  "VALUES('m1','cv1','human:ana','bot:helper','chat','hi',?)", (H.now(),))
+        enqueue_stored(c, 'm1')
     heartbeat(api, runner, seconds_ago=seconds_ago, runtimes=SIGNED_IN)
     return runner
 
