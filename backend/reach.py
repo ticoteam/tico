@@ -16,7 +16,7 @@
   own write is checked: a person's, the keeper's and the hub's own hand-offs (step flows, routines, rule wakes) never
   come through here. Task caps (backend/task_caps.py) are still their own table.
 
-Tables: backend/migrations/0040_reach.sql (0041_reach_nearby.sql adds the `nearby` mode).
+Tables: backend/migrations/0040_reach.sql (0042_reach_nearby.sql adds the `nearby` mode).
 """
 import dataclasses
 import os
@@ -412,7 +412,9 @@ def remove_line(c, auth, who, line_id, via=None, checked=True):
 # ----------------------------------------------------------------------------------------------- the chart around a bot
 # The built-in helpers that work for the whole company from off the chart: what they send is never limited, and anyone
 # may reach them (a bot that needs a fix asks BotOps). The Assistant's slug is the install's own (TICO_ASSISTANT_BOT).
-HELPERS = ("botops", "task-manager", "goal-manager", "librarian", "support", "assistant")
+# The built-in bots of Auth.system_bot plus the support helper, except the Health Monitor: its tasks to people far from
+# it are what nearby reach is for, so it is checked like any bot.
+HELPERS = ("botops", "task-manager", "goal-manager", "librarian", "support", "assistant", "bookkeeper", H.COUNSEL)
 SOLICITED_DAYS = 7          # how far back a teammate's message to a bot makes the bot's answer to them solicited
 NAMES_SHOWN = 6             # the teammates a refusal names as the ones the bot does reach
 
@@ -526,7 +528,8 @@ class Decision:
     can_reach: tuple = ()
 
 
-def decide(ctx, sender, receiver, kind="task", *, system=False, on_task=False, solicited=False, count=None):
+def decide(ctx, sender, receiver, kind="task", *, system=False, on_task=False, solicited=False, count=None,
+           unseen=frozenset()):
     """Whether `sender` may reach `receiver` with one write. Pure: the context's roster, configs, settings and lines,
     the write's facts, and `count(scope)` for what was already sent today (scope `("line", line)`, `("task",)` or
     `("chat",)`; none counted when it is None). `kind` is `task` (a task made, handed or asked on) or `chat` (a message
@@ -548,17 +551,17 @@ def decide(ctx, sender, receiver, kind="task", *, system=False, on_task=False, s
     line, why = line_for(ctx, sender, receiver), "open"
     if line is not None and line["per_day"] is not None:
         if line["per_day"] == 0 or count(("line", line)) >= line["per_day"]:
-            return _refused(ctx, "reach_line", sender, receiver, eff["mode"], line)
+            return _refused(ctx, "reach_line", sender, receiver, eff["mode"], line, unseen=unseen)
     if line is not None:
         why = "line"
     elif eff["mode"] != "open":
         near = nearby(ctx, sender) if eff["mode"] == "nearby" else {}
         if receiver not in near:
-            return _refused(ctx, "reach_closed", sender, receiver, eff["mode"])
+            return _refused(ctx, "reach_closed", sender, receiver, eff["mode"], unseen=unseen)
         why = near[receiver]
     field = "tasks_per_day" if kind == "task" else "chats_per_day"
     if count((kind,)) >= eff[field]:
-        return _refused(ctx, "reach_cap", sender, receiver, eff["mode"], cap=(field, eff[field]))
+        return _refused(ctx, "reach_cap", sender, receiver, eff["mode"], cap=(field, eff[field]), unseen=unseen)
     return Decision(True, why)
 
 
@@ -572,11 +575,13 @@ def _reached(ctx, sender, mode):
     return near
 
 
-def _refused(ctx, code, sender, receiver, mode, line=None, cap=None):
-    """The refusal a bot reads: what it hit, that nothing was sent, and exactly where the work goes instead."""
+def _refused(ctx, code, sender, receiver, mode, line=None, cap=None, unseen=frozenset()):
+    """The refusal a bot reads: what it hit, that nothing was sent, and exactly where the work goes instead. Teammates
+    the bot may not See (`unseen`) are never named, its manager included; the receiver it named itself."""
     boss = _managers(ctx).get(sender)
-    via = boss if boss and boss != receiver else None
-    reached = [a for a in _reached(ctx, sender, mode) if a != receiver]
+    via = boss if boss and boss != receiver and boss not in unseen else None
+    reached = [a for a in _reached(ctx, sender, mode) if a != receiver and a not in unseen and not
+               (a.startswith("group:") and a in unseen)]
     s, r = name(ctx, sender), name(ctx, receiver)
     if code == "reach_cap":
         field, limit = cap
@@ -657,9 +662,11 @@ def on_task(c, task_id, sender, receiver, before=None):
 def solicited(c, sender, receiver, conversation_id=None, in_reply_to=None, before=None):
     """The receiver came to the sender first: it gave the sender an open task, or (in the last SOLICITED_DAYS) wrote
     to it, here when the write names a conversation (addressed to it or @mentioning it), or this is a reply to the
-    receiver's message. `before`: only what was written before then (the dry-run's history)."""
-    if in_reply_to:
-        row = c.execute("SELECT sender_id FROM messages WHERE id=?", (in_reply_to,)).fetchone()
+    receiver's message. `conversation_id` and `in_reply_to` may each be several (a sub-thread and its parent thread; a
+    reply and the message its sub-thread hangs from). `before`: only what was written before then (the dry-run's
+    history)."""
+    for message_id in _many(in_reply_to):
+        row = c.execute("SELECT sender_id FROM messages WHERE id=?", (message_id,)).fetchone()
         if row and row["sender_id"] == receiver:
             return True
     if c.execute("SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND status NOT IN ('done','closed','declined')"
@@ -674,10 +681,38 @@ def solicited(c, sender, receiver, conversation_id=None, in_reply_to=None, befor
         where += " OR EXISTS(SELECT 1 FROM message_mentions x WHERE x.message_id=m.id AND x.actor=?)"
         args.append(sender)
     where += ")"
-    if conversation_id:
-        where += " AND m.conversation_id=?"
-        args.append(conversation_id)
-    return c.execute(f"SELECT 1 FROM messages m WHERE {where} LIMIT 1", args).fetchone() is not None
+    places = _many(conversation_id)
+    if places:
+        where += f" AND m.conversation_id IN ({','.join('?' * len(places))})"
+        args.extend(places)
+    if c.execute(f"SELECT 1 FROM messages m WHERE {where} LIMIT 1", args).fetchone():
+        return True
+    # A DM the bot is in: what the receiver wrote there was written to the bot, and a person who wrote there brought
+    # its members together.
+    dms = [p for p in places if _is_dm(c, p)]
+    return bool(dms) and c.execute(
+        f"SELECT 1 FROM messages WHERE (sender_id=? OR sender_id LIKE 'human:%') AND created_at>=? AND created_at<? "
+        f"AND conversation_id IN ({','.join('?' * len(dms))}) LIMIT 1", (receiver, since, until, *dms)).fetchone() \
+        is not None
+
+
+def _is_dm(c, conversation_id):
+    from . import threads as T
+    thread = T.thread_row(c, conversation_id)
+    return bool(thread) and not thread.get("parent_id") and T.audience_of(T.root_of(c, thread)) in ("personal",
+                                                                                                    "participants")
+
+
+def _many(value):
+    return [v for v in (value if isinstance(value, (list, tuple)) else (value,)) if v]
+
+
+def task_of(c, task_id=None, conversation_id=None):
+    """The task a write is on: the one it names, else the task whose thread it is written in."""
+    if task_id or not conversation_id:
+        return task_id
+    row = c.execute("SELECT task_id FROM conversations WHERE id=?", (conversation_id,)).fetchone()
+    return row["task_id"] if row else None
 
 
 def members(ctx, party):
@@ -738,9 +773,15 @@ class Refused(Problem):
             "receiver": receiver, "via": decision.via, "can_reach": list(decision.can_reach[:20])})
 
 
+REPLAY_AGENT = "org-rule-hold"   # org_rule_check.replay_identity: a held write a person chose to Send anyway
+
+
 def _sender(who):
-    """The bot a write is checked for, or None: a person, the keeper and a person's BotOps or Assistant are never."""
-    return who.actor if getattr(who, "role", "") == "bot" and H.is_bot(getattr(who, "actor", "")) else None
+    """The bot a write is checked for, or None: a person, the keeper and a person's BotOps or Assistant are never. Nor
+    is a held write a person sent anyway: it passed reach before it was held, and a person approved it since."""
+    if getattr(who, "role", "") != "bot" or not H.is_bot(getattr(who, "actor", "")):
+        return None
+    return None if getattr(who, "agent", "") == REPLAY_AGENT else who.actor
 
 
 def check(c, who, receiver, kind="task", *, task_id=None, conversation_id=None, in_reply_to=None, ctx=None):
@@ -763,9 +804,14 @@ def check(c, who, receiver, kind="task", *, task_id=None, conversation_id=None, 
     found = decide(ctx, sender, receiver, kind, count=count)
     if found.allowed:
         return
+    task_id = task_of(c, task_id, _many(conversation_id)[0] if _many(conversation_id) else None)
     if (task_id and on_task(c, task_id, sender, receiver)) or solicited(c, sender, receiver, conversation_id,
                                                                         in_reply_to):
         return
+    from .teammate_access import hidden
+    unseen = hidden(c, who)
+    if unseen:
+        found = decide(ctx, sender, receiver, kind, count=count, unseen=frozenset(unseen))
     raise Refused(found, receiver)
 
 
@@ -800,10 +846,12 @@ def check_post(c, who, thread, mentioned, target, in_reply_to=None, ctx=None):
     if audience == "home":
         receivers.append(T.home_owner(root))
     task_id = root.get("task_id") if audience == "task" else None
+    # A sub-thread's post answers the message it hangs from, and whoever wrote to the bot in the thread above it.
+    places = [thread["id"], thread.get("parent_id")]
+    evidence = [in_reply_to, thread.get("parent_message_id")]
     ctx = ctx or context(c)
     for receiver in dict.fromkeys(r for r in receivers if r):
-        check(c, who, receiver, "chat", task_id=task_id, conversation_id=thread["id"], in_reply_to=in_reply_to,
-              ctx=ctx)
+        check(c, who, receiver, "chat", task_id=task_id, conversation_id=places, in_reply_to=evidence, ctx=ctx)
 
 
 def check_thread(c, who, thread_id, text, to=None, parent_message_id=None):
@@ -819,7 +867,43 @@ def check_thread(c, who, thread_id, text, to=None, parent_message_id=None):
         sub = c.execute("SELECT id FROM conversations WHERE parent_message_id=?", (parent_message_id,)).fetchone()
         thread = T.thread_row(c, sub[0]) if sub else thread
     target = H.resolve_actor(c, to) if to else None      # a DM's other members check_post finds itself
-    check_post(c, who, thread, [a for a, _ in T.mentions(c, thread, text, author=who.actor)], target)
+    check_post(c, who, thread, [a for a, _ in T.mentions(c, thread, text, author=who.actor)], target,
+               in_reply_to=parent_message_id)
+
+
+def check_edit(c, who, message_id, text):
+    """A bot's edit of its own message: the teammates it @mentions now and did not before get the message, so each
+    must be in its reach, as on a post."""
+    from . import threads as T
+    if not _sender(who):
+        return
+    message = H.message(c, message_id)
+    thread = T.thread_row(c, message["conversation_id"]) if message else None
+    if thread is None:
+        return
+    had = {r[0] for r in c.execute("SELECT actor FROM message_mentions WHERE message_id=? AND in_audience=1",
+                                   (message_id,))} if H._has_table(c, "message_mentions") else set()
+    added = [a for a, _ in T.mentions(c, thread, text, author=who.actor) if a not in had]
+    if added:
+        check_post(c, who, thread, added, None, in_reply_to=message.get("in_reply_to"))
+
+
+DELIVERED = ("dm", "mention", "ask", "assign", "addressed", "home")   # the deliveries a bot's post reaches someone by
+
+
+def check_delivered(c, who, message_id, task_id=None, conversation_id=None, in_reply_to=None):
+    """After a write in the bot's transaction: everyone the message was delivered to (addressed, mentioned, a DM's
+    members, a Home's owner) must be in its reach. A refusal rolls the whole write back, so nothing is sent."""
+    if not _sender(who) or not H._has_table(c, "message_deliveries"):
+        return
+    marks = ",".join("?" * len(DELIVERED))
+    receivers = [r[0] for r in c.execute(
+        f"SELECT DISTINCT recipient FROM message_deliveries WHERE message_id=? AND reason IN ({marks})",
+        (message_id, *DELIVERED))]
+    ctx = context(c) if receivers else None
+    for receiver in receivers:
+        check(c, who, receiver, "chat", task_id=task_id, conversation_id=conversation_id, in_reply_to=in_reply_to,
+              ctx=ctx)
 
 
 # ----------------------------------------------------------------------------------------------- HTTP
@@ -907,4 +991,4 @@ def install(app, store, auth, mutate):
         return mutate(request, _Nothing(), lambda c: remove_line(c, auth, who, line_id))
 
 
-__all__ = ["check", "check_post", "decide", "effective", "install", "listing", "nearby", "precheck"]
+__all__ = ["check", "check_delivered", "check_edit", "check_post", "decide", "effective", "install", "listing", "nearby", "precheck"]

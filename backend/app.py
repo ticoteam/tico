@@ -1557,6 +1557,9 @@ def create_app(settings=None):
             refs["quiet"] = True                 # no job: the session's next turn, or its deadline, takes it
         message = H.say(c, who.actor, to, body.text, conversation_id=conversation_id,
                         kind=body.kind, refs=refs, in_reply_to=body.in_reply_to, wait_s=body.wait_s)
+        # Everyone else it reached (its @mentions, a DM's members) is checked too; a refusal rolls the send back.
+        reach.check_delivered(c, who, message["id"], task_id=refs.get("task") or refs.get("task_id"),
+                              conversation_id=message.get("conversation_id"), in_reply_to=body.in_reply_to)
         due = None
         if to.startswith("bot:") and way == "defer":
             if who.role == "bot":

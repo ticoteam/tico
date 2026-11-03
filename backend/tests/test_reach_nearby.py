@@ -187,3 +187,95 @@ def test_the_dry_run_replays_history_through_the_same_decision(api, capsys):
     assert out["pairs"] == [{"sender": "bot:product-design", "receiver": "human:cara", "sender_name": "product-design",
                              "receiver_name": "Cara", "count": 2, "via": "bot:cpo"}]
     assert out["by_kind"] == {"task:made": 2}
+
+
+def refused_code(r):
+    assert r.status_code == 409, r.text
+    return r.json()["error"]
+
+
+def test_a_refusal_never_names_a_teammate_the_bot_may_not_see(api):
+    from backend.tests.test_api import restrict
+    chart(api)
+    with api.app.state.store.transaction() as c:
+        restrict(c, "cpo", people=["ana"])                  # product-design may no longer See its own manager
+    error = refused_code(api.post("/api/v2/tasks", json={"title": "To Cara", "body": "Scenario task.",
+                                                         "owner": "human:cara"}, headers=headers("pd-test")))
+    assert error["via"] is None and "bot:cpo" not in error["can_reach"]
+    assert "cpo" not in error["detail"] and "finance" in error["detail"]
+
+
+def members_thread(api, members, body=None):
+    r = api.post("/api/v2/threads", json={"title": "Numbers", "audience": "members", "members": members,
+                                          **({"body": body} if body else {})}, headers=headers("ana-test"))
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def test_a_dm_a_person_brought_the_bot_into_is_solicited_and_a_legacy_message_checks_every_recipient(api):
+    chart(api)
+    # Ben opens a DM with product-design and Cara: product-design may answer there, Cara included.
+    dm = api.post("/api/v2/threads/dm", json={"members": ["bot:product-design", "human:cara"], "body": "Plan?"},
+                  headers=headers("ben-test"))
+    assert dm.status_code == 200, dm.text
+    r = api.post(f"/api/v2/threads/{dm.json()['id']}/messages", json={"text": "Here is the plan."},
+                 headers=headers("pd-test"))
+    assert r.status_code == 200, r.text
+    # A legacy message to a peer that @mentions Cara where she reads it is refused whole: the mention reaches her.
+    tid = members_thread(api, ["bot:finance", "human:cara", "bot:product-design"])
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT count(*) FROM messages").fetchone()[0]
+    r = api.post("/api/v2/messages", json={"to": "bot:finance", "text": "@cara can you check this?",
+                                           "conversation_id": tid}, headers=headers("pd-test"))
+    assert r.status_code == 409 and r.json()["error"]["receiver"] == "human:cara", r.text
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == before
+
+
+def test_an_edit_that_mentions_someone_new_out_of_reach_is_refused(api):
+    chart(api)
+    tid = members_thread(api, ["bot:finance", "human:cara", "bot:product-design"])
+    posted = api.post(f"/api/v2/threads/{tid}/messages", json={"text": "@finance numbers?"}, headers=headers("pd-test"))
+    assert posted.status_code == 200, posted.text
+    message_id = posted.json()["id"]
+    error = refused_code(api.patch(f"/api/v2/messages/{message_id}", json={"text": "@finance @cara numbers?"},
+                                   headers=headers("pd-test")))
+    assert error["code"] == "reach_closed" and error["receiver"] == "human:cara"
+    with api.app.state.store.read() as c:
+        assert H.message(c, message_id)["body"] == "@finance numbers?"
+
+
+def test_a_sub_thread_reply_to_the_receivers_message_is_solicited(api):
+    chart(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO conversations(id, kind, subject) VALUES('t-top', 'thread', 'Top')")
+        c.execute("INSERT INTO messages(id, conversation_id, sender_id, body, created_at) VALUES"
+                  "('m-cara', 't-top', 'human:cara', 'Who can help?', ?)", (H.now(),))
+        # check_post passes the sub-thread and the thread above it, and the message the sub-thread hangs from.
+        assert reach.solicited(c, "bot:product-design", "human:cara", ["t-sub", "t-top"], [None, "m-cara"])
+        assert not reach.solicited(c, "bot:product-design", "human:cara", "t-sub")
+
+
+def test_a_message_in_a_tasks_thread_uses_the_task_and_a_send_anyway_replay_is_not_rechecked(api):
+    chart(api)
+    shared = task(api, "ben-test", "bot:product-design", title="Launch note")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET waiting_on='human:cara' WHERE id=?", (shared["id"],))
+        conversation = H.task(c, shared["id"])["conversation_id"]
+        who = Identity("bot:product-design", "bot", agent="test")
+        reach.check(c, who, "human:cara", "chat", conversation_id=conversation)      # the thread's own task
+        replay = Identity("bot:product-design", "bot", agent=reach.REPLAY_AGENT)
+        reach.check(c, replay, "human:cara", "task")                                    # a person sent it anyway
+        try:
+            reach.check(c, who, "human:cara", "task")
+            raise AssertionError("refused off the task")
+        except reach.Refused:
+            pass
+
+
+def test_the_built_in_helpers_are_reached_and_the_health_monitor_is_not_exempt(api):
+    chart(api)
+    found = ctx(api)
+    for slug in ("botops", "tico-counsel", "bookkeeper", "task-manager"):
+        assert reach.decide(found, "bot:product-design", "bot:" + slug).why == "helper", slug
+    assert not reach.decide(found, "bot:health-monitor", "human:cara").allowed

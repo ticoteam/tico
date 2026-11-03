@@ -65,26 +65,35 @@ A bot's write is checked on:
 - creating a task for someone else (`POST /api/v2/tasks`, MCP and CLI included), and the person a task question or
   approval asks (`asked`), unless they share the parent task;
 - handing a task to someone or setting who it waits on (`POST /api/v2/tasks/{id}` with `owner` or `waiting_on`);
-- chat: a message (`POST /api/v2/messages`, bot to bot included), a note (`POST /api/v2/notes`), and a thread post or
-  new thread or DM (`/api/v2/threads...`): the one it is addressed to, those it @mentions who can read the thread, a
-  DM's other members and the bot whose Home it is. `hub_task_dry_run` reports the refusal a task would get.
+- chat: a message (`POST /api/v2/messages`, bot to bot included: the one it is sent to first, then everyone else it was
+  delivered to, its @mentions and a DM's members, in the same write), a note (`POST /api/v2/notes`), and a thread post
+  or new thread or DM (`/api/v2/threads...`): the one it is addressed to, those it @mentions who can read the thread, a
+  DM's other members and the bot whose Home it is;
+- an edit of its own message (`PATCH /api/v2/messages/{id}`): those it @mentions now and did not before.
+
+`hub_task_dry_run` reports the refusal a task would get.
 
 Never refused:
 
 - a person's write, the owner's included; only a bot is ever checked;
 - a bot writing to itself;
-- a solicited reply: a reply to the receiver's message (`in_reply_to`), an answer to a teammate who gave the bot an
-  open task, or to one who wrote to it (addressed or @mentioning it) in the last 7 days, in that thread when it names
-  one. It still adds to the bot's chats a day;
+- a solicited reply: a reply to the receiver's message (`in_reply_to`, or the message a sub-thread hangs from), an
+  answer to a teammate who gave the bot an open task, or to one who wrote to it (addressed or @mentioning it) in the
+  last 7 days, in that thread (or the thread above a sub-thread) when it names one. In a DM, anything the receiver
+  wrote there, and any person's message there (a person brought its members together), counts. It still adds to the
+  bot's chats a day;
 - anything on a task the bot and the receiver are both part of: requester, owner (now or at any earlier step), the one
-  it waits on, its guest, or a poster in or member of the task's thread. Handing a task back to its requester passes;
-  handing it to someone new is checked;
+  it waits on, its guest, or a poster in or member of the task's thread. A message in a task's thread is on that task.
+  Handing a task back to its requester passes; handing it to someone new is checked;
 - system hand-offs: step flow and the allocator, check pools, routines and automations, rule wakes and the keeper. They
   write in the hub, not through a bot's route;
-- the hub's own work in a bot's name: a runner's reply to the message that woke it, an approval's decider, a held post
-  sent anyway, comments on a task;
+- the hub's own work in a bot's name: a runner's reply to the message that woke it, an approval's decider, comments
+  on a task;
+- a held write (a message, note or task) a person chose to Send anyway: it passed reach before it was held;
 - built-in helpers off the chart, as sender or receiver: BotOps, Task Manager, Goal Manager, Librarian, the Assistant
-  (`TICO_ASSISTANT_BOT`, `coo` by default) and the support helper. Anyone reaches them.
+  (`TICO_ASSISTANT_BOT`, `coo` by default), the Bookkeeper, Counsel (`tico-counsel`) and the support helper. Anyone
+  reaches them. The Health Monitor is a built-in bot too, but it is checked like any bot: its tasks to people far from
+  it are what nearby reach is for.
 
 The refusal is a 409 the bot reads once and acts on, never a retry:
 
@@ -94,7 +103,8 @@ The refusal is a 409 the bot reads once and acts on, never a retry:
 - `reach_cap`: its chats or tasks a day are used; the count starts again at midnight.
 
 Each says nothing was sent and not to retry, and carries `receiver`, `via` (the manager to send it to, or `null`) and
-`can_reach` (up to 20 parties) beside `code` and `detail`.
+`can_reach` (up to 20 parties) beside `code` and `detail`. A teammate the bot may not See is never named in the detail,
+`via` or `can_reach`.
 
 `scripts/reach_dry_run.py --db HUB.db --days N` replays the last N days of bot task and chat writes through the same
 `decide`, read-only, and reports what nearby would refuse: counts by sender → receiver, how many land on people, and

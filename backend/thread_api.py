@@ -356,6 +356,8 @@ def install(app, store, auth, mutate, rule_check):
         who = request.state.identity
         with store.read() as c:
             thread_id = (H.message(c, message_id) or {}).get("conversation_id") or ""
+        # A bot's edit that @mentions someone new out of its reach is refused before the rule check spends judgment.
+        reach.precheck(store, who, lambda c: reach.check_edit(c, who, message_id, body.text))
         rc = rule_check(who, "threads_edit", body.text, lambda c: recipients(c, who, thread_id, None), "",
                         {"message_id": message_id}, place=thread_place(who, thread_id)) if thread_id else None
 
@@ -367,6 +369,7 @@ def install(app, store, auth, mutate, rule_check):
                               retryable=True)
             if gate and gate.get("held"):
                 return org_rule_check.held_answer(c, who, gate, auth=auth)
+            reach.check_edit(c, who, message_id, body.text)
             edited = threads.edit_message(c, threads.viewer(auth, who), message_id, body.text)
             return {**_thread_message(edited), **org_rule_check.answer(gate)}
         return mutate(request, body, work)

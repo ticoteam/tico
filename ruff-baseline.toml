@@ -16,7 +16,7 @@
 #   DTZ005       2   owner: engineering
 #   DTZ007       2   owner: engineering
 #   DTZ011       5   owner: engineering
-#   F401        30   owner: engineering
+#   F401        29   owner: engineering
 #   F402         1   owner: engineering
 #   F541         6   owner: engineering
 #   F811         2   owner: engineering
@@ -95,7 +95,7 @@
 "backend/manage.py" = ["F401"]
 "backend/market.py" = ["B008", "BLE001", "S110"]
 "backend/market_watch.py" = ["BLE001"]
-"backend/mcp.py" = ["BLE001", "F401", "S110"]
+"backend/mcp.py" = ["BLE001", "S110"]
 "backend/media.py" = ["B905", "BLE001"]
 "backend/meetings.py" = ["F401"]
 "backend/message_links.py" = ["B023"]
