@@ -231,3 +231,68 @@ def test_a_sample_runs_its_claude_command_on_every_surface(tmp_path, monkeypatch
         assert servers == {}
     else:
         assert servers["hub"]["command"] and servers["hub"]["args"][0].endswith("fake_mcp.py"), servers
+
+
+def _hub_answer(tmp_path, monkeypatch, canned):
+    """answer() from the fake hub's shared core, over a canned list and a fresh state file (no model, no process)."""
+    (tmp_path / "canned.json").write_text(json.dumps(canned))
+    monkeypatch.setenv("EVAL_STATE", str(tmp_path / "state.json"))
+    monkeypatch.setenv("EVAL_CANNED", str(tmp_path / "canned.json"))
+    monkeypatch.setenv("EVAL_LOG", str(tmp_path / "log.jsonl"))
+    monkeypatch.setenv("EVAL_REPO", str(REPO))
+    ns = {}
+    exec(live.FAKE_CORE, ns)
+    return ns["answer"]
+
+
+PAUSED = {"items": [{"id": "bot_a", "status": "paused"}]}
+ACTIVE = {"items": [{"id": "bot_a", "status": "active"}]}
+
+
+def test_a_read_after_a_successful_write_shows_the_new_value(tmp_path, monkeypatch):
+    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^bot status list", "out": PAUSED,
+                         "after": [{"when": r"^bot resume bot_a", "out": ACTIVE}]}])
+    assert json.loads(answer(["bot", "status", "list"], "cli")[0]) == PAUSED
+    answer(["bot", "resume", "bot_a"], "cli")
+    assert json.loads(answer(["bot", "status", "list"], "cli")[0]) == ACTIVE
+
+
+def test_a_failed_or_dry_run_write_leaves_the_old_value(tmp_path, monkeypatch):
+    canned = [{"match": r"^bot status list", "out": PAUSED,
+               "after": [{"when": r"^bot resume bot_a", "out": ACTIVE}]},
+              {"match": r"^bot resume bot_a --fail", "out": "not allowed", "exit": 1}]
+    answer = _hub_answer(tmp_path, monkeypatch, canned)
+    answer(["bot", "resume", "bot_a", "--fail"], "cli")
+    assert json.loads(answer(["bot", "status", "list"], "cli")[0]) == PAUSED
+    answer(["bot", "resume", "bot_a", "--dry-run"], "cli")
+    assert json.loads(answer(["bot", "status", "list"], "cli")[0]) == PAUSED
+
+
+def test_the_latest_matching_write_wins(tmp_path, monkeypatch):
+    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^bot status list", "out": ACTIVE, "after": [
+        {"when": r"^bot pause bot_a", "out": PAUSED}, {"when": r"^bot resume bot_a", "out": ACTIVE}]}])
+    answer(["bot", "pause", "bot_a"], "cli")
+    answer(["bot", "resume", "bot_a"], "cli")
+    assert json.loads(answer(["bot", "status", "list"], "cli")[0]) == ACTIVE
+    answer(["bot", "pause", "bot_a"], "cli")
+    assert json.loads(answer(["bot", "status", "list"], "cli")[0]) == PAUSED
+
+
+def test_an_uncanned_list_read_is_an_empty_list_with_a_note(tmp_path, monkeypatch):
+    answer = _hub_answer(tmp_path, monkeypatch, [])
+    out = json.loads(answer(["needs-you", "show"], "cli")[0])
+    assert out["note"] == "no canned data" and out["by_kind"] == {}
+    out = json.loads(answer(["conversation", "show", "c1"], "cli")[0])
+    assert out["messages"] == [] and out["note"] == "no canned data"
+
+
+def test_approval_list_is_built_from_the_message_list_and_follows_a_decline(tmp_path, monkeypatch):
+    approval = "2a7f0c9e-4000-4000-8000-000000000001"
+    message = {"id": "m1", "from_actor": "bot:release", "text": "Approve this publish", "refs": {"approval": approval}}
+    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^message list", "out": {"messages": [message]}}])
+    rows = json.loads(answer(["approval", "list"], "cli")[0])["items"]
+    assert [(r["id"], r["status"]) for r in rows] == [(approval, "pending")]
+    answer(["approval", "decline", "2a7f0c9e"], "cli")
+    rows = json.loads(answer(["approval", "list"], "cli")[0])["items"]
+    assert rows[0]["status"] == "declined"
+
