@@ -176,6 +176,11 @@ async function until(fn, what) {
       // + Add rule: Add rule with Builder as Who.
       await panel(page).locator('[data-rr-add-rule]').click();
       const dlg = page.locator('#ru-add');
+      // Opened for one party: just the text, focused; the rest behind More.
+      await dlg.locator('[data-ru-adv]').waitFor();
+      assert.equal(await dlg.locator('textarea[name=text]').evaluate(el => el === document.activeElement), true);
+      assert.equal(await dlg.locator('[data-scope="who"]').isVisible(), false);
+      await dlg.locator('[data-ru-adv]').click();
       await dlg.locator('[data-scope="who"]').waitFor();
       assert.match(await dlg.locator('[data-scope="who"]').innerText(), /Builder/);
       assert.equal(await dlg.locator('[data-seg="kind"] [aria-pressed="true"], [data-ru-seg="kind"] [aria-pressed="true"]').innerText(), 'Internal');

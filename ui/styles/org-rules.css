@@ -28,6 +28,10 @@
 .ru-f[aria-pressed="true"]{background:var(--surface2);font-weight:600}
 .ru-n{flex:none;color:var(--muted);font-variant-numeric:tabular-nums}
 .ru-more{color:var(--muted)}
+.ru-adv-t{align-self:flex-start;border:0;background:none;padding:2px 0;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
+.ru-adv-t:hover{color:var(--ink)}
+.ru-adv{display:contents}
+.ru-adv[hidden]{display:none}
 .ru-fnone{padding:3px 6px;color:var(--muted);font-size:var(--t-sm)}
 
 /* lists */
