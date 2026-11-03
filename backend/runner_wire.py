@@ -1,6 +1,6 @@
 """The runner wire keeps the names it had before the stored columns dropped their `_json` suffix.
 
-Runners already in the field read these bodies (contracts/runner, runner-rs serde, runner/), so a hub answers them
+Runners already in the field read these bodies (contracts/runner, runner-rs serde, runner_support/), so a hub answers them
 with the old names: a message's stored `refs` text as `refs_json` beside the decoded `refs`, a conversation's
 `participants_json` beside `participants`, an assignment's `config_json` beside `config`, a task's text columns (`labels_json`, ...) as they were, and a worktree
 link's `detail_json`. Renamed time and actor columns go back under their old names too (`created` beside a message's

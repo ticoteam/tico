@@ -5,7 +5,7 @@
 # The Mac runner and relay (no gate part runs on a Mac) are carried forward from the previous release when their sources
 # did not change, and published with it. When they did change they are built here, beside the publication, and added to
 # the published release with the checksum files rewritten after them; until then a Mac checkout's update waits
-# (runner/release_update.py) instead of failing.
+# (runner_support/release_update.py) instead of failing.
 # The desktop app follows: built only when the shell changed since the previous release, otherwise the previous release's
 # desktop files and updater manifest are carried forward. Either way they are added to the published release afterwards,
 # and a desktop failure leaves the server release in place. Tico Recorder (recorder.yml) follows the same way, with
@@ -143,9 +143,9 @@ jobs:
             | while read -r tag; do git merge-base --is-ancestor "$tag" "$SHA" && { echo "$tag"; break; }; done)"
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           build=true
-          # runner/harnesses is part of the runner's source fingerprint (runner-rs/build.rs). A change to the macos job
+          # runner-rs/harnesses is part of the runner's source fingerprint (runner-rs/build.rs). A change to the macos job
           # alone (say, its Rust toolchain) does not rebuild: it takes effect with the next runner or relay change.
-          if [ -n "$previous" ] && git diff --quiet "$previous" "$SHA" -- runner-rs relay-rs runner/harnesses \
+          if [ -n "$previous" ] && git diff --quiet "$previous" "$SHA" -- runner-rs relay-rs \
              && has_mac "$previous"; then
             build=false
           fi
