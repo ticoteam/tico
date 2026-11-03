@@ -29,8 +29,10 @@ person does is refused. Owners and admins set Everyone, a team or a bot back to 
 - its peers (teammates with the same manager);
 - the members of the team it is directly in (bots and people; not the teams above or below).
 
-A bot with no manager has no peers: it reaches its reports and its team only. The owner is reached like anyone else:
-only a bot that reports to them, or is near them, or has a line to them, reaches them.
+A bot with no manager on the chart (none set, or one archived or gone) counts as reporting to the company owner: it
+reaches the owner, and the other bots with no manager, and the owner's own reports, are its peers. A bot that reaches no
+one would go silent. Otherwise the owner is reached like anyone else: only a bot that reports to them, or is near them,
+or has a line to them, reaches them.
 
 ## Lines
 
@@ -99,7 +101,8 @@ Never refused:
 The refusal is a 409 the bot reads once and acts on, never a retry:
 
 - `reach_closed`: the receiver is outside its reach. The detail names who it reaches and ends "Send it to <manager>, who
-  can pass it on." (with no manager, the teammates it does reach, or that it needs a manager);
+  can pass it on." (a bot with no manager: the owner, named as such; with no owner either, the teammates it does reach,
+  or that it needs a manager);
 - `reach_line`: a line blocks the pair (`per_day` 0) or its count for today is used;
 - `reach_cap`: its chats or tasks a day are used; the count starts again at midnight.
 

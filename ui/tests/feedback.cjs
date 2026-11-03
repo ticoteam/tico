@@ -292,6 +292,13 @@ async function chatPhone(browser, theme = 'dark') {
   console.log(`feedback chat phone (${theme}): ok`);
 }
 
+// Feedback on, after a reset: the page's own first read (made before the fake was routed) may land after the reset and
+// turn it off; read again until the fake's answer turns it on.
+const fbOn = page => page.waitForFunction(() => {
+  if (FB.on === false) { FB.on = null; FB.asked.clear(); fbSync(); }
+  return document.body.classList.contains('fb-on');
+});
+
 const APPROVAL = {id: 'ap-1', kind: 'approval', what: 'send', title: 'Approve this send', requester_id: 'bot:writer', requested_by: 'bot:writer',
   created_at: iso(), payload: {to: ['ava@customer.example'], subject: 'Your renewal', body: 'Hi Ava, your plan renews on the 14th.'}};
 async function decideCard(browser, {phone, theme = 'dark'}) {
@@ -303,7 +310,7 @@ async function decideCard(browser, {phone, theme = 'dark'}) {
   await page.evaluate(async () => { FB.on = null; FB.asked.clear(); await v2Refresh(); tasksRender(TASKS_ST); decideOpen('approval:ap-1'); });
   const card = page.locator('#need-card .dc-card[data-key="approval:ap-1"]');
   await card.waitFor();
-  await page.waitForFunction(() => document.body.classList.contains('fb-on'));
+  await fbOn(page);
   const up = card.getByRole('button', {name: 'Good', exact: true});
   assert.equal(await up.isVisible(), true, 'a small pair on the card');
   await up.click();
@@ -336,7 +343,7 @@ async function taskRows(browser) {
   const {page, errors} = await open(browser, {hash: '#/tasks', baseTasks: [bot, person]});
   const {writes, reads} = await feedbackFake(page);
   await page.evaluate(() => { FB.on = null; FB.asked.clear(); tasksRender(TASKS_ST); });     // as in decideCard
-  await page.waitForFunction(() => document.body.classList.contains('fb-on'));
+  await fbOn(page);
   assert.deepEqual(reads.filter(r => r.type), [{type: 'task', ids: ['t-bot']}], 'one read, only for the task a bot asked for');
   assert.equal(await page.locator('[data-task-key="tt-person"] [data-fb]').count(), 0);
   const row = page.locator('#task-body [data-task-key="tt-bot"]');
@@ -445,7 +452,7 @@ async function taskRowPress(browser) {
   const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks', baseTasks: [bot]});
   const {writes} = await feedbackFake(page);
   await page.evaluate(() => { FB.on = null; FB.asked.clear(); tasksRender(TASKS_ST); });     // as in decideCard
-  await page.waitForFunction(() => document.body.classList.contains('fb-on'));
+  await fbOn(page);
   const title = page.locator('[data-task-key="tt-bot"] .tl-open');
   await press(page, title);
   const menu = page.locator('dialog.fb-menu[open]');

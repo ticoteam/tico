@@ -59,10 +59,6 @@ def api(tmp_path, api_database):
             # backend/tests/test_onboarding.py, not to every other test's front page.
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)",
                       (encode({"completed": "2026-01-01T00:00:00Z"}),))
-            # These bots sit on no chart, so nearby reach would refuse most of what they send; Everyone stays
-            # open here and backend/tests/test_reach_nearby.py clears it to test the default.
-            c.execute("INSERT INTO reach_settings(id, party_id, mode, created_at, updated_at, updated_by_id) "
-                      "VALUES('reach-everyone-open', '*', 'open', ?, ?, 'human:ana')", (H.now(), H.now()))
         yield client
 
 

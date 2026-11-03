@@ -9,7 +9,8 @@ messages a bot sent that reached another teammate (message_deliveries addressed,
 not digests, sub-thread followers or routing). Each goes through `reach.decide`, the one decision enforcement uses, with
 the same facts: the task they share (as it stood then), whether the receiver wrote to the bot first, and today's counts
 (taken from the replayed history itself). The chart, settings and lines are today's, so the report says what turning
-nearby on now would refuse for work like that.
+nearby on now would refuse for work like that. A bot with no manager counts as reporting to the owner, as enforcement
+has it, so "via" is the owner for those.
 
 It reports counts by sender → receiver, how many land on people, and totals by kind. A refusal it reports may still be
 one a system flow made in the bot's name (a routine posting as the bot): it errs toward reporting. Use a copy
@@ -149,7 +150,7 @@ def text(out):
         lines.append("")
         lines.append(f"{'count':>6}  sender -> receiver (manager it would go through)")
         for p in out["pairs"]:
-            via = f"  (via {p['via']})" if p["via"] else "  (no manager)"
+            via = f"  (via {p['via']})" if p["via"] else "  (no one to pass it on)"
             lines.append(f"{p['count']:>6}  {p['sender_name']} -> {p['receiver_name']}{via}")
     return "\n".join(lines)
 

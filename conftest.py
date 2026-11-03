@@ -147,3 +147,15 @@ def api_database(tmp_path_factory, request):
             source.backup(target)
     snapshot.with_suffix(".building").replace(snapshot)
     return snapshot
+
+
+@pytest.fixture(autouse=True)
+def reach_open_by_default(request, monkeypatch):
+    """Reach (backend/reach.py) starts bots `nearby`, and most test companies put their bots on no chart, so nearby
+    would refuse what a test about something else sends. Backend tests start Everyone open instead; the reach tests
+    (backend/tests/test_reach*.py) keep the shipped default and test it."""
+    path = request.node.path
+    if path.parent.name != "tests" or path.parent.parent.name != "backend" or path.name.startswith("test_reach"):
+        return
+    from backend import reach
+    monkeypatch.setitem(reach.DEFAULTS, "mode", "open")

@@ -455,12 +455,14 @@ def _ref(ctx, raw):
 
 def _managers(ctx):
     """{actor: its manager's actor or None}: every bot that is not archived (`bot_config.reports_to`) and every person
-    on the chart (`reports_to`, a person's id unless it names a bot)."""
+    on the chart (`reports_to`, a person's id unless it names a bot). A bot with no manager on the chart counts as
+    reporting to the company owner, so it reaches the owner and the other bots with no manager are its peers: a bot
+    that reaches no one would go silent."""
     if "_managers" not in ctx:
-        out = {}
+        out, top = {}, ctx.get("owner")
         for bid, row in ctx["bots"].items():
             if row.get("state") != "archived":
-                out["bot:" + bid] = _ref(ctx, (ctx["configs"].get(bid) or {}).get("reports_to"))
+                out["bot:" + bid] = _ref(ctx, (ctx["configs"].get(bid) or {}).get("reports_to")) or top
         for person in P.visible_people(ctx["roster"]):
             raw = str(person.get("reports_to") or "")
             out["human:" + person["id"]] = _ref(ctx, raw if ":" in raw or not raw else "human:" + raw)
@@ -476,7 +478,7 @@ def _teams(ctx):
 
 def nearby(ctx, actor):
     """{teammate: why} a bot in `nearby` reaches: its manager, its direct reports, its peers (the same manager) and the
-    members of the team it is in. A bot with no manager has no peers either."""
+    members of the team it is in. A bot with no manager on the chart has the owner as its manager (`_managers`)."""
     managers, teams = _managers(ctx), _teams(ctx)
     boss, team = managers.get(actor), teams.get(actor) or ""
     out = {boss: "manager"} if boss else {}
@@ -596,7 +598,9 @@ def _refused(ctx, code, sender, receiver, mode, line=None, cap=None, unseen=froz
         head = (f"A line on Rules › Internal blocks {s} from reaching {r}." if line["per_day"] == 0 else
                 f"{s} has reached {r} {line['per_day']} times today, the most its line on Rules › Internal allows.")
     elif mode == "nearby":
-        head = f"{r} is outside {s}'s reach: it reaches only its manager, its reports, its peers and its team"
+        boss_is = ("the owner (it has no manager on the chart)" if boss and boss == ctx.get("owner") and not
+                   _ref(ctx, (ctx["configs"].get(H.actor_id(sender)) or {}).get("reports_to")) else "its manager")
+        head = f"{r} is outside {s}'s reach: it reaches only {boss_is}, its reports, its peers and its team"
         head += f" ({shown})." if shown else "."
     else:
         head = f"{r} is outside {s}'s reach: it reaches only who its lines on Rules › Internal name"

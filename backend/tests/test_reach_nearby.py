@@ -2,8 +2,9 @@
 the writes that are never refused. Acme is the fictional company here.
 
 The chart: cpo reports to Ben; product-design reports to cpo; finance reports to cpo too (product-design's peer); ops
-reports to product-design; doc-updater has no manager and is on the Product team with cpo and product-design. Scout
-is a bot nobody is near. Cara is a person nobody here reports to. coo is the Assistant, a built-in helper."""
+reports to product-design; doc-updater has no manager and is on the Product team with cpo and product-design. A bot
+with no manager counts as reporting to the owner, Ana: doc-updater and Scout, which is on no team, are peers that way.
+Cara is a person nobody here reports to. coo is the Assistant, a built-in helper."""
 import json
 
 from backend import reach, task_allocator
@@ -15,7 +16,6 @@ from backend.tests.test_task_caps import as_bot
 
 def chart(api):
     with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM reach_settings WHERE party_id='*'")      # the fixture's open Everyone: back to default
         roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         roster["org_groups"] = {"product": {"name": "Product"}}
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
@@ -61,8 +61,10 @@ def test_nearby_is_the_manager_reports_peers_and_team_and_a_line_adds_one_with_i
     assert reach.nearby(found, "bot:product-design") == {
         "bot:cpo": "manager", "bot:finance": "peer", "bot:ops": "report", "bot:doc-updater": "team"}
     assert reach.nearby(found, "bot:cpo")["human:ben"] == "manager"
-    # No manager: its team and its reports only, no peers.
-    assert set(reach.nearby(found, "bot:doc-updater")) == {"bot:cpo", "bot:product-design"}
+    # No manager: the owner (Ana) stands in, so the other bots with no manager are its peers.
+    near = reach.nearby(found, "bot:doc-updater")
+    assert (near["human:ana"], near["bot:scout"], near["bot:cpo"], near["bot:product-design"]) == (
+        "manager", "peer", "team", "team")
     for receiver in ("bot:cpo", "bot:finance", "bot:ops", "bot:doc-updater"):
         assert reach.decide(found, "bot:product-design", receiver).allowed, receiver
     assert not reach.decide(found, "bot:product-design", "human:cara").allowed
@@ -109,6 +111,23 @@ def test_the_owner_is_reached_only_by_a_bot_that_reports_to_them(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot='product-design'")
     task(api, "pd-test", "human:ana", title="For the owner")
+
+
+def test_a_bot_with_no_manager_reports_to_the_owner(api):
+    chart(api)
+    # It reaches the owner and the other bots with no manager, never no one.
+    task(api, "doc-test", "human:ana", title="For the owner")
+    message(api, "doc-test", "bot:scout", "Can you take this?")
+    error = refused_code(api.post("/api/v2/tasks", json={"title": "To Cara", "body": "Scenario task.",
+                                                         "owner": "human:cara"}, headers=headers("doc-test")))
+    assert error["code"] == "reach_closed" and error["via"] == "human:ana"
+    assert "reaches only the owner (it has no manager on the chart)" in error["detail"]
+    assert "Send it to Ana, who can pass it on." in error["detail"] and "reaches no one" not in error["detail"]
+    assert {"human:ana", "bot:scout"} <= set(error["can_reach"])
+    # Given a manager, the owner is no longer its stand-in.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='cpo' WHERE bot='doc-updater'")
+    task(api, "doc-test", "human:ana", title="For the owner again", expected=409)
 
 
 def test_a_solicited_reply_and_work_on_a_shared_task_pass(api):
