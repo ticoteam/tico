@@ -2277,7 +2277,7 @@ impl Runner {
             while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
                 if ev["kind"] == "_diagnostics_drained" { break; }
                 if ev["process_exit"] == true {
-                    let clean = redactor.as_ref().map(|r| r.scrub_json(&ev)).unwrap_or(ev);
+                    let clean = redactor.as_ref().map(|r| r.scrub_json(&ev).into_owned()).unwrap_or(ev);
                     let _ = self.state.append(&aid, "error", &clean);
                 }
             }
@@ -2349,7 +2349,7 @@ impl Runner {
         let mut reply = std::mem::take(&mut drove.reply);
         let mut committed_secret = false;
         if let Some(r) = &redactor {
-            reply = r.scrub_text(&reply);
+            reply = r.scrub_text(&reply).into_owned();
             if host.is_some() {
                 let tree = scrub_changes(r, &execution_path, &started_at).await;
                 mark("scrubbed", &aid);
