@@ -40,11 +40,12 @@ def test_org_model_recommendations_are_only_the_published_starter_catalog(api):
 
 
 def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewrites_it_once(api, monkeypatch):
-    import time
-    started = time.monotonic()
+    # At once means the first draft is composed from the catalog and never reaches the model, so nothing waits on one.
+    # Checked by the calls made, not by the clock, which a loaded runner can stretch.
+    model_calls = []
+    monkeypatch.setattr(recruiting, "_rewrite_call", lambda *args, **kwargs: model_calls.append(args) or "")
     drafted = post(api, "seats/draft", {"title": "Customer support lead", "team": "Support"})
-    assert time.monotonic() - started < 1
-    assert drafted["source"] == "catalog"
+    assert drafted["source"] == "catalog" and model_calls == []
     text = drafted["description"]
     assert "\n\nWhat you'll do\n- " in text and "\n\nWorks in: " in text and not text.startswith("What")
     monkeypatch.setattr(recruiting, "_rewrite_call", lambda *_: (_ for _ in ()).throw(RuntimeError("no key")))

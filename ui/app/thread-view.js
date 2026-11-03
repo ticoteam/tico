@@ -34,8 +34,8 @@ function thvDraftSave(view) {
 // {header: 'compact'} keeps only its actions (call, Members, the thread menu), drawn into `actsHost` when given (a bar
 // the page owns). {compactEmpty: true} draws a Home with no messages as its composer alone, never a blank timeline, and
 // hides the card (`hideGone`) from a viewer who can't post either. {focus: message id} shows that message. {goals: slug}
-// (a bot's Home or DM) brings back the old chat's bar (pill.js): the goal (the target in the composer and the pinned
-// goal's bar, chat-goal.js), the bot's avatar that switches bots on a phone, Stop while it runs, and the "/" menu.
+// (a bot's Home or DM) brings back the old chat's bar (pill.js): the ways to send (Set as goal among them) and the
+// pinned goal's bar (chat-goal.js), the bot's avatar that switches bots on a phone, Stop while it runs, and the "/" menu.
 function threadMount(host, opts = {}) {
   const view = {key: ++THV_N, host, opts, id: '', thread: null, breadcrumb: [], messages: [], next: null, state: 'loading',
                 readAt: 0, openSeq: 0, readSent: new Map(), marks: new Map(), pending: [], replyTo: '', editing: '',
@@ -602,23 +602,27 @@ function thvComposerDraw(view) {
   if (!can) { host.hidden = true; return; }
   host.hidden = false;
   if (view.composer) return;
-  // One line, as the bot chat's pill was: (a bot's Home or DM: the bot, on a phone) Attach, the words, Goal, Send, which
-  // Stop replaces while the bot runs. `pill-thread` keeps the task question card's frame (.ask, ui/styles/task-files.css)
-  // off it. A bot's composer takes the old chat's "/" commands (slash-commands.js) through the hooks below.
+  // One line, as the bot chat's pill was: (a bot's Home or DM: the bot, on a phone) the words, Attach, the ways to send
+  // and Send, which Stop replaces while the bot runs. `pill-thread` keeps the task question card's frame (.ask,
+  // ui/styles/task-files.css) off it. A bot's composer takes the old chat's "/" commands (slash-commands.js) through the
+  // hooks below. `ways`: Send shows the person's kept way and every message names it; Set as goal is for one goal
+  // (chat-goal.js reads it too).
   const bot = view.opts.goals || null;
-  const C = view.composer = {files: [], lib: [], mention: null, slug: bot, thread: true, running: null, stopping: false,
+  const C = view.composer = {files: [], lib: [], mention: null, slug: bot, thread: true, running: null, stopping: false, ways: !!bot,
     label: () => thvComposerLabel(view), buttons: () => thvComposerButtons(view), goalsOf: () => view.goals,
     clear: () => thvComposerClear(view), command: text => thvComposerCommand(view, text), task: text => thvComposerTask(view, text),
     newChat: view.opts.dm ? () => thvNewDm(view) : null};
   host.innerHTML = `<div class="ask pill-thread thv-ask"><div class="p-pill">
       ${bot ? pillBotHTML(bot) : ''}
+      ${bot ? '<span class="thv-goal-chip" hidden>Goal<button type="button" aria-label="Leave goal" title="Leave goal">×</button></span>' : ''}
       <textarea class="p-text" rows="1" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="Message" placeholder="Message"></textarea>
-      ${view.goals ? '<button class="p-goal p-icon" type="button" title="Goal" aria-label="Goal" aria-pressed="false" hidden><span class="nav-icon" aria-hidden="true">target</span></button>' : ''}
       <span class="thv-attach-wrap"><button class="p-attach p-icon" type="button" title="Attach" aria-label="Attach" aria-haspopup="menu" aria-expanded="false">${ICON_CLIP}</button>
         <div class="p-menu thv-attach-menu" role="menu" hidden><button type="button" role="menuitem" data-attach="upload">Upload</button><button type="button" role="menuitem" data-attach="library">Library file</button></div></span>
       <input type="file" multiple hidden class="p-file">
-      ${bot ? `<button class="p-stop p-send-icon" type="button" aria-label="Stop" title="Stop" hidden>${ICON_STOP}</button>` : ''}
-      <button class="p-send p-send-icon" type="button" aria-label="Send" title="Send">${ICON_SEND}</button></div>
+      ${bot ? `<button class="p-stop p-send-icon" type="button" aria-label="Stop" title="Stop" hidden>${ICON_STOP}</button>
+      <span class="p-sendbox"><button class="p-way p-icon" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Ways to send" title="Ways to send"><span class="nav-icon" aria-hidden="true">expand_more</span></button>` : ''}
+      <button class="p-send p-send-icon" type="button" aria-label="Send" title="Send">${ICON_SEND}</button>${bot ? `
+      <div class="p-menu p-ways" role="menu" aria-label="Ways to send" hidden></div></span>` : ''}</div>
     <div class="p-chips"></div>
     ${bot ? '<div class="p-cmd" hidden></div>' : ''}
     <div class="p-menu thv-mentions" role="listbox" aria-label="Mention" hidden></div>
@@ -633,12 +637,11 @@ function thvComposerDraw(view) {
   });
   box.addEventListener('blur', () => setTimeout(() => thvMentionClose(view), 150));
   C.el.querySelector('.p-send').onclick = () => void thvComposerSend(view);
-  const goal = C.el.querySelector('.p-goal');
-  if (goal) goal.onclick = () => chatGoalButton(view.goals);
   if (bot) {
     pillBotWire(C.el.querySelector('.p-bot'), bot);
     C.el.querySelector('.p-stop').onclick = () => void pillStop(C);
     slashAttach(C);
+    thvWaysWire(view);
   }
   C.el.querySelector('.p-attach').onclick = ev => {
     const open = menu.hidden;
@@ -664,17 +667,16 @@ function thvComposerDraw(view) {
   thvComposerLabel(view);
   thvStopSync(view);
 }
-// Send says what it will do: the arrow, or "Set goal" in goal mode, and the empty box says so too (as pill.js
-// pillLabel). An empty box only dims it.
+// Send says what it will do: in a bot's Home or DM the way's icon (pill.js sendWayPaint), the target in goal mode,
+// with the Goal chip and the empty box saying so too; elsewhere the arrow. An empty box only dims it.
 function thvComposerLabel(view) {
   const C = view.composer, btn = C?.el.querySelector('.p-send'), box = C?.el.querySelector('.p-text');
   if (!btn) return;
-  const goal = chatGoalThreadMode(C), word = goal ? 'Set goal' : 'Send';
-  // The arrow is swapped only when the mode changes: a redraw between press and release would lose the click.
-  if (btn.dataset.shows !== word) { btn.innerHTML = goal ? esc(word) : ICON_SEND; btn.dataset.shows = word; }
-  btn.classList.toggle('p-send-goal', goal);
-  btn.setAttribute('aria-label', btn.disabled && btn.dataset.busy || word);
-  btn.title = btn.disabled && btn.dataset.busy || word;
+  const goal = chatGoalThreadMode(C);
+  if (C.ways) sendWayPaint(btn, thvWayMode(view));
+  else if (!btn.disabled) { btn.setAttribute('aria-label', 'Send'); btn.title = 'Send'; }
+  const chip = C.el.querySelector('.thv-goal-chip');
+  if (chip) chip.hidden = !goal;
   box.placeholder = goal ? `Goal for ${botDisplayName(C.slug)}…` : 'Message';
   thvComposerButtons(view);
 }
@@ -683,14 +685,73 @@ function thvComposerButtons(view) {
   if (!btn) return;
   const empty = !box.value.trim() && !C.files.length && !C.lib.length;
   btn.classList.toggle('p-off', empty);
-  // While the bot runs, Stop takes Send's place until something is typed: a message typed meanwhile still goes to it.
+  // While the bot runs, Stop takes Send's place (and the caret's) until something is typed: a message typed meanwhile
+  // still goes to it.
   const stop = C.el.querySelector('.p-stop');
   if (!stop) return;
   const show = !!C.running && empty;
   stop.hidden = !show; btn.hidden = show; stop.disabled = !!C.stopping;
+  const caret = C.el.querySelector('.p-way');
+  if (caret) { caret.hidden = show; if (show) thvWaysMenu(view, false); }
   const says = C.stopping ? 'Stopping…' : 'Stop';
   stop.title = says; stop.setAttribute('aria-label', says);
 }
+// ----------------------------------------------------------------- the ways to send (a bot's Home or DM)
+// Steer now, Queue, Defer with its durations, then Set as goal (deliveryMenuHTML, pill.js). Steer, Queue and Defer are
+// the person's kept way (sendWayPick); Set as goal enters goal mode (chat-goal.js) for one goal and is never kept.
+// Someone who may not message the bot (Write) defers with no deadline, as on a task they are not on.
+const thvDirects = view => botByRef(view.composer?.slug)?.my_access?.write !== false;
+// The way a message goes (never goal: a goal is not a message), and what Send shows (goal in goal mode).
+const thvSendMode = view => thvDirects(view) ? SEND_WAY : 'defer:never';
+const thvWayMode = view => chatGoalThreadMode(view.composer) ? 'goal' : thvSendMode(view);
+const thvGoalOffered = view => !!view.composer?.goalMode || !!view.goals?.goalSupported && !goalPinned(view.goals.goal);
+function thvWaysMenu(view, open) {
+  const C = view.composer, menu = C?.el.querySelector('.p-ways'), caret = C?.el.querySelector('.p-way');
+  if (!menu || !caret) return;
+  if (!open && menu.hidden) return;
+  const directs = thvDirects(view), current = thvWayMode(view);
+  menu.innerHTML = open ? deliveryMenuHTML({steer: directs, queue: directs, goal: thvGoalOffered(view), deadlines: directs,
+    current, deferFor: deliveryWay(current) === 'defer' ? deliveryFor(current) : 'never'}) : '';
+  menu.hidden = !open;
+  caret.setAttribute('aria-expanded', String(!!open));
+  // On a phone the keyboard stays up: focus stays in the box.
+  if (open && !touchKeyboard()) (menu.querySelector('[aria-checked="true"]') || menu.querySelector('button'))?.focus();
+}
+function thvWayPick(view, mode) {
+  const C = view.composer;
+  thvWaysMenu(view, false);
+  if (mode === 'goal') { if (!C.goalMode) chatGoalButton(view.goals); }
+  else {
+    if (C.goalMode) chatGoalButton(view.goals);      // a way to send leaves goal mode
+    sendWayPick(mode);
+  }
+  thvComposerLabel(view);
+  if (!touchKeyboard()) C.el.querySelector('.p-text')?.focus();
+}
+function thvWaysWire(view) {
+  const C = view.composer, q = sel => C.el.querySelector(sel), menu = q('.p-ways'), caret = q('.p-way');
+  // The caret, a right-click or a long press on Send open the menu.
+  caret.onclick = () => thvWaysMenu(view, menu.hidden);
+  sendWayHold(q('.p-send'), () => thvWaysMenu(view, true), () => !q('.p-send').disabled);
+  menu.onclick = ev => { const b = ev.target.closest?.('[data-deliver]'); if (b) thvWayPick(view, b.dataset.deliver); };
+  menu.addEventListener('keydown', ev => deliveryMenuKeys(menu, ev));
+  // Escape closes the menu only, wherever focus is in the composer.
+  C.el.addEventListener('keydown', ev => {
+    if (ev.key !== 'Escape' || menu.hidden) return;
+    ev.preventDefault(); ev.stopPropagation();
+    thvWaysMenu(view, false);
+    if (!touchKeyboard()) caret.focus();
+  }, true);
+  q('.thv-goal-chip button').onclick = () => { if (C.goalMode) chatGoalButton(view.goals); q('.p-text').focus(); };
+}
+// A press outside an open menu closes it; a way picked anywhere repaints every bot composer on screen.
+document.addEventListener('pointerdown', ev => {
+  for (const v of THV_VIEWS) {
+    const box = v.composer?.el.querySelector('.p-sendbox');
+    if (box && !box.querySelector('.p-ways').hidden && !box.contains(ev.target)) thvWaysMenu(v, false);
+  }
+});
+SEND_WAY_PAINT.add(() => { for (const v of THV_VIEWS) if (v.composer?.ways && !v.gone) thvComposerLabel(v); });
 // ----------------------------------------------------------------- Stop
 // The newest run in a bot's Home or DM, as the old chat read it (its conversation snapshot's execution: a thread id is a
 // conversation id, docs/dev/threads-contract.md); Stop shows while it runs (chat.js chatRunning).
@@ -869,19 +930,22 @@ async function thvComposerSend(view) {
     if (slash === true) return;
     if (slash !== 'plain' && runCommand(text, C.el.querySelector('.p-cmd'), C.slug)) { sessionAcknowledge(box); thvComposerClear(view); return; }
   }
+  // In a bot's Home or DM every message names the kept way (thread posts take delivery, backend/thread_api.py); in
+  // goal mode with a file attached it goes as a message, that way too.
+  const way = C.ways ? deliveryBody(thvSendMode(view)) : null;
   const files = C.files.splice(0), lib = C.lib.splice(0);
   box.value = ''; box.style.height = ''; thvChips(view);
   THV_DRAFTS.delete(thvDraftKey(view));
-  await thvSend(view, {text, files, lib});
+  await thvSend(view, {text, files, lib, way});
 }
 // One message out: a "Checking…" row while the rules check runs, then the message, or a held row the author can
 // edit, discard or (when the server allows) send anyway.
-async function thvSend(view, {text, files = [], lib = [], parent = null}) {
+async function thvSend(view, {text, files = [], lib = [], parent = null, way = null}) {
   const p = {key: 'p' + (++THV_N), text, files, lib, parent: parent?.id || '', depth: parent ? (Number(parent.depth) || 0) + 1 : 0, state: 'checking'};
   view.pending.push(p);
   thvDraw(view, {stick: !parent});
   const refs = lib.length ? {files: lib.map(f => ({id: f.id, title: f.title}))} : null;
-  const body = {text, ...(refs ? {refs} : {}), ...(parent ? {parent_message_id: parent.id} : {})};
+  const body = {text, ...(refs ? {refs} : {}), ...(parent ? {parent_message_id: parent.id} : {}), ...(way || {})};
   try {
     let r;
     // An upload goes to a thread, so a first message with files makes the DM before it sends.
@@ -891,7 +955,7 @@ async function thvSend(view, {text, files = [], lib = [], parent = null}) {
       if (t?.id) { view.thread = t; thvSetId(view, t.id); }
     }
     if (!view.id && view.opts.dm) {
-      r = await post('/v2/threads/dm', {members: [view.opts.dm], body: text, ...(refs ? {refs} : {})});
+      r = await post('/v2/threads/dm', {members: [view.opts.dm], body: text, ...(refs ? {refs} : {}), ...(way || {})});
       const t = r?.thread || r;
       if (t?.id) { view.thread = t; thvSetId(view, t.id); }
     } else {

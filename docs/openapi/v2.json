@@ -39414,6 +39414,33 @@
                     "title": "Titles",
                     "type": "array"
                   },
+                  "delivery": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "steer",
+                          "queue",
+                          "defer"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Delivery"
+                  },
+                  "defer_for": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Defer For"
+                  },
                   "files": {
                     "type": "array",
                     "maxItems": 10,
@@ -39472,6 +39499,33 @@
                     "maxItems": 10,
                     "title": "Titles",
                     "type": "array"
+                  },
+                  "delivery": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "steer",
+                          "queue",
+                          "defer"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Delivery"
+                  },
+                  "defer_for": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Defer For"
                   }
                 },
                 "title": "ThreadUpload",
@@ -46756,6 +46810,33 @@
             "type": "string",
             "title": "Title",
             "default": ""
+          },
+          "delivery": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "steer",
+                  "queue",
+                  "defer"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery"
+          },
+          "defer_for": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Defer For"
           }
         },
         "type": "object",
@@ -68638,6 +68719,33 @@
               }
             ],
             "title": "Parent Message Id"
+          },
+          "delivery": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "steer",
+                  "queue",
+                  "defer"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery"
+          },
+          "defer_for": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Defer For"
           }
         },
         "type": "object",
