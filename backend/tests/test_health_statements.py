@@ -2,6 +2,7 @@
 (Nov 3: 384 statements and 1.2 s a call on the Tico Team hub, rising with the data)."""
 import collections
 import contextlib
+import os
 import re
 import time
 import uuid
@@ -88,6 +89,12 @@ def test_health_statements_do_not_grow_with_history(api):
     seed(api, "few", 6)
     history(api, 3)
     bulk(api)
+    from backend.tests.test_api import post
+    for round_ in range(int(os.environ.get("QUEUED", "0"))):
+        for n in range(6):
+            post(api, f"chat/few-{n:02d}", {"text": f"More {round_}"})
+        for n in range(34):
+            post(api, f"chat/many-{n:02d}", {"text": f"More {round_}"})
     health(api)                                   # first-time reads
     _, small = health(api)
     seed(api, "many", 34)
