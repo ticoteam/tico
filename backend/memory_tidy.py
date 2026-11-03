@@ -27,6 +27,16 @@ DATE = re.compile(r"\b(20\d\d-\d\d-\d\d)\b")
 BULLET = re.compile(r"^[-*] ")
 DATED_BULLET = re.compile(r"^[-*] (?:\*\*)?20\d\d-")
 LOG_HEADINGS = {"Log", "Learning log", "Dated learnings"}
+
+
+def snapshot_metrics(snapshot):
+    """Sizes of an exact Git snapshot, never a proposed diary's claimed sizes."""
+    text = snapshot.get(LEARNINGS)
+    parsed = parse(text or '')
+    return {'rule_count': len(parsed.rules) if parsed.layout_found else None,
+            'rule_characters': sum(len(r.text) for r in parsed.rules) if parsed.layout_found else None,
+            'learnings_bytes': len(text.encode()) if text is not None else None,
+            'memory_knowledge_bytes': sum(len(v.encode()) for k, v in snapshot.items() if _allowed(k))}
 SOURCE_ID = re.compile(r"\be[0-9a-f]{16}-[1-9][0-9]*\b")
 ARCHIVE_RECORD = re.compile(r"^<!-- memory-tidy source=(e[0-9a-f]{16}-[1-9][0-9]*) chars=([0-9]+) -->\n", re.M)
 

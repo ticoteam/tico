@@ -909,6 +909,12 @@ class Scheduler:
                                      "asks cleared": ended.get("asks") or [],
                                      "asked cards expired": ended.get("cards") or [],
                                      "tidy cards withdrawn": tidy_expired}, none="Nothing expired"))
+            try:
+                from . import memory_tidy_report
+                with self.store.transaction() as c:
+                    memory_tidy_report.weekly(c, self.execution.auth, stamp(at))
+            except Exception as exc:
+                failures.append({'memory_tidy_report': type(exc).__name__})
             # A Finance action whose approval was decided, withdrawn or expired ends now (its hold released).
             try:
                 from .finance import actions as finance

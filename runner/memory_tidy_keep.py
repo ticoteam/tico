@@ -96,6 +96,13 @@ class Git:
         return result
 
 
+def completion(g, commit):
+    parent = g.text('rev-parse', commit + '^')
+    return {'status': 'kept', 'commit': commit, 'reason': '', 'metrics': {
+        'parent_commit': parent, 'before': contract.snapshot_metrics(g.snapshot(parent)),
+        'after': contract.snapshot_metrics(g.snapshot(commit))}}
+
+
 def apply(repo, request, *, before_push=None, journal=None):
     """Three non-force attempts; remote marker recovers a lost completion response."""
     ident = request['id']
@@ -122,7 +129,7 @@ def apply(repo, request, *, before_push=None, journal=None):
             parts = history.split('\0')
             for i in range(0, len(parts) - 1, 2):
                 if marker in parts[i+1].splitlines():
-                    return {'status': 'kept', 'commit': parts[i].strip(), 'reason': ''}
+                    return completion(g, parts[i].strip())
             if local.run('status', '--porcelain').stdout:
                 raise Refused('Bot checkout has uncommitted writes; Keep can be tried after they are saved')
             local_head = local.text('rev-parse', 'HEAD')
@@ -150,14 +157,14 @@ def apply(repo, request, *, before_push=None, journal=None):
                 tmp.replace(journal)
             pushed = g.run('push', '--porcelain', 'origin', commit + ':refs/heads/main', check=False)
             if pushed.returncode == 0:
-                return {'status': 'kept', 'commit': commit, 'reason': ''}
+                return completion(g, commit)
             # Includes uncertain transport failure: fetch again and detect our marker.
         g.run('fetch', '--quiet', 'origin', 'refs/heads/main')
         head = g.text('rev-parse', 'FETCH_HEAD')
         history = g.run('log', '--format=%H%x00%B%x00', request['memory_commit'] + '..' + head).stdout.decode().split('\0')
         for i in range(0, len(history) - 1, 2):
             if marker in history[i+1].splitlines():
-                return {'status': 'kept', 'commit': history[i].strip(), 'reason': ''}
+                return completion(g, history[i].strip())
         raise Refused('Main could not be updated after three push attempts; card remains open')
 
 

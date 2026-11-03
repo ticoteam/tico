@@ -154,6 +154,60 @@ today (the thread, the task, the mailbox, the meeting); anything else is counted
 
 ## Nightly memory tidy contract (developer integration)
 
+### Pilot reports and correction evidence
+
+The existing hourly maintenance clock delivers each completed pilot week (weeks 1
+and 2) once to the installation owner and named reviewer as private report tasks.
+The first admitted pilot night anchors the two preceding baseline weeks. With no
+pilot ledger, nothing is delivered. This adds no enabled routine or model call.
+
+The owner and named reviewer can refresh a report for late decisions or reversions:
+`hub api GET 'memory-tidy/report?pilot_start=2026-11-02T11:30:00Z&week=1'`.
+The response contains structured data and Markdown. Windows are half open, in UTC;
+the pass-start cohort stays fixed and decisions are read as of report generation.
+Passes run use actual starts/completed results, not retries or free skips. Keep
+requires its landed commit. Discard, withdrawn cards and skips by reason are
+separate. Each pass carries its own provider-table cost estimate, including
+subscriptions; all-time estimated spend comes from the admission ledger's $50 stop.
+There is no first measured figure, carried cost or wake-cost line.
+
+A person with access to the bot, or the named reviewer, records a correction with
+`POST /api/v2/memory-tidy/corrections` (also `hub api POST memory-tidy/corrections`):
+
+```json
+{"bot":"ops","occurred_at":"2026-11-03T12:00:00Z","evidence":"https://acme.example/tasks/one#comment-two","reason":"The release date was wrong."}
+```
+
+This is an explicit tag on evidence, not a classifier of conversation text.
+The bot/evidence pair counts once; changing that record is refused. Generic
+replies and a bot's self-corrections are never inferred. The dated record may
+describe an earlier event, but it does not make uncovered history complete.
+Its recorder, the owner or named reviewer can remove an incorrect tag using
+`DELETE /api/v2/memory-tidy/corrections` with `bot` and `evidence` in the body;
+refresh the report after a removal or late record.
+
+Keep's computer reports rule counts/characters, learnings file bytes and total
+memory/knowledge bytes from the exact landed commit and its parent, including
+stale-anchor skips. Older Keep results without those measurements show unknown.
+The report labels these as applied Keep snapshots rather than total daily growth.
+Pushed history includes full bounded commit messages separately from truncated
+display diffs. A standard `This reverts commit <sha>.` line links a revert to a
+landed Keep. Revert messages use `Reason: ...`; lost-rule reversions also require
+`Reason: lost a rule`, `Lost-rule: <the lost rule>` and `Evidence: <link>`.
+Missing or incomplete reasons leave the lost-rule result unknown. Other reasons
+count only as reverted. Each kept commit counts once even if reported repeatedly.
+
+Zero requires coverage of the whole observed period. Bounded computer-history
+ranges retain gaps; an old computer cannot establish zero reversions. Corrections
+are covered from this feature's installation, never retroactively. Reopened tasks
+use done/closed-to-open history events and event-time ownership; each reopening
+counts once, and a baseline is known only if retained history reaches its start.
+Under the pilot's approved definitions the historical correction and lost-rule
+baseline is unknown. Every unknown is named and prevents a two-week Goal pass.
+The report still evaluates the 60% Keep threshold, rule-loss reversions, comparisons
+and progress toward 20,000 rule characters (a target, not a hard stop). Report
+generation never switches the pilot on or approves additional spending.
+
 `backend.memory_tidy` is the read-only proposal boundary. It does not schedule a
 pass, call a model, create a reviewer card, persist a run, or apply Keep. Those callers
 must enforce the pilot list, named model without fallback, low effort and the $50

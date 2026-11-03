@@ -17,6 +17,7 @@ from pydantic import Field
 
 from . import models as M
 from .memory_tidy import Result
+from .memory_tidy_report import KeepMetrics
 from .still_needed import crossed_at
 from .store import H, Problem
 
@@ -157,6 +158,7 @@ class MemoryTidyCompletion(M.Contract):
     status: Literal['kept', 'refused']
     commit: str = ''
     reason: str = Field(default='', max_length=500)
+    metrics: KeepMetrics | None = None
 
 
 def install(app, store, auth, mutate):
@@ -243,6 +245,10 @@ def install(app, store, auth, mutate):
             c.execute('UPDATE memory_tidy_keeps SET status=?,commit_sha=?,reason=? WHERE id=?',
                       (body.status, body.commit, body.reason, ident))
             if body.status == 'kept':
+                if body.metrics is not None:
+                    c.execute('INSERT OR IGNORE INTO memory_tidy_keep_metrics VALUES(?,?,?,?,?)',
+                              (row['card_id'], body.metrics.parent_commit, body.commit,
+                               json.dumps(body.metrics.before.model_dump()), json.dumps(body.metrics.after.model_dump())))
                 c.execute("UPDATE memory_tidy_cards SET status='kept',decided_at=?,decided_by=?,reason=? WHERE id=?",
                           (H.now(), row['requested_by'], '', row['card_id']))
             else:

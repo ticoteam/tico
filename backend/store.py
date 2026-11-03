@@ -1212,6 +1212,9 @@ class Store:
             c.executescript(_cards.SCHEMA)
             from . import memory_tidy_cards as _memory_tidy_cards
             c.executescript(_memory_tidy_cards.SCHEMA)
+            from . import memory_tidy_report as _memory_tidy_report
+            c.executescript(_memory_tidy_report.SCHEMA)
+            _memory_tidy_report.ensure(c)
             from . import task_manager as _task_manager
             c.executescript(_task_manager.SCHEMA)
             from . import bookkeeper as _bookkeeper

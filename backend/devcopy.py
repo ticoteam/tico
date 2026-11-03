@@ -47,7 +47,8 @@ EMPTY = (
     # reconnect cards: an open one is a wake the copy could send; the refusals only settle those
     "task_reconnects", "google_signin_refusals",
     # Pass deadlines can withdraw tasks; a rehearsal copy never resumes that work.
-    "memory_tidy_passes", "memory_tidy_packets",
+    "memory_tidy_passes", "memory_tidy_packets", "memory_tidy_corrections", "memory_tidy_keep_metrics",
+    "memory_tidy_reverts", "memory_tidy_report_coverage",
     # routines and watchers
     "webhooks", "webhook_events", "webhook_sends", "webhook_attempts",   # outgoing: a copy never sends an event out
     "task_rules", "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "trigger_bodies", "trigger_seen", "rule_events_seen", "rule_task_runs", "rule_task_state", "trigger_relays", "hook_relay_state", "sleep_idle_state", "tico_notices", "mail_items", "mail_intake", "mail_reads", "mail_private_backfill", "watcher_runs", "watcher_items", "watcher_refs",
@@ -147,7 +148,8 @@ KEEP = frozenset((
     "message_links_seen", "notes", "pages", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
     "recording_source_refs", "recording_transcripts", "org_rules", "org_rule_misses", "redesign_migrated", "refusals", "registry_metadata", "repositories", "rule_due_dates", "rule_due_status", "rule_reads", "rule_sources", "rule_suggestions", "rules", "run_backoff", "runners",
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
-    "memory_tidy_cards", "memory_tidy_keeps", "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_events", "strategy_versions",
+    "memory_tidy_cards", "memory_tidy_keeps", "memory_tidy_corrections", "memory_tidy_keep_metrics",
+    "memory_tidy_reverts", "memory_tidy_report_coverage", "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_events", "strategy_versions",
     "system_runs", "tags", "task_assets",
     "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
     "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
