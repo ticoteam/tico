@@ -27,9 +27,14 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub thread show <thread> [--cursor C]      one thread in tree order: a message's sub-thread sits under it
     hub thread home <actor>                    a teammate's Home thread, made on first use (needs Read on them)
     hub thread dm <actor>                      your DM with one person or bot: the open one, or a new one (needs Write)
-    hub thread dm-group <actor> <actor> [...] [--body "<text>"]   a group DM with these people or bots; --body is the first message
+    hub thread dm-group <actor> <actor> [...] [--body "<text>"] [--title T]   a group DM with these people or bots;
+                                               --body is the first message; a new one with 2+ others needs --title
     hub thread create ["<title>"] [--audience members|team|company|personal] [--group G] [--member ACTOR ...]
-                    [--body "<text>"]          the first message goes in with --body
+                    [--body "<text>"] [--pin-for-members]   the first message goes in with --body; a title is needed
+                                               unless it is a DM with one teammate
+    hub thread pin|unpin <thread>              pin a thread for yourself, or unpin it (even one pinned for everyone)
+    hub thread catch-up [--cursor C] [--limit N]   each thread with something new for you, mentions first, with its
+                                               new messages; mark one read with hub thread read <thread> --all
     hub thread post <thread> "<text>" [--kind say|ask] [--to ACTOR] [--ref KIND:ID ...]
     hub thread reply <thread> <message> "<text>"   a side topic: the reply goes in that message's sub-thread
     hub thread edit <message> "<text>"         edit a message you wrote: a new revision
@@ -44,6 +49,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub thread search "<words>" [--cursor C]   the messages in threads you can read
     hub thread members list|add|remove <thread> [<actor>] [--owner]   actors: human:<id>, bot:<slug>, group:<id>
     hub thread update <thread> [--title T] [--archive|--unarchive] [--audience ...] [--group G] [--keep-days N|--keep-forever]
+                    [--pin-for-everyone|--unpin-for-everyone]   a pin for everyone: its starter or an admin
     hub thread link-slack <thread> [<channel>] [--history] [--off]
                                            a thread's Slack link (admins): with a channel, asks for it and Tico
                                            checks it; --history also brings the channel's earlier messages; --off
@@ -1132,6 +1138,16 @@ def parser():
     s.add_argument("--thread-only", dest="scope", action="store_const", const="thread", default="subtree",
                    help="this thread only, not its sub-threads")
     s.set_defaults(fn="thread catchup")
+    s = thread.add_parser("catch-up", help="each thread with something new for you, mentions first, with its new messages")
+    s.add_argument("--cursor", help="the page after this cursor: a page's next_cursor")
+    s.add_argument("--limit", type=int, help="items in this page (default 20, at most 50)")
+    s.set_defaults(fn="thread catch-up")
+    s = thread.add_parser("pin", help="pin a thread for yourself: it stays at the top of your list")
+    s.add_argument("thread")
+    s.set_defaults(fn="thread pin")
+    s = thread.add_parser("unpin", help="unpin a thread for yourself, even one pinned for everyone")
+    s.add_argument("thread")
+    s.set_defaults(fn="thread unpin")
     s = thread.add_parser("list", help="your threads: needs attention first, then unread, then recent; DMs apart")
     s.add_argument("--with", dest="with", metavar="ACTOR", help="only the threads shared with this person, bot or group")
     thread_page_flags(s)
@@ -1146,6 +1162,7 @@ def parser():
     s = thread.add_parser("dm-group", help="a group DM with several people or bots, with an optional first message")
     s.add_argument("members", nargs="+", metavar="ACTOR", help="human:<id> or bot:<slug>; one or more")
     s.add_argument("--body", help="the first message")
+    s.add_argument("--title", help="its name: needed for a new group DM with two or more others")
     s.set_defaults(fn="thread dm-group")
     s = thread.add_parser("dm", help="your DM with one person or bot: the open one, or a new one")
     s.add_argument("actor", help="human:<id> or bot:<slug>")
@@ -1157,6 +1174,8 @@ def parser():
     s.add_argument("--member", dest="members", action="append", metavar="ACTOR",
                    help="a person, bot or group to add: human:<id>, bot:<slug> or group:<id>; repeat for more")
     s.add_argument("--body", help="the first message")
+    s.add_argument("--pin-for-members", dest="pin_for_members", action="store_true",
+                   help="pin it for you and every person you add")
     s.set_defaults(fn="thread create")
     s = thread.add_parser("post", help="post a message to a thread")
     s.add_argument("thread")
@@ -1251,6 +1270,10 @@ def parser():
     s.add_argument("--keep-days", dest="retention_days", type=int,
                    help="delete its messages after this many days, sub-threads included (a root thread's owner or admin)")
     s.add_argument("--keep-forever", dest="keep_forever", action="store_true", help="keep its messages for good")
+    s.add_argument("--pin-for-everyone", dest="pinned_for_everyone", action="store_const", const=True,
+                   help="pin it for everyone who reads it (its starter or an admin)")
+    s.add_argument("--unpin-for-everyone", dest="pinned_for_everyone", action="store_const", const=False,
+                   help="take its pin for everyone off")
     s.set_defaults(fn="thread update")
     s = thread.add_parser("link-slack", help="link a thread to a Slack channel (admins), list its links, or --off to take them away")
     s.add_argument("thread", help="the thread's id")

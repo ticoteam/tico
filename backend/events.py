@@ -479,6 +479,16 @@ THREAD_TRIGGERS = [
     ("changes_threads_attention_followers", "UPDATE", "thread_followers",
      _changed("last_read_seq", "following"),
      _row("threads", "attention", "NEW.thread_id", ref="NEW.actor", conversation="NEW.thread_id")),
+    # `pinned` (backend/thread_rail.py): a reader's own pin goes only to that reader (`ref`), a pin for everyone (no
+    # `ref`) to everyone who reads the thread.
+    ("changes_thread_pins_insert", "INSERT", "thread_pins", None,
+     _row("threads", "pinned", "NEW.thread_id", ref="NEW.actor", conversation="NEW.thread_id")),
+    ("changes_thread_pins_update", "UPDATE", "thread_pins", _changed("pinned"),
+     _row("threads", "pinned", "NEW.thread_id", ref="NEW.actor", conversation="NEW.thread_id")),
+    ("changes_thread_pins_delete", "DELETE", "thread_pins", None,
+     _row("threads", "pinned", "OLD.thread_id", ref="OLD.actor", conversation="OLD.thread_id")),
+    ("changes_threads_pinned", "UPDATE", "conversations", _changed("pinned_for_everyone_at"),
+     _row("threads", "pinned", "NEW.id", conversation="NEW.id")),
 ]
 TRIGGERS += THREAD_TRIGGERS
 
@@ -501,6 +511,7 @@ NEEDS = {
     "changes_runner_task_links_delete": ("task_links.computer_id",),
     "changes_runner_restart": ("runners.restart_requested_at",),
     "changes_threads_insert": ("conversations.parent_id",),
+    "changes_threads_pinned": ("conversations.pinned_for_everyone_at",),
     "changes_threads_update": ("conversations.archived_at", "conversations.audience",
                                "conversations.audience_group_id"),
 }
@@ -1250,6 +1261,8 @@ def _threads(view, rows):
             continue
         if row["kind"] in ("read", "attention") and row["ref"] != view.who.actor:
             continue
+        if row["kind"] == "pinned" and row["ref"] and row["ref"] != view.who.actor:
+            continue                # one reader's own pin; a pin for everyone has no `ref`
         # Reactions are per message: one event for each message whose reactions moved.
         last[(row["subject_id"], row["kind"], row["ref"] if row["kind"] == "reactions" else None)] = row
     view.prime(subject for subject, _, _ in last)
@@ -1279,6 +1292,10 @@ def _threads(view, rows):
         elif kind == "counters":
             entry["counters"] = {"last_seq": found.get("last_seq") or 0,
                                  "last_unread_seq": found.get("last_unread_seq") or 0}
+        elif kind == "pinned":
+            own = threads.pin_rows(view.c, view.who.actor, [tid]).get(tid)
+            entry.update(actor=view.who.actor, pinned_for_everyone=bool(found.get("pinned_for_everyone_at")),
+                         pinned=threads.pinned(found.get("pinned_for_everyone_at"), own))
         elif kind in ("attention", "unsent"):
             pass        # the reader's needs-you set moved: the client re-reads it, nothing else is sent
         elif kind == "ranked":
