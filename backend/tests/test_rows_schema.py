@@ -13,6 +13,7 @@ from backend.store import Store
 
 TABLES = {
     rows.TaskRow: "tasks",
+    rows.TaskCheckBackWakeRow: "task_check_back_wakes",
     rows.AttemptRow: "attempts",
     rows.RunnerRow: "runners",
     rows.ApprovalRow: "approvals",
@@ -21,16 +22,18 @@ TABLES = {
     rows.MemoryTidyPassRow: "memory_tidy_passes",
     rows.MemoryTidyPacketRow: "memory_tidy_packets",
     rows.ThreadRankingRow: "thread_rankings",
+    rows.FeedbackRow: "feedbacks",
+    rows.UsageFactRow: "usage_facts",
+    rows.UsageMeterReadRow: "usage_meter_reads",
+    rows.BudgetNodeRow: "budget_nodes",
 }
 
 
 # Tables with no TypedDict in backend/rows.py yet. Shrink-only: a table that gains a TypedDict must leave this list
 # in the same change, and adding a name here is a visible decision in review, not a way around the row shapes.
 UNTYPED = frozenset({
-    # Native threads (backend/threads.py, calls, federation, Slack threads), merged before their row shapes.
-    "call_holds", "call_participants", "calls", "federation_deferrals", "federation_directory_entries",
-    "federation_items", "federation_keys", "federation_members", "federation_messages", "federation_outbox_items",
-    "federation_peerings", "federation_receipts", "federation_states", "federation_threads", "message_deliveries",
+    # Native threads (backend/threads.py, calls, Slack threads), merged before their row shapes.
+    "call_holds", "call_participants", "calls", "message_deliveries",
     "message_mentions", "message_reactions", "message_revisions", "sequences", "slack_inbound_events",
     "slack_link_members", "slack_message_links", "slack_thread_links", "teammate_accesses", "thread_digests",
     "thread_earlier_notices", "thread_followers", "thread_followups", "thread_members", "thread_routings",
@@ -38,6 +41,8 @@ UNTYPED = frozenset({
     # Finance's combined build (migration 0037): prepaid postings and invoice reminders.
     "fin_invoice_reminders", "fin_prepaid_postings",
     "memory_tidy_keeps", "pending_subscription_fallbacks", "projects", "record_aliases", "subscription_connects",
+    # Reach (backend/reach.py): settings and lines.
+    "reach_lines", "reach_settings",
     # The Company page (backend/company_page).
     "audience_readers", "audience_sources", "audiences", "company_page_settings", "disclosure_revisions",
     "disclosure_rules", "edition_checks", "edition_sources", "edition_views", "editions", "page_releases", "page_stats",
@@ -75,7 +80,7 @@ UNTYPED = frozenset({
     "granola_connections", "growth_channels", "growth_cohorts",     "growth_settings", "gtm_sources", "health_findings", "health_reports",
     "hook_relay_state", "hosting_enrollments", "human_tokens", "humans", "idempotency", "idempotency_messages",
     "import_refs", "inbound_inboxes", "inbound_messages", "inbound_sync", "intake_items", "invariant_state",
-    "invite_sends", "job_recovery", "jobs", "kpi_definitions", "kpi_readings", "kpis", "learned_entries",
+    "job_recovery", "jobs", "kpi_definitions", "kpi_readings", "kpis", "learned_entries",
     "learning_cursors", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs",
     "linked_docs", "listen_items", "listen_judgments", "listen_runs", "listening_destinations", "live_meeting_access",
     "live_meeting_bots", "live_meeting_chat", "live_meeting_chat_routes", "live_meeting_chunk_versions",
@@ -106,8 +111,8 @@ UNTYPED = frozenset({
     "task_manager_seen", "task_milestone_waits", "task_reconnects", "task_relations", "task_reminders",
     "task_requesters", "task_roles", "task_rules", "task_run_models", "task_steps", "task_tags", "task_trash",
     "task_trash_assets", "task_types", "tico_notices", "tico_storage", "trigger_bodies", "trigger_deliveries",
-    "trigger_relays", "trigger_seen", "triggers", "turn_usage_segments", "turns", "update_archive_overrides",
-    "update_queue", "update_reads", "update_settings", "updates", "usage_alerts", "usage_limits", "usage_pools",
+    "trigger_relays", "trigger_seen", "triggers", "turns", "update_archive_overrides",
+    "update_queue", "update_reads", "update_settings", "updates", "usage_alerts",
     "watcher_items", "watcher_pending", "watcher_refs", "watcher_runs", "watcher_triage", "webhook_attempts",
     "webhook_events", "webhook_sends", "webhooks", "worktree_waits"
 })

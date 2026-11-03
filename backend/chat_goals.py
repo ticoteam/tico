@@ -34,6 +34,11 @@ def capabilities(c, auth, conv):
         # A task's own room is its owning bot's, whoever else is in it (a requesting bot).
         owner = (H.task(c, conv["task_id"]) or {}).get("owner_id") or ""
         bots = [H.actor_id(owner)] if H.is_bot(owner) else []
+    elif not bots and conv.get("audience") in ("personal", "members") and not conv.get("parent_id"):
+        # A DM made as threads make one (threads.dm) lists its people as members, not participants: a bot's DM is
+        # the bot's chat, as the bot's chat room was.
+        bots = [H.actor_id(r[0]) for r in c.execute(
+            "SELECT actor FROM thread_members WHERE thread_id=? AND actor LIKE 'bot:%'", (conv["id"],))]
     if len(bots) != 1 or bots[0] == auth.settings.assistant_bot:
         return None, False, []
     bot = bots[0]

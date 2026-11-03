@@ -2,7 +2,7 @@
 
 The command surface (docs/history/hub-v2.md §5) and the exit codes are the contract every bot's AGENT.md
 depends on: 0 fine, 2 refused or a non-retryable API error, 1 anything else. The real HTTP round
-trip is `runner/tests/test_conformance.py`; here the API is a stub or absent.
+trip is `runner_support/tests/test_conformance.py`; here the API is a stub or absent.
 """
 import contextlib
 import io
@@ -22,8 +22,9 @@ import pytest
 from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
-SUBCOMMANDS = ["whoami", "inbound", "connections", "mail", "company-page", "audiences", "editions", "readers", "meeting", "message", "conversation", "thread", "question", "note", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
-               "proposal", "rules", "strategy", "brand", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "peer", "trigger", "relay", "call", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
+ALIASES = {"approvals", "automations", "bots", "rule", "tasks"}
+SUBCOMMANDS = ["whoami", "inbound", "connections", "mail", "company-page", "audiences", "editions", "readers", "meeting", "message", "conversation", "thread", "question", "note", "feedback", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
+               "proposal", "rules", "strategy", "brand", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "call", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "origin", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
                "credential", "slack", "support", "health-monitor", "finance", "task-manager", "stall-triage", "roadmap", "service-key"]
 
@@ -278,7 +279,9 @@ def test_product_repository_cli_confirms_without_a_terminal_only_with_the_exact_
 class Parser(unittest.TestCase):
     def test_every_subcommand_is_still_there(self):
         text = hubcli.parser().format_help()
-        self.assertIn("{" + ",".join(SUBCOMMANDS) + "}", text)
+        # The plural aliases (`tasks`, `bots`, ...) sit in the same braces; the commands themselves keep their order.
+        choices = text.split("{", 1)[1].split("}", 1)[0].split(",")
+        self.assertEqual([c for c in choices if c not in ALIASES], SUBCOMMANDS)
 
     def test_task_update_help_and_mcp_offer_only_writable_statuses(self):
         from clients import hubtools
@@ -831,6 +834,14 @@ def test_hub_notice_list_is_not_the_renamed_notice_send():
     assert argv == ["message", "send", "Deploy done", "--fyi"] and "is now" in said
 
 
+def test_goal_checkin_list_with_the_list_word_is_checkin_list():
+    """`goal checkin list <id>` is the noun-sub-noun-verb form of `goal checkin-list <id>`: matched before the parse, so it
+    never posts a check-in on a goal named "list"."""
+    argv, said = hubcli.rename_argv(["goal", "checkin", "list", "g1"])
+    assert argv == ["goal", "checkin-list", "g1"] and "is now" in said
+    assert hubcli.parser().parse_args(argv).fn == "goal checkin-list"
+
+
 class _Recorder:
     """A client for `remotecli.run` that records each write and whether it asked to act as the requester."""
     calls = []
@@ -1170,6 +1181,30 @@ def test_rules_withdraw_posts_an_empty_body_to_the_hold_withdraw_route(monkeypat
     client.post.assert_called_once_with("rule-holds/h7/withdraw", {}, key=None)
 
 
+def test_assistant_withdraw_posts_the_reason_to_the_card_route(monkeypatch):
+    """`hub assistant withdraw <id> --reason ...` runs `hub_assistant_withdraw`: POST assistant/actions/{id}/withdraw."""
+    from clients import remotecli
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.return_value = {"actor": "bot:botops"}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["assistant", "withdraw", "a7", "--reason", "Wrong person"]))
+    client.post.assert_called_once_with("assistant/actions/a7/withdraw", {"reason": "Wrong person"}, key=None)
+
+
+def test_assistant_proposals_lists_the_callers_waiting_cards(monkeypatch):
+    """`hub assistant proposals` runs `hub_assistant_proposals`: GET assistant/proposals."""
+    from clients import remotecli
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.return_value = {"actions": []}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["assistant", "proposals"]))
+    client.get.assert_called_with("assistant/proposals")
+
+
 def test_connection_list_reaches_the_connections_route_with_its_paging(monkeypatch):
     """`hub connections list --limit 5 --cursor c2` runs `hub_connections_list`: GET connections with the page."""
     from clients import remotecli
@@ -1181,3 +1216,94 @@ def test_connection_list_reaches_the_connections_route_with_its_paging(monkeypat
     remotecli.run(hubcli.parser().parse_args(["connections", "list", "--limit", "5", "--cursor", "c2"]))
     from unittest.mock import call
     assert call("connections", limit=5, cursor="c2") in client.get.call_args_list
+
+
+def test_task_check_back_reaches_the_same_api_from_cli_and_mcp(monkeypatch):
+    from clients import hubtools, remotecli
+    calls = []
+    class Api:
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False
+        def get(self, path, **query):
+            return {"actor": "human:ana"}
+        def post(self, path, body=None, key=None):
+            calls.append((path, body))
+            return {"task": {"id": "t1", "check_back_at": "2026-11-03T10:00:00Z"}}
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    remotecli.run(hubcli.parser().parse_args(["task", "check-back", "t1", "--in", "45m", "--for", "Inspect the result."]))
+    hubtools.task_check_back(Api(), {"id": "t1", "at": "45m", "note": "Inspect the result."})
+    assert calls == [("tasks/t1/check-back", {"at": "45m", "note": "Inspect the result."})] * 2
+
+
+def test_the_background_card_names_its_person_on_the_wire(monkeypatch):
+    """`hub assistant propose --for human:<id>` reaches the server as the body's `for`: remotecli.run used to drop it."""
+    from clients import hubcli, remotecli
+    client = mock.Mock()
+    client.post.return_value = {"action": {"id": "a1"}}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["assistant", "propose", "--summary", "Archive the Ops bot",
+                                              "--path", "/api/v2/bots/ops/archive", "--body", '{"expected_revision": 1}',
+                                              "--for", "human:ana"]))
+    path, body = client.post.call_args.args[0], client.post.call_args.args[1]
+    assert path == "assistant/actions"
+    assert body["for"] == "human:ana" and body["path"] == "/api/v2/bots/ops/archive" and body["method"] == "POST"
+
+
+def test_a_propose_without_for_sends_no_recipient(monkeypatch):
+    from clients import hubcli, remotecli
+    client = mock.Mock()
+    client.post.return_value = {"action": {"id": "a1"}}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["assistant", "propose", "--summary", "Archive", "--path", "/api/v2/bots/ops/archive"]))
+    assert "for" not in client.post.call_args.args[1]
+
+
+def test_approval_list_is_the_pending_default_and_the_mcp_tool_matches(monkeypatch):
+    """`hub approval list` runs `approval list` (GET approvals, pending by default, with --from/--since passed through),
+    and the MCP tool `hub_approval_list` takes the same arguments."""
+    from clients import remotecli, hubtools
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.return_value = {"actor": "human:ana", "status": "pending", "total": 0, "approvals": [], "next": None}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    args = hubcli.parser().parse_args(["approval", "list"])
+    assert args.fn == "approval list" and remotecli.tool_name(args.fn) == "hub_approval_list"
+    remotecli.run(args)
+    client.get.assert_called_with("approvals", status="pending", limit=20, offset=0)
+    remotecli.run(hubcli.parser().parse_args(
+        ["approval", "list", "--status", "declined", "--from", "bot:finance", "--since", "2026-10-01", "--limit", "5"]))
+    client.get.assert_called_with("approvals", status="declined", limit=5, offset=0, **{"from": "bot:finance"},
+                                  since="2026-10-01")
+    tool = hubtools.BY_NAME["hub_approval_list"]
+    assert set(tool["inputSchema"]["properties"]) == {"status", "from", "before", "since", "limit", "offset"}
+    tool["fn"](client, {"from": "bot:finance", "since": "2026-10-01"})
+    client.get.assert_called_with("approvals", status="pending", limit=20, offset=0, **{"from": "bot:finance"},
+                                  since="2026-10-01")
+
+
+@pytest.mark.parametrize("alias, canonical", [
+    (["tasks", "list"], ["task", "list"]),
+    (["task", "defer", "T1", "--handled"], ["task", "later", "T1", "--handled"]),
+    (["tasks", "defer", "T1", "--handled"], ["task", "later", "T1", "--handled"]),
+    (["approvals", "list"], ["approval", "list"]),
+    (["automations", "list"], ["automation", "list"]),
+    (["bots", "show", "ops"], ["bot", "show", "ops"]),
+    (["rule", "list"], ["rules", "list"]),
+])
+def test_an_alias_runs_the_same_calls_as_the_command_it_names(alias, canonical, monkeypatch):
+    """The parser keeps the spelling typed, so dispatch renames an alias first: `hub tasks list` makes the calls of
+    `hub task list` and never reaches the "unsupported" fallback."""
+    from clients import remotecli
+    from unittest.mock import MagicMock
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    made = []
+    for words in (alias, canonical):
+        client = MagicMock()
+        monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+        remotecli.run(hubcli.parser().parse_args(words))
+        made.append(client.mock_calls)
+    assert made[0] == made[1] and made[0]

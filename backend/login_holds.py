@@ -83,7 +83,7 @@ def subscription_login(subscription_id):
     return SUBSCRIPTION + subscription_id
 
 
-def canonical(c, runner_id, profile, runtime, subscription=True):
+def canonical(c, runner_id, profile, runtime, subscription=True, loads=None):
     """The login a profile's turns on `runtime` sign in with, as holds key it: "" (the computer's own) for a profile
     the computer reports shares it (`shared_login`, runner-rs/src/fallback.rs `login`), else the profile.
     Inside a transaction it is answered once: a claim scan asks it per bot and per job, and the runner's readiness
@@ -93,9 +93,11 @@ def canonical(c, runner_id, profile, runtime, subscription=True):
     from .read_cache import cache
     if subscription:
         from .model_subscriptions import in_effect
-        found = in_effect(c, runner_id, runtime)
+        found = in_effect(c, runner_id, runtime, loads=loads)
         if found:
             return subscription_login(found["id"])
+    if loads is not None:
+        return _canonical(c, runner_id, profile, runtime, loads)
     values = cache(c)
     if values is None:
         return _canonical(c, runner_id, profile, runtime)
@@ -105,10 +107,11 @@ def canonical(c, runner_id, profile, runtime, subscription=True):
     return values[key]
 
 
-def _canonical(c, runner_id, profile, runtime):
+def _canonical(c, runner_id, profile, runtime, loads=None):
     from .store import readiness_document
     from .read_cache import one
-    row = one(c, "SELECT readiness,capabilities FROM runners WHERE id=?", (runner_id,))
+    row = (loads.runner_of(c, runner_id) if loads is not None
+           else one(c, "SELECT readiness,capabilities FROM runners WHERE id=?", (runner_id,)))
     ready = readiness_document(row["readiness"]) if row else {}
     from .subscriptions import computer_logins
     current = row and computer_logins(row, ready)
@@ -124,9 +127,14 @@ def _canonical(c, runner_id, profile, runtime):
     return "" if report.get("shared_login") is True else profile
 
 
-def get(c, runner_id, profile, runtime):
-    from .read_cache import metadata
-    row = metadata(c, key(runner_id, profile, runtime))
+def get(c, runner_id, profile, runtime, loads=None):
+    """The hold on the login, as a dict ({} for none). `loads`: the claim's set of every hold (claim_loads), when read."""
+    k = key(runner_id, profile, runtime)
+    if loads is not None:
+        row = (loads.holds[k],) if k in loads.holds else None
+    else:
+        from .read_cache import metadata
+        row = metadata(c, k)
     try:
         value = json.loads(row[0]) if row else {}
     except ValueError:
@@ -282,10 +290,10 @@ def _probe_live(c, hold, now):
     return row["state"] == "queued" and (hold.get("probe_at") or "") > H.shift(now, seconds=-PROBE_STALE)
 
 
-def holding(c, runner_id, profile, runtime, job_id=None, now=None):
+def holding(c, runner_id, profile, runtime, job_id=None, now=None, loads=None):
     """Why no turn may start on the login now: "held" before the hold ends, "probing" while another job's probe turn
     is out after it; None when one may (with `job_id`, when that job may)."""
-    hold = get(c, runner_id, profile, runtime)
+    hold = get(c, runner_id, profile, runtime, loads)
     if not hold:
         return None
     now = now or H.now()

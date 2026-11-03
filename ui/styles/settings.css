@@ -825,13 +825,17 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .gw-table code{font-size:var(--t-sm);margin-right:4px;white-space:nowrap}
 .gw-status-cell[data-status=live]{color:var(--ok)}
 .gw-status-cell:not([data-status=live]){color:var(--muted)}
+.gw-table .gw-note{color:var(--muted)}
+.gw-table .gw-open{text-align:right;white-space:nowrap}
 @media (max-width:640px){
   .gw-table thead{display:none}
   .gw-table tbody tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:8px 0;border-bottom:1px solid var(--line)}
+  .gw-table tbody tr:last-child{border-bottom:0}
   .gw-table td{padding:0;border:0}
   .gw-table .gw-name{font-weight:600}
   .gw-table .gw-bots-word{display:inline}
-  .gw-table .gw-model,.gw-table .gw-tools,.gw-table .gw-price{grid-column:1 / -1;color:var(--muted)}
+  .gw-table .gw-model,.gw-table .gw-tools,.gw-table .gw-price,.gw-table .gw-note{grid-column:1 / -1;color:var(--muted)}
+  .gw-table .gw-open{grid-column:2;grid-row:1}
 }
 .settings-tier{display:grid;gap:8px;min-width:0}
 .settings-tier-row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;min-width:0}
@@ -903,6 +907,7 @@ section.card>header .settings-head-act{margin-left:auto}
 #set-subs .scroll,#set-machines .scroll{position:relative}
 .subs-name{font-weight:500}
 .subs-kind{color:var(--muted)}
+.subs-owner{color:var(--muted)}
 .subs-count{color:var(--muted)}.subs-count .nav-icon{font-size:15px;vertical-align:-3px;margin-right:4px}
 .subs-usage{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}.subs-usage-w{min-width:2.4em}
 .subs-bar{display:inline-block;width:48px;height:4px;border-radius:2px;background:var(--surface2);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}
@@ -918,6 +923,7 @@ section.card>header .settings-head-act{margin-left:auto}
 .subs-connect{display:grid;gap:12px;margin-bottom:12px}
 .subs-connect>button{width:100%}
 .subs-connect-or{font-size:var(--t-sm);color:var(--muted);text-align:center}
+.subs-note{margin:0;font-size:var(--t-sm)}
 .subs-field{display:grid;gap:4px;min-width:0}
 .subs-field[hidden]{display:none}
 .subs-field .k{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--muted)}

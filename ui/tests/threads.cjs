@@ -16,7 +16,8 @@ const me = (unread = 0, extra = {}) => ({member: true, following: true, notify: 
 const thread = (id, title, seq, extra = {}) => ({id, title, audience: 'team', audience_group_id: 'ops', last_seq: seq, last_unread_seq: 0,
   last_message_at: at(100 - seq), me: me(), members: [], ...extra});
 
-// Fourteen threads: one needs attention, two are unread, the rest are older. The sidebar shows ten and then All.
+// Fourteen threads: one needs attention, two are unread, the rest are older. The sidebar shows five: the one that
+// needs attention, then the most important of the rest.
 const listed = Array.from({length: 13}, (_, i) => thread('t' + i, `Thread ${i}`, i + 1));
 listed[11].me = me(3); listed[4].me = me(1);
 // Their levels (GET /v2/threads?sort=important): the two unread ones rank highest; the rest read as the middle (5).
@@ -69,8 +70,9 @@ const timeline = {
     {...msg('o1', 1, 'bot:ops', 'Weekly numbers are in the doc.'), thread_id: 'h-ops'},
     {...msg('o2', 2, 'bot:ops', 'Daily update, Oct 31', {kind: 'notice', refs: {card: 'update', update: {id: 'u1', kind: 'daily', day: '2026-10-31'}}}), thread_id: 'h-ops'},
   ]}),
-  'h-bea': () => ({thread: {id: 'h-bea', audience: 'home', home: {actor: 'human:bea'}, last_seq: 1, me: me(0, {can_post: false})}, breadcrumb: [], next_cursor: null, messages: [
+  'h-bea': () => ({thread: {id: 'h-bea', audience: 'home', home: {actor: 'human:bea'}, last_seq: 2, me: me(0, {can_post: false})}, breadcrumb: [], next_cursor: null, messages: [
     {...msg('b1', 1, 'human:bea', 'Daily update, Oct 31', {kind: 'notice', refs: {card: 'update', update: {id: 'u2', kind: 'daily', day: '2026-10-31'}}}), thread_id: 'h-bea'},
+    {...msg('b2', 2, 'human:bea', 'Out Friday afternoon.'), thread_id: 'h-bea'},
   ]}),
   // Empty Homes: one the viewer may post to, one they may not.
   'h-cy': () => ({thread: {id: 'h-cy', audience: 'home', home: {actor: 'human:cy'}, last_seq: 0, me: me()}, breadcrumb: [], next_cursor: null, messages: []}),
@@ -214,13 +216,39 @@ let browser = null;
   // ---- Ana at desktop width
   {
     const {page, seen} = await open(browser, 'ana');
+    // Inbox folded before it stopped folding: it shows its rows all the same.
+    await page.addInitScript(() => localStorage.setItem('hub.nav.collapsed', '["inbox"]'));
     await page.goto('https://tico-ui.test/#/tasks');
     await page.locator('#th-list .th-row').first().waitFor();
-    // Inbox: only what waits on Ana, then the way to every thread; no DMs section.
+    // Under Inbox: what waits on Ana, then the most important of the rest (levels 8 and 7, then the newest at the
+    // middle level), five in all, then her held message; no DMs section, no "Threads" or "All" row.
     const rows = await page.locator('#th-list .th-row').evaluateAll(els => els.map(a => ({title: a.querySelector('.th-row-title').textContent, attn: a.classList.contains('attn')})));
-    assert.deepEqual(rows.map(r => r.title), ['Launch plan', '1 held message', 'Threads'], 'Inbox: ' + rows.map(r => r.title));
-    assert.ok(!rows[0].attn, 'every Inbox row waits on her: no dot');
+    assert.deepEqual(rows.map(r => r.title), ['Launch plan', 'Thread 11', 'Thread 4', 'Thread 12', 'Thread 10', '1 held message'], 'Inbox: ' + rows.map(r => r.title));
+    assert.ok(!rows.some(r => r.attn), 'no Needs attention dot');
+    assert.equal(await page.locator('#th-list [data-thread]').count(), 5, 'five chats at most');
+    assert.equal(await page.locator('#th-list').isVisible(), true);
     assert.equal(await page.locator('#inbox-count').textContent(), '1');
+    // The header is a link to Inbox: no chevron, nothing folds.
+    assert.equal(await page.locator('#nav-inbox-section .section-chev, [data-section-toggle="inbox"]').count(), 0, 'no fold');
+    assert.equal(await page.locator('#nav-inbox-link').getAttribute('href'), '#/threads?view=inbox');
+    assert.equal(await page.locator('#nav-inbox-link').getAttribute('aria-current'), null, 'not the page on Tasks');
+    await page.locator('#nav-inbox-link').click();
+    await page.waitForFunction(() => location.hash === '#/threads?view=inbox');
+    await page.locator('#nav-inbox-link.cur[aria-current="page"]').waitFor();
+    assert.equal(await page.locator('#th-list').isVisible(), true, 'the rows stay');
+    // Noise (level 1 or less) never fills a place, nor does a thread twice or a DM with one bot.
+    await page.evaluate(() => {
+      const t = (id, importance, seq) => ({id, title: id, audience: 'team', importance, last_seq: seq, me: {unread: 0}});
+      THREADS.threads = [t('noise', 1, 99), t('zero', 0, 98), t('a', 9, 1), t('b', 6, 2), THREADS.attention[0]];
+      THREADS.dms = [{...t('dm', 6, 3), audience: 'personal', dm_with: [{actor: 'human:bea'}], dm_with_count: 1},
+        {...t('botdm', 10, 4), audience: 'personal', dm_with: [{actor: 'bot:ops'}], dm_with_count: 1}];
+      threadsSideRender();
+    });
+    assert.deepEqual(await page.locator('#th-list [data-thread]').evaluateAll(els => els.map(a => a.dataset.thread)), ['t-plan', 'a', 'dm', 'b'],
+      'waits on her, then by level and newest');
+    await page.goto('https://tico-ui.test/#/tasks');
+    await page.evaluate(() => threadsLoad());     // the list as the server has it again
+    await page.locator('#th-list [data-thread="t11"]').waitFor();
     assert.equal(await page.locator('#dm-list, #nav-dms-section').count(), 0, 'no DMs section');
     assert.equal(seen.sorts[0], 'important', 'Important is the default');
     // The DM with Ops is counted on Ops in Team.
@@ -389,7 +417,7 @@ let browser = null;
     const tabs = await page.locator('#btabs [data-bt]').evaluateAll(els => els.map(b => b.dataset.bt));
     assert.ok(tabs.includes('home') && tabs.includes('dm'), 'Home and DM: ' + tabs);
     assert.ok(!tabs.includes('chat'));
-    assert.equal(await page.locator('.bot-threads-link').getAttribute('href'), '#/threads?with=bot%3Aops');
+    assert.equal(await page.locator('.bot-threads-link').count(), 0, 'no Threads with link on a Home');
     await shot(page, 'bot-home-desktop');
     // The Home's actions (the call and the menu) sit in the Home/DM bar; the thread has no title line.
     await page.locator('#pane-chat .bot-talk-acts [data-thv-menu]').waitFor();
@@ -409,9 +437,10 @@ let browser = null;
     await page.locator('#pane-chat [data-talk="dm"][aria-selected="true"]').waitFor();
     assert.equal(await page.locator('#bot-thread .thv-composer .p-text').inputValue(), 'Half a thought');
 
-    // A person's Home under their profile, with the update card.
+    // A person's Home under their profile: updates live on the Updates page, never as cards in a Home.
     await page.goto('https://tico-ui.test/#/person/bea');
-    await page.locator('#person-home .th-update').waitFor();
+    await page.getByText('Out Friday afternoon.').waitFor();
+    assert.equal(await page.locator('#person-home .th-update').count(), 0, 'no update cards in a Home');
     await shot(page, 'person-desktop');
 
     // A Home with nothing in it is its composer, never a blank timeline; its actions sit in the card's header.
@@ -513,6 +542,9 @@ let browser = null;
     assert.ok(seen.sorts.length && seen.sorts.every(v => v === 'recent'), 'Recent: ' + seen.sorts);
     const recentRows = await page.locator('#threads-all .thp-sec').nth(1).locator('.th-row-title').allTextContents();
     assert.deepEqual(recentRows.slice(0, 2), ['Thread 12', 'Thread 11'], 'newest first: ' + recentRows.slice(0, 3));
+    // The sidebar still picks its five by level, from the list it read in this order.
+    await page.waitForFunction(() => !THREADS.loading);
+    assert.deepEqual(await page.locator('#th-list [data-thread]').evaluateAll(els => els.map(a => a.dataset.thread)), ['t-plan', 't11', 't4', 't12', 't10']);
     await page.reload();
     await page.locator('.thp-sort [data-th-sort="recent"].cur').waitFor();
     await page.locator('.thp-sort [data-th-sort="important"]').click();
@@ -556,8 +588,9 @@ let browser = null;
     const tabs = await page.locator('#btabs [data-bt]').evaluateAll(els => els.map(b => b.dataset.bt));
     assert.ok(!tabs.includes('home'), 'no Home without Read: ' + tabs);
     assert.ok(!tabs.includes('dm'), 'no DM without Write: ' + tabs);
-    // Nothing waits on Bob: Inbox says so, and still leads to every thread.
-    assert.deepEqual(await page.locator('#th-list li').allTextContents(), ['All caught up', 'Threads']);
+    // No chats for Bob: the Inbox header alone, no count and nothing under it.
+    await page.locator('#nav-inbox-link').waitFor();
+    assert.equal(await page.locator('#th-list li').count(), 0);
     assert.equal(await page.locator('#inbox-count').isVisible(), false);
     assert.equal(await page.locator('.bot-threads-link').count(), 0);
     assert.equal(await page.locator('#pane-chat [data-talk]').count(), 0);
@@ -579,6 +612,10 @@ let browser = null;
     await page.locator('#mobile-more').click();
     await page.locator('#search-open').waitFor();
     await page.waitForTimeout(300);     // the drawer slides in
+    // The drawer: the Inbox header and five chats under it, then the held message.
+    assert.equal(await page.locator('#nav-inbox-link').isVisible(), true);
+    assert.equal(await page.locator('#th-list [data-thread]').count(), 5);
+    await page.evaluate(() => document.querySelector('#nav-inbox-section').scrollIntoView({block: 'center'}));
     await shot(page, 'drawer-phone');
     await page.locator('#search-open').click();
     await page.locator('#search-modal[open]').waitFor();
@@ -609,7 +646,7 @@ let browser = null;
     await page.getByText('Weekly numbers are in the doc.').waitFor();
     await shot(page, 'bot-home-phone');
     await page.goto('https://tico-ui.test/#/person/bea');
-    await page.locator('#person-home .th-update').waitFor();
+    await page.getByText('Out Friday afternoon.').waitFor();
     await shot(page, 'person-phone');
     await page.goto('https://tico-ui.test/#/person/cy');
     await page.locator('#person-home .thv-composer .p-text').waitFor();
@@ -714,21 +751,12 @@ let browser = null;
     await page.waitForFunction(() => !document.querySelector('#thread-keep')?.open);
     assert.deepEqual(seen.patches[1], {retention_days: null});
 
-    // Calls off: the owner is told where to set them up, and nobody gets a control that cannot work.
+    // Calls off: nobody gets a control that cannot work, and no "Set up calls" note either.
     callsOff = true;
     await page.goto('https://tico-ui.test/#/thread/t-sub');
-    await page.locator('a.thv-call-note').waitFor();
-    assert.match(await page.locator('a.thv-call-note').getAttribute('href'), /docs\/meet\.md/);
-    assert.equal(await page.locator('[data-call]').count(), 0);
-    // A hosted server's owner has no environment to edit, so the same words ask Tico support.
-    await page.evaluate(() => {
-      S.config.hosted = 'own';
-      window.supportStart = text => { window.supportAsked = text; };
-      THV_VIEWS.forEach(v => thvDraw(v));
-    });
-    await page.locator('button[data-call-setup]').click();
-    assert.ok(await page.evaluate(() => window.supportAsked), 'a hosted owner reaches Tico support');
-    await page.evaluate(() => { delete S.config.hosted; });
+    await page.locator('.thv-title').waitFor();
+    await page.waitForLoadState('networkidle');
+    assert.equal(await page.locator('.thv-call-note, [data-call]').count(), 0);
     assert.deepEqual(seen.errors, []);
     await page.close();
     const member = await open(browser, 'bob', {phone: true});

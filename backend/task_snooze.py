@@ -114,6 +114,11 @@ def snooze(conn, actor, task_id, until, mover=False, note=None):
                  "WHERE id=?", (stamp, actor, note, at, task_id))
     H._task_event(conn, task_id, actor, "snoozed_until", row.get("snoozed_until"), stamp, note or "")
     after = H.task(conn, task_id)
+    from . import task_check_backs
+    if task_check_backs.involved(after):
+        planned = min(stamp, after["check_back_at"]) if H.is_bot(actor) and task_check_backs.pending(after) else stamp
+        task_check_backs.set_time(conn, after, planned, note, system=True)
+        after = H.task(conn, task_id)
     # The owner learns nobody expects it before then; a bot reads it on its next real run, not now.
     if after["owner_id"] != actor:
         H._wake(conn, after, after["owner_id"], f"Snoozed until {_label(stamp)}: {after['title']}",
@@ -135,6 +140,12 @@ def unsnooze(conn, actor, task_id, mover=False):
         return row
     left = row.get("snoozed_note")
     after = _clear(conn, actor, row, "unsnoozed")
+    from . import task_check_backs
+    if task_check_backs.enabled(conn) and task_check_backs.involved(after):
+        soon = H.shift(H.now(), minutes=30)
+        task_check_backs.set_time(conn, after, min(soon, after["check_back_at"]) if task_check_backs.pending(after) else soon,
+                                  "Inspect the resumed work and continue.", system=True)
+        after = H.task(conn, task_id)
     if after["owner_id"] != actor and after["status"] in H.ACTIVE_STATUSES:
         H._wake(conn, after, after["owner_id"], f"Unsnoozed: {after['title']}" + _note_line(left),
                 _wake_refs({"wake": "snooze"}, left))
@@ -190,8 +201,11 @@ def wake_ended(conn, at, failures=None):
             if after.get("due_at") and H._has_table(conn, "task_reminders") and not H.not_yet_due(after, at):
                 # This notice is the due date's reminder too; the Due pass would only repeat it.
                 conn.execute("INSERT OR IGNORE INTO task_reminders VALUES(?,?,?)", (after["id"], after["due_at"], at))
-            H._wake(conn, after, after["owner_id"], f"Snooze over: {after['title']}" + _note_line(left),
-                    _wake_refs({"wake": "snooze"}, left), trigger="schedule")
+            from . import task_check_backs
+            body, refs = task_check_backs.fold_snooze(conn, after,
+                f"Snooze over: {after['title']}" + _note_line(left), _wake_refs({"wake": "snooze"}, left), at)
+            message = H._wake(conn, after, after["owner_id"], body, refs, trigger="schedule")
+            task_check_backs.record_fold(conn, after, message, refs, at)
             woken.append(after["id"])
     return woken
 

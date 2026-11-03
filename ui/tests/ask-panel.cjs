@@ -48,7 +48,7 @@ async function open(browser, viewport, state) {
       const user = msg('u' + state.sent.length, 'human:ben', body.text, new Date().toISOString());
       const bot = msg('b' + state.sent.length, 'bot:coo', "I can't fix that one. [Talk to the Tico team](#/support)", new Date().toISOString());
       state.messages.push(user, bot);
-      return json({message: user, reply: bot, fast: true});
+      return json({message: user});
     }
     if (p === '/api/v2/uploads/assistant/messages') {
       const raw = route.request().postDataBuffer().toString('latin1'), field = name => raw.match(new RegExp(`name="${name}"\\r\\n\\r\\n([^\\r]*)`))?.[1];
@@ -56,7 +56,7 @@ async function open(browser, viewport, state) {
       state.uploaded = (state.uploaded || []).concat([body]);
       const user = msg('f' + state.uploaded.length, 'human:ben', body.text, new Date().toISOString());
       state.messages.push(user, msg('g' + state.uploaded.length, 'bot:coo', 'Read it.', new Date().toISOString()));   // the turn's reply, by the snapshot
-      return json({message: user, reply: null, fast: false});
+      return json({message: user});
     }
     const ticket = p.match(/^\/api\/v2\/support\/tickets\/([^/]+)\/(messages|read)$/), listing = () => json({enabled: state.supportOff !== true, tickets: state.tickets, unread: state.unreadCount ?? state.tickets.filter(t => t.unread).length});
     if (ticket) {
@@ -305,6 +305,12 @@ const words = text => text.trim().split(/\s+/).length;
     assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], ['Close Ask Tico', 'close']);
     assert.equal(await page.locator('#ask-panel').evaluate(el => [...el.querySelectorAll('*')].every(x => x.getBoundingClientRect().right <= innerWidth + 1)), true, 'no horizontal scroll');
     assert.equal(await page.locator('#ask-panel [data-ask-loop], #ask-panel [data-ask-requests]').count(), 0, 'no support links on a phone either');
+    // Its box is one line, as the bot chat's was: Attach, the words, Send in one row, not the words over the buttons.
+    const row = await page.locator('#ask-panel .p-pill').evaluate(el => {
+      const mid = x => { const r = el.querySelector(x).getBoundingClientRect(); return r.top + r.height / 2; };
+      return {height: el.getBoundingClientRect().height, text: mid('.p-text'), attach: mid('.p-attach'), send: mid('.p-send')};
+    });
+    assert.ok(row.height < 60 && Math.abs(row.text - row.send) < 4 && Math.abs(row.attach - row.send) < 4, `one line (${JSON.stringify(row)})`);
     // Closing flies the dot back down into the tab bar.
     await flight(page, '#mobile-ask [data-ask-dot]', async () => { await tab.click(); await page.locator('#ask-panel').waitFor({state: 'hidden'}); });
     assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], [null, 'dot']);

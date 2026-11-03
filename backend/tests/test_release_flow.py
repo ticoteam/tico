@@ -148,3 +148,50 @@ def test_qa_hears_a_private_ticket_shipped_on_its_own_qa_subtask(api):
                          f"WHERE {H.MESSAGE_TASK_SQL}=? AND m.recipient_id='bot:qab' "
                          "AND json_extract(m.refs,'$.wake')='release_published'", (check["id"],)).fetchall()
     assert len(woke) == 1 and "QA: payroll export" in woke[0][0] and "Acme payroll export" not in woke[0][0]
+
+
+def test_a_published_release_withdraws_the_undecided_asks_at_or_below_it_in_its_channel(api):
+    """The webhook path: an ask for an older or the same version goes, a newer or prerelease ask and another
+    repository's stay, and a decided ask is never touched."""
+    _team(api)
+    store = api.app.state.store
+
+    def ask(c, task, tag, repo="ticoteam/tico", commit=None):
+        url = f"https://github.com/{repo}/releases/tag/{tag}"
+        return H.approval_request(c, H.bot_actor("cmo"), "publish", {
+            "url": url, "version": tag.lstrip("v"), "commit": commit or tag, "content_sha256": "a" * 64}, task_id=task["id"])
+
+    with store.transaction() as c:
+        task = H.task_create(c, H.human_actor("ana"), "Release", "Cut it.", H.bot_actor("cmo"), lint=False)
+        asks = {name: ask(c, task, *args) for name, args in {
+            "old": ("v1.0.0",), "same": ("v1.2.3", "ticoteam/tico", "b2"), "newer": ("v1.3.0",),
+            "pre": ("v1.2.3-rc.1",), "other": ("v1.0.0", "ticoteam/other")}.items()}
+        decided = ask(c, task, "v0.9.0")
+        H.approval_decide(c, H.human_actor("ana"), decided["id"], "approved")
+    hook(api, "release", {"action": "published", "release": {"tag_name": "v1.2.3", "html_url": RELEASE_URL},
+                          "repository": {"full_name": "ticoteam/tico"}})
+    with store.read() as c:
+        got = {name: H.approval(c, a["id"])["decision"] for name, a in asks.items()}
+        told = [r["body"] for r in c.execute("SELECT body FROM messages WHERE recipient_id=? AND body LIKE 'Withdrawn:%'",
+                                             (H.bot_actor("cmo"),))]
+        kept = H.approval(c, decided["id"])["decision"]
+    assert got == {"old": "withdrawn", "same": "withdrawn", "newer": None, "pre": None, "other": None}
+    assert sorted(told) == ["Withdrawn: your publish approval. v1.2.3 already shipped."] * 2, "the bot hears it quietly"
+    assert kept == "approved"
+
+
+def test_a_release_in_another_connected_repository_withdraws_its_own_older_asks_at_once(api):
+    """Only the server's release repository gets the ticket and docs follow-ups; the older asks of any repository
+    are withdrawn as soon as its release publishes."""
+    _team(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        task = H.task_create(c, H.human_actor("ana"), "Release", "Cut it.", H.bot_actor("cmo"), lint=False)
+        older = H.approval_request(c, H.bot_actor("cmo"), "publish", {
+            "url": "https://github.com/acme/other/releases/tag/v1.0.0", "version": "1.0.0", "commit": "o1",
+            "content_sha256": "a" * 64}, task_id=task["id"])
+    hook(api, "release", {"action": "published", "release": {"tag_name": "v1.2.3",
+                          "html_url": "https://github.com/acme/other/releases/tag/v1.2.3"},
+                          "repository": {"full_name": "acme/other"}})
+    with store.read() as c:
+        assert H.approval(c, older["id"])["decision"] == "withdrawn"

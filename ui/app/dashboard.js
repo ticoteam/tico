@@ -10,8 +10,9 @@ const OVERVIEW_GRAPH = OVERVIEW + '/graph';           // ui/app/overview-graph.j
 const OVERVIEW_COMPANY = OVERVIEW + '/company-page';   // ui/app/company-page.js
 const TEAM_PAGE = '#/team/';
 const DASH_SIZES = [['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']];
-// {place, month, key, view, choices, root, menu}: the place on screen. A write's answer is drawn only while it is still
-// the place.
+// {place, month, key, view, choices, root, menu, editing}: the place on screen. A write's answer is drawn only while it is
+// still the place. `editing`: Edit shows the grips, the ⋯ menus and + Card / + Page until Done, Escape or leaving the page;
+// it is this view's alone, never saved.
 let DASH = null;
 // A place drawn on this grid under its own head (the Growth page, ui/app/growth-page.js): {head(state) → its HTML,
 // pages() → whether + Page shows, drawn(state) after each draw, wire(state) once}.
@@ -25,7 +26,7 @@ const dashApi = place => '/v2/places/' + encodeURIComponent(place);
 const dashReadUrl = state => dashApi(state.place) + (state.month ? '?month=' + encodeURIComponent(state.month) : '');
 const dashKey = state => state.place + (state.month ? '?month=' + state.month : '');
 const dashTabsHTML = on => `<nav class="tabs slim strat-tabs dash-tabs" aria-label="Overview">${
-  [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Company'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ['graph', OVERVIEW_GRAPH, 'Graph'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Company page']] : [])].map(([id, href, label]) =>
+  [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Company'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ['graph', OVERVIEW_GRAPH, 'Graph'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Share']] : [])].map(([id, href, label]) =>
     `<a href="${href}"${on === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const dashNum = n => n == null ? '–' : Number(n).toLocaleString(undefined, {maximumFractionDigits: 2});
 const dashMoney = n => n == null ? '–' : '$' + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
@@ -128,14 +129,15 @@ function dashAudienceWords(aud) {
 // again only when the answer differs, so its page widgets are not reloaded for nothing.
 async function pageDashboard(place, {month = ''} = {}) {
   const team = place.startsWith('team:'), own = DASH_PLACES[place];
-  const state = {place, month, view: null, choices: null, root: null, menu: null, readAt: Date.now()};
+  const state = {place, month, view: null, choices: null, root: null, menu: null, editing: false, readAt: Date.now()};
   const key = state.key = dashKey(state), kept = (S.lastRead.places ||= {})[key];
   const main = $('#main'); main.classList.add('dash-layout');
   const head = own ? own.head(state) : `<h1>${team ? '' : 'Overview'}</h1>${team ? '' : dashTabsHTML(place === 'person:me' ? 'mine' : 'dashboard')}<span class="spacer"></span>`;
   main.innerHTML = `<div class="dash" id="dash-root"><header class="dash-head">${head}
       <span class="dash-actions" hidden>${team ? '<button type="button" class="ghost dash-audience" data-dash-audience></button>' : ''}
-        <button type="button" class="ghost" data-dash-add="card"><span class="dash-plus" aria-hidden="true">+</span>Card</button>
-        ${!own || own.pages() ? '<button type="button" class="ghost" data-dash-add="page"><span class="dash-plus" aria-hidden="true">+</span>Page</button>' : ''}</span></header>
+        <button type="button" class="ghost" data-dash-add="card" hidden><span class="dash-plus" aria-hidden="true">+</span>Card</button>
+        ${!own || own.pages() ? '<button type="button" class="ghost" data-dash-add="page" hidden><span class="dash-plus" aria-hidden="true">+</span>Page</button>' : ''}
+        <button type="button" class="ghost" data-dash-mode="edit">Edit</button><button type="button" class="primary" data-dash-mode="done" hidden>Done</button></span></header>
     <div class="dash-grid" id="dash-grid">${kept ? '' : skelRows(4, {card: true})}</div>
     ${team ? '<section class="card home-card dash-home" id="dash-home"><header><h2>Home</h2><div class="home-card-acts" id="dash-home-acts"></div></header><div id="dash-home-thread"></div></section>' : ''}
     <dialog class="tmodal tmodal-shell dash-dialog" id="dash-dialog" aria-label="Card"></dialog></div>`;
@@ -208,12 +210,30 @@ setInterval(() => {
   const every = typeof liveConnected === 'function' && liveConnected() ? DASH_LIVE_POLL_MS : DASH_POLL_MS;
   if (Date.now() - (state.readAt || 0) >= every) void dashReread(state);
 }, 30e3);
+// Edit mode on or off: the grips and ⋯ menus (dashboard.css, .dash-editing) and the header's buttons. A redraw keeps it.
+function dashEditing(state, on, {focus = false} = {}) {
+  const root = state.root;
+  state.editing = on = !!(on && state.view?.can_edit);
+  if (!on) dashMenuClose(state);
+  root.classList.toggle('dash-editing', on);
+  root.querySelectorAll('[data-dash-add], [data-dash-mode="done"]').forEach(b => { b.hidden = !on; });
+  root.querySelector('[data-dash-mode="edit"]').hidden = on;
+  if (focus) root.querySelector(`[data-dash-mode="${on ? 'done' : 'edit'}"]`)?.focus();
+}
+// Escape leaves edit mode, unless a menu or a dialog has it, or it is typed into a field.
+document.addEventListener('keydown', ev => {
+  const state = DASH;
+  if (ev.key !== 'Escape' || ev.defaultPrevented || !state?.editing || state.menu || document.querySelector('dialog[open]')) return;
+  if (ev.target.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return;
+  dashEditing(state, false, {focus: state.root.contains(document.activeElement)});
+});
 function dashDraw(state) {
   const v = state.view, root = state.root;
   S.lastRead.places[state.key] = v;
   if (v.kind === 'team') { root.querySelector('h1').textContent = v.name; }
   const actions = root.querySelector('.dash-actions');
   actions.hidden = !v.can_edit;
+  dashEditing(state, state.editing);
   const aud = root.querySelector('[data-dash-audience]');
   if (aud) {
     aud.innerHTML = `<span class="nav-icon" aria-hidden="true">groups</span>Seen by ${esc(dashAudienceWords(v.audience))}`;
@@ -333,6 +353,8 @@ function dashWire(state) {
     const more = ev.target.closest('[data-dash-menu]');
     if (more) return more.getAttribute('aria-expanded') === 'true' ? dashMenuClose(state) : dashMenuOpen(state, more);
     if (state.menu && !ev.target.closest('.dash-menu')) dashMenuClose(state);
+    const mode = ev.target.closest('[data-dash-mode]');
+    if (mode) return void dashEditing(state, mode.dataset.dashMode === 'edit', {focus: true});
     const add = ev.target.closest('[data-dash-add]');
     if (add) return void (add.dataset.dashAdd === 'card' ? dashCardForm(state, -1) : dashPageForm(state));
     if (ev.target.closest('[data-dash-audience]')) return void dashAccessEdit(state);

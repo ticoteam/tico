@@ -107,7 +107,7 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("people"), words="invite person"),
     S("people.member_bot_limit", "Member bot limit", PEOPLE + " > Team rules", "admin", "confirm", "PUT",
       "access/limits", "member_bot_limit", "int", _card("people"), "access#limits.member_bot_limit"),
-    S("people.person.role", "A person's role", PEOPLE, "admin", "confirm", "POST", "access/humans/{person}", "role",
+    S("people.person.role", "A person's role", PEOPLE, "owner", "confirm", "POST", "access/humans/{person}", "role",
       "choice:member|admin", _card("people"), words="admin member role"),
     S("people.person.sign_in", "A person may sign in", PEOPLE, "admin", "confirm", "POST", "access/humans/{person}",
       "sign_in", card=_card("people")),
@@ -231,13 +231,15 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("bots"), words="turns per hour day"),
     S("bot.profile", "Bot profile", BOTS + " > Bot editor", "bot", "direct", "POST", "bots/{bot}/profile",
       value="json", card=_card("bots")),
-    # Tico Cloud: a cloud machine, shared or its own, its size and Always on all spend credit
-    # (backend/cloud_machines.py). The shared machine's size and Always on are the company's, for owners and admins.
+    # Tico Cloud: a cloud machine, shared or its own, its size, Always on and Pause after all spend credit
+    # (backend/cloud_machines.py). The shared machine's size, Always on and Pause after are the company's, for owners
+    # and admins.
     S("bot.cloud_machine", "Cloud machine", BOTS + " > Bot editor", "bot", "confirm", "POST",
       "bots/{bot}/cloud-machine", value="json", card=_card("bots"),
-      words="cloud machine shared own size always on computer"),
+      words="cloud machine shared own size always on pause after minutes computer"),
     S("cloud.shared_machine", "Shared cloud machine", BOTS + " > Bot editor", "admin", "confirm", "POST",
-      "cloud-machines/shared", value="json", card=_card("bots"), words="shared cloud machine size always on"),
+      "cloud-machines/shared", value="json", card=_card("bots"),
+      words="shared cloud machine size always on pause after minutes"),
     # Letting a bot run workflows or edit workflow files, or turning Create product repositories back on (the Owner
     # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
     S("bot.repositories", "Bot repositories", REPOS, "admin", "direct", "PUT", "bots/{bot}/repositories",
@@ -306,10 +308,13 @@ ENTRIES = TEAM_RULES + [
       "triggers/{id}/delete", value="json", card=_card("webhooks", "incoming")),
     S("webhooks.gateway.wake", "Gateway wake", HOOKS + " > Gateway", "creator", "confirm", "POST",
       "triggers/{id}/relay/wake", "wake", card=_card("webhooks", "gateway")),
-    S("hooks.wake_url", "Gateway wake URL", HOOKS + " > Gateway", "owner", "confirm", "PUT", "hooks/wake-url", "url",
-      "text", _card("webhooks", "gateway")),
-    S("webhooks.outgoing.create", "New outgoing webhook", HOOKS + " > Outgoing", "anyone", "confirm", "POST", "webhooks",
-      value="json", card=_card("webhooks", "outgoing")),
+    # Both answer with a signing secret shown only then, which a Confirm card's tap never shows (it keeps the status).
+    S("hooks.wake_url", "Gateway wake URL", HOOKS + " > Gateway", "owner", "person", "PUT", "hooks/wake-url", "url",
+      "text", _card("webhooks", "gateway"),
+      why="Setting the Gateway wake URL shows its signing secret once, in Settings"),
+    S("webhooks.outgoing.create", "New outgoing webhook", HOOKS + " > Outgoing", "anyone", "person", "POST", "webhooks",
+      value="json", card=_card("webhooks", "outgoing"),
+      why="A new outgoing webhook shows its signing secret once, in Settings"),
     S("webhooks.outgoing", "Outgoing webhook", HOOKS + " > Outgoing", "creator", "confirm", "POST", "webhooks/{id}/update",
       value="json", card=_card("webhooks", "outgoing")),
     # Listening
@@ -362,14 +367,9 @@ ENTRIES = TEAM_RULES + [
 ]
 
 # Confirm entries whose route BotOps can't yet put on a Confirm card (backend/assistant.py valid_operation): a person
-# changes them in Settings until it can, rather than BotOps changing them at once.
-NO_CARD_YET = ("assistant.on", "privacy.usage_count.reset", "company.server_connection.remove", "storage.s3.remove",
-               "storage.move", "people.person.delete", "me.tokens.revoke", "team.turn_levels",
-               "bot.budget", "strategy.checks", "strategy.level",
-               "repos.product.create", "hooks.wake_url", "webhooks.outgoing.create",
-               "listening.destination", "listening.destination.remove", "roadmap.public",
-               "inbound.inbox.release", "inbound.phone_request", "inbound.phone_request.accept", "pool.limit.usd",
-               "bot.cloud_machine", "cloud.shared_machine", "mail.address.order")
+# changes them in Settings until it can, rather than BotOps changing them at once. None now: each has a card, or is a
+# person's because it shows a secret once (the wake URL, a new outgoing webhook).
+NO_CARD_YET = ()
 _NO_CARD_WHY = " needs a person's yes, and BotOps can't ask for it on a Confirm card yet"
 ENTRIES = [(replace(e, when_held="person", why=e.name + " that sends outside" + _NO_CARD_WHY) if e.confirm_when else
             replace(e, kind="person", why=e.name + _NO_CARD_WHY)) if e.key in NO_CARD_YET else e for e in ENTRIES]

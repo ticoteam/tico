@@ -691,9 +691,13 @@ def ended(api, attempt):
 @pytest.mark.parametrize("reported", [False, True])
 def test_a_rate_limited_gateway_waits_its_retry_after_and_is_not_called_a_cap(api, monkeypatch, reported):
     machine, attempt = tico_run(api, monkeypatch)
+    # The clock is pinned so the reset and the attempt's finish share one instant: a whole second passing between them
+    # reads the reported wait a second short.
+    at = H.now()
+    monkeypatch.setattr(H, "now", lambda: at)
     finish(api, machine, attempt, "Tico AI Gateway: rate limited after too many refused keys from this address; wait "
            "an hour (rate_limited)", limited=True,
-           **({"limit_resets_at": H.shift(H.now(), seconds=3600)} if reported else {}))
+           **({"limit_resets_at": H.shift(at, seconds=3600)} if reported else {}))
     status, job = ended(api, attempt)
     assert status["state"] == "limited" and job == "queued"
     assert status["focus"].startswith("Tico AI Gateway rate limited at ") and "cap" not in status["focus"]
@@ -1071,7 +1075,8 @@ def test_a_new_bot_on_the_gateway_default_takes_its_templates_level(api, monkeyp
         plain = new_bot(api, "plain")
         own = new_bot(api, "chosen", template="inbox", model="tico-general-high-1.0", harness="pi", effort="high")
         with api.app.state.store.read() as c:
-            models = dict(c.execute("SELECT slug, model FROM bots WHERE slug IN ('mailwatch','plain','chosen')").fetchall())
+            models = dict(c.execute("SELECT b.slug, json_extract(bc.config, '$.model') FROM bots b "
+                                    "JOIN bot_config bc ON bc.bot=b.id WHERE b.slug IN ('mailwatch','plain','chosen')").fetchall())
             stored = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (H.resolve_bot(c, "mailwatch")["id"],)).fetchone()[0])
         assert models == {"mailwatch": "tico-general-low-1.0", "plain": "tico-general-medium-1.0", "chosen": "tico-general-high-1.0"}, (made, plain, own)
         assert stored["model"] == "tico-general-low-1.0" and stored["gateway"] == {"level": "low"}

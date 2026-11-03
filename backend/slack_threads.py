@@ -66,80 +66,6 @@ MISSING_CHANNEL = ("channel_not_found", "not_in_channel")
 MAX_DRAIN = 500                 # queued inbound events carried in one pass of one link
 STALLED = frozenset({"denied", "retry"})   # outcomes that keep the queue where it is
 
-SCHEMA = [
-    """CREATE TABLE IF NOT EXISTS slack_thread_links (
-  id TEXT PRIMARY KEY,
-  thread_id TEXT NOT NULL,
-  channel_ref TEXT NOT NULL,
-  channel_id TEXT NOT NULL DEFAULT '',
-  channel_name TEXT NOT NULL DEFAULT '',
-  channel_private INTEGER NOT NULL DEFAULT 0,
-  audience TEXT NOT NULL DEFAULT '',
-  state TEXT NOT NULL CHECK (state IN ('requested','active','suspended','refused','unlinked')),
-  reason TEXT NOT NULL DEFAULT '',
-  history_state TEXT NOT NULL DEFAULT 'off' CHECK (history_state IN ('off','pending','running','done','failed')),
-  history_count INTEGER NOT NULL DEFAULT 0,
-  linked_by TEXT NOT NULL,
-  needs_task_id TEXT,
-  failure_task_id TEXT,
-  checked_at TEXT,
-  activated_at TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL)""",
-    "CREATE INDEX IF NOT EXISTS slack_thread_links_thread ON slack_thread_links(thread_id, state)",
-    "CREATE INDEX IF NOT EXISTS slack_thread_links_channel ON slack_thread_links(channel_id, state)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS slack_thread_links_open_thread ON slack_thread_links(thread_id) "
-    "WHERE state IN ('requested','active','suspended')",
-    "CREATE UNIQUE INDEX IF NOT EXISTS slack_thread_links_open_channel ON slack_thread_links(channel_id) "
-    "WHERE state IN ('active','suspended') AND channel_id <> ''",
-    """CREATE TABLE IF NOT EXISTS slack_link_members (
-  link_id TEXT NOT NULL REFERENCES slack_thread_links(id),
-  slack_user_id TEXT NOT NULL,
-  person_id TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (link_id, slack_user_id))""",
-    """CREATE TABLE IF NOT EXISTS slack_message_links (
-  id TEXT PRIMARY KEY,
-  link_id TEXT NOT NULL REFERENCES slack_thread_links(id),
-  channel_id TEXT NOT NULL,
-  direction TEXT NOT NULL CHECK (direction IN ('in','out')),
-  ts TEXT NOT NULL DEFAULT '',
-  thread_ts TEXT NOT NULL DEFAULT '',
-  message_id TEXT,
-  delivery_id TEXT,
-  origin_id TEXT,
-  actor TEXT NOT NULL DEFAULT '',
-  revision INTEGER NOT NULL DEFAULT 0,
-  attempts INTEGER NOT NULL DEFAULT 0,
-  state TEXT NOT NULL CHECK (state IN ('sent','held','deleted','sending','uncertain','ready','failed')),
-  edit_ts TEXT NOT NULL DEFAULT '',
-  error TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL)""",
-    "CREATE UNIQUE INDEX IF NOT EXISTS slack_message_links_ts ON slack_message_links(channel_id, ts) WHERE ts <> ''",
-    "CREATE UNIQUE INDEX IF NOT EXISTS slack_message_links_out ON slack_message_links(link_id, message_id) "
-    "WHERE direction = 'out'",
-    "CREATE INDEX IF NOT EXISTS slack_message_links_message ON slack_message_links(message_id)",
-    "CREATE INDEX IF NOT EXISTS slack_message_links_state ON slack_message_links(state, updated_at)",
-    """CREATE TABLE IF NOT EXISTS slack_inbound_events (
-  seq INTEGER PRIMARY KEY AUTOINCREMENT,
-  link_id TEXT NOT NULL REFERENCES slack_thread_links(id),
-  event_key TEXT NOT NULL UNIQUE,
-  event TEXT NOT NULL,
-  created_at TEXT NOT NULL)""",
-    "CREATE INDEX IF NOT EXISTS slack_inbound_events_link ON slack_inbound_events(link_id, seq)",
-]
-
-
-def ensure(c):
-    """The bridge's tables, idempotent like the other modules' (`strategy.ensure`). A column added after a table was first
-    made is added here, once."""
-    for statement in SCHEMA:
-        c.execute(statement)
-    if not any(r[1] == "failure_task_id" for r in c.execute("PRAGMA table_info(slack_thread_links)")):
-        c.execute("ALTER TABLE slack_thread_links ADD COLUMN failure_task_id TEXT")
-
-
 def outside_recipient(channel_id):
     return f"slack:{channel_id}"
 
@@ -327,9 +253,6 @@ def request_link(store, who, thread_id, channel_ref, history=False, auth=None):
         if thread.get("audience") not in ("company", "members"):
             raise Problem("audience", "Only a company thread (for a public channel) or a members thread (for a private "
                           "one) can be linked to Slack", 422)
-        if core.shared_root(c, thread_id):
-            raise Problem("shared_thread", "This thread is shared with another company, so it can't be linked to Slack: "
-                          "their words would reach your workspace's channel", 409)
         if c.execute("SELECT 1 FROM slack_thread_links WHERE thread_id=? AND state IN ('requested','active','suspended')",
                      (thread_id,)).fetchone():
             raise Problem("conflict", "This thread is already linked to a Slack channel", 409)
@@ -1053,8 +976,6 @@ class Bridge:
         msg = _one(c, "SELECT * FROM messages WHERE id=?", (d["message_id"],))
         if not msg:
             return {"do": "settle", "state": "moot", "error": "message gone"}
-        if self.core().remote_guest(c, msg.get("sender_id")):      # another company's words never reach a channel
-            return {"do": "settle", "state": "moot", "error": "from another company"}
         refs = _refs(msg.get("refs"))
         if (refs.get("slack") or {}).get("channel") == link["channel_id"]:
             return {"do": "settle", "state": "delivered"}           # it came from this channel: no echo

@@ -194,7 +194,7 @@ QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_sca
          "engineering_exceptions": run_engineering_exceptions, "bookkeeper_check": run_bookkeeper_check}
 
 # The Bookkeeper's Watch (daily) and rules digest (weekly): their own cadence, not controlled jobs (CONTROLS has the
-# six a person switches). The Bookkeeper's pause is their off switch.
+# a person switches). The Bookkeeper's pause is their off switch.
 FIXED = {"bookkeeper_watch": (run_bookkeeper_watch, timedelta(days=1)),
          "bookkeeper_rules_digest": (run_bookkeeper_rules_digest, timedelta(days=7)),
          "thread_followups": (run_thread_followups, timedelta(minutes=15)),
@@ -209,7 +209,13 @@ def run_now(store, auth, key, actor):
     their own thread, as when scheduled, and return True. Raises a 409 when that one is already running."""
     from .store import Problem
     at = datetime.now(timezone.utc)
-    if key in QUICK:
+    if key == "task_check_backs":
+        from . import task_check_backs
+        with SR.recording(store, key) as run:
+            checked = task_check_backs.run_pass(store, stamp(at))
+            run.did(f"{len(checked['woke'])} followed up", quiet=not any(checked.values()))
+        running = False
+    elif key in QUICK:
         QUICK[key](store, auth, at, [])
         running = False
     elif key == "stale_review":
@@ -228,6 +234,10 @@ def run_now(store, auth, key, actor):
             run_id = learnings.claim_tonight(c)
         learnings.start(store, run_id)
         running = True
+    elif key == "auto_dream":
+        from . import dream_auto
+        dream_auto.run_now(store, auth)
+        running = False
     else:
         raise Problem("invalid", "Nothing to run", 422)
     with store.transaction() as c:
@@ -410,6 +420,11 @@ class Scheduler:
             with locked("task_snooze") as c:
                 woken = task_snooze.wake_ended(c, stamp(at), failures)
             run.did(SR.words_of(woken, "snooze ended", "Nothing due"), quiet=not woken)
+        from . import task_check_backs
+        with SR.recording(self.store, "task_check_backs") as run:
+            checked = task_check_backs.run_pass(self.store, stamp(at), failures)
+            run.did(f"{len(checked['woke'])} followed up, {len(checked['repaired'])} repaired, {len(checked['blocked'])} blocked",
+                    quiet=not any(checked.values()))
         # Quiet tasks a run deferred to a time that has come get their run (backend/quiet_work.py).
         from . import quiet_work
         with locked("quiet_work") as c:
@@ -546,6 +561,12 @@ class Scheduler:
             learnings.nightly(self.store, at)
         except Exception as exc:
             failures.append({"learnings": type(exc).__name__})
+        # The nightly auto dreams (backend/dream_auto.py): a bot whose memory changed a lot gets a dream; claimed per night.
+        try:
+            from . import dream_auto
+            dream_auto.nightly(self.store, self.execution.auth, at)
+        except Exception as exc:
+            failures.append({"auto_dream": type(exc).__name__})
         try:
             from . import memory_tidy_controls
             from .store import Problem
@@ -896,6 +917,7 @@ class Scheduler:
                 run.did(SR.words_of({"approvals expired": ended.get("stale") or [],
                                      "approvals closed with their task": ended.get("ended") or [],
                                      "asks cleared": ended.get("asks") or [],
+                                     "asked cards expired": ended.get("cards") or [],
                                      "tidy cards withdrawn": tidy_expired}, none="Nothing expired"))
             # A Finance action whose approval was decided, withdrawn or expired ends now (its hold released).
             try:

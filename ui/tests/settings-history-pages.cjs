@@ -80,6 +80,8 @@ const {unrouted} = require('./support/routes.cjs');
 
     // The owner's Changes: page one carries the change in progress; each Show older appends the next page.
     await page.goto('https://tico-ui.test/#/settings/history');
+    assert.deepEqual(await page.evaluate(() => [100000, 250000].map(tokens => settingsValue('compact_at', tokens))), ['100k', '250k'],
+      'a Compact at change is labelled with its size, 100k included');
     await page.locator('[data-history-view=changes]').click();
     await waitForChanges(owner, 2);
     assert.deepEqual(await changeIds(owner), ['h1', 'o1']);

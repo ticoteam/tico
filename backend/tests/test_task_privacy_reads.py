@@ -8,6 +8,7 @@ from backend import read_cache, sql as SQL, task_privacy, views
 from backend.auth import Identity
 from backend.store import H, Problem, encode
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt  # noqa: F401
+from backend.enqueue import enqueue_stored
 
 
 
@@ -157,7 +158,7 @@ def test_live_events_stop_when_private_owner_loses_access(api):
     assert "Second packet note" not in after and row["id"] not in after and "Sensitive" not in after
 
 
-def test_context_search_and_cached_fleet_do_not_disclose_revoked_sources(api):
+def test_context_search_and_fleet_do_not_disclose_revoked_sources(api):
     row = task(api, requester="human:cara", owner="human:ben")
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO linked_docs(id,title,url,kind,description,added_by,created_at,updated_at) "
@@ -165,10 +166,10 @@ def test_context_search_and_cached_fleet_do_not_disclose_revoked_sources(api):
                   ("private-reference", "Sensitive packet reference", "https://example.test/#/task/" + row["id"],
                    "Sensitive packet", H.now(), H.now()))
         who = Identity("human:ben", "human", email="ben@acme.example")
-        before = views.fleet_snapshot_cached(c, api.app.state.auth, who, lambda row, **k: row)
+        before = views.fleet_snapshot(c, api.app.state.auth, who, lambda row, **k: row)
         assert row["id"] in {t["id"] for t in before["tasks"]}
         c.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (row["id"],))
-        after = views.fleet_snapshot_cached(c, api.app.state.auth, who, lambda row, **k: row)
+        after = views.fleet_snapshot(c, api.app.state.auth, who, lambda row, **k: row)
         assert row["id"] not in {t["id"] for t in after["tasks"]}
     result = get(api, "context/search?q=Sensitive&source=docs", "ben-test")
     assert "private-reference" not in json.dumps(result)
@@ -342,6 +343,7 @@ def test_sql_event_privacy_scales_with_matching_attempts_not_their_cross_product
                 mid, jid, aid = (f"synthetic-{kind}-{n}" for kind in ("message", "job", "attempt"))
                 c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                           "VALUES(?,?,'human:ana','bot:ops','say','Public request','{}',?)", (mid, conv["id"], started))
+                enqueue_stored(c, mid)
                 jid = c.execute("SELECT id FROM jobs WHERE message_id=?", (mid,)).fetchone()[0]
                 c.execute("UPDATE jobs SET state='completed',attempt_id=? WHERE id=?", (aid, jid))
                 c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,finished_at) "
@@ -611,9 +613,10 @@ def running_turn(api):
 
 
 def queue(c, mid, cid, refs, *, sender="human:ana", in_reply_to=None):
-    """A message to bot:ops as stored; the jobs trigger queues it."""
+    """A message to bot:ops as stored, with the job it queues."""
     c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs,in_reply_to) "
               "VALUES(?,?,?,'bot:ops','say','More',?,?,?)", (mid, cid, sender, H.now(), encode(refs), in_reply_to))
+    enqueue_stored(c, mid)
 
 
 def test_long_run_reads_a_fixed_number_of_statements_and_keeps_private_provenance(api):

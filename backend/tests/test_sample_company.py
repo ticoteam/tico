@@ -121,7 +121,9 @@ def test_the_owner_starts_the_sample_company_and_every_bot_has_its_model_goal_an
     providers = api.get("/api/v2/providers", headers=signed_in()).json()
     assert providers["enabled"] == ["anthropic", "openai"] and providers["default"]["runtime"] == "claude"
 
-    bots = {row["slug"]: row for row in rows(api, "SELECT slug,display_name,runtime,model,state FROM bots")}
+    bots = {row["slug"]: row for row in rows(
+        api, "SELECT b.slug,b.display_name,b.state,json_extract(bc.config,'$.runtime') AS runtime,"
+             "json_extract(bc.config,'$.model') AS model FROM bots b LEFT JOIN bot_config bc ON bc.bot=b.id")}
     assert {"coo", "botops", *ROLE_BOTS} <= set(bots)
     assert {slug: bots[slug]["runtime"] for slug in ROLE_BOTS} == ROLE_BOTS          # spread over both subscriptions
     assert bots["builder"]["display_name"] == "Builder"
@@ -169,7 +171,8 @@ def test_a_company_with_its_own_provider_keeps_it(environment):
     assert start(api).status_code == 200
     providers = api.get("/api/v2/providers", headers=signed_in()).json()
     assert providers["enabled"] == ["openai"]
-    bots = {row["slug"]: row["runtime"] for row in rows(api, "SELECT slug,runtime FROM bots")}
+    bots = {row["slug"]: row["runtime"] for row in rows(
+        api, "SELECT b.slug,json_extract(bc.config,'$.runtime') AS runtime FROM bots b LEFT JOIN bot_config bc ON bc.bot=b.id")}
     # Claude is off here, so the Claude bots run on the company's own default, as a wizard pick would.
     assert bots["builder"] == "codex" and bots["head-of-product"] == "codex"
 
@@ -190,11 +193,11 @@ def test_the_bots_start_once_a_computer_runs_them(environment):
 
 
 def test_each_role_bot_is_made_already_set_up_so_it_does_its_starter_task(environment, tmp_path):
-    """The computer makes each bot's repository from its template (runner/catalog_job.py); a template's state.md
+    """The computer makes each bot's repository from its template (runner_support/catalog_job.py); a template's state.md
     says setup has not started, and its AGENT.md asks the setup questions first until it does."""
     import io
     import json
-    from runner import catalog_job
+    from runner_support import catalog_job
     api = environment()
     start(api)
     record, config = (api.get(path, headers=signed_in()).json() for path in ("/api/v2/setup", "/api/v2/config"))

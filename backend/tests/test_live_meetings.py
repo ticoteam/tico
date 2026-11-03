@@ -780,7 +780,7 @@ def claimed_turn(api, machine, bot="ops"):
 
 
 def thread_of(attempt):
-    """The provider thread the runner keys this turn on (runner/state.py and runner-rs session_key, clients/sessions.py)."""
+    """The provider thread the runner keys this turn on (runner_support/state.py and runner-rs session_key, clients/sessions.py)."""
     from clients import sessions
     return sessions.session_key(attempt["config"], attempt["bot"], (attempt.get("task") or {}).get("id"),
                                 (attempt.get("conversation") or {}).get("id"))
@@ -1290,3 +1290,131 @@ def test_recorder_discard_ends_without_filing_or_bot_runs(live):
     with live.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM meetings").fetchone()[0] == filed_before
         assert c.execute("SELECT count(*) FROM live_meeting_turns").fetchone()[0] == runs_before
+
+
+def screen_jpeg():
+    # A real, tiny JPEG fixture, decoded by browsers without screen capture.
+    import base64
+    return base64.b64decode('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAEf/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABAf/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPxB//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPxB//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxB//9k=')
+
+
+def test_screen_is_people_only_ephemeral_and_revocation_clears_access(live):
+    mid = post(live, 'live-meetings', {'title': 'Private screen', 'visibility': 'private'})['id']
+    attach(live, mid, 'ops')
+    prefix = f'/api/v2/live-meetings/{mid}/screen'
+    assert live.get(prefix, headers=headers('ben-test')).status_code == 404
+    generation = live.post(prefix + '/start', headers=headers()).json()['generation']
+    def upload(seq=1, generation=generation, data=None):
+        return live.post(prefix + f'/frame?generation={generation}&seq={seq}', content=data or screen_jpeg(),
+                         headers={**headers(), 'Content-Type': 'image/jpeg'})
+    with live.app.state.store.read() as c:
+        counts = tuple(c.execute(f'SELECT count(*) FROM {table}').fetchone()[0]
+                       for table in ('idempotency', 'live_meeting_events'))
+    assert upload().status_code == 204
+    assert live.get(prefix + '/frame?wait=0', headers=headers('ops-live')).status_code == 403
+    assert live.get(prefix + '/frame?wait=0', headers=headers('ben-test')).status_code == 404
+    frame = live.get(prefix + '/frame?wait=0', headers=headers())
+    assert frame.content == screen_jpeg() and 'no-store' in frame.headers['cache-control']
+    assert upload().status_code == 409
+    assert upload(2, 'old-generation').status_code == 409
+    assert upload(2, data=b'bad jpeg').status_code == 422
+    assert upload(2, data=b'x' * 1_000_001).status_code == 413
+    with live.app.state.store.read() as c:
+        assert counts == tuple(c.execute(f'SELECT count(*) FROM {table}').fetchone()[0]
+                               for table in ('idempotency', 'live_meeting_events'))
+    post(live, f'live-meetings/{mid}/access', {'add':['human:ben']})
+    assert live.get(prefix + '/frame?wait=0', headers=headers('ben-test')).status_code == 200
+    post(live, f'live-meetings/{mid}/access', {'remove':['human:ben']})
+    assert live.get(prefix + '/frame?wait=0', headers=headers('ben-test')).status_code == 404
+    # Pause erases the frame; resume never restores it or the publisher generation.
+    post(live, f'live-meetings/{mid}/control', {'action':'pause'})
+    post(live, f'live-meetings/{mid}/control', {'action':'resume'})
+    assert upload(3).status_code == 410
+    assert live.get(prefix + '/frame?wait=0', headers=headers()).status_code == 410
+
+
+def test_screen_expiry_generation_fencing_and_browser_links(live):
+    mid = connect(live)['id']
+    settings = live.app.state.store.settings
+    settings.public_url = 'https://acme.example'
+    assert get(live, f'live-meetings/{mid}')['link'] == f'https://acme.example/#/meetings/live/{mid}'
+    assert get(live, 'recorder/browser')['url'] == 'https://acme.example'
+    prefix = f'/api/v2/live-meetings/{mid}/screen'
+    old = live.post(prefix + '/start', headers=headers()).json()['generation']
+    new = live.post(prefix + '/start', headers=headers()).json()['generation']
+    assert old != new
+    live.post(prefix + '/stop?generation=' + old, headers=headers())
+    assert mid in live.app.state.meeting_frames.shares
+    live.app.state.meeting_frames.shares[mid].alive -= 11
+    assert live.post(prefix + '/alive?generation=' + new, headers=headers()).status_code == 410
+    assert live.get(prefix + '/frame?wait=0', headers=headers()).status_code == 410
+    audience = live.get(prefix, headers=headers()).json()['audience']
+    newer = live.post(prefix + '/start', headers=headers()).json()['generation']
+    post(live, f'live-meetings/{mid}/access', {'visibility':'team'})
+    assert live.post(prefix + '/alive?generation=' + newer, headers=headers()).status_code == 410
+    post(live, f'live-meetings/{mid}/access', {'visibility':'private'})
+    assert live.post(prefix + '/start?expected_audience=' + audience, headers=headers()).status_code == 409
+
+
+def test_screen_rechecks_access_during_an_open_frame_wait(live):
+    from concurrent.futures import ThreadPoolExecutor
+    mid = post(live, 'live-meetings', {'title':'Private wait', 'visibility':'private'})['id']
+    prefix = f'/api/v2/live-meetings/{mid}/screen'
+    live.post(prefix + '/start', headers=headers())
+    post(live, f'live-meetings/{mid}/access', {'add':['human:ben']})
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(live.get, prefix + '/frame?wait=2', headers=headers('ben-test'))
+        time.sleep(.1)
+        post(live, f'live-meetings/{mid}/access', {'remove':['human:ben']})
+        assert pending.result(timeout=3).status_code == 404
+
+
+def test_a_contended_screen_lock_does_not_block_the_async_server(live):
+    import threading
+    import httpx
+    mid = connect(live)['id']
+    prefix = f'/api/v2/live-meetings/{mid}/screen'
+    live.post(prefix + '/start', headers=headers())
+    held, release = threading.Event(), threading.Event()
+    def hold():
+        with live.app.state.meeting_frames.lock:
+            held.set()
+            release.wait(1)
+    holder = threading.Thread(target=hold)
+    holder.start()
+    assert held.wait(1)
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=live.app), base_url='http://testserver') as client:
+            pending = asyncio.create_task(client.get(prefix + '/frame?wait=0', headers=headers()))
+            await asyncio.sleep(.02)
+            began = time.monotonic()
+            try:
+                response = await asyncio.wait_for(client.get('/healthz'), .3)
+                assert response.status_code == 200
+                assert time.monotonic() - began < .3
+            finally:
+                release.set()
+                await pending
+    try:
+        asyncio.run(run())
+    finally:
+        release.set()
+        holder.join()
+
+
+def test_idle_screen_wait_does_not_fill_slow_request_diagnostics(live):
+    from backend import flight
+    mid = connect(live)['id']
+    prefix = f'/api/v2/live-meetings/{mid}/screen'
+    assert live.post(prefix + '/start', headers=headers()).status_code == 200
+    recorder = flight.Recorder()
+    live.app.state.timing.recorder = recorder
+    try:
+        response = live.get(prefix + '/frame?wait=1.1', headers=headers())
+        assert response.status_code == 204
+        recorder.drain()
+        assert not recorder.slow
+        route = next(row for row in live.app.state.timing.summary()['routes'] if row['route'].endswith('/screen/frame'))
+        assert route['max'] < 1000, route
+    finally:
+        live.app.state.timing.recorder = None

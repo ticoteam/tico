@@ -53,9 +53,9 @@
 .rdo-top.has-row+.rdo-row>li::after{content:"";position:absolute;z-index:-1;box-sizing:border-box;top:0;left:0;right:0;
   border-top:var(--tree-w) solid var(--tree-line)}
 .rdo-top.has-row+.rdo-row>li:first-child::after{left:calc(var(--rdo-sx) - var(--tree-w) / 2);height:calc(var(--rdo-drop) + var(--rdo-tuck));
-  border-left:var(--tree-w) solid var(--tree-line);border-top-left-radius:var(--tree-r)}
+  border-left:var(--tree-w) solid var(--tree-line);border-top-left-radius:var(--tree-corner)}
 .rdo-top.has-row+.rdo-row>li:last-child::after{right:calc(100% - var(--rdo-sx) - var(--tree-w) / 2);height:calc(var(--rdo-drop) + var(--rdo-tuck));
-  border-right:var(--tree-w) solid var(--tree-line);border-top-right-radius:var(--tree-r)}
+  border-right:var(--tree-w) solid var(--tree-line);border-top-right-radius:var(--tree-corner)}
 .rdo-top.has-row+.rdo-row>li:not(:only-child):is(:first-child,:last-child)::before,
 .rdo-top.has-row+.rdo-row>li:only-child::after{display:none}
 

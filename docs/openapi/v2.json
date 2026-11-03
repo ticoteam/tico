@@ -175,12 +175,12 @@
       "description": "Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks."
     },
     {
-      "name": "Federation",
-      "description": "Shared threads between Tico installs through Tico HQ: this install's key, peerings (both installs approve, and a pause stops one) and the threads it shares (docs/federation.md)."
-    },
-    {
       "name": "Threads",
       "description": "Threads: the sidebar, a thread and its timeline, read marks, search, members, follow, and the messages in a thread. A thread the viewer may not read answers 404, never 403."
+    },
+    {
+      "name": "Feedback",
+      "description": "A person's \ud83d\udc4d or \ud83d\udc4e on a message, task or approval a bot made, with an optional reason: a \ud83d\udc4e can tell the bot (a note for its next run in that conversation) or become an org rule. Every answer leaves out feedback on what the caller cannot read."
     },
     {
       "name": "Company page",
@@ -189,18 +189,135 @@
   ],
   "paths": {
     "/api/v2/approvals": {
+      "get": {
+        "summary": "The approvals addressed to you: pending (what Needs you counts), approved or declined",
+        "operationId": "listApprovals",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "pending",
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Needs you"
+        ]
+      },
       "post": {
         "summary": "Ask a person to approve an action. Kinds task_cap and spend_limit are proposals the top of the org decides; the hub applies one on approve, audited with via approval:<id>, and tells BotOps",
         "operationId": "requestApproval",
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ApprovalCreate"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -723,6 +840,227 @@
         ]
       }
     },
+    "/api/v2/assistant/actions/{aid}/withdraw": {
+      "post": {
+        "summary": "Any teammate (a person or a bot) withdraws a waiting card: it never runs, and the owner's chat says who withdrew it. Only the owner confirms it; the owner cancels it instead",
+        "operationId": "withdrawAssistantAction",
+        "parameters": [
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Aid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantWithdraw"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantActionResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Assistant"
+        ]
+      }
+    },
+    "/api/v2/assistant/changes": {
+      "get": {
+        "summary": "What your Assistant changed for you in the last `days` (default 30), newest first, each with the words it acted on and whether it can still be undone; paged with `limit` and `before`",
+        "operationId": "listAssistantChanges",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 30,
+              "title": "Days"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantChangeList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Assistant"
+        ]
+      }
+    },
+    "/api/v2/assistant/changes/{cid}/restore": {
+      "post": {
+        "summary": "Undo one change your Assistant made for you where the record allows it; repeating it answers `already: true`",
+        "operationId": "restoreAssistantChange",
+        "parameters": [
+          {
+            "name": "cid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Cid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantChangeResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Assistant"
+        ]
+      }
+    },
     "/api/v2/assistant/decisions": {
       "get": {
         "summary": "The approvals your Assistant decided for you, with your words and whether each can still be undone",
@@ -776,7 +1114,7 @@
     },
     "/api/v2/assistant/messages": {
       "post": {
-        "summary": "Say something to the Assistant. A lookup is answered at once (fast: true, with the reply); anything else is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. `place: updates` (the Updates chat) always takes a turn, handed the recent updates the caller may read",
+        "summary": "Say something to the Assistant. It is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. `place: updates` (the Updates chat) is handed the recent updates the caller may read",
         "operationId": "sendAssistantMessage",
         "requestBody": {
           "content": {
@@ -833,6 +1171,67 @@
             },
             "description": "1-200 characters. Reusing a key with the same body replays the first answer."
           }
+        ]
+      }
+    },
+    "/api/v2/assistant/proposals": {
+      "get": {
+        "summary": "The Confirm cards still waiting for their owner, to find one to withdraw: filter by proposer and/or owner",
+        "operationId": "listAssistantProposals",
+        "parameters": [
+          {
+            "name": "proposer",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Proposer"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Owner"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Assistant"
         ]
       }
     },
@@ -3778,6 +4177,127 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BotBudgetState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bots"
+        ]
+      }
+    },
+    "/api/v2/bots/{bot}/dream": {
+      "get": {
+        "summary": "The bot's open dream, or else its newest one finished in the last day; dream is null otherwise",
+        "operationId": "getBotDream",
+        "parameters": [
+          {
+            "name": "bot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotDreamView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Bots"
+        ]
+      },
+      "post": {
+        "summary": "Start a dream: a `dream` task for the bot, with the rights `POST /api/v2/tasks` needs. Its open dream is returned instead of a second; 409 stateless for a bot that keeps no memory",
+        "operationId": "startBotDream",
+        "parameters": [
+          {
+            "name": "bot",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Bot"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotDreamView"
                 }
               }
             }
@@ -10780,21 +11300,179 @@
         ]
       }
     },
-    "/api/v2/federation": {
-      "get": {
-        "summary": "This install's key id, Gateway, one page of peerings and shared threads with cursors (no key material)",
-        "operationId": "getFederation",
+    "/api/v2/feedback": {
+      "post": {
+        "summary": "Rate a message, task or approval a bot made; rating again replaces it. tell_bot (a \ud83d\udc4e only) leaves the bot a note",
+        "operationId": "giveFeedback",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackGive"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Feedback"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Feedback"
+        ],
         "parameters": [
           {
-            "name": "limit",
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      },
+      "get": {
+        "summary": "On these subjects the caller reads (subject_ids, comma-separated, at most 200): the caller's own feedback and everyone's up/down counts",
+        "operationId": "listFeedbackMarkers",
+        "parameters": [
+          {
+            "name": "subject_type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Subject Type"
+            }
+          },
+          {
+            "name": "subject_ids",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 1,
-              "default": 50,
-              "title": "Limit"
+              "type": "string",
+              "default": "",
+              "title": "Subject Ids"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackMarkers"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Feedback"
+        ]
+      }
+    },
+    "/api/v2/feedback/list": {
+      "get": {
+        "summary": "Feedback newest first, paged and byte-capped, by bot, rating and since, on subjects the caller reads",
+        "operationId": "listFeedback",
+        "parameters": [
+          {
+            "name": "bot_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bot Id"
+            }
+          },
+          {
+            "name": "rating",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rating"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
             }
           },
           {
@@ -10802,28 +11480,36 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "default": "",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "Cursor"
             }
           },
           {
-            "name": "threads_cursor",
+            "name": "limit",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "default": "",
-              "title": "Threads Cursor"
+              "type": "integer",
+              "default": 50,
+              "title": "Limit"
             }
           }
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackPage"
+                }
               }
             }
           },
@@ -10849,20 +11535,22 @@
           }
         },
         "tags": [
-          "Federation"
+          "Feedback"
         ]
       }
     },
-    "/api/v2/federation/keys": {
-      "post": {
-        "summary": "Make this install's federation key and register it with Tico HQ",
-        "operationId": "createFederationKey",
+    "/api/v2/feedback/recent-reasons": {
+      "get": {
+        "summary": "The caller's five latest distinct reasons, each with how often they used it",
+        "operationId": "listRecentFeedbackReasons",
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackReasons"
+                }
               }
             }
           },
@@ -10888,408 +11576,22 @@
           }
         },
         "tags": [
-          "Federation"
-        ],
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
+          "Feedback"
         ]
       }
     },
-    "/api/v2/federation/keys/rotate": {
-      "post": {
-        "summary": "A new key; the old one is retired and every peering needs approving again",
-        "operationId": "rotateFederationKey",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
-        ],
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ]
-      }
-    },
-    "/api/v2/federation/peerings": {
-      "post": {
-        "summary": "Ask another install to peer; an Idempotency-Key is required",
-        "operationId": "requestFederationPeering",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PeerBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
-        ],
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ]
-      }
-    },
-    "/api/v2/federation/peerings/{peering_id}/approve": {
-      "post": {
-        "summary": "Approve a peering after checking the other install's key; active once both approve",
-        "operationId": "approveFederationPeering",
-        "parameters": [
-          {
-            "name": "peering_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Peering Id"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
-        ]
-      }
-    },
-    "/api/v2/federation/peerings/{peering_id}/pause": {
-      "post": {
-        "summary": "The kill switch: while paused nothing crosses the peering in either direction",
-        "operationId": "setFederationPeeringPause",
-        "parameters": [
-          {
-            "name": "peering_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Peering Id"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PauseBody"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
-        ]
-      }
-    },
-    "/api/v2/federation/peerings/{peering_id}/revoke": {
-      "post": {
-        "summary": "End a peering; a new request starts over",
-        "operationId": "revokeFederationPeering",
-        "parameters": [
-          {
-            "name": "peering_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Peering Id"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
-        ]
-      }
-    },
-    "/api/v2/federation/threads/{thread_id}/installs": {
-      "post": {
-        "summary": "Share a thread this install owns with an active peer; it gets the thread from now on",
-        "operationId": "shareFederationThread",
-        "parameters": [
-          {
-            "name": "thread_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Thread Id"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/InstallBody"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
-        ]
-      }
-    },
-    "/api/v2/federation/threads/{thread_id}/installs/{install_id}": {
+    "/api/v2/feedback/{feedback_id}": {
       "delete": {
-        "summary": "Remove an install from a thread this install owns; it gets the removal and nothing after",
-        "operationId": "unshareFederationThread",
+        "summary": "Remove my feedback; a note it left that no run carried yet is taken back",
+        "operationId": "removeFeedback",
         "parameters": [
           {
-            "name": "thread_id",
+            "name": "feedback_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Thread Id"
-            }
-          },
-          {
-            "name": "install_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Install Id"
+              "title": "Feedback Id"
             }
           },
           {
@@ -11304,10 +11606,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackRemoved"
+                }
               }
             }
           },
@@ -11333,90 +11637,22 @@
           }
         },
         "tags": [
-          "Federation"
+          "Feedback"
         ]
       }
     },
-    "/api/v2/federation/threads/{thread_id}/installs/{install_id}/retry": {
+    "/api/v2/feedback/{feedback_id}/rule": {
       "post": {
-        "summary": "Send again now what another install has not taken from this thread; for whoever manages the thread",
-        "operationId": "retryFederationThreadInstall",
+        "summary": "Make my \ud83d\udc4e an internal org rule for the bot or all bots: active when I manage its Who, else suggested",
+        "operationId": "makeFeedbackRule",
         "parameters": [
           {
-            "name": "thread_id",
+            "name": "feedback_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Thread Id"
-            }
-          },
-          {
-            "name": "install_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Install Id"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
-        ]
-      }
-    },
-    "/api/v2/federation/threads/{thread_id}/readers": {
-      "post": {
-        "summary": "Let a local person read a shared thread copy on this install; an admin who reads it adds readers",
-        "operationId": "addFederationThreadReader",
-        "parameters": [
-          {
-            "name": "thread_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Thread Id"
+              "title": "Feedback Id"
             }
           },
           {
@@ -11434,17 +11670,19 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ReaderBody"
+                "$ref": "#/components/schemas/FeedbackRule"
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Successful Response",
+            "description": "OK",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackRuleMade"
+                }
               }
             }
           },
@@ -11470,7 +11708,68 @@
           }
         },
         "tags": [
-          "Federation"
+          "Feedback"
+        ]
+      }
+    },
+    "/api/v2/feedback/{feedback_id}/rule-draft": {
+      "post": {
+        "summary": "A one-sentence rule drafted from my \ud83d\udc4e; stores nothing. With no model the reason comes back, drafted false",
+        "operationId": "draftFeedbackRule",
+        "parameters": [
+          {
+            "name": "feedback_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Feedback Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackRuleDraft"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Feedback"
         ]
       }
     },
@@ -24003,7 +24302,7 @@
         ]
       },
       "post": {
-        "summary": "Add a subscription: a kind, a name and the pasted value (owners and admins)",
+        "summary": "Add a subscription: a kind, a name, the pasted value and, for a plan, optionally its owner, a person (default: you; an API key has none; owners and admins)",
         "operationId": "addModelSubscription",
         "requestBody": {
           "content": {
@@ -24065,7 +24364,7 @@
     },
     "/api/v2/model-subscriptions/{sid}": {
       "post": {
-        "summary": "Rename a subscription and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true",
+        "summary": "Rename a subscription, change a plan owner and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true",
         "operationId": "changeModelSubscription",
         "parameters": [
           {
@@ -24479,6 +24778,59 @@
         ]
       }
     },
+    "/api/v2/needs-you/summary": {
+      "get": {
+        "summary": "The Needs you count split by kind and by the bot that put each item there, with this week's and older counts; the same query as the board, so the numbers match it (`limit` caps the list of bots)",
+        "operationId": "getNeedsYouSummary",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NeedsSummary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Needs you"
+        ]
+      }
+    },
     "/api/v2/notices": {
       "get": {
         "summary": "Notices from Tico Team, newest first, each once (any signed-in person)",
@@ -24800,6 +25152,58 @@
         },
         "tags": [
           "Team chart"
+        ]
+      }
+    },
+    "/api/v2/origins/{ref}": {
+      "get": {
+        "summary": "Why a task, bot question or approval is on your list: who made it, its cause (automation, rule, parent task or bot), its siblings in the last seven days and up to three commands that would stop the source; 404 when you cannot read it",
+        "operationId": "getOrigin",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ref"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Origin"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Needs you"
         ]
       }
     },
@@ -33828,6 +34232,77 @@
         ]
       }
     },
+    "/api/v2/tasks/{tid}/check-back": {
+      "post": {
+        "summary": "Set a future follow-up appointment on bot work. Accepts an offset timestamp or duration such as 45m; human snoozes take precedence and human-only work is excluded",
+        "operationId": "setTaskCheckBack",
+        "parameters": [
+          {
+            "name": "tid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskCheckBack"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Tasks"
+        ]
+      }
+    },
     "/api/v2/tasks/{tid}/comments": {
       "get": {
         "summary": "Comments and questions with their answers",
@@ -38587,6 +39062,33 @@
                     "title": "Titles",
                     "type": "array"
                   },
+                  "delivery": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "steer",
+                          "queue",
+                          "defer"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Delivery"
+                  },
+                  "defer_for": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Defer For"
+                  },
                   "files": {
                     "type": "array",
                     "maxItems": 10,
@@ -38645,6 +39147,33 @@
                     "maxItems": 10,
                     "title": "Titles",
                     "type": "array"
+                  },
+                  "delivery": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "steer",
+                          "queue",
+                          "defer"
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Delivery"
+                  },
+                  "defer_for": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Defer For"
                   }
                 },
                 "title": "ThreadUpload",
@@ -41340,6 +41869,19 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Body"
+          },
+          "for": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "For"
           }
         },
         "additionalProperties": false,
@@ -41368,6 +41910,52 @@
         },
         "required": [
           "action"
+        ],
+        "additionalProperties": true
+      },
+      "AssistantChangeList": {
+        "type": "object",
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "changes",
+          "next"
+        ],
+        "additionalProperties": true
+      },
+      "AssistantChangeResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "restored": {
+            "type": "boolean"
+          },
+          "already": {
+            "type": "boolean"
+          },
+          "object": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "already",
+          "id",
+          "object",
+          "restored"
         ],
         "additionalProperties": true
       },
@@ -41457,25 +42045,9 @@
         "properties": {
           "message": {
             "$ref": "#/components/schemas/Message"
-          },
-          "reply": {
-            "type": [
-              "object",
-              "null"
-            ]
-          },
-          "fast": {
-            "type": "boolean"
-          },
-          "intent": {
-            "type": [
-              "string",
-              "null"
-            ]
           }
         },
         "required": [
-          "fast",
           "message"
         ],
         "additionalProperties": true
@@ -41494,6 +42066,20 @@
         ],
         "title": "AssistantSettings",
         "description": "A person's own Assistant settings (Settings > General)."
+      },
+      "AssistantWithdraw": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Reason",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AssistantWithdraw",
+        "description": "A bot takes back a Confirm card it proposed; the reason (optional) goes to the person in one line."
       },
       "Audience": {
         "type": "object",
@@ -43167,6 +43753,116 @@
           "owners",
           "slug",
           "state"
+        ],
+        "additionalProperties": true
+      },
+      "BotDreamView": {
+        "type": "object",
+        "properties": {
+          "dream": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "task": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "starting",
+                      "dreaming",
+                      "asking",
+                      "done",
+                      "stopped"
+                    ]
+                  },
+                  "questions": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "message_id": {
+                            "type": "string"
+                          },
+                          "text": {
+                            "type": "string"
+                          },
+                          "mine": {
+                            "type": "boolean",
+                            "description": "The question is put to the caller, who answers it at POST /api/v2/messages/{mid}/answer"
+                          }
+                        },
+                        "required": [
+                          "message_id",
+                          "mine",
+                          "text"
+                        ],
+                        "additionalProperties": true
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "summary": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "doing": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "While dreaming: the bot's one line on what it is doing now (the task note)"
+                  },
+                  "closed_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "started_at": {
+                    "type": "string"
+                  },
+                  "auto": {
+                    "type": "boolean",
+                    "description": "Started by the nightly run (Auto dream), not by a person"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "An auto dream's reason: the first line of its body"
+                  }
+                },
+                "required": [
+                  "auto",
+                  "closed_at",
+                  "doing",
+                  "questions",
+                  "reason",
+                  "started_at",
+                  "state",
+                  "status",
+                  "summary",
+                  "task"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "dream"
         ],
         "additionalProperties": true
       },
@@ -45762,6 +46458,33 @@
             "type": "string",
             "title": "Title",
             "default": ""
+          },
+          "delivery": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "steer",
+                  "queue",
+                  "defer"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery"
+          },
+          "defer_for": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Defer For"
           }
         },
         "type": "object",
@@ -46973,6 +47696,302 @@
           "repositories"
         ],
         "title": "ExtraRepos"
+      },
+      "Feedback": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "person_id": {
+            "type": "string"
+          },
+          "subject_type": {
+            "enum": [
+              "message",
+              "task",
+              "approval"
+            ]
+          },
+          "subject_id": {
+            "type": "string"
+          },
+          "bot_id": {
+            "type": "string"
+          },
+          "rating": {
+            "enum": [
+              "up",
+              "down"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "none",
+              "told_bot",
+              "rule"
+            ]
+          },
+          "note_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note_status": {
+            "enum": [
+              "waiting",
+              "carried",
+              "settled",
+              "canceled",
+              null
+            ]
+          },
+          "org_rule_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rule_status": {
+            "enum": [
+              "suggested",
+              "active",
+              "retired",
+              null
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bot_id",
+          "created_at",
+          "id",
+          "note_id",
+          "note_status",
+          "org_rule_id",
+          "outcome",
+          "person_id",
+          "rating",
+          "reason",
+          "rule_status",
+          "subject_id",
+          "subject_type",
+          "updated_at"
+        ],
+        "additionalProperties": true
+      },
+      "FeedbackGive": {
+        "properties": {
+          "subject_type": {
+            "type": "string",
+            "enum": [
+              "message",
+              "task",
+              "approval"
+            ],
+            "title": "Subject Type"
+          },
+          "subject_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Subject Id"
+          },
+          "rating": {
+            "type": "string",
+            "enum": [
+              "up",
+              "down"
+            ],
+            "title": "Rating"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Reason",
+            "default": ""
+          },
+          "tell_bot": {
+            "type": "boolean",
+            "title": "Tell Bot",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "subject_type",
+          "subject_id",
+          "rating"
+        ],
+        "title": "FeedbackGive"
+      },
+      "FeedbackMarkers": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Feedback"
+            }
+          },
+          "counts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "subject_id": {
+                  "type": "string"
+                },
+                "up": {
+                  "type": "integer"
+                },
+                "down": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "down",
+                "subject_id",
+                "up"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "counts",
+          "items"
+        ],
+        "additionalProperties": true
+      },
+      "FeedbackPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Feedback"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "additionalProperties": true
+      },
+      "FeedbackReasons": {
+        "type": "object",
+        "properties": {
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "count",
+                "text"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "reasons"
+        ],
+        "additionalProperties": true
+      },
+      "FeedbackRemoved": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "ok"
+        ],
+        "additionalProperties": true
+      },
+      "FeedbackRule": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Text"
+          },
+          "all_bots": {
+            "type": "boolean",
+            "title": "All Bots",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "FeedbackRule"
+      },
+      "FeedbackRuleDraft": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "drafted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "drafted",
+          "text"
+        ],
+        "additionalProperties": true
+      },
+      "FeedbackRuleMade": {
+        "type": "object",
+        "properties": {
+          "feedback": {
+            "$ref": "#/components/schemas/Feedback"
+          },
+          "rule": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "feedback",
+          "rule"
+        ],
+        "additionalProperties": true
       },
       "FileActivity": {
         "type": "object",
@@ -53903,20 +54922,6 @@
         ],
         "additionalProperties": true
       },
-      "InstallBody": {
-        "properties": {
-          "install": {
-            "type": "string",
-            "title": "Install"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "install"
-        ],
-        "title": "InstallBody"
-      },
       "InternalDoc": {
         "type": "object",
         "properties": {
@@ -56662,6 +57667,12 @@
           "added_by_name": {
             "type": "string"
           },
+          "owner_id": {
+            "type": "string"
+          },
+          "owner_name": {
+            "type": "string"
+          },
           "created_at": {
             "type": "string"
           },
@@ -56678,6 +57689,8 @@
           "kind",
           "label",
           "name",
+          "owner_id",
+          "owner_name",
           "preview",
           "revision",
           "runtime",
@@ -56753,12 +57766,20 @@
                 },
                 "help": {
                   "type": "string"
+                },
+                "connect": {
+                  "type": "boolean"
+                },
+                "owned": {
+                  "type": "boolean"
                 }
               },
               "required": [
+                "connect",
                 "help",
                 "kind",
                 "label",
+                "owned",
                 "runtime",
                 "secret_label"
               ],
@@ -56786,6 +57807,41 @@
           "action"
         ],
         "title": "Moderate"
+      },
+      "NeedsSummary": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "this_week": {
+            "type": "integer"
+          },
+          "by_kind": {
+            "type": "object"
+          },
+          "by_bot": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "bots_left": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "actor",
+          "bots_left",
+          "by_bot",
+          "by_kind",
+          "this_week",
+          "total"
+        ],
+        "additionalProperties": true
       },
       "NeedsYou": {
         "oneOf": [
@@ -57174,6 +58230,60 @@
         ],
         "additionalProperties": true
       },
+      "Origin": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "made_by": {
+            "type": "object"
+          },
+          "task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cause": {
+            "type": "object"
+          },
+          "siblings": {
+            "type": "object"
+          },
+          "stop": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "cause",
+          "created_at",
+          "id",
+          "kind",
+          "made_by",
+          "ref",
+          "siblings",
+          "stop",
+          "task",
+          "title"
+        ],
+        "additionalProperties": true
+      },
       "Page": {
         "type": "object",
         "properties": {
@@ -57480,34 +58590,6 @@
         "additionalProperties": false,
         "type": "object",
         "title": "Pause"
-      },
-      "PauseBody": {
-        "properties": {
-          "paused": {
-            "type": "boolean",
-            "title": "Paused"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "paused"
-        ],
-        "title": "PauseBody"
-      },
-      "PeerBody": {
-        "properties": {
-          "peer": {
-            "type": "string",
-            "title": "Peer"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "peer"
-        ],
-        "title": "PeerBody"
       },
       "Person": {
         "type": "object",
@@ -58878,20 +59960,6 @@
           "seq"
         ],
         "title": "ReadMark"
-      },
-      "ReaderBody": {
-        "properties": {
-          "actor": {
-            "type": "string",
-            "title": "Actor"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "actor"
-        ],
-        "title": "ReaderBody"
       },
       "ReaderChange": {
         "properties": {
@@ -61088,6 +62156,22 @@
           },
           "can_edit": {
             "type": "boolean"
+          },
+          "reports_now": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "until": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "until"
+            ],
+            "additionalProperties": true
           }
         },
         "required": [
@@ -63158,6 +64242,18 @@
             ],
             "title": "Name"
           },
+          "owner_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Id"
+          },
           "kind": {
             "anyOf": [
               {
@@ -63193,7 +64289,7 @@
         "additionalProperties": false,
         "type": "object",
         "title": "SubscriptionWrite",
-        "description": "A new subscription, or a saved one's reconnect (a new `secret`) or rename. `confirm` accepts that a reconnect\nstops and restarts the live runs on every computer given it."
+        "description": "A new subscription, or a saved one's reconnect (a new `secret`), rename or new owner (`owner_id`, a person; a new\nplan defaults to whoever adds it; an API key has none). `confirm` accepts that a reconnect stops and restarts the\nlive runs on every computer given it."
       },
       "Suggestion": {
         "properties": {
@@ -63633,6 +64729,62 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "check_back_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "check_back_note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "check_back": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "at": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string"
+                  },
+                  "by": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "due": {
+                    "type": "boolean"
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "Whether follow-up delivery is enabled for this install"
+                  },
+                  "delivery": {
+                    "type": "string",
+                    "description": "Due delivery state from the existing queue, or pending, disabled, bot_unavailable"
+                  }
+                },
+                "required": [
+                  "at",
+                  "by",
+                  "delivery",
+                  "due",
+                  "enabled",
+                  "note"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "version": {
@@ -64388,6 +65540,34 @@
         ],
         "additionalProperties": true
       },
+      "TaskCheckBack": {
+        "properties": {
+          "at": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 2,
+            "title": "At"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "at"
+        ],
+        "title": "TaskCheckBack"
+      },
       "TaskComment": {
         "properties": {
           "public": {
@@ -64566,6 +65746,30 @@
             "maxLength": 200,
             "minLength": 1,
             "title": "Owner"
+          },
+          "check_back_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Back At"
+          },
+          "check_back_note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Back Note"
           },
           "due": {
             "anyOf": [
@@ -66259,6 +67463,30 @@
             ],
             "title": "Owner"
           },
+          "check_back_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Back At"
+          },
+          "check_back_note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Check Back Note"
+          },
           "due": {
             "anyOf": [
               {
@@ -67020,6 +68248,33 @@
               }
             ],
             "title": "Parent Message Id"
+          },
+          "delivery": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "steer",
+                  "queue",
+                  "defer"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery"
+          },
+          "defer_for": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Defer For"
           }
         },
         "type": "object",

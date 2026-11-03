@@ -30,9 +30,9 @@ SETTLE = timedelta(hours=1)
 
 # Routines whose summaries are not in D.ROUTINES: the Strategy, Librarian and BotOps bots.
 EXTRA_SUMMARIES = {
-    "goal-manager:kpi-pass": ("Checked nine goals; the Q4 bookings goal moved to amber.",
-                              "All nine goal colours unchanged.",
-                              "Checked nine goals; two need an update from their owner."),
+    "goal-manager:kpi-pass": ("Checked forty goals; the Q4 bookings goal moved to amber.",
+                              "All forty goal colours unchanged.",
+                              "Checked forty goals; two need an update from their owner."),
     "librarian:curate-the-market": ("Curated four market items; one went to the weekly delta.",
                                     "No new market items; yesterday's list stands.",
                                     "Curated six items for the weekly delta; two were duplicates."),

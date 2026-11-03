@@ -33,7 +33,9 @@ function thvDraftSave(view) {
 // first message). {card: true} keeps the list to a box inside a page; {header: false} leaves out the title line, and
 // {header: 'compact'} keeps only its actions (call, Members, the thread menu), drawn into `actsHost` when given (a bar
 // the page owns). {compactEmpty: true} draws a Home with no messages as its composer alone, never a blank timeline, and
-// hides the card (`hideGone`) from a viewer who can't post either. {focus: message id} shows that message.
+// hides the card (`hideGone`) from a viewer who can't post either. {focus: message id} shows that message. {goals: slug}
+// (a bot's Home or DM) brings back the old chat's bar (pill.js): the ways to send (Set as goal among them) and the
+// pinned goal's bar (chat-goal.js), the bot's avatar that switches bots on a phone, Stop while it runs, and the "/" menu.
 function threadMount(host, opts = {}) {
   const view = {key: ++THV_N, host, opts, id: '', thread: null, breadcrumb: [], messages: [], next: null, state: 'loading',
                 readAt: 0, openSeq: 0, readSent: new Map(), marks: new Map(), pending: [], replyTo: '', editing: '',
@@ -41,11 +43,13 @@ function threadMount(host, opts = {}) {
   THV_VIEWS.add(view);
   host.innerHTML = `<section class="thv${opts.card ? ' thv-card' : ''}" data-thv="${view.key}">
     ${opts.header === false ? '' : '<header class="thv-head"></header>'}
+    ${opts.goals ? '<section class="chat-goal thv-goal" aria-label="Goal" hidden></section>' : ''}
     <div class="thv-scroll"><button type="button" class="ghost small thv-older" hidden>Earlier</button>
       <div class="thv-list" role="log" aria-live="polite"></div></div>
     <button type="button" class="stick-pill thv-unread" hidden>Unread</button>
     <div class="thv-composer"></div></section>`;
   view.el = host.querySelector('.thv');
+  if (opts.goals) view.goals = chatGoalThread(view, opts.goals);
   thvWire(view);
   // A view that is not displayed (a hidden tab or pane) reads nothing; it marks read once it shows.
   if (window.ResizeObserver) { view.shown = new ResizeObserver(() => thvMarkRead(view)); view.shown.observe(view.el); }
@@ -86,12 +90,13 @@ function thvSetId(view, id) {
   view.follow?.();
   view.id = id;
   view.follow = liveFollowThread(id);
+  if (view.goals) { void chatGoalThreadId(view); void thvRunRead(view); }
 }
 async function thvLoad(view) {
   try {
     const id = await thvResolve(view);
     if (view.gone) return;
-    if (!id) { view.state = 'empty'; thvDraw(view); return; }
+    if (!id) { view.state = 'empty'; thvDraw(view); if (view.goals) void chatGoalThreadId(view); return; }
     thvSetId(view, id);
     const r = await get(thvPath(id) + '/timeline?limit=50', {fresh: true});
     if (view.gone) return;
@@ -281,6 +286,7 @@ function thvRows(view) {
       continue;
     }
     if (m.collapsed) { rows.push({more: m, id: m.id}); continue; }
+    if (chatGoalControl(m)) continue;          // a goal's /goal message: the goal bar shows its effect (chat-goal.js)
     rows.push({m});
   }
   return rows;
@@ -294,7 +300,6 @@ function thvIsNew(view, m) {
   return m.seq > view.readAt && m.seq <= view.openSeq;
 }
 function thvWhoHTML(a) {
-  if (connectIsGuest(a)) return `<span class="th-who">${connectGuestHTML(a)}</span>`;   // another company's (ui/app/thread-connect.js)
   const slug = actorSlug(a), pid = actorPerson(a);
   if (slug && S.emps.some(e => e.id === slug)) return `<a class="th-who" href="#/bot/${esc(slug)}">${esc(actorName(a))}</a>`;
   if (pid) return `<a class="th-who" href="#/person/${esc(encodeURIComponent(pid))}">${esc(actorName(a))}</a>`;
@@ -325,16 +330,20 @@ function thvReactionsHTML(m) {
 }
 function thvMsgHTML(view, m) {
   const depth = thvDepth(view, m.depth), sub = m.thread_id && m.thread_id !== view.id;
+  // A bot's own words take a row of Copy, 👍 and 👎 under them, apart from the emoji reactions (ui/app/feedback.js).
+  const fb = !m.deleted && m.id && String(m.sender_id || '').startsWith('bot:') ? fbKey('message', m.id) : '';
   const fresh = thvIsNew(view, m), quiet = fresh && !thvAddressed(m);
   const cls = ['th-msg', view.focus === m.id && 'th-focus', sub && 'th-sub', m.refs?.follow_up && 'th-followup', thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted']
     .filter(Boolean).join(' ');
-  const head = `<div class="th-head">${thvWhoHTML(connectAuthor(m))}<time title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>${
+  const head = `<div class="th-head">${thvWhoHTML(m.sender_id)}<time title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time>${
     m.edited_at && !m.deleted ? '<span class="th-edited muted">edited</span>' : ''}</div>`;
   let body;
   if (m.deleted) body = '<div class="th-body muted">Deleted</div>';
   else if (view.editing === m.id) body = `<div class="th-edit"><textarea class="th-edit-text" rows="2" aria-label="Edit message">${esc(m.body || '')}</textarea>
       <div class="th-edit-acts"><button type="button" class="ghost small" data-th-edit-cancel>Cancel</button><button type="button" class="primary small" data-th-edit-save>Save</button></div></div>`;
   else if (thvIsUpdateCard(m)) body = thvUpdateHTML(m);
+  // A met or stopped goal: the one line the chat showed (chat-goal.js).
+  else if (m.refs?.chat_goal && m.refs?.goal_status) body = chatGoalNoticeHTML(m, view.goals?.goal);
   // A card a bot left for you fills in from its action or request (ui/assistant.js, ui/credential-card.js).
   else if (m.refs?.credential_request) body = `<div data-credential-host="${esc(m.refs.credential_request)}"><div class="asst-state">Loading the card…</div></div>`;
   else if (m.refs?.action) body = `<div data-action-host="${esc(m.refs.action)}"><div class="asst-state">Loading the card…</div></div>`;
@@ -354,9 +363,9 @@ function thvMsgHTML(view, m) {
     ${st.title ? `<span class="th-subhead-title">${esc(st.title)}</span>` : ''}
     <span class="th-subhead-n">${n ? `${n} ${n === 1 ? 'reply' : 'replies'}` : 'No replies'}</span>${
     st.unread ? `<span aria-hidden="true">·</span><span class="th-more-new">${st.unread} new</span>` : ''}</a>` : '';
-  return `<div class="${cls}" data-mid="${esc(m.id)}" data-message="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}" style="--d:${depth}">
-    <div class="th-av">${actorAvatar(connectAuthor(m), sub ? 20 : 28)}</div>
-    <div class="th-main">${head}${body}${m.deleted ? '' : thvFilesHTML(m) + thvReactionsHTML(m)}</div>
+  return `<div class="${cls}" data-mid="${esc(m.id)}" data-message="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}" style="--d:${depth}"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>
+    <div class="th-av">${actorAvatar(m.sender_id, sub ? 20 : 28)}</div>
+    <div class="th-main">${head}${body}${m.deleted ? '' : thvFilesHTML(m) + thvReactionsHTML(m) + fbRowHTML(fb, m.body)}</div>
     ${m.deleted || view.editing === m.id ? '' : `<div class="th-acts"><button type="button" class="th-act" data-th-ack aria-label="Acknowledge" title="Acknowledge">${THV_ACK}</button><button type="button" class="th-act" data-th-more aria-haspopup="menu" aria-expanded="false" aria-label="Message menu" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div>`}
   </div>${more}`;
 }
@@ -412,6 +421,8 @@ function thvListHTML(view) {
   }
   const replyAt = view.replyTo ? thvBranchEnd(view, view.replyTo) : '';
   for (const row of rows) {
+    // Updates have their own page (Updates); a Home does not repeat them as cards.
+    if (view.opts.home && row.m && thvIsUpdateCard(row.m)) continue;
     out.push(row.fold ? thvFoldHTML(view, row) : row.more ? thvMoreHTML(view, row.more) : thvMsgHTML(view, row.m));
     for (const id of row.ids || [row.m?.id || row.id]) {
       for (const p of afterParent.get(id) || []) out.push(thvPendingHTML(view, p));
@@ -446,6 +457,7 @@ function thvDraw(view, {stick = false} = {}) {
   const unread = list.querySelector('.th-new');
   view.el.querySelector('.thv-unread').hidden = !unread || thvVisible(box, unread);
   thvComposerDraw(view);
+  fbSync();
   if (keep) box.scrollTop = box.scrollHeight;
 }
 const thvVisible = (box, el) => { const a = box.getBoundingClientRect(), b = el.getBoundingClientRect(); return b.bottom > a.top && b.top < a.bottom; };
@@ -519,7 +531,20 @@ function threadViewsLive(topic, d) {
     if (topic === 'messages' && thvApplyMessage(view, d)) { thvDraw(view); thvMarkRead(view); }
   }
 }
-liveOn('messages', d => { if (d?.thread_id || d?.message?.thread_id) threadViewsLive('messages', d); });
+liveOn('messages', d => {
+  if (d?.thread_id || d?.message?.thread_id) threadViewsLive('messages', d);
+  // A goal set, paused, met or stopped in a bot's Home or DM on screen: read it as the goal route shows it.
+  if (d?.goal_id) for (const view of THV_VIEWS) if (view.goals && view.id && view.id === d.conversation_id && !view.gone) void chatGoalThreadId(view);
+});
+// A run in a bot's Home or DM on screen started, ended or was stopped: Stop follows it. Its output steps change nothing.
+liveOn('runs', d => {
+  if (d?.output) return;
+  for (const view of THV_VIEWS) if (view.goals && view.id && view.id === d?.conversation_id && !view.gone)
+    liveSoon('thv-run:' + view.key, () => thvRunRead(view), 120);
+});
+// A message waiting behind the bot's other run shows Stop while that run goes on.
+liveOn('bots', d => { for (const view of THV_VIEWS) if (view.composer?.slug === d?.bot && !view.gone) thvStopSync(view); });
+liveOn('reset', () => { for (const view of THV_VIEWS) if (view.goals && !view.gone) void thvRunRead(view); });
 
 // ----------------------------------------------------------------- the composer
 function thvComposerDraw(view) {
@@ -529,26 +554,47 @@ function thvComposerDraw(view) {
   if (!can) { host.hidden = true; return; }
   host.hidden = false;
   if (view.composer) return;
-  const C = view.composer = {files: [], lib: [], mention: null};
-  host.innerHTML = `<div class="ask thv-ask"><div class="p-pill">
+  // One line, as the bot chat's pill was: (a bot's Home or DM: the bot, on a phone) the words, Attach, the ways to send
+  // and Send, which Stop replaces while the bot runs. `pill-thread` keeps the task question card's frame (.ask,
+  // ui/styles/task-files.css) off it. A bot's composer takes the old chat's "/" commands (slash-commands.js) through the
+  // hooks below. `ways`: Send shows the person's kept way and every message names it; Set as goal is for one goal
+  // (chat-goal.js reads it too).
+  const bot = view.opts.goals || null;
+  const C = view.composer = {files: [], lib: [], mention: null, slug: bot, thread: true, running: null, stopping: false, ways: !!bot,
+    label: () => thvComposerLabel(view), buttons: () => thvComposerButtons(view), goalsOf: () => view.goals,
+    clear: () => thvComposerClear(view), command: text => thvComposerCommand(view, text), task: text => thvComposerTask(view, text),
+    newChat: view.opts.dm ? () => thvNewDm(view) : null};
+  host.innerHTML = `<div class="ask pill-thread thv-ask"><div class="p-pill">
+      ${bot ? pillBotHTML(bot) : ''}
+      ${bot ? '<span class="thv-goal-chip" hidden>Goal<button type="button" aria-label="Leave goal" title="Leave goal">×</button></span>' : ''}
       <textarea class="p-text" rows="1" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="Message" placeholder="Message"></textarea>
       <span class="thv-attach-wrap"><button class="p-attach p-icon" type="button" title="Attach" aria-label="Attach" aria-haspopup="menu" aria-expanded="false">${ICON_CLIP}</button>
         <div class="p-menu thv-attach-menu" role="menu" hidden><button type="button" role="menuitem" data-attach="upload">Upload</button><button type="button" role="menuitem" data-attach="library">Library file</button></div></span>
       <input type="file" multiple hidden class="p-file">
-      <button class="p-send p-send-icon" type="button" aria-label="Send" title="Send">${ICON_SEND}</button></div>
+      ${bot ? `<button class="p-stop p-send-icon" type="button" aria-label="Stop" title="Stop" hidden>${ICON_STOP}</button>
+      <span class="p-sendbox"><button class="p-way p-icon" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Ways to send" title="Ways to send"><span class="nav-icon" aria-hidden="true">expand_more</span></button>` : ''}
+      <button class="p-send p-send-icon" type="button" aria-label="Send" title="Send">${ICON_SEND}</button>${bot ? `
+      <div class="p-menu p-ways" role="menu" aria-label="Ways to send" hidden></div></span>` : ''}</div>
     <div class="p-chips"></div>
+    ${bot ? '<div class="p-cmd" hidden></div>' : ''}
     <div class="p-menu thv-mentions" role="listbox" aria-label="Mention" hidden></div>
     <div class="thv-lib" hidden></div></div>`;
   C.el = host.firstElementChild;
   const box = C.el.querySelector('.p-text'), file = C.el.querySelector('.p-file'), menu = C.el.querySelector('.thv-attach-menu');
   const grow = () => { box.style.height = 'auto'; box.style.height = Math.min(box.scrollHeight, 160) + 'px'; };
-  box.addEventListener('input', () => { grow(); thvMentionFind(view); });
+  box.addEventListener('input', () => { grow(); thvMentionFind(view); thvComposerButtons(view); });
   box.addEventListener('keydown', ev => {
     if (C.mention && thvMentionKey(view, ev)) return;
     if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && !touchKeyboard()) { ev.preventDefault(); void thvComposerSend(view); }
   });
   box.addEventListener('blur', () => setTimeout(() => thvMentionClose(view), 150));
   C.el.querySelector('.p-send').onclick = () => void thvComposerSend(view);
+  if (bot) {
+    pillBotWire(C.el.querySelector('.p-bot'), bot);
+    C.el.querySelector('.p-stop').onclick = () => void pillStop(C);
+    slashAttach(C);
+    thvWaysWire(view);
+  }
   C.el.querySelector('.p-attach').onclick = ev => {
     const open = menu.hidden;
     menu.hidden = !open; ev.currentTarget.setAttribute('aria-expanded', String(open));
@@ -569,6 +615,163 @@ function thvComposerDraw(view) {
   thvDropZone(view);
   const draft = THV_DRAFTS.get(thvDraftKey(view));
   if (draft) { box.value = draft.text; C.files.push(...draft.files); C.lib.push(...draft.lib); thvChips(view); requestAnimationFrame(grow); }
+  if (view.goals) chatGoalRender(view.goals);
+  thvComposerLabel(view);
+  thvStopSync(view);
+}
+// Send says what it will do: in a bot's Home or DM the way's icon (pill.js sendWayPaint), the target in goal mode,
+// with the Goal chip and the empty box saying so too; elsewhere the arrow. An empty box only dims it.
+function thvComposerLabel(view) {
+  const C = view.composer, btn = C?.el.querySelector('.p-send'), box = C?.el.querySelector('.p-text');
+  if (!btn) return;
+  const goal = chatGoalThreadMode(C);
+  if (C.ways) sendWayPaint(btn, thvWayMode(view));
+  else if (!btn.disabled) { btn.setAttribute('aria-label', 'Send'); btn.title = 'Send'; }
+  const chip = C.el.querySelector('.thv-goal-chip');
+  if (chip) chip.hidden = !goal;
+  box.placeholder = goal ? `Goal for ${botDisplayName(C.slug)}…` : 'Message';
+  thvComposerButtons(view);
+}
+function thvComposerButtons(view) {
+  const C = view.composer, btn = C?.el.querySelector('.p-send'), box = C?.el.querySelector('.p-text');
+  if (!btn) return;
+  const empty = !box.value.trim() && !C.files.length && !C.lib.length;
+  btn.classList.toggle('p-off', empty);
+  // While the bot runs, Stop takes Send's place (and the caret's) until something is typed: a message typed meanwhile
+  // still goes to it.
+  const stop = C.el.querySelector('.p-stop');
+  if (!stop) return;
+  const show = !!C.running && empty;
+  stop.hidden = !show; btn.hidden = show; stop.disabled = !!C.stopping;
+  const caret = C.el.querySelector('.p-way');
+  if (caret) { caret.hidden = show; if (show) thvWaysMenu(view, false); }
+  const says = C.stopping ? 'Stopping…' : 'Stop';
+  stop.title = says; stop.setAttribute('aria-label', says);
+}
+// ----------------------------------------------------------------- the ways to send (a bot's Home or DM)
+// Steer now, Queue, Defer with its durations, then Set as goal (deliveryMenuHTML, pill.js). Steer, Queue and Defer are
+// the person's kept way (sendWayPick); Set as goal enters goal mode (chat-goal.js) for one goal and is never kept.
+// Someone who may not message the bot (Write) defers with no deadline, as on a task they are not on.
+const thvDirects = view => botByRef(view.composer?.slug)?.my_access?.write !== false;
+// The way a message goes (never goal: a goal is not a message), and what Send shows (goal in goal mode).
+const thvSendMode = view => thvDirects(view) ? SEND_WAY : 'defer:never';
+const thvWayMode = view => chatGoalThreadMode(view.composer) ? 'goal' : thvSendMode(view);
+const thvGoalOffered = view => !!view.composer?.goalMode || !!view.goals?.goalSupported && !goalPinned(view.goals.goal);
+function thvWaysMenu(view, open) {
+  const C = view.composer, menu = C?.el.querySelector('.p-ways'), caret = C?.el.querySelector('.p-way');
+  if (!menu || !caret) return;
+  if (!open && menu.hidden) return;
+  const directs = thvDirects(view), current = thvWayMode(view);
+  menu.innerHTML = open ? deliveryMenuHTML({steer: directs, queue: directs, goal: thvGoalOffered(view), deadlines: directs,
+    current, deferFor: deliveryWay(current) === 'defer' ? deliveryFor(current) : 'never'}) : '';
+  menu.hidden = !open;
+  caret.setAttribute('aria-expanded', String(!!open));
+  // On a phone the keyboard stays up: focus stays in the box.
+  if (open && !touchKeyboard()) (menu.querySelector('[aria-checked="true"]') || menu.querySelector('button'))?.focus();
+}
+function thvWayPick(view, mode) {
+  const C = view.composer;
+  thvWaysMenu(view, false);
+  if (mode === 'goal') { if (!C.goalMode) chatGoalButton(view.goals); }
+  else {
+    if (C.goalMode) chatGoalButton(view.goals);      // a way to send leaves goal mode
+    sendWayPick(mode);
+  }
+  thvComposerLabel(view);
+  if (!touchKeyboard()) C.el.querySelector('.p-text')?.focus();
+}
+function thvWaysWire(view) {
+  const C = view.composer, q = sel => C.el.querySelector(sel), menu = q('.p-ways'), caret = q('.p-way');
+  // The caret, a right-click or a long press on Send open the menu.
+  caret.onclick = () => thvWaysMenu(view, menu.hidden);
+  sendWayHold(q('.p-send'), () => thvWaysMenu(view, true), () => !q('.p-send').disabled);
+  menu.onclick = ev => { const b = ev.target.closest?.('[data-deliver]'); if (b) thvWayPick(view, b.dataset.deliver); };
+  menu.addEventListener('keydown', ev => deliveryMenuKeys(menu, ev));
+  // Escape closes the menu only, wherever focus is in the composer.
+  C.el.addEventListener('keydown', ev => {
+    if (ev.key !== 'Escape' || menu.hidden) return;
+    ev.preventDefault(); ev.stopPropagation();
+    thvWaysMenu(view, false);
+    if (!touchKeyboard()) caret.focus();
+  }, true);
+  q('.thv-goal-chip button').onclick = () => { if (C.goalMode) chatGoalButton(view.goals); q('.p-text').focus(); };
+}
+// A press outside an open menu closes it; a way picked anywhere repaints every bot composer on screen.
+document.addEventListener('pointerdown', ev => {
+  for (const v of THV_VIEWS) {
+    const box = v.composer?.el.querySelector('.p-sendbox');
+    if (box && !box.querySelector('.p-ways').hidden && !box.contains(ev.target)) thvWaysMenu(v, false);
+  }
+});
+SEND_WAY_PAINT.add(() => { for (const v of THV_VIEWS) if (v.composer?.ways && !v.gone) thvComposerLabel(v); });
+// ----------------------------------------------------------------- Stop
+// The newest run in a bot's Home or DM, as the old chat read it (its conversation snapshot's execution: a thread id is a
+// conversation id, docs/dev/threads-contract.md); Stop shows while it runs (chat.js chatRunning).
+async function thvRunRead(view) {
+  if (!view.goals || !S.me?.cloud) return;
+  const id = view.id;
+  const d = id ? await v2Get(`/v2/conversations/${encodeURIComponent(id)}/snapshot?limit=1`, {fresh: true}) : null;
+  if (view.gone || view.id !== id) return;
+  view.execution = d?.execution || null;
+  thvStopSync(view);
+}
+function thvStopSync(view) {
+  const C = view.composer;
+  if (!C?.slug) return;
+  const running = chatRunning(view.execution, C.slug);
+  if (!running === !C.running && running?.run_id === C.running?.run_id) return;
+  C.running = running; C.stopping = false;
+  thvComposerButtons(view);
+}
+// ----------------------------------------------------------------- "/" commands (slash-commands.js slashRun)
+function thvComposerClear(view) {
+  const box = view.composer.el.querySelector('.p-text');
+  box.value = ''; box.style.height = '';
+  THV_DRAFTS.delete(thvDraftKey(view));
+  thvComposerButtons(view);
+}
+// An empty DM is made first, as its first message would make it.
+async function thvDmMake(view) {
+  if (view.id || !view.opts.dm) return !!view.id;
+  const made = await post('/v2/threads/dm', {members: [view.opts.dm]});
+  const t = made?.thread || made;
+  if (t?.id && !view.gone) { view.thread = t; thvSetId(view, t.id); }
+  return !!view.id;
+}
+// A harness's own command (/compact, a repository's skill) goes to the bot as the old chat sent it: a message marked
+// as a command, which its harness runs as typed (backend/models.py MessageCreate.command).
+async function thvComposerCommand(view, text) {
+  const C = view.composer;
+  try {
+    if (!await thvDmMake(view)) return;
+    const r = await post('/v2/messages', {to: 'bot:' + C.slug, text, conversation_id: view.id, command: true});
+    if (C.el.querySelector('.p-text').value.trim() === text) thvComposerClear(view);
+    if (r?.held) void thvHoldsLoad(view); else void thvRefresh(view);
+  } catch (e) { toast(`Not sent: ${e.message}`, true); }
+}
+// /task: a task for this bot, with the files attached here (bot-tasks.js v2PillTask).
+async function thvComposerTask(view, text) {
+  const C = view.composer, slug = C.slug, files = C.files.slice();
+  try {
+    await cloudCompose('/v2/tasks', {title: text.split('\n')[0].trim().slice(0, 80), body: text, owner: slug}, files);
+    C.files = C.files.filter(f => !files.includes(f));
+    thvComposerClear(view); thvChips(view);
+    toast(`Task for ${empName(slug)} created`);
+    await v2Refresh();
+    if (BOT?.slug === slug) void loadBotTasksV2(slug);
+  } catch (e) { toast(e.message, true); }
+}
+// /new in a DM: the DM is archived and the next message starts a fresh one, as the old chat's New chat did.
+async function thvNewDm(view) {
+  if (!view.id) return;
+  try { await patch(thvPath(view.id), {archived: true}); }
+  catch (e) { toast(e.message, true); return; }
+  if (view.gone) return;
+  view.follow?.(); view.follow = null;
+  Object.assign(view, {id: '', thread: null, messages: [], pending: [], next: null, execution: null, state: 'loading'});
+  if (view.goals) { view.goals.conv = null; view.goals.goal = null; }
+  thvStopSync(view);
+  await thvLoad(view);
 }
 function thvDropZone(view) {
   const zone = view.el;
@@ -585,6 +788,7 @@ function thvChips(view) {
   C.el.querySelector('.p-chips').innerHTML = [
     ...C.files.map((f, i) => `<span>${esc(f.name)} <a href="#" data-rm="file:${i}" aria-label="Remove ${esc(f.name)}">×</a></span>`),
     ...C.lib.map((f, i) => `<span>${esc(f.title)} <a href="#" data-rm="lib:${i}" aria-label="Remove ${esc(f.title)}">×</a></span>`)].join('');
+  thvComposerLabel(view);   // a file sends as a message, so goal mode's "Set goal" waits until it is gone
 }
 // Library files: the newest the viewer may read, filtered as they type.
 async function thvLibOpen(view) {
@@ -669,20 +873,31 @@ function thvMentionClose(view) {
 async function thvComposerSend(view) {
   const C = view.composer, box = C.el.querySelector('.p-text');
   const text = box.value.trim();
-  if (!text && !C.files.length && !C.lib.length) return;
+  // Goal mode: the words are the bot's goal for this thread (POST /v2/conversations/<thread>/goal), not a message.
+  if (chatGoalThreadMode(C)) { if (await chatGoalSend(C, text)) THV_DRAFTS.delete(thvDraftKey(view)); return; }
+  if (!text && !C.files.length && !C.lib.length) { box.focus(); return; }
+  // A bot's "/" commands, as the old chat ran them: Tico's own here, a harness's to the bot, other words as a message.
+  if (C.slug && text) {
+    const slash = slashRun(C, text);
+    if (slash === true) return;
+    if (slash !== 'plain' && runCommand(text, C.el.querySelector('.p-cmd'), C.slug)) { sessionAcknowledge(box); thvComposerClear(view); return; }
+  }
+  // In a bot's Home or DM every message names the kept way (thread posts take delivery, backend/thread_api.py); in
+  // goal mode with a file attached it goes as a message, that way too.
+  const way = C.ways ? deliveryBody(thvSendMode(view)) : null;
   const files = C.files.splice(0), lib = C.lib.splice(0);
   box.value = ''; box.style.height = ''; thvChips(view);
   THV_DRAFTS.delete(thvDraftKey(view));
-  await thvSend(view, {text, files, lib});
+  await thvSend(view, {text, files, lib, way});
 }
 // One message out: a "Checking…" row while the rules check runs, then the message, or a held row the author can
 // edit, discard or (when the server allows) send anyway.
-async function thvSend(view, {text, files = [], lib = [], parent = null}) {
+async function thvSend(view, {text, files = [], lib = [], parent = null, way = null}) {
   const p = {key: 'p' + (++THV_N), text, files, lib, parent: parent?.id || '', depth: parent ? (Number(parent.depth) || 0) + 1 : 0, state: 'checking'};
   view.pending.push(p);
   thvDraw(view, {stick: !parent});
   const refs = lib.length ? {files: lib.map(f => ({id: f.id, title: f.title}))} : null;
-  const body = {text, ...(refs ? {refs} : {}), ...(parent ? {parent_message_id: parent.id} : {})};
+  const body = {text, ...(refs ? {refs} : {}), ...(parent ? {parent_message_id: parent.id} : {}), ...(way || {})};
   try {
     let r;
     // An upload goes to a thread, so a first message with files makes the DM before it sends.
@@ -692,7 +907,7 @@ async function thvSend(view, {text, files = [], lib = [], parent = null}) {
       if (t?.id) { view.thread = t; thvSetId(view, t.id); }
     }
     if (!view.id && view.opts.dm) {
-      r = await post('/v2/threads/dm', {members: [view.opts.dm], body: text, ...(refs ? {refs} : {})});
+      r = await post('/v2/threads/dm', {members: [view.opts.dm], body: text, ...(refs ? {refs} : {}), ...(way || {})});
       const t = r?.thread || r;
       if (t?.id) { view.thread = t; thvSetId(view, t.id); }
     } else {
@@ -775,7 +990,6 @@ async function thvClick(view, ev) {
   if (t.closest('[data-th-file]')) { const b = t.closest('[data-th-file]'); void openFileLink(b.dataset.thFile, b.dataset.name); return; }
   if (t.closest('[data-th-expand]')) { void thvExpand(view, t.closest('[data-th-expand]')); return; }
   if (t.closest('[data-thv-members]')) { threadMembersOpen(view); return; }
-  if (t.closest('[data-call-setup]')) { window.supportStart('Please set up calls on our Tico server.'); return; }
   if (t.closest('[data-call]')) { void callAction(view, t.closest('[data-call]').dataset.call); return; }
   if (t.closest('[data-thv-menu]')) { threadMenuOpen(view, t.closest('[data-thv-menu]')); return; }
   if (t.closest('[data-th-earlier]')) {

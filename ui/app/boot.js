@@ -67,6 +67,7 @@ window.addEventListener('load', () => {
   }
   void orgHistorySync();
   void railsSync();
+  void sendWaySync();
   void tasksPinsSync();
   window.gsBoot?.();
   window.hlBoot?.();

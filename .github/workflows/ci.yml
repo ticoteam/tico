@@ -120,8 +120,10 @@ jobs:
 
   # The three images for both architectures, with the version baked in and the binaries above copied in, pushed by
   # digest only: no tag points at them until release.yml promotes this run's digests for the version tag.
+  # They start with the candidate, not after native-linux: VM start, checkout and buildx setup run while the binaries
+  # build, and the server and runner images wait for them below (the updater image has no Rust binaries).
   images:
-    needs: [candidate, native-linux]
+    needs: candidate
     strategy:
       fail-fast: true
       matrix:
@@ -131,6 +133,7 @@ jobs:
     runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-${{ matrix.platform == 'arm64' && 'arm64' || 'x64' }}/spot=false/extras=s3-cache
     timeout-minutes: 30
     permissions:
+      actions: read   # watches this run's native-linux build
       contents: read
       packages: write
     steps:
@@ -138,11 +141,36 @@ jobs:
         with:
           ref: ${{ needs.candidate.outputs.sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Wait for the release Linux binaries
+        if: matrix.image != 'tico-updater'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ matrix.platform == 'arm64' && 'linux-arm64' || 'linux-x86_64' }}
+        run: |
+          for _ in $(seq 150); do
+            job="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
+              -q "[.jobs[] | select((.name | startswith(\"native-linux (\")) and (.name | contains(\"$NAME\"))) | {status, conclusion}]")"
+            [ "$(jq 'length' <<<"$job")" = 1 ] || { echo "::error::The native-linux $NAME build was not found."; exit 1; }
+            if [ "$(jq -r '.[0].status' <<<"$job")" = completed ]; then
+              [ "$(jq -r '.[0].conclusion' <<<"$job")" = success ] && exit 0
+              echo "::error::The release Linux binaries did not build."; exit 1
+            fi
+            sleep 5
+          done
+          echo "::error::The release Linux binaries were not built within 12 minutes."; exit 1
+      - if: matrix.image != 'tico-updater'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: runner-${{ matrix.platform == 'arm64' && 'linux-arm64' || 'linux-x86_64' }}
           path: ${{ runner.temp }}/native
       - name: Stage the binaries for the image
+        if: matrix.image != 'tico-updater'
         env:
           PLATFORM: ${{ matrix.platform }}
         run: |
@@ -150,12 +178,6 @@ jobs:
           for name in tico-runner tico-screen-relay; do
             gunzip -c "$RUNNER_TEMP"/native/"$name"-linux-*.gz > "dist/native/$PLATFORM/$name"
           done
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       - id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -208,7 +230,7 @@ jobs:
           - {name: browser-3, part: browser, shard: '3/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
           - {name: browser-4, part: browser, shard: '4/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
           - {name: python-1, part: python, shard: '1/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-2, part: python, shard: '2/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-2, part: python, shard: '2/24', workers: '4', runner: 4cpu-linux-x64}
           - {name: python-3, part: python, shard: '3/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
           - {name: python-4, part: python, shard: '4/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
           - {name: python-5, part: python, shard: '5/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
@@ -331,7 +353,7 @@ jobs:
       # The release's own Linux binaries, where a checkout's build would be; hosted_release_check.py run checks on
       # every VM that their build ids match the candidate's sources. Setup above overlaps their build: wait for the
       # native-linux x86_64 job to finish, and fail this part if that build did not succeed. Only product, desktop
-      # and python-1 (every native test file, release_checks.py) need them; the other VMs start at once.
+      # and python-1/python-2 (the native test files, release_checks.py NATIVE_SHARDS) need them; the others start at once.
       # A candidate frozen before native-first python shards may put native tests on any python VM: all of them wait.
       - name: Does this VM need the release binaries
         id: binaries

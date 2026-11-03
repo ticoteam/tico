@@ -437,19 +437,6 @@ def room_messages_of(api, person, slug):
             ("human:" + person, bid))]
 
 
-def test_an_existing_database_gets_the_queue_trigger_that_queues_for_app_delivery(api):
-    from backend import store as S
-    from backend.config import Settings
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.execute("DROP TRIGGER queue_bot_message")
-        c.execute(S.QUEUE_TRIGGER.replace(" AND NOT EXISTS (SELECT 1 FROM runners r", " AND NOT EXISTS (SELECT 2 FROM runners r"))
-    S.Store(Settings(db_path=store.settings.db_path, registry_dir=store.settings.registry_dir)).initialize(seed_market=False)
-    with store.read() as c:
-        stored = c.execute("SELECT sql FROM sqlite_master WHERE name='queue_bot_message'").fetchone()[0]
-    assert stored == S.QUEUE_TRIGGER.replace(" IF NOT EXISTS", "", 1)
-
-
 def delivering(api):
     """Cara's Grok Bot, delivered through her ready Mac: (computer, report(messages, error))."""
     sync(api, designer(messages=[]), token="cara-test")

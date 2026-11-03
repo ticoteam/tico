@@ -190,9 +190,10 @@ def test_archive_restore_preserves_kpi_history_and_marks_it_on_goals(api):
 
 def add_strategy_bot(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES('goal-manager','goal-manager','Goal Manager','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('goal-manager','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('goal-manager','goal-manager','Goal Manager','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('goal-manager',?,NULL,'ana')",
+                  ('{"runtime":"fake","host":"keeper"}',))
 
 
 def owners_chat(api):
@@ -228,19 +229,18 @@ def test_only_kpi_owner_or_manager_above_can_archive_and_goal_manager_is_refused
     post(api, f"kpis/{kpi['id']}/restore", {}, token=token, expected=403)
 
 
-def test_in_the_owners_chat_the_assistant_acts_as_the_owner_but_leaves_kpi_archive_and_restore_to_them(api):
+def test_in_the_owners_chat_the_assistant_acts_as_the_owner_on_the_words_that_asked(api):
+    """The owner's turn asked to archive the KPI and bring it back: its cited words admit each change as the owner. A KPI
+    change is not a proposal (`assistant/actions` refuses it), so it runs on the turn or not at all."""
     _, kpi = goal_with_kpi(api, owner="ben", token="ben-test")
     token = owners_chat(api)
     assert get(api, "me", token)["actor"] == "human:ana"
     post(api, f"kpis/{kpi['id']}/archive", {}, token="ana-test")
-    for change in ("restore", "archive"):
-        # With the Assistant's rights, not the owner's: never on its own, and not a card the owner confirms either.
-        assert post(api, f"kpis/{kpi['id']}/{change}", {}, token=token,
-                    expected=403)["error"]["code"] == "confirm_required"
-        post(api, "assistant/actions", {"summary": change.title() + " the activation KPI", "method": "POST",
-                                        "path": f"/api/v2/kpis/{kpi['id']}/{change}", "body": {}},
-             token=token, expected=422)
-        post(api, f"kpis/{kpi['id']}/{change}", {}, token="ana-test")
+    post(api, f"kpis/{kpi['id']}/restore", {}, token=token)
+    post(api, f"kpis/{kpi['id']}/archive", {}, token=token)
+    post(api, "assistant/actions", {"summary": "Archive the activation KPI", "method": "POST",
+                                    "path": f"/api/v2/kpis/{kpi['id']}/archive", "body": {}},
+         token=token, expected=422)
 
 
 

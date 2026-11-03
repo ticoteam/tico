@@ -67,8 +67,8 @@ The operation groups below are generated from the committed spec's tags. After r
 | Model subscriptions | The company's saved model logins and keys, given to computers per runtime. A value is sent only to add or reconnect one; no answer carries it. |
 | Slack links | A thread's link to a Slack channel, both ways ([guide](slack.md)): asked for by an admin, checked by the gateway, then active, suspended or refused. Admins only. |
 | Memory tidy | Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks. |
-| Federation | Shared threads between Tico installs through Tico HQ: this install's key, peerings (both installs approve, and a pause stops one) and the threads it shares ([guide](federation.md)). |
 | Threads | Threads: the sidebar, a thread and its timeline, read marks, search, members, follow, and the messages in a thread. A thread the viewer may not read answers 404, never 403. |
+| Feedback | A person's 👍 or 👎 on a message, task or approval a bot made, with an optional reason: a 👎 can tell the bot (a note for its next run in that conversation) or become an org rule. Every answer leaves out feedback on what the caller cannot read. |
 | Company page | The public page for the company's updates: its audiences, the editions each one reads, the stats the page shows, the readers who sign in to it, and the logo ([guide](company-page.md)). |
 <!-- api-tags:end -->
 

@@ -179,14 +179,20 @@ function taskMatches(it, query) {
 // A task’s state is written in words; its owner and dependencies remain separate properties.
 // A question the server marks `older` no longer counts: it waits under Older questions. Since questions unanswered for two
 // business days go back to their bot instead (backend/still_needed.py), servers no longer mark any.
+// A declined task is on its requester's Needs you for DECLINED_NEEDS_HOURS after its last change (backend/hubdb.py
+// needs_you, the same number), and on no one's plate otherwise: its owner, its question and its waits do not hold it.
+const DECLINED_NEEDS_HOURS = 24;
+const taskDeclinedToWho = (t, pid) => t?.status === 'declined' && taskRequester(t) === pid && !actorPerson(t.owner_id)
+  && Date.now() - Date.parse(t.updated_at || '') < DECLINED_NEEDS_HOURS * 3600e3;
 function taskNeedsViewer(t) {
   const me = myActor();
-  return !!me && !!t && !taskFinished(t) && (t.owner_id === me || (t.ask?.recipient_id === me && !t.ask?.older) || taskWaitingOn(t) === me
-    || (t.status === 'declined' && taskRequester(t) === me && !actorPerson(t.owner_id)));
+  if (!me || !t || taskFinished(t)) return false;
+  if (t.status === 'declined') return taskDeclinedToWho(t, me);
+  return t.owner_id === me || (t.ask?.recipient_id === me && !t.ask?.older) || taskWaitingOn(t) === me;
 }
 function taskOlderAsk(t) {
   const me = myActor();
-  return !!me && !!t && !taskFinished(t) && t.ask?.recipient_id === me && !!t.ask?.older && !taskNeedsViewer(t);
+  return !!me && !!t && !taskFinished(t) && t.status !== 'declined' && t.ask?.recipient_id === me && !!t.ask?.older && !taskNeedsViewer(t);
 }
 // The person a bot's waiting task names (`hub task update --status waiting --on <person>`), or ''.
 // Who a waiting task waits on: the person it names, or the one its reconnect card is for (backend/reconnects.py).

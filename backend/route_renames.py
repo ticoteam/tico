@@ -15,6 +15,7 @@ only `/runners/{id}/...`, what a person does to one computer, moves to `/compute
 `/connectors/*` routes stay as they are.
 """
 import inspect
+import re
 
 from fastapi import Request
 from fastapi.routing import APIRoute
@@ -48,9 +49,15 @@ def _swap(path, old, new, only, forward=True):
     if path != src and not path.startswith(src + "/"):
         return None
     rest = path[len(src):]
-    if only is not None and not rest.startswith(only):
+    if only is not None and not (rest.startswith(only) or (only == "/{" and _has_id(rest))):
         return None
     return dst + rest
+
+
+def _has_id(rest):
+    """Whether a sub-path holds an id and something after it (`/abc123/logins`): a concrete request for a computer's own
+    route, as well as the registered `/{rid}/...` template. `/enroll` and `/heartbeat` are the runner's own calls."""
+    return re.match(r"/[^/{}]+/", rest) is not None
 
 
 def new_path(path):

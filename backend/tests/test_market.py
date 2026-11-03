@@ -19,21 +19,22 @@ def _seed(api, tmp_path):
     with store.transaction() as c:
         M.seed(c, {}, Blobs(store.settings), document=M.load_snapshot(FIXTURE_REGISTRY))
         if not H.bot(c, "listening"):
-            c.execute("INSERT INTO bots (id, slug, display_name, runtime, model, effort, cwd, host, state, created_at) "
-                      "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                      ("listening", "listening", "Listening", "grok", "grok-4.6", "high", "", "keeper", "active", H.now()))
+            c.execute("INSERT INTO bots (id, slug, display_name, effort, state, created_at) VALUES (?,?,?,?,?,?)",
+                      ("listening", "listening", "Listening", "high", "active", H.now()))
         if not c.execute("SELECT 1 FROM bot_config WHERE bot='listening'").fetchone():
             c.execute("INSERT INTO bot_config (bot, config, team, owner_id, description, reports_to, repo) "
                       "VALUES (?,?,?,?,?,?,?)",
-                      ("listening", "{}", "marketing", "ana", "Listening", "cmo", "emp-listening"))
+                      ("listening", '{"runtime":"grok","model":"grok-4.6","host":"keeper"}', "marketing", "ana",
+                       "Listening", "cmo", "emp-listening"))
 
 
 def _librarian(api):
     with api.app.state.store.transaction() as c:
         if not H.bot(c, "librarian"):
-            c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                      "VALUES('librarian','librarian','Librarian','fake','','','','keeper','active',?)", (H.now(),))
-            c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('librarian','{}',NULL,'ana')")
+            c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                      "VALUES('librarian','librarian','Librarian','','active',?)", (H.now(),))
+            c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('librarian',?,NULL,'ana')",
+                      ('{"runtime":"fake","host":"keeper"}',))
 
 
 def test_the_librarian_gets_the_market_routines_and_the_old_market_analyst_is_retired(api):
@@ -42,9 +43,10 @@ def test_the_librarian_gets_the_market_routines_and_the_old_market_analyst_is_re
     _librarian(api)
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES('market-analyst','market-analyst','Market Analyst','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('market-analyst','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('market-analyst','market-analyst','Market Analyst','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('market-analyst',?,NULL,'ana')",
+                  ('{"runtime":"fake","host":"keeper"}',))
         task = H.task_create(c, "human:ana", "Check Northwind pricing", "", "bot:market-analyst", lint=False)
         M.ensure_curator(c)
         keys = {r["routine_key"]: r for r in c.execute("SELECT * FROM schedules WHERE bot='librarian'")}
@@ -179,38 +181,37 @@ def test_market_import_resolves_cites_skips_and_dry_runs(api, tmp_path):
 
 
 def test_a_market_ask_is_audited_and_capped_per_person_per_day(api, tmp_path, monkeypatch):
-    """The ask spends the server's Gemini key: one `market.ask` event per model call, never the question, and a
+    """The ask spends the enabled server provider's key: one `market.ask` event per model call, never the question, and a
     clear 429 once the person's daily cap is used. With no key the pulled excerpts are still the answer."""
     _seed(api, tmp_path)
     store = api.app.state.store
     sent = []
 
-    def complete(question, excerpts):
+    def complete(question, excerpts, writer):
         sent.append(question)
         return "Northwind sells pricing software."
 
     monkeypatch.setattr(M, "complete", complete)
+    def writer(system, user):
+        return {"answer": "stub"}
+    writer.model = "stub-model"
+    monkeypatch.setattr("backend.updates.writer_for", lambda *a, **kw: writer)
     store.settings.decisions_daily_calls_owner = 1
     out = post(api, "market/ask", {"question": "What does Northwind sell?"})
     assert out["answer"] == "Northwind sells pricing software."
     with store.read() as c:
         rows = [json.loads(r["detail"]) for r in c.execute(
             "SELECT detail FROM events WHERE action='market.ask' AND actor='human:ana'")]
-    assert len(rows) == 1 and rows[0]["model"] == M.ASK_MODEL and "Northwind" not in json.dumps(rows[0])
+    assert len(rows) == 1 and rows[0]["model"] == "stub-model" and "Northwind" not in json.dumps(rows[0])
     over = api.post("/api/v2/market/ask", json={"question": "What does Northwind sell?"}, headers=headers())
     assert over.status_code == 429 and over.json()["error"]["code"] == "budget" and len(sent) == 1
 
-    from clients import docs_qa
-
-    def no_key(question, excerpts):
-        raise docs_qa.NoKey("no key")
-
-    monkeypatch.setattr(M, "complete", no_key)
+    monkeypatch.setattr("backend.updates.writer_for", lambda *a, **kw: None)
     store.settings.decisions_daily_calls_owner = 5
     out = post(api, "market/ask", {"question": "What does Northwind sell?"})
     assert out["answer"].startswith("Pulled from the market graph.")
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM events WHERE action='market.ask'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM events WHERE action='market.ask'").fetchone()[0] == 2
 
 
 def test_graph_reads_share_market_permissions_and_hide_inactive_entities(api):

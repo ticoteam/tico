@@ -243,6 +243,7 @@ pub struct SettingsForm {
 }
 
 pub struct Recorder {
+    pub screen: super::screen::ScreenShare,
     pub store: Store,
     _lock: Option<AppLock>,
     transcriber: Transcriber,
@@ -355,6 +356,7 @@ impl Recorder {
             String::new()
         };
         let mut app = Self {
+            screen: Default::default(),
             store,
             _lock: lock,
             transcriber,
@@ -602,12 +604,16 @@ impl Recorder {
     }
     /// Stops the recording in progress; the audio worker flushes and finishes in the background.
     pub fn stop(&mut self) {
+        if let Some((id, _)) = &self.active {
+            self.screen.stop_meeting(id);
+        }
         if let Some((_, handle)) = &self.active {
             handle.stop();
         }
     }
     /// Used on quit: stop and wait for the final audio to be saved.
     pub fn shutdown(&mut self) {
+        self.screen.stop_and_wait();
         if let Some((_, handle)) = self.active.take() {
             let _ = handle.finish();
         }
@@ -981,6 +987,11 @@ impl Recorder {
                         "live" => {
                             // Polled every few seconds; the window hears about it only on change.
                             if self.live != value["view"] {
+                                if value["view"]["state"] != "live" {
+                                    if let Some(id) = &self.meeting {
+                                        self.screen.stop_meeting(id);
+                                    }
+                                }
                                 self.live = value["view"].clone();
                                 self.bump();
                             }
@@ -1034,7 +1045,8 @@ impl Recorder {
             .as_ref()
             .is_some_and(|(_, handle)| handle.is_finished())
         {
-            if let Some((_, handle)) = self.active.take() {
+            if let Some((id, handle)) = self.active.take() {
+                self.screen.stop_meeting(&id);
                 let result = handle.finish();
                 self.report(result);
             }
@@ -1172,6 +1184,8 @@ impl Recorder {
     pub fn update_hold(&self) -> Option<&'static str> {
         if self.active.is_some() {
             Some("After this recording")
+        } else if self.screen.view()["active"] == true {
+            Some("After screen sharing stops")
         } else if self
             .records
             .iter()
@@ -1212,7 +1226,7 @@ impl Recorder {
     /// in `levels`.
     fn outside_state(&self) -> String {
         use std::fmt::Write;
-        let mut out = String::new();
+        let mut out = self.screen.view().to_string();
         if let Some((id, handle)) = &self.active {
             let status = handle.status();
             let _ = write!(out, "{id}|{}|{}|", status.phase, status.error);
@@ -1301,6 +1315,11 @@ impl Recorder {
         self.reload();
     }
     pub fn control_live(&mut self, action: &str) {
+        if action != "resume" {
+            if let Some(id) = &self.meeting {
+                self.screen.stop_meeting(id);
+            }
+        }
         let Ok(record) = self.open_record() else {
             return;
         };
@@ -1328,6 +1347,9 @@ impl Recorder {
         self.reload();
     }
     pub fn finish_live(&mut self) {
+        if let Some(id) = &self.meeting {
+            self.screen.stop_meeting(id);
+        }
         if self.context.live_id.is_empty() {
             return;
         }
@@ -1705,6 +1727,15 @@ impl Recorder {
     }
     /// Everyone in the Tico (`team`) or only the people and bots added (private).
     pub fn set_team(&mut self, team: bool) {
+        if team
+            && self
+                .meeting
+                .as_ref()
+                .is_some_and(|id| self.screen.active_for(id))
+        {
+            self.error = "Stop screen sharing before making this meeting public".into();
+            return;
+        }
         if self.shareable() {
             let _ = self.access_job(Some(team), vec![], vec![]);
         }
@@ -1748,6 +1779,7 @@ impl Recorder {
             self.error = UPDATING.into();
             return;
         }
+        self.screen.stop_meeting(id);
         let Ok(record) = self.store.get(id) else {
             return;
         };
@@ -1858,6 +1890,7 @@ impl Recorder {
     }
     /// Removes the recording's audio and transcript from this Mac. The window asks first.
     pub fn delete(&mut self, id: &str) {
+        self.screen.stop_meeting(id);
         let result = self.store.delete(id);
         let deleted = result.is_ok();
         self.report(result);
@@ -1908,6 +1941,7 @@ impl Recorder {
         }
     }
     pub fn sign_out(&mut self, id: &str) {
+        self.screen.stop_destination(id);
         let Some(destination) = self
             .config
             .destinations
@@ -2042,13 +2076,22 @@ impl Recorder {
         self.connect = None;
     }
     pub fn dismiss_error(&mut self) {
+        self.screen.dismiss();
         self.error.clear();
     }
     /// Opens a Tico page (a sent task) in the browser. Only addresses of a connected Tico.
     pub fn open_url(&mut self, url: &str) {
-        let allowed = self.config.destinations.iter().any(|row| {
-            settings::safe_url(&row.base_url).is_ok_and(|base| url.starts_with(&format!("{base}/")))
-        });
+        let known_item = self
+            .context
+            .items
+            .iter()
+            .any(|item| !item.task_url.is_empty() && item.task_url == url)
+            && settings::safe_url(url.split('#').next().unwrap_or("")).is_ok();
+        let allowed = known_item
+            || self.config.destinations.iter().any(|row| {
+                settings::safe_url(&row.base_url)
+                    .is_ok_and(|base| url.starts_with(&format!("{base}/")))
+            });
         if allowed {
             signin::open_browser(url);
         }
@@ -2121,6 +2164,7 @@ impl Recorder {
             String::new()
         };
         json!({
+            "screen": self.screen.view(),
             "busy": self.busy,
             "demo": self.demo,
             "error": self.error,
@@ -2330,6 +2374,9 @@ impl Recorder {
         let sync_error = self.sync_error(&record.id);
         json!({
             "id": record.id,
+            "link_ready": !self.context.live_id.is_empty() || !record.deliveries.is_empty(),
+            "can_share_screen": record.deliveries.is_empty() && !self.context.live_discarded && !self.context.locally_paused
+                && (self.context.live_id.is_empty() || self.context.live_state == "live"),
             "title": record.title,
             "started_at": record.started_at,
             "duration_ms": record.chunks.iter().map(|chunk| chunk.end_ms).max().unwrap_or(0),

@@ -230,10 +230,6 @@ def install(app, auth, settings):
     if settings.demo_public:
         discard_read_writes(app.state.store)
 
-    # "Ask the librarian" answers from the graph alone: no model is called.
-    from . import market
-    market.complete = lambda question, excerpts: ""
-
     # The seeded Granola account holds no token and nothing leaves this computer: a sync answers "recent" (Sync now
     # takes the same answer, as the route passes `now` too).
     async def granola_recent(who, interval=0, now=False):
@@ -263,8 +259,7 @@ def install(app, auth, settings):
             if RUNS.match(path):
                 return problem(409, "demo", EXPLAIN)
             if settings.demo_public and not PUBLIC_WRITES.match(path):
-                return problem(403, "demo", "This public demo is read-only. Run your own with "
-                               "`docker run --rm -p 127.0.0.1:8765:8765 ghcr.io/ticoteam/tico demo`.")
+                return problem(403, "demo", "This public demo is read-only.")
         PUBLIC_READ.set(settings.demo_public and request.method in ("GET", "HEAD"))
         return await call_next(request)
 

@@ -192,7 +192,7 @@ def edge_networks(ranges=EDGE):
         remove()
 
 
-ISOLATION_FILE = 'runner/tests/test_isolation_docker.py'
+ISOLATION_FILE = 'runner_support/tests/test_isolation_docker.py'
 PARTS = ('product', 'python', 'browser', 'desktop')
 # The desktop app's own tests, among them its updater installing from a company feed served by this checkout's
 # publisher and download routes (app/tests/update_hub.py). Building them needs WebKitGTK's development files.
@@ -226,15 +226,15 @@ TIMINGS = ROOT / 'scripts' / 'test-timings.json'
 
 
 # Test files that run the release's own native binaries (runner-rs, relay-rs), by what their source names. The release
-# gate gives them python shard 1, the only python VM that waits for the native-linux build; the rest start at once.
+# gate gives them python shards 1-2 (NATIVE_SHARDS), the only python VMs that wait for the native-linux build; the rest start at once.
 NATIVE_TEST = re.compile(r'rust_binary|TICO_RUNNER_BIN|TICO_SCREEN_RELAY_BIN|target/release|"target" / "release"|'
-                         r'engine\.current|screen_binary|from runner import engine|runner\.engine|'
-                         # scripts/tico runs the checkout's runner (install, status: runner/engine.py finds the binary).
+                         r'engine\.current|screen_binary|from runner(?:_support)? import engine|runner(?:_support)?\.engine|'
+                         # scripts/tico runs the checkout's runner (install, status: runner_support/engine.py finds the binary).
                          r'"scripts" / "tico"\)|scripts/tico"')
 NATIVE_BINARIES = ('runner-rs/target/release/tico-runner', 'relay-rs/target/release/tico-screen-relay')
 # A test module importing another test module (test_screen borrows test_screen_relay_contract's running_service).
-TEST_IMPORT = re.compile(r'from\s+((?:backend|runner|scripts)\.tests(?:\.\w+)*)\s+import\s+([\w, ]+)|'
-                         r'import\s+((?:backend|runner|scripts)\.tests(?:\.\w+)+)')
+TEST_IMPORT = re.compile(r'from\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)*)\s+import\s+([\w, ]+)|'
+                         r'import\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)+)')
 
 
 def native_test_files(names):
@@ -268,6 +268,10 @@ def native_test_files(names):
     return {name for name in names if native(name)}
 
 
+# Release python shards 1..NATIVE_SHARDS hold the native test files (ci.yml: only those python VMs wait for binaries).
+NATIVE_SHARDS = 2
+
+
 def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=False):
     """The test files of shard `index` of `total`: every file pytest collects with `selection` (by default the
     release Python step's), grouped so each shard takes about the same time: the slowest file by its recorded
@@ -287,18 +291,22 @@ def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=Fal
         raise RuntimeError(f'{len(counts)} test files cannot fill {total} shards')
     timings = recorded_timings('release' if selection else 'default')
     if native_first:
-        # Shard 1: every native test file; shards 2..total: the rest, balanced as usual.
-        if total < 2:
-            raise RuntimeError('native-first sharding needs at least 2 shards')
+        # Shards 1..NATIVE_SHARDS: the native test files, balanced between them (those VMs wait ~2 min for the
+        # release's Linux binaries, so the native files are split rather than left on one VM); the other shards: the
+        # rest, balanced as usual.
+        if total <= NATIVE_SHARDS:
+            raise RuntimeError(f'native-first sharding needs more than {NATIVE_SHARDS} shards')
         native = native_test_files(counts)
-        if index == 1:
-            mine = sorted(native)
-            print(f'Python shard 1/{total}: the {len(mine)} native test files, {sum(counts[n] for n in mine)} of '
-                  f'{sum(counts.values())} tests', flush=True)
+        if index <= NATIVE_SHARDS:
+            groups, loads, _ = bin_shards({name: counts[name] for name in native}, timings, NATIVE_SHARDS)
+            mine = sorted(groups[index - 1])
+            print(f'Python shard {index}/{total}: {len(mine)} of the {len(native)} native test files, '
+                  f'{sum(counts[n] for n in mine)} of {sum(counts.values())} tests, about {loads[index - 1]:.0f} seconds',
+                  flush=True)
             return mine
         counts = {name: n for name, n in counts.items() if name not in native}
-        groups, loads, unrecorded = bin_shards(counts, timings, total - 1)
-        index, total = index - 1, total - 1
+        groups, loads, unrecorded = bin_shards(counts, timings, total - NATIVE_SHARDS)
+        index, total = index - NATIVE_SHARDS, total - NATIVE_SHARDS
     else:
         groups, loads, unrecorded = bin_shards(counts, timings, total)
     mine = groups[index - 1]

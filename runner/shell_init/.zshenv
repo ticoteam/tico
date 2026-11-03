@@ -1,1 +1,1 @@
-. "$ZDOTDIR/zsh-init" .zshenv
+. "${ZDOTDIR:h:h}/runner_support/shell_init/zsh-init" .zshenv

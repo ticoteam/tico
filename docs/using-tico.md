@@ -242,14 +242,20 @@ hosted server asleep when idle wakes for it. Each deadline fires once, across re
 deferred to it ("Deferred since your last turn: 2 comments, 1 task") and lists the deferred comments and messages
 themselves, up to 20 a turn; the rest wait for the next turn.
 
-Defaults: plain Send is Steer for a message and a comment on a task a bot owns, as before (when the bot is idle
-that is the same as Queue). A comment on a task a bot filed for a
+Defaults, for a send that names no way (the API, CLI, MCP and Slack): Steer for a message and a comment on a task a
+bot owns, as before (when the bot is idle that is the same as Queue). A comment on a task a bot filed for a
 person is a Defer with a 24-hour deadline unless it @mentions a bot on the task (then a Queue). A deferred comment or
 task has a 24-hour deadline unless you pick one; a deferred thread message or deferred message has none. Steer does not
 apply to a new task (it has no turn yet). **Set as goal** is a separate action, apart in the send menu.
 
-The web send menu (the caret beside Send, in a bot's Home and a task's thread) offers **Steer now**, **Queue**
-and **Defer** with its durations, then **Set as goal**. The CLI and API take the same words:
+In the web app a bot's chat (its Home and your DM with it) and a task's thread name a way every time. Send's icon shows it: an arrow for Steer, an arrow over
+lines for Queue, a clock for Defer (with its deadline), a target for Set as goal. The caret beside Send (or a
+right-click or long press on Send) offers **Steer now**, **Queue** and **Defer** with its durations, then **Set as
+goal**. The way you pick is kept for you on the server, across devices; it starts as Steer. Set as goal is for one
+goal (a **Goal** chip shows before the words), then Send goes back to your way. Someone who may not message the bot
+gets Defer with no deadline. A task with no bot on it and a thread between people have a plain Send. A custom client can read and set
+the same way with `GET` and `POST /api/v2/preferences/compose.send_way` (`{"value": "queue"}`; `steer`, `queue` or
+`defer:<30m|1h|4h|24h|2d|7d|never>`). The CLI and API take the same words:
 
 ```bash
 hub chat send content "Skip the charts." --steer
@@ -261,6 +267,12 @@ hub task create --owner content --title "Check the refund counts" --defer 2d
 `queue` or `defer`; no `steer` on a new task) and `defer_for` (`<n>m`, `<n>h`, `<n>d` up to two years, or `never`;
 defer only). The answer's `sent_as` (`delivery`, `until`) says how it went. The MCP tools `hub_chat_send`,
 `hub_message_send`, `hub_task_comment` and `hub_task_create` take the same fields.
+
+A person's post in a bot's Home or a DM with a bot takes them too, as optional fields: `POST /api/v2/threads/<id>/messages`,
+`POST /api/v2/threads/dm` (with its first `body`) and `POST /api/v2/uploads/threads/<id>/messages` (form fields). A
+post that names no way goes as it always did, `refs` and all. A way on a reply or in a thread with no bot across is
+refused (422); Steer, Queue or a deadline from someone who may not message the bot is refused (403), and their Defer
+waits for the bot's next turn even while it runs there.
 
 ## Leave work for the next run
 

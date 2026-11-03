@@ -5,9 +5,9 @@
 <title>Tico</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
-<meta name="theme-color" content="#101513">
+<meta name="theme-color" content="#131413">
 <link rel="preload" href="/vendor/fonts/inter-variable.woff2?v=d27c9cfb920f" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="/vendor/fonts/material-symbols-outlined.woff2?v=1956ef1492ab" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/vendor/fonts/material-symbols-outlined.woff2?v=75c426f73215" as="font" type="font/woff2" crossorigin>
 <script src="/tico/ui/theme.js"></script>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
@@ -53,6 +53,7 @@
 <link rel="stylesheet" href="/tico/ui/styles/bot-page.css">
 <link rel="stylesheet" href="/tico/ui/styles/chat.css">
 <link rel="stylesheet" href="/tico/ui/styles/threads.css">
+<link rel="stylesheet" href="/tico/ui/styles/feedback.css">
 <link rel="stylesheet" href="/tico/ui/styles/thread-connect.css">
 <link rel="stylesheet" href="/tico/ui/styles/visual-cards.css">
 <link rel="stylesheet" href="/tico/ui/styles/visual-media.css">
@@ -124,16 +125,17 @@
     <a class="nav-link" href="#/docs" data-nav="docs"><span class="nav-icon" aria-hidden="true">docs</span>Docs</a>
     <a class="nav-link" href="#/strategy" data-nav="strategy"><span class="nav-icon" aria-hidden="true">strategy</span>Strategy</a>
     <a class="nav-link" href="#/meetings" data-nav="meetings"><span class="nav-icon" aria-hidden="true">forum</span>Meetings<span class="nav-badge meet-pending-badge" data-meet-pending hidden></span></a>
-    <!-- Inbox: the chats that wait on you (a question, a mention, a person's DM, a held message), burned down by
-         answering; Threads is the whole list. A DM with one bot is not here: its bot's row in Team counts its unread. -->
+    <!-- Inbox: its header opens Inbox (the chats that wait on you: a question, a mention, a person's DM, a held message);
+         under it the five most important chats, those that wait on you first. It never folds. A DM with one bot is not
+         here: its bot's row in Team counts its unread. -->
     <section class="side-section" id="nav-inbox-section" hidden>
       <div class="nav-row org-head">
-        <button class="section-toggle" type="button" data-section-toggle="inbox" aria-expanded="true" aria-controls="nav-inbox">
-          <span>Inbox</span><span class="nav-badge th-count" id="inbox-count" hidden></span><span class="section-chev" aria-hidden="true">›</span>
-        </button>
+        <a class="section-head" id="nav-inbox-link" href="#/threads?view=inbox" data-nav="inbox">
+          <span>Inbox</span><span class="nav-badge th-count" id="inbox-count" hidden></span>
+        </a>
         <button class="org-history" id="th-new" type="button" title="New thread" aria-label="New thread"><span class="org-plus" aria-hidden="true">+</span></button>
       </div>
-      <div class="section-body" id="nav-inbox" data-section-body="inbox"><ul class="th-list" id="th-list"></ul></div>
+      <div id="nav-inbox"><ul class="th-list" id="th-list"></ul></div>
     </section>
     <section class="side-pins" id="nav-pins" aria-labelledby="nav-pins-h" hidden><h2 class="side-pins-h" id="nav-pins-h">Pipelines</h2><ul class="pin-list" id="pin-list"></ul></section>
     <section class="side-section">
@@ -277,6 +279,7 @@
 <script src="/tico/ui/app/needs-you.js"></script>
 <script src="/tico/ui/app/bot-tasks.js"></script>
 <script src="/tico/ui/app/bot-sidebar.js"></script>
+<script src="/tico/ui/app/feedback.js"></script>
 <script src="/tico/ui/app/chat.js"></script>
 <script src="/tico/ui/app/pill.js"></script>
 <script src="/tico/ui/app/chat-goal.js"></script>

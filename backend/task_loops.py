@@ -11,12 +11,13 @@ LOOP_HOURS = 24         # ... within this many hours flag a task
 FLAG_KEY = "task-loop:"  # registry_metadata: when a task's people were last told
 
 
-def looping(c, at=None):
-    """[{task_id, title, private, changes, movers: [(actor, count)]}], busiest first. Uses task_events_field_ts."""
+def looping(c, at=None, limit=20):
+    """[{task_id, title, private, changes, movers: [(actor, count)]}], busiest first (at most `limit`, 20 unless a reader
+    names fewer). Uses task_events_field_ts."""
     since = H.shift(at or H.now(), hours=-LOOP_HOURS)
     out = []
     for row in c.execute("SELECT task_id, count(*) AS n FROM task_events WHERE field='status' AND created_at>=? "
-                         "GROUP BY task_id HAVING n>=? ORDER BY n DESC LIMIT 20", (since, LOOP_CHANGES)).fetchall():
+                         "GROUP BY task_id HAVING n>=? ORDER BY n DESC LIMIT ?", (since, LOOP_CHANGES, limit)).fetchall():
         task = H.task(c, row["task_id"])
         if not task:
             continue

@@ -6,7 +6,7 @@ pass). Plan only, no code. Read against ticoteam/tico `origin/main` c15ff9b04. M
 ## The idea in one line
 
 A rule is one sentence, **Internal** (how teammates, bots and people, treat each other) or **External** (what someone
-outside requires of us). It says **Who** follows it; an internal rule can also say **With** whom. From then on the bots
+outside requires of us). Its **Followed by** line says who follows it; an internal rule can also say **With** whom. From then on the bots
 it applies to know it. Counsel reads contracts and suggests external rules. A rule can have a **due date** with a status (Upcoming, Due soon, Overdue, Satisfied); a routine that
 opens a task before it is optional.
 
@@ -23,13 +23,13 @@ opens a task before it is optional.
 ## The model
 
 **Rules** are the one new thing, in two kinds. Internal comes first: it's what Chris will start adding.
-- **Internal:** between teammates. "Never tell anyone what color you like" (Who: Everyone). "Ask Chris before
-  assigning him a task" (Who: all bots, With: Chris). "Don't ask Bookkeeper to pay anything" (Who: Marketing, With:
+- **Internal:** between teammates. "Never tell anyone what color you like" (Followed by: Everyone). "Ask Chris before
+  assigning him a task" (Followed by: all bots, With: Chris). "Don't ask Bookkeeper to pay anything" (Followed by: Marketing, With:
   Bookkeeper).
 - **External:** someone outside requires it, with a **From** (Twilio, Acme Corp, City of Austin, FTC) of kind
   Vendor, Customer, Government or Other.
 - Each is one sentence (up to 1000 characters) plus an optional description.
-- **Who** follows it: Everyone (every teammate), all bots, departments, bots or people. Only owners and admins can
+- **Followed by** (who follows it): Everyone (every teammate), all bots, departments, bots or people. Only owners and admins can
   add or edit an Everyone rule.
 - **With** (internal, optional): the teammates it's about: departments, bots or people. Empty means any output.
 - Status is suggested, active or retired.
@@ -73,21 +73,23 @@ lives on other pages; on this page the button is **+ Add document**.
 
 ## Screens
 
-1. **Bot › Rules tab** (board 1): **Internal** (written rules where the bot is in Who, then its settings as
+1. **Bot › Rules tab** (board 1): **Internal** (written rules where the bot is under Followed by, then its settings as
    sentences, each opening the setting), then **External**.
 2. **Rules › Internal** (board 2): list with Rule | Followed by | With | Due; filters Followed by, With, and "Settings too" (off).
    Clicking a rule opens a side panel: rule, description, Followed by, With, If broken (Block / Escalate / Warn, shown as Stop / Ask first / Warn), due date; Retire / Save.
+   Who may reach whom, how often, and the lines between teammates (each line's rule an internal rule): see
+   [reach.md](reach.md).
 3. **Blocked** (board 3): what a blocked bot gets back and does next (Block, the default), and an Escalate review task
    for the bot's manager (Keep blocked / Send anyway / Edit rule). **Nav:** Rules is a top-level item under Automations and Library, collapsed by default.
 4. **Rules › External** (board 4): the page is **Rules** with tabs **Internal · External · Due · Suggested**. External
-   is a flat list with filters for From, Who and Due. Buttons: **+ Add document**, **+ Add rule**. The From filter's list replaces a Sources tab. Clicking a
-   rule opens a side panel: edit the rule, a description, Who (company, departments or bots; + add), From;
+   is a flat list with filters for From, Followed by and Due. Buttons: **+ Add document**, **+ Add rule**. The From filter's list replaces a Sources tab. Clicking a
+   rule opens a side panel: edit the rule, a description, Followed by (company, departments or bots; + add), From;
    see its due date and the cited quote; Retire / Save. No "Counsel is reading" banner.
 5. **Add document** (board 5): one file or link, a short description ("We just closed our deal with Twilio"), and
    From (or a new one plus a kind). It starts a Counsel review. (Finding public terms on its own is Later #1.)
-6. **Suggested** (board 6): grouped by From ("Twilio"). Each row is the sentence, Who, and Skip / Add.
+6. **Suggested** (board 6): grouped by From ("Twilio"). Each row is the sentence, Followed by, and Skip / Add.
    **Add all** adds the group with the scopes shown. The quote is stored and shows in the rule's side panel, not here.
-7. **Add rule** (board 7): Internal or External first; Internal asks Who and With, External asks Who and From.
+7. **Add rule** (board 7): Internal or External first; Internal asks Followed by and With, External asks Followed by and From.
 8. **Due** (board 8), for both kinds: columns Due | Rule | Repeats | Routine | Owner | Status. Repeats is the frequency; Routine is
    optional ("30 days before" or —). Status is Overdue / Due soon / Upcoming / Satisfied. Clicking a row opens a
    side panel: Due, Repeats, Owner, Routine, the status with **Mark satisfied**, and a history of past due dates
@@ -252,7 +254,7 @@ ahead of time so it doesn't try.
     (`GET /api/v2/rule-holds?thread=`), which the chat draws under its messages.
   - **`where:`** narrows a rule to some places: `thread:<conversation id>`, `team:<group>` (the sender's or the
     conversation owner's group chain), `kind:dm` (a direct chat, or a write with no conversation), and
-    `has_outside_members` (someone in it is outside the roster, or is a Slack or federated actor). A write meets the
+    `has_outside_members` (someone in it is outside the roster, or is a Slack actor). A write meets the
     rule when one of its terms holds. A message has the place of its thread (`conversations.id` is the thread id, with
     its root, audience and members read from the thread); a task comment has its task's conversation. The Rules panel
     sets one choice (anywhere, direct chats, outside, a team, or a thread). Its thread list is the threads sidebar

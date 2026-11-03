@@ -424,8 +424,8 @@ def heartbeat_later(store):
 
 
 def install(app, store, settings, auth):
-    def actor(who):
-        return app.state.inbound.connection_actor(who, what="this server", code="company_connection")
+    def actor(who, tap=False):
+        return app.state.inbound.connection_actor(who, what="this server", code="company_connection", tap=tap)
 
     @app.get(PROOF_PATH)
     async def company_connection_proof():
@@ -462,5 +462,5 @@ def install(app, store, settings, auth):
     @app.delete("/api/v2/company/server-connection")
     def company_server_disconnect(request: Request):
         who = request.state.identity
-        actor(who)
+        actor(who, tap=True)
         return disconnect(store, app.state.vault, who)

@@ -26,7 +26,7 @@ KEY = "providers"
 DEFAULT = "default"
 
 # `runtime` is the host a runner starts (runner-rs/src/hosts/<runtime>.rs); `harness` names the tool
-# manifest that installs it (runner/harnesses/<harness>.toml). `login`, what the person types on the runner's
+# manifest that installs it (runner-rs/harnesses/<harness>.toml). `login`, what the person types on the runner's
 # machine to sign that runtime in, comes from the manifest. Providers with no CLI of their own share the
 # catch-all runtime (`catch_all`): pi, reached with an OpenRouter API key.
 PROVIDERS = (
@@ -745,11 +745,11 @@ def fill(record, config):
     return {**config, "runtime": runtime, "model": model}
 
 
-def bot_choice(c, settings, config):
+def bot_choice(c, settings, config, record=None):
     """(runtime, model) for a bot's stored config, or ('', '') when nothing resolves: for the
-    places that only record or display what a bot runs on and must not fail."""
+    places that only record or display what a bot runs on and must not fail. `record`: load(c, settings), if read."""
     try:
-        return resolve(load(c, settings), config)
+        return resolve(load(c, settings) if record is None else record, config)
     except ProviderError:
         return "", ""
 

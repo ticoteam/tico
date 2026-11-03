@@ -8,6 +8,7 @@ from backend.store import H, encode
 from backend.tests.test_api import api, get, headers  # noqa: F401  (the api fixture)
 from backend.tests.test_groups import send
 from backend.tests.test_usage_limits import finish, fleet, groups, put, start
+from backend import usage_limits
 
 
 def test_every_bot_and_pool_row_says_what_it_spent_in_each_window_capped_or_not(api):
@@ -59,17 +60,16 @@ def big_org(api, first, last, groups_=8):
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(people),))
         for n in range(first, last):
             slug = f"acme-bot-{n:03d}"
-            c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                      "VALUES(?,?,?,?,?,?,'','keeper','active',?)", (slug, slug, slug, "fake", "m", "", H.now()))
+            c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) VALUES(?,?,?,?,'active',?)",
+                      (slug, slug, slug, "", H.now()))
             c.execute("INSERT INTO bot_config(bot,config,owner_id,team) VALUES(?,?,?,?)",
-                      (slug, encode({"name": slug}), "ana", teams[n % len(teams)]))
+                      (slug, encode({"name": slug, "runtime": "fake", "model": "m", "host": "keeper"}), "ana",
+                       teams[n % len(teams)]))
             c.execute("INSERT INTO turns(id,bot,started_at,finished_at,est_cost_usd,billing) VALUES(?,?,?,?,?,?)",
                       (H.new_id(), slug, H.now(), H.now(), 0.25, "api"))
-            c.execute("INSERT INTO usage_limits(bot,daily_usd,updated_at,updated_by) VALUES(?,?,?,?)",
-                      (slug, 10, H.now(), "human:ana"))
+            usage_limits.save_own(c, slug, {"daily_usd": 10}, "human:ana")
         for gid in org:
-            c.execute("INSERT OR IGNORE INTO usage_pools(scope,daily_usd,updated_at,updated_by) VALUES(?,?,?,?)",
-                      ("group:" + gid, 100, H.now(), "human:ana"))
+            usage_limits.save_pool(c, "group:" + gid, {"daily_usd": 100}, "human:ana")
 
 
 def statements(api, monkeypatch):

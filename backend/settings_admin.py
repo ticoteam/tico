@@ -67,7 +67,7 @@ def repository_present(c, bot):
 
 # Where a bot's conversation compacts, in tokens (runner-rs/src/hosts/mod.rs DEFAULT_COMPACT_AT): the choices offered,
 # and what a bot that never chose one gets.
-COMPACT_AT = (150_000, 250_000, 400_000, 600_000, 1_000_000)
+COMPACT_AT = (100_000, 150_000, 250_000, 400_000, 600_000, 1_000_000)
 DEFAULT_COMPACT_AT = 250_000
 
 
@@ -197,10 +197,22 @@ class SettingsAdmin:
         return P.load(_json(row[0], {}) if row else {"people": H.humans(c)})
 
     def _team(self, c, bot, proposed=None):
+        """The group a bot is made in. Its own team wins (`team_of`). A bot that names none, and that `team_of` leaves
+        in no group because it reports to a person, takes the group that person is in (`P.manager_team`), and keeps it
+        as its own `team` in `proposed` (its config, changed in place) so the chart shows it under that person. The
+        company's own bots and helpers stay out of groups (groups.outside), as the groups migration keeps them."""
+        from . import groups as Groups
         entries = self._entries(c)
+        roster = self._roster(c)
         if proposed is not None:
             entries[bot] = proposed
-        return P.team_of(bot, entries, self._roster(c))
+        team = P.team_of(bot, entries, roster)
+        if team is None and proposed is not None and proposed.get("team") is None \
+                and not Groups.outside(self.settings, proposed.get("name") or bot, proposed):
+            team = P.manager_team(proposed.get("reports_to"), entries, roster)
+            if team:
+                proposed["team"] = team
+        return team
 
     @staticmethod
     def _people(c, ids):
@@ -252,7 +264,7 @@ class SettingsAdmin:
                 "shared_from": shared_bots.source_of(_json(config["config"], {})),
                 "temp": bool((_json(config["config"], {}) or {}).get("temp")),
                 "owner_id": config["owner_id"], "revision": config["revision"],
-                "model": effective.get("model") or row["model"], "runtime": effective.get("runtime") or row["runtime"],
+                "model": effective.get("model") or "", "runtime": effective.get("runtime") or "",
                 "effort": effective.get("reasoning_effort") or row["effort"],
                 "compact_at": compact_at(effective),
                 # The bot's own, never its original's: a branch's queue is its own (backend/wake_presets.py).
@@ -270,7 +282,7 @@ class SettingsAdmin:
                 "capture_stream": (_json(config["config"], {}) or {}).get("capture_stream"),
                 "update_subscriptions": update_feeds.chosen(_json(config["config"], {}) or {}),
                 "update_feeds": update_feeds.status(),
-                "harness": resolve_harness(effective, effective.get("runtime") or row.get("runtime")),
+                "harness": resolve_harness(effective, effective.get("runtime")),
                 "fallback": normalize_fallback(effective.get("fallback")),
                 "app_delivery": app_delivery.view(c, _json(config["config"], {}) or {})}
 
@@ -327,7 +339,7 @@ class SettingsAdmin:
             return
         effort = self._effort(choice, None, config.get("reasoning_effort"))
         config.update(model=model, reasoning_effort=effort)
-        c.execute("UPDATE bots SET model=?,effort=? WHERE id=?", (model, effort, slug))
+        c.execute("UPDATE bots SET effort=? WHERE id=?", (effort, slug))
         c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(config), slug))
 
     def pick_slug(self, c, name, fallback="bot"):
@@ -496,10 +508,8 @@ class SettingsAdmin:
                 config.update(self.template_repo_defaults(body.template))
         team = self._team(c, bot_id, config)
         now = H.now()
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES(?,?,?,?,?,?,'','keeper',?,?)",
-                  (bot_id, body.slug, body.display_name, runtime_of(harness) or choice["runtime"],
-                   choice["id"], effort, body.status, now))
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) VALUES(?,?,?,?,?,?)",
+                  (bot_id, body.slug, body.display_name, effort, body.status, now))
         c.execute(
             "INSERT INTO bot_config(bot,config,team,owner_id,owner_ids,description,reports_to,"
             "repo,thread_mode,definition_updated_at,definition_updated_by,bot_owners,created_by) "
@@ -879,8 +889,8 @@ class SettingsAdmin:
             return BA.owner_ids(config["bot_owners"])
         if field == "model":
             declared, row = _json(config["config"], {}), H.bot(c, bot)
-            runtime = declared.get("runtime") or row.get("runtime") or ""
-            return {"model": declared.get("model") or row.get("model") or "",
+            runtime = declared.get("runtime") or ""
+            return {"model": declared.get("model") or "",
                     "runtime": runtime, "harness": resolve_harness(declared, runtime),
                     "effort": declared.get("reasoning_effort") or row.get("effort") or ""}
         if field == report_managers.LIFECYCLE:
@@ -1063,8 +1073,7 @@ class SettingsAdmin:
                                  "reasoning_effort": target["effort"],
                                  "model_managed_by": "cloud"})
                 c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(declared), bot))
-                c.execute("UPDATE bots SET model=?,runtime=?,effort=? WHERE id=?",
-                          (target["model"], target["runtime"], target["effort"], bot))
+                c.execute("UPDATE bots SET effort=? WHERE id=?", (target["effort"], bot))
                 from .model_login import hold_removals
                 hold_removals(c, self.settings)
                 # The limit was the old model's: the new one starts on the queued work now, unless it waits on the
@@ -1271,13 +1280,20 @@ class SettingsAdmin:
         """Whether a change is one a manager bot made to its report, which anyone who manages the bot may undo."""
         return row["via"] == report_managers.VIA and row["field"] in REPORT_UNDO
 
-    def _undoer(self, c, who, change):
-        """The owner undoes any change. A person who manages the bot undoes what its manager bot changed on it, and nothing else."""
+    def may_undo(self, c, who, change):
+        """Whether `who` may undo this settings change. The owner undoes any change. A person who manages the bot undoes
+        what its manager bot changed on it, and what their own Assistant changed for them as themselves (the same right
+        that made it, held now)."""
         if who.role == "owner":
-            return
-        if not self._report_undo(change) or not self.auth.bot_manager(c, who, change["bot"]):
+            return True
+        if not self.auth.bot_manager(c, who, change["bot"]):
+            return False
+        return self._report_undo(change) or (change["via"] == "assistant" and change["actor"] == who.actor)
+
+    def _undoer(self, c, who, change):
+        if not self.may_undo(c, who, change):
             raise Problem("forbidden", "Only the owner may undo this settings change; a person who manages the bot may "
-                          "undo what its manager bot changed", 403)
+                          "undo what its manager bot changed, and what their own Assistant changed for them", 403)
 
     def undo(self, c, who, change_id, body):
         change = c.execute("SELECT * FROM settings_changes WHERE id=?", (change_id,)).fetchone()

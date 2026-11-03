@@ -4,6 +4,7 @@ Every test runs against a fresh database in a temp directory with a small fake r
 nothing here reads `registry/` or the real `runtime/hub.db`.
 """
 import hashlib
+import importlib
 import json
 import re
 import sqlite3
@@ -162,16 +163,47 @@ class GrowthRethink(unittest.TestCase):
         self.addCleanup(self.dir.cleanup)
         self.path = Path(self.dir.name) / "hub.db"
 
+    # The retired tables and columns as the release before the rethink created them. Growth's startup schema no
+    # longer makes them, so a file from that release is rebuilt with them here.
+    BEFORE = """
+CREATE TABLE gtm_drafts (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL DEFAULT '{}',
+  revision INTEGER NOT NULL DEFAULT 0, updated_by TEXT, updated_at TEXT);
+CREATE TABLE gtm_versions (id TEXT PRIMARY KEY, n INTEGER NOT NULL UNIQUE, body TEXT NOT NULL DEFAULT '{}',
+  note TEXT NOT NULL DEFAULT '', published_by TEXT, published_at TEXT NOT NULL);
+CREATE TABLE growth_ideas (
+  task_id TEXT PRIMARY KEY REFERENCES tasks(id), hypothesis TEXT NOT NULL DEFAULT '', prediction TEXT NOT NULL DEFAULT '',
+  bet_id TEXT, kpi_id TEXT, judged_kpi_id TEXT, ice_i INTEGER, ice_c INTEGER, ice_e INTEGER,
+  status TEXT NOT NULL DEFAULT 'idea', source_kind TEXT, source_ref TEXT, test_from TEXT, test_to TEXT, change TEXT,
+  stop_if TEXT, min_events INTEGER, audience TEXT, external_ref TEXT, result TEXT, learning TEXT, bet_effect TEXT,
+  confidence TEXT, verdict_at TEXT, verdict_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE growth_idea_channels (
+  task_id TEXT NOT NULL REFERENCES tasks(id), channel_id TEXT NOT NULL, PRIMARY KEY(task_id, channel_id));
+ALTER TABLE growth_settings ADD COLUMN framework TEXT NOT NULL DEFAULT '';
+ALTER TABLE growth_settings ADD COLUMN verdict_win_pct REAL NOT NULL DEFAULT 60;
+"""
+
     def before_rethink(self):
         """The file as the release before the rethink left it: every migration before it (not the ones after, which
-        would then sort after an applied one), and the strategy tables store.py makes at startup."""
+        would then sort after an applied one), the threads schema that release's modules made after the migrations
+        (0047 makes it now, unrecorded here so the full migrate still runs it), and the strategy tables store.py makes
+        at startup."""
         conn = sqlite3.connect(self.path, isolation_level=None)
         conn.row_factory = sqlite3.Row
         self.addCleanup(conn.close)
         every = migrations.files()
+        apply = migrations.apply
+        threads = importlib.import_module("backend.migrations.0047_native_threads_schema")
+
+        def apply_then_threads(conn, directory=None):
+            apply(conn, directory)
+            threads.up(conn)
+
         with unittest.mock.patch.object(migrations, "files",
-                                        lambda directory=None: [m for m in every if m.version < "0035_growth_rethink"]):
+                                        lambda directory=None: [m for m in every if m.version < "0035_growth_rethink"]), \
+                unittest.mock.patch.object(migrations, "apply", apply_then_threads):
             H.migrate(conn)
+        for statement in migrations.statements(self.BEFORE):
+            conn.execute(statement)
         for statement in S.SCHEMA:
             conn.execute(statement)
         return conn
@@ -287,25 +319,13 @@ class GrowthRethink(unittest.TestCase):
 
 
 class RegistrySync(HubCase):
-    def test_sync_is_idempotent_and_keeps_tokens_threads_and_quarantine(self):
-        token = H.issue_token(self.conn, "cmo")
-        self.conn.execute("UPDATE bots SET thread_id='t-1' WHERE slug='cmo'")
+    def test_sync_is_idempotent_and_keeps_quarantine(self):
         H.quarantine(self.conn, "seo", "test")
         H.sync_registry(self.conn, EMPLOYEES, PEOPLE)
         H.sync_registry(self.conn, EMPLOYEES, PEOPLE)
         self.assertEqual(len(H.bots(self.conn)), len(EMPLOYEES))
         self.assertEqual(len(H.humans(self.conn)), len(PEOPLE["people"]))
-        self.assertEqual(H.bot(self.conn, "cmo")["thread_id"], "t-1")
-        self.assertEqual(H.verify_bot(self.conn, "cmo", token)["slug"], "cmo")
         self.assertEqual(H.bot(self.conn, "seo")["state"], "quarantined")
-
-class Tokens(HubCase):
-    def test_a_wrong_or_rotated_token_is_refused(self):
-        first = H.issue_token(self.conn, "cmo")
-        self.refused("identity", H.verify_bot, self.conn, "cmo", "nope")
-        H.issue_token(self.conn, "cmo")                     # the keeper rotates on resume
-        self.refused("identity", H.verify_bot, self.conn, "cmo", first)
-        self.refused("identity", H.verify_bot, self.conn, "seo", first)   # never issued one
 
 
 # ----------------------------------------------------------------------------- rule 1

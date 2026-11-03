@@ -132,7 +132,7 @@ All of it is in the stable v2 contract ([openapi/v2.json](openapi/v2.json), tag 
 | `PATCH /api/v2/linked-docs/{id}` `{"title"?, "description"?, "url"?, "archived"?}` | `{"linked"}` |
 
 Writes are recorded in the activity log with the actor (`docs.created_at`, `docs.updated_at`, `docs.restored`,
-`docs.locked`, `docs.imported`, `docs.linked`, ...). The Assistant's fast-path lookup (`GET /api/v2/context/search?source=docs`)
+`docs.locked`, `docs.imported`, `docs.linked`, ...). `GET /api/v2/context/search?source=docs`
 covers internal, indexed external and linked docs too.
 
 The code is `backend/docs.py` (with `backend/docs_import.py` for file conversion) and `ui/docs-page.js`,

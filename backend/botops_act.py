@@ -136,7 +136,7 @@ def _untouched(c, task, writer):
     if c.execute("SELECT 1 FROM task_events WHERE task_id=? AND field IN ('title','body') AND actor NOT IN (?,?) LIMIT 1",
                  (task["id"], writer, H.KEEPER)).fetchone():
         return False
-    said = c.execute("SELECT 1 FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? AND m.sender_id NOT IN (?,?,?) "
+    said = c.execute("SELECT 1 FROM message_refs m WHERE m.ref_task_id=? AND m.sender_id NOT IN (?,?,?) "
                      "LIMIT 1", (task["id"], H.KEEPER, botops, writer)).fetchone()
     return not said
 
@@ -173,7 +173,7 @@ def lend_lapsed(c, task):
     origin = H.message(c, task["request_id"]) if task.get("request_id") else None
     if origin and origin["sender_id"] == requester:
         spoke.append(origin["created_at"])
-    comment = c.execute("SELECT max(m.created_at) FROM messages m WHERE " + H._task_ref_sql("$.task") + "=? "
+    comment = c.execute("SELECT max(m.created_at) FROM message_refs m WHERE m.ref_task_id=? "
                         "AND m.sender_id=? AND json_extract(m.refs,'$.comment') IS NOT NULL "
                         "AND json_extract(m.refs,'$.via') IS NULL AND json_extract(m.refs,'$.assistant') IS NULL",
                         (task["id"], requester)).fetchone()[0]
@@ -269,12 +269,6 @@ DO = _routes(
     # or a token is left out: it hands the person's media token to BotOps, so it stays with the person.
     ("POST", rf"threads/{_S}/calls"), ("POST", rf"calls/{_S}/(end|leave|bots|action-items/retry)"),
     ("DELETE", rf"calls/{_S}/bots/{_S}"),
-    # Peering with another company's Tico and what it shares: the owner's or an admin's call, and a thread's routes also
-    # ask for read and manage on that thread (backend/federation_routes.py).
-    ("POST", r"federation/keys(/rotate)?"), ("POST", r"federation/peerings"),
-    ("POST", rf"federation/peerings/{_S}/(approve|pause|revoke)"),
-    ("POST", rf"federation/threads/{_S}/(readers|installs)"), ("POST", rf"federation/threads/{_S}/installs/{_S}/retry"),
-    ("DELETE", rf"federation/threads/{_S}/installs/{_S}"),
     # Withdrawing a held write to edit and resend it: its author's own call (backend/org_rule_check.py).
     ("POST", rf"rule-holds/{_S}/withdraw"),
     # Who reads an inbox: the route checks the person may change it.
@@ -627,8 +621,10 @@ def parse_body(raw):
 
 
 # BotOps' own: the run's plumbing and what BotOps says itself. Never switched to the requester by default.
+# Taking back its own Confirm card, and listing them (backend/assistant.py): BotOps' own cards, never run for a person.
 OWN = re.compile(API + r"(credential-runtime|runner-credential-.*|runner-watcher-credentials|attempts.*|jobs.*|runners/.*|"
-                 r"messages(/.*)?|chat/.*|conversations/.*|bots/" + "botops" + r"(/.*)?|files/(uploads|imports)|uploads/.*|me(/.*)?)")
+                 r"messages(/.*)?|chat/.*|conversations/.*|bots/" + "botops" + r"(/.*)?|files/(uploads|imports)|uploads/.*|me(/.*)?|"
+                 r"assistant/proposals|assistant/actions/" + _S + r"/withdraw)")
 
 
 def default_delegable(method, path, body=None, query=None):
@@ -685,6 +681,9 @@ def mail_settings_hint(bot, slug=""):
             + " > Mail sending, or with `hub bot mail " + (slug or bot) + " --send`")
 
 
+ROLE_FIX = "Your role can't change this: "     # `fix` for a person's role refused (app.py words a setting's who may)
+
+
 def fix(path, code, status, acting, names, base=""):
     """`{"fix", "link"}` for a refusal of a BotOps call, or None. `acting` is the identity the route checked;
     `names` maps actor ids to display names."""
@@ -720,5 +719,5 @@ def fix(path, code, status, acting, names, base=""):
         text = (asker + " asked for this without citing who wanted it, so BotOps had only " + asker + "'s rights: say "
                 "go ahead in your BotOps chat, or change " + where + " yourself")
     else:
-        text = "Your role can't change this: ask an owner or admin to change " + where
+        text = ROLE_FIX + "ask an owner or admin to change " + where
     return {"fix": text, "link": (base.rstrip("/") + "/" + link) if base else link}
