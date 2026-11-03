@@ -22,6 +22,7 @@ import pytest
 from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
+ALIASES = {"approvals", "automations", "bots", "rule", "tasks"}
 SUBCOMMANDS = ["whoami", "inbound", "connections", "mail", "company-page", "audiences", "editions", "readers", "meeting", "message", "conversation", "thread", "question", "note", "feedback", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
                "proposal", "rules", "strategy", "brand", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "peer", "trigger", "relay", "call", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
@@ -278,7 +279,9 @@ def test_product_repository_cli_confirms_without_a_terminal_only_with_the_exact_
 class Parser(unittest.TestCase):
     def test_every_subcommand_is_still_there(self):
         text = hubcli.parser().format_help()
-        self.assertIn("{" + ",".join(SUBCOMMANDS) + "}", text)
+        # The plural aliases (`tasks`, `bots`, ...) sit in the same braces; the commands themselves keep their order.
+        choices = text.split("{", 1)[1].split("}", 1)[0].split(",")
+        self.assertEqual([c for c in choices if c not in ALIASES], SUBCOMMANDS)
 
     def test_task_update_help_and_mcp_offer_only_writable_statuses(self):
         from clients import hubtools
