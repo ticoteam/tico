@@ -1090,7 +1090,8 @@ class _SyncWal:
     """An after-commit callback that fsyncs the WAL: what synchronous=FULL does at commit, for a transaction that was
     opened at NORMAL before it knew it would write money. Equal to every other one, so a transaction queues one. A
     `barrier`: Store.transaction runs it first and lets its error through, so a write that did not reach the disk is
-    never answered as done (the caller retries with its idempotency key and gets the stored result)."""
+    never answered as done. A failed sync stays owed (`_OWED`): every later write transaction on that file queues it
+    again, so a retry that only replays the stored result still waits for the disk."""
 
     barrier = True
 
@@ -1106,11 +1107,34 @@ class _SyncWal:
         try:
             fd = os.open(self.path + "-wal", os.O_RDONLY)
         except FileNotFoundError:
+            _OWED.discard(self.path)
             return
         try:
             os.fsync(fd)
+        except BaseException:
+            _OWED.add(self.path)
+            raise
         finally:
             os.close(fd)
+        _OWED.discard(self.path)
+
+
+_OWED: set[str] = set()          # database files whose WAL sync failed and has not succeeded since
+
+
+def _main_path(c: sqlite3.Connection) -> str:
+    return next((row[2] for row in c.execute("PRAGMA database_list") if row[1] == "main"), "")
+
+
+def owed_sync(c: sqlite3.Connection) -> None:
+    """Store.transaction calls this before every commit: a WAL sync that failed earlier is queued again, so nothing on
+    that file (an idempotent replay included) is answered as done until a sync succeeds."""
+    hooks = getattr(c, "after_commit", None)
+    if not _OWED or hooks is None:
+        return
+    path = _main_path(c)
+    if path in _OWED and _SyncWal(path) not in hooks:
+        hooks.append(_SyncWal(path))
 
 
 def durable_commit(c: sqlite3.Connection) -> None:
@@ -1121,7 +1145,7 @@ def durable_commit(c: sqlite3.Connection) -> None:
     hooks = getattr(c, "after_commit", None)
     if hooks is None or synchronous("NORMAL") == "OFF" or c.execute("PRAGMA synchronous").fetchone()[0] >= 2:
         return
-    path = next((row[2] for row in c.execute("PRAGMA database_list") if row[1] == "main"), "")
+    path = _main_path(c)
     if path and _SyncWal(path) not in hooks:
         hooks.append(_SyncWal(path))
 

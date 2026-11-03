@@ -2272,6 +2272,7 @@ class Store:
                 c.provenance_start = provenance_clock.current(c)
                 yield c
                 message_links.refresh_dirty(c)
+                H.owed_sync(c)
                 c.commit()
                 # Work that must see the committed rows (a delivery worker's doorbell) runs once the write is durable.
                 # A barrier (hubdb.durable_commit's WAL sync) runs first and its error is the request's: the write is

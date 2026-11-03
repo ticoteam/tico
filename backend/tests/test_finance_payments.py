@@ -1967,5 +1967,14 @@ def test_a_finance_action_whose_wal_sync_fails_is_not_answered_as_done(api, monk
     with pytest.raises(OSError):
         with store.transaction() as c:
             act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
+    with pytest.raises(OSError):                                         # still owed: the next write waits on it too
+        with store.transaction() as c:
+            c.execute("SELECT 1")
+    synced = []
+    monkeypatch.setattr(H.os, "fsync", lambda fd: synced.append(fd))
     with store.transaction() as c:
-        assert c.after_commit == []                                      # nothing left queued for the next transaction
+        c.execute("SELECT 1")
+    assert len(synced) == 1 and not H._OWED                              # paid once the disk answers
+    with store.transaction() as c:
+        c.execute("SELECT 1")
+    assert len(synced) == 1
