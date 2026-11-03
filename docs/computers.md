@@ -216,6 +216,9 @@ the sign-in, since the result passes through that computer; cancel and paste to 
 **Connect** is off and pasting still works. A sign-in the command reports as failed saves nothing. If the sign-in cannot
 accept the code and asks to retry, Tico ends that attempt and offers **Try again**. Open the new link and use the code
 from that page; a code from the previous attempt does not carry over.
+The computer's runner log records the sign-in ID, stages, elapsed time, command exit code and a safe failure category
+(code rejected, OAuth network error, or another OAuth error). It never records the authorization link, code, token or
+raw command output. A generic code rejection cannot say whether that code expired, was reused or was incomplete.
 Connecting a saved subscription is **Reconnect**, and asks first as a pasted value does. It belongs to the company; the list says
 who added it. Owners and admins add, rename, reconnect and remove them in **Settings > Models**; anyone who sees that
 page sees the list (name, kind, status, computers, usage), never a value.
