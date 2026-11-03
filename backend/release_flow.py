@@ -358,7 +358,7 @@ def published(c, target, url="", release_repo=""):
 # A release's publish approval (H.is_release_approval) is for one version. Once a newer one ships, asking again about
 # an older one is noise in someone's Needs you, so it is withdrawn, never approved.
 VERSION = re.compile(r"^v?(\d+(?:\.\d+){1,3})(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
-RELEASE_PAGE = re.compile(r"^https://github\.com/([\w.-]+/[\w.-]+)/releases/tag/[^/?#]+")
+RELEASE_PAGE = re.compile(r"^https://github\.com/([\w.-]+/[\w.-]+)/releases/tag/([^/?#]+)")
 
 
 def version_key(text):
@@ -377,18 +377,20 @@ def version_key(text):
 
 
 def _open_releases(c):
-    """The undecided release publish approvals whose GitHub release page and version read, as
-    {id, repo, channel, key, version}. Any other approval is none of this module's business."""
+    """The undecided publish approvals that point at a GitHub release page and read as a version, as
+    {id, repo, channel, key, version}. The version is the payload's, or else the page's tag: older asks carry only
+    the url. Any other approval (a post, a roadmap page) is none of this module's business."""
     out = []
     for row in H._rows(c.execute("SELECT id, kind, payload FROM approvals WHERE decision IS NULL AND kind='publish'")):
         payload = H._json(row.get("payload"), {}) or {}
-        if not H.is_release_approval(row["kind"], payload):
-            continue
         page = RELEASE_PAGE.match(str(payload.get("url") or ""))
-        parsed = version_key(payload.get("version"))
-        if page and parsed:
+        if not page:
+            continue
+        version = str(payload.get("version") or page.group(2))
+        parsed = version_key(version)
+        if parsed:
             out.append({"id": row["id"], "repo": page.group(1).lower(), "channel": parsed[0], "key": parsed[1],
-                        "version": str(payload["version"])})
+                        "version": version})
     return out
 
 
@@ -428,9 +430,9 @@ def superseded_by_shipped(c):
         parsed = version_key(tag)
         if parsed is None:
             continue
-        seen = newest.get((repo, parsed[0]))
+        seen = newest.get((repo.lower(), parsed[0]))
         if seen is None or parsed[1] > seen[1]:
-            newest[(repo, parsed[0])] = (tag, parsed[1])
+            newest[(repo.lower(), parsed[0])] = (tag, parsed[1])
     out = []
     for ask in asks:
         top = newest.get((ask["repo"], ask["channel"]))

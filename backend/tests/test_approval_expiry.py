@@ -136,6 +136,10 @@ class SupersededReleases(HubCase):
         newer = self.ask("v1.1.0")
         other_repo = self.ask("v0.1.0", repo="acme/other")
         prerelease = self.ask("v1.0.5-rc.1")
+        # An ask from before the version and commit were recorded: only the release page's url and a digest.
+        url_only = H.approval_request(self.conn, CMO, "publish", {
+            "url": "https://github.com/acme/site/releases/tag/v0.4.17", "content_sha256": "e" * 64},
+            task_id=self.task["id"])
         unreadable = H.approval_request(self.conn, CMO, "publish", {
             "url": "https://github.com/acme/site/releases/tag/next", "version": "next", "commit": "z9",
             "content_sha256": "d" * 64}, task_id=self.task["id"])
@@ -144,7 +148,7 @@ class SupersededReleases(HubCase):
         self.conn.execute("INSERT INTO milestones(kind,target,reached_at,source) VALUES('release_published',"
                           "'acme/site@v0.9.0',?,'')", (H.now(),))
         out = approval_expiry.sweep(self.conn)
-        self.assertEqual(sorted(out["superseded"]), sorted([old["id"], shipped["id"]]))
+        self.assertEqual(sorted(out["superseded"]), sorted([old["id"], shipped["id"], url_only["id"]]))
         self.assertEqual([self.decision(a) for a in (newer, other_repo, prerelease, unreadable)], [None] * 4)
 
     def test_versions_order_within_a_channel_and_unreadable_ones_are_left_alone(self):
