@@ -51,6 +51,7 @@ The words Tico uses, and what each replaces.
 - **Needs you**: only when it needs the viewer. Otherwise **Needs <Name>**, as in "Needs Sam".
 - **Approval**: a yes or no on one exact action.
 - **Proposal**: a suggested change to a goal, a KPI or the strategy draft, for its owner to confirm. A `strategy_draft` proposal is how the Strategy Bot puts a draft or a bet change in front of the owner.
+- **Reach**: a party's limits on who it may reach and how many chats and tasks a day it may send. Set on the Rules page's **Internal** tab, which draws the org chart; the limits are not enforced yet ([Reach](reach.md)).
 - **Run**: one time a bot works.
 - **Update**: a bot's daily or weekly post, and a new Tico version.
 - **Message**, **Comment**: a message is said in a thread. A comment is on a task.
