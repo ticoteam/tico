@@ -3922,6 +3922,7 @@ RENAMED = [
     (("goals",), ("goal", "list"), (), None),
     (("goal", "auto"), ("goal", "status"), (), _goal_auto),
     (("goal", "checkins"), ("goal", "checkin-list"), (), None),
+    (("goal", "checkin", "list"), ("goal", "checkin-list"), (), None),
     (("kpi", "add"), ("kpi", "create"), (), None),
     (("kpi", "readings"), ("kpi", "show"), (), None),
     (("context", "search"), ("doc", "search"), (), _context_search),

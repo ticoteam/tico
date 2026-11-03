@@ -834,6 +834,14 @@ def test_hub_notice_list_is_not_the_renamed_notice_send():
     assert argv == ["message", "send", "Deploy done", "--fyi"] and "is now" in said
 
 
+def test_goal_checkin_list_with_the_list_word_is_checkin_list():
+    """`goal checkin list <id>` is the noun-sub-noun-verb form of `goal checkin-list <id>`: matched before the parse, so it
+    never posts a check-in on a goal named "list"."""
+    argv, said = hubcli.rename_argv(["goal", "checkin", "list", "g1"])
+    assert argv == ["goal", "checkin-list", "g1"] and "is now" in said
+    assert hubcli.parser().parse_args(argv).fn == "goal checkin-list"
+
+
 class _Recorder:
     """A client for `remotecli.run` that records each write and whether it asked to act as the requester."""
     calls = []
