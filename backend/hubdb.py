@@ -4761,7 +4761,7 @@ def _unblock(conn, done_task, told=()):
         # Only a blocker still open holds the wake: a kept, finished ticket blocks nothing. A kept ticket that finishes
         # again (reopened, then done) does not wake the item's owner twice.
         waits = TR.live_blocker(conn, row["id"], ACTIVE_STATUSES) or kept and _one(
-            conn, "SELECT 1 FROM messages WHERE conversation_id=? AND json_extract(refs,'$.task')=? "
+            conn, "SELECT 1 FROM message_refs WHERE conversation_id=? AND ref_task_id=? "
                   "AND json_extract(refs,'$.trigger_source')=? AND body LIKE 'Unblocked: %' LIMIT 1",
             (row["conversation_id"], row["id"], done_task["id"]))
         if row["status"] in ACTIVE_STATUSES and not waits and row["id"] not in told:
@@ -6960,7 +6960,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         if is_human(after["requester_id"]):
             # Keep completion notices out of ordinary Slack reply mirroring, including quiet
             # updates. One eligible notice per task/status also covers reopen/retry cycles.
-            duplicate = _one(conn, "SELECT 1 FROM messages WHERE json_extract(refs,'$.task')=? "
+            duplicate = _one(conn, "SELECT 1 FROM message_refs WHERE ref_task_id=? "
                              "AND json_extract(refs,'$.task_completion.status')=? "
                              "AND json_extract(refs,'$.task_completion.notify')=1 LIMIT 1",
                              (task_id, status))
@@ -7647,7 +7647,9 @@ def message_task_id(message, conversation=None):
 
 
 def _task_ref_sql(path):
-    """The SQL twin of `_task_ref` for one `$.key` of `m.refs`: an array yields its first element."""
+    """The SQL twin of `_task_ref` for one `$.key` of `m.refs`: an array yields its first element. A query that reads
+    the message alone reads `message_refs.ref_task_id` (migration 0050), the same value for `$.task`; this stays for
+    MESSAGE_TASK_SQL, which callers splice under other aliases."""
     return (f"CASE WHEN json_type(m.refs,'{path}')='array' THEN json_extract(m.refs,'{path}[0]') "
             f"ELSE json_extract(m.refs,'{path}') END")
 

@@ -1602,8 +1602,8 @@ def wake_note_threads(c, bot, notes):
         seen.add(root["id"])
         if len(seen) > NOTE_WAKE_THREADS:
             break
-        if c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id "
-                     "WHERE j.bot_id=? AND j.state IN ('queued','leased') AND json_extract(m.refs,'$.wake')=? "
+        if c.execute("SELECT 1 FROM jobs j JOIN message_refs m ON m.id=j.message_id JOIN conversations t ON t.id=m.conversation_id "
+                     "WHERE j.bot_id=? AND j.state IN ('queued','leased') AND m.ref_wake=? "
                      "AND coalesce(t.root_id,t.id)=? LIMIT 1", (H.actor_id(bot), NOTE_WAKE, root["id"])).fetchone():
             continue
         made = _carrier(c, thread, H.message(c, source["id"]), bot, "mention", None, wake=NOTE_WAKE,
