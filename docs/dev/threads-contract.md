@@ -594,6 +594,7 @@ narrows `runs`. They do not narrow `threads`: the sidebar stays live while a thr
  "thread": {<thread view>},                      // created|renamed|archived|unarchived|audience|members|sub_thread
  "read": {"last_read_seq": 4411},                // kind=read, only to that reader
  "counters": {"last_seq": 4411, "last_unread_seq": 4400},   // kind=counters|activity
+ "message_id": "...", "unread": true,            // kind=activity: is that message unread for this viewer (§10.1)
  "message_id": "...", "reactions": [{"emoji": ":+1:", "count": 2, "actors": ["human:ana", "bot:legal"]}]}
                                                  // kind=reactions, only when the viewer reads that message
 ```
@@ -671,37 +672,51 @@ a sub-thread shows its root's.
 | `DELETE /api/v2/threads/{id}/pin` | `thread_rail.unpin(...)` → thread view: a row with `pinned` 0 when the root is pinned for everyone, else the row goes |
 | `PATCH /api/v2/threads/{id} {"pinned_for_everyone": bool}` | `thread_rail.set_pinned_for_everyone(c, principal, thread_id, value)`: managers only (`can_manage`, 403); 422 `pin_everyone` on a 1:1 DM, a Home, a task's or a meeting's thread. Taking it off drops the rows with `pinned` 0 |
 | `POST /api/v2/threads {..., "pin_for_members": true}` | `threads.create(..., pin_for_members=True)`: a pin row for the starter and every `human:` member |
-| `GET /api/v2/threads/rail?cursor=&limit=100` | `thread_rail.rail(c, viewer, cursor=None, limit=100)` → `{"pinned": [view], "threads": [view], "catch_up": 7, "dms": {actor: unread}, "next_cursor"}` |
+| `GET /api/v2/threads/rail?cursor=&limit=100` | `thread_rail.rail(c, viewer, cursor=None, limit=100)` → `{"pinned": [view], "threads": [view], "catch_up": 7, "catch_up_ids": [root id], "dms": {actor: unread}, "next_cursor"}` |
 | `GET /api/v2/threads/browse?q=&cursor=&limit=50` | `thread_rail.browse(c, viewer, q=None, cursor=None, limit=50)` → `{"threads": [view + "member_count"], "next_cursor"}` |
 | `GET /api/v2/threads/catch-up?cursor=&limit=20` | `thread_rail.catch_up(c, viewer, cursor=None, limit=20)` → `{"items": [{"thread": view, "new_count": 4, "mention": true, "messages": [timeline message], "more": 0}], "count": 7, "next_cursor"}` |
 
 Rail. Candidates are open roots the viewer reads (`readable_sql`, then `thread_readable`) with audience company, team
 or members, or a DM with two or more others (`_dm_members`); never a 1:1 DM, a Home, a task's thread or a meeting. The
 viewer is in one as its starter, a member (or in a member group), a follower of it or of any thread under it, a
-participant, or by a pin. `pinned` (first page only, at most 200, a quarter of the page's bytes) is every candidate
-pinned for the viewer, a pin for everyone on a thread they never joined included; `threads` (half the page's bytes)
-the rest they are in. Both are ordered by title, case-insensitively, unnamed last, then id; `next_cursor` is opaque.
+participant, or by a pin. `pinned` (at most 200 a page, a quarter of the page's bytes) is every candidate pinned for
+the viewer, a pin for everyone on a thread they never joined included; `threads` (half the page's bytes) the rest they
+are in. Both are ordered by title, case-insensitively, unnamed last, then id, and each goes on through the same
+opaque `next_cursor` until both are done (null then), so a row past either cap is on a later page.
 Rows are list rows: `me.unread` and `me.activity` sum the open subtree, as in the sidebar, plus `activity_seq`.
-`catch_up` (Catch up's `count`) and `dms` (`threads.one_dm_unread`: `{actor: unread}` for each open, followed,
-unmuted DM with exactly one other person or bot) are on the first page only: later pages have `null` and `{}`. The
-sidebar's first page has the same counts apart: `bot_dms` and `person_dms`.
+`catch_up` (Catch up's `count`), `catch_up_ids` (the roots it counts, at most 99) and `dms` (`threads.one_dm_unread`:
+`{actor: unread}` for each open, followed, unmuted DM with exactly one other person or bot) are on the first page only:
+later pages have `null`, `[]` and `{}`. The sidebar's first page has the same DM counts apart: `bot_dms` and
+`person_dms`.
+
+Live updates. A client reads the rail whole on first load, on `reset`, on `needs` and on a safety poll every few
+minutes, and patches it from the `threads` topic in between: `activity` carries `message_id` and `unread` (that message
+passes `threads.unread_message_sql` for the viewer past their mark: a person's message not their own, or a delivery to
+them that counts under the task rule; one indexed lookup an event), so the row's `me.unread` goes up and its root joins
+`catch_up_ids` without a read; the viewer's own `read` clears them; `created`, `members`, `audience`, `archived` and
+`unarchived` carry the thread view; `pinned` moves the row (a thread not on the rail is read alone,
+`GET /api/v2/threads/{id}`).
 
 Browse. Open company and team roots the viewer reads and is not in (as above, pins aside), newest activity first
 (the newest `last_seq` in the open subtree), `q` a case-insensitive LIKE on the title. `member_count` counts the root's
 members and followers once each. Joining is `PUT .../follow`, which puts the thread in the rail.
 
 Catch up. An item is an open root the viewer reads with `me.unread` > 0 over its subtree (bot activity alone is never
-unread, nor are one's own messages), or with an open Needs attention item of kind mention, ask, DM or held
-(`thread_attention.items`). Candidates: company, team, members threads, DMs (1:1 and group) and task threads the viewer
+unread, nor are one's own messages), or with an open mention or ask (`thread_attention._addressed`'s rule, read as ids
+in SQL, the newest 500) or a write held for their review. Candidates: company, team, members threads, DMs (1:1 and group) and task threads the viewer
 is in (a task's thread only with unread under the task rules, `H.delivery_counts_sql`), and the viewer's own Home;
-another's Home only through a Needs attention item. A root the viewer follows with notify `muted` is left out unless it
+another's Home only through a mention, an ask or a hold. A root the viewer follows with notify `muted` is left out unless it
 mentions them; a migrated Home they read only for its history counts only by its attention items. Order: items that
 mention the viewer (an open mention or ask, or a new message delivered to them as a mention, ask or assignment) first,
-then newest activity, then id. `new_count` is `me.unread`, or 1 for an attention item alone. `messages` are the new
-messages (past the viewer's mark in each thread, under the unread rule) plus an attention item's own message, each
-through the per-message check, in tree order (a message, then the sub-thread under it, each with `depth`), at most 20;
-`more` counts the rest. `count` is every item across pages, at most 99 (the sidebar badge); at most 1,000 roots are
-looked at. Reading an item is `POST .../read-all`; muting it is `PUT .../follow {"notify": "muted"}`. The older
+then newest activity, then id (newest first). Roots are read and checked 100 at a time (batched read checks and
+subtree counts), at most 1,000; counting stops at 99 and reads no message text. `new_count` is `me.unread`, or 1 for
+an attention item alone. `messages` are the new messages (past the viewer's mark in each thread, under the unread rule)
+plus an open mention's or ask's own message, each through the per-message check, in tree order (a message, then the
+sub-thread under it, each with `depth`): the order is worked out on ids and seqs first (at most 25 a thread, 200
+threads), then only the messages shown are read whole. At most 20 a card, and cards and messages stop at the page's
+byte budget (512 KiB; the first card's first message always goes); a text over 4,000 characters is cut, with
+`"clipped": true`. `more` counts every other new message (a COUNT over the subtree). `count` is every item across
+pages, at most 99 (the sidebar badge). Reading an item is `POST .../read-all`; muting it is `PUT .../follow {"notify": "muted"}`. The older
 `POST /api/v2/threads/{id}/catch-up` (`hub thread catchup`) is a different thing: a written summary of one thread.
 
 Naming. Only a DM with one teammate may be unnamed. `threads.create`, `threads.dm` and a post that starts a thread

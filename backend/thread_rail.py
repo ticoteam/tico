@@ -24,11 +24,13 @@ BROWSE_LIMIT = 50
 CATCH_UP_LIMIT = 20
 CATCH_UP_MAX_LIMIT = 50
 CATCH_UP_MESSAGES = 20          # an item shows this many new messages; `more` counts the rest
-CATCH_UP_READ = 400             # new messages read for one item, before the per-message check
+CATCH_UP_THREADS = 200          # threads of one subtree an item reads its new messages from
+CATCH_UP_BODY = 4000            # a shown message's text is cut here (`clipped`); the thread has it whole
 CATCH_UP_SCAN = 1000            # roots one Catch up looks at
+CATCH_UP_BATCH = 100            # roots read and checked together
 CATCH_UP_SHOWN = 99             # `count` stops here (the sidebar badge)
-ATTENTION_KINDS = ("thread_mention", "thread_ask", "thread_dm", "thread_held")
-MENTION_KINDS = ("thread_mention", "thread_ask")
+ATTENTION_SCAN = 500            # open mentions and asks read for one Catch up
+DONE = 0                        # a rail cursor's list that has no more rows
 EVERYONE_REFUSED = ("home", "task", "meeting")
 
 
@@ -234,34 +236,53 @@ def _title_page(c, v, where, args, after, limit):
             return rows, False
 
 
+def _rail_cursor(cursor):
+    """A rail cursor: where `pinned` and `threads` each go on, or DONE."""
+    position = _decode(cursor, 2)
+    for part in position:
+        if part != DONE and not (isinstance(part, list) and len(part) == 3):
+            raise Problem("cursor", "Unknown cursor", 422)
+    return position
+
+
+def _rail_next(rows, items, more):
+    if not more or not items:
+        return DONE
+    last = rows[len(items) - 1]
+    return [last["t_blank"], last["t_key"], last["id"]]
+
+
 def rail(c, v, *, cursor=None, limit=RAIL_LIMIT):
-    """The reader's threads by title: {"pinned", "threads", "catch_up", "dms", "next_cursor"}. `pinned` (the first page
-    only, at most PINNED_MAX) holds the ones pinned for them, among them threads pinned for everyone they read but never
-    joined; `threads` the others they are in, paged. `catch_up` is Catch up's count and `dms` the unread in each
-    one-teammate DM (bots and people), on the first page only (later pages: null and {})."""
+    """The reader's threads by title: {"pinned", "threads", "catch_up", "catch_up_ids", "dms", "next_cursor"}.
+    `pinned` holds the ones pinned for them (threads pinned for everyone they read but never joined among them), at most
+    PINNED_MAX a page; `threads` the others they are in. Both go on through `next_cursor` until each is done.
+    `catch_up` is Catch up's count, `catch_up_ids` the roots it counts, and `dms` the unread in each one-teammate DM
+    (bots and people), on the first page only (later pages: null, [] and {})."""
     v = _viewer(v)
     limit = _limit(limit, RAIL_LIMIT, T.MAX_PAGE)
-    after = _decode(cursor, 3)
+    first = not cursor
+    pinned_at, threads_at = (None, None) if first else _rail_cursor(cursor)
     extra, marks = _names(v, c)
     args = {"me": v.actor, **extra}
     kind = f"({_audience()} IN ('company','team','members') OR {_group_dm()})"
     base = [ROOT_OPEN, kind, T.readable_sql(c, v, "r")]
     v._members = {}
     try:
-        threads_rows, more = _title_page(c, v, " AND ".join([*base, _in(marks), f"NOT {PINNED_SQL}"]), args, after,
-                                         limit)
-        pinned_rows = [] if cursor else _title_page(c, v, " AND ".join([*base, PINNED_SQL]), args, None, PINNED_MAX)[0]
+        pinned_rows, pinned_more = ([], False) if pinned_at == DONE else _title_page(
+            c, v, " AND ".join([*base, PINNED_SQL]), args, pinned_at, PINNED_MAX)
+        threads_rows, threads_more = ([], False) if threads_at == DONE else _title_page(
+            c, v, " AND ".join([*base, _in(marks), f"NOT {PINNED_SQL}"]), args, threads_at, limit)
         shown = _views(c, v, pinned_rows + threads_rows)
     finally:
         v._members = None
-    pinned_items, _ = _fits([shown[r["id"]] for r in pinned_rows], T.MAX_PAGE_BYTES // 4)
-    thread_items, cut = _fits([shown[r["id"]] for r in threads_rows], T.MAX_PAGE_BYTES // 2)
-    more = more or cut
-    last = threads_rows[len(thread_items) - 1] if thread_items else None
-    return {"pinned": pinned_items, "threads": thread_items,
-            "catch_up": None if cursor else catch_up_count(c, v),
-            "dms": {} if cursor else T.one_dm_unread(c, v),
-            "next_cursor": _encode([last["t_blank"], last["t_key"], last["id"]]) if more and last else None}
+    pinned_items, pinned_cut = _fits([shown[r["id"]] for r in pinned_rows], T.MAX_PAGE_BYTES // 4)
+    thread_items, threads_cut = _fits([shown[r["id"]] for r in threads_rows], T.MAX_PAGE_BYTES // 2)
+    position = [_rail_next(pinned_rows, pinned_items, pinned_more or pinned_cut),
+                _rail_next(threads_rows, thread_items, threads_more or threads_cut)]
+    count, ids = catch_up_count(c, v) if first else (None, [])
+    return {"pinned": pinned_items, "threads": thread_items, "catch_up": count, "catch_up_ids": ids,
+            "dms": T.one_dm_unread(c, v) if first else {},
+            "next_cursor": None if position == [DONE, DONE] else _encode(position)}
 
 
 # ----------------------------------------------------------------------------- browse
@@ -324,23 +345,45 @@ def _member_counts(c, ids):
 
 
 # ----------------------------------------------------------------------------- catch up
-def _attention(c, v):
-    """{root id: {"mention": bool, "messages": [message ids]}} for the reader's open Needs attention items: mentions,
-    asks, unread DMs with another person, and held posts (thread_attention)."""
+def _flags(c, v):
+    """({root id: [message ids]}, {root ids}): the roots that mention the reader, with their open mentions' and asks'
+    messages (thread_attention._addressed's rule, ids only, the newest ATTENTION_SCAN), and the roots of writes held
+    for their review. Thread checks are batched; only a restricted message is read whole for its own check."""
     from . import thread_attention
-    items = [it for it in thread_attention.items(c, None, v, with_capped=False) if it["kind"] in ATTENTION_KINDS]
-    places = [it.get("conversation_id") or it.get("thread_id") for it in items]
-    found, _ = T.read_threads(c, v, places)
-    out = {}
-    for item, place in zip(items, places, strict=True):
-        thread = found.get(place) if place else None
-        if thread is None:
+    me = v.actor
+    rows = [dict(r) for r in c.execute(
+        "SELECT m.id, m.conversation_id, m.restricted, COALESCE(cv.root_id, cv.id) AS root FROM message_deliveries d "
+        "CROSS JOIN messages m ON m.id=d.message_id CROSS JOIN conversations cv ON cv.id=m.conversation_id "
+        "WHERE d.recipient=? AND d.reason IN ('mention','ask','assign','addressed') "
+        "AND d.state IN ('pending','delivered','read') AND m.sender_id<>? "
+        f"AND {H.delivery_counts_sql('m', 'd.recipient', 'd.reason')} "
+        "AND (m.sender_id LIKE 'human:%' OR m.kind='ask' OR d.reason='mention') "
+        "AND m.deleted_at IS NULL AND m.superseded_at IS NULL AND (m.kind<>'ask' OR m.answered_by_id IS NULL) "
+        "AND cv.task_id IS NULL AND cv.closed_at IS NULL AND cv.archived_at IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.conversation_id=m.conversation_id AND r.sender_id=? "
+        "AND r.created_at>m.created_at AND r.deleted_at IS NULL) ORDER BY m.created_at DESC LIMIT ?",
+        (me, me, me, ATTENTION_SCAN))]
+    found, _ = T.read_threads(c, v, [r["conversation_id"] for r in rows])
+    T.prime_members(c, v, list(found))
+    mentions = {}
+    for r in rows:
+        thread = found.get(r["conversation_id"])
+        if thread is None or not T.thread_readable(c, v, thread):
             continue
-        entry = out.setdefault(thread.get("root_id") or thread["id"], {"mention": False, "messages": []})
-        entry["mention"] = entry["mention"] or item["kind"] in MENTION_KINDS
-        if item["kind"] in MENTION_KINDS and item.get("message_id"):
-            entry["messages"].append(item["message_id"])
-    return out
+        if r["restricted"]:
+            whole = H.message(c, r["id"])
+            if not whole or not T.message_readable(c, v, whole, thread_checked=True):
+                continue
+        mentions.setdefault(r["root"], []).append(r["id"])
+    for root in _mentioned(c, v):
+        mentions.setdefault(root, [])
+    held = set()
+    for hold in thread_attention._holds(c, v)[:ATTENTION_SCAN]:
+        place = thread_attention._held_thread(c, v, hold["id"])
+        row = T.thread_row(c, place) if place else None
+        if row is not None:
+            held.add(row.get("root_id") or row["id"])
+    return mentions, held
 
 
 def _mentioned(c, v):
@@ -351,74 +394,99 @@ def _mentioned(c, v):
         "CROSS JOIN conversations s ON s.id=m.conversation_id LEFT JOIN thread_followers f ON f.thread_id=s.id AND "
         "f.actor=d.recipient WHERE d.recipient=? AND d.reason IN ('mention', 'ask', 'assign', 'addressed') "
         "AND d.state IN ('pending', 'delivered', 'read') AND d.reason<>'addressed' "
-        f"AND m.seq>{mark} AND m.sender_id<>? AND m.deleted_at IS NULL AND {T._SUBTREE_OPEN}",
-        (v.actor, v.actor))}
+        f"AND m.seq>{mark} AND m.sender_id<>? AND m.deleted_at IS NULL AND {T._SUBTREE_OPEN} "
+        f"AND {H.delivery_counts_sql('m', 'd.recipient', 'd.reason')} LIMIT ?",
+        (v.actor, v.actor, ATTENTION_SCAN))}
 
 
-def _catch_up_items(c, v):
-    """Every Catch up item for the reader, in order: mentions and asks first, then newest activity. Each is
-    {"row", "summary", "mention", "new_count", "activity", "attention"}."""
-    attention = _attention(c, v)
+def _walk(c, v, flags, after=None):
+    """Catch up's items in order, read a batch at a time: the roots that mention the reader first, then the rest, each
+    newest activity first. At most CATCH_UP_SCAN roots are looked at. Each item is {"row", "rank", "activity",
+    "mention", "new_count", "attention"}."""
+    mentions, held = flags
     history = T._history_only_roots(c, v)
     extra, marks = _names(v, c)
-    args = {"me": v.actor, "attention": json.dumps(sorted(attention)), "history": json.dumps(history),
-            "scan": CATCH_UP_SCAN, **extra}
+    flagged = sorted(set(mentions) | held)
+    args = {"me": v.actor, "flagged": json.dumps(flagged), "mentions": json.dumps(sorted(mentions)),
+            "history": json.dumps(history), "batch": CATCH_UP_BATCH, **extra}
     by_person, to_viewer = T.unread_terms(c, v)
-    is_attention = "r.id IN (SELECT value FROM json_each(:attention))"
+    is_flagged = "r.id IN (SELECT value FROM json_each(:flagged))"
     audience = _audience()
     where = [ROOT_OPEN, T.readable_sql(c, v, "r"),
              f"(({audience} IN ('company','team','members','personal','participants','task') AND "
-             f"({_in(marks)} OR {PINNED_SQL})) OR ({audience}='home' AND r.owner_id=:me) OR {is_attention})",
-             f"({is_attention} OR (r.id NOT IN (SELECT value FROM json_each(:history)) AND ({by_person} OR {to_viewer})))"]
-    found = [T.thread_row(c, dict(r)) for r in c.execute(
-        f"SELECT r.*, {ACTIVITY} AS activity FROM conversations r WHERE {' AND '.join(where)} "
-        "ORDER BY activity DESC, r.id DESC LIMIT :scan", args)]
-    rows = [r for r in found if T.thread_readable(c, v, r)]
-    summaries = T.subtree_summaries(c, v, [r["id"] for r in rows])
-    followers = T._followers_of(c, v, [r["id"] for r in rows])
-    mentioned = _mentioned(c, v)
+             f"({_in(marks)} OR {PINNED_SQL})) OR ({audience}='home' AND r.owner_id=:me) OR {is_flagged})",
+             f"({is_flagged} OR (r.id NOT IN (SELECT value FROM json_each(:history)) AND ({by_person} OR {to_viewer})))"]
+    scanned = 0
+    for rank, phase in ((0, "r.id IN (SELECT value FROM json_each(:mentions))"),
+                        (1, "r.id NOT IN (SELECT value FROM json_each(:mentions))")):
+        if after and int(after[0]) > rank:
+            continue
+        position = [int(after[1]), str(after[2])] if after and int(after[0]) == rank else None
+        while scanned < CATCH_UP_SCAN:
+            cond, at = "", {}
+            if position:
+                cond = " WHERE activity<:at_seq OR (activity=:at_seq AND id<:at_id)"
+                at = {"at_seq": position[0], "at_id": position[1]}
+            found = [T.thread_row(c, dict(r)) for r in c.execute(
+                f"SELECT * FROM (SELECT r.*, {ACTIVITY} AS activity FROM conversations r WHERE "
+                f"{' AND '.join([*where, phase])}){cond} ORDER BY activity DESC, id DESC LIMIT :batch", {**args, **at})]
+            scanned += len(found)
+            T.prime_members(c, v, [r["id"] for r in found])
+            rows = [r for r in found if T.thread_readable(c, v, r)]
+            summaries = T.subtree_summaries(c, v, [r["id"] for r in rows])
+            followers = T._followers_of(c, v, [r["id"] for r in rows])
+            readable = {r["id"] for r in rows}
+            for r in found:
+                position = [int(r["activity"] or 0), r["id"]]
+                if r["id"] not in readable:
+                    continue
+                mention = r["id"] in mentions
+                unread = 0 if r["id"] in history else int((summaries.get(r["id"]) or {}).get("unread") or 0)
+                if not unread and r["id"] not in held and not mention:
+                    continue
+                if (followers.get(r["id"]) or {}).get("notify") == "muted" and not mention:
+                    continue
+                yield {"row": r, "rank": rank, "activity": position[0], "mention": mention, "new_count": unread or 1,
+                       "attention": mentions.get(r["id"]) or []}
+            if len(found) < CATCH_UP_BATCH:
+                break
+
+
+def _first(items, n):
     out = []
-    for r in rows:
-        summary = summaries.get(r["id"]) or {"unread": 0, "activity": False}
-        flagged = attention.get(r["id"])
-        mention = bool(flagged and flagged["mention"]) or r["id"] in mentioned
-        unread = 0 if r["id"] in history else int(summary.get("unread") or 0)
-        if not unread and not flagged:
-            continue
-        if (followers.get(r["id"]) or {}).get("notify") == "muted" and not mention:
-            continue
-        out.append({"row": r, "summary": summary, "mention": mention, "new_count": unread or 1,
-                    "activity": int(summary.get("activity_seq") or r.get("activity") or 0),
-                    "attention": (flagged or {}).get("messages") or []})
-    out.sort(key=_order)
+    for item in items:
+        out.append(item)
+        if len(out) >= n:
+            break
     return out
 
 
-def _order(item):
-    return (0 if item["mention"] else 1, -item["activity"], item["row"]["id"])
-
-
 def catch_up_count(c, v):
-    """How many Catch up items the reader has, at most CATCH_UP_SHOWN: the sidebar's badge."""
-    return min(len(_catch_up_items(c, _viewer(v))), CATCH_UP_SHOWN)
+    """(how many Catch up items the reader has, at most CATCH_UP_SHOWN; their root ids): the sidebar's badge, and the
+    set a client keeps from the live stream. It stops at CATCH_UP_SHOWN and reads no message text."""
+    v = _viewer(v)
+    found = _first(_walk(c, v, _flags(c, v)), CATCH_UP_SHOWN)
+    return len(found), [it["row"]["id"] for it in found]
 
 
 def catch_up(c, v, *, cursor=None, limit=CATCH_UP_LIMIT):
-    """{"items", "count", "next_cursor"}: each root with something new for the reader, and each open Needs attention
-    item, mentions and asks first, then newest activity. An item is its thread view, `new_count` (its subtree's unread,
-    or 1 for an attention item alone), `mention`, and its new messages in tree order, at most CATCH_UP_MESSAGES, each
-    with its `depth` and through the per-message check; `more` counts the rest. `count` is every item, at most
+    """{"items", "count", "next_cursor"}: each root with something new for the reader, and each open mention, ask or
+    held write, the ones that mention them first, then newest activity. An item is its thread view, `new_count` (its
+    subtree's unread, or 1 for an attention item alone), `mention`, and its new messages in tree order, at most
+    CATCH_UP_MESSAGES, each with its `depth` and through the per-message check; `more` counts the rest. Cards and their
+    messages stop at the page's byte budget, and a message's text at CATCH_UP_BODY. `count` is every item, at most
     CATCH_UP_SHOWN. Reading one is POST .../read-all; muting one is following it with notify `muted`."""
     v = _viewer(v)
     limit = _limit(limit, CATCH_UP_LIMIT, CATCH_UP_MAX_LIMIT)
     after = _decode(cursor, 3)
-    every = _catch_up_items(c, v)
+    flags = _flags(c, v)
     if after:
-        at = (int(after[0]), -int(after[1]), str(after[2]))
-        every_after = [it for it in every if _order(it) > at]
+        found = _first(_walk(c, v, flags, after), limit + 1)
+        count = len(_first(_walk(c, v, flags), CATCH_UP_SHOWN))
     else:
-        every_after = every
-    page, more = every_after[:limit], len(every_after) > limit
+        found = _first(_walk(c, v, flags), max(limit + 1, CATCH_UP_SHOWN))
+        count = min(len(found), CATCH_UP_SHOWN)
+    page, more = found[:limit], len(found) > limit
     v._members = {}
     try:
         shown = _views(c, v, [it["row"] for it in page])
@@ -426,59 +494,91 @@ def catch_up(c, v, *, cursor=None, limit=CATCH_UP_LIMIT):
         v._members = None
     items, budget, tail = [], T.MAX_PAGE_BYTES, None
     for it in page:
-        messages, rest = _new_messages(c, v, it["row"], it["attention"])
-        entry = {"thread": shown[it["row"]["id"]], "new_count": it["new_count"], "mention": it["mention"],
-                 "messages": messages, "more": rest}
-        budget -= len(json.dumps(entry, default=str))
-        if items and budget < 0:
+        head = {"thread": shown[it["row"]["id"]], "new_count": it["new_count"], "mention": it["mention"]}
+        head_size = len(json.dumps(head, default=str)) + 32
+        if items and head_size > budget:
             more = True
             break
-        items.append(entry)
+        messages, rest, used = _new_messages(c, v, it["row"], it["attention"], budget - head_size, force=not items)
+        if items and not messages and rest:
+            more = True
+            break
+        items.append({**head, "messages": messages, "more": rest})
+        budget -= head_size + used
         tail = it
-    return {"items": items, "count": min(len(every), CATCH_UP_SHOWN),
-            "next_cursor": _encode([0 if tail["mention"] else 1, tail["activity"], tail["row"]["id"]])
-            if more and tail else None}
+    return {"items": items, "count": count,
+            "next_cursor": _encode([tail["rank"], tail["activity"], tail["row"]["id"]]) if more and tail else None}
 
 
-def _new_messages(c, v, root, attention_ids):
-    """The new messages of a root's open subtree for the reader, in tree order (a message, then the sub-thread under
-    it), the first CATCH_UP_MESSAGES of them, and how many more. An attention item's own message is among them even
-    when it was read."""
+def _new_messages(c, v, root, attention_ids, budget, *, force=False):
+    """([message], more, bytes used): the new messages of a root's open subtree for the reader, in tree order (a message,
+    then the sub-thread under it), the first CATCH_UP_MESSAGES that pass the per-message check and fit `budget` bytes
+    (with `force`, the first one always goes), and how many more there are. An open mention's or ask's own message is
+    among them even when it was read. Only the messages shown are read whole."""
     mark = T._subtree_mark(c, v)
-    rows = [dict(r) for r in c.execute(
-        f"SELECT m.* FROM {T._SUBTREE.format(me='?')}JOIN messages m ON m.conversation_id=s.id AND m.seq>{mark} "
-        f"WHERE s.root_id=? AND {T._SUBTREE_OPEN} AND s.last_unread_seq>{mark} AND {T.unread_message_sql()} "
-        "ORDER BY m.seq LIMIT ?", (v.actor, root["id"], v.actor, v.actor, CATCH_UP_READ))]
-    have = {m["id"] for m in rows}
+    subtree = T._SUBTREE.format(me="?")
+    unread_threads = [dict(r) for r in c.execute(
+        f"SELECT s.id, s.path FROM {subtree}WHERE (s.root_id=? OR s.id=?) AND {T._SUBTREE_OPEN} "
+        f"AND s.last_unread_seq>{mark} ORDER BY s.last_unread_seq DESC LIMIT ?",
+        (v.actor, root["id"], root["id"], CATCH_UP_THREADS))]
+    readable = {t["id"]: t for t in unread_threads if t["id"] == root["id"] or T.thread_readable(c, v, t["id"])}
+    per = CATCH_UP_MESSAGES + 5
+    light, total = [], 0
+    for part in H.chunks(list(readable)):
+        marks = ",".join("?" * len(part))
+        scope = (f"FROM {subtree}JOIN messages m ON m.conversation_id=s.id AND m.seq>{mark} WHERE s.id IN ({marks}) "
+                 f"AND {T.unread_message_sql()}")
+        light += [dict(r) for r in c.execute(
+            f"SELECT id, conversation_id, seq FROM (SELECT m.id, m.conversation_id, m.seq, ROW_NUMBER() OVER "
+            f"(PARTITION BY m.conversation_id ORDER BY m.seq) AS n {scope}) WHERE n<=?",
+            (v.actor, *part, v.actor, v.actor, per))]
+        total += c.execute(f"SELECT COUNT(*) {scope}", (v.actor, *part, v.actor, v.actor)).fetchone()[0]
+    have = {m["id"] for m in light}
     for mid in attention_ids:
-        if mid not in have:
-            found = H.message(c, mid)
-            if found and found.get("seq") is not None:
-                rows.append(dict(found))
-                have.add(mid)
-    # Every thread of the subtree with the seq of the message it branched from: a message's place in tree order is the
-    # seqs of the messages its thread hangs from, then its own.
-    threads_of = {r["id"]: dict(r) for r in c.execute(
-        "SELECT s.id, s.path, s.parent_message_id, (SELECT seq FROM messages WHERE id=s.parent_message_id) AS anchor "
-        "FROM conversations s WHERE s.root_id=? OR s.id=?", (root["id"], root["id"]))}
-    shown = []
-    for m in rows:
-        thread = threads_of.get(m["conversation_id"])
-        if thread is None or (thread["id"] != root["id"] and not T.thread_readable(c, v, thread["id"])):
+        if mid in have:
             continue
-        if not T.message_readable(c, v, m, thread_checked=True):
+        found = H.message(c, mid)
+        place = T.thread_row(c, found["conversation_id"]) if found else None
+        if not place or (place.get("root_id") or place["id"]) != root["id"] or not T.thread_readable(c, v, place):
             continue
-        path = [p for p in str(thread.get("path") or f"/{thread['id']}/").split("/") if p]
-        key = [int((threads_of.get(p) or {}).get("anchor") or 0) for p in path[1:]] + [int(m["seq"] or 0)]
-        shown.append((key, len(path) - 1, m))
-    shown.sort(key=lambda entry: entry[0])
-    first = shown[:CATCH_UP_MESSAGES]
+        readable.setdefault(place["id"], {"id": place["id"], "path": place.get("path")})
+        light.append({"id": mid, "conversation_id": place["id"], "seq": found.get("seq")})
+        have.add(mid)
+        total += 1
+    # A message's place in tree order: the seqs of the messages its thread hangs from, then its own.
+    paths = {tid: [p for p in str(t.get("path") or f"/{tid}/").split("/") if p] for tid, t in readable.items()}
+    anchors = {}
+    for part in H.chunks(sorted({p for path in paths.values() for p in path[1:]})):
+        for r in c.execute("SELECT s.id, (SELECT seq FROM messages WHERE id=s.parent_message_id) FROM conversations s "
+                           f"WHERE s.id IN ({','.join('?' * len(part))})", part):
+            anchors[r[0]] = int(r[1] or 0)
+    ordered = sorted(light, key=lambda m: ([anchors.get(p, 0) for p in paths[m["conversation_id"]][1:]]
+                                           + [int(m["seq"] or 0)]))
     known = v.known(c)
-    marks = T.reactions(c, [m["id"] for _, _, m in first])
-    out = []
-    for _, depth, m in first:
-        item = {**known.message(T._message_out(m)), "depth": depth}
-        if m["id"] in marks:
-            item["reactions"] = known.reactions(marks[m["id"]], m["conversation_id"])
-        out.append(item)
-    return out, len(shown) - len(first)
+    out, used, dropped, cut = [], 0, 0, False
+    for start in range(0, len(ordered), per):
+        if cut or len(out) >= CATCH_UP_MESSAGES:
+            break
+        chunk = [m["id"] for m in ordered[start:start + per]]
+        rows = {r["id"]: dict(r) for r in c.execute(
+            f"SELECT * FROM messages WHERE id IN ({','.join('?' * len(chunk))})", chunk)}
+        marks = T.reactions(c, chunk)
+        for mid in chunk:
+            m = rows.get(mid)
+            if m is None or not T.message_readable(c, v, m, thread_checked=True):
+                dropped += 1
+                continue
+            item = {**known.message(T._message_out(m)), "depth": len(paths[m["conversation_id"]]) - 1}
+            if len(str(item.get("body") or "")) > CATCH_UP_BODY:
+                item.update(body=str(item["body"])[:CATCH_UP_BODY].rstrip() + "…", clipped=True)
+            if mid in marks:
+                item["reactions"] = known.reactions(marks[mid], m["conversation_id"])
+            size = len(json.dumps(item, default=str)) + 2
+            if size > budget - used and (out or not force):
+                cut = True
+                break
+            out.append(item)
+            used += size
+            if len(out) >= CATCH_UP_MESSAGES:
+                break
+    return out, max(0, total - len(out) - dropped), used

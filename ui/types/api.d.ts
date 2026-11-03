@@ -5226,6 +5226,7 @@ export type ThreadMembers = {
 
 export type ThreadMessage = {
   body?: string | null;
+  clipped?: boolean;
   conversation_id?: string;
   created_at?: string;
   deleted?: boolean;
@@ -5271,6 +5272,7 @@ export type ThreadPost = {
 
 export type ThreadRail = {
   catch_up: number | null;
+  catch_up_ids: Array<string>;
   dms: ThreadDmCounts;
   next_cursor: string | null;
   pinned: Array<ThreadView>;
