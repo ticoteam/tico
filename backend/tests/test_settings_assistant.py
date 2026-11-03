@@ -50,7 +50,7 @@ def test_a_person_asks_their_assistant_for_a_direct_setting_and_it_changes(api):
     before = release_times(api)
     r, attempt = assistant_turn(api, "ana-test", "Set the release to 09:30")
     token = attempt["token"]
-    assert "hub_settings_set" in {t["name"] for t in hubtools.listing(kind="assistant")}
+    assert "hub_settings_set" in {hubtools.tool_key(t["name"]) for t in hubtools.listing(kind="assistant")}
     # Without citing the person's words it is a card, and nothing changes yet.
     err, card = mcp(api, "hub_settings_set", {"key": "release.times", "value": "09:30"}, token)
     assert not err and card["needs_confirm"] is True, card

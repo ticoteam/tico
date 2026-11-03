@@ -544,7 +544,7 @@ def test_the_withdraw_and_list_tools_are_offered_to_bots_and_work(api, botops):
     _, card = waiting_card(api, botops)
     aid = card["action"]["id"]
     _, _, other = setup_attempt(api, "ops")
-    names = {t["name"] for t in hubtools.listing(kind="bot")}
+    names = {hubtools.tool_key(t["name"]) for t in hubtools.listing(kind="bot")}
     assert {"hub_assistant_withdraw", "hub_assistant_proposals"} <= names
     err, out = call(api, "hub_assistant_proposals", {"proposer": "botops"}, token=other["token"])
     assert not err and [a["id"] for a in out["actions"]] == [aid], out

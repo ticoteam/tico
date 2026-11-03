@@ -362,13 +362,13 @@ def test_the_assistants_tools_cite_the_message_for_it(api):
     turn = Turn(attempt["token"])
     declined = hubtools.BY_NAME["hub_approval_decline"]["fn"](turn, {"id": spend, "note": "Not now", "on_behalf_of": "turn"})
     assert declined["decision"] == "declined" and declined["decided_by_id"] == "human:ben"
-    assert {"hub_approval_decline", "hub_question_answer"} <= {t["name"] for t in hubtools.listing(kind="assistant")}
+    assert {"hub_approval_decline", "hub_question_answer"} <= {hubtools.tool_key(t["name"]) for t in hubtools.listing(kind="assistant")}
     with pytest.raises(APIError) as refused:
         hubtools.BY_NAME["hub_task_close"]["fn"](turn, {"id": launch["id"]})
     assert refused.value.code == "confirm_required"
     closed = hubtools.BY_NAME["hub_task_close"]["fn"](turn, {"id": launch["id"], "note": "As you asked", "on_behalf_of": "turn"})
     assert closed["task"]["status"] == "closed"
-    assert "hub_task_close" in {t["name"] for t in hubtools.listing(kind="assistant")}
+    assert "hub_task_close" in {hubtools.tool_key(t["name"]) for t in hubtools.listing(kind="assistant")}
 
 
 def test_a_cited_message_must_be_the_persons_own_recent_words_in_their_assistant_chat(api):

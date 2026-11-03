@@ -15,6 +15,7 @@ from backend.store import H
 from backend.tests.test_bookkeeper import DEFAULT_RIGHTS, built, check, checks, ensure
 from backend.tests.test_mcp import call, rpc
 from backend.tests.test_onboarding import draft, environment, machine, signed_in  # noqa: F401
+from clients import hubtools
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "bookkeeper"
 SPEC_TOOLS = ("hub_finance_search", "hub_finance_report", "hub_finance_metric", "hub_finance_act",
@@ -44,7 +45,7 @@ def _token(api):
 
 
 def _names(api, token):
-    return {t["name"] for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
+    return {hubtools.tool_key(t["name"]) for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
 
 
 def _kinds(api, token):

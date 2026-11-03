@@ -147,7 +147,7 @@ def test_the_assistant_adds_a_rule_its_owner_may_make_and_refuses_an_uncited_one
     org(api)
     _, attempt = assistant_turn(api, "ana-test", "Add a rule: everyone logs time.")
     turn = _Turn(api, attempt["token"])
-    assert "hub_rules_add" in {t["name"] for t in hubtools.listing(kind="assistant")}
+    assert "hub_rules_add" in {hubtools.tool_key(t["name"]) for t in hubtools.listing(kind="assistant")}
     everyone = _add_via_assistant(api, turn, {"kind": "internal", "text": "Everyone logs time.",
                                               "who": {"everyone": True}})
     assert everyone["status"] == "active"

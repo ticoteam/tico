@@ -23,6 +23,7 @@ from backend.tests.test_api import api, assign, claim, get, headers, post, ready
 from backend.tests.test_botops_parity import act
 from backend.tests.test_member_bots import botops, turn  # noqa: F401
 from backend.tests.live import live  # noqa: F401
+from clients import hubtools
 from clients import hermes_agent as H
 
 REAL_RUN, REAL_SLEEP, REAL_WHICH = subprocess.run, time.sleep, H.shutil.which
@@ -174,7 +175,7 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
     assert "sync job tico-sync (every 1h) is scheduled" in out
 
     # The agent's MCP door lists the inbox tools.
-    assert "hub_message_list" in {t["name"] for t in connector.mcp("tools/list")["tools"]}
+    assert "hub_message_list" in {hubtools.tool_key(t["name"]) for t in connector.mcp("tools/list")["tools"]}
 
     # The owner writes to the bot: it waits (no job), the heartbeat counts it, and the agent reads it over MCP.
     sent = post(api, "chat/scout", {"text": "What did you find today?"})
@@ -233,7 +234,7 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
     fresh = connector.token()
     assert fresh.startswith("tico-agent-") and fresh != token and "backoff" not in connector.credential()
     assert api.get("/api/v2/me", headers=headers(token)).status_code == 401
-    assert "hub_message_list" in {t["name"] for t in connector.mcp("tools/list")["tools"]}
+    assert "hub_message_list" in {hubtools.tool_key(t["name"]) for t in connector.mcp("tools/list")["tools"]}
     assert connector.run("heartbeat", "--profile", "scout")[0] == 0
     post(api, "chat/scout", {"text": "Welcome back."})
     assert [m["body"] for m in connector.tool("hub_message_list")["messages"]] == ["Welcome back."]

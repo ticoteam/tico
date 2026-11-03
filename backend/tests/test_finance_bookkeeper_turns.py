@@ -18,6 +18,7 @@ from backend.store import H, encode
 from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
 from backend.tests.test_finance_fixtures import MERCURY, OWNER, FakeMercury, account, act, connect, sync_once  # noqa: F401
 from backend.tests.test_mcp import call, rpc
+from clients import hubtools
 
 CONFIG = {"template": "bookkeeper", "name": "bookkeeper", "runtime": "fake", "status": "active"}
 PAYEE = {"name": "Northwind Hosting", "method": "ach", "account_number": "000099998888", "routing_number": "000000000",
@@ -245,7 +246,7 @@ def test_the_bot_reads_a_file_with_hub_file_read(api):
     """AGENT.md's bill and receipt steps read a Library file with `hub file read` (clients/hubcli.py): the tool is
     offered to the bot, and the instructions name no command the hub does not have (`hub file get` was one)."""
     token = hire(api)
-    names = {t["name"] for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
+    names = {hubtools.tool_key(t["name"]) for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
     agent = (Path(__file__).resolve().parents[2] / "templates" / "catalog" / "bookkeeper" / "AGENT.md").read_text()
     assert "hub_file_read" in names and "hub file read" in agent and "hub file get" not in agent
 

@@ -2125,6 +2125,9 @@ def test_restart_uses_start_evidence_and_does_not_hold_internal_shell_writes(api
     ('mcp__hub__hub_release_now', 'publish release'),
     ('mcp__hub__hub_webhook_send', 'send webhook'),
     ('mcp__hub__hub_support_send', 'send support report'),
+    ('mcp__tico__release_now', 'publish release'),
+    ('mcp__tico__webhook_send', 'send webhook'),
+    ('mcp__tico__support_send', 'send support report'),
 ])
 def test_restart_with_hub_publish_or_send_call_is_held_and_names_it(api, tool, label):
     """Hub publish/send tools recorded with their runner prefix hold a restarted run and name the operation."""

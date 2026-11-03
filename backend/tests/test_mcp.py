@@ -41,7 +41,7 @@ def test_initialize_lists_every_tool_and_ignores_notifications(api):
     tools = rpc(api, "tools/list")["result"]["tools"]
     # A tool that reaches out to the internet (hub_doc_fetch) runs on the bot's computer, never here; the owner is offered
     # what a human may use (backend/tests/test_mcp_callers.py: the other callers).
-    assert {t["name"] for t in tools} == {t["name"] for t in hubtools.listing(kind="owner")}
+    assert {t["name"] for t in tools} == {hubtools.tool_key(t["name"]) for t in hubtools.listing(kind="owner")}
     assert "hub_doc_fetch" not in {t["name"] for t in tools} and len(tools) > 100
     assert all(t["inputSchema"]["type"] == "object" for t in tools)
     assert api.get("/api/v2/mcp", headers=headers()).status_code == 405
@@ -87,7 +87,7 @@ THREAD_WRITES = {"hub_thread_create", "hub_thread_post", "hub_thread_reply", "hu
 
 
 def test_every_thread_tool_is_listed_with_a_schema_a_caller_can_check(api):
-    tools = {t["name"]: t for t in rpc(api, "tools/list")["result"]["tools"]}
+    tools = {hubtools.tool_key(t["name"]): t for t in rpc(api, "tools/list")["result"]["tools"]}
     assert THREAD_READS | THREAD_WRITES <= set(tools)
     for name in THREAD_READS | THREAD_WRITES:
         schema = tools[name]["inputSchema"]
@@ -147,7 +147,7 @@ def test_thread_tools_reach_the_routes_of_the_contract():
 
 
 def test_a_group_dm_needs_at_least_one_member(api):
-    tools = {t["name"]: t for t in rpc(api, "tools/list")["result"]["tools"]}
+    tools = {hubtools.tool_key(t["name"]): t for t in rpc(api, "tools/list")["result"]["tools"]}
     schema = tools["hub_thread_dm_group"]["inputSchema"]
     assert schema["required"] == ["members"] and schema["properties"]["members"]["minItems"] == 1
     isError, payload = call(api, "hub_thread_dm_group", {"members": []})
@@ -649,3 +649,32 @@ def test_a_query_field_named_path_reaches_the_query_string(api, door):
     _, _, attempt = setup_attempt(api)
     answer = door(attempt["token"]).get("file-approvals", path="reports/pipeline.md", digest="0" * 64)
     assert answer["approved"] is False and answer["digest"] == "0" * 64
+
+
+def test_listed_tool_names_drop_the_prefix_and_map_back_to_one_tool():
+    listed = [public for public in hubtools.PUBLIC_NAMES.values()]
+    assert len(set(listed)) == len(hubtools.BY_NAME)                       # unique after the prefix goes
+    assert not any(name.startswith("hub_") for name in listed)
+    assert all(hubtools.KEY_OF_PUBLIC[hubtools.public_name(key)] == key for key in hubtools.BY_NAME)
+    assert hubtools.public_name("hub_task_show") == "task_show"
+
+
+def test_every_command_has_a_tool_and_every_old_name_resolves_to_it():
+    assert hubtools.tool_key("task_show") == hubtools.tool_key("hub_task_show") == "hub_task_show"
+    assert hubtools.tool_key("mcp__tico__task_show") == "hub_task_show"          # the listed name, client-prefixed
+    assert hubtools.tool_key("mcp__hub__hub_task_show") == "hub_task_show"      # saved history
+    assert hubtools.tool_key("tico__task_show") == "hub_task_show"
+    assert hubtools.tool_key("hub_say") == "hub_message_send"                    # renamed in 0.2.21 and still run
+    assert hubtools.tool_key("hub_task_defer") == "hub_task_later"               # CALL_ALIASES
+    assert hubtools.tool_key("hub_docs_search") == "hub_doc_search"              # RENAMED_PREFIXES
+    assert hubtools.tool_key("Bash") == "Bash" and hubtools.tool_key("") == ""   # unknown names pass as they were
+    for old, new in hubtools.RENAMED_TOOLS.items():
+        assert hubtools.tool_key(old) == new, old
+
+
+def test_a_tool_call_by_an_old_name_runs_the_listed_tool(api):
+    listed = {hubtools.tool_key(t["name"]) for t in rpc(api, "tools/list")["result"]["tools"]}
+    assert not {name for name in listed if name.startswith("hub_")}           # old names are never listed
+    isError, payload = call(api, "hub_thread_dm_group", {"members": []})
+    assert isError is True and payload["error"] == "validation"
+    assert call(api, "thread_dm_group", {"members": []}) == (isError, payload)

@@ -13,6 +13,7 @@ import pytest
 from backend import support
 from backend.auth import Identity
 from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
+from clients import hubtools
 
 
 class FakeHQ:
@@ -564,7 +565,7 @@ def test_a_bot_reports_and_sends_over_mcp(environment, hq):  # noqa: F811  (the 
     from backend.tests.test_mcp import call, rpc
     api = environment()
     as_bot(api)
-    tools = {t["name"] for t in rpc(api, "tools/list", token="bot-coo")["result"]["tools"]}
+    tools = {hubtools.tool_key(t["name"]) for t in rpc(api, "tools/list", token="bot-coo")["result"]["tools"]}
     assert {"hub_support_report", "hub_support_send"} <= tools
     err, drafted = call(api, "hub_support_report", {"message": "  " + REPORT.replace(". ", ".\r\n") + "\n"}, token="bot-coo")
     assert not err, drafted

@@ -7603,7 +7603,7 @@ def offered_to(tool_):
 def listing(local=False, kind=None):
     """`tools/list` payload: the public fields of every tool this server may offer this kind of caller (all of them
     when the kind is not known)."""
-    return [{"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
+    return [{"name": public_name(t["name"]), "description": t["description"], "inputSchema": t["inputSchema"]}
             for t in TOOLS if (local or not t.get("local")) and (kind is None or kind in offered_to(t))]
 
 
@@ -7650,6 +7650,39 @@ def renamed_to(name):
         if name.startswith(old) and new + name[len(old):] in BY_NAME:
             return new + name[len(old):]
     return None
+
+
+# Registry keys keep their `hub_` prefix inside the code (`hub_task_show`). A client lists a tool without it, under the
+# server `tico` (`task_show`, called `mcp__tico__task_show`), because the client already adds the server's name. The
+# stripped names are unique (test_mcp), so each listed name maps back to exactly one key.
+PREFIX = "hub_"
+PUBLIC_NAMES = {key: (key[len(PREFIX):] if key.startswith(PREFIX) else key) for key in BY_NAME}
+KEY_OF_PUBLIC = {public: key for key, public in PUBLIC_NAMES.items()}
+
+
+def public_name(key):
+    """The name a tool is listed under: its registry key without the `hub_` prefix."""
+    return PUBLIC_NAMES.get(key, key)
+
+
+def tool_key(name):
+    """The registry key a tool call names, whichever name the client sent: the listed name (`task_show`), with or
+    without a client's `mcp__<server>__` prefix (`mcp__tico__task_show`, `mcp__hub__hub_task_show`), the `hub_` name
+    every earlier release listed, or a name Tico renamed (CALL_ALIASES, RENAMED_TOOLS, RENAMED_PREFIXES). Saved
+    history keeps the names it was written with, so it goes through here too. An unknown name comes back as it was."""
+    name = str(name or "")
+    if "__" in name:
+        name = name.split("__")[-1]
+    if name in BY_NAME:
+        return name
+    if name in KEY_OF_PUBLIC:
+        return KEY_OF_PUBLIC[name]
+    name = CALL_ALIASES.get(name, name)
+    if name in BY_NAME:
+        return name
+    if new := renamed_to(name):
+        return new
+    return name
 
 
 def error_payload(exc):
@@ -7751,6 +7784,7 @@ class Protocol:
         name, args = params.get("name"), params.get("arguments", {})
         if not isinstance(name, str):
             return self._error(rid, -32602, "name must be a string")
+        name = tool_key(name)                            # the listed name, or any name a call used before
         if name in ("hub_context_show", "hub_context_search") and isinstance(args, dict):
             args = dict(args)
             if name == "hub_context_show":
@@ -7762,11 +7796,7 @@ class Protocol:
                 if source == "market":
                     args["market"] = True
                 name = "hub_doc_search"
-        name = CALL_ALIASES.get(name, name)
         entry = BY_NAME.get(name)
-        if not entry and (new := renamed_to(name)):
-            return self._tool_error(rid, {"error": "renamed", "detail": f"`{name}` was renamed `{new}` in Tico 0.2.21.",
-                                          "renamed_to": new, "retryable": False})
         if entry and entry.get("local") and not self.local:
             return self._tool_error(rid, {"error": "local_only", "detail":
                 f"{name} runs on the Computer holding the bot repository. Run it there, or ask BotOps.", "retryable": False})

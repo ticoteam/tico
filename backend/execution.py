@@ -10,7 +10,7 @@ from contextlib import contextmanager
 import time
 from datetime import timezone
 
-from clients import gateway, sessions
+from clients import gateway, hubtools, sessions
 
 from . import auto_tasks, start_places, org_turns, app_delivery, check_models, learned, rooms, rules as wake_rule_engine, updates_chat, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
@@ -658,8 +658,9 @@ OUTSIDE_ACTIONS = tuple((label, re.compile(pattern, re.I)) for label, pattern in
     ('send webhook', r"\b(?:hub\s+)?webhook\s+send\b"),
     ('make payment', r"\bstripe\s+(?:payments|payment_intents)\s+(?:create|confirm)\b"),
 ))
-# Runner tool names that name the same operations, including the hub MCP tools with their runner prefix
-# (`mcp__hub__hub_webhook_send` arrives here as `hub_webhook_send`). Internal hub writes (tasks, messages,
+# Runner tool names that name the same operations, including the Tico MCP tools with their client prefix
+# (`mcp__tico__webhook_send`, and the `mcp__hub__hub_webhook_send` of saved history, both arrive here as
+# `hub_webhook_send`: hubtools.tool_key). Internal hub writes (tasks, messages,
 # comments) stay out on purpose: they are reversible teamwork, not outside effects.
 OUTSIDE_TOOLS = {'send_email': 'send email', 'send_mail': 'send email', 'merge_pull_request': 'merge pull request',
                  'publish_release': 'publish release', 'make_payment': 'make payment',
@@ -805,7 +806,7 @@ def outside_actions(c, job, started, finished):
         if first is None or is_start:
             evidence[key] = call
     for call in evidence.values():
-        name = str(call.get('tool') or call.get('name') or '').split('__')[-1]
+        name = hubtools.tool_key(call.get('tool') or call.get('name') or '')
         if name in OUTSIDE_TOOLS:
             actions.add(OUTSIDE_TOOLS[name])
         labels = call.get('outside_actions')

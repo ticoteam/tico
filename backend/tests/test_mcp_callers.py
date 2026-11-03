@@ -13,7 +13,8 @@ BOTS_ONLY = {"hub_update_create", "hub_file_publish", "hub_file_link"}
 
 
 def offered(api, token):
-    return {t["name"] for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
+    """The registry keys a caller is offered (the listed names are `task_show`; test_mcp checks those)."""
+    return {hubtools.tool_key(t["name"]) for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
 
 
 def test_each_caller_is_offered_only_the_tools_it_can_use(api, botops):
@@ -65,7 +66,7 @@ def test_a_tool_that_is_not_offered_is_refused_when_it_is_called(api, botops):
 
 
 def test_the_assistant_is_offered_reads_its_own_writes_and_its_proposal_tool():
-    names = {t["name"] for t in hubtools.listing(kind="assistant")}
+    names = {hubtools.tool_key(t["name"]) for t in hubtools.listing(kind="assistant")}
     assert "hub_assistant_propose" in names and "hub_task_create" in names and "hub_health_check" in names
     assert not {"hub_sql", "hub_api", "hub_message_send", "hub_update_create", "hub_bot_update"} & names
-    assert {t["name"] for t in hubtools.listing()} >= names                # no kind: everything, the server decides
+    assert {hubtools.tool_key(t["name"]) for t in hubtools.listing()} >= names   # no kind: everything, the server decides

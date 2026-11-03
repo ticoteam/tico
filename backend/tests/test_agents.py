@@ -5,6 +5,7 @@ import json
 from backend.store import H
 from backend.tests.test_api import api, assign, get, headers, post, runner  # noqa: F401
 from backend.tests.test_mcp import call, rpc
+from clients import hubtools
 
 
 def hermes_bot(api, slug="scout", status="active", token="ana-test", **overrides):
@@ -105,7 +106,7 @@ def test_agent_credentials_rotate_revoke_and_follow_the_bots_state(api):
 def test_the_mcp_door_lists_ack_and_the_agent_cannot_act_as_a_runner(api):
     hermes_bot(api)
     token = credential(api)["token"]
-    tools = {t["name"] for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
+    tools = {hubtools.tool_key(t["name"]) for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
     assert "hub_message_mark_read" in tools and "hub_message_list" in tools
     # Runner-only doors stay shut to an agent credential.
     assert api.post("/api/v2/runners/heartbeat", json={"version": "x", "platform": "x", "readiness": {}},

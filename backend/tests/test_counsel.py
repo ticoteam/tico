@@ -846,7 +846,7 @@ def test_rules_read_by_id_is_the_single_rule_and_with_from_a_document_read():
 
 def test_the_assistant_is_offered_the_document_read_the_question_and_the_single_rule_read():
     from clients import hubtools
-    names = {t["name"] for t in hubtools.listing(kind="assistant")}
+    names = {hubtools.tool_key(t["name"]) for t in hubtools.listing(kind="assistant")}
     assert {"hub_rules_get", "hub_rules_read", "hub_rules_ask", "hub_rules_add"} <= names
     tools = {t["name"]: t for t in hubtools.TOOLS}
     assert tools["hub_rules_get"]["writes"] is False
@@ -923,15 +923,15 @@ def pdf_bytes(text):
 
 def test_counsel_is_offered_only_its_own_tools_and_refuses_the_rest():
     from clients import hubtools
-    names = {t["name"] for t in hubtools.listing(kind="counsel")}
+    names = {hubtools.tool_key(t["name"]) for t in hubtools.listing(kind="counsel")}
     assert names == {n for n in hubtools.COUNSEL_TOOLS if n in hubtools.BY_NAME}
     assert {"hub_rules_list", "hub_rules_get", "hub_rules_add", "hub_file_read", "hub_task_comment",
             "hub_task_close"} <= names
     outward = {"hub_gateway_search", "hub_gateway_fetch", "hub_message_send"}
     assert not outward & names
     # Other bots and people keep theirs.
-    assert outward <= {t["name"] for t in hubtools.listing(kind="bot")}
-    assert outward <= {t["name"] for t in hubtools.listing(kind="owner")}
+    assert outward <= {hubtools.tool_key(t["name"]) for t in hubtools.listing(kind="bot")}
+    assert outward <= {hubtools.tool_key(t["name"]) for t in hubtools.listing(kind="owner")}
     assert hubtools.kind_of({"role": "bot", "actor": "bot:tico-counsel"}) == "counsel"
     assert hubtools.kind_of({"role": "bot", "actor": "bot:ops"}) == "bot"
     # A refused call never reaches the server (the protocol has no API to call here).

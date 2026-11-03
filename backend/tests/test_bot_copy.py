@@ -278,7 +278,7 @@ def test_the_tools_copy_update_and_share_a_skill_in_the_workspace_as_the_request
         tool("hub_skill_copy", skill="triage", bot="scribe", to=["ops"])
     assert refused.value.status == 403 and not (workspace / "bot-ops").exists()
     assert botcopy.head(workspace / "bot-cara-helper") and "botops" in hubtools.offered_to(hubtools.BY_NAME["hub_bot_copy"])
-    assert "hub_bot_copy" in {t["name"] for t in hubtools.listing(local=True)} and "hub_bot_copy" not in {t["name"] for t in hubtools.listing()}
+    assert "hub_bot_copy" in {hubtools.tool_key(t["name"]) for t in hubtools.listing(local=True)} and "hub_bot_copy" not in {hubtools.tool_key(t["name"]) for t in hubtools.listing()}
 
 
 def rename(api, slug, new_slug, token="ana-test"):

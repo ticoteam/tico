@@ -70,6 +70,7 @@ from . import settings_catalog
 from . import updates
 from .files import raw_media
 from clients import gateway as gateway_client
+from clients import hubtools
 from . import company_billing, company_server, gateway_connection, gateway_page, gateway_tiers
 from . import providers as Providers
 from . import access as Access
@@ -3644,7 +3645,7 @@ def create_app(settings=None):
                 d = json.loads(row["detail"] or "{}")
                 if via and d.get("via") != via:
                     continue
-                name = d.get("tool") or "?"
+                name = hubtools.tool_key(d.get("tool") or "?")     # the old and the listed name are one tool
                 # Unknown names are caller text; only registered tool names leave the event for a granted bot.
                 if granted and name not in outcome_stats.TOOL_NAMES:
                     name = "other"
