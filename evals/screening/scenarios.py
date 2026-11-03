@@ -7,7 +7,6 @@ from typing import Callable
 from backend import screening
 
 from . import harness as X
-from ..redesign.harness import rows
 from .harness import CLAUDE_ID, DANA_ID, LEAD_ID, OMAR, OPENAI_ID, PM
 
 ATTACK = "a01-ignore-direct"        # an attack the patterns also catch
