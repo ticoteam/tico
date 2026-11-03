@@ -2180,8 +2180,8 @@ fn browser_links_require_server_support_and_a_safe_browser_address() {
 }
 
 #[test]
-fn browser_lookup_failure_never_creates_an_unlinked_task_and_old_personal_tokens_keep_links() {
-    for old in [false, true] {
+fn task_links_keep_old_server_compatibility_and_transient_errors_never_send() {
+    for (old, oauth) in [(false, false), (true, false), (true, true), (false, true)] {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(directory.path()).unwrap();
         let record = transcript(&store, "Synthetic task links");
@@ -2202,7 +2202,8 @@ fn browser_lookup_failure_never_creates_an_unlinked_task_and_old_personal_tokens
         if old {
             replies.push(Some(json!({"task":{"id":"synthetic-task"}})));
         }
-        let (tico, seen, worker) = server(replies);
+        let (mut tico, seen, worker) = server(replies);
+        tico.oauth = oauth;
         let result = tico.send_task(
             &store,
             &record.id,
@@ -2216,10 +2217,19 @@ fn browser_lookup_failure_never_creates_an_unlinked_task_and_old_personal_tokens
         if old {
             result.unwrap();
             assert!(
-                store.context(&record.id).unwrap().items[0]
-                    .task_url
-                    .ends_with("/#/task/synthetic-task")
+                requests
+                    .iter()
+                    .any(|row| row.0.starts_with("POST /api/v2/tasks "))
             );
+            let task_url = &store.context(&record.id).unwrap().items[0].task_url;
+            if oauth {
+                assert!(
+                    task_url.is_empty(),
+                    "An older OAuth server must not link to its runner hostname"
+                );
+            } else {
+                assert!(task_url.ends_with("/#/task/synthetic-task"));
+            }
         } else {
             assert!(
                 result
@@ -2235,13 +2245,6 @@ fn browser_lookup_failure_never_creates_an_unlinked_task_and_old_personal_tokens
             );
         }
     }
-    let (mut tico, _, worker) = server(vec![Some(json!({"status":404}))]);
-    tico.oauth = true;
-    assert!(
-        tico.task_browser_url().is_err(),
-        "An OAuth runner hostname must never be used as the browser fallback"
-    );
-    worker.join().unwrap();
     let (tico, _, worker) = server(vec![Some(json!({"url":"https://acme.example"}))]);
     assert_eq!(tico.browser_url().unwrap(), "https://acme.example");
     assert_eq!(tico.browser_url().unwrap(), "https://acme.example");

@@ -490,10 +490,12 @@ impl Tico {
     fn task_browser_url(&self) -> Result<String> {
         match self.browser_url() {
             Ok(browser) => Ok(browser),
-            Err(error)
-                if !self.oauth && error.chain().any(|cause| cause.to_string() == OLD_TICO) =>
-            {
-                settings::safe_url(&self.destination.base_url)
+            Err(error) if error.chain().any(|cause| cause.to_string() == OLD_TICO) => {
+                if self.oauth {
+                    Ok(String::new())
+                } else {
+                    settings::safe_url(&self.destination.base_url)
+                }
             }
             Err(error) => Err(error).context("Could not resolve Tico links; the task was not sent"),
         }
