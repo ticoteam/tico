@@ -255,13 +255,16 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     // ---- Two earlier conversations, one closed: one chat, oldest at the top, newest at the bottom, a date line per day
     // and the writer's name when it changes. A closed one never stops the person writing: the next message goes to the
     // one still open.
+    // Within an hour after midnight the newest replies would straddle two days: then the whole seed sits in yesterday.
+    const sinceMidnight = (Date.now() - new Date().setHours(0, 0, 0, 0)) / 60000, shift = sinceMidnight < 61 ? sinceMidnight + 120 : 0;
+    const atDay = m => at(m + shift);
     v = await visit({viewport: {width: 1280, height: 800}, seed: [
-      {id: 'sup_2', created_at: at(60), status: 'answered', message: 'Bots stopped', sent: {},
-        messages: [{id: 1, created_at: at(50), from: 'staff', author_name: 'Mia', body: 'Restarted the runner.'},
-                   {id: 2, created_at: at(49), from: 'staff', author_name: 'Mia', body: 'Try now.'},
-                   {id: 3, created_at: at(40), from: 'staff', body: 'Anything else?'}]},
-      {id: 'sup_1', created_at: at(3 * 24 * 60), status: 'closed', message: 'Can bots share a computer?', sent: {diagnostics: 'x'},
-        messages: [{id: 1, created_at: at(3 * 24 * 60 - 4), from: 'staff', body: 'Yes.'}, {id: 2, created_at: at(3 * 24 * 60 - 5), from: 'person', body: 'Thanks'}]},
+      {id: 'sup_2', created_at: atDay(60), status: 'answered', message: 'Bots stopped', sent: {},
+        messages: [{id: 1, created_at: atDay(50), from: 'staff', author_name: 'Mia', body: 'Restarted the runner.'},
+                   {id: 2, created_at: atDay(49), from: 'staff', author_name: 'Mia', body: 'Try now.'},
+                   {id: 3, created_at: atDay(40), from: 'staff', body: 'Anything else?'}]},
+      {id: 'sup_1', created_at: atDay(3 * 24 * 60), status: 'closed', message: 'Can bots share a computer?', sent: {diagnostics: 'x'},
+        messages: [{id: 1, created_at: atDay(3 * 24 * 60 - 4), from: 'staff', body: 'Yes.'}, {id: 2, created_at: atDay(3 * 24 * 60 - 5), from: 'person', body: 'Thanks'}]},
     ]});
     ({page} = v);
     await page.waitForFunction(() => window.supportState().unread === 4);
@@ -273,8 +276,12 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       : (el.matches('.you') ? 'me: ' : 'them: ') + [...el.children].map(c => c.textContent).join(' | ')));
     assert.deepEqual(order.filter(x => x !== 'day'), ['me: Can bots share a computer? | Diagnostics attached', 'them: Tico team | Yes.', 'me: Thanks',
       'me: Bots stopped', 'them: Mia | Restarted the runner.', 'them: Try now.', 'them: Tico team | Anything else?'], `in time order: ${order}`);
-    assert.equal(order.filter(x => x === 'day').length, 2, 'a date line for each day');
-    assert.equal(await chat.locator('.support-day').last().innerText(), 'Today');
+    // Days are the browser's own (its time zone may not be this script's): count them there.
+    const seen = await page.evaluate(times => ({days: new Set(times.map(t => new Date(t).toDateString())).size,
+      today: new Date(times[0]).toDateString() === new Date().toDateString()}),
+      [atDay(40), atDay(49), atDay(50), atDay(60), atDay(3 * 24 * 60), atDay(3 * 24 * 60 - 4), atDay(3 * 24 * 60 - 5)]);
+    assert.equal(order.filter(x => x === 'day').length, seen.days, 'a date line for each day');
+    assert.equal(await chat.locator('.support-day').last().innerText(), seen.today ? 'Today' : 'Yesterday');
     assert.ok(await chat.locator('[data-thread]').evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 4), 'opens at the newest');
     assert.doesNotMatch(await chat.innerText(), DESK);
     await page.locator('#support-open:not(.has-unread)').waitFor();

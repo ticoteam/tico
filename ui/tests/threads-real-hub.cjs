@@ -255,9 +255,9 @@ async function restrictPerson(hub) {
       const tag = isPhone ? 'phone' : 'desktop';
       const page = await pageAs(browser, hub, 'dana', {phone: isPhone});
 
-      // Calls are not set up on this hub: the owner sees so on load, with no Start call to find out from.
+      // Calls are not set up on this hub: no Start call, and no note about it.
       await page.goto(hub.url + '/#/thread/' + plan.id);
-      await page.locator('.thv-call-note', {hasText: 'Set up calls'}).waitFor({timeout: t(15000)});
+      await page.locator('.thv-aud').waitFor({timeout: t(15000)});
       assert.equal(await page.locator('[data-call]').count(), 0, `${tag}: no Start call without calls`);
 
       // The audience shows in the thread's header on either screen.

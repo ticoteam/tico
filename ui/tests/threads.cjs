@@ -69,8 +69,9 @@ const timeline = {
     {...msg('o1', 1, 'bot:ops', 'Weekly numbers are in the doc.'), thread_id: 'h-ops'},
     {...msg('o2', 2, 'bot:ops', 'Daily update, Oct 31', {kind: 'notice', refs: {card: 'update', update: {id: 'u1', kind: 'daily', day: '2026-10-31'}}}), thread_id: 'h-ops'},
   ]}),
-  'h-bea': () => ({thread: {id: 'h-bea', audience: 'home', home: {actor: 'human:bea'}, last_seq: 1, me: me(0, {can_post: false})}, breadcrumb: [], next_cursor: null, messages: [
+  'h-bea': () => ({thread: {id: 'h-bea', audience: 'home', home: {actor: 'human:bea'}, last_seq: 2, me: me(0, {can_post: false})}, breadcrumb: [], next_cursor: null, messages: [
     {...msg('b1', 1, 'human:bea', 'Daily update, Oct 31', {kind: 'notice', refs: {card: 'update', update: {id: 'u2', kind: 'daily', day: '2026-10-31'}}}), thread_id: 'h-bea'},
+    {...msg('b2', 2, 'human:bea', 'Out Friday afternoon.'), thread_id: 'h-bea'},
   ]}),
   // Empty Homes: one the viewer may post to, one they may not.
   'h-cy': () => ({thread: {id: 'h-cy', audience: 'home', home: {actor: 'human:cy'}, last_seq: 0, me: me()}, breadcrumb: [], next_cursor: null, messages: []}),
@@ -389,7 +390,7 @@ let browser = null;
     const tabs = await page.locator('#btabs [data-bt]').evaluateAll(els => els.map(b => b.dataset.bt));
     assert.ok(tabs.includes('home') && tabs.includes('dm'), 'Home and DM: ' + tabs);
     assert.ok(!tabs.includes('chat'));
-    assert.equal(await page.locator('.bot-threads-link').getAttribute('href'), '#/threads?with=bot%3Aops');
+    assert.equal(await page.locator('.bot-threads-link').count(), 0, 'no Threads with link on a Home');
     await shot(page, 'bot-home-desktop');
     // The Home's actions (the call and the menu) sit in the Home/DM bar; the thread has no title line.
     await page.locator('#pane-chat .bot-talk-acts [data-thv-menu]').waitFor();
@@ -409,9 +410,10 @@ let browser = null;
     await page.locator('#pane-chat [data-talk="dm"][aria-selected="true"]').waitFor();
     assert.equal(await page.locator('#bot-thread .thv-composer .p-text').inputValue(), 'Half a thought');
 
-    // A person's Home under their profile, with the update card.
+    // A person's Home under their profile: updates live on the Updates page, never as cards in a Home.
     await page.goto('https://tico-ui.test/#/person/bea');
-    await page.locator('#person-home .th-update').waitFor();
+    await page.getByText('Out Friday afternoon.').waitFor();
+    assert.equal(await page.locator('#person-home .th-update').count(), 0, 'no update cards in a Home');
     await shot(page, 'person-desktop');
 
     // A Home with nothing in it is its composer, never a blank timeline; its actions sit in the card's header.
@@ -609,7 +611,7 @@ let browser = null;
     await page.getByText('Weekly numbers are in the doc.').waitFor();
     await shot(page, 'bot-home-phone');
     await page.goto('https://tico-ui.test/#/person/bea');
-    await page.locator('#person-home .th-update').waitFor();
+    await page.getByText('Out Friday afternoon.').waitFor();
     await shot(page, 'person-phone');
     await page.goto('https://tico-ui.test/#/person/cy');
     await page.locator('#person-home .thv-composer .p-text').waitFor();
@@ -714,21 +716,12 @@ let browser = null;
     await page.waitForFunction(() => !document.querySelector('#thread-keep')?.open);
     assert.deepEqual(seen.patches[1], {retention_days: null});
 
-    // Calls off: the owner is told where to set them up, and nobody gets a control that cannot work.
+    // Calls off: nobody gets a control that cannot work, and no "Set up calls" note either.
     callsOff = true;
     await page.goto('https://tico-ui.test/#/thread/t-sub');
-    await page.locator('a.thv-call-note').waitFor();
-    assert.match(await page.locator('a.thv-call-note').getAttribute('href'), /docs\/meet\.md/);
-    assert.equal(await page.locator('[data-call]').count(), 0);
-    // A hosted server's owner has no environment to edit, so the same words ask Tico support.
-    await page.evaluate(() => {
-      S.config.hosted = 'own';
-      window.supportStart = text => { window.supportAsked = text; };
-      THV_VIEWS.forEach(v => thvDraw(v));
-    });
-    await page.locator('button[data-call-setup]').click();
-    assert.ok(await page.evaluate(() => window.supportAsked), 'a hosted owner reaches Tico support');
-    await page.evaluate(() => { delete S.config.hosted; });
+    await page.locator('.thv-title').waitFor();
+    await page.waitForLoadState('networkidle');
+    assert.equal(await page.locator('.thv-call-note, [data-call]').count(), 0);
     assert.deepEqual(seen.errors, []);
     await page.close();
     const member = await open(browser, 'bob', {phone: true});
