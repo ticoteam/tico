@@ -316,14 +316,20 @@ impl Exits {
             std::mem::take(&mut row.bytes),
             std::mem::take(&mut row.tunnels),
         );
-        let key = (
+        let key = self.key_of(usage);
+        self.count(key, bytes, tunnels);
+    }
+
+    /// The (exit, runner, bot, host, day) key slot `usage` counts under.
+    fn key_of(&self, usage: u32) -> UsageKey {
+        let row = &self.rows[usage as usize];
+        (
             row.exit.clone(),
             row.runner_id.clone(),
             row.bot.clone(),
             row.host.clone(),
             civil_date(i64::from(row.day)),
-        );
-        self.count(key, bytes, tunnels);
+        )
     }
 
     fn flush_all(&mut self) {
@@ -485,6 +491,12 @@ impl Exits {
         }
         let day = self.today();
         self.roll(usage, day);
+        if !self.rows[usage as usize].dirty {
+            // The slot's first count since it was flushed: its key takes its row in the totals now, in first-count
+            // order, as when every frame counted straight into them. Later frames only add in the slot.
+            let key = self.key_of(usage);
+            self.count(key, 0, 0);
+        }
         let row = &mut self.rows[usage as usize];
         row.dirty = true;
         row.bytes += n;
@@ -1417,6 +1429,20 @@ mod tests {
             ),
             (11, 1, "www.acme.example", "ops")
         );
+    }
+
+    #[test]
+    fn a_tunnels_key_takes_its_row_at_its_first_count() {
+        let mut exits = exits();
+        let _opens = exits.connect_link("laptop");
+        exits.set_policy("laptop", policy(1, &["ops"], 10_000)).unwrap();
+        exits.admit(&grant("a", "ops", 1, 0)).unwrap();
+        exits.spend("a", 100).unwrap();
+        // Not flushed yet, but the key holds its row, so a later key cannot take the last one ahead of it.
+        assert_eq!(exits.usage.len(), 1);
+        exits.spend("a", 1).unwrap();
+        assert_eq!(exits.usage.len(), 1);
+        assert_eq!(exits.usage_batch().unwrap().rows[0].bytes, 101);
     }
 
     #[test]
