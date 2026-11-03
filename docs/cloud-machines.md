@@ -44,6 +44,22 @@ cloud machine" under Computer).
 - Billing and caps are HQ's: the shared machine is one machine against the company's machine cap, whatever the
   number of bots on it.
 
+## When a machine can't start
+
+When a bot's cloud machine can't start, the problem replaces the machine's state. It shows on the bot's page under
+**Computer**, on the work queued for the bot, and in **Settings → Health** when that work is stuck. *code* is the reason
+HQ or the server gives.
+
+| Shown as | Means |
+|---|---|
+| Out of credit | The company is out of credit, so its cloud machines don't start. Tico checks again about every 10 minutes. |
+| Didn't start (*code*): trying again | HQ refused to make or start the machine. Tico waits 15 seconds after the first refusal, twice as long after the next, and so on, up to 15 minutes. |
+| Couldn't be made or started (*code*): trying again | Something on the server failed while Tico made or started the machine. Tico tries again on each look, about every 10 seconds. |
+| Started, but its work did not run there | Tico started the machine for the bot's work, and the work did not run on it. |
+| Made, but it never connected to this server | Three machines in a row never connected, so Tico makes no more until one connects or a person changes the machine's settings. |
+
+The other problems clear once the machine can start again.
+
 ## A stop never lands under a turn
 
 The server decides an idle stop on a read of the hub, and a runner can claim work between that read and HQ's stop.
