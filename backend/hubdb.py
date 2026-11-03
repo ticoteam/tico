@@ -6989,7 +6989,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         if is_human(after["requester_id"]):
             # Keep completion notices out of ordinary Slack reply mirroring, including quiet
             # updates. One eligible notice per task/status also covers reopen/retry cycles.
-            duplicate = _one(conn, "SELECT 1 FROM message_refs WHERE ref_task_id=? "
+            # messages, not message_refs: store.py's slack_task_completion_notices index is on json_extract(refs,'$.task').
+            duplicate = _one(conn, "SELECT 1 FROM messages WHERE json_extract(refs,'$.task')=? "
                              "AND json_extract(refs,'$.task_completion.status')=? "
                              "AND json_extract(refs,'$.task_completion.notify')=1 LIMIT 1",
                              (task_id, status))

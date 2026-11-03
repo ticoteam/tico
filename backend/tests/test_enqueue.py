@@ -243,7 +243,8 @@ def test_enqueue_matches_the_dropped_trigger_on_every_odd_input():
             '{"quiet":null}', '{"live":{"kind":"transcript"}}', '{"live":{"kind":"decision"}}',
             '{"live":{"kind":"tool"}}', '{"live":{"kind":"ask"}}', '{"live":{"kind":""}}', '{"live":{"kind":1}}',
             '{"live":"transcript"}', '{"live":["transcript"]}', '{"live":{"kind":"Transcript"}}',
-            '{"live":{"kind":"transcript"},"quiet":false}', '{"command":true}', '{"task":["t1"]}')
+            '{"live":{"kind":"transcript"},"quiet":false}', '{"command":true}', '{"task":["t1"]}',
+            '{"quiet":NaN}', '{"quiet":Infinity}', '{"quiet":-Infinity}', '{"task":"t1","depth":Infinity}')
     legacy, current = _bare(True), _bare(False)
     n = 0
     for sender in senders:

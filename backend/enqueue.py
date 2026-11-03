@@ -18,6 +18,7 @@ external_sync.import_messages (always quiet). Until migration 0052 this rule was
 trigger's SQL and this module agree row for row (tests/test_enqueue.py).
 """
 import json
+import math
 
 from .harnesses import EXTERNAL_HARNESSES
 
@@ -40,8 +41,9 @@ def _refs(value):
 
 
 def _sql_zero(value):
-    """SQLite's `coalesce(x, 0) = 0` for a JSON value: missing, null, false and numeric zero are zero; text is not."""
-    return value is None or (isinstance(value, (int, float)) and value == 0)
+    """SQLite's `coalesce(x, 0) = 0` for a JSON value: missing, null, false and numeric zero are zero; text is not.
+    NaN is zero too: SQLite's json_extract reads a JSON NaN as NULL."""
+    return value is None or (isinstance(value, (int, float)) and (value == 0 or math.isnan(value)))
 
 
 def wanted(sender, recipient, refs):

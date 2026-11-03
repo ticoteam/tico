@@ -26,12 +26,15 @@ def _typed(api, refs):
     ('{"command":true,"live":{"kind":"transcript"}}', (None, None, 0, 1, "transcript")),
     ('{"quiet":true}', (None, None, 1, 0, None)),
     ("[1,2]", (None, None, 0, 0, None)),
+    ('{"task":"t5","depth":Infinity}', ("t5", None, 0, 0, None)),  # JSON5 json_extract reads (Python writes Infinity)
+    ("not json", (None, None, 0, 0, None)),
 ])
 def test_message_refs_types_the_routing_keys(api, refs, want):
     assert _typed(api, refs) == want
 
 
-@pytest.mark.parametrize("quiet", ["true", "false", "0", "0.0", "1", '""', '"no"', "[]", "{}", "null"])
+@pytest.mark.parametrize("quiet", ["true", "false", "0", "0.0", "1", '""', '"no"', "[]", "{}", "null",
+                                   "NaN", "Infinity", "-Infinity"])
 def test_ref_quiet_is_the_queue_s_own_rule(api, quiet):
     import json
     assert _typed(api, '{"quiet":' + quiet + "}")[2] == (0 if _sql_zero(json.loads(quiet)) else 1)
