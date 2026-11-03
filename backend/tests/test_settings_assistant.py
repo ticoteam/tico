@@ -48,6 +48,7 @@ def release_times(api):
 
 def test_a_person_asks_their_assistant_for_a_direct_setting_and_it_changes(api):
     before = release_times(api)
+    assert before != ["09:30"], before
     r, attempt = assistant_turn(api, "ana-test", "Set the release to 09:30")
     token = attempt["token"]
     assert "hub_settings_set" in {t["name"] for t in hubtools.listing(kind="assistant")}
