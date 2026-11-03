@@ -34,7 +34,7 @@ def convert(api, typ, rules):
 
 
 def wake_id(api, typ):
-    [found] = [a for a in get(api, "automations")["automations"] if (a.get("wakes") or {}).get("scope_id") == typ["id"]]
+    [found] = [a for a in get(api, "automations?limit=500")["automations"] if (a.get("wakes") or {}).get("scope_id") == typ["id"]]
     return found["id"]
 
 

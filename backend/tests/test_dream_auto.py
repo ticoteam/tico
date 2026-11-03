@@ -296,6 +296,7 @@ def test_a_store_with_no_app_has_no_night_and_its_tick_does_not_fail(tmp_path):
     from backend.store import Store
     from backend.config import Settings
     s = Store(Settings(db_path=tmp_path / "bare.sqlite"))
+    s.initialize(seed_market=False)
     assert DA.nightly(s, Auth(s), night()) is None
     with s.read() as c:
         assert not DA.claimed(c, DA.night_of(night()))
