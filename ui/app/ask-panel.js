@@ -329,6 +329,9 @@ async function askLoad(chat) {
     P.sending = true; pillButtons(P); fail('');
     try {
       const r = await cloudCompose('/v2/assistant/messages', {text: text || 'Attached files.', page: askPage()}, files);
+      // An org rule held it: nothing was written, so the box keeps the text and there is no message to show.
+      if (r?.held) { if (current()) fail('An org rule held this message. Nothing was sent.'); return; }
+      if (!r?.message) throw new Error('Not sent. Try again.');
       CHAT_CACHE.delete(info.bot);                    // the Assistant page reads the conversation again when it opens
       if (!current()) return;
       if (!messages.some(x => x.id === r.message.id)) messages.push(r.message);
