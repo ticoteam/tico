@@ -565,7 +565,8 @@ def view(cat=None):
             "levels": cat["levels"],
             "tiers": {row["id"]: {"name": row["name"], "department": row.get("department", ""), "level": row["level"],
                                   "fast": bool(row.get("fast")), "current": row["current"], "versions": [
-                {"version": v["version"], "id": v["id"], "model": v["model"], "price": v["price"]}
+                {"version": v["version"], "id": v["id"], "model": v["model"], "price": v["price"],
+                 **({"context": v["context"]} if v.get("context") else {})}
                 for v in reversed(row["versions"])]} for row in cat["models"] if row.get("department")}}
 
 
