@@ -40,6 +40,7 @@ CAUSE = contextvars.ContextVar("wake_cause", default="")
 
 # Never filtered. Each entry: (key, what it is). `always_wakes` returns the key that matched.
 ALWAYS_WAKE = (
+    ("check_back", "a scheduled task follow-up owed now, even when the task waits on a handoff"),
     ("person", "a person's message or comment, or a notice of a person's own act (an approval, a step move)"),
     ("manager", "a task comment from a party’s org-chart manager"),
     ("ask", "an ask, answer or steer: a question to the bot, or the answer it waits on"),
@@ -113,6 +114,8 @@ def always_wakes(conn, actor, target, kind, refs, body, cause=None, in_reply_to=
     cannot read matches "reply": fail open."""
     refs = refs if isinstance(refs, dict) else {}
     cause = CAUSE.get() if cause is None else cause
+    if actor == "keeper" and refs.get("wake") == "check_back":
+        return "check_back"
     if str(actor).startswith("human:") or str(cause).startswith("human:"):
         return "person"
     if refs.get("comment") and str(actor).startswith("bot:") and str(target).startswith("bot:"):

@@ -41,6 +41,8 @@ def test_payloads_stay_under_their_budgets(api):
         # 2,000 tasks: 500 on ana (her Needs you), the rest on bots.
         clone(c, "tasks", row, 499, title=lambda i: f"Review plan {i}")
         clone(c, "tasks", row, 1500, owner_id=lambda i: "bot:ops", title=lambda i: f"Bot work {i}")
+        c.execute("UPDATE tasks SET check_back_at=?,check_back_note=? WHERE owner_id LIKE 'bot:%'",
+                  (H.shift(H.now(), hours=1), "Inspect the next result. " * 20))
         first = dict(c.execute("SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (cid,)).fetchone())
         # 1,000 long replies before it; a person's message would queue a run of its own.
         clone(c, "messages", {**first, "body": BODY, "sender_id": "bot:ops", "recipient_id": "human:ana"}, 1000,

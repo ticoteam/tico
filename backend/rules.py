@@ -82,6 +82,7 @@ HOLD_ROW, HOLD_IGNORED = "rule", "ignored"
 
 # What a message is, as a rule names it. The always-wake events cannot be lowered by a row.
 FLOOR_EVENTS = {
+    "check_back": "a task follow-up appointment is due",
     "person_message": "a person's message or comment, or a notice of a person's own act",
     "ask": "an ask or a steer: a question to the bot",
     "answer": "the answer to an ask the bot made",
@@ -99,7 +100,7 @@ FLOOR_EVENTS = {
 # Structured task news that wakes at once when no row already wakes it or keeps it quiet.
 URGENT_EVENTS = ("incident_news", "task_action", "task_blocker", "direct_review_request")
 # wake_rules.always_wakes key -> (event, rule id)
-_FLOOR = {"person": "person_message", "approval": "approval", "needs_action": "needs_action", "reply": "reply",
+_FLOOR = {"check_back": "check_back", "person": "person_message", "approval": "approval", "needs_action": "needs_action", "reply": "reply",
           "gate": "verdict", "handoff": "builder_handoff"}
 # wake_rules.AWAITED key -> event
 AWAITED_EVENTS = {

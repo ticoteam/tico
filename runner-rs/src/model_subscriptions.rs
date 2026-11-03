@@ -684,7 +684,7 @@ mod tests {
         values.extend(start(&mut got, "codex", &mut Env::new()));
         let r = crate::redact::Redactor::new(&values);
         for leaked in ["sk-proj-synthetic-key-1-aaaaaaaaaaaa", "eyJsynthetic.id-token-1.sig", "eyJsynthetic.access-1.sig", "rt_synthetic_refresh_1_bbbbbbbb"] {
-            let out = r.scrub_text(&format!("echo {leaked} > notes.txt"));
+            let out = r.scrub_text(&format!("echo {leaked} > notes.txt")).into_owned();
             assert!(!out.contains(leaked), "{out}");
         }
         // Not a secret: the refresh time stays readable.
