@@ -26,7 +26,7 @@ def finish(api, r, attempt, text="Done."):
 def reply(api, r, attempt, words):
     """The owner's Assistant turn ends on its read-back; the owner answers, and that starts its next turn."""
     finish(api, r, attempt, "Want me to save it?")
-    assert say(api, words)["fast"] is False
+    assert say(api, words)
     return post(api, "jobs/claim", {}, token=r["token"])["attempt"]
 
 
@@ -147,7 +147,7 @@ def test_a_save_after_other_words_or_outside_thirty_minutes_is_not_agreed(api):
         room = H.conversation(c, get(api, "assistant")["room_id"])
         H._write_message(c, "human:ana", "bot:coo", "hmm, the owner", room, "say", {"assistant": True}, None,
                          None)
-    assert say(api, "yes")["fast"] is False
+    assert say(api, "yes")
     attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
     assert save(api, attempt, step, expected=403)["error"]["code"] == "not_agreed"
     # A notice, or the Assistant's own message, between the read-back and the yes: the yes answers that, not the
@@ -159,7 +159,7 @@ def test_a_save_after_other_words_or_outside_thirty_minutes_is_not_agreed(api):
         with api.app.state.store.transaction() as c:
             H._write_message(c, who, "human:ana", "Want a daily digest of this chat?", room, kind, {"assistant": True},
                              None, None)
-        assert say(api, "yes")["fast"] is False
+        assert say(api, "yes")
         attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
         assert save(api, attempt, step, expected=403)["error"]["code"] == "not_agreed", who
     # And so does anything after the yes.

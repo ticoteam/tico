@@ -1168,8 +1168,8 @@ preference: with none that can run, it runs on an author's own, and the subtask'
 
 Every task a bot owns has its own thread (a `kind: task` thread), even one filed from a thread: its comments,
 notices, notes and replies go there, and the thread it was filed from gets one quiet line, "Started task: <title>"
-(`refs.task_started`). A bot's open task filed into a thread before this moves to a thread of its own the next time
-a turn on it is claimed; its earlier messages stay in the thread, and the new thread opens with a line saying so. A
+(`refs.task_started`), written into that thread's history only: task news reaches no person's Inbox or digest. A bot's
+open task filed into a thread before this moves to a thread of its own the next time a turn on it is claimed; its earlier messages stay in the thread, and the new thread opens with a line saying so. A
 person's own tasks, and the Assistant's (whose turns act for the person of the thread), keep their thread.
 A turn reads only its own lane's messages: the main session reads the Home, with no task traffic, and a task's
 session reads that task (and its subtasks that share the session). The Home hears where its bot's tasks got to

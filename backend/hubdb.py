@@ -3,8 +3,8 @@
 
 The contract is `docs/history/hub-v2.md` §0-§5. This module is the whole database layer: the cloud
 service (`backend/store.py` and everything behind it) goes through it and nowhere else. Pure
-stdlib, one file. It grew up under the local keeper; the `host` column's `dispatcher` default and
-the token helpers are that history, kept because rows and callers still carry them.
+stdlib, one file. It grew up under the local keeper; the `dispatcher` host default in the bot
+config is that history, kept because configs and callers still carry it.
 
 Shape of every write:
 
@@ -18,17 +18,15 @@ withdrawn text in the audit trail.
 
     conn = connect()                         # <projects>/runtime/hub.db, or $HUB_DB
     sync_registry(conn, employees, people)   # bots and humans from the registry
-    token = issue_token(conn, "cmo")         # the keeper hands this to the turn
-    verify_bot(conn, "cmo", token)           # hubdb checks before any bot write
 
 ## Deviations from docs/history/hub-v2.md (also listed in that file's "Deviations" section)
 
 1. **`conn` first.** §4 writes the signature as `say(actor, ...)`. There is no ambient
    connection, so every function is `say(conn, actor, ...)`; `actor` is still the first
-   argument the caller thinks about, and `issue_token(conn, slug)` in §1 already puts `conn`
-   first. Read helpers are `tasks(conn, owner=...)` and so on.
-2. **`verify_bot` raises.** It returns the bot row and raises `Refused("identity")` on a bad
-   or missing token, so a caller cannot forget to check a boolean.
+   argument the caller thinks about, and every other call in §1 puts `conn` first too. Read
+   helpers are `tasks(conn, owner=...)` and so on.
+2. **No token helpers here.** The §1 `issue_token` and `verify_bot` are not in this module. A
+   bot's token hash lives on its `agents` row (`backend/agents.py`), where auth reads it.
 3. **Lint (rule 7) applies to unsolicited human items.** A bot's `say`/`notice` to a human is
    linted only when rule 4 counts it as unsolicited; a reply to the human's own message,
    a reply inside a conversation the human started, and `answer`, are exempt. Every task with
@@ -68,7 +66,6 @@ import json
 import logging
 import os
 import re
-import secrets
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -84,7 +81,6 @@ from . import task_roles as TRo
 from . import task_snooze as TS
 from . import run_triggers as RT
 from . import status_values as SV
-from clients.manifest import repo_dir
 from backend.chat_goals_schema import SCHEMA as CHAT_GOALS_SCHEMA
 from backend.repositories_schema import SCHEMA as REPOSITORIES_SCHEMA
 from backend.subscriptions_schema import SCHEMA as SUBSCRIPTIONS_SCHEMA
@@ -106,6 +102,28 @@ HUB_DIR = Path(__file__).resolve().parent.parent
 ROOT = HUB_DIR.parent                       # employees are siblings of the hub
 DEFAULT_DB = ROOT / "runtime" / "hub.db"
 KEEPER = "keeper"
+
+
+def task_news(sender_id, refs):
+    """A keeper message about a task: started, finished, a nudge, a still-wanted question. It is the task's own history,
+    shown on the task, and it never reaches a person (no delivery, so no unread, Inbox row, digest or push): people are
+    not chatted about their own tasks. Bots still get it, as before."""
+    return sender_id == KEEPER and isinstance(refs, dict) and bool(refs.get("task"))
+
+
+def task_news_sql(m="m"):
+    """SQL: the messages row `m` is task news (`task_news`)."""
+    refs = f"CASE WHEN json_valid({m}.refs) THEN {m}.refs END"
+    return f"({m}.sender_id='{KEEPER}' AND COALESCE(json_extract({refs},'$.task'),'')<>'')"
+
+
+def delivery_counts_sql(m, recipient):
+    """SQL: a delivery of message `m` to `recipient` is a reason for a person to see it: TRUE unless the recipient is a
+    person and the message is task news. One rule for the write side (threads' primary delivery trigger) and every
+    read side (unread, the Inbox, the sidebar, digests), so old notices already delivered stop counting too."""
+    return f"NOT ({recipient} LIKE 'human:%' AND {task_news_sql(m)})"
+
+
 REVIEW_OWNER = "coo"                        # rule 8's first review task
 FLEET_MAINTAINER = "botops"                 # sweeps every bot's stuck tasks and may start them
 STUCK_HOURS = 24                            # an open bot task untouched this long is stuck
@@ -294,8 +312,9 @@ ALTER TABLE tasks ADD COLUMN goal_id TEXT;
 # no longer belongs to one goal: `goal_kpis` links a goal to a KPI and holds the target (an improvement
 # from a baseline to a value by a deadline, or a range to stay inside). Readings keep the business time
 # (`period_start`/`period_end`) apart from `collected_at`, and a correction is a new reading that
-# `supersedes` the old one. The old `kpis.goal_id` and `kpis.target` stay for the rows that had them; a
-# new KPI stores '' in `goal_id`. Rows that existed before this migration are recognised by `owner IS NULL`.
+# `supersedes` the old one. The old `kpis.goal_id` and `kpis.target` are copied into `goal_kpis` here; migration 0044
+# drops `goal_id` (and its index), and `kpis.target` stays, read by nothing. Rows that existed before this migration
+# are recognised by `owner IS NULL`.
 KPIS_SCHEMA = """
 ALTER TABLE kpis ADD COLUMN slug TEXT;
 ALTER TABLE kpis ADD COLUMN definition TEXT NOT NULL DEFAULT '';
@@ -1072,10 +1091,6 @@ def payload_hash(payload):
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def token_hash(token):
-    return hashlib.sha256(str(token).encode()).hexdigest()
-
-
 # ----------------------------------------------------------------------------- connection
 def synchronous(default):
     """The PRAGMA synchronous a connection uses: `default`, or OFF when $TICO_SQLITE_SYNC is "off".
@@ -1084,6 +1099,70 @@ def synchronous(default):
     commit buys nothing there, while a shared host's disk paid for it: two pytest workers on the team runner wrote
     ~30 MB/s, a quarter of the volume's throughput, and pushed the live server's pages out of the cache."""
     return "OFF" if os.environ.get("TICO_SQLITE_SYNC", "").lower() == "off" else default
+
+
+class _SyncWal:
+    """An after-commit callback that fsyncs the WAL: what synchronous=FULL does at commit, for a transaction that was
+    opened at NORMAL before it knew it would write money. Equal to every other one, so a transaction queues one. A
+    `barrier`: Store.transaction runs it first and lets its error through, so a write that did not reach the disk is
+    never answered as done. A failed sync stays owed (`_OWED`): every later write transaction on that file queues it
+    again, so a retry that only replays the stored result still waits for the disk."""
+
+    barrier = True
+
+    def __init__(self, path):
+        self.path = path
+
+    def __eq__(self, other):
+        return isinstance(other, _SyncWal)
+
+    __hash__ = None
+
+    def __call__(self):
+        try:
+            fd = os.open(self.path + "-wal", os.O_RDONLY)
+        except FileNotFoundError:
+            _OWED.discard(self.path)
+            return
+        try:
+            os.fsync(fd)
+        except BaseException:
+            _OWED.add(self.path)
+            raise
+        finally:
+            os.close(fd)
+        _OWED.discard(self.path)
+
+
+_OWED: set[str] = set()          # database files whose WAL sync failed and has not succeeded since
+
+
+def _main_path(c: sqlite3.Connection) -> str:
+    return next((row[2] for row in c.execute("PRAGMA database_list") if row[1] == "main"), "")
+
+
+def owed_sync(c: sqlite3.Connection) -> None:
+    """Store.transaction calls this before every commit: a WAL sync that failed earlier is queued again, so nothing on
+    that file (an idempotent replay included) is answered as done until a sync succeeds."""
+    hooks = getattr(c, "after_commit", None)
+    if not _OWED or hooks is None:
+        return
+    path = _main_path(c)
+    if path in _OWED and _SyncWal(path) not in hooks:
+        hooks.append(_SyncWal(path))
+
+
+def durable_commit(c: sqlite3.Connection) -> None:
+    """Make this transaction's commit reach the disk before the request answers, from inside the transaction: SQLite
+    refuses to change synchronous once it has begun, so the WAL is fsynced once the commit is done. Nothing to do on a
+    connection already at FULL (a `durable` transaction), on one with no after-commit queue (a plain connection), or
+    when the test suite turned syncing off."""
+    hooks = getattr(c, "after_commit", None)
+    if hooks is None or synchronous("NORMAL") == "OFF" or c.execute("PRAGMA synchronous").fetchone()[0] >= 2:
+        return
+    path = _main_path(c)
+    if path and _SyncWal(path) not in hooks:
+        hooks.append(_SyncWal(path))
 
 
 # After a checkpoint the WAL file is cut back to this size, so a migration's peak is not kept on disk.
@@ -2623,30 +2702,6 @@ def quarantine_lifted_note(conn, slug):
 
 
 # ----------------------------------------------------------------------------- identity
-def issue_token(conn, slug):
-    """A fresh per-thread token for a bot; only its sha256 is stored. Returns the token."""
-    row = bot(conn, slug)
-    if not row:
-        raise Refused("not-found", f"no bot {slug}")
-    token = secrets.token_urlsafe(32)
-    conn.execute("UPDATE bots SET token_hash=? WHERE id=?", (token_hash(token), row["id"]))
-    event(conn, KEEPER, "token.issue", bot_actor(slug))
-    return token
-
-
-def verify_bot(conn, slug, token):
-    """The bot row when the token matches what the keeper issued; else `Refused("identity")`.
-
-    Raises rather than returning False so a caller cannot forget to check (deviation 2).
-    """
-    row = bot(conn, slug)
-    if not row or not row.get("token_hash"):
-        raise Refused("identity", f"no live token for {slug}")
-    if not secrets.compare_digest(str(row["token_hash"]), token_hash(token or "")):
-        raise Refused("identity", f"the token for {slug} does not match")
-    return row
-
-
 def _actor_exists(conn, actor):
     kind = actor_kind(actor)
     if kind == KEEPER:
@@ -2860,7 +2915,7 @@ def sync_registry(conn, employees, people):
     """Bring `bots` and `humans` up to date with the registry. Nothing is ever deleted.
 
     `employees` is `{slug: entry}` as the registry merge returns it (defaults
-    merged, `dir` set); `host` defaults to `dispatcher`. `people` is `registry/people.yaml`
+    merged); `people` is `registry/people.yaml`
     as a parsed document, or the list of person rows inside it.
     """
     ts = now()
@@ -2869,27 +2924,22 @@ def sync_registry(conn, employees, people):
         state = str(e.get("status") or "active").strip() or "active"
         if state not in BOT_STATES:
             state = "active"
+        # The runtime, model and host are the entry's own, in bot_config (the seed writes the whole entry there).
         row = {"slug": slug,
                "display_name": str(e.get("display_name") or slug),
-               "runtime": str(e.get("runtime") or ""),
-               "model": str(e.get("model") or ""),
                "effort": str(e.get("reasoning_effort") or e.get("effort") or ""),
-               "cwd": str(e.get("dir") or e.get("cwd") or repo_dir(ROOT, slug)),
-               "host": str(e.get("host") or "dispatcher"),
                "state": state, "created_at": ts}
         have = resolve_bot(conn, slug)
         if have is None:
             # a registry bot's id is its slug: its actor string is the one the code already builds from it
             row["id"] = slug
-            conn.execute(
-                "INSERT INTO bots (id, slug, display_name, runtime, model, effort, cwd, host, state, created_at) "
-                "VALUES (:id, :slug, :display_name, :runtime, :model, :effort, :cwd, :host, :state, :created_at)", row)
+            conn.execute("INSERT INTO bots (id, slug, display_name, effort, state, created_at) "
+                         "VALUES (:id, :slug, :display_name, :effort, :state, :created_at)", row)
         else:
-            # never lower a state a human set, and never touch the token or the thread
+            # never lower a state a human set
             row["id"] = have["id"]
             row["state"] = "quarantined" if have.get("state") == "quarantined" else state
-            conn.execute("UPDATE bots SET display_name=:display_name, runtime=:runtime, model=:model, "
-                         "effort=:effort, cwd=:cwd, host=:host, state=:state WHERE id=:id", row)
+            conn.execute("UPDATE bots SET display_name=:display_name, effort=:effort, state=:state WHERE id=:id", row)
     doc = people if isinstance(people, dict) else {"people": people or []}
     for p in (doc.get("people") or []):
         p = p if isinstance(p, dict) else {}
@@ -9245,12 +9295,9 @@ def rename_bot(conn, bot_id, new_slug):
     return bot(conn, row["id"])
 
 
-def bots(conn, host=None, state=None):
+def bots(conn, state=None):
     sql, args = "SELECT * FROM bots", []
     where = []
-    if host:
-        where.append("host=?")
-        args.append(host)
     if state:
         where.append("state=?")
         args.append(state)
@@ -9474,7 +9521,8 @@ WAITING_TERMS = "d.state IN ('pending','delivered','capped','held')"
 # Paged on the delivery's own (created_at, rowid), which the waiting index holds in order: no sort.
 UNREAD_PAGE_SQL = ("SELECT d.rowid AS _seq, d.created_at AS _at, m.* FROM message_deliveries d "
                    "JOIN messages m ON m.id=d.message_id WHERE d.recipient=? AND " + WAITING_TERMS + " "
-                   "AND m.deleted_at IS NULL AND (m.expires_at IS NULL OR m.expires_at > ?) AND d.created_at<=? "
+                   "AND " + delivery_counts_sql("m", "d.recipient") + " AND m.deleted_at IS NULL "
+                   "AND (m.expires_at IS NULL OR m.expires_at > ?) AND d.created_at<=? "
                    "AND (d.created_at<? OR d.rowid<?) ORDER BY d.created_at DESC, d.rowid DESC LIMIT ?")
 
 

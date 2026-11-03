@@ -675,6 +675,14 @@ def install_credentials(app,store,delegate=None,propose=None):
         # credential a person asked it to grant (no manual steps).
         who=acting(request,None,on_behalf_of) if on_behalf_of else request.state.identity
         with store.read() as c:
+            if who.role=='bot' and not on_behalf_of and str(who.actor).startswith('bot:'):
+                # A bot sees the names and env names of what it is granted (granted: the same rule a run's values
+                # follow), so it can check they reach its turn. No preview, no other subject's grants, no people.
+                ids=granted(c,who.actor)
+                mine=[{k:v for k,v in vault.brief(row).items() if k!='preview'}|{'can_reveal':False,'grants':[]}
+                      for row in c.execute('SELECT * FROM credentials ORDER BY lower(name),id') if row['id'] in ids]
+                return {'credentials':mine,'can_manage':False,'people':[],'bots':[],'computers':[],
+                        'configured':vault.configured,'key_storage':vault.cipher.storage}
             if who.role not in ('human','owner') or not can_open(c,who,vault.admins):
                 raise Problem('forbidden',ask_admin_detail(c,vault.admins,'share credentials, or grant you access to one'),403)
             admin=administrator(c,who,vault.admins)
