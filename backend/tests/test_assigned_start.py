@@ -597,8 +597,9 @@ def test_overdue_pages_past_more_than_two_hundred_ineligible_recoveries(api, clo
     monkeypatch.setattr(A.privacy, 'attempt_tasks', counted)
     with store.read() as c:
         assert [r['id'] for r in A.overdue(c, limit=1)] == [wanted['id']]
-        # One page reads the carrier's run once: the first page of 200 ineligible recoveries, then the page holding `wanted`.
-        assert len(calls) == 2
+        # A page reads the carrier's run once if one of its rows is still a candidate after the waits. The attempted
+        # recoveries are candidates, so their page reads it; the waiting ones are held back before any read.
+        assert len(calls) == (2 if excluded == 'attempted' else 1)
     assert wanted['id'] in {r['id'] for r in get(api, 'needs-you')['items']}
     check = next(x for x in get(api, 'health')['checks'] if x['id'] == 'assigned_not_started')
     assert [r['task'] for r in check['items']] == [wanted['id']]
@@ -725,7 +726,68 @@ def test_repeated_selection_reads_the_page_runs_once_per_tick(api):
         A.sweep(c, at, found)
     found, second = traced_due(store, at)
     assert found == []
-    attempt_reads = [s for s in second if 'FROM attempts WHERE bot_id' in s]
+    attempt_reads = [s for s in second if 'JOIN attempts a ON a.bot_id=f.bot' in s]
     assert len(attempt_reads) == 1
     # The page's own reads (rows, ledger, owners, waits), the one runs read and its priming: 32 measured on this change.
     assert len(second) <= 35
+
+
+def test_one_bots_unreadable_runs_do_not_block_the_other_bots_tasks(api, monkeypatch):
+    """A bot whose runs cannot be read takes its own rows to on_error. The page still yields every other bot's task, and
+    the cursor moves past the whole page, so one bad bot cannot pin the scheduler's cursor."""
+    store = api.app.state.store
+    fleet(store, 2, 4, 0)                                   # fleet-00 owns tasks 0 and 2, fleet-01 owns 1 and 3
+    original = A._runs
+
+    def unreadable(c, floors):
+        if 'fleet-00' in floors:
+            raise ValueError('Synthetic unreadable runs')
+        return original(c, floors)
+
+    monkeypatch.setattr(A, '_runs', unreadable)
+    cursor, failures = [''], []
+    with store.read_transaction() as c:
+        found = A.due(c, H.now(), cursor=cursor, failures=failures)
+    assert found == ['fleet-t-00001', 'fleet-t-00003']
+    assert sorted(f['assigned_start'] for f in failures) == ['fleet-t-00000', 'fleet-t-00002']
+    assert {f['error'] for f in failures} == {'ValueError'}
+    assert cursor == ['fleet-t-00003']
+
+
+def test_each_bots_runs_are_read_from_its_own_floor_on_the_bots_index(api, monkeypatch):
+    """A bot with a recent floor reads only its own recent runs, not the history back to another bot's older floor. The
+    statement is one join on the attempts' bot_id index, and chunking the pairs returns the same runs."""
+    store = api.app.state.store
+    fleet(store, 2, 2, 8)        # runs 0..7 are 720, 630, ... 90 hours old, alternating between fleet-00 and fleet-01
+    now = H.now()
+    floors = {'fleet-00': H.shift(now, hours=-400), 'fleet-01': H.shift(now, hours=-100)}
+    expected = {'fleet-a-4', 'fleet-a-6', 'fleet-a-7'}
+    params = [value for pair in sorted(floors.items()) for value in pair]
+    with store.read_transaction() as c:
+        assert {run['id'] for run in A._runs(c, floors)} == expected
+        monkeypatch.setattr(A, 'RUN_PAIRS', 1)
+        assert {run['id'] for run in A._runs(c, floors)} == expected
+        plan = [row[3] for row in c.execute('EXPLAIN QUERY PLAN ' + A._runs_sql(2), params)]
+    assert any('USING INDEX' in detail and 'bot_id' in detail for detail in plan), plan
+    assert not any(detail.startswith('SCAN a') for detail in plan), plan
+
+
+def test_a_bot_whose_only_candidate_is_waiting_has_no_runs_read(api, monkeypatch):
+    """Waits come before the attempts read: a bot whose only candidate is held reads no runs, and the other bot's task
+    still yields."""
+    store = api.app.state.store
+    fleet(store, 2, 2, 0)
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE owner_id='bot:fleet-00'")
+    read = []
+    original = A._runs
+
+    def spy(c, floors):
+        read.append(sorted(floors))
+        return original(c, floors)
+
+    monkeypatch.setattr(A, '_runs', spy)
+    with store.read_transaction() as c:
+        found = A.due(c, H.now(), cursor=[''])
+    assert found == ['fleet-t-00001']
+    assert read == [['fleet-01']]

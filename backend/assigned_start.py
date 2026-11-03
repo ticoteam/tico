@@ -78,9 +78,18 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
         except Exception as exc:
             logging.getLogger(__name__).exception('Assignment recovery could not read one task')
             picked.append(exc)
-    latest, failed = _attempted(c, rows, picked)
+    # Waits come before the attempts read: a row they hold back sets no floor, so its bot's runs are not read for it.
     # Tasks the page's wait checks can't rule out; the rest of the page skips waiting() (auto_tasks.maybe_waiting).
     suspect = auto_tasks.maybe_waiting(c, rows)
+    for i, row in enumerate(rows):
+        if isinstance(picked[i], tuple) and row['id'] in suspect:
+            try:
+                if auto_tasks.waiting(c, row, starting=True):
+                    picked[i] = None
+            except Exception as exc:
+                logging.getLogger(__name__).exception('Assignment recovery could not check one task for a wait')
+                picked[i] = exc
+    latest, failed, bot_failed = _attempted(c, rows, picked)
     for i, row in enumerate(rows):
         if scanned is not None:
             scanned[:] = [row['id']]
@@ -91,10 +100,12 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
             if entry is None:
                 continue
             key, since, saved = entry
-            if row['id'] in suspect and auto_tasks.waiting(c, row, starting=True):
-                continue
+            bot = H.actor_id(row['owner_id'])
+            # A bot whose runs could not be read raises for each of its rows; the page's other bots are unaffected.
+            if bot in bot_failed:
+                raise bot_failed[bot]
             # A run of this bot that failed to read its tasks raises for every row it could have counted for.
-            broken = [item for item in failed.get(H.actor_id(row['owner_id']), ()) if item[0] >= since]
+            broken = [item for item in failed.get(bot, ()) if item[0] >= since]
             if broken:
                 raise max(broken, key=lambda item: item[0])[1]
             if latest[i] >= since:
@@ -121,29 +132,59 @@ def _picked(row, owners, ledger, cutoff, at, recorded):
     return key, since, saved
 
 
+# (bot, floor) pairs per statement: two parameters each, well under SQLite's variable limit.
+RUN_PAIRS = 250
+
+
+def _runs_sql(pairs):
+    """The runs of each (bot, floor) pair at or after that bot's own floor: one join on the attempts' bot_id index."""
+    return ("WITH f(bot,since) AS (VALUES " + ",".join("(?,?)" for _ in range(pairs)) + ") "
+            "SELECT a.id,a.bot_id,a.created_at FROM f JOIN attempts a ON a.bot_id=f.bot AND a.created_at>=f.since "
+            "ORDER BY a.created_at DESC")
+
+
+def _runs(c, floors):
+    """(id, bot_id, created_at) of each bot's runs at or after its floor, one statement a chunk of bots."""
+    found = []
+    for part in H.chunks(sorted(floors.items()), RUN_PAIRS):
+        found.extend(c.execute(_runs_sql(len(part)), [value for pair in part for value in pair]))
+    return found
+
+
 def _attempted(c, rows, picked):
     """When each row's task was last carried by a run of its bot: the page's runs read in one statement, primed once.
 
-    Returns (latest, failed). latest[i] is the newest created_at of a run of row i's bot that carried row i's task, or ''
-    (a run of that bot is only counted when it is at or after the row's assignment, which candidates compares). Runs are
-    read from each bot's oldest assignment on the page, so every run that can count for a row is here. failed maps a bot
-    to [(created_at, error)] for each run whose tasks could not be read."""
+    Only rows still candidates set a floor: `picked` holds None or an error for a row a wait or a read held back. Returns
+    (latest, failed, bot_failed). latest[i] is the newest created_at of a run of row i's bot that carried row i's task, or
+    ''. A run counts only at or after its bot's own floor, the oldest eligible assignment of that bot. failed maps a bot to
+    [(created_at, error)] for each run whose tasks could not be read. bot_failed maps a bot to the error from reading or
+    priming its runs: the page's batch read failed, then each bot is read alone, and only the bot that still fails is kept."""
     floors = {}
     for row, entry in zip(rows, picked, strict=True):
         if isinstance(entry, tuple):
             bot = H.actor_id(row['owner_id'])
             floors[bot] = min(floors.get(bot, entry[1]), entry[1])
-    latest, failed = [''] * len(rows), {}
+    latest, failed, bot_failed = [''] * len(rows), {}, {}
     if not floors:
-        return latest, failed
+        return latest, failed, bot_failed
+    try:
+        runs = _runs(c, floors)
+        if runs:
+            privacy.prime_attempts(c, [run['id'] for run in runs])
+    except Exception:
+        logging.getLogger(__name__).exception('Assignment recovery could not read its runs together; reading each bot alone')
+        runs = []
+        for bot, since in floors.items():
+            try:
+                own = _runs(c, {bot: since})
+                if own:
+                    privacy.prime_attempts(c, [run['id'] for run in own])
+            except Exception as exc:
+                logging.getLogger(__name__).exception('Assignment recovery could not read the runs of one bot')
+                bot_failed[bot] = exc
+                continue
+            runs.extend(own)
     where = {row['id']: (i, H.actor_id(row['owner_id'])) for i, row in enumerate(rows)}
-    runs = []
-    for part in H.chunks(sorted(floors)):
-        runs.extend(c.execute(f"SELECT id,bot_id,created_at FROM attempts WHERE bot_id IN ({','.join('?' * len(part))}) "
-                              "AND created_at>=? ORDER BY created_at DESC", (*part, min(floors.values()))))
-    runs = [run for run in runs if run['created_at'] >= floors[run['bot_id']]]
-    if runs:
-        privacy.prime_attempts(c, [run['id'] for run in runs])
     for run in runs:
         try:
             carried = privacy.attempt_tasks(c, run['id'])
@@ -155,7 +196,7 @@ def _attempted(c, rows, picked):
             i, bot = where.get(tid, (None, None))
             if i is not None and bot == run['bot_id'] and run['created_at'] > latest[i]:
                 latest[i] = run['created_at']
-    return latest, failed
+    return latest, failed, bot_failed
 
 
 def due(c, at, limit=50, cursor=None, failures=None):
