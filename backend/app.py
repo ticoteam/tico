@@ -1208,6 +1208,8 @@ def create_app(settings=None):
             value.pop("occurrence", None)       # only a due-date routine's task has one: a board of 500 carries none
         value.pop("occurrence_step", None)      # the server's: which step made an occurrence's task (never in a view)
         value.pop("rule_due_id", None)          # the server's: the rule due date its run was fired for (rule_due.py)
+        from .task_check_backs import view as check_back_view
+        value["check_back"] = check_back_view(row, c)
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
         value.pop("blocker_key", None)          # blocker_asks' match key, for the server only
         value.pop("holds_cleared_at", None)     # the stranded sweep's clock (task_holds), for the server only
@@ -3893,9 +3895,10 @@ def create_app(settings=None):
                 if brief:
                     for row in rows:
                         for field in ("body", "acceptance_criteria", "acceptance", "public_title", "public_summary",
+                                      "check_back_note", "check_back",
                                       "requester_count", "external_requesters", "internal_requesters", "important_requesters", "organization", "size"):
                             row.pop(field, None)
-                        for field in ("verdict", "verdict_head"):   # only a review or QA subtask has one
+                        for field in ("verdict", "verdict_head", "check_back_at", "done_at", "closed_at", "closed_by_id", "guest"):
                             if row.get(field) is None:
                                 row.pop(field, None)
                         if isinstance(row.get("step"), dict):
@@ -4375,6 +4378,7 @@ def create_app(settings=None):
                             requester_actor=requester_actor, visibility=body.visibility,
                             public_title=body.public_title, public_summary=body.public_summary,
                             public_warning=public_warning,
+                            check_back_at=body.check_back_at, check_back_note=body.check_back_note,
                             private=private, conversation_id=rooms.task_conversation_id(c, auth, owner, who.actor),
                             lane=body.lane, labels=body.labels, top=body.top, lint=lint,
                             goal_id=body.goal_id, next_run=body.next_run, type=body.type, step=body.step,
@@ -4607,7 +4611,7 @@ def create_app(settings=None):
             warned = rule_warned_fields(rule_gate, body, row, approved=exact_approval(c, who.actor))
             body, allowance = body.model_copy(update=warned), rule_summary_allowance(rule_gate, warned)
         if body.close:
-            if any(v is not None for v in (body.title, body.status, body.owner, body.due, body.body, body.lane,
+            if any(v is not None for v in (body.title, body.status, body.owner, body.due, body.check_back_at, body.check_back_note, body.body, body.lane,
                                            body.labels, body.waiting_on, body.rank, body.roles,
                                            body.goal_id, body.type, body.step, body.step_rank, body.number, body.private, body.visibility, body.public_title, body.public_summary, body.size,
                                            body.verdict, body.verdict_head)):
@@ -4967,6 +4971,18 @@ def create_app(settings=None):
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
             return settings_admin.set_task_run_model(c, who, task_id, body)
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/tasks/{tid}/check-back")
+    def task_check_back(request: Request, tid: str, body: M.TaskCheckBack):
+        who = request.state.identity
+        def work(c):
+            from . import task_check_backs
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            H.TS._check(c, who.actor, task_id, mover(c, who))
+            return {"task": task_view(task_check_backs.set_time(c, H.task(c, task_id), body.at, body.note, actor=who.actor),
+                                      c, visible_sql=auth.task_sql(c, who), who=who)}
         return mutate(request, body, work)
 
     @app.post("/api/v2/tasks/{tid}/snooze")

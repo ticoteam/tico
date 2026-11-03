@@ -1681,3 +1681,49 @@ and after `--apply`, and each `task.purged` event names the ones its task left.
 
 Open **Settings → Tasks → Task settings** to see what Tico does when a task is created, enters a step, finishes, or is checked on a schedule. Choose a task type to see its steps. Each action shows its source, whether it wakes a bot or stays quiet, and its current state. Edit and Add action open the existing Rules editor with that task type and trigger selected. Built-ins marked Always on have no switch.
 
+
+
+## Following up bot work
+
+Every unfinished task whose requester or owner is a bot records **Follow up by** and what result to inspect.
+Human-only tasks keep their existing behavior. A follow-up is an inspection time, separate from the delivery
+deadline, and does not pause useful work. Choose a time conservatively longer than the expected work:
+
+```sh
+hub task check-back <task-id> --in 45m --for "Verify the review assignment and inspect its result"
+# Or use an ISO date-time with its timezone:
+hub task check-back <task-id> --at 2026-12-02T15:00:00-08:00 --for "Read the returned acceptance result"
+```
+
+`hub_task_check_back` and `POST /api/v2/tasks/{id}/check-back` take `at` (a duration or timestamp) and `note`.
+Task create/update also accept `check_back_at` and `check_back_note`; omitted times get a provisional default.
+Read responses include these fields and a compact `check_back` object with the time, expected result, responsible
+bot and whether it is due. The web, phone and desktop task properties show **Follow up by** and let task parties
+reschedule it. Explicit bot appointments are at least five minutes ahead and within 14 days; a person's dated
+snooze can be longer. A human snooze takes precedence over an earlier inspection.
+
+Enable **Task check-backs** under Automations > System routines for the staged rollout. It starts off: dates are
+stored, but existing stall recovery stays in force until enabled. Enabling backfills missing appointments in
+bounded batches, and the server scheduler delivers due appointments through the existing task session queue.
+No second session starts beside a running task. A paused, offline or limited bot retains its queued obligation;
+Health reports missing or overdue follow-ups. Turning the rollout off does not suppress existing recovery.
+
+On the wake, inspect the actual PR link, assignment/reservation, result and blocker. A missing readable child is
+not proof that a private child does not exist: check routing before creating a duplicate. Repair routine handoffs
+within your existing authority, then continue or set the next follow-up naming the actual wait. Waiting on a
+child never removes the parent bot's responsibility. A ledger entry or status comment is not proof the work ran.
+Dropped deliveries and completed follow-up turns without a next date are repaired with bounded backoff; repeated
+omissions use existing stuck diagnostics when authorized, otherwise leave visible debt rather than leaking private
+work or repeatedly asking a person. Done/declined results belong to the requester: a suitable parent's check carries
+them, otherwise a bot requester receives a consumption check. Human acceptance keeps its existing question/Close
+flow. Self-requested completed work does not create a perpetual consumption loop.
+
+Check-backs never broaden permissions or waive review/QA policy, and do not postpone the existing untouched-human-ask
+auto-close. Snooze-end and an already-due task deadline can share the follow-up wake.
+
+The rollout is bounded to 50 inspected tasks per scheduler pass. Old appointments preserve future snooze,
+resume and deadline dates; otherwise they receive staggered provisional dates. At most 12 first follow-up
+wakes per bot are delivered in an hour (`TICO_TASK_CHECK_BACKS_PER_BOT_HOUR` changes that cap).
+Due work beyond the cap stays visible and is delivered by a later pass. Historical Done/Declined results
+are included without assuming age proves acceptance. Health shows missing dates, overdue work and returned
+results even while the feature is in shadow mode; it never publishes unreadable task details.

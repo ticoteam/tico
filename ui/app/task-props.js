@@ -78,6 +78,13 @@ function taskPropsHTML(t, opts = {}) {
     {edit: r.edit, empty: !dueAt, popup: 'dialog', words: dueWords || 'none',
       extra: (r.edit ? `<input type="date" class="prop-date" data-prop-date tabindex="-1" aria-hidden="true" value="${esc(dueISO)}">` : '')
         + (r.edit && dueAt ? `<button type="button" class="prop-x" data-prop-clear="due" aria-label="Clear the due date" title="Clear">${TL_ICON.x}</button>` : '')}));
+  if (t.check_back_at) {
+    const when = fmt(t.check_back_at);
+    const edit = r.edit || (r.reopen && ['done', 'declined'].includes(t.status));
+    rows.push(row('check_back', 'Follow up by', txt(when), {edit, words: when,
+      extra: t.check_back ? `<small>${esc(actorLabel(t.check_back.by))}${t.check_back.due ? ' · Due' : ''}${t.check_back.delivery ? ' · ' + esc(t.check_back.delivery.replaceAll('_', ' ')) : ''}</small>` : ''}));
+    rows.push(row('check_back_note', 'Expected result', txt(t.check_back_note || 'Inspect progress'), {edit, words: t.check_back_note || 'Inspect progress'}));
+  }
   // Tags: chips (each opens its tag) and a small +
   const chips = tagChips(t.labels || [], t.tags || [], r.links, true);
   rows.push(`<div class="prop" data-prop-row="tags"><span class="prop-k" aria-hidden="true">Tags</span><span class="prop-vwrap"><span class="prop-tags tlabels" aria-label="Tags">${chips
@@ -108,7 +115,7 @@ function taskPropsHTML(t, opts = {}) {
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
 // A refused save's reason stays under the properties until that property saves (several: one line each, named).
-const PROP_WORDS = {status: 'Status', owner: 'Owner', due: 'Due', tags: 'Tags', parent: 'Part of', type: 'Type', step: 'Step', people: 'People', publication: 'Public', size: 'Size'};
+const PROP_WORDS = {status: 'Status', owner: 'Owner', due: 'Due', check_back: 'Follow up by', check_back_note: 'Expected result', tags: 'Tags', parent: 'Part of', type: 'Type', step: 'Step', people: 'People', publication: 'Public', size: 'Size'};
 
 // Who is on a task by role (the server's `roles`): one chip per person and role, × takes one off, + adds one.
 // Roles are names the team chooses; what they mean downstream is the client's.
@@ -294,6 +301,14 @@ function taskPropsBind(d, task, change) {
         const actor = o.value.includes(':') ? o.value : 'bot:' + o.value;
         return {value: o.value, text: o.textContent, html: `<span class="tl-opt-face">${actorFace(actor, 16)}</span><span>${esc(o.textContent)}</span>`, checked: task.owner_id === actor, actor};
       }), onPick: it => { if (it.actor !== task.owner_id) void save('owner', {owner: it.actor}); }});
+    } else if (key === 'check_back') {
+      propMenu(d, b, {label: 'Follow up by', items: [
+        {value: '30m', text: 'In 30 minutes'}, {value: '2h', text: 'In two hours'}, {value: '1d', text: 'Tomorrow'}
+      ], entry: 'ISO date-time with timezone or duration', onPick: it => void save('check_back', {check_back_at: it.value}),
+      onEntry: at => void save('check_back', {check_back_at: at})});
+    } else if (key === 'check_back_note') {
+      propMenu(d, b, {label: 'Expected result', entry: 'What should be ready to inspect?',
+        onEntry: note => void save('check_back_note', {check_back_note: note})});
     } else if (key === 'due') {
       const input = $('[data-prop-date]', d);
       d.focusProp = 'due';

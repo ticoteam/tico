@@ -101,6 +101,12 @@ def defer(conn, bot, kind, item, *, conversation_id="", task_id=None, defer_for=
     due = until(defer_for or (TASK_DEFAULT if kind in ("comment", "task") else CHAT_DEFAULT), created)
     conn.execute("INSERT INTO deferrals(id,bot,kind,item,conversation_id,task_id,due_at,created_at) VALUES(?,?,?,?,?,?,?,?)",
                  (H.new_id(), H.actor_id(bot), kind, item, conversation_id or "", task_id, due, created))
+    if kind == "task" and task_id and due:
+        from . import task_check_backs
+        row = H.task(conn, task_id)
+        explicit = conn.execute("SELECT 1 FROM task_events WHERE task_id=? AND field='check_back_explicit' LIMIT 1", (task_id,)).fetchone()
+        if row and task_check_backs.involved(row) and not explicit:
+            task_check_backs.set_time(conn, row, due, "Inspect the deferred assignment at its delivery deadline.", system=True)
     return due
 
 

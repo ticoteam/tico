@@ -286,6 +286,9 @@ STABLE = [
      "keeps it and changes only what is named, and a null `model` clears it so the bot's task model runs the task "
      "again. Whoever may change the bot's model may change this; a bot never does. Its `readiness` says whether the bot's "
      "computer can run it now", "TaskRunModelResult"),
+    ("/api/v2/tasks/{tid}/check-back", "post", "Tasks", "setTaskCheckBack",
+     "Set a future follow-up appointment on bot work. Accepts an offset timestamp or duration such as 45m; "
+     "human snoozes take precedence and human-only work is excluded", "TaskResult"),
     ("/api/v2/tasks/{tid}/snooze", "post", "Tasks", "snoozeTask",
      "Set a task aside until `until` (an ISO-8601 date or date-time): off lists and Needs you, and quiet, until "
      "then, when its owner bot is woken once. Its requester, owner, anyone on it by role, or a mover", "TaskResult"),
@@ -763,7 +766,12 @@ SCHEMAS = {
     "TaskTypeList": obj({"types": items(ref("TaskType"))}),
     "TaskTypeResult": obj({"type": ref("TaskType")}),
     "Task": obj({"private": "b", "id": "s", "title": "s", "body": "s", "requester_id": "s", "owner_id": "s", "status": "s", "created_at": "s",
-                 "updated_at": "s", "due_at": "n", "version": "i", "lane": "s", "labels": items({"type": "string"}),
+                 "updated_at": "s", "due_at": "n", "check_back_at": {"type": ["string", "null"]},
+                 "check_back_note": {"type": ["string", "null"]}, "check_back": {"oneOf": [
+                     obj({"at": "s", "note": "s", "by": {"type": ["string", "null"]}, "due": "b"},
+                         delivery={"type": "string", "description": "Due delivery state from the existing queue, or pending, disabled, bot_unavailable"}),
+                     {"type": "null"}]},
+                 "version": "i", "lane": "s", "labels": items({"type": "string"}),
                  "acceptance_criteria": items({"type": "string"}),
                  "occurrence": {"type": ["string", "null"], "description": "A due-date routine's occurrence, \"<automation_id>:<due_on>\", on the task it opened: the due is its deadline, not a wake date."}},
                 required=["id", "title", "requester_id", "owner_id", "status", "created_at", "updated_at", "due_at", "version", "lane", "labels", "holds"],

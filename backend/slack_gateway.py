@@ -1479,6 +1479,8 @@ class Gateway:
             label = (f"#{task['number']} " if task.get("number") is not None else "") + str(task.get("title") or "").strip()
             url = self.settings.public_url + "/#/task/" + urllib.parse.quote(task["id"], safe="")
             footer = f"(sent from {name} on <{slack_escape(url)}|{slack_escape(label[:80])}>)"
+            if task.get("check_back_at"):
+                footer += "\nFollow up by " + slack_escape(task["check_back_at"])
         else:
             footer = f"(sent from {name})"
         return {"text": slack_escape(text) + ("\n" + seen if seen else "") + "\n\n" + footer, "username": name,

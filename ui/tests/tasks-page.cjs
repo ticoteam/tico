@@ -1451,12 +1451,32 @@ async function renamedBot(browser) {
   console.log('a bot whose id is not its slug: ok');
 }
 
+async function taskCheckBack(browser) {
+  const extra = {...fixtures().find(x => x.id === 't-checkout'), id: 't-followup', title: 'Inspect the review result',
+    check_back_at: new Date(Date.now() + 3600000).toISOString(), check_back_note: 'Verify the reviewer was assigned.'};
+  const {page, errors, posts} = await open(browser, {extraTasks: [extra]});
+  await page.locator('[data-task-key="tt-followup"] .tl-title').click();
+  const peek = page.locator('#task-peek');
+  await peek.locator('[data-prop="check_back"]').click();
+  await peek.locator('.prop-pop [data-prop-pick="2h"]').click();
+  await page.waitForFunction(() => !document.querySelector('#task-peek').saving);
+  assert.equal(taskWrites(posts).at(-1).body.check_back_at, '2h');
+  await peek.locator('[data-prop="check_back_note"]').click();
+  await peek.locator('.prop-pop input').fill('Inspect the returned review.');
+  await peek.locator('.prop-pop input').press('Enter');
+  await page.waitForFunction(() => document.querySelector('#task-peek [data-prop="check_back_note"]')?.textContent.includes('returned review'));
+  assert.equal(taskWrites(posts).at(-1).body.check_back_note, 'Inspect the returned review.');
+  assert.deepEqual(errors, []);
+  await page.close();
+  console.log('task follow-up date and expected result: ok');
+}
+
 module.exports = {open, fixtures};
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const only = process.env.TASKS_ONLY ? process.env.TASKS_ONLY.split(',') : null;
-    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, privateParent, snoozing, wakeNotes, deferredWork, bulk, bulkPaging, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal, renamedBot}))
+    for (const [name, run] of Object.entries({listAndTabs, typeSelection, filters, carriedOver, peekAndKeys, properties, privateParent, snoozing, wakeNotes, deferredWork, bulk, bulkPaging, views, plates, waitingOnYou, donePagination, ages, polling, phone, recheckSaves, recheckLists, recheckPhone, recheckFinal, renamedBot, taskCheckBack}))
       if (!only || only.includes(name)) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
