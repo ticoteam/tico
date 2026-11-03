@@ -8,9 +8,6 @@ below word for word as its notes.
 
 ## [Unreleased]
 
-### Fixed
-- **Claude connections show a failed sign-in and let you retry.** When Claude rejects an authorization code and waits for another attempt, Tico now ends the attempt with a clear message and offers Try again instead of leaving “Code sent” waiting until expiry. Codes and tokens stay out of the error message ([Subscriptions](docs/computers.md#subscriptions)).
-
 ## [0.4.15] - 2026-10-27
 
 ### Fixed
