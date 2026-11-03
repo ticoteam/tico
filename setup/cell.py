@@ -74,6 +74,7 @@ import ipaddress
 import json
 import os
 import re
+import urllib.parse
 import secrets
 import shutil
 import socket
@@ -350,6 +351,19 @@ def check_host(value: str, flag: str, cell_domain: str) -> str:
     return host
 
 
+def refuse_server_host(host: str, env: dict[str, str], flag: str) -> None:
+    """bad_domain when a page host is the app's, visuals' or runners' host in the company's settings: its server refuses
+    to start with that reader origin (backend/company_page/reader_app.py)."""
+    for key in ("TICO_PUBLIC_URL", "TICO_VISUAL_ORIGIN", "TICO_RUNNER_URL"):
+        value = (env.get(key) or "").strip()
+        try:
+            other = urllib.parse.urlsplit(value).hostname if value else None    # as backend/visuals.py hostname()
+        except ValueError:
+            other = None
+        if host and other and other.lower() == host:
+            raise CellError("bad_domain", f"{flag} {host} is the company's {key}")
+
+
 def carried_env(text: str) -> dict[str, str]:
     """--env-file: KEY=VALUE lines (comments and blank lines allowed), read as the cell reads .env. The errors name the
     line, never a value."""
@@ -490,6 +504,10 @@ def parser() -> Parser:
     z.add_argument("--company", required=True, metavar="SLUG")
     z.add_argument("--minutes", required=True, metavar="N|default",
                    help=f"idle minutes before it sleeps, 0 to {SLEEP_MINUTES_MAX} (0 = never); default removes the policy")
+    h = cmd("set-page-host", "a running company's page host (docs/company-page.md), without add's sign-in settings")
+    h.add_argument("--company", required=True, metavar="SLUG")
+    h.add_argument("--host", required=True, help="such as acme.tico.page; \"\" clears it (the folder is kept)")
+    h.add_argument("--timeout", type=int, default=HEALTH_TIMEOUT, help="seconds to wait for /healthz")
     u = cmd("update", "run another release; the database is snapshotted first and put back if it does not come up")
     u.add_argument("--company", required=True, metavar="SLUG")
     u.add_argument("--version", required=True)
@@ -1296,15 +1314,7 @@ class Cell:
                 host = (old or {}).get("page_host", "") if page_host is None else page_host
                 if host in {domain, *aliases} and host:
                     raise CellError("bad_domain", f"--page-host {host} is one of the company's own hosts")
-                mine = {domain, *aliases, *([host] if host else [])}
-                for other in self.live_companies():
-                    clash = sorted(mine & set(hosts_of(other))) if other["slug"] != slug else []
-                    if clash:
-                        raise CellError("domain_taken", f"{clash[0]} belongs to {other['slug']}")
-                for r in self.routes():
-                    clash = sorted(mine & set(r["hosts"]))
-                    if clash:
-                        raise CellError("domain_taken", f"{clash[0]} belongs to the route {r['name']}")
+                self.refuse_taken(slug, {domain, *aliases, *([host] if host else [])})
                 index = old["index"] if old else self.allocate()
                 d = self.dir(slug)
                 old_env = envfile.parse(_read(d / ".env"))
@@ -1373,6 +1383,7 @@ class Cell:
                 ignored = sorted(k for k in extra if k in written or cell_owned(k))
                 extra = {k: v for k, v in extra.items() if v and k not in ignored}
                 env.update(extra)
+                refuse_server_host(host, env, "--page-host")
                 changed = False
                 if carried is not None:
                     changed = _write_atomic(d / "extra.env", "# Carried from the install this company moved from "
@@ -1665,6 +1676,67 @@ class Cell:
             if failed:
                 raise failed
         return c, ready, True
+
+    def refuse_taken(self, slug: str, mine: set[str]) -> None:
+        """domain_taken when another company or a route already answers on one of `mine`."""
+        for other in self.live_companies():
+            clash = sorted(mine & set(hosts_of(other))) if other["slug"] != slug else []
+            if clash:
+                raise CellError("domain_taken", f"{clash[0]} belongs to {other['slug']}")
+        for r in self.routes():
+            clash = sorted(mine & set(r["hosts"]))
+            if clash:
+                raise CellError("domain_taken", f"{clash[0]} belongs to the route {r['name']}")
+
+    def set_page_host(self, args) -> dict:
+        """A running company's page host (docs/company-page.md), or "" to clear it: what `add --page-host` sets, without
+        add's sign-in settings, so staff can turn on the page for a company that already runs. Its settings are
+        rewritten, its server restarts and the host is routed; a cleared host keeps the folder. The record carries
+        `page_pending` until the restarted server answers, so a run that failed is redone in full when given again; a
+        settled one only re-writes its routes."""
+        started = self.system.monotonic()
+        slug = check_slug(args.company)
+        cell = self.load_cell()
+        host = check_host(args.host, "--host", cell["domain"]) if (args.host or "").strip() else ""
+        with self.lock("company-" + slug):
+            c = self.live(slug)
+            if c.get("state") != "running":
+                raise CellError("not_running", f"{slug} is {c.get('state')}; start it before giving it a page host")
+            if host and host in {c["domain"], *c.get("aliases", [])}:
+                raise CellError("bad_domain", f"--host {host} is one of the company's own hosts")
+            if host == c.get("page_host", "") and not c.get("page_pending"):
+                with self.lock("cell"):
+                    routed = [self.write_router(), self.write_tunnel()]
+                return {"ok": True, "company": slug, "page_host": host or None, "changed": any(routed)}
+            d = self.dir(slug)
+            env = envfile.parse(_read(d / ".env"))
+            self.secrets += [v for k, v in env.items() if k in contract.SECRET_KEYS and v and v not in self.secrets]
+            refuse_server_host(host, env, "--host")
+            with self.lock("cell"):     # the host's owner is checked and recorded under one lock, as add does
+                self.refuse_taken(slug, {host} if host else set())
+                if host:
+                    pages = self.pages_dir(slug)
+                    pages.mkdir(parents=True, exist_ok=True)
+                    os.chmod(pages, 0o755)
+                    self.system.chown(pages, SERVER_UID, SERVER_UID)
+                    c["page_host"] = host
+                    env.update(TICO_READER_ORIGIN=f"https://{host}", TICO_COMPANY_PAGE_DIR=PAGE_MOUNT)
+                else:
+                    c.pop("page_host", None)
+                    env.pop("TICO_READER_ORIGIN", None)
+                    env.pop("TICO_COMPANY_PAGE_DIR", None)
+                c["page_pending"] = True
+                self.write_company(c, envfile.render(env), "")
+                self.save(c)
+
+            def route():
+                with self.lock("cell"):
+                    self.write_router()
+                    self.write_tunnel()
+            ready = self.launch(c, started, args.timeout, route)
+            c.pop("page_pending", None)
+            self.save(c)
+            return {**self.answer(c, ready, True), "page_host": host or None}
 
     def set_sleep(self, args) -> dict:
         """The company's sleep policy on its record (its server reads it through GET /sleep): N idle minutes, 0 for
