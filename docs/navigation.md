@@ -41,6 +41,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Find a file or page any bot made | Library → Files (`#/library/files`); search finds text inside ([Files](files.md#library--files)) |
 | See every connection, who reads it and its bots | Library → Connections (`#/library/connections`) ([Connect tools](connect-tools.md#connections)) |
 | Arrange your own landing page | Overview → Mine (`#/home`) ([Overview](overview.md#my-dashboard)) |
+| See rules or goals on the team chart, by bot | Overview → Graph (`#/overview/graph`, `?view=goals` for goals) ([Overview](overview.md#graph)) |
 | Open a page full size | Tap its card, or `#/page/<id>` ([Pages](pages.md)) |
 | Read or write the team's strategy, publish a version | Strategy (`#/strategy`); the owner writes and publishes, the Strategy Bot proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
 | See the market map, or ask the Librarian about the market | Strategy → Market (`#/strategy/market`; `#/market` redirects there) |
@@ -48,7 +49,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
 | See the Company page, or share it | Overview → Company page (`#/overview/company-page`); the share icon has transparency, the address and readers. Owners and admins only ([Company page](company-page.md)) |
 | Change the Company page: editions, disclosure, stats, audiences, accent, logo | Overview → Company page → Manage (`#/company-page`) |
-| Contact support or continue a support thread | Ask → **Loop in Support** (phone: the Ask tab), or any `#/support` link |
+| Message the Tico team | **?** beside Search (phone: More drawer, beside Search), or any `#/support` link |
 
 All four system bots appear as **Built-in** in Settings > Bots. Neither Assistant nor BotOps has a rail entry: **Ask**
 (the sidebar's bottom row, ⌘J; the phone's middle tab) opens your Assistant over any page as **Tico Assistant**, `#/assistant`

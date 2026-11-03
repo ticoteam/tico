@@ -327,13 +327,20 @@ def config_path(profile):
     return CONFIG_DIR / (profile + ".json")
 
 
+def upgraded(config):
+    """A credential file written before the bot key was named `bot_id` keeps working: its `bot` becomes `bot_id`."""
+    if isinstance(config, dict) and "bot" in config and "bot_id" not in config:
+        config["bot_id"] = config.pop("bot")
+    return config
+
+
 def load_config(profile):
     path = config_path(profile)
     try:
         mode = stat.S_IMODE(path.stat().st_mode)
         if mode & 0o077:
             raise Failure(f"{path} must be readable only by its owner (chmod 600)")
-        return json.loads(path.read_text())
+        return upgraded(json.loads(path.read_text()))
     except OSError:
         raise Failure(f"No agent configuration for profile {profile!r}; run pair (or install) first")
 
@@ -773,7 +780,7 @@ def perform_install(harness, profile, directory, url, bot, token, no_timer=False
         upsert_env(directory, {ENV_TOKEN: token, ENV_URL: url}, ENV_FILE)
         mcp = "none"
     python = sys.executable
-    config = {"url": url, "bot": bot, "slug": slug, "token": token, "profile": profile,
+    config = {"url": url, "bot_id": bot, "slug": slug, "token": token, "profile": profile,
               "profile_dir": str(directory), "python": python, "harness": me.get("agent")}
     for kept in ("sync", "sync_job", "updated_at"):
         if kept in previous:
@@ -898,7 +905,7 @@ def cmd_heartbeat(args):
         reply = request(config["url"], config["token"], "POST", "/api/v2/agents/heartbeat",
                         heartbeat_body(args.harness, args.profile, directory))
     except Failure as exc:
-        message = blocked_message(exc, config.get("slug") or config.get("bot", args.profile))
+        message = blocked_message(exc, config.get("slug") or config.get("bot_id", args.profile))
         if not message:
             raise
         config["backoff"] = {"until": time.time() + BACKOFF_SECONDS, "since": hold.get("since") or time.time(),
@@ -919,7 +926,7 @@ def cmd_heartbeat(args):
 
 def cmd_status(args):
     config = load_config(args.key)
-    print(json.dumps({k: config.get(k) for k in ("url", "bot", "profile", "profile_dir", "python", "timer", "heartbeat_mode",
+    print(json.dumps({k: config.get(k) for k in ("url", "bot_id", "profile", "profile_dir", "python", "timer", "heartbeat_mode",
                                                  "sync", "sync_error", "updated_at", "last_reply", "backoff")}, indent=2))
     return 0
 
@@ -930,7 +937,7 @@ def cmd_check(args):
     when that is older than five minutes, so a stopped timer cannot hide work. With `--gate` a last line of
     {"wakeAgent": false} tells Hermes not to start the agent when there is nothing to do."""
     config = load_config(args.key)
-    bot = config.get("slug") or config.get("bot", args.profile)
+    bot = config.get("slug") or config.get("bot_id", args.profile)
     reply, last_ok = config.get("last_reply"), config.get("last_ok") or 0
     hold = config.get("backoff") or {}
     problem = ""
@@ -1096,7 +1103,7 @@ def cmd_reinstall(args):
         no_timer = args.no_timer
     else:
         no_timer = config.get("heartbeat_mode") == "manual" or ("heartbeat_mode" not in config and not config.get("timer"))
-    return perform_install(args.harness, args.profile, directory, config["url"], config["bot"], config["token"],
+    return perform_install(args.harness, args.profile, directory, config["url"], config["bot_id"], config["token"],
                            no_timer=no_timer, sync=args.sync, previous=config)
 
 
@@ -1318,7 +1325,7 @@ def cmd_doctor(args):
     config = {}
     try:
         mode = stat.S_IMODE(path.stat().st_mode)
-        config = json.loads(path.read_text())
+        config = upgraded(json.loads(path.read_text()))
         if mode & 0o077:
             say("problem", f"credential file {path} is mode {mode:03o}; run chmod 600 on it")
         else:
@@ -1381,12 +1388,12 @@ def cmd_doctor(args):
     if config.get("url") and config.get("token"):
         try:
             me = request(config["url"], config["token"], "GET", "/api/v2/me")
-            if me.get("actor") == "bot:" + str(config.get("bot")):
+            if me.get("actor") == "bot:" + str(config.get("bot_id")):
                 say("ok", f"GET /api/v2/me works: {me.get('actor')} ({me.get('agent') or me.get('role')})")
             else:
-                say("problem", f"GET /api/v2/me answers {me.get('actor')!r}, not bot:{config.get('bot')}")
+                say("problem", f"GET /api/v2/me answers {me.get('actor')!r}, not bot:{config.get('bot_id')}")
         except Failure as exc:
-            message = blocked_message(exc, config.get("slug") or config.get("bot", args.profile)) or str(exc)
+            message = blocked_message(exc, config.get("slug") or config.get("bot_id", args.profile)) or str(exc)
             say("problem", "GET /api/v2/me failed: " + message)
 
     doctor_sync(say, harness, args.profile, directory, config)

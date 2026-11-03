@@ -229,7 +229,14 @@ def skip_pass(c, task_id, check):
     """A nightly memory tidy pass whose named model cannot run (its login is out of quota) ends skipped with the reason
     on its own subtask: declined quietly, with no notice to its requester and no wake of its parent, and no retry.
     Nothing else runs for it: no other model is named."""
-    H.task_update(c, H.KEEPER, task_id, status="declined", note=PASS_SKIPPED, quiet=True, wake_others=False)
+    from . import memory_tidy_runs
+    filed = c.execute('SELECT * FROM memory_tidy_passes WHERE check_task_id=?', (task_id,)).fetchone()
+    if filed:
+        # A waiting container resumes when its last child ends, independently
+        # of the verdict wake flag. Retire it before ending the check.
+        memory_tidy_runs.close_pass(c, filed, PASS_SKIPPED)
+    else:
+        H.task_update(c, H.KEEPER, task_id, status="declined", note=PASS_SKIPPED, quiet=True, wake_others=False)
     H._task_event(c, task_id, H.KEEPER, "memory_pass", f"{check['runtime']}:{check['model']}", None, PASS_SKIPPED)
 
 

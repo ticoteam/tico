@@ -42,10 +42,11 @@ def _month(row, month):
     return {"month": month, **{key: row.get(key) for key in SERIES_KEYS}}
 
 
-def _window(c, months):
-    """The newest `months` months with cohort rows, oldest first."""
-    return sorted(r[0] for r in c.execute("SELECT DISTINCT month FROM growth_cohorts ORDER BY month DESC LIMIT ?",
-                                          (months,)))
+def _window(c, months, until=None):
+    """The newest `months` months with cohort rows, oldest first; `until` (YYYY-MM) leaves out the months after it."""
+    where, args = ("WHERE month<=? ", [until]) if until else ("", [])
+    return sorted(r[0] for r in c.execute(f"SELECT DISTINCT month FROM growth_cohorts {where}ORDER BY month DESC LIMIT ?",
+                                          [*args, months]))
 
 
 def _since(window):
@@ -126,8 +127,9 @@ def _markers(c, auth, who, since):
     return out
 
 
-def numbers(c, auth, who, months, hidden):
-    window = _window(c, months)
+def numbers(c, auth, who, months, hidden, until=None):
+    """The numbers for the newest `months` months with rows up to `until` (default: all of them)."""
+    window = _window(c, months, until)
     conf = G.settings(c)
     totals, by_month = {}, {}
     for m in window:

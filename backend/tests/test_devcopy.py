@@ -12,6 +12,7 @@ from backend import devcopy
 from backend.auth import Identity
 from backend.config import Settings
 from backend.execution import Execution
+from backend.finance import actions as finance
 from backend.store import H, Problem, Store
 
 OLD = "2020-01-01T00:00:00.000000Z"
@@ -119,8 +120,16 @@ def test_every_table_is_classified(tmp_path):
     for source in (Path(devcopy.__file__).parent / "migrations").glob("*.py"):  # and a migration file drops for good
         dropped |= set(re.findall(r"DROP TABLE IF EXISTS ([a-z_]+);", source.read_text()))
     names -= dropped
-    groups = (devcopy.KEEP, set(devcopy.HISTORY), set(devcopy.EMPTY))
+    groups = (devcopy.KEEP, set(devcopy.HISTORY), set(devcopy.EMPTY), set(finance.DEV_COPY_EMPTIED))
     assert {t: n for t in names if (n := sum(t in g for g in groups)) != 1} == {}
+
+
+def test_devcopy_names_no_finance_table_as_one_it_empties(tmp_path):
+    """Finance empties its own tables (finance.DEV_COPY_EMPTIED, in its scrub), so devcopy's emptied list has none."""
+    store = Store(Settings(db_path=tmp_path / "hub.sqlite"))
+    store.initialize(seed_market=False)
+    with closing(sqlite3.connect(store.settings.db_path)) as c:
+        assert [t for t in devcopy.emptied(c) if t.startswith("fin_")] == []
 
 
 def test_server_env_sources_whole_with_spaces(tmp_path):

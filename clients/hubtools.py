@@ -1317,7 +1317,10 @@ GOAL_YES = _s("The owner's plain yes to a goal read-back: turn or its message id
 def goal_read_back(api, args):
     changes = args["changes"]
     if isinstance(changes, str):
-        changes = json.loads(changes)
+        try:
+            changes = json.loads(changes)
+        except ValueError:
+            raise ValueError("changes must be a JSON array of 1 to 20 change objects") from None
     if not isinstance(changes, list) or not 1 <= len(changes) <= 20 or any(not isinstance(c, dict) for c in changes):
         raise ValueError("changes must be a JSON array of 1 to 20 change objects")
     return api.post("goals/read-back", {"changes": changes}, key=_key(args))
@@ -1344,7 +1347,10 @@ def goal_save(api, args):
         raise ValueError("path must be a goal read-back save step")
     if not args.get("on_behalf_of"):
         raise ValueError("cite the owner's plain yes with on_behalf_of")
-    body = json.loads(args["body"])
+    try:
+        body = json.loads(args["body"])
+    except ValueError:
+        raise ValueError("body must be a JSON object") from None
     if not isinstance(body, dict):
         raise ValueError("body must be a JSON object")
     return _asked(api, args).post(path.removeprefix("/api/v2/"), body, key=_key(args))
@@ -1692,8 +1698,8 @@ def kpi_log(api, args):
       "from the Strategy Bot at level 2 or 3, a red or "
       "stalled goal's recovery (recovery: payload evidence, options [{label, actions}], pick; actions create, "
       "reorder or settle), or, from any bot at any level, a change to the strategy draft (strategy_draft: payload "
-      "summary, vision, sections {serve, sell, know, how, not, extra: {key: {title, body}}}, bets [{id?, statement, why, "
-      "rules_out, wrong_if, cites, status}], each optional; a bet with an id changes only the fields sent, one "
+      "summary, vision, sections {serve, sell, proof, now, know, how, not, extra: {key: {title, body}}}, bets [{id?, "
+      "statement, why, rules_out, wrong_if, cites, status}], each optional; a bet with an id changes only the fields sent, one "
       "without is new; source bet_tripped when a tripped bet prompted it; confirmed, the owner's draft and bets "
       "change, nothing is published), or a change to the brand draft (brand_draft: payload "
       "{sections: {name: value or null}}; confirmed by an admin, merged into the draft, never published). "
@@ -1760,6 +1766,9 @@ def _draft_revision(api, args):
     return draft["revision"]
 
 
+# The fixed sections, in the page's order (backend/strategy.py FIXED_KEYS); any other key is an extra section.
+STRATEGY_SECTIONS = ("serve", "sell", "proof", "now", "know", "how", "not")
+
 BET_PROPS = {
     "why": _s("The reasoning, one or two sentences"),
     "rules_out": _s("What the bet refuses; an active bet needs one"),
@@ -1785,8 +1794,9 @@ def _bet_body(args):
     return body
 
 
-@tool("hub_strategy_show", "The team's published strategy: summary, vision, the five sections, the bets with their "
-      "wrong-ifs, each bet's goals and colour, and the team's website. The owner also gets the draft.", {})
+@tool("hub_strategy_show", "The team's published strategy: summary, vision, the seven sections, the bets with their "
+      "wrong-ifs, each bet's goals and colour, the team's website, and proof_since (when How we know they want it "
+      "last changed). The owner also gets the draft.", {})
 def strategy_show(api, args):
     return _as_person(api).get("strategy")
 
@@ -1800,7 +1810,7 @@ def strategy_summary(api, args):
 @tool("hub_strategy_draft", "Owner only: change the strategy draft, only the fields sent (\"\" clears one). A bot "
       "proposes instead: hub_proposal_create, kind strategy_draft.",
       {"summary": _s("At most 400 characters: what every bot reads"), "vision": _s("One or two sentences"),
-       "sections": {"type": "object", "description": "{serve, sell, know, how, not, extra: {key: {title, body}}}, any of them"},
+       "sections": {"type": "object", "description": "{serve, sell, proof, now, know, how, not, extra: {key: {title, body}}}, any of them"},
        "section": {"type": "array", "items": {"type": "string"}, "description": "KEY=TEXT, instead of sections"},
        "revision": {"type": "integer", "description": "The draft's revision you read; default the current one"}},
       writes=True)
@@ -1808,7 +1818,7 @@ def strategy_draft(api, args):
     sections = dict(args.get("sections") or {})
     for item in args.get("section") or []:
         key, _, text = str(item).partition("=")
-        if key.strip() in ("serve", "sell", "know", "how", "not"):
+        if key.strip() in STRATEGY_SECTIONS:
             sections[key.strip()] = text
         else:
             sections.setdefault("extra", {})[key.strip()] = {"title": key.strip().replace("-", " ").capitalize(),
@@ -2717,14 +2727,19 @@ OLD_SERVER_MEDIA = ("This Tico server takes video and audio files up to 25 MB. A
 
 # ----------------------------------------------------------------------------- cards and pins (docs/overview.md)
 CARD_TEMPLATES = ("tasks_by_status", "done_per_week", "needs_you", "spend", "kpi", "automation_runs", "latest_pages",
-                  "needs_attention", "unread_threads", "my_tasks", "updates")
-PLACE = _s("Where: dashboard, team:<group id>, bot:<slug> (a sidebar), task:<id>, or person:me (My dashboard, the "
-           "person's own landing page)")
+                  "needs_attention", "unread_threads", "my_tasks", "updates", "growth_number", "growth_funnel",
+                  "growth_channels", "growth_retention", "growth_board")
+PLACE = _s("Where: dashboard, growth (the Growth page), team:<group id>, bot:<slug> (a sidebar), task:<id>, or person:me "
+           "(My dashboard, the person's own landing page)")
 CARD_SETTINGS = {"team": _s("A group id; empty for the whole company"),
                  "weeks": {"type": "integer", "description": "Done per week: weeks shown, 4 to 26"},
                  "count": {"type": "integer", "description": "Latest pages, Unread threads, My tasks, Updates: how many, "
-                           "1 to 10"},
-                 "kpi": _s("KPI: the KPI id")}
+                           "1 to 10; Growth channels 1 to 20; Growth board 1 to 5 per lane"},
+                 "kpi": _s("KPI: the KPI id"),
+                 "metric": _s("Growth number: new_customers, spend, bot_cost, cac, revenue_month, margin_pct, ltv, "
+                              "ltv_cac, payback_months, kept_d30, kept_d90 or kept_d180"),
+                 "channel": _s("Growth number: a channel slug; empty for all channels"),
+                 "months": {"type": "integer", "description": "Growth retention: cohort months shown, 3 to 12"}}
 SIZE = _s("small, medium or large", enum=["small", "medium", "large"])
 
 
@@ -2740,7 +2755,8 @@ def card_list(api, args):
 
 
 @tool("hub_card_add", "Add one of Tico's built-in cards, pinned at a place you may arrange. A bot pins to its own "
-      "sidebar or its task; the Dashboard and team pages are a person's (BotOps: the person who asked).",
+      "sidebar or its task; the Dashboard and team pages are a person's (BotOps: the person who asked). Growth cards go "
+      "on the Growth page only, which the owner, admins and bots arrange.",
       {"template": _s("The card", enum=list(CARD_TEMPLATES)), "title": _s("Its heading; empty uses the card's name"),
        "place": PLACE, "size": SIZE, **CARD_SETTINGS}, required=("template",), writes=True)
 def card_add(api, args):
@@ -6745,12 +6761,14 @@ FINANCE_CHARS = 16000            # about 4k tokens
 FIN_OTHER = " other"             # an "Other · n" row's key, as backend/finance/reads.py OTHER: no real key starts
                                  # with a space, so a vendor named Other stays its own row
 FINANCE_MAX_CHARS = 64000        # about 16k tokens
-FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by", "close"]
+FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by", "close",
+                   "sales_tax", "1099"]
+TAX_WORKPAPERS = {"sales_tax": "finance/tax/sales-tax", "1099": "finance/tax/1099"}   # spec 11: whole, full view only
 FINANCE_METRICS = ["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
-                   "ar_overdue", "uncategorized_count", "unreconciled_days"]
-FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card"]
+                   "ar_overdue", "uncategorized_count", "unreconciled_days", "duplicate_charges", "price_increases"]
+FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card", "account"]
 FINANCE_INBOX = ["uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
-                 "budget_near_limit", "sync_failed", "period_ready"]
+                 "budget_near_limit", "sync_failed", "period_ready", "unreconciled", "bill_email"]
 FIN_DAY = {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "YYYY-MM-DD"}
 # Whole-number fields an "Other · n" row does not add up: they describe one row, not an amount.
 _FIN_NOT_ADDED = {"pct", "days_late", "priority", "depth", "level", "version", "revision", "view_version"}
@@ -6902,6 +6920,17 @@ def _fin_guard(result, budget, key=None):
     return marker
 
 
+def _fin_whole(result, budget):
+    """A tax workpaper goes whole or not at all (spec 11): a cut-down one would be partial totals, so it is never shrunk.
+    Over `budget` it is not read here; a person exports it from Finance -> Tax."""
+    size = _fin_size(result)
+    if size <= budget:
+        return result
+    return {"error": "too_big", "chars": size, "cap": budget,
+            "message": "This tax workpaper is too long to read whole here, and a part of it would be a partial total. "
+                       "A person can export it from Finance -> Tax."}
+
+
 def _fin_query(args, names):
     return {k: args[k] for k in names if args.get(k) is not None and args.get(k) != ""}
 
@@ -6923,8 +6952,9 @@ def _fin_paged(api, path, query, key, budget):
 
 
 @tool("hub_finance_search", "Search the books you may see: entries, bank and card rows, bills, invoices, contacts, "
-      "rules and cards (each card with the vendor accounts it is saved on). Name a kind to page with cursor; without "
-      "one you get the first few of each kind.",
+      "rules and cards (each card with the vendor accounts it is saved on). account finds the chart's lines by code or "
+      "name, with their ids, for categorize, bill_create and rule_create. Name a kind to page with cursor; without "
+      "one you get the first few of each kind (not accounts: name that kind).",
       {"kind": _s("What to search", enum=FINANCE_SEARCH), "q": _s("Words to match"),
        "status": _s("Row, document or card status"), "contact_id": _s("Bills/invoices: this vendor or customer"),
        "vendor": _s("Cards: saved on this vendor (a contact's id or name): which of your cards works there"),
@@ -6959,20 +6989,28 @@ def finance_search(api, args):
 
 
 @tool("hub_finance_report", "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, "
-      "ar_aging, spend_by, or close (a month's close checklist). Rows past top_n fold into \"Other · n\".",
+      "ar_aging, spend_by, or close (a month's close checklist). Rows past top_n fold into \"Other · n\". sales_tax and "
+      "1099 are the tax workpapers for a year: whole or not at all, and only for someone who sees everything.",
       {"kind": _s("The report", enum=FINANCE_REPORTS), "start": FIN_DAY, "end": FIN_DAY,
        "period": _s("Column size", enum=["day", "week", "month", "quarter", "year"]),
        "basis": _s("cash or accrual (default: the company's)", enum=["cash", "accrual"]),
        "compare": _s("prior adds the window before", enum=["prior"]),
        "top_n": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows before Other (default 20)"},
-       "by": _s("spend_by: group by", enum=["department", "team", "teammate", "bot", "person", "vendor", "account"]),
-       "month": _s("close: the month, YYYY-MM")},
+       "by": _s("spend_by: group by", enum=["department", "team", "teammate", "bot", "person", "vendor", "account",
+                                             "location", "class", "project", "location_class", "location_project",
+                                             "class_project"]),
+       "month": _s("close: the month, YYYY-MM"),
+       "year": {"type": "integer", "minimum": 2000, "maximum": 2100,
+                "description": "sales_tax, 1099: the calendar year (this year when omitted)"}},
       ("kind",))
 def finance_report(api, args):
     if args["kind"] == "close":
         if not args.get("month"):
             raise APIError("validation", "close needs month (YYYY-MM)")
-        return _fin_guard(api.get("finance/close/" + quote(str(args["month"]), safe="")), FINANCE_CHARS)
+        query = _fin_query(args, ("top_n",))
+        return _fin_guard(api.get("finance/close/" + quote(str(args["month"]), safe=""), **query), FINANCE_CHARS)
+    if args["kind"] in TAX_WORKPAPERS:
+        return _fin_whole(api.get(TAX_WORKPAPERS[args["kind"]], **_fin_query(args, ("year",))), FINANCE_CHARS)
     query = _fin_query(args, ("start", "end", "period", "basis", "compare", "top_n", "by"))
     result = api.get("finance/reports/" + quote(str(args["kind"]), safe=""), **query)
     budget = _fin_budget(args.get("top_n"), 20)
@@ -7015,7 +7053,8 @@ def finance_action(api, args):
 
 
 @tool("hub_finance_inbox", "Your Finance work queue: uncategorized rows, bills to enter, receipts, bills due, overdue "
-      "invoices, budgets near limit, failed syncs, months ready to close; with counts per kind. Name a kind to page "
+      "invoices, budgets near limit, failed syncs, months ready to close, books not reconciled for over a month "
+      "(unreconciled), emailed bills Finance did not take (bill_email); with counts per kind. Name a kind to page "
       "through that kind alone, past its first 200.",
       {"kind": _s("Only this kind of work, paged on with cursor", enum=FINANCE_INBOX),
        "cursor": _s("next_cursor from the last page (same kind)"),

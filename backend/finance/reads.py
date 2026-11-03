@@ -345,12 +345,18 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
             if cell.teammate:
                 spent[cell.teammate] = spent.get(cell.teammate, 0) + cell.amount
     budget: dict[str, list[int | None]] = {}
+    budget_to_date: dict[str, list[int | None]] = {}   # the current bucket's budget up to today; None elsewhere (§4.4)
     tops = _filter_budgets(s, f)
     versions = SB.versions(c, [b.id for b in tops], made_by)
     for b in tops:
         cols = [B.in_window(b, versions[b.id], bucket, fy) for bucket in buckets]
         row = budget.setdefault(b.account_id, [None] * len(buckets))
         budget[b.account_id] = [x if y is None else (y if x is None else x + y) for x, y in zip(row, cols, strict=False)]
+        to_date = [B.in_window(b, versions[b.id], (p, min(q, today)), fy) if _column_state(p, q, today) == "current"
+                   else None for p, q in buckets]
+        row = budget_to_date.setdefault(b.account_id, [None] * len(buckets))
+        budget_to_date[b.account_id] = [x if y is None else (y if x is None else x + y)
+                                        for x, y in zip(row, to_date, strict=False)]
     projection: dict[str, list[int]] = {}
     methods: dict[str, set[str]] = {}
     if buckets:
@@ -401,6 +407,7 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
                      # "Payroll (private)" with no amount (§7.5): its budget is withheld too, since a narrow
                      # filter's payroll budget can be one person's planned pay.
                      "budget": None if hidden else budget.get(account_id),
+                     "budget_to_date": None if hidden else budget_to_date.get(account_id),
                      "projection": None if hidden else projection.get(account_id),
                      "projection_method": None if hidden else _method(methods.get(account_id))})
     if view == "expenses":
@@ -505,10 +512,11 @@ def _covered(scopes: Sequence[tuple[str, str]], team: str, teammate: str) -> boo
 
 
 def _with_spend(s: _Seen, rows: list[Row]) -> list[Row]:
-    """Rows with spend in the filter, a budget or a projection, and the lines above them."""
+    """Rows with actual spend in the filter, and the lines above them. A budget or a projection alone does not keep a
+    line (spec §12: lines with no spend in the filter are hidden); private rows stay."""
     keep: set[str] = set()
     for r in rows:
-        if r["private"] or any(r.get(k) and any(cast(list[object], r[k])) for k in ("actual", "budget", "projection")):
+        if r["private"] or (r.get("actual") and any(cast(list[object], r["actual"]))):
             at = str(r["account_id"])
             while at and at not in keep:
                 keep.add(at)
@@ -1090,13 +1098,14 @@ def budgets(c: sqlite3.Connection, viewer: str, *, include_inactive: bool = Fals
     day = dates.day(on) if on else dates.day(s.ctx.today)
     seen = _visible(s, include_inactive)
     most = max(1, min(int(limit), 500))
+    carded = SK.budgets_with_cards(c, [b.id for b in seen[:most]])
     rows: list[Row] = []
     netted = False
     for b in seen[:most]:
         st = budgeting.state(s.ctx, b.id, day, read=budgeting.Netted(s.view))
         state_row = _state_row(s, b, st)
         netted = netted or bool(state_row["excluded"])
-        rows.append({**_budget_row(b), "state": state_row})
+        rows.append({**_budget_row(b), "state": state_row, "card_limits": b.id in carded})
     return {"budgets": rows, "more": len(seen) > most, "on": day.isoformat(), "view_version": s.view.version,
             "excluded": netted}
 
@@ -1146,9 +1155,31 @@ def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = Non
 
 
 METRICS = ("cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
-           "ar_overdue", "uncategorized_count", "unreconciled_days")
+           "ar_overdue", "uncategorized_count", "unreconciled_days", "duplicate_charges", "price_increases")
 STALE_HOURS = 24            # bank data older than this marks a cash metric stale
+WATCH_LABELS = 10           # the Watch findings a metric names (its count is the whole)
 RUNWAY_MONTHS = 3           # runway divides cash by the average burn of this many full months
+
+
+def _worst_gap(s: _Seen, money_ids: Sequence[str]) -> int | None:
+    """Days since the oldest reconciliation among these money accounts; None when none has a feed yet."""
+    return _worst(s, money_ids)[0]
+
+
+def _worst(s: _Seen, money_ids: Sequence[str]) -> tuple[int | None, bool]:
+    """`_worst_gap`, and whether that worst account was never reconciled (its days count from its first row)."""
+    today = dates.day(s.ctx.today)
+    worst: int | None = None
+    never = False
+    for m in money_ids:
+        through = SK.locked_through(s.ctx.c, m)
+        first = SK.first_feed_day(s.ctx.c, m)
+        if not first:
+            continue
+        gap = max(0, (today - dates.day(through)).days) if through else (today - dates.day(first)).days
+        if worst is None or gap > worst:
+            worst, never = gap, not through
+    return worst, never
 
 
 def _data_as_of(s: _Seen, money_ids: Sequence[str]) -> tuple[str | None, bool]:
@@ -1167,10 +1198,12 @@ def _data_as_of(s: _Seen, money_ids: Sequence[str]) -> tuple[str | None, bool]:
     return oldest, age > timedelta(hours=STALE_HOURS)
 
 
-def _cash(s: _Seen) -> tuple[int, list[Row], list[str]]:
-    """Cash on the books in the money accounts that hold cash (bank, Stripe) the viewer sees, total and per account."""
+def _cash(s: _Seen, money_id: str | None = None) -> tuple[int, list[Row], list[str]]:
+    """Cash on the books in the money accounts that hold cash (bank, Stripe) the viewer sees, total and per account;
+    one money account when `money_id` is given."""
     rows = [r for r in SK.money_accounts(s.ctx.c, s.ctx.book.id)
-            if r["holds_cash"] and r["account_id"] and tab.sees_money_account(s.ctx, s.view, r)]
+            if r["holds_cash"] and r["account_id"] and tab.sees_money_account(s.ctx, s.view, r)
+            and (money_id is None or str(r["id"]) == money_id)]
     sums = SK.balances(s.ctx.c, s.ctx.book.id, s.ctx.today, sorted({str(r["account_id"]) for r in rows}))
     per: list[Row] = [{"money_account_id": str(r["id"]), "name": str(r["name"]), "balance": sums.get(str(r["account_id"]), 0),
             "provider_balance": r["balance"], "balance_as_of": r["balance_as_of"]} for r in rows]
@@ -1178,11 +1211,12 @@ def _cash(s: _Seen) -> tuple[int, list[Row], list[str]]:
     return sum(sums.get(g, 0) for g in by_gl), per, [str(r["id"]) for r in rows]
 
 
-def _net_burn(c: sqlite3.Connection, viewer: str, a: date, z: date, at: str | None) -> int:
+def _net_burn(c: sqlite3.Connection, viewer: str, a: date, z: date, at: str | None) -> tuple[int, bool]:
     """Cash burn over a window: cash-basis expenses minus cash-basis income the viewer sees (financing, being on the
-    balance sheet, never counts)."""
+    balance sheet, never counts), and whether private lines (payroll) were left out of it."""
     found = pnl(c, viewer, a.isoformat(), z.isoformat(), "year", "cash", at)
-    return sum(cast(list[int], found["expense"])) - sum(cast(list[int], found["income"]))
+    burn = sum(cast(list[int], found["expense"])) - sum(cast(list[int], found["income"]))
+    return burn, bool(found["excluded"])
 
 
 def _full_months(today: date, n: int) -> tuple[date, date]:
@@ -1199,12 +1233,14 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
            teammate: str | None = None, days: int | None = None, at: str | None = None) -> Row:
     """One number for a card, a goal or a bot (§7.2), cut to the viewer like every read, with `as_of` (when it was
     worked out) and, for numbers resting on bank data, `data_as_of` and `stale`. cash: the books' balance of the cash
-    accounts the viewer sees (per account in `accounts`); burn: cash out minus cash in this month (or the window);
-    runway_months: cash over the average burn of the last 3 full months (null when nothing burns); revenue, spend: the
+    accounts the viewer sees (per account in `accounts`, or the one money account `account_id` names); burn: cash out minus cash in this month (or the window);
+    runway_months: cash over the average burn of the last 3 full months (null when nothing burns, or when the viewer sees
+    a slice rather than company expenses: `scoped`); burn and runway say `excluded` when payroll was left out; revenue, spend: the
     window (this month by default); budget_remaining / budget_pct_used: one budget; ap_due: open bills due within
     `days` (default 7, overdue included); ar_overdue: invoices at least `days` (default 1) late;
     uncategorized_count: settled rows waiting for a category (last 90 days); unreconciled_days: days since the
-    oldest reconciliation of the money accounts the viewer sees."""
+    oldest reconciliation of the money accounts the viewer sees; duplicate_charges, price_increases: how many Watch
+    findings of that kind the posted debits show now, with their first labels."""
     if name not in METRICS:
         raise invalid(f"a metric is {'|'.join(METRICS)}")
     s = _open(c, viewer, at)
@@ -1223,17 +1259,21 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
     if name in ("cash", "runway_months"):
         if not (s.view.everything or s.view.balance_sheet or s.view.bs_lines):
             raise denied("cash is on the balance sheet, the owner's unless granted")
-        total, per, money_ids = _cash(s)
+        cut = account_id if name == "cash" else None
+        total, per, money_ids = _cash(s, cut)
+        if cut and not per:
+            raise FinanceError(NOT_FOUND, "no such money account")
         data_as_of, stale = _data_as_of(s, money_ids)
         base.update({"data_as_of": data_as_of, "stale": stale})
         if name == "cash":
             return {**base, "value": total, "unit": "minor", "currency": currency, "accounts": per}
         a, z = _full_months(today, RUNWAY_MONTHS)
-        burn = _net_burn(c, viewer, a, z, at)
+        burn, excluded = _net_burn(c, viewer, a, z, at)
+        scoped = not s.view.company_expenses()    # company cash over a slice's burn is no company runway
         monthly = Decimal(burn) / RUNWAY_MONTHS
-        value = None if monthly <= 0 else str((Decimal(total) / monthly).quantize(Decimal("0.1")))
+        value = None if monthly <= 0 or scoped else str((Decimal(total) / monthly).quantize(Decimal("0.1")))
         return {**base, "value": value, "unit": "months", "cash": total, "monthly_burn": int(monthly),
-                "start": a.isoformat(), "end": z.isoformat()}
+                "start": a.isoformat(), "end": z.isoformat(), "excluded": excluded, "scoped": scoped}
     if name in ("ap_due", "ar_overdue"):
         kind = "bill" if name == "ap_due" else "invoice"
         if not tab_ap.sees_side(s.ctx, s.view, kind):
@@ -1253,20 +1293,21 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
         return {**base, "value": len(rows), "more": more, "unit": "count", "data_as_of": data_as_of, "stale": stale}
     if name == "unreconciled_days":
         money_ids, _ = tab.feed_scope(s.ctx, s.view)
-        worst: int | None = None
-        for m in money_ids:
-            through = SK.locked_through(c, m)
-            first = SK.first_feed_day(c, m)
-            if not first:
-                continue
-            gap = max(0, (today - dates.day(through)).days) if through else (today - dates.day(first)).days
-            worst = gap if worst is None else max(worst, gap)
         data_as_of, stale = _data_as_of(s, money_ids)
-        return {**base, "value": worst or 0, "unit": "days", "data_as_of": data_as_of, "stale": stale}
+        return {**base, "value": _worst_gap(s, money_ids) or 0, "unit": "days", "data_as_of": data_as_of, "stale": stale}
+    if name in ("duplicate_charges", "price_increases"):
+        # The same Watch checks the daily Watch runs (watch_findings), read as a count with the first few labels; plain
+        # code over the viewer's posted debits, no model call.
+        found = (W.duplicate_charges if name == "duplicate_charges" else W.price_increases)(_charges(c, viewer, s.ctx.at))
+        money_ids, _ = tab.feed_scope(s.ctx, s.view)
+        data_as_of, stale = _data_as_of(s, money_ids)
+        return {**base, "value": len(found), "unit": "count", "labels": [str(f["label"])[:160] for f in found[:WATCH_LABELS]],
+                "data_as_of": data_as_of, "stale": stale}
     a, z = _window(start, end, s.ctx)
     if name == "burn":
-        return {**base, "value": _net_burn(c, viewer, a, z, at), "unit": "minor", "currency": currency,
-                "start": a.isoformat(), "end": z.isoformat()}
+        burn, excluded = _net_burn(c, viewer, a, z, at)
+        return {**base, "value": burn, "unit": "minor", "currency": currency, "start": a.isoformat(),
+                "end": z.isoformat(), "excluded": excluded, "scoped": not s.view.company_expenses()}
     if name == "revenue":
         found = pnl(c, viewer, a.isoformat(), z.isoformat(), "year", "accrual", at)
         return {**base, "value": sum(cast(list[int], found["income"])), "unit": "minor", "currency": currency,
@@ -1397,6 +1438,7 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
 # ------------------------------------------------------------------------------------------------ search
 SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project", "po",
               "estimate")
+NAMED_ONLY_KINDS = ("account",)     # searched when named (the chart a bot codes lines to), not in the first few of each
 RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects"}
 SEARCH_EACH = 10            # results per kind when no kind is named
 
@@ -1424,6 +1466,24 @@ def _search_rules(ctx: Ctx, viewer: str, q: str, filters: Mapping[str, object], 
              "words": str(r["words"]), "active": bool(r["active"]),
              "priority": int(r["priority"]) if str(r["kind"]) == "posting" else None} for r in page], \
         (str(page[-1]["id"]) if len(rows) > most else None)
+
+
+def _search_accounts(ctx: Ctx, viewer: str, q: str, most: int, cursor: str | None) -> tuple[list[Row], str | None]:
+    """The active accounts the viewer may post to, matched by code or name, in code order: the same lines the bill,
+    invoice and journal forms list (tab_ap.chart), so a bot can find the account id of a line. Paged by (code, id)."""
+    held = ctx.rights(viewer)
+    if not any(R.has(ctx.org, viewer, r, held) for r in (R.BOOK, R.AP, R.AR)):
+        raise denied("the chart is for teammates who write to the books")
+    view = ctx.view(viewer)
+    parts = tab.decode_cursor(cursor) or []
+    after = (parts[0], parts[1]) if len(parts) == 2 else ("", "")
+    found = [a for a in sorted(ctx.accounts.values(), key=lambda x: (x.code, x.id))
+             if a.active and (view.everything or view.sees_account(a)) and (a.code, a.id) > after
+             and (not q or q.lower() in f"{a.code} {a.name}".lower())]
+    page = found[:most]
+    nxt = tab.encode_cursor([page[-1].code, page[-1].id]) if len(found) > most and page else None
+    return [{"kind": "account", "id": a.id, "code": a.code, "name": a.name, "type": a.type, "subtype": a.subtype,
+             "label": f"{a.code} {a.name}"} for a in page], nxt
 
 
 def _record_row(kind: str, r: Any) -> Row:
@@ -1515,9 +1575,10 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
     start, end; bill/invoice: status, contact_id, start, end, aging; contact: kind, active; rule: kind (gate|posting);
     card: status, vendor (the cards saved on that vendor, so `vendor` answers "which of my cards works at X");
     po/estimate: status, contact_id, and a search over number, memo and contact name;
-    item/location/project: active (1 keeps only active records)."""
-    if kind is not None and kind not in SEARCH_KINDS:
-        raise invalid(f"kind is {'|'.join(SEARCH_KINDS)}")
+    item/location/project: active (1 keeps only active records); account (named only): a search over code and name,
+    the active accounts the forms list, in code order."""
+    if kind is not None and kind not in (*SEARCH_KINDS, *NAMED_ONLY_KINDS):
+        raise invalid(f"kind is {'|'.join((*SEARCH_KINDS, *NAMED_ONLY_KINDS))}")
     if cursor and kind is None:
         raise invalid("a cursor pages one kind; name it")
     f = filters or {}
@@ -1574,6 +1635,9 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
                 results += [{**r, "label": f"{r['nickname'] or r['holder']} ••{r['last4'] or ''}".strip()}
                             for r in cast(list[Row], found["cards"])]
                 nxt = cast(str | None, found["next"])
+            elif k == "account":
+                listed_accounts, nxt = _search_accounts(ctx, viewer, text, most, cursor)
+                results += listed_accounts
             elif k in RECORD_KINDS:
                 _in_view_or_refuse(view)
                 parts = tab.decode_cursor(cursor)
@@ -1598,9 +1662,10 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
 
 # ------------------------------------------------------------------------------------------------ inbox
 INBOX_KINDS = ("uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due",
-               "invoice_overdue", "budget_near_limit", "sync_failed", "period_ready")
+               "invoice_overdue", "budget_near_limit", "sync_failed", "period_ready", "unreconciled", "bill_email")
 INBOX_EACH = 200            # items one kind contributes before its count says "more"
 RECEIPT_DAYS = 90
+STATEMENT_DAYS = 35         # a money account reconciled longer ago than a statement month is an unreconciled item
 
 
 def _money(amount: int) -> str:
@@ -1611,7 +1676,8 @@ def inbox(c: sqlite3.Connection, viewer: str, *, limit: int = 50, cursor: str | 
           at: str | None = None) -> Row:
     """The viewer's Finance work queue (§7.1): uncategorized rows, bills to enter (drafts, e.g. from the bills
     address), unmatched and missing receipts, bills due within a week, overdue invoices, budgets near their limit,
-    failed syncs and months ready to close. Each item has its ids and a short label; `counts` covers every kind
+    failed syncs, months ready to close, books not reconciled for over a month, and emailed bills Finance did not take
+    (bill_email). Each item has its ids and a short label; `counts` covers every kind
     (`more` when a kind has over 200). With `kind`, that kind alone, paged from its own query past the 200 (to
     INBOX_DEEP), so a reader that follows `next_cursor` reaches every item."""
     s = _open(c, viewer, at)
@@ -1664,9 +1730,11 @@ def _inbox_kind(s: _Seen, kind: str, n: int, skip: int = 0) -> tuple[list[Row], 
     held = ctx.rights(s.view.viewer)
     cut = set(tab.private_cut(ctx, view))
     if kind == "uncategorized":
+        from .documents import review_candidates     # lazy: keeps the module import order as it was
         rows, over = _uncategorized(s, today - timedelta(days=RECEIPT_DAYS), today, n, skip)
         return [{"id": str(r["id"]), "feed_id": str(r["id"]), "date": str(r["txn_date"]),
                  "amount": int(r["amount"]), "entry_id": r["entry_id"], "status": str(r["status"]),
+                 "candidates": review_candidates(ctx, view.viewer, r),
                  "label": f"{r['counterparty'] or r['description'] or 'Row'} · {_money(int(r['amount']))}"}
                 for r in rows], over
     if kind == "bill_to_enter":
@@ -1718,12 +1786,31 @@ def _inbox_kind(s: _Seen, kind: str, n: int, skip: int = 0) -> tuple[list[Row], 
                              "excluded": st["excluded"], "label": f"{b.name} · {st['pct'] or '?'}% used"})
         return near[skip:skip + n], len(near) > skip + n
     if kind == "sync_failed":
-        if not (view.everything or view.sources or R.is_admin(ctx.org, s.view.viewer, held)):
+        if not (view.everything or view.sources):
             return None
         failed: list[Row] = [{"id": str(x["id"]), "connection_id": str(x["id"]), "date": str(x["updated_at"] or "")[:10],
                    "label": f"{x['name'] or x['provider']}: {str(x['last_error'] or 'sync failed')[:120]}"}
                   for x in SK.connections(c) if str(x["status"]) == "error"]
         return failed[skip:skip + n], len(failed) > skip + n
+    if kind == "unreconciled":
+        if not R.has(ctx.org, s.view.viewer, R.BOOK, held):
+            return None
+        money_ids, _ = tab.feed_scope(ctx, view)
+        days, never = _worst(s, money_ids)
+        label = "Books not reconciled yet" if never else f"{days} days since the books were reconciled"
+        late: list[Row] = ([{"id": "books", "days": days, "label": label}]
+                           if days is not None and days > STATEMENT_DAYS else [])
+        return late[skip:skip + n], len(late) > skip + n
+    if kind == "bill_email":                 # a bill to enter (bill_create needs AP): by the right, and a view of bills
+        if not R.has(ctx.org, s.view.viewer, R.AP, held) or not tab_ap.sees_side(ctx, view, "bill"):
+            return None
+        from .. import bills_address       # the emailed bills keep their own rows, outside the fin_ tables
+        emailed = bills_address.for_bookkeeper(c, skip + n + 1)
+        return [{"id": str(r["id"]), "file_id": str(r["file_id"] or ""), "date": str(r["received_at"] or "")[:10],
+                 "status": str(r["state"]) + str(r["code"] or ""),
+                 "label": (f"{r['sender'] or 'Unknown sender'}: {r['subject'] or r['name']}"[:160]
+                           + (f" (file {r['file_id']})" if r["file_id"] else ""))}
+                for r in emailed[skip:skip + n]], len(emailed) > skip + n
     if not R.has(ctx.org, s.view.viewer, R.BOOK, held):      # period_ready
         return None
     ready: list[Row] = [{"id": p, "month": p, "label": f"{p} is ready to close"} for p in _closable(c, ctx)
@@ -1741,8 +1828,12 @@ def _closable(c: sqlite3.Connection, ctx: Ctx) -> list[str]:
     return out
 
 
-def _checklist(s: _Seen, month: str) -> Row:
-    """What stands between a month and its close, for whoever does the books."""
+SUSPENSE_ALL = 10**12       # a limit past any month's rows: suspense is counted whole, never a page of it
+
+
+def _checklist(s: _Seen, month: str, top_n: int = 20) -> Row:
+    """What stands between a month and its close, for whoever does the books. The money accounts still behind are
+    listed up to `top_n`, and the rest fold into one "Other · n" row; `count` is always the whole number."""
     ctx = s.ctx
     first = dates.month(month)
     last = dates.month_end(first)
@@ -1754,13 +1845,22 @@ def _checklist(s: _Seen, month: str) -> Row:
     behind = [{"money_account_id": str(m["id"]), "name": str(m["name"]),
                "locked_through": SK.locked_through(ctx.c, str(m["id"])) or None} for m in live
               if (SK.locked_through(ctx.c, str(m["id"])) or "") < last.isoformat()]
-    rows, more = _uncategorized(s, first, last, INBOX_EACH)
+    top = max(1, min(int(top_n), MAX_TOP))
+    folded = behind[top:]
+    listed = behind[:top] + ([{"key": OTHER, "label": f"Other · {len(folded)}", "count": len(folded),
+                               "money_account_id": None, "name": f"Other · {len(folded)}", "locked_through": None}]
+                             if folded else [])
+    # Suspense (spec §11): every settled row of the month still waiting for a category blocks the close, so the count and
+    # the close decision read the whole month, not a page of it. Lines on Other expenses are shown with their count and
+    # do not.
+    rows, more = _uncategorized(s, first, last, SUSPENSE_ALL)
+    waiting = [r for r in rows if str(r["status"]) == "new"]
     accrual = ctx.book.basis == "accrual"
     checks: list[Row] = [
-        {"key": "reconciled", "ok": not behind, "count": len(behind), "accounts": behind,
+        {"key": "reconciled", "ok": not behind, "count": len(behind), "accounts": listed,
          "label": "Every money account reconciled through month end"},
-        {"key": "uncategorized", "ok": not rows, "count": len(rows), "more": more,
-         "label": "Nothing left in Other expenses or uncategorized"}]
+        {"key": "suspense", "ok": not waiting, "count": len(waiting), "more": more, "other": len(rows) - len(waiting),
+         "label": "Review suspense"}]
     # Company-wide counts only for whoever sees them: unmatched receipts with the whole books, draft bills with
     # payables (and only the drafts the viewer sees whole).
     if s.view.everything:
@@ -1777,13 +1877,17 @@ def _checklist(s: _Seen, month: str) -> Row:
          "Cash basis: no accruals to review", "note": True},
         {"key": "budget_vs_actual", "ok": True, "label": "Write the budget vs actual note", "note": True}]
     checks += notes
-    # A month no money account had a feed for has nothing to reconcile, so it is never "ready" on its own.
-    ready = status == "open" and last < dates.day(ctx.today) and bool(live) and not behind and not rows
-    return {"month": month, "start": first.isoformat(), "end": last.isoformat(), "status": status, "ready": ready,
-            "checks": checks}
+    # `closable` is what close_period needs: an ended open month, reconciled through its end, nothing waiting for a
+    # category. `ready` (what finance.period.ready fires on) also needs a money account with a feed: a month no money
+    # account had a feed for has nothing to reconcile, so it is never "ready" on its own.
+    ended = last < dates.day(ctx.today)
+    closable = status == "open" and ended and not behind and not waiting
+    return {"month": month, "start": first.isoformat(), "end": last.isoformat(), "status": status,
+            "ready": closable and bool(live), "closable": closable, "ended": ended, "checks": checks}
 
 
-def close_checklist(c: sqlite3.Connection, viewer: str, period: str, at: str | None = None) -> Row:
+def close_checklist(c: sqlite3.Connection, viewer: str, period: str, at: str | None = None, *,
+                    top_n: int = 20) -> Row:
     """A month's close checklist (§10): reconciled through month end, nothing uncategorized, receipts matched, draft
     bills entered, and notes for accruals and budget vs actual. `ready` is what finance.period.ready fires on (the
     first two, on an open month that has ended). For teammates with finance.book, cut to their view: only the money
@@ -1791,7 +1895,7 @@ def close_checklist(c: sqlite3.Connection, viewer: str, period: str, at: str | N
     s = _open(c, viewer, at)
     if not R.has(s.ctx.org, viewer, R.BOOK, s.ctx.rights(viewer)):
         raise denied("the close is for teammates who do the books")
-    return {**_checklist(s, dates.month(period).isoformat()[:7]), "view_version": s.view.version}
+    return {**_checklist(s, dates.month(period).isoformat()[:7], top_n), "view_version": s.view.version}
 
 
 def ready_months(c: sqlite3.Connection, at: str | None = None) -> list[str]:
@@ -1801,6 +1905,24 @@ def ready_months(c: sqlite3.Connection, at: str | None = None) -> list[str]:
         return []
     s = _Seen(ctx=ctx, view=ctx.view(ctx.org.owner), private=SA.private_lines(c))
     return [p for p in _closable(c, ctx) if _checklist(s, p)["ready"]]
+
+
+def close_blockers(ctx: Ctx, month: str, who: str) -> list[str]:
+    """What still keeps an open month from closing (spec §11), for everyone: the checklist's blocking items, read with the
+    owner's view so every actor gets the same answer. Empty when the month can close."""
+    s = _Seen(ctx=ctx, view=ctx.view(ctx.org.owner or who), private=SA.private_lines(ctx.c))
+    row = _checklist(s, month)
+    if row["closable"]:
+        return []
+    why = [] if row["ended"] else [f"{month} has not ended"]
+    for check in cast(list[dict[str, Any]], row["checks"]):
+        if check["ok"]:
+            continue
+        if check["key"] == "reconciled":
+            why.append(f"{check['count']} money account(s) not reconciled through {row['end']}")
+        elif check["key"] == "suspense":
+            why.append(f"{check['count']}{'+' if check['more'] else ''} settled row(s) still waiting for a category")
+    return why or [f"{month} is not ready to close"]
 
 
 def company_cash(c: sqlite3.Connection, at: str | None = None) -> int | None:
@@ -1824,7 +1946,7 @@ def transactions(c: sqlite3.Connection, viewer: str, *, teams: Iterable[str] = (
 
 
 # ------------------------------------------------------------------------------------------------ watch
-WATCH_HISTORY_DAYS = 120       # posted debits read for duplicate charges and price increases
+WATCH_HISTORY_DAYS = 120       # posted debits read for duplicate charges, price increases and unused subscriptions
 WATCH_PAGES = 10              # pages of 200 read per check of the debits
 
 
@@ -1859,7 +1981,8 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
                     or not payee:
                 continue
             out.append(W.Charge(id=str(row["id"]), payee=payee, amount=-amount,
-                                day=date.fromisoformat(str(row["date"])[:10])))
+                                day=date.fromisoformat(str(row["date"])[:10]),
+                                shown=str(row.get("counterparty") or "").strip(), card=str(row.get("card_id") or "")))
         cursor = cast(str | None, page.get("next"))
         if not cursor:
             break
@@ -1868,7 +1991,8 @@ def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
 
 def watch_findings(c: sqlite3.Connection, viewer: str, at: str) -> list[dict[str, Any]]:
     """Every Watch check's findings now: runway, unusual spend per payee over the last four months, and the posted
-    debits read for duplicate charges and price increases. Every read goes through the viewer's view."""
+    debits read for duplicate charges, price increases and unused subscriptions (the cards an archived or idle bot holds
+    come from the hub's bot facts). Every read goes through the viewer's view."""
     today = date.fromisoformat(at[:10])
     found: list[dict[str, Any]] = []
     figures: Row = {}
@@ -1895,6 +2019,7 @@ def watch_findings(c: sqlite3.Connection, viewer: str, at: str) -> list[dict[str
     found += W.unusual_spend(series, months[-1][0])
     charges = _charges(c, viewer, at)
     found += W.duplicate_charges(charges) + W.price_increases(charges)
+    found += W.unused_subscriptions(charges, ST.idle_bot_cards(c, at, W.UNUSED_IDLE_DAYS), today)
     return found
 
 

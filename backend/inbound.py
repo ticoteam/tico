@@ -222,9 +222,12 @@ class Inbound:
             rows = [dict(r) for r in c.execute('SELECT * FROM inbound_inboxes WHERE inbox_id>? AND '+clause+
                                                ' ORDER BY inbox_id LIMIT ?',(after,*values,limit+1))]
             sync = dict(c.execute('SELECT * FROM inbound_sync WHERE singleton=1').fetchone())
+            # The demo has no HQ, so it is never off in the page's eyes once its seeded inboxes exist. Every write
+            # still refuses in `remote`, so nothing can be created or rented there.
+            demo_inboxes = bool(self.settings.demo and c.execute('SELECT 1 FROM inbound_inboxes LIMIT 1').fetchone())
         # A gap names its inbox: only the inboxes this reader may read.
         gaps = [g for g in json.loads(sync['gaps']) if g.get('inbox_id') not in hidden]
-        return {'inboxes':rows[:limit],'next':rows[limit-1]['inbox_id'] if len(rows)>limit else None,'configured':not self.off,'last_synced_at':sync['last_synced_at'],'error':sync['error'],
+        return {'inboxes':rows[:limit],'next':rows[limit-1]['inbox_id'] if len(rows)>limit else None,'configured':not self.off or demo_inboxes,'last_synced_at':sync['last_synced_at'],'error':sync['error'],
                 'gaps':gaps}
 
     def connection_actor(self, who, what='Inbox', code='inbox_connection', tap=False):
@@ -345,6 +348,9 @@ class Inbound:
     def phone_requests(self, who, after='', limit=100):
         with self.store.read_transaction() as c:
             permit(c,who,admin=True,auth=self.auth)
+        # The demo has no HQ to ask, and it has no requests: an empty list, not an error. Writes still refuse in `remote`.
+        if self.settings.demo:
+            return {'phone_requests':[],'next':None}
         return self.remote('GET','phone-requests?'+urlencode({'after':after,'limit':limit}))
 
     def phone_request(self, who, *, name=None, operation=None, ident=None, action=None, price=None):

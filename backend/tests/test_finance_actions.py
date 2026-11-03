@@ -1,8 +1,14 @@
 """The write path: idempotency, dry runs, denials, and the approval flow end to end (approve commits once, a changed
 payload voids and asks again, decline denies, a withdrawn or expired approval ends the action)."""
+import sqlite3
+from contextlib import closing
+
+from backend import devcopy
 from backend import hubdb as H
+from backend.config import Settings
 from backend.finance import actions as FA
 from backend.finance import reads as FR
+from backend.store import Store
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 
@@ -115,7 +121,9 @@ def test_decline_someone_else_and_a_lost_right_never_commit(books):
         other = _coder_asks(c, parent, "k-other", 4_000)
         H.approval_decide(c, "human:cara", other.approval_id, "approved")
         c.execute("UPDATE approvals SET decided_by_id='human:dan' WHERE id=?", (other.approval_id,))
-        assert FA.approval_decided(c, other.approval_id, AT).status == "denied"
+        # Decided by someone other than the person it was sent to: the approval is void and asked again (§5), not denied.
+        asked_again = FA.approval_decided(c, other.approval_id, AT)
+        assert asked_again.status == "needs_approval" and asked_again.approval_id != other.approval_id
         late = _coder_asks(c, parent, "k-late", 3_000)
         H.approval_decide(c, "human:cara", late.approval_id, "approved")
         c.execute("UPDATE fin_budgets SET active=0 WHERE id=?", (parent,))
@@ -158,6 +166,86 @@ def test_default_gates_send_close_and_large_bot_entries_to_one_person(books):
         assert grant.code == "denied"            # the coder leads no team
 
 
+def _provider_rows(c):
+    """A books connection and its outbox row, the rows a dev copy must not keep acting on."""
+    c.execute("INSERT INTO fin_connections(id,provider,purpose,created_at,created_by) "
+              "VALUES('fc1','quickbooks','books',?,'morgan')", (H.now(),))
+    c.execute("INSERT INTO fin_outbox(id,connection_id,op,idempotency_key,created_at,created_by) "
+              "VALUES('ob1','fc1','journal.create','k1',?,'morgan')", (H.now(),))
+
+
+def test_a_dev_copy_scrub_empties_the_provider_rows_with_keys_on(tmp_path):
+    store = Store(Settings(db_path=tmp_path / "hub.sqlite"))
+    store.initialize(seed_market=False)
+    with closing(sqlite3.connect(store.settings.db_path)) as c:
+        c.execute("PRAGMA foreign_keys=ON")
+        _provider_rows(c)
+        removed = FA.scrub_dev_copy(c, H.now())
+        assert removed["fin_connections"] == 1 and removed["fin_outbox"] == 1 and removed["fin_actions"] == 0
+        assert [t for t in FA.DEV_COPY_EMPTIED if _count(c, t)] == []
+        c.commit()
+
+
+def test_a_dev_copy_build_reports_the_rows_finance_emptied(tmp_path):
+    source = Store(Settings(db_path=tmp_path / "live" / "hub.sqlite"))
+    source.initialize(seed_market=False)
+    with closing(sqlite3.connect(source.settings.db_path)) as c:
+        c.execute("PRAGMA foreign_keys=ON")
+        _provider_rows(c)
+        c.commit()
+    for conn in source.pool:
+        conn.close()
+    source.pool.clear()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    removed, _ = devcopy.build(source.settings.db_path, dest, days=30)
+    assert removed["fin_connections"] == 1 and removed["fin_outbox"] == 1
+    with closing(sqlite3.connect(dest)) as c:
+        assert [t for t in FA.DEV_COPY_EMPTIED if _count(c, t)] == []
+
+
+def test_a_dev_copy_keeps_the_prepaid_postings_so_a_month_is_not_expensed_twice(tmp_path):
+    """A prepaid month's posting record is what stops amortize from expensing that month again. A dev copy keeps it
+    whole (DEV_COPY_KEPT), so the table is neither kept-by-accident nor one of the unclassified tables the copy empties."""
+    store = Store(Settings(db_path=tmp_path / "hub.sqlite"))
+    store.initialize(seed_market=False)
+    with closing(sqlite3.connect(store.settings.db_path)) as c:
+        assert "fin_prepaid_postings" in FA.DEV_COPY_KEPT
+        assert "fin_prepaid_postings" not in devcopy.emptied(c)
+
+
+def test_a_dev_copy_scrub_with_one_emptied_table_missing_still_empties_the_others(tmp_path):
+    store = Store(Settings(db_path=tmp_path / "hub.sqlite"))
+    store.initialize(seed_market=False)
+    with closing(sqlite3.connect(store.settings.db_path)) as c:
+        c.execute("PRAGMA foreign_keys=ON")
+        _provider_rows(c)
+        c.commit()
+        c.execute("PRAGMA foreign_keys=OFF")               # as devcopy's copy runs: a missing child is not checked
+        c.execute("DROP TABLE fin_cards")
+        removed = FA.scrub_dev_copy(c, H.now())
+        assert "fin_cards" not in removed and removed["fin_connections"] == 1
+        assert _count(c, "fin_connections") == 0 and _count(c, "fin_outbox") == 0
+        c.commit()
+
+
+def test_a_dev_copy_build_still_empties_finance_when_one_of_its_tables_is_missing(tmp_path):
+    source = Store(Settings(db_path=tmp_path / "live" / "hub.sqlite"))
+    source.initialize(seed_market=False)
+    with closing(sqlite3.connect(source.settings.db_path)) as c:
+        c.execute("PRAGMA foreign_keys=ON")
+        _provider_rows(c)
+        c.execute("DROP TABLE fin_cards")
+        c.commit()
+    for conn in source.pool:
+        conn.close()
+    source.pool.clear()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    removed, _ = devcopy.build(source.settings.db_path, dest, days=30)
+    assert removed["fin_connections"] == 1
+    with closing(sqlite3.connect(dest)) as c:
+        assert _count(c, "fin_connections") == 0
+
+
 def test_a_changed_approver_voids_the_decision_and_asks_the_new_one(books):
     with books.transaction() as c:
         asked = _coder_asks(c, _software(c))
@@ -175,7 +263,7 @@ def test_defaults_are_fixed_when_asked_not_when_approved(books):
         assert '"effective_from": "2026-10-01"' in stored
         assert _coder_asks(c, parent).action_id == asked.action_id         # a retry without it is the same request
         H.approval_decide(c, "human:cara", asked.approval_id, "approved")
-        done = FA.approval_decided(c, asked.approval_id, "2026-11-02T09:00:00.000000Z")
+        done = FA.approval_decided(c, asked.approval_id, "2026-10-20T09:00:00.000000Z")
         assert done.status == "committed" and done.result["effective_from"] == "2026-10-01"
 
 

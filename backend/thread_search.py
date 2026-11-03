@@ -27,6 +27,8 @@ TEXT_MAX = 20_000         # characters of a body that are indexed
 EXCERPT_WORDS = 16        # words of text each hit shows
 WORD = re.compile(r"\w+")
 
+SEARCHED_COLUMNS = {"id", "body", "deleted_at", "refs"}   # the `messages` columns the index and its triggers read
+
 KEYS = ("CREATE TABLE IF NOT EXISTS message_search_keys(id INTEGER PRIMARY KEY AUTOINCREMENT, "
         "message_id TEXT NOT NULL UNIQUE)")
 # Created apart so a SQLite built without FTS5 still starts: search then finds nothing (ensure returns False).
@@ -68,6 +70,11 @@ def ensure(c):
     first time it is made. Returns False when this SQLite has no FTS5 or there is no messages table yet."""
     tables = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if "messages" not in tables:
+        return False
+    # The app installs its routes before Store.initialize runs the migrations, so an upgraded database can still have
+    # the old column names here (refs_json before the cleanup's rename to refs). Wait for the migrated schema; the
+    # first search after it makes the index.
+    if not SEARCHED_COLUMNS <= {row[1] for row in c.execute("PRAGMA table_info(messages)")}:
         return False
     existed = "message_search" in tables
     c.execute(KEYS)

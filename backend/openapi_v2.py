@@ -587,8 +587,8 @@ STABLE = [
     ("/api/v2/bots/{bot}/kpis", "get", "KPIs", "listBotKpis",
      "A bot's five automatic KPIs, computed from Tico's own data (Read on the bot)", "BotKpis"),
     ("/api/v2/usage", "get", "Usage", "getUsage",
-     "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, harness, model, effort or subscription, "
-     "filterable by those run dimensions and department (__unknown__ selects missing values). The owner and bot administrators see every bot; anyone else sees the bots they run "
+     "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, task (the top 25), harness, model, effort or subscription, "
+     "filterable by those run dimensions, department (__unknown__ selects missing values) and bots (slugs, comma separated). The owner and bot administrators see every bot; anyone else sees the bots they run "
      "or own. ?bot=<bot id or slug> is that bot's daily series and top routines instead", "Usage"),
     ("/api/v2/usage/limits", "get", "Usage", "getUsageLimits",
      "The team default limit and each bot's hourly, daily, weekly and monthly limits with this period's spend, for the bots "
@@ -1313,9 +1313,10 @@ SCHEMAS = {
                          "low_estimate_runs": {"type": "integer", "description": "Priced runs whose estimate may be low: the model "
                                                "charges more for long prompts and the runner did not report every request's tokens"}}),
     "Usage": obj({"from": "s", "to": "s", "prices_as_of": {"type": "string", "description": "The date the price table was read"},
-                  "group": {"enum": ["bot", "day", "routine", "harness", "model", "effort", "subscription"]}, "department": "n", "totals": ref("UsageFigures"),
+                  "group": {"enum": ["bot", "day", "routine", "task", "harness", "model", "effort", "subscription"]}, "department": "n", "totals": ref("UsageFigures"),
                   "rows": items({"type": "object", "description": "By bot: bot, name, department; by day: day; by routine: "
-                                                 "routine (null for runs that came from none), title, bot, name. Every row has the "
+                                                 "routine (null for runs that came from none), title, bot, name; by task: value and name (its title, "
+                                                 "'A private task', or null and 'Chats and other runs' for runs with none). Every row has the "
                                                  "usage figures and `share`, its part of the total (estimate plus API-equivalent)",
                                                  "additionalProperties": True}),
                   "dimensions": {"type": "object", "description": "Available dimension filters, scoped to visible runs"},
@@ -1804,7 +1805,7 @@ SCHEMAS.update({
         required=["id", "name", "kind", "active"])), "next_cursor": "n", "view_version": "i"}),
     "FinanceInbox": obj({"items": items(obj({"kind": {"type": "string", "enum": [
         "uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
-        "budget_near_limit", "sync_failed", "period_ready"]}, "id": "s", "label": "s"})),
+        "budget_near_limit", "sync_failed", "period_ready", "unreconciled", "bill_email"]}, "id": "s", "label": "s"})),
         "counts": {"type": "object", "additionalProperties": {"type": "integer"}}, "more": items({"type": "string"}),
         "next_cursor": "n", "currency": "s", "view_version": "i"}),
     "FinanceReportOf": obj({"kind": {"type": "string", "enum": ["pnl", "pnl_by", "balance_sheet", "cash_flow",
@@ -2329,9 +2330,9 @@ PROBLEM = {"type": "object", "required": ["error"], "properties": {"error": {
 TAGS['Cards and pins'] = ("Tico's built-in cards and where pages and cards are pinned: the Dashboard, team pages, bot "
                           "sidebars and tasks (docs/overview.md). A card shows each reader only what they may see.")
 STABLE.extend([
-    ('/api/v2/places/{place}', 'get', 'Cards and pins', 'getPlace', 'A place\'s pins in order (dashboard, team:<group>, '
-     'bot:<id>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable pages are '
-     'left out', 'Place'),
+    ('/api/v2/places/{place}', 'get', 'Cards and pins', 'getPlace', 'A place\'s pins in order (dashboard, growth, '
+     'team:<group>, bot:<id>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable '
+     'pages are left out. growth takes `month` (YYYY-MM) and answers `month` and `months`, the picker\'s choices', 'Place'),
     ('/api/v2/places/{place}', 'put', 'Cards and pins', 'savePlace', 'Save a Dashboard, team page or My dashboard (its '
      'default cards become pins); a team page\'s audience sets its group\'s Read', 'Place'),
     ('/api/v2/places/{place}/order', 'post', 'Cards and pins', 'orderPlace', 'Put every pin at a place in this order', 'Place'),
@@ -2343,7 +2344,7 @@ STABLE.extend([
      '`ids` reads up to 50', 'CardList'),
     ('/api/v2/cards', 'post', 'Cards and pins', 'addCard', 'A built-in card, pinned at `place` in the same write', None),
     ('/api/v2/cards/choices', 'get', 'Cards and pins', 'getCardChoices', 'Card templates and their settings, the teams, '
-     'and the KPIs and pages the caller may pick', None),
+     'the KPIs and pages the caller may pick, the Growth page\'s metrics and channels; `place=growth` adds its templates', None),
     ('/api/v2/cards/{cid}', 'patch', 'Cards and pins', 'updateCard', 'Change a card\'s heading or settings', None),
     ('/api/v2/cards/{cid}', 'delete', 'Cards and pins', 'removeCard', 'Remove a card and every pin of it', None),
 ])
@@ -2354,6 +2355,7 @@ STABLE.extend([
     ('/api/v2/rules/read', 'post', 'Rules', 'readRuleDocument', 'Add a document for Counsel to read: a file you can read, or a public link (saved as a file version); Counsel suggests the rules in it', None),
     ('/api/v2/rules/ask', 'post', 'Rules', 'askRules', 'A can-I question: the active rules that share words with it, cited, and Counsel\'s answer on a task', None),
     ('/api/v2/rules/due', 'get', 'Rules', 'listRuleDue', 'Due dates of rules in force: overdue, then those falling due within next days', None),
+    ('/api/v2/rules/by-teammate', 'get', 'Rules', 'listRulesByTeammate', 'The rules in force the caller may read, each with can_edit; and per bot and per person the caller may see, the ids of the rules whose Who (who) or With (with) names it, only those with one', 'RulesByTeammate'),
     ('/api/v2/rules/{rule_id}', 'get', 'Rules', 'getRule', 'One rule, its due dates, and the quote it cites where its file is readable', None),
     ('/api/v2/rule-due/{due_id}', 'get', 'Rules', 'getRuleDue', 'One due date in full: its status, open occurrences, and its chain of edits (ended and removed rows included)', None),
     ('/api/v2/rules/{rule_id}', 'post', 'Rules', 'updateRule', 'Edit a rule against its version; a bot cannot edit', None),
@@ -2376,14 +2378,26 @@ STABLE.extend([
     ('/api/v2/rule-holds/{hold_id}/send', 'post', 'Rules', 'sendRuleHold', 'The reviewer sends it anyway, once, with the hold\'s nonce; for a person\'s write that is the rule\'s author, its editors or an admin', None),
     ('/api/v2/rule-holds/{hold_id}/appeal', 'post', 'Rules', 'appealRuleHold', 'The author bot asks the reviewer to look, with why', None),
 ])
+_RULE_IDS = items({'type': 'string'})
+SCHEMAS['RulesByTeammate'] = obj({
+    'rules': items(obj({'id': 's', 'kind': {'enum': ['internal', 'external']}, 'text': 's',
+                        'if_broken': {'enum': ['block', 'escalate', 'warn', None]}, 'can_edit': 'b'})),
+    'bots': items(obj({'slug': 's', 'who': _RULE_IDS, 'with': _RULE_IDS})),
+    'people': items(obj({'id': 's', 'who': _RULE_IDS, 'with': _RULE_IDS})),
+})
 SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done_per_week', 'needs_you', 'spend', 'kpi',
                                                         'automation_runs', 'latest_pages', 'needs_attention',
-                                                        'unread_threads', 'my_tasks', 'updates']},
+                                                        'unread_threads', 'my_tasks', 'updates', 'growth_number',
+                                                        'growth_funnel', 'growth_channels', 'growth_retention',
+                                                        'growth_board']},
                        'title': 's', 'heading': 's', 'name': 's', 'team_name': 's', 'settings': 'o', 'hidden': 'b',
                        'data': {'type': ['object', 'null'], 'description': 'What the card shows the caller; null when hidden'}},
                       required=['id', 'template', 'heading', 'settings', 'hidden', 'data'])
 SCHEMAS['CardList'] = obj({'cards': items(ref('Card')), 'next': 'n'})
-SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'team', 'bot', 'task', 'person']}, 'saved': 'b', 'can_edit': 'b',
+SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'growth', 'team', 'bot', 'task', 'person']}, 'saved': 'b',
+                        'can_edit': 'b', 'month': {'type': 'string', 'description': 'growth: the month its cards read (YYYY-MM)'},
+                        'months': {'type': 'array', 'items': {'type': 'string'},
+                                   'description': 'growth: the newest 24 months with cohort rows, oldest first'},
                         'pins': items(obj({'id': 'n', 'item': 'n', 'position': 'i', 'size': {'enum': ['small', 'medium', 'large']},
                                            'card': ref('Card'),
                                            'page': obj({'file_id': 's', 'title': 's', 'bot': 's', 'updated_at': 's', 'archived': 'b'})},

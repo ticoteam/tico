@@ -6,15 +6,26 @@
 'use strict';
 
 const OVERVIEW_CAMPUS = OVERVIEW + '/campus';
+const OVERVIEW_GRAPH = OVERVIEW + '/graph';           // ui/app/overview-graph.js
 const OVERVIEW_COMPANY = OVERVIEW + '/company-page';   // ui/app/company-page.js
 const TEAM_PAGE = '#/team/';
 const DASH_SIZES = [['small', 'Small'], ['medium', 'Medium'], ['large', 'Large']];
-// {place, view, choices, root, menu}: the place on screen. A write's answer is drawn only while it is still the place.
+// {place, month, key, view, choices, root, menu}: the place on screen. A write's answer is drawn only while it is still
+// the place.
 let DASH = null;
+// A place drawn on this grid under its own head (the Growth page, ui/app/growth-page.js): {head(state) → its HTML,
+// pages() → whether + Page shows, drawn(state) after each draw, wire(state) once}.
+const DASH_PLACES = {};
+// By template: the heading a card shows when it has no title of its own, and what it says when it shows nothing.
+const DASH_HEADING = {};
+const DASH_EMPTY = {};
 
 const dashApi = place => '/v2/places/' + encodeURIComponent(place);
+// The place as it reads: the Growth page's for the month picked there.
+const dashReadUrl = state => dashApi(state.place) + (state.month ? '?month=' + encodeURIComponent(state.month) : '');
+const dashKey = state => state.place + (state.month ? '?month=' + state.month : '');
 const dashTabsHTML = on => `<nav class="tabs slim strat-tabs dash-tabs" aria-label="Overview">${
-  [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Company'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Company page']] : [])].map(([id, href, label]) =>
+  [['mine', HOME, 'Mine'], ['dashboard', OVERVIEW, 'Company'], ['campus', OVERVIEW_CAMPUS, 'Campus'], ['graph', OVERVIEW_GRAPH, 'Graph'], ...(cpAllowed() ? [['company', OVERVIEW_COMPANY, 'Company page']] : [])].map(([id, href, label]) =>
     `<a href="${href}"${on === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
 const dashNum = n => n == null ? '–' : Number(n).toLocaleString(undefined, {maximumFractionDigits: 2});
 const dashMoney = n => n == null ? '–' : '$' + Number(n).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
@@ -81,7 +92,7 @@ const DASH_BODY = {
   latest_pages: d => d.pages.length ? `<ul class="dash-list dash-pages">${d.pages.map(dashPageRow).join('')}</ul>` : '<p class="muted dash-none">No pages yet</p>',
 };
 function dashCardBody(card) {
-  if (card.hidden || !card.data) return '<p class="muted dash-none">Not shown to you</p>';
+  if (card.hidden || !card.data) return `<p class="muted dash-none">${esc(DASH_EMPTY[card.template] || 'Not shown to you')}</p>`;
   return (DASH_BODY[card.template] || (() => ''))(card.data, card);
 }
 // A page pin: the page itself through pageCard (ui/app/pages.js) when this build has it, else a link to it.
@@ -97,7 +108,8 @@ function dashPageEl(page, size) {
 }
 // A card names its team, except on that team's own page.
 const dashTeamShown = (card, view) => card.team_name && !(view?.kind === 'team' && card.settings?.team === view.group) ? card.team_name : '';
-const dashPinTitle = (pin, view) => pin.card ? pin.card.heading + (dashTeamShown(pin.card, view) ? ' · ' + pin.card.team_name : '') : pin.page?.title || 'Page';
+const dashHeading = card => (!card.title && DASH_HEADING[card.template]?.(card)) || card.heading;
+const dashPinTitle = (pin, view) => pin.card ? dashHeading(pin.card) + (dashTeamShown(pin.card, view) ? ' · ' + pin.card.team_name : '') : pin.page?.title || 'Page';
 // Who sees a team page, in a few words: Everyone, the one team or person, else how many.
 function dashAudienceWords(aud) {
   if (!aud || aud.everyone !== false) return 'Everyone';
@@ -114,38 +126,53 @@ function dashAudienceWords(aud) {
 // ---- the page
 // A place seen before is drawn at once from what it showed last (S.lastRead.places), then read again; the grid is drawn
 // again only when the answer differs, so its page widgets are not reloaded for nothing.
-async function pageDashboard(place) {
-  const team = place.startsWith('team:'), kept = (S.lastRead.places ||= {})[place];
+async function pageDashboard(place, {month = ''} = {}) {
+  const team = place.startsWith('team:'), own = DASH_PLACES[place];
+  const state = {place, month, view: null, choices: null, root: null, menu: null, readAt: Date.now()};
+  const key = state.key = dashKey(state), kept = (S.lastRead.places ||= {})[key];
   const main = $('#main'); main.classList.add('dash-layout');
-  main.innerHTML = `<div class="dash" id="dash-root"><header class="dash-head">
-      <h1>${team ? '' : 'Overview'}</h1>${team ? '' : dashTabsHTML(place === 'person:me' ? 'mine' : 'dashboard')}<span class="spacer"></span>
+  const head = own ? own.head(state) : `<h1>${team ? '' : 'Overview'}</h1>${team ? '' : dashTabsHTML(place === 'person:me' ? 'mine' : 'dashboard')}<span class="spacer"></span>`;
+  main.innerHTML = `<div class="dash" id="dash-root"><header class="dash-head">${head}
       <span class="dash-actions" hidden>${team ? '<button type="button" class="ghost dash-audience" data-dash-audience></button>' : ''}
         <button type="button" class="ghost" data-dash-add="card"><span class="dash-plus" aria-hidden="true">+</span>Card</button>
-        <button type="button" class="ghost" data-dash-add="page"><span class="dash-plus" aria-hidden="true">+</span>Page</button></span></header>
+        ${!own || own.pages() ? '<button type="button" class="ghost" data-dash-add="page"><span class="dash-plus" aria-hidden="true">+</span>Page</button>' : ''}</span></header>
     <div class="dash-grid" id="dash-grid">${kept ? '' : skelRows(4, {card: true})}</div>
     ${team ? '<section class="card home-card dash-home" id="dash-home"><header><h2>Home</h2><div class="home-card-acts" id="dash-home-acts"></div></header><div id="dash-home-thread"></div></section>' : ''}
     <dialog class="tmodal tmodal-shell dash-dialog" id="dash-dialog" aria-label="Card"></dialog></div>`;
-  const state = DASH = {place, view: null, choices: null, root: $('#dash-root'), menu: null, readAt: Date.now()};
+  DASH = state; state.root = $('#dash-root');
   // A team's Home: the thread everyone who can see the team reads.
   if (team) threadMount($('#dash-home-thread'), {home: 'group:' + place.slice(5), card: true, header: 'compact', actsHost: $('#dash-home-acts'), hideGone: $('#dash-home'), compactEmpty: true});
   dashWire(state);
+  own?.wire?.(state);
   if (kept) { state.view = kept; dashDraw(state); }
   let view;
-  try { view = await get(dashApi(place)); }
+  try { view = await get(dashReadUrl(state)); }
   catch (e) {
     if (DASH !== state) return;
-    if (kept) delete S.lastRead.places[place];
+    if (kept) delete S.lastRead.places[key];
     $('#dash-grid').innerHTML = `<p class="empty">${esc(!team ? e.message : e.status === 404 ? 'No such team' : e.status === 403 ? 'This team page is not shared with you' : e.message)}</p>`;
     return;
   }
   if (!Array.isArray(view?.pins)) view = {kind: place.split(':')[0], pins: [], can_edit: false, saved: true};
   // A read that lands after the page was left is kept for the next visit when nothing is kept yet.
-  if (DASH !== state) { S.lastRead.places[place] ||= view; return; }
+  if (DASH !== state) { S.lastRead.places[key] ||= view; return; }
+  // The month moved while the read was out: that read draws.
+  if (dashKey(state) !== key) return;
   // A write made while the read was out already drew its own answer.
   if (state.view !== kept && state.view) return;
   if (kept && sameData(view, kept)) return;
   state.view = view;
   dashDraw(state);
+}
+// Read the place again and draw it (the Growth page after its month or its settings change). The newest read wins.
+async function dashRefresh(state) {
+  const seq = state.refreshSeq = (state.refreshSeq || 0) + 1;
+  try {
+    const view = await get(dashReadUrl(state), {fresh: true});
+    if (DASH !== state || state.refreshSeq !== seq || !Array.isArray(view?.pins)) return;
+    state.view = view;
+    dashDraw(state);
+  } catch (e) { if (DASH === state && state.refreshSeq === seq) dashToast(e.message); }
 }
 // "Seen by" is the group's Read (backend/teammate_access.py): it opens the group's Access editor, for its leads
 // and the admins (the same people who arrange the page), and the page is read again after a save.
@@ -183,7 +210,7 @@ setInterval(() => {
 }, 30e3);
 function dashDraw(state) {
   const v = state.view, root = state.root;
-  S.lastRead.places[state.place] = v;
+  S.lastRead.places[state.key] = v;
   if (v.kind === 'team') { root.querySelector('h1').textContent = v.name; }
   const actions = root.querySelector('.dash-actions');
   actions.hidden = !v.can_edit;
@@ -199,7 +226,7 @@ function dashDraw(state) {
     el.className = 'dash-pin'; el.dataset.size = pin.size || 'medium'; el.dataset.at = String(i);
     el.innerHTML = `<header class="dash-pin-head">
         ${v.can_edit ? `<button type="button" class="dash-grip" data-dash-grip aria-label="Move ${esc(dashPinTitle(pin, v))}" title="Move">${BOT_SVG.grip}</button>` : ''}
-        <h2>${pin.card ? esc(pin.card.heading) : ''}${pin.card && dashTeamShown(pin.card, v) ? ` <span class="muted">· ${esc(pin.card.team_name)}</span>` : ''}</h2>
+        <h2>${pin.card ? esc(dashHeading(pin.card)) : ''}${pin.card && dashTeamShown(pin.card, v) ? ` <span class="muted">· ${esc(pin.card.team_name)}</span>` : ''}</h2>
         <span class="spacer"></span>
         ${v.can_edit ? `<button type="button" class="dash-more" data-dash-menu aria-haspopup="menu" aria-expanded="false" aria-label="${esc(dashPinTitle(pin, v))} menu" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>` : ''}</header>
       <div class="dash-pin-body"></div>`;
@@ -208,6 +235,7 @@ function dashDraw(state) {
     else body.append(dashPageEl(pin.page, pin.size));
     grid.append(el);
   });
+  DASH_PLACES[state.place]?.drawn?.(state);
 }
 // A place nobody saved shows its default cards without ids; the first change saves them, then finds the pin again.
 async function dashSaved(state) {
@@ -220,7 +248,10 @@ async function dashWrite(state, work) {
   try {
     const view = await work();
     if (DASH !== state) return;
-    state.view = view?.pins ? view : await get(dashApi(state.place), {fresh: true});
+    // An answer for another month than the one picked (a write's) is read again for it, the newest read winning.
+    if (!view?.pins || (state.month && view.month !== state.month)) return void await dashRefresh(state);
+    state.refreshSeq = (state.refreshSeq || 0) + 1;   // a read still out is older than this answer
+    state.view = view;
     dashDraw(state);
   } catch (e) { if (DASH === state) dashToast(e.message); }
 }
@@ -322,19 +353,39 @@ function dashWire(state) {
 }
 
 // ---- forms: a card's settings, a page to pin
+// The cards a place offers: the Growth page's own templates only there (?place=growth).
+// Bumped when what the card form offers changes (a Growth channel added or retired): the next form reads it again.
+let DASH_CHOICES_AT = 0;
+const dashChoicesStale = () => { DASH_CHOICES_AT += 1; };
 async function dashChoices(state, team = '') {
-  const key = 'c:' + team;
-  if (!state.choicesBy) state.choicesBy = {};
-  return state.choicesBy[key] ||= get('/v2/cards/choices' + (team ? '?team=' + encodeURIComponent(team) : ''));
+  const query = new URLSearchParams();
+  if (team) query.set('team', team);
+  if (DASH_PLACES[state.place]) query.set('place', state.place);
+  const text = query.toString(), key = 'c:' + text;
+  if (!state.choicesBy || state.choicesAt !== DASH_CHOICES_AT) state.choicesBy = {}, state.choicesAt = DASH_CHOICES_AT;
+  return state.choicesBy[key] ||= get('/v2/cards/choices' + (text ? '?' + text : ''));
 }
 const dashTeamOptions = (teams, value) => `<option value="">Company</option>${teams.map(t => `<option value="${esc(t.id)}"${t.id === value ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}`;
+// count: [label, max, default] by template; the rest count pages.
+const DASH_COUNT = {unread_threads: ['Threads', 10, 5], my_tasks: ['Tasks', 10, 5], updates: ['Updates', 10, 5], growth_channels: ['Channels', 20, 10], growth_board: ['Tasks per lane', 5, 3]};
+const dashOptions = (pairs, value) => pairs.map(([v, l]) => `<option value="${esc(v)}"${v === value ? ' selected' : ''}>${esc(l)}</option>`).join('');
 function dashFieldsHTML(template, choices, settings) {
   const fields = choices.templates.find(t => t.id === template)?.fields || [];
+  const [countLabel, countMax, countDefault] = DASH_COUNT[template] || ['Pages', 10, 5];
   return fields.map(f => f === 'team' ? `<label>Team<select name="team">${dashTeamOptions(choices.teams, settings.team || '')}</select></label>`
     : f === 'weeks' ? `<label>Weeks<input type="number" name="weeks" min="4" max="26" value="${esc(settings.weeks ?? 8)}" required></label>`
-    : f === 'count' ? `<label>${{unread_threads: 'Threads', my_tasks: 'Tasks', updates: 'Updates'}[template] || 'Pages'}<input type="number" name="count" min="1" max="10" value="${esc(settings.count ?? 5)}" required></label>`
+    : f === 'count' ? `<label>${countLabel}<input type="number" name="count" min="1" max="${countMax}" value="${esc(settings.count ?? countDefault)}" required></label>`
+    : f === 'months' ? `<label>Months<input type="number" name="months" min="3" max="12" value="${esc(settings.months ?? 6)}" required></label>`
+    : f === 'metric' ? `<label>Number<select name="metric" required>${dashOptions((choices.metrics || []).map(m => [m.id, m.label]), settings.metric || '')}</select></label>`
+    : f === 'channel' ? `<label>Channel<select name="channel"><option value="">All channels</option>${dashOptions((choices.channels || []).map(c => [c.slug, c.name]), settings.channel || '')}</select></label>`
     : f === 'kpi' ? `<label>KPI<select name="kpi" required>${choices.kpis.length ? choices.kpis.map(k => `<option value="${esc(k.id)}"${k.id === settings.kpi ? ' selected' : ''}>${esc(k.name)}</option>`).join('') : '<option value="">No KPIs</option>'}</select></label>`
     : '').join('');
+}
+// A card's title field suggests the name it shows without one: a Number's is its metric's.
+function dashTitleHint(form, choices, template) {
+  const metric = template === 'growth_number' && form.querySelector('[name="metric"]');
+  form.elements.namedItem('title').placeholder = metric ? (choices.metrics || []).find(m => m.id === metric.value)?.label || ''
+    : choices.templates.find(t => t.id === template)?.name || '';
 }
 function dashSettingsOf(form) {
   const out = {};
@@ -365,6 +416,9 @@ function dashDialog(state, title, inner, submit) {
   if (!dlg.open) dlg.showModal();
   return form;
 }
+// A new card's size: a Number is a tile, the Funnel and Channels want the row; the rest a half.
+const DASH_SIZE = {growth_number: 'small', growth_funnel: 'large', growth_channels: 'large'};
+const dashSizeOf = template => DASH_SIZE[template] || 'medium';
 // at < 0: a new card for this place; else the card pinned at that position.
 async function dashCardForm(state, at) {
   let choices;
@@ -373,12 +427,13 @@ async function dashCardForm(state, at) {
   const card = at >= 0 ? state.view.pins[at].card : null;
   const team = state.view.kind === 'team' ? state.view.group : '';
   const settings = card ? card.settings : {team};
-  const template = card ? card.template : choices.templates[0].id;
-  const form = dashDialog(state, card ? card.heading : 'Add card', `
-    ${card ? '' : `<label>Card<select name="template">${choices.templates.map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('')}</select></label>`}
-    <label>Title<input name="title" maxlength="80" value="${esc(card?.title || '')}" placeholder="${esc(card?.name || choices.templates[0].name)}"></label>
+  // A new card starts on the place's own first template (a Number on the Growth page), else the first offered.
+  const first = DASH_PLACES[state.place]?.first, template = card ? card.template : (choices.templates.find(t => t.id === first) || choices.templates[0]).id;
+  const form = dashDialog(state, card ? dashHeading(card) : 'Add card', `
+    ${card ? '' : `<label>Card<select name="template">${dashOptions(choices.templates.map(t => [t.id, t.name]), template)}</select></label>`}
+    <label>Title<input name="title" maxlength="80" value="${esc(card?.title || '')}"></label>
     <div class="dash-fields">${dashFieldsHTML(template, choices, settings)}</div>
-    ${card ? '' : `<label>Size<select name="size">${DASH_SIZES.map(([id, label]) => `<option value="${id}"${id === 'medium' ? ' selected' : ''}>${label}</option>`).join('')}</select></label>`}`,
+    ${card ? '' : `<label>Size<select name="size">${DASH_SIZES.map(([id, label]) => `<option value="${id}"${id === dashSizeOf(template) ? ' selected' : ''}>${label}</option>`).join('')}</select></label>`}`,
   async f => {
     const el = f.elements, body = {title: el.namedItem('title').value.trim(), settings: dashSettingsOf(f)};
     if (card) {
@@ -391,11 +446,14 @@ async function dashCardForm(state, at) {
       await dashWrite(state, async () => null);
     }
   });
-  const pick = form.querySelector('[name="template"]');
+  const pick = form.querySelector('[name="template"]'), chosen = () => pick ? pick.value : template;
   if (pick) pick.onchange = () => {
     form.querySelector('.dash-fields').innerHTML = dashFieldsHTML(pick.value, choices, settings);
-    form.elements.namedItem('title').placeholder = choices.templates.find(t => t.id === pick.value)?.name || '';
+    form.elements.namedItem('size').value = dashSizeOf(pick.value);
+    dashTitleHint(form, choices, pick.value);
   };
+  form.querySelector('.dash-fields').addEventListener('change', ev => { if (ev.target.name === 'metric') dashTitleHint(form, choices, chosen()); });
+  dashTitleHint(form, choices, template);
 }
 async function dashPageForm(state) {
   let choices;

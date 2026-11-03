@@ -5,6 +5,7 @@ import json
 import urllib.error
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 from backend import hubdb as H
 from backend import usage_limits
@@ -74,6 +75,22 @@ def test_usage_posting_matches_gateway_billed_runs_once(books):
                                                                 "tico-image": "0.07"}), fetched_at=AT)
         assert [(p["line"], p["amount"]) for p in FA.post_usage(c, "2026-10-17T16:05:00.000000Z")] == [("ai", 2)]
         assert sum(v for (_, code), v in _usage_lines(c).items() if code == "5100") == 62
+
+
+def test_gateway_usage_in_a_raw_totals_month_posts_nothing_because_the_totals_carry_it(books):
+    """§4.1 and §9: a month holding raw totals already carries its Gateway spend, so the usage run posts nothing there
+    (a posting into that month is refused) and the month's usage posts no entry at all."""
+    raw = (Path(__file__).parent / "fixtures" / "finance" / "raw_totals.csv").read_text()
+    mapping = {"Software subscriptions": "6100", "Office rent": "6900", "Sales revenue": "4000", "Cash at bank": "1000"}
+    with books.transaction() as c:
+        assert act(c, OWNER, "import_raw_totals", {"csv": raw, "basis": "cash", "mapping": mapping,
+                                                   "source_name": "Acme history"}).status == "committed"
+        _turn(c, "coder", "2026-02-15T13:00:00.000000Z", 0.30)
+        meter = _meter("2026-02-28T16:00:00Z", **{"tico-medium": "0.30", "tico-fast": "0.10", "tico-image": "0.07"})
+        meter["month"] = "2026-02"
+        assert FA.usage_snapshot(c, meter, fetched_at="2026-02-28T16:01:00.000000Z")
+        assert FA.post_usage(c, "2026-02-28T16:05:00.000000Z") == []
+        assert _usage_lines(c) == {}
 
 
 def test_a_run_hold_settles_once_and_the_posting_takes_it_in(books):
@@ -319,7 +336,12 @@ def test_a_bots_own_allocation_is_its_to_spend(books):
         assert act(c, OWNER, "allocation_set", {"budget_id": ai, "target_kind": "teammate", "target_id": "bot:coder",
                                                 "amount": 100}).status == "committed"
         assert usage_limits.blocked(c, "coder", at=NOON) is None
-        assert usage_limits.blocked(c, "seller", at=NOON)
+        assert not FA.run_hold(c, "coder", "job-coder", at=AT).refused        # coder spends what was set aside for it
+        # Nothing is spent, so no budget is at its cutoff and the reserve pauses no bot on its own (spec 4.4). A run claim
+        # is work, not a request for budget: the reserve does not refuse the seller's run either, it is held against the
+        # spend room that is left (only a budget at its cutoff refuses a run).
+        assert usage_limits.blocked(c, "seller", at=NOON) is None
+        assert not FA.run_hold(c, "seller", "job-seller", at=AT).refused
         assert jobs.cap_wanted(c, AT)[0] == "clear"
 
 
@@ -452,7 +474,8 @@ def test_no_settled_hold_outlives_its_months_final_posting(books):
         assert _hold(c, late)[1] is not None
     with books.transaction() as c:
         # Settled in September, but September's meter billed nothing: the final posting frees it.
-        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 1_000, "effective_from": "2026-09-01"})
+        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 1_000, "effective_from": "2026-09-01"},
+            at="2026-08-15T12:00:00.000000Z")
         lone = FA.run_hold(c, "coder", "jsep", at="2026-09-20T10:00:00.000000Z").hold_id
         run = _turn(c, "coder", "2026-09-20T11:00:00.000000Z", 0.20)
         FA.run_ended(c, "jsep", run, "2026-09-20T11:00:01.000000Z")

@@ -67,8 +67,11 @@ def test_python_sql_and_sse_renderings_agree_for_every_teammate(world):
             v = threads.viewer(auth, identity)
             python = {i for i in ids if threads.readable(c, v, i)}
             marks = ",".join("?" * len(ids))
+            # `tasks` is the viewer's readable tasks, as a caller passes it: a private task's thread is not SQL's call.
+            tasks = [t for (t,) in c.execute("SELECT id FROM tasks") if threads._task_readable(c, v, t)]
+            readable_tasks = "SELECT id FROM tasks WHERE id IN (" + (",".join(f"'{t}'" for t in tasks) or "NULL") + ")"
             sql = {r[0] for r in c.execute(f"SELECT id FROM conversations WHERE id IN ({marks}) AND "
-                                           + threads.readable_sql(c, v, "conversations"), ids)}
+                                           + threads.readable_sql(c, v, "conversations", tasks=readable_tasks), ids)}
             sse = threads.readable_ids(c, threads.viewer(auth, identity), ids)
             assert sql <= python, (actor, "SQL shows what Python hides", sorted(sql - python)[:5])
             assert sse == python, (actor, sorted(sse ^ python)[:5])
@@ -118,17 +121,17 @@ def test_internal_bots_read_company_and_their_groups_threads_and_external_agents
     import json
     bot = "bot:content"
     with store.transaction() as c:
-        # The demo's Content bot is in Leadership; here Leadership sits under Operations.
+        # The demo's Content bot is in Marketing; here Marketing sits under Operations.
         roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
-        roster["org_groups"] = {"operations": {"name": "Operations"}, "marketing": {"name": "Marketing"},
-                                "leadership": {"name": "Leadership", "parent": "operations"}}
+        roster["org_groups"] = {"operations": {"name": "Operations"}, "leadership": {"name": "Leadership"},
+                                "marketing": {"name": "Marketing", "parent": "operations"}}
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
     with store.transaction() as c:
         owner = threads.viewer(auth, owner_of(c, auth))
         other = next(a for a in people(who) if a != owner.actor)
         chain = threads.Viewer(auth, Identity(bot, "bot", attempt_id="att-none")).chain(c)
-        assert chain[:2] == ["leadership", "operations"], chain
-        own, above, outside = "leadership", "operations", "marketing"
+        assert chain[:2] == ["marketing", "operations"], chain
+        own, above, outside = "marketing", "operations", "leadership"
 
         def make(title, **kw):
             return threads.create(c, owner, title=title, **kw)["id"]

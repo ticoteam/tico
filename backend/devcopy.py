@@ -32,6 +32,7 @@ from contextlib import closing
 from pathlib import Path
 
 from . import backup
+from .finance import actions as finance
 from .hubdb import now, shift
 
 # Emptied, never pruned: one surviving row is one thing the copy could do.
@@ -45,6 +46,8 @@ EMPTY = (
     "task_milestone_waits", "milestones",
     # reconnect cards: an open one is a wake the copy could send; the refusals only settle those
     "task_reconnects", "google_signin_refusals",
+    # Pass deadlines can withdraw tasks; a rehearsal copy never resumes that work.
+    "memory_tidy_passes", "memory_tidy_packets",
     # routines and watchers
     "webhooks", "webhook_events", "webhook_sends", "webhook_attempts",   # outgoing: a copy never sends an event out
     "task_rules", "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "trigger_bodies", "trigger_seen", "rule_events_seen", "rule_task_runs", "rule_task_state", "trigger_relays", "hook_relay_state", "sleep_idle_state", "tico_notices", "mail_items", "mail_intake", "mail_reads", "mail_private_backfill", "watcher_runs", "watcher_items", "watcher_refs",
@@ -93,11 +96,6 @@ EMPTY = (
     "task_cap_log",
     # A hard delete's queue of bytes still to remove from storage: the copy never deletes from the source's stores.
     "blob_purges",
-    # Finance: what moves money or calls a provider (connections and their tokens, cursors and id maps, the outbox and
-    # inbox, cards and their authorizations, payees and payments) and spend holds. Its pending actions and undrained events are trimmed
-    # in prune; the books, budgets, views and rules are kept.
-    "fin_connections", "fin_external_refs", "fin_outbox", "fin_inbox", "fin_cards", "fin_card_auths", "fin_holds",
-    "fin_recipients", "fin_payments", "fin_transfers", "fin_provider_users", "fin_card_saves",
     # Calls: a live call's room and recorder are on the source's LiveKit, so the copy holds no live call. Its
     # transcripts and action items are thread messages, kept with the history.
     "calls", "call_participants", "call_holds",
@@ -114,6 +112,8 @@ EMPTY = (
     "company_page_settings", "audiences", "audience_sources", "disclosure_revisions", "disclosure_rules", "editions",
     "edition_sources", "edition_checks", "page_stats", "stat_board_approvals", "page_releases",
 )
+# Finance's own tables are classified in finance/actions.py (DEV_COPY_KEPT, and DEV_COPY_EMPTIED which Finance empties
+# in its scrub), so no Finance table name is written here.
 # Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",
                "automation_versions")
@@ -137,7 +137,7 @@ KEEP = frozenset((
     "kpis", "learning_cursors",
     # Threads: the search index (its triggers follow the messages kept), and the digest and follow-up ledgers, which
     # stop the copy emailing or nudging again what the source already did.
-    "thread_digests", "thread_followups", "thread_earlier_notices", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs", "learned_entries", "linked_docs", "listening_destinations",
+    "thread_digests", "thread_followups", "thread_earlier_notices", "thread_rankings", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs", "learned_entries", "linked_docs", "listening_destinations",
     "listen_items", "listen_judgments", "listen_runs", "live_meeting_chat", "live_meeting_chat_routes",
     "live_meeting_access", "live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_events", "live_meeting_humans",
     "live_meeting_turns", "live_meeting_windows", "live_meetings", "mail_agent_instructions", "mail_messages",
@@ -152,19 +152,7 @@ KEEP = frozenset((
     "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
     "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
     "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
-    "usage_limits", "usage_pools", "task_caps",
-    # Finance history and definitions (EMPTY has what acts; prune drops pending actions and settles undrained events)
-    "fin_accounts", "fin_actions", "fin_allocations", "fin_attachments", "fin_bill_lines", "fin_bill_retained",
-    "fin_bills", "fin_books",
-    "fin_budget_versions", "fin_budgets", "fin_contacts", "fin_dimensions", "fin_entries", "fin_events",
-    "fin_feed_txns", "fin_invoice_lines", "fin_invoices", "fin_line_tags", "fin_lines", "fin_money_accounts",
-    "fin_periods", "fin_private_lines", "fin_projections", "fin_reconciliations", "fin_restatements", "fin_rights",
-    "fin_rollups",
-    "fin_rule_counters", "fin_rule_runs", "fin_rules", "fin_settings", "fin_statements", "fin_usage_snapshots",
-    "fin_settlements", "fin_cash_rollups", "fin_credit_refunds", "fin_vendor_aliases", "fin_vendor_labels",
-    "fin_view_defaults", "fin_view_grants", "fin_view_versions",
-    "fin_raw_imports", "fin_close_snapshots", "fin_tax_jurisdictions", "fin_tax_seeds",
-    "fin_purchase_orders", "fin_po_lines", "fin_estimates", "fin_estimate_lines",
+    "usage_limits", "usage_pools", "task_caps", "reach_settings", "reach_lines",
     # Shared records (backend/records): locations, items and projects
     "items", "locations", "projects", "record_aliases",
     # Growth and brand (backend/growth.py, backend/brand.py)
@@ -174,7 +162,7 @@ KEEP = frozenset((
     "message_deliveries", "message_mentions", "message_reactions", "message_revisions", "sequences",
     "teammate_accesses", "thread_followers", "thread_members", "thread_routings",
     "message_search_keys",    # the search index's keys (thread_search.py); its FTS table is copied whole too, and search joins messages
-))
+)) | frozenset(finance.DEV_COPY_KEPT)
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.
 OWNED = frozenset(("attempt_events", "attempt_conversations", "attempt_inputs", "attempt_load_snapshots"))
@@ -196,7 +184,8 @@ def data_tables(c):
 
 def unclassified(c, keep_automations=False):
     kept = AUTOMATIONS if keep_automations else ()
-    return sorted(t for t in data_tables(c) if t not in KEEP and t not in HISTORY and t not in EMPTY and t not in kept)
+    return sorted(t for t in data_tables(c) if t not in KEEP and t not in HISTORY and t not in EMPTY and t not in kept
+                  and t not in finance.DEV_COPY_EMPTIED)
 
 
 def quote(name):
@@ -323,23 +312,26 @@ def prune(c, days, keep_automations=False):
         revoke_automation_secrets(c)
     # A deleted task's snapshot holds copies of its own rows; an emptied table's copies (requesters' contacts and
     # token hashes, delivery bookkeeping) go too, so neither a read of the trash nor a restore brings them back.
+    # Finance's emptied tables are in this set too, though Finance deletes them (in its scrub, below).
+    gone_all = set(gone) | set(finance.DEV_COPY_EMPTIED)
     if "task_trash" in present:
         for task_id, raw in c.execute("SELECT task_id,rows FROM task_trash").fetchall():
             snapshot = json.loads(raw or "{}")
             rows = snapshot.get("rows") if isinstance(snapshot, dict) else None
-            if isinstance(rows, dict) and set(rows) & set(gone):
-                snapshot["rows"] = {t: r for t, r in rows.items() if t not in gone}
+            if isinstance(rows, dict) and set(rows) & gone_all:
+                snapshot["rows"] = {t: r for t, r in rows.items() if t not in gone_all}
                 c.execute("UPDATE task_trash SET rows=? WHERE task_id=?", (json.dumps(snapshot), task_id))
     # The secret that keys visitors' hashed addresses is the live install's; the copy gets its own.
     if "registry_metadata" in present:
         c.execute("UPDATE registry_metadata SET value=? WHERE key='roadmap_ip_secret'",
                   (json.dumps(secrets.token_hex(32)),))
-    # Finance makes its kept tables inert itself: pending actions, undrained events, links to emptied holds.
-    if "fin_actions" in present:
-        from .finance import actions as finance
-        dropped = finance.scrub_dev_copy(c, now())["fin_actions"]
-        if dropped:
-            removed["fin_actions"] = removed.get("fin_actions", 0) + dropped
+    # Finance makes its tables inert itself: pending actions, undrained events, links to emptied holds, and the rows that
+    # move money or call a provider (DEV_COPY_EMPTIED). Any Finance table present means the scrub runs: a copy missing one
+    # table still has the rest made inert (scrub_dev_copy skips the tables a copy does not have).
+    if present & (set(finance.DEV_COPY_KEPT) | set(finance.DEV_COPY_EMPTIED)):
+        for table, count in finance.scrub_dev_copy(c, now()).items():
+            if count:
+                removed[table] = removed.get(table, 0) + count
     if "jobs" in present:
         delete("jobs", "state IN (%s)" % ",".join("?" * len(OPEN_JOBS)), OPEN_JOBS)
     if "attempts" in present:

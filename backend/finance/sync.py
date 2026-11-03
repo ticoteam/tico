@@ -41,6 +41,9 @@ UNOWNED_HOURS = 24               # an event no connection could read (404) is re
 MISSING = "404"                   # in an inbox row's tried list: some connection's read came back 404 this round
 GONE_TRIES = 5                    # a transaction Mercury keeps answering 404 for is given up after this many reads
 REQUEST_PAGES = 10                # pages of Mercury's approval requests read to find an unknown payment
+# The documented filters of Mercury's request list: one list call each (it shows no sent status, so a sent request is
+# found by its transaction, read back, not by this list).
+REQUEST_STATUSES = ("pendingApproval", "approved", "rejected", "cancelled")
 Make = Callable[[str], Provider]
 
 
@@ -69,13 +72,16 @@ def probe(provider: Provider) -> tuple[dict[str, object], str]:
     for a in listed(accounts, "accounts"):
         if str(a.get("type") or "mercury") != "mercury":
             continue
-        rows.append({"id": str(a.get("id")), "name": str(a.get("nickname") or a.get("name") or "Mercury")[:120],
+        four = F.last4(a.get("accountNumber"))
+        rows.append({"id": str(a.get("id")),
+                     "name": F.bare_name(a.get("nickname") or a.get("name") or "Mercury", four)[:120],
                      "kind": str(a.get("kind") or ""), "status": str(a.get("status") or "active"),
-                     "last4": F.last4(a.get("accountNumber")), "current": _cents(a.get("currentBalance")),
+                     "last4": four, "current": _cents(a.get("currentBalance")),
                      "available": _cents(a.get("availableBalance"))})
     found: dict[str, object] = {"accounts": rows, "credit": [
         {"id": str(a.get("id")), "status": str(a.get("status") or "active"), "current": _cents(a.get("currentBalance")),
-         "available": _cents(a.get("availableBalance"))} for a in listed(credit, "accounts")] if credit.ok else []}
+         "available": _cents(a.get("availableBalance")), "kind": str(a.get("kind") or "")}
+        for a in listed(credit, "accounts")] if credit.ok else []}
     if users.ok:
         found["users"] = user_rows(users)
     return found, ""
@@ -83,7 +89,8 @@ def probe(provider: Provider) -> tuple[dict[str, object], str]:
 
 def user_rows(users: Answer) -> list[dict[str, object]]:
     """Mercury's users as Finance keeps them: id, name, email (lowercased) and role."""
-    return [{"id": str(u.get("id") or ""), "email": str(u.get("email") or "").lower(), "role": str(u.get("role") or ""),
+    return [{"id": str(u.get("userId") or ""), "email": str(u.get("email") or "").lower(),
+             "role": str(u.get("organizationRole") or ""),
              "name": " ".join(str(u.get(k) or "").strip() for k in ("firstName", "lastName")).strip()[:120]}
             for u in listed(users, "users")]
 
@@ -134,20 +141,25 @@ def delivery(c: Any, connection_id: str | None, body: Mapping[str, object], at: 
     return kept
 
 
-def stripe_delivery(c: Any, body: Mapping[str, object], at: str | None = None) -> bool:
+def stripe_delivery(c: Any, body: Mapping[str, object], at: str | None = None) -> str:
     """A verified Stripe webhook (backend/triggers.py checked its signature), kept once in fin_inbox by event id and the
     worker rung. The worker reads the balance itself, so the event only says when to read. With one live Stripe
-    connection the event is its; with none or several it is not kept."""
+    connection the event is its. Returns "kept", "seen" (a replay of a kept event), or why it is not kept: "no_event_id",
+    "not_set_up", "no_connection" or "several_connections". A refusal is reported as one, never as seen."""
     eid = str(body.get("id") or "")
-    if not eid or not is_set_up(c):
-        return False
+    if not eid:
+        return "no_event_id"
+    if not is_set_up(c):
+        return "not_set_up"
     live = [str(r["id"]) for r in SK.connections(c, "stripe") if str(r["status"]) in ("active", "error")]
-    if len(live) != 1:
-        return False
+    if not live:
+        return "no_connection"
+    if len(live) > 1:
+        return "several_connections"
     kept = SK.inbox_add(c, connection_id=live[0], provider="stripe", event_id=eid, payload=body, at=at or _now())
     if kept:
         tico.after_commit(c, ring)
-    return kept
+    return "kept" if kept else "seen"
 
 
 stripe_probe = stripe_sync.probe_credential
@@ -201,11 +213,12 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
         return "idle"
     provider = _provider(store, vault, str(row["credential_ref"] or ""), make)
     if provider is None:
-        _failed(store, cid, "the Mercury token is missing; store it again in Settings", now)
+        _failed(store, cid, "the Mercury token is missing; store it again in Settings", now, str(row["status"]))
         return "no_token"
     problems: list[str] = []
-    if due:
+    if due or inbox:       # balances come from webhooks (§9): an event waiting reads them now; the poll stays 15 minutes
         problems += balances(store, provider, cid, now)
+    if due:
         provider_users(store, provider, cid, now)
         problems += uncertain_cards(store, provider, cid, now)
         problems += backfill(store, provider, cid, now)
@@ -216,17 +229,23 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
     problems += pay(store, provider, now, cid)
     if due:
         problems += statements(store, provider, cid, now)
+        with store.transaction() as c:      # the balance this pass read and every row it took in (inbox too) agree now
+            banking.refresh_connection_openings(load(c, now), cid)
     with store.transaction() as c:
         fields: dict[str, object] = {"last_sync_at": now, "updated_at": now}
+        # A first backfill still under way goes on at once (rung below), not a poll later: until it ends the books
+        # carry part of the history and no opening balance.
+        going = due and not problems and not _settings(SK.get(c, "fin_connections", cid)).get("backfilled")
         if due:
-            fields["next_sync_at"] = _after(now, POLL_MINUTES * 60)
+            fields["next_sync_at"] = now if going else _after(now, POLL_MINUTES * 60)
         if problems:
             fields.update({"status": "error", "last_error": problems[0][:300]})
-            ctx = load(c, now)
-            banking.event(ctx, "finance.sync.failed", cid, {"connection_id": cid}, now[:13])
+            banking.sync_failed(load(c, now), cid, str(row["status"]), problems[0])
         else:
             fields.update({"status": "active", "last_error": None, "last_ok_at": now})
         SK.update(c, "fin_connections", cid, fields)
+    if going:
+        BELL.ring()
     return "failed" if problems else "ok"
 
 
@@ -277,10 +296,11 @@ def uncertain_cards(store: Any, provider: Provider, cid: str, now: str) -> list[
     return problems
 
 
-def _failed(store: Any, cid: str, why: str, now: str) -> None:
+def _failed(store: Any, cid: str, why: str, now: str, prior: str) -> None:
     with store.transaction() as c:
         SK.update(c, "fin_connections", cid, {"status": "error", "last_error": why, "updated_at": now,
                                               "next_sync_at": _after(now, POLL_MINUTES * 60)})
+        banking.sync_failed(load(c, now), cid, prior, why)
 
 
 def balances(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
@@ -345,23 +365,34 @@ def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
         with store.transaction() as c:
             SK.update(c, "fin_connections", cid, {"events_cursor": str(first[0].get("id")) if first else "start"})
     cursor = str(row["cursor"] or "") or None
+    repeat = False                      # the page before was all rows already taken in
     for _ in range(BACKFILL_PAGES):
         page = provider.transactions(cursor)
         if not page.ok:
             return [error_text(page)]
         raws = listed(page, "transactions")
+        with store.read() as c:
+            known = SK.known_txns(c, cid, [str(r.get("id")) for r in raws if r.get("id")])
         _ingest_all(store, cid, raws, now)
-        cursor = next_page(page) or (str(raws[-1].get("id")) if raws else cursor)
-        done = not raws or not next_page(page) and len(raws) < 500
+        before, cursor = cursor, next_page(page) or (str(raws[-1].get("id")) if raws else cursor)
+        # The end: an empty or short last page, or (whatever Mercury's page says) a page that moves the cursor nowhere
+        # or a second page in a row of rows already taken in, so a list that keeps naming a next page still ends. One
+        # such page alone is a pass cut off before its cursor was kept (the cursor is kept every page): it goes on.
+        seen = bool(raws) and known == len(raws)
+        done = not raws or cursor == before or not next_page(page) and len(raws) < 500 or seen and repeat
+        repeat = seen
         with store.transaction() as c:
+            fresh = _settings(SK.get(c, "fin_connections", cid))
             SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings": SK.dump(
-                {**conf, "backfilled": True}) if done else row["settings"]})
+                {**fresh, "backfilled": True, "opened": []}) if done else SK.dump(fresh)})
             if done:
-                # The balances read at the start of this pass and the whole feed: each account's opening balance.
+                # The balances read at the start of this pass and the whole feed: each account's opening balance. One
+                # with no balance read yet gets its opening on a later pass (banking.refresh_opening).
                 ctx = load(c, now)
-                for m in SK.money_accounts(c, ctx.book.id):
-                    if str(m["connection_id"] or "") == cid:
-                        banking.opening_balance(ctx, str(m["id"]))
+                mine = [m for m in SK.money_accounts(c, ctx.book.id) if str(m["connection_id"] or "") == cid]
+                for m in mine:
+                    banking.opening_balance(ctx, str(m["id"]))
+                banking.mark_opened(ctx, cid, [str(m["id"]) for m in mine if m["balance"] is not None and m["account_id"]])
         if done:
             break
     return []
@@ -615,8 +646,8 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
         elif op == "card_create" and not answer.body.get("skipped"):
             limit = int(answer.body.get("sent_limit") or body["monthly"])     # what was asked for, not a later edit
             SK.update(c, "fin_cards", card_id, {
-                "provider_card_id": str(answer.body.get("cardId") or answer.body.get("id") or ""),
-                "last4": str(answer.body.get("lastFourDigits") or "")[-4:] or None, "provider_status": "active",
+                "provider_card_id": str(answer.body.get("id") or ""),
+                "last4": str(answer.body.get("lastFour") or "")[-4:] or None, "provider_status": "active",
                 "provider_limit": limit, "sync_status": "ok", "synced_at": now, "updated_at": now})
             cards.created(load(c, now), card_id, str(o["action_id"] or ""), str(o["id"]))
         elif op == "card_create":
@@ -680,14 +711,20 @@ def pay(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
                 banking.payment_linked(ctx, SK.get(c, "fin_payments", pid))
             continue
         if status == "unknown":
+            # A cancel a finance admin asked for before this sweep is decided only by a read back of the account's
+            # transactions to the payment's creation (what Mercury sent, whether or not it still lists the request).
+            asked = payments.cancel_asked_before(p, now)
             requests, complete = _requests(provider, account)
+            back, whole = _read_back(provider, account, p, now) if complete and asked else ([], False)
             with store.transaction() as c:
                 ctx = load(c, now)
                 row = SK.get(c, "fin_payments", pid)
-                if payments.found(ctx, row, requests):
+                if payments.found(ctx, row, requests, back):
                     banking.payment_linked(ctx, SK.get(c, "fin_payments", pid))   # a debit taken in before it
-                elif complete:
+                elif complete and (whole or not asked):
                     payments.not_found(ctx, row)
+                elif complete:
+                    payments.read_incomplete(ctx, row)
             continue
         if status != "queued":
             continue
@@ -713,8 +750,54 @@ def pay(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
 
 
 def _requests(provider: Provider, account: str) -> tuple[list[dict[str, Any]], bool]:
-    """Mercury's approval requests for one account, every page (up to REQUEST_PAGES)."""
-    return _every_page(lambda after: provider.send_requests(account, after), "requests")
+    """Mercury's approval requests for one account: every page of each documented status (REQUEST_STATUSES), one list
+    call per status. Whole only when all of them were read whole."""
+    out: list[dict[str, Any]] = []
+    whole = True
+    for status in REQUEST_STATUSES:
+        rows, done = _every_page(lambda after, s=status: provider.send_requests(account, after, s), "requests")
+        out += rows
+        whole = whole and done
+    return out, whole
+
+
+TXN_PAGES = 1000                  # pages one read back may take of an account's transactions (500 a page)
+
+
+def _read_back(provider: Provider, account: str, pay: Any, now: str) -> tuple[list[dict[str, Any]], bool]:
+    """The account's transactions from the payment's creation day through the day after now (Mercury's days are UTC),
+    every page: the rows, and whether the whole span was read. Mercury's filters narrow it to this payment: its request
+    id when one is known (a request's transaction carries it; a direct send is its own transaction and has none), else
+    the key in its note (payments.NOTE + key), which Mercury's search matches."""
+    if not account:
+        return [], False
+    start = str(pay["created_at"])[:10]
+    end = (datetime.fromisoformat(now.replace("Z", "+00:00")) + timedelta(days=1)).date().isoformat()
+    request = "" if str(pay["mode"]) == "direct" else str(pay["provider_request_id"] or "")
+    search = None if request else f"{payments.NOTE}{pay['idempotency_key']}"
+    return _offset_pages(lambda offset: provider.account_transactions(account, search, start, end, offset,
+                                                                      request or None), "transactions")
+
+
+def _offset_pages(read: Callable[[int], Answer], rows_key: str) -> tuple[list[dict[str, Any]], bool]:
+    """One of Mercury's account lists read to its end by offset: each page's rows until the answer's `total` (every
+    match) is reached. A failed read, an answer with no total, or a page that ends short of the total is not whole: it
+    never counts as "not there"."""
+    out: list[dict[str, Any]] = []
+    for _ in range(TXN_PAGES):
+        page = read(len(out))
+        if not page.ok:
+            return out, False
+        rows = listed(page, rows_key)
+        total = page.body.get("total")
+        if not isinstance(total, int) or isinstance(total, bool):
+            return out + rows, False
+        out += rows
+        if len(out) >= total:
+            return out, True
+        if not rows:
+            return out, False
+    return out, False
 
 
 def _every_page(read: Callable[[str | None], Answer], rows_key: str) -> tuple[list[dict[str, Any]], bool]:

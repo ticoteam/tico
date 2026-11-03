@@ -236,9 +236,10 @@ def run_now(store, auth, key, actor):
 
 
 class Scheduler:
-    def __init__(self, store, execution):
+    def __init__(self, store, execution, onboarding=None, auth=None):
         self.store, self.execution = store, execution
         self.listening_since = H.now()  # when this server began listening; a computer is not silent before it
+        self.onboarding, self.auth = onboarding, auth   # the Bookkeeper is built the tick Finance is set up
         self.swept = None
         self.stranded = None
         self.asks_checked = None
@@ -250,6 +251,7 @@ class Scheduler:
         self.billing_checked = None
         self.cloud_checked = None
         self.stale_checked = None
+        self.threads_ranked = None
         self.hosted_checked = None
         self.invariants_checked = None
         self.finance_checked = {}   # Finance job -> its last start in this process
@@ -267,6 +269,7 @@ class Scheduler:
         waiting `finance.*` events every tick, run holds past expiry every ten minutes, Gateway usage postings hourly
         (the Gateway worker fetches the meter), bills due, reminders, the cash alert and ready closes hourly, setup
         when missing and next month's period daily."""
+        from . import bookkeeper
         from .finance import actions as finance, reads as finance_reads
         steps = []
         try:
@@ -281,6 +284,8 @@ class Scheduler:
         if not ready:
             if self.finance_due("setup", at, timedelta(hours=1)):
                 steps.append(("finance_setup", lambda c: finance.ensure_setup(c, self.store.settings.owner_email)))
+                if self.onboarding is not None:        # its own step: a Finance set up now builds the Bookkeeper now
+                    steps.append(("bookkeeper", lambda c: bookkeeper.ensure(c, self.onboarding, self.auth)))
         else:
             if waiting:
                 steps.append(("finance_events", lambda c: finance.drain_events(c, stamp(at))))
@@ -288,6 +293,8 @@ class Scheduler:
                 steps.append(("finance_holds", lambda c: finance.expire_holds(c, stamp(at))))
             if self.finance_due("usage", at, timedelta(hours=1)):
                 steps.append(("finance_usage", lambda c: finance.post_usage(c, stamp(at))))
+            if self.finance_due("prepaids", at, timedelta(hours=1)):
+                steps.append(("finance_prepaids", lambda c: finance.amortize_prepaids(c, stamp(at))))
             if self.finance_due("documents", at, timedelta(hours=1)):
                 steps.append(("finance_documents", lambda c: finance.watch_documents(c, stamp(at))))
             if self.finance_due("period", at, timedelta(days=1)):
@@ -731,6 +738,15 @@ class Scheduler:
                 stale_review.tick(self.store, stamp(at))
             except Exception as exc:
                 failures.append({"stale_review": type(exc).__name__})
+        if self.threads_ranked is None or at - self.threads_ranked >= timedelta(seconds=300):
+            # Thread ranking (backend/thread_rank.py): the Important view's 1-10 levels, for roots with new messages;
+            # the Decide calls run on the pass's own thread, never under this lock.
+            self.threads_ranked = at
+            try:
+                from . import thread_rank
+                thread_rank.tick(self.store, stamp(at))
+            except Exception as exc:
+                failures.append({"thread_rank": type(exc).__name__})
         if self.go_lives_checked is None or at - self.go_lives_checked >= timedelta(minutes=10):
             # A go-live waiting for a computer that never reports still ends, with its notice (backend/go_live.py).
             self.go_lives_checked = at

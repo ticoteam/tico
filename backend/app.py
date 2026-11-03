@@ -36,12 +36,14 @@ from . import org_rule_check
 from .roadmaps import exact_approval
 from . import login_holds
 from . import cloud_access
+from . import demo_billing
+from .usage import own_bots as usage_bots
 from . import counsel
 from . import thread_api
 from . import step_age
 from . import task_holds
 from . import runs
-from . import bot_stops, turn_budgets, proposals, task_caps
+from . import bot_stops, turn_budgets, proposals, task_caps, reach
 from . import (auto_tasks, check_models, profiles, run_triggers, task_models, task_run_models, team_rules, update_feeds,
                topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits)
 from . import task_privacy as privacy
@@ -136,6 +138,10 @@ def create_app(settings=None):
     from . import flight
     recorder = flight.Recorder() if settings.flight_recorder else None
     store = Store(settings, recorder)
+    # An upgraded database gets its pending migrations (the cleanup's column renames) before any install below opens a
+    # transaction: install-time code and every commit's hooks use the new names. Startup's store.initialize does the rest.
+    if settings.db_path.exists():
+        store.migrate()
     census = Census(store, settings)
     releases.CHECKER.bind(census)
     auth = Auth(store)
@@ -284,7 +290,7 @@ def create_app(settings=None):
             install_signals(recorder_thread.folder, recorder_thread.file)
         async def schedule_loop():
             from .scheduler import Scheduler
-            scheduler = Scheduler(store, execution)
+            scheduler = Scheduler(store, execution, onboarding=onboarding, auth=auth)
             def github_wakes():
                 from .github import flush_wakes, reconcile_worktree_prs, refresh_deployed_tasks, refresh_pending_checks
                 with store.transaction() as c:
@@ -762,7 +768,7 @@ def create_app(settings=None):
                 # A run's raw provider stream: up to 5 MB of frames, escaped once more as a JSON string.
                 captured = (request.url.path.startswith("/api/v2/attempts/") and request.url.path.endswith("/capture")
                             and request.state.identity.role == "runner")
-                memory_report = (bool(re.fullmatch(r"/api/v2/bots/[^/]+/memory/report", request.url.path))
+                memory_report = (bool(re.fullmatch(r"/api/v2/(?:bots/[^/]+/memory/report|attempts/[^/]+/memory-tidy/prepare)", request.url.path))
                                  and request.state.identity.role == "runner")
                 # A bot's video or audio file streams to disk up to the server's upload limit (backend/files.py).
                 media_raw = published and raw_media(request, imported=request.url.path == "/api/v2/files/imports")
@@ -1921,7 +1927,11 @@ def create_app(settings=None):
     def billing_view(request: Request, month: str = ""):
         """The company's balance and status, credits, usage by day and the month's statement, from Tico HQ; a Tico
         Cloud company's access (`cloud`) too, kept at once so the app and the page agree (backend/cloud_access.py)."""
-        answer = company_billing.read(*billing_key(request.state.identity), month)
+        key_base = billing_key(request.state.identity)
+        if settings.demo:       # a sample from the demo's own usage (backend/demo_billing.py); HQ is not reached
+            with store.read() as c:
+                return demo_billing.read(c, usage_bots(c, auth, request.state.identity), month)
+        answer = company_billing.read(*key_base, month)
         cloud_access.from_billing(store, answer)
         return answer
 
@@ -1935,12 +1945,21 @@ def create_app(settings=None):
     @app.get("/api/v2/billing/usage")
     def billing_day(request: Request, day: str = ""):
         """One day's usage by hour, from Tico HQ."""
-        return company_billing.day(*billing_key(request.state.identity), day)
+        key_base = billing_key(request.state.identity)
+        if settings.demo:       # the same sample as the page's, hour by hour (backend/demo_billing.py)
+            with store.read() as c:
+                return demo_billing.day(c, usage_bots(c, auth, request.state.identity), day)
+        return company_billing.day(*key_base, day)
 
     @app.get("/api/v2/billing/statements/{month}.csv")
     def billing_statement_csv(request: Request, month: str):
         """The month's statement as CSV, the same lines and numbers as on screen."""
-        body = company_billing.statement_csv(*billing_key(request.state.identity), month)
+        key_base = billing_key(request.state.identity)
+        if settings.demo:       # the same lines as the page's statement (backend/demo_billing.py)
+            with store.read() as c:
+                body = demo_billing.statement_csv(c, usage_bots(c, auth, request.state.identity), month)
+        else:
+            body = company_billing.statement_csv(*key_base, month)
         return Response(body, media_type="text/csv; charset=utf-8", headers={
             "X-Content-Type-Options": "nosniff",
             "Content-Disposition": 'attachment; filename="tico-statement-%s.csv"' % month})
@@ -1949,14 +1968,20 @@ def create_app(settings=None):
     @app.get("/api/v2/hosted-servers")
     def hosted_servers(request: Request):
         """The company's Tico server and bot computers HQ hosts, each on or stopped; `none` when HQ hosts nothing."""
-        return company_billing.servers(*billing_key(request.state.identity, "sees hosted servers"))
+        key_base = billing_key(request.state.identity, "sees hosted servers")
+        if settings.demo:       # the sample key goes nowhere: HQ hosts nothing the demo can show
+            return {"state": "none"}
+        return company_billing.servers(*key_base)
 
     @app.post("/api/v2/hosted-servers/{server_id}/start")
     def hosted_server_start(request: Request, server_id: str):
         """Start one stopped hosted server; `paused` with the add-credit words while the company is out of credit."""
         if settings.rehearsal:      # a copy of real data sends nothing: never a real server's power
             raise Problem("rehearsal", "Hosted servers can't be started from a rehearsal", 409)
-        return company_billing.start(*billing_key(request.state.identity, "starts hosted servers"), server_id)
+        key_base = billing_key(request.state.identity, "starts hosted servers")
+        if settings.demo:       # the sample key goes nowhere: a demo never starts a real server
+            raise Problem("demo", "Hosted servers can't be started from the demo", 409)
+        return company_billing.start(*key_base, server_id)
 
     @app.get("/api/v2/access")
     def access_view(request: Request):
@@ -2717,6 +2742,8 @@ def create_app(settings=None):
                 from .report_order import roster_saved
                 roster_saved(c, roster)                    # a new manager's report goes last there
                 c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
+                from .finance import actions as FA
+                FA.revalidate_org(c)           # Finance's view grants follow the org chart at once (spec 7.5)
                 from . import people_mirror
                 people_mirror.changed()                    # `left` and sign-in changes reach the Tico account
                 H.event(c, who.actor, "person.updated", pid, {"title": body.title is not None, "about": body.about is not None,
@@ -3101,7 +3128,7 @@ def create_app(settings=None):
                 except Problem:
                     pass
         return ask_ingest.preflight(store, app.state.judge, who, body.to, title, body.text,
-                                    kind="question" if tref else "loose")
+                                    kind="question" if tref else "loose", asked=(body.refs or {}).get("questions"))
 
     def message_write(c, who, body, rc=None, ingest=None, files=None):
         """One message, as every route that sends one writes it (`/messages`, a conversation's `/messages`) and Send
@@ -5157,7 +5184,8 @@ def create_app(settings=None):
         if not body.ask or not ask_ingest.gated(who, settings.assistant_bot) or not (row := readable_task(who, tid)):
             return None
         asked = body.ask.who or (row["owner_id"] if who.actor == row["requester_id"] else row["requester_id"])
-        return ask_ingest.preflight(store, app.state.judge, who, asked, row["title"], body.text, kind="question")
+        return ask_ingest.preflight(store, app.state.judge, who, asked, row["title"], body.text, kind="question",
+                                    asked=[q.model_dump() for q in body.ask.questions])
 
     def rule_prepare_comment(store_, bot, replay):
         return comment_ingest(bot, replay["task"], M.TaskComment.model_validate(replay["body"]))
@@ -7846,7 +7874,7 @@ def create_app(settings=None):
                      "paused_by": paused_by, "open_tasks": count}
             key, base = gateway_connection.target(c, app.state.vault, settings)[:2]
         # HQ calls must never hold a database transaction. Only the pause bit leaves this route.
-        value["company_paused"] = company_billing.paused(key, base)
+        value["company_paused"] = False if settings.demo else company_billing.paused(key, base)
         return value
 
     @app.post("/api/v2/bots/{bot}/control")
@@ -8020,7 +8048,10 @@ def create_app(settings=None):
 
         def finish(c):
             with automations.for_attempt(c, aid):
-                return execution.complete(c, request.state.identity, aid, body, rule_check=rc)
+                result = execution.complete(c, request.state.identity, aid, body, rule_check=rc)
+                from . import memory_tidy_transport
+                memory_tidy_transport.complete(c, aid, body, request.state.identity, app.state.files, app.state.blobs)
+                return result
         return mutate(request, body, finish)
 
     @org_rule_check.replayer("reply")
@@ -8178,6 +8209,8 @@ def create_app(settings=None):
     install_cards(app, store, auth, mutate, settings, task_view)
     from . import memory_tidy_cards
     memory_tidy_cards.install(app, store, auth, mutate)
+    from . import memory_tidy_transport
+    memory_tidy_transport.install(app, store, execution, mutate)
     turn_work.install(app, store, auth)
     from . import run_view
     run_view.install(app, store, auth)
@@ -8274,6 +8307,7 @@ def create_app(settings=None):
     thread_tasks.install(app, store, auth, create_task, settings.public_url or "")    # Make task from a message
     counsel.install(app, store, auth, mutate)      # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
+    reach.install(app, store, auth, mutate)        # Rules › Internal: who reaches whom (docs/reach.md)
     profiles.install(app, store, auth, mutate, settings_admin)
     from . import release_flow
     release_flow.install(app, store, auth, mutate)

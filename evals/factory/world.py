@@ -362,7 +362,7 @@ class World:
             source = "login hold reset"
         else:
             source = "LIMIT_COOLDOWN_LONG" if streak >= execution.LIMIT_STRIKES else "LIMIT_COOLDOWN"
-        return {"bot": slug, "since": since, "until": until, "source": source, "streak": streak}
+        return {"bot_id": slug, "since": since, "until": until, "source": source, "streak": streak}
 
     # ------------------------------------------------------------------ fake GitHub
     def hook(self, event, payload):

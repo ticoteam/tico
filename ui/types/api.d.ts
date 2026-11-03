@@ -741,7 +741,7 @@ export type Card = {
   name?: string;
   settings: Record<string, unknown>;
   team_name?: string;
-  template: "tasks_by_status" | "done_per_week" | "needs_you" | "spend" | "kpi" | "automation_runs" | "latest_pages" | "needs_attention" | "unread_threads" | "my_tasks" | "updates";
+  template: "tasks_by_status" | "done_per_week" | "needs_you" | "spend" | "kpi" | "automation_runs" | "latest_pages" | "needs_attention" | "unread_threads" | "my_tasks" | "updates" | "growth_number" | "growth_funnel" | "growth_channels" | "growth_retention" | "growth_board";
   title?: string;
 };
 
@@ -1715,7 +1715,7 @@ export type FinanceInbox = {
   currency: string;
   items: Array<{
   id: string;
-  kind: "uncategorized" | "bill_to_enter" | "unmatched_receipt" | "missing_receipt" | "bill_due" | "invoice_overdue" | "budget_near_limit" | "sync_failed" | "period_ready";
+  kind: "uncategorized" | "bill_to_enter" | "unmatched_receipt" | "missing_receipt" | "bill_due" | "invoice_overdue" | "budget_near_limit" | "sync_failed" | "period_ready" | "unreconciled" | "bill_email";
   label: string;
 }>;
   more: Array<string>;
@@ -3439,7 +3439,9 @@ export type Place = {
   audience?: Record<string, unknown>;
   can_edit: boolean;
   group?: string;
-  kind: "dashboard" | "team" | "bot" | "task" | "person";
+  kind: "dashboard" | "growth" | "team" | "bot" | "task" | "person";
+  month?: string;
+  months?: Array<string>;
   name?: string;
   pins: Array<{
   card?: Card;
@@ -3915,6 +3917,26 @@ export type RuleSourceCreate = {
 
 export type Rules = {
   rules: Array<Rule>;
+};
+
+export type RulesByTeammate = {
+  bots: Array<{
+  slug: string;
+  who: Array<string>;
+  with: Array<string>;
+}>;
+  people: Array<{
+  id: string;
+  who: Array<string>;
+  with: Array<string>;
+}>;
+  rules: Array<{
+  can_edit: boolean;
+  id: string;
+  if_broken: "block" | "escalate" | "warn" | null;
+  kind: "internal" | "external";
+  text: string;
+}>;
 };
 
 export type RunNow = {
@@ -5273,7 +5295,7 @@ export type Usage = {
   dimension_labels?: Record<string, unknown>;
   dimensions?: Record<string, unknown>;
   from: string;
-  group?: "bot" | "day" | "routine" | "harness" | "model" | "effort" | "subscription";
+  group?: "bot" | "day" | "routine" | "task" | "harness" | "model" | "effort" | "subscription";
   name?: string;
   prices_as_of: string;
   routines?: Array<Record<string, unknown>>;
@@ -6676,6 +6698,7 @@ export type GetCallResponse = Call;
 
 /** GET /api/v2/cards/choices */
 export type GetCardChoicesParams = {
+  place?: string;
   team?: string;
 };
 export type GetCardChoicesBody = never;
@@ -6846,6 +6869,7 @@ export type GetFinanceChartResponse = FinanceChart;
 /** GET /api/v2/finance/close/{month} */
 export type GetFinanceCloseChecklistParams = {
   month: string;
+  top_n?: number;
 };
 export type GetFinanceCloseChecklistBody = never;
 export type GetFinanceCloseChecklistResponse = FinanceCloseChecklist;
@@ -6905,7 +6929,7 @@ export type GetFinanceMetricParams = {
   budget_id?: string | null;
   days?: number | null;
   end?: string | null;
-  name: "cash" | "burn" | "runway_months" | "revenue" | "spend" | "budget_remaining" | "budget_pct_used" | "ap_due" | "ar_overdue" | "uncategorized_count" | "unreconciled_days";
+  name: "cash" | "burn" | "runway_months" | "revenue" | "spend" | "budget_remaining" | "budget_pct_used" | "ap_due" | "ar_overdue" | "uncategorized_count" | "unreconciled_days" | "duplicate_charges" | "price_increases";
   start?: string | null;
   team?: string | null;
   teammate?: string | null;
@@ -7174,6 +7198,7 @@ export type GetPersonAssistantResponse = PersonAssistant;
 
 /** GET /api/v2/places/{place} */
 export type GetPlaceParams = {
+  month?: string | null;
   place: string;
 };
 export type GetPlaceBody = never;
@@ -7939,7 +7964,7 @@ export type ListFinanceTransactionsParams = {
   q?: string | null;
   source?: "all" | "feed" | "entry";
   start?: string | null;
-  status?: "new" | "matched" | "posted" | "ignored" | "pending" | null;
+  status?: "new" | "matched" | "posted" | "ignored" | "pending" | "failed" | null;
   teammates?: Array<string> | null;
   teams?: Array<string> | null;
   unattributed?: boolean;
@@ -8293,6 +8318,11 @@ export type ListRulesParams = {
 export type ListRulesBody = never;
 export type ListRulesResponse = unknown;
 
+/** GET /api/v2/rules/by-teammate */
+export type ListRulesByTeammateParams = Record<string, never>;
+export type ListRulesByTeammateBody = never;
+export type ListRulesByTeammateResponse = RulesByTeammate;
+
 /** GET /api/v2/seats */
 export type ListSeatsParams = Record<string, never>;
 export type ListSeatsBody = never;
@@ -8435,6 +8465,7 @@ export type ListThreadMembersResponse = ThreadMembers;
 export type ListThreadsParams = {
   cursor?: string | null;
   limit?: number | null;
+  sort?: string | null;
   with?: string | null;
 };
 export type ListThreadsBody = never;
@@ -9345,7 +9376,7 @@ export type SearchFinanceParams = {
   contact_kind?: "vendor" | "customer" | "both" | null;
   cursor?: string | null;
   end?: string | null;
-  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project" | "po" | "estimate" | null;
+  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | "item" | "location" | "project" | "po" | "estimate" | "account" | null;
   limit?: number;
   money_account_id?: string | null;
   q?: string;

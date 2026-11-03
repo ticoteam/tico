@@ -139,13 +139,16 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub page list [--bot X] [--task ID] [--archived]   pages you may read, newest first
     hub page show <id>                     one page's status: updated, by, version, cadence, stale or replaced
     hub page archive <id> [--restore]      hide a page from lists and search, or bring it back
-    hub card list [--place P]              what is pinned at dashboard, team:<group>, bot:<slug>, task:<id> or
-                                           person:me (My dashboard)
+    hub card list [--place P]              what is pinned at dashboard, growth, team:<group>, bot:<slug>, task:<id>
+                                           or person:me (My dashboard)
     hub card add <template> [--place P] [--team G] [--weeks N] [--count N] [--kpi ID] [--title T] [--size S]
+                                           [--metric M] [--channel C] [--months N]
                                            tasks_by_status, done_per_week, needs_you, spend, kpi, automation_runs,
                                            latest_pages, needs_attention, unread_threads, my_tasks, updates; a bot
-                                           pins to its own sidebar or task
-    hub card update <id> [--title T] [--team G] [--weeks N] [--count N] [--kpi ID]
+                                           pins to its own sidebar or task. The Growth page's cards (growth_number,
+                                           growth_funnel, growth_channels, growth_retention, growth_board) go on
+                                           --place growth only; --metric and --channel are for growth_number
+    hub card update <id> [--title T] [--team G] [--weeks N] [--count N] [--kpi ID] [--metric M] [--channel C] [--months N]
     hub card remove <id>
     hub connections list [--cursor C] [--limit N]
                                            every connection you may see: status, scope, who reads it, its bots
@@ -586,10 +589,11 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub health-monitor findings            the Health Monitor: what the last hourly scan found
     hub health-monitor report <key> | --process process:<name> --cpu N --mb N
                                            report a finding as a Tico bug, one ticket per signature
-    hub finance search [--kind entry|feed|bill|invoice|contact|rule|card] [--q words] [--status S] [--vendor V]
+    hub finance search [--kind entry|feed|bill|invoice|contact|rule|card|account] [--q words] [--status S] [--vendor V]
                     [--start D] [--end D] [--cursor C] [--limit N]   the books you may see; name a kind to page
-    hub finance report <pnl|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by|close> [--start D]
-                    [--end D] [--period month] [--compare prior] [--top-n N] [--by vendor] [--month YYYY-MM]
+    hub finance report <pnl|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by|close|sales_tax|1099>
+                    [--start D] [--end D] [--period month] [--compare prior] [--top-n N] [--by vendor] [--month YYYY-MM]
+                    [--year YYYY]
     hub finance metric <name> [--budget-id B] [--start D] [--end D] [--days N]   one number, with its as-of time
     hub finance act <kind|help> [--payload JSON|-] [--dry-run] [--operation-id KEY]
                                            ask for one Finance action; help lists kinds, `help --payload
@@ -1231,6 +1235,9 @@ def parser():
         s.add_argument("--weeks", type=int)
         s.add_argument("--count", type=int)
         s.add_argument("--kpi")
+        s.add_argument("--metric")
+        s.add_argument("--channel")
+        s.add_argument("--months", type=int)
         if name == "add":
             s.add_argument("--place")
             s.add_argument("--size", choices=["small", "medium", "large"])
@@ -2102,8 +2109,9 @@ def parser():
     s.set_defaults(fn="rules withdraw")
     strategy = sub.add_parser("strategy", help="the team's strategy: its bets, its sections, the versions").add_subparsers(dest="sub")
     s = strategy.add_parser("show", help="the published strategy, its bets and their goals; the owner also gets the draft")
-    s.add_argument("--section", choices=["serve", "sell", "know", "how", "not"],
-                   help="only this section of the published strategy, as text (how: How we sell)")
+    s.add_argument("--section", choices=["serve", "sell", "proof", "now", "know", "how", "not"],
+                   help="only this section of the published strategy, as text (proof: How we know they want it; "
+                        "now: Why now; how: How we sell)")
     s.add_argument("--json", action="store_true", help="print the API response as JSON")
     s.set_defaults(fn="strategy show")
     s = strategy.add_parser("summary", help="the text every run's context carries")
@@ -2112,7 +2120,7 @@ def parser():
     s.add_argument("--summary")
     s.add_argument("--vision")
     s.add_argument("--section", action="append", default=[], metavar="KEY=TEXT",
-                   help="serve, sell, know, how, not, or an extra section's key; KEY= clears it; repeatable")
+                   help="serve, sell, proof, now, know, how, not, or an extra section's key; KEY= clears it; repeatable")
     s.add_argument("--revision", type=int, help="the draft's revision you read; default the current one")
     s.set_defaults(fn="strategy draft")
     s = strategy.add_parser("publish", help="owner only: the draft becomes the next version")
@@ -3576,7 +3584,7 @@ def parser():
     fin = sub.add_parser("finance", help="the books, as you: search, reports, metrics, actions, your work queue "
                          "(docs/finance-tools.md)").add_subparsers(dest="sub")
     s = fin.add_parser("search", help="entries, bank and card rows, bills, invoices, contacts and rules you may see")
-    s.add_argument("--kind", choices=["entry", "feed", "bill", "invoice", "contact", "rule", "card"])
+    s.add_argument("--kind", choices=["entry", "feed", "bill", "invoice", "contact", "rule", "card", "account"])
     s.add_argument("--q")
     for flag in ("--status", "--contact-id", "--vendor", "--account-id", "--money-account-id", "--start", "--end",
                  "--cursor"):
@@ -3589,8 +3597,9 @@ def parser():
     s.set_defaults(fn="finance search")
     s = fin.add_parser("report", help="one report cut to your view; rows past --top-n fold into Other")
     s.add_argument("kind", choices=["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging",
-                                    "spend_by", "close"])
+                                    "spend_by", "close", "sales_tax", "1099"])
     s.add_argument("--start"); s.add_argument("--end")
+    s.add_argument("--year", type=int, help="sales_tax, 1099: the calendar year (this year when omitted)")
     s.add_argument("--period", choices=["day", "week", "month", "quarter", "year"])
     s.add_argument("--basis", choices=["cash", "accrual"])
     s.add_argument("--compare", choices=["prior"])
@@ -3601,7 +3610,7 @@ def parser():
     s = fin.add_parser("metric", help="one number you may see, with when it was worked out")
     s.add_argument("name", choices=["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining",
                                     "budget_pct_used", "ap_due", "ar_overdue", "uncategorized_count",
-                                    "unreconciled_days"])
+                                    "unreconciled_days", "duplicate_charges", "price_increases"])
     for flag in ("--budget-id", "--start", "--end", "--account-id", "--team", "--teammate"):
         s.add_argument(flag)
     s.add_argument("--days", type=int)
@@ -3617,11 +3626,16 @@ def parser():
     s.set_defaults(fn="finance action")
     s = fin.add_parser("inbox", help="your Finance work queue")
     s.add_argument("--kind", choices=["uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due",
-                                      "invoice_overdue", "budget_near_limit", "sync_failed", "period_ready"],
+                                      "invoice_overdue", "budget_near_limit", "sync_failed", "period_ready",
+                                      "unreconciled", "bill_email"],
                    help="only this kind, paged on with --cursor past its first 200")
     s.add_argument("--cursor"); s.add_argument("--limit", type=int)
     s.set_defaults(fn="finance inbox")
-    fin.add_parser("card-fill", help="fill your card into a checkout (not available yet)").set_defaults(fn="finance card-fill")
+    s = fin.add_parser("card-fill", help="fill your card into a checkout (not available yet)")
+    s.add_argument("card_id", nargs="?", help="your card")
+    s.add_argument("--merchant", help="the checkout's domain")
+    s.add_argument("--amount", type=int, help="minor units")
+    s.set_defaults(fn="finance card-fill")
     manager = sub.add_parser("task-manager", help="the Task Manager's hourly department check (docs/task-manager.md)").add_subparsers(dest="sub")
     manager.add_parser("status", help="bot, report switch and schedule, last run, each department's last check").set_defaults(fn="task-manager status")
     manager.add_parser("on", help="switch the hourly report on").set_defaults(fn="task-manager on")

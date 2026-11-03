@@ -207,9 +207,16 @@ def main():
             return 0
         gate_temp = temp / "tico-release-gate"
         gate_temp.mkdir(mode=0o700, exist_ok=True)
-        receipt["native_binaries"] = native_binaries(root)
-        env = {**os.environ, "TMPDIR": str(gate_temp),
-               "TICO_SCREEN_RELAY_BIN": receipt["native_binaries"]["relay"]["path"]}
+        env = {**os.environ, "TMPDIR": str(gate_temp)}
+        # Only the VMs that test native binaries wait for the native-linux build: product, desktop and python shards 1-2
+        # (release_checks.py NATIVE_SHARDS gives them the native test files; a shard without binaries refuses native tests).
+        # Browser tests use none. Where the binaries were placed, they must be the candidate's.
+        placed = (root / "runner-rs/target/release/tico-runner").exists()
+        if args.part == "python" and not placed and "native_first" not in (root / "scripts/release_checks.py").read_text():
+            raise RuntimeError("candidate predates native-first python shards; every python VM needs the binaries")
+        if args.part in ("product", "desktop") or placed:
+            receipt["native_binaries"] = native_binaries(root)
+            env["TICO_SCREEN_RELAY_BIN"] = receipt["native_binaries"]["relay"]["path"]
         receipt.update({"command": command, "gate_start_requested": True, "gate_state": "starting"})
         checkpoint()  # Survives timeout/cancellation even when the finalizer cannot run.
         gate_clock = time.monotonic()

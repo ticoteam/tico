@@ -31,7 +31,7 @@ function finCapsOf(acc, who) {
   const rights = new Set(row.rights || []);
   const may = right => owner || rights.has(right) || rights.has('finance.admin');
   return {row, owner, all, rights, may,
-    any: all || row.default !== 'none' || live.length > 0,
+    any: all || row.default !== 'none' || live.length > 0 || rights.has('finance.admin'),
     company: all || what.has('pnl') || what.has('pnl_lines'),
     // Company-wide expenses (backend/finance/core/view.py company_expenses), which the Unattributed filter needs.
     companyExpenses: all || live.some(g => g.whose === 'company' && (g.what === 'pnl' || g.what === 'expenses')),
@@ -53,7 +53,7 @@ function finCaps() {
 }
 // Tax workpapers are filed whole, so only a viewer who sees everything reads them (backend/finance/tax.py).
 const finTabShown = (tab, caps, acc) => !!caps?.any && (tab === 'balance' ? caps.balance : tab === 'sources' ? caps.sources : tab === 'tax' ? caps.all
-  : tab === 'payables' ? caps.payables : tab === 'receivables' ? caps.receivables : tab === 'access' ? !caps.viewing && (!!acc?.can_view_as || (acc?.teammates || []).length > 1) : true);
+  : tab === 'payables' ? caps.payables : tab === 'receivables' ? caps.receivables : tab === 'access' ? !caps.viewing && (!!acc?.can_view_as || caps.rights.has('finance.admin') || (acc?.teammates || []).length > 1) : true);
 // ?view_as=… on every read while the owner views as someone.
 const finAs = (sep = '&') => FIN_VIEW_AS && finCaps()?.viewing ? `${sep}view_as=${encodeURIComponent(FIN_VIEW_AS)}` : '';
 // A Finance address that keeps "View as": the view is in the address, so Back and Forward carry it.
@@ -109,6 +109,8 @@ const FIN_BOOKS_WHY = {access_denied: 'access denied', not_connected: 'connect a
 
 // A narrow viewer's figures leave payroll out (§7.5): a read (or row) with `excluded` says so, as the P&L's totals do.
 const finExcl = x => x?.excluded ? ' excl. payroll' : '';
+// A viewer's totals over the slice they see, labeled so they aren't read as the company's (§7.5).
+const finOwnSlice = caps => caps.viewing ? ` · ${finWho(caps.who)}'s view` : ' · Your view';
 
 // ----------------------------------------------------------------- formats
 const FIN_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -229,10 +231,18 @@ function finDialog(title, body, saveLabel, onSave) {
   dlg.querySelectorAll('[data-close]').forEach(b => { b.onclick = () => dlg.close(); });
   dlg.onclose = () => dlg.remove();
   const form = dlg.querySelector('form'), err = dlg.querySelector('[data-error]'), save = dlg.querySelector('[type=submit]');
+  // While a save runs the button says so (a Mercury connect tests the token and maps accounts, which takes seconds).
+  // A save that relabels the button (Preview → Import, Send, Done) keeps its label: only the busy text is put back.
+  let idle = '';
+  const busy = on => {
+    save.disabled = on; save.setAttribute('aria-busy', on ? 'true' : 'false');
+    if (on) { idle = save.textContent; save.textContent = `${idle}…`; }
+    else if (save.textContent === `${idle}…`) save.textContent = idle;
+  };
   form.onsubmit = async ev => {
-    ev.preventDefault(); err.hidden = true; save.disabled = true;
-    try { if (await onSave(form) === false) save.disabled = false; else dlg.close(); }
-    catch (e) { err.textContent = e.message; err.hidden = false; save.disabled = false; }
+    ev.preventDefault(); err.hidden = true; busy(true);
+    try { if (await onSave(form) === false) busy(false); else dlg.close(); }
+    catch (e) { err.textContent = e.message; err.hidden = false; busy(false); }
   };
   dlg.showModal();
   form.querySelector('input:not([type=hidden]),select')?.focus();
