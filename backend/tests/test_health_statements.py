@@ -42,7 +42,7 @@ def bulk(api, tasks=30000, events=100000):
                       "WHEN 2 THEN 'declined' ELSE 'done' END, ?, ?, 0 FROM nums WHERE i<=?",
                       (i, bot, H.shift(H.now(), minutes=-3000), H.shift(H.now(), minutes=-30), tasks // len(bots)))
         c.execute("INSERT INTO task_events(id,task_id,created_at,actor,field,old,new) "
-                  "SELECT 'te'||i,(SELECT id FROM tasks LIMIT 1 OFFSET i%100),datetime('now','-'||(i%4000)||' minutes'),"
+                  "SELECT 'te'||i,'bt0-'||(i%100+1),datetime('now','-'||(i%4000)||' minutes'),"
                   "'human:ana',CASE i%3 WHEN 0 THEN 'status' WHEN 1 THEN 'owner' ELSE 'note' END,'a','b' FROM nums WHERE i<=?", (events,))
         c.execute("INSERT INTO events(id,created_at,actor,action,target,detail) "
                   "SELECT 'ev'||i,datetime('now','-'||(i%4000)||' minutes'),'human:ana',CASE i%4 WHEN 0 THEN 'task.update' "
