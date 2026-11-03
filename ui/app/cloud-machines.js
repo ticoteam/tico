@@ -13,14 +13,18 @@ const CLOUD_STATES = {none: 'Not started yet', starting: 'Starting', running: 'R
   stopped: 'Stopped', deleted: 'Deleted', failed: 'Failed'};
 // The Computer select's values for the two cloud machines; any other value is a computer's id.
 const CLOUD_CHOICES = {'cloud-shared': 'shared', 'cloud-own': 'own'};
+// The names the Computer select shows for them; settings-bots.js search matches a bot's by the same words.
+const CLOUD_CHOICE_LABELS = {'cloud-shared': 'Shared cloud machine', 'cloud-own': 'Own cloud machine'};
 let CLOUD_SIZES = null;
 const cloudSizeName = name => name ? name[0].toUpperCase() + name.slice(1) : '';
 const cloudMachineOn = e => e?.cloud_machine?.mode === 'cloud';
 const cloudMachineShared = e => cloudMachineOn(e) && e.cloud_machine.placement !== 'own';
 const cloudMachinePick = value => CLOUD_CHOICES[value] || null;
 const cloudMachineValue = e => cloudMachineOn(e) ? (cloudMachineShared(e) ? 'cloud-shared' : 'cloud-own') : '';
+// The name of a bot's cloud machine as the Computer select shows it; '' for a bot not on one.
+const cloudMachineLabel = e => CLOUD_CHOICE_LABELS[cloudMachineValue(e)] || '';
 function cloudMachineOptionsHTML(current) {
-  return Object.entries({'cloud-shared': 'Shared cloud machine', 'cloud-own': 'Own cloud machine'}).map(([value, label]) =>
+  return Object.entries(CLOUD_CHOICE_LABELS).map(([value, label]) =>
     `<option value="${value}" ${value === current ? 'selected' : ''}>${label}</option>`).join('');
 }
 async function cloudMachineSizes() {
