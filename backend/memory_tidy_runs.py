@@ -111,7 +111,7 @@ def unsettled(c):
 
 
 def packet_runner(c, bot):
-    row = c.execute('SELECT r.capabilities FROM assignments a JOIN runners r ON r.id=a.runner_id '
+    row = c.execute('SELECT r.capabilities FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id '
                     'WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
     return bool(row and 'memory_tidy_packets_v1' in json.loads(row[0] or '[]'))
 

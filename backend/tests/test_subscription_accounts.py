@@ -93,7 +93,7 @@ def test_nothing_token_like_is_stored_or_shown(api):
             beat(api, r, runtime_account={**ACCOUNT, field: secret},
                  profile_account={'email': 'dev@acme.example', field: secret})
             with api.app.state.store.read() as c:
-                stored = json.dumps([list(row) for row in c.execute('SELECT readiness FROM runners')]
+                stored = json.dumps([list(row) for row in c.execute('SELECT readiness FROM runners_with_state')]
                                     + [list(row) for row in c.execute('SELECT runtimes FROM computer_profiles')])
             assert secret not in stored
             shown = json.dumps(get(api, 'operations', 'cara-test')) + json.dumps(get(api, 'subscriptions', 'cara-test'))
@@ -177,7 +177,7 @@ def test_an_own_window_that_fails_its_checks_reads_unknown_and_the_heartbeat_sti
     claude = machine(api, r, 'cara-test')['readiness']['runtimes']['claude']
     assert claude['five_hour']['used_percent'] is None and claude['weekly']['used_percent'] == 17
     with api.app.state.store.read() as c:
-        assert 'sk-ant-oat01' not in json.dumps([list(row) for row in c.execute('SELECT readiness FROM runners')])
+        assert 'sk-ant-oat01' not in json.dumps([list(row) for row in c.execute('SELECT readiness FROM runners_with_state')])
 
 
 def test_a_bot_a_member_may_not_see_is_left_off_another_persons_computer(world):

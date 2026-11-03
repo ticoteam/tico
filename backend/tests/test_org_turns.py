@@ -24,7 +24,7 @@ def independent(api, machine):
     assign(api, machine, 'finance')
     ready(api, machine, ['ops', 'finance'])
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET capacity=200 WHERE id=?', (machine['runner_id'],))
+        c.execute('UPDATE runner_states SET capacity=200 WHERE runner_id=?', (machine['runner_id'],))
     post(api, 'chat/finance', {'text': 'Independent synthetic work'})
 
 
@@ -250,7 +250,7 @@ def test_stop_level_idle_claim_keeps_computer_contact_fresh(api, monkeypatch):
     monkeypatch.setattr(H, 'now', lambda: H.shift(now, seconds=20))
     assert claim(api, machine, 'finance') is None
     with api.app.state.store.read() as c:
-        assert c.execute('SELECT last_seen_at FROM runners WHERE id=?', (machine['runner_id'],)).fetchone()[0] == H.now()
+        assert c.execute('SELECT last_seen_at FROM runners_with_state WHERE id=?', (machine['runner_id'],)).fetchone()[0] == H.now()
 
 
 def test_stop_level_counted_waiter_takes_its_place_while_new_claims_wait(api):

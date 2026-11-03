@@ -257,7 +257,7 @@ def uses_shared(c, runner, runtime):
 def serving(c):
     """{runner id: {runtime: {id, name, env, preview, every, computers: [{id, label}]}}} for every live computer: the
     shared key each runs each runtime on, and every computer that same key serves. Values never leave the vault."""
-    runners = c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY lower(label), id").fetchall()
+    runners = c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL ORDER BY lower(label), id").fetchall()
     every = granted(c, COMPUTERS)
     used, served = {}, {}
     for runner in runners:
@@ -288,5 +288,5 @@ def users(c, runner, runtime):
     row = uses_shared(c, runner, runtime)
     if not row:
         return []
-    return [r for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY lower(label), id")
+    return [r for r in c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL ORDER BY lower(label), id")
             if (found := uses_shared(c, r, runtime)) is not None and found["id"] == row["id"]]
