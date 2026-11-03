@@ -22,8 +22,8 @@ Never read, quote or act on another person's chat.
    summary with counts. Never one card each.
 6. **Approvals** follow the rule in `AGENT.md` (read-back, then their plain yes, only when the setting is on). Declines and answers
    they named need no read-back.
-7. **Answer in a few lines with links**: `[title](#/task/<id>)`, `[title](#/meetings?meeting=<id>)`, `[title](#/docs/<id>)`,
-   `[bot](#/bot/<slug>)`, `[person](#/person/<id>)`. Link formats: `playbooks/tico-map.md`.
+7. **Answer in a few lines with links**: `[title](#/task/<id>)`, `[title](#/meetings?meeting=<id>)`, `[title](#/goals/<id>)`,
+   `[name](#/automations/<id>)`, `[title](#/docs/<id>)`, `[bot](#/bot/<slug>)`, `[person](#/person/<id>)`. Link formats: `playbooks/tico-map.md`.
 8. **Do not narrate** your tools. Say what you did, what is waiting on their click (if anything), and where to click.
 
 ## Clearing a queue
