@@ -419,11 +419,13 @@ def prime_machines(c, slugs):
     """Read what machine() and H.status read for each of these bots one table at a time (one query per 500 bots
     each), so Health's pass over every bot reads none of them again per bot. Outside a snapshot nothing is kept."""
     from .agents import CONFIG_SQL, ROW_SQL
+    from .auth import OPERATOR_SQL
     if read_cache.cache(c) is None:
         return
     for part in H.chunks(sorted(set(slugs))):
         marks = ",".join("?" * len(part))
         for statement, query in ((CONFIG_SQL, f"SELECT config,bot FROM bot_config WHERE bot IN ({marks})"),
+                                 (OPERATOR_SQL, f"SELECT bot,owner_id FROM bot_config WHERE bot IN ({marks})"),
                                  (ROW_SQL, f"SELECT * FROM agents WHERE bot IN ({marks})"),
                                  (ASSIGNED_SQL, ASSIGNED_COLUMNS + ",a.bot FROM assignments a "
                                                 f"JOIN runners r ON r.id=a.runner_id WHERE a.bot IN ({marks})"),
@@ -753,15 +755,17 @@ def operation_issues(c, who, auth):
     if who.role == "owner":
         # Container backups report through replication; imported VM timer history stays historical.
         managed_backups = bool(os.environ.get("TICO_BACKUP_MODE"))
-        for row in c.execute("SELECT id,label,owner_id,last_seen_at,revoked_at,version,checkout,restart_requested_at "
-                             "FROM runners WHERE revoked_at IS NULL"):
+        runners = c.execute("SELECT id,label,owner_id,last_seen_at,revoked_at,version,checkout,restart_requested_at "
+                            "FROM runners WHERE revoked_at IS NULL").fetchall()
+        busy = runner_busy_many(c, [row["id"] for row in runners])     # every computer's running turns in one read
+        for row in runners:
             online = row["last_seen_at"] and row["last_seen_at"] > H.shift(H.now(), seconds=-60)
             if online and not runner_version_supported(row["version"]):
                 add("runner_version", row["label"] + " needs a runner update",
                     "Install the current " + auth.settings.app_name + " runner before assigning new work.",
                     machine=row["id"], action="Update this runner in Settings → Computers.")
             if online:
-                checkout_issue(add, row, runner_busy(c, row["id"]))
+                checkout_issue(add, row, busy[row["id"]])
         for row in c.execute("SELECT service,last_error,detail FROM service_health WHERE last_error IS NOT NULL"):
             if managed_backups and row["service"] in SNAPSHOT_BACKUP_ROWS:
                 continue
@@ -1126,6 +1130,17 @@ def runner_busy(c, runner_id):
     """Turns running on a computer now: what a restart would wait for."""
     return c.execute("SELECT count(*) FROM attempts WHERE runner_id=? AND state IN ('leased','running') "
                      "AND lease_until>?", (runner_id, H.now())).fetchone()[0]
+
+
+def runner_busy_many(c, runner_ids):
+    """runner_busy for many computers, {runner: turns}, in one read per 500 computers."""
+    now, found = H.now(), {}
+    ids = sorted(set(runner_ids))
+    for part in H.chunks(ids):
+        found.update(c.execute("SELECT runner_id,count(*) FROM attempts WHERE runner_id IN (%s) "
+                               "AND state IN ('leased','running') AND lease_until>? GROUP BY runner_id"
+                               % ",".join("?" * len(part)), (*part, now)).fetchall())
+    return {rid: found.get(rid, 0) for rid in runner_ids}
 
 
 def restart_issue(add, row, busy, since=None):
