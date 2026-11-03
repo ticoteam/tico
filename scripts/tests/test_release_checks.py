@@ -45,7 +45,7 @@ def test_isolation_uses_the_candidate_image_only_after_successful_builds(tmp_pat
         monkeypatch.setattr(release_checks, 'Check', Check)
         assert release_checks.release(SimpleNamespace(previous=None)) == (0 if builds_ok else 1)
         output = capsys.readouterr().out
-        isolation_file = 'runner/tests/test_isolation_docker.py'
+        isolation_file = 'runner_support/tests/test_isolation_docker.py'
         plan = json.loads((tmp_path / 'all-python-batches.json').read_text())
         assert plan and all(f'--ignore={isolation_file}' in command for command in plan)
         assert all(command[command.index('-n') + 1] == workers for command in plan)
@@ -370,10 +370,22 @@ def test_native_test_files_include_tests_that_borrow_a_native_test_modules_helpe
     assert release_checks.native_test_files(names) == {'backend/tests/test_uses.py', 'backend/tests/test_uses_too.py'}
 
 
+def test_native_test_files_follow_the_runner_support_package(tmp_path, monkeypatch):
+    tests = tmp_path / 'runner_support/tests'
+    tests.mkdir(parents=True)
+    (tests / 'test_engine.py').write_text('from runner_support import engine\n')
+    (tests / 'test_prepare.py').write_text('run("-m", "runner_support.engine", "prepare")\n')
+    (tests / 'test_borrows.py').write_text('from runner_support.tests.test_engine import fake\n')
+    (tests / 'test_plain.py').write_text('from runner_support import redact\n')
+    monkeypatch.setattr(release_checks, 'ROOT', tmp_path)
+    names = [f'runner_support/tests/{n}.py' for n in ('test_engine', 'test_prepare', 'test_borrows', 'test_plain')]
+    assert release_checks.native_test_files(names) == set(names[:3])
+
+
 def test_the_screen_relay_borrowers_and_scripts_tico_runs_are_native():
     # v0.5.59's first validation: test_systemd_units runs scripts/tico install, which needs the runner binary.
     names = ['backend/tests/test_screen.py', 'backend/tests/test_browser_exit_relay.py',
-             'runner/tests/test_systemd_units.py', 'backend/tests/test_api.py', 'backend/tests/test_selected_claim.py']
+             'runner_support/tests/test_systemd_units.py', 'backend/tests/test_api.py', 'backend/tests/test_selected_claim.py']
     assert release_checks.native_test_files(names) == set(names[:3])
 
 

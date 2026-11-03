@@ -89,7 +89,7 @@ def finding(api, key):
 
 def runner_errors(api, runner, lines):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness=? WHERE id=?",
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?",
                   (json.dumps({"schema_version": 1, "bots": {}, "recent_errors": lines}), runner["runner_id"]))
 
 
@@ -276,7 +276,7 @@ def test_a_computer_on_a_release_the_server_cannot_work_with_is_bad(environment,
     monkeypatch.setenv("TICO_VERSION", "0.4.45")
     api, runner = built(environment)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.now(), runner["runner_id"]))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), runner["runner_id"]))
         c.execute("INSERT INTO runner_versions(runner_id,release,reported_at) VALUES(?,?,?) ON CONFLICT(runner_id) "
                   "DO UPDATE SET release=excluded.release,update_state='',update_error=''",
                   (runner["runner_id"], release, H.now()))
@@ -393,7 +393,7 @@ def test_a_setup_finding_naming_a_bot_is_never_reported_to_hq(environment, hq):
         c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m-silent','human:ana',?,'chat','hi',?)",
                   ("bot:" + SECRET_BOT, H.now()))
         enqueue_stored(c, 'm-silent')
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), minutes=-15), runner["runner_id"]))
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.shift(H.now(), minutes=-15), runner["runner_id"]))
     found = scan(api)
     silent = "computer_silent:" + runner["runner_id"]
     assert "limited_no_fallback:" + SECRET_BOT in found and "push_stuck:" + runner["runner_id"] in found and silent in found
@@ -619,7 +619,7 @@ def gateway_choice(api, monkeypatch, runner_id, isolated, enabled=("anthropic",)
         providers.save(c, "human:test", {"expected_revision": providers.load(c)["revision"], "enabled": list(enabled),
                                          "runtime": "claude", "auto_fallback": True, "preset": "subscriptions-gateway"},
                        H.now())
-        c.execute("UPDATE runners SET readiness=? WHERE id=?",
+        c.execute("UPDATE runner_states SET readiness=? WHERE runner_id=?",
                   (json.dumps({"schema_version": 1, "isolated": isolated, "runtimes": {}, "bots": {}}), runner_id))
 
 
