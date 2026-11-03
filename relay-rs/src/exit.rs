@@ -1435,7 +1435,9 @@ mod tests {
     fn a_tunnels_key_takes_its_row_at_its_first_count() {
         let mut exits = exits();
         let _opens = exits.connect_link("laptop");
-        exits.set_policy("laptop", policy(1, &["ops"], 10_000)).unwrap();
+        exits
+            .set_policy("laptop", policy(1, &["ops"], 10_000))
+            .unwrap();
         exits.admit(&grant("a", "ops", 1, 0)).unwrap();
         exits.spend("a", 100).unwrap();
         // Not flushed yet, but the key holds its row, so a later key cannot take the last one ahead of it.
@@ -1449,7 +1451,9 @@ mod tests {
     fn the_first_count_on_a_new_day_moves_every_open_tunnels_earlier_counts_first() {
         let mut exits = exits();
         let _opens = exits.connect_link("laptop");
-        exits.set_policy("laptop", policy(1, &["ops"], 10_000)).unwrap();
+        exits
+            .set_policy("laptop", policy(1, &["ops"], 10_000))
+            .unwrap();
         exits.admit(&grant("a", "ops", 1, 0)).unwrap();
         let mut docs = grant("b", "ops", 1, 0);
         docs.host = "docs.acme.example".into();
@@ -1468,26 +1472,36 @@ mod tests {
     fn an_admit_sees_the_keys_open_tunnels_counted_on_earlier_days() {
         let mut exits = exits();
         let _opens = exits.connect_link("laptop");
-        exits.set_policy("laptop", policy(1, &["ops"], 10_000)).unwrap();
+        exits
+            .set_policy("laptop", policy(1, &["ops"], 10_000))
+            .unwrap();
         exits.admit(&grant("a", "ops", 1, 0)).unwrap();
         exits.spend("a", 5).unwrap();
         exits.day = Some("2026-11-02".into());
         exits.admit(&grant("b", "ops", 1, 0)).unwrap();
         // Tunnel a is still open; its bytes from the day before are in the totals the row limit counts.
-        assert_eq!(exits.usage.values().copied().collect::<Vec<_>>(), vec![(5, 0)]);
+        assert_eq!(
+            exits.usage.values().copied().collect::<Vec<_>>(),
+            vec![(5, 0)]
+        );
     }
 
     #[test]
     fn a_closed_tunnel_is_in_the_day_totals_before_its_slot_is_released() {
         let mut exits = exits();
         let _opens = exits.connect_link("laptop");
-        exits.set_policy("laptop", policy(1, &["ops"], 10_000)).unwrap();
+        exits
+            .set_policy("laptop", policy(1, &["ops"], 10_000))
+            .unwrap();
         exits.admit(&grant("a", "ops", 1, 0)).unwrap();
         exits.spend("a", 5).unwrap();
         exits.close("a", Close::new(1000, ""));
         // Its task has not released the slot yet; admission already sees the row (else a new key could pass the
         // usage-row limit and later lose its counts).
-        assert_eq!(exits.usage.values().copied().collect::<Vec<_>>(), vec![(5, 1)]);
+        assert_eq!(
+            exits.usage.values().copied().collect::<Vec<_>>(),
+            vec![(5, 1)]
+        );
     }
 
     /// Tunnels on two hosts and two bots, one whose bytes and close fall across UTC midnight: the batch has each
