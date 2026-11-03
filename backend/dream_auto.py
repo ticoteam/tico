@@ -267,6 +267,9 @@ def nightly(store, auth, at):
     settings = store.settings
     if settings.rehearsal or settings.test_identities:
         return None
+    # A store with no app around it (a bare Scheduler, a script) has no task path to file a dream through: no night.
+    if dream.creator(store) is None:
+        return None
     night = night_of(at)
     # The tick comes every few seconds: once this process has seen the night claimed, it never asks again.
     if store.__dict__.get("auto_dream_night") == night:

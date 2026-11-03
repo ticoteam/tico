@@ -289,6 +289,19 @@ def test_the_scheduler_tick_hands_its_time_to_the_auto_dream_night(api, monkeypa
     assert seen == [at]
 
 
+def test_a_store_with_no_app_has_no_night_and_its_tick_does_not_fail(tmp_path):
+    """A bare Scheduler (no app installed the dream route) at 02:30 skips the night quietly and claims nothing."""
+    from backend.auth import Auth
+    from backend.execution import Execution
+    from backend.store import Store
+    from backend.config import Settings
+    s = Store(Settings(db_path=tmp_path / "bare.sqlite"))
+    assert DA.nightly(s, Auth(s), night()) is None
+    with s.read() as c:
+        assert not DA.claimed(c, DA.night_of(night()))
+    assert not [f for f in Scheduler(s, Execution(s, Auth(s))).tick(night())["failures"] if "auto_dream" in f]
+
+
 # ---- regressions from the review of 676ac34a0 -------------------------------------------------------------------------
 
 def test_an_overlapping_run_cannot_start_past_the_cap(api, monkeypatch):
