@@ -3,6 +3,11 @@
 The task, doc and feature pushes go through the real hub task path, because that is the point of them.
 """
 
+import pytest
+
+from backend.store import H
+from backend.tests.test_api import restrict
+from backend.tests.test_bot_access import bot, bot_id
 from backend.tests.test_api import api, get, headers   # noqa: F401
 
 
@@ -134,3 +139,43 @@ def test_a_doc_update_goes_to_the_doc_bot_unless_the_push_names_someone_else(api
     owners = {iid: get(api, "tasks/" + push(api, rid, iid)["item"]["result_ref"])["task"]["owner_id"]
               for iid in (default, named)}
     assert owners == {default: "bot:doc-updater", named: "human:ben"}
+
+
+@pytest.mark.parametrize("access", ["hidden", "see_only", "write"])
+def test_doc_default_checks_the_canonical_bot_id_for_a_non_admin(api, access):
+    """A renamed label must not bypass the stored bot's access configuration."""
+    without_doc_bot(api)
+    bot(api, "docs-worker")
+    canonical = bot_id(api, "docs-worker")
+    assert canonical != "doc-updater"
+    with api.app.state.store.transaction() as c:
+        H.rename_bot(c, canonical, "doc-updater")
+        if access == "hidden":
+            restrict(c, canonical, people=["ana"])
+        elif access == "see_only":
+            restrict(c, canonical, see={"everyone": True}, read={"everyone": True}, write={"people": ["ana"]})
+        else:
+            restrict(c, canonical, everyone=True)
+        before = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
+    rid = record(api, {"title": "Cara's docs call"}, token="cara-test")
+    iid = add(api, rid, {"section": "doc", "text": "Correct the guide"}, token="cara-test")["item"]["id"]
+    if access == "write":
+        pushed = push(api, rid, iid, token="cara-test")
+        task = get(api, "tasks/" + pushed["item"]["result_ref"], token="cara-test")["task"]
+        assert task["owner_id"] == "bot:" + canonical
+        # Naming the same bot by its label uses the same canonical identity.
+        named = add(api, rid, {"section": "doc", "text": "Correct the FAQ",
+                              "detail": {"owner": "bot:doc-updater"}}, token="cara-test")["item"]["id"]
+        pushed = push(api, rid, named, token="cara-test")
+        assert get(api, "tasks/" + pushed["item"]["result_ref"], token="cara-test")["task"]["owner_id"] == "bot:" + canonical
+    else:
+        refused = push(api, rid, iid, token="cara-test", expected=422)
+        assert refused["error"]["code"] == "owner"
+        assert "Unknown recipient" not in refused["error"]["detail"]
+        item = items(api, rid, token="cara-test")["sections"]["doc"][0]
+        assert item["status"] == "proposed" and item["result_ref"] is None
+        with api.app.state.store.read() as c:
+            assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == before
+        change(api, rid, iid, {"detail": {"owner": "human:cara"}}, token="cara-test")
+        pushed = push(api, rid, iid, token="cara-test")
+        assert get(api, "tasks/" + pushed["item"]["result_ref"], token="cara-test")["task"]["owner_id"] == "human:cara"

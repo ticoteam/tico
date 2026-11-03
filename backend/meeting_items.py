@@ -34,9 +34,9 @@ PROCESS_LABELS = {"blocked", "blocked by specs", "needs architecture review", "n
                   "spec reviewed", "in review", "ready for qa"}
 DUPLICATE_RATIO = 0.8
 DOC_BOT = "doc-updater"
-# A doc update goes to the owner it names, else to DOC_BOT when this team has that bot.
+# A doc update goes to the owner it names, else to DOC_BOT when the person can send it work.
 DOC_OWNER_NAMED = "Pick someone on this team to own this doc update, then push again."
-DOC_OWNER_DEFAULT = "This team has no " + DOC_BOT + " bot, so pick who this doc update is for, then push again."
+DOC_OWNER_DEFAULT = "Pick who this doc update is for, then push again."
 # Only these keys mean anything per section, so anything else is a mistake worth naming.
 DETAIL_KEYS = {
     "doc": ("document", "change", "why", "owner"),
@@ -215,7 +215,7 @@ def doc_owner(c, auth, who, detail):
     named = str(detail.get("owner") or "").strip()
     if not named:
         bot = H.resolve_actor(c, DOC_BOT)
-        if not bot or not auth.bot_access(c, who, DOC_BOT)["write"]:
+        if not bot or not auth.bot_access(c, who, H.actor_id(bot))["write"]:
             raise Problem("owner", DOC_OWNER_DEFAULT, 422)
         return bot
     actor = H.resolve_actor(c, named)

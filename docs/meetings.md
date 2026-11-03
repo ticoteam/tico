@@ -188,9 +188,10 @@ format is a `422` that names the problem.
   requests**. A human adds items (with the quote and time they came from if they like) and the
   meeting's owner pushes them. Push creates ordinary Tico tasks, never a card in another tool: a
   task item becomes a task for its named owner; a doc update becomes a task for the owner it names,
-  or for `doc-updater` when it names none and the team has that bot; a feature request becomes a task
-  for whoever is primary for the product group. A doc update with no owner and no `doc-updater` bot
-  stays proposed: Push says who to choose, and the item opens so you can pick an owner, then push
+  or for `doc-updater` when it names none and you can send work to that bot; a feature request
+  becomes a task for whoever is primary for the product group. If a doc update has no owner and
+  `doc-updater` is absent or you cannot send it work, the item stays proposed: Push asks you to
+  choose an owner, and the item opens so you can pick one, then push
   again. Product area, app and label
   are optional: use your team's names or leave them blank. Existing B/F and CA/PA codes still work.
   A near-identical open task returns a link (**Push anyway** overrides).
