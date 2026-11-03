@@ -158,3 +158,71 @@ def test_ordinary_patterns_still_save():
     for pattern in (r"invoice \d+", "^(re|fwd):", "(ab){2}", "[a-z]+@acme\\.example", "(foo)+bar", "a*b*c{0,20}d+"):
         check({**flow(act("a")), "trigger": {"type": "event", "name": "x", "filters": [
             {"field": "a", "op": "matches", "value": pattern}]}})
+
+
+LEGAL = [{"id": "legal", "name": "Legal", "color": "red", "then": [{"do": "create_task", "args": {"title": "Review"}}]}]
+
+
+def rule(**extra):
+    return {"when": [{"field": "message.subject", "op": "matches", "value": "subpoena"}],
+            "then": [{"do": "label", "args": {"name": "STARRED"}}], **extra}
+
+
+def gate(*rules):
+    return {"id": "gate", "type": "filter", "rules": list(rules)}
+
+
+def test_destinations_save_and_a_rule_may_name_one():
+    saved = check(flow(gate(rule(to="legal")), destinations=LEGAL))
+    assert saved["destinations"] == LEGAL
+    ignore = [{"id": "ignore", "name": "Ignore"}]                  # no then: the destination only ends the thread
+    assert check(flow(act("a"), destinations=ignore))["destinations"] == ignore
+
+
+def test_a_flow_without_destinations_saves_as_before():
+    assert "destinations" not in check(flow(act("a")))
+    assert "destinations" not in check(flow(act("a"), destinations=None))
+
+
+@pytest.mark.parametrize("move", [{"next": "rule"}, {"next": "step"}, {"next": "end"}, {"stop": True},
+                                  {"stop": True, "next": "end"}, {"to": "legal"}, {"to": "legal", "stop": True},
+                                  {"to": "legal", "next": "end"}])
+def test_next_and_to_save_in_the_combinations_the_refusals_allow(move):
+    check(flow(gate(rule(**move)), destinations=LEGAL))
+
+
+@pytest.mark.parametrize("move, words", [
+    ({"next": "later"}, "next is one of"),
+    ({"stop": True, "next": "rule"}, "stop ends the thread"),
+    ({"stop": True, "next": "step"}, "stop ends the thread"),
+    ({"to": "legal", "next": "rule"}, "to ends the thread"),
+    ({"to": "legal", "next": "step"}, "to ends the thread"),
+    ({"to": "legal", "stop": False}, "to ends the thread"),
+    ({"to": "nowhere"}, "names one of"),
+    ({"to": 3}, "names one of"),
+])
+def test_bad_next_and_to_are_refused(move, words):
+    refused(flow(gate(rule(**move)), destinations=LEGAL), words)
+
+
+def test_to_needs_a_destination_in_the_flow():
+    refused(flow(gate(rule(to="legal"))), "names one of")
+
+
+def test_a_rule_key_outside_the_list_is_still_refused():
+    refused(flow(gate({**rule(), "goto": "legal"})), "a rule has")
+
+
+@pytest.mark.parametrize("dests, words", [
+    ({"legal": LEGAL[0]}, "destinations are a list"),
+    ([{"id": f"d{n}", "name": "x", "then": []} for n in range(21)], "at most 20"),
+    ([{"id": "Legal Team", "name": "x", "then": []}], "every destination has an id"),
+    ([{"id": "legal", "name": "x", "then": []}, {"id": "legal", "name": "y", "then": []}], "unique"),
+    ([{"id": "legal", "name": "x" * 81, "then": []}], "name is text"),
+    ([{"id": "legal", "name": "x", "color": "purple", "then": []}], "color is one of"),
+    ([{"id": "legal", "name": "x", "then": [{"do": "note", "args": {"text": "x"}}] * 11}], "at most 10"),
+    ([{"id": "legal", "name": "x", "then": [{"do": "explode"}]}], "do is one of"),
+    ([{"id": "legal", "name": "x", "then": [], "steps": []}], "a destination has id"),
+])
+def test_bad_destinations_are_refused(dests, words):
+    refused(flow(act("a"), destinations=dests), words)

@@ -3574,6 +3574,11 @@ _AUTO_FIELDS = {
     "group": _s("group:<id>, for permissions"), "enabled": {"type": "boolean"},
     "spend_cap": {"type": ["object", "null"], "description": "{per_30m: dollars} for its LLM and bot turns; null = the bot's limit"},
     "batch": {"type": "object", "description": "{times: [\"08:00\", ...], tz}: filters on receipt, the rest at these times"},
+    "destinations": {"type": ["array", "null"], "items": {"type": "object"},
+                     "description": "Named chains a filter rule's `to` runs, at most 20: {id (a name like legal), name, "
+                                    "color (amber, orange, violet, green, blue, teal, pink, gray or red; optional), then: "
+                                    "the actions, at most 10 (empty = ignore)}. A rule sends a thread there with `to`, "
+                                    "after its own actions; null takes them away"},
     "trigger": {"type": "object", "description": "{type: message|task_received|schedule|webhook|listening|event|due, ...}; a due trigger is {type: due, first_due: YYYY-MM-DD, repeats: once|weekly|monthly|quarterly|yearly, open_days (default 14), tz}"},
     "steps": {"type": "array", "items": {"type": "object"},
               "description": "The whole step tree (filter, decide, llm, find, bot_turn, paths, action). An action step is "

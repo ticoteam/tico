@@ -42325,6 +42325,16 @@
           "can_pause": {
             "type": "boolean"
           },
+          "destinations": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object"
+            },
+            "description": "Named chains a filter rule's `to` runs (see the automation guide)"
+          },
           "spend_cap": {
             "type": [
               "object",
@@ -42525,6 +42535,16 @@
           },
           "can_pause": {
             "type": "boolean"
+          },
+          "destinations": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object"
+            },
+            "description": "Named chains a filter rule's `to` runs (see the automation guide)"
           },
           "spend_cap": {
             "type": [
@@ -42739,6 +42759,18 @@
             "items": {},
             "type": "array",
             "title": "Steps"
+          },
+          "destinations": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Destinations"
           }
         },
         "additionalProperties": false,
@@ -42962,6 +42994,18 @@
               }
             ],
             "title": "Steps"
+          },
+          "destinations": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Destinations"
           },
           "summary": {
             "anyOf": [

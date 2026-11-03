@@ -121,7 +121,7 @@ VALUES_BYTES = 60_000    # what a judge call is shown of a run's values
 MAIL_LEASE_MINUTES = 5   # a claimed mail action not reported by then goes back to the queue
 MAIL_TRIES = 3           # claims a mail action gets before it fails
 BOTOPS = "bot:botops"            # builds automations for whoever asks it, with that asker's rights (backend/botops_act.py)
-VERSIONED = ("trigger", "steps", "batch")   # what the automation does; a change here is a new version
+VERSIONED = ("trigger", "steps", "batch", "destinations")   # what the automation does; a change here is a new version
 # The automations a write in this context comes from: their own actions never start them again.
 CHAIN = contextvars.ContextVar("automation_chain", default=())
 _BELL = threading.Event()
@@ -540,7 +540,7 @@ def _checked(c, flow, settings=None, access=True, saved=None, aid=None, wake_ste
             if flow["owner"] != "person:" + person:
                 raise Problem("forbidden", f"Only {person}'s own automation runs a turn on their Assistant", 403)
         assistant_bot = getattr(settings, "assistant_bot", None)
-        for do, args in _actions(flow["steps"]):
+        for do, args in _actions(flow):
             bot = str((args or {}).get("bot") or "")
             if do in ("wake_bot", "note") and bot and "{{" not in bot and not may_tell(c, flow["owner"], bot,
                                                                                       assistant_bot):
@@ -596,6 +596,9 @@ def _bot_ids(c, flow):
         return {k: (bot_ref(v, bare=True) if k in BOT_ARGS and isinstance(v, str) else v) for k, v in args.items()}
 
     flow = {**flow, "owner": bot_ref(flow["owner"]), "steps": steps_of(flow.get("steps"))}
+    if flow.get("destinations"):
+        flow["destinations"] = [{**dest, "then": [{**a, "args": args_of(a.get("args"))} if a.get("args") else a
+                                                  for a in dest.get("then") or []]} for dest in flow["destinations"]]
     trigger = flow.get("trigger") or {}
     if trigger.get("type") == "task_received" and isinstance(trigger.get("to"), str):
         to = trigger["to"]
@@ -606,8 +609,16 @@ def _bot_ids(c, flow):
     return flow
 
 
-def _actions(steps):
-    """(do, args) of every action in the steps: action steps and filter rules', nested paths included."""
+def _actions(flow):
+    """(do, args) of every action the flow runs: its steps' (action steps and filter rules', nested paths included) and
+    its destinations' chains."""
+    yield from _step_actions(flow.get("steps"))
+    for dest in flow.get("destinations") or []:
+        for action in dest.get("then") or []:
+            yield action.get("do"), action.get("args") or {}
+
+
+def _step_actions(steps):
     for step in steps or []:
         if step.get("type") == "action":
             yield step.get("do"), step.get("args") or {}
@@ -615,8 +626,8 @@ def _actions(steps):
             for action in rule.get("then") or []:
                 yield action.get("do"), action.get("args") or {}
         for path in step.get("paths") or []:
-            yield from _actions(path.get("steps"))
-        yield from _actions((step.get("otherwise") or {}).get("steps"))
+            yield from _step_actions(path.get("steps"))
+        yield from _step_actions((step.get("otherwise") or {}).get("steps"))
 
 
 RUN_MODEL_KEYS = ("model", "effort", "harness")
@@ -2316,6 +2327,7 @@ class AutomationIn(Contract):
     batch: dict | None = None
     trigger: dict
     steps: list = Field(default_factory=list)
+    destinations: list | None = None
 
 
 class AutomationPatch(Contract):
@@ -2327,6 +2339,7 @@ class AutomationPatch(Contract):
     batch: dict | None = None
     trigger: dict | None = None
     steps: list | None = None
+    destinations: list | None = None   # null takes them away
     summary: str | None = Field(default=None, max_length=200)   # a few words on a new version or proposal
 
 
@@ -2346,7 +2359,7 @@ class RunNow(Contract):
     input: dict = Field(default_factory=dict)   # shaped like the trigger's output: message, task, item, event, body
 
 
-FLOW_KEYS = ("name", "owner", "group", "enabled", "builtin", "spend_cap", "batch", "trigger", "steps")
+FLOW_KEYS = ("name", "owner", "group", "enabled", "builtin", "spend_cap", "batch", "trigger", "steps", "destinations")
 
 
 def page(rows, limit, offset, cap):

@@ -1940,6 +1940,8 @@ _RUN = obj({"id": "s", "automation_id": "s", "version": "i", "trigger_ref": "s",
 SCHEMAS.update({
     "Automation": obj({"id": "s", "name": "s", "owner_id": "s", "enabled": "b", "trigger": {"type": "object"},
                        "steps": items({"type": "object"}), "version": "i", "can_edit": "b", "can_pause": "b",
+                       "destinations": {"type": ["array", "null"], "items": {"type": "object"},
+                                        "description": "Named chains a filter rule's `to` runs (see the automation guide)"},
                        "spend_cap": {"type": ["object", "null"]}, "batch": {"type": ["object", "null"]},
                        "last_run": {"type": ["object", "null"]},
                        "counts": obj({"today": obj({"runs": "i", "dropped": "i"})}),
