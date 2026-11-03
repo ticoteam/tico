@@ -313,7 +313,7 @@ def test_approval_list_is_built_from_the_message_list_in_the_real_shape(tmp_path
     assert env["status"] == "declined" and [(r["id"], r["status"]) for r in env["approvals"]] == [(new, "declined")]
 
 
-FAKE_CLAUDE = """#!/usr/bin/env python3
+FAKE_CLAUDE = r"""#!/usr/bin/env python3
 import json, os, sys
 argv = sys.argv[1:]
 with open(os.environ["FAKE_CLAUDE_LOG"], "a") as log:
