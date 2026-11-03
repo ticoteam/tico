@@ -1251,7 +1251,7 @@ def _threads(view, rows):
     the reader it names; a thread the viewer cannot read sends nothing, and an `activity` row only for a message the
     viewer reads. A call's `call.*` rows go to the people who may read the call's thread."""
     from . import calls, threads
-    out, last = [], {}
+    out, last, activity = [], {}, {}
     for row in rows:
         if str(row["kind"]).startswith("call."):
             # Tico Meet call changes (backend/calls.py): the call's thread decides who hears each one, and each is sent once.
@@ -1265,8 +1265,11 @@ def _threads(view, rows):
             continue                # one reader's own pin; a pin for everyone has no `ref`
         # Reactions are per message: one event for each message whose reactions moved.
         last[(row["subject_id"], row["kind"], row["ref"] if row["kind"] == "reactions" else None)] = row
+        if row["kind"] == "activity" and row["ref"]:
+            # Every message one thread's activity rows name, in order: the event stands for all of them.
+            activity.setdefault(row["subject_id"], {})[row["ref"]] = None
     view.prime(subject for subject, _, _ in last)
-    H.prime_messages(view.c, [row["ref"] for (_, kind, _), row in last.items() if kind == "activity" and row["ref"]])
+    H.prime_messages(view.c, [ref for refs in activity.values() for ref in refs])
     for (tid, kind, ref), row in last.items():
         if not view.conversation(tid):
             continue
@@ -1285,12 +1288,16 @@ def _threads(view, rows):
             entry["message_id"] = ref
             entry["reactions"] = view.known.reactions(threads.reactions(view.c, [ref]).get(ref, []), tid)
         elif kind == "activity":
-            if not _activity_shown(view, found, row["ref"]):
+            # The newest message the viewer reads names the event; `unread_count` is how many of them are unread for
+            # the viewer (one check each), so a list adds that many without a re-read.
+            shown = [ref for ref in (activity.get(tid) or {row["ref"]: None}) if _activity_shown(view, found, ref)]
+            if not shown:
                 continue
             entry["counters"] = {"last_seq": found.get("last_seq") or 0,
                                  "last_unread_seq": found.get("last_unread_seq") or 0}
-            entry["message_id"] = row["ref"]
-            entry["unread"] = _activity_unread(view, tid, row["ref"])
+            entry["message_id"] = shown[-1]
+            count = sum(1 for ref in shown if _activity_unread(view, tid, ref))
+            entry.update(unread=count > 0, unread_count=count)
         elif kind == "counters":
             entry["counters"] = {"last_seq": found.get("last_seq") or 0,
                                  "last_unread_seq": found.get("last_unread_seq") or 0}

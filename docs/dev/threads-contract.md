@@ -594,7 +594,7 @@ narrows `runs`. They do not narrow `threads`: the sidebar stays live while a thr
  "thread": {<thread view>},                      // created|renamed|archived|unarchived|audience|members|sub_thread
  "read": {"last_read_seq": 4411},                // kind=read, only to that reader
  "counters": {"last_seq": 4411, "last_unread_seq": 4400},   // kind=counters|activity
- "message_id": "...", "unread": true,            // kind=activity: is that message unread for this viewer (§10.1)
+ "message_id": "...", "unread": true, "unread_count": 2,   // kind=activity: how many of its messages are unread (§10.1)
  "message_id": "...", "reactions": [{"emoji": ":+1:", "count": 2, "actors": ["human:ana", "bot:legal"]}]}
                                                  // kind=reactions, only when the viewer reads that message
 ```
@@ -690,10 +690,11 @@ later pages have `null`, `[]` and `{}`. The sidebar's first page has the same DM
 `person_dms`.
 
 Live updates. A client reads the rail whole on first load, on `reset`, on `needs` and on a safety poll every few
-minutes, and patches it from the `threads` topic in between: `activity` carries `message_id` and `unread` (that message
-passes `threads.unread_message_sql` for the viewer past their mark: a person's message not their own, or a delivery to
-them that counts under the task rule; one indexed lookup an event), so the row's `me.unread` goes up and its root joins
-`catch_up_ids` without a read; the viewer's own `read` clears them; `created`, `members`, `audience`, `archived` and
+minutes, and patches it from the `threads` topic in between. One `activity` event stands for every activity row of
+that thread in its batch: `message_id` is the newest of them the viewer reads, `unread_count` how many of them pass
+`threads.unread_message_sql` for the viewer past their mark (a person's message not their own, or a delivery to them
+that counts under the task rule; one indexed lookup a row) and `unread` whether any does, so the row's `me.unread` goes
+up by `unread_count` and its root joins `catch_up_ids` without a read; the viewer's own `read` clears them; `created`, `members`, `audience`, `archived` and
 `unarchived` carry the thread view; `pinned` moves the row (a thread not on the rail is read alone,
 `GET /api/v2/threads/{id}`).
 
@@ -701,21 +702,29 @@ Browse. Open company and team roots the viewer reads and is not in (as above, pi
 (the newest `last_seq` in the open subtree), `q` a case-insensitive LIKE on the title. `member_count` counts the root's
 members and followers once each. Joining is `PUT .../follow`, which puts the thread in the rail.
 
-Catch up. An item is an open root the viewer reads with `me.unread` > 0 over its subtree (bot activity alone is never
-unread, nor are one's own messages), or with an open mention or ask (`thread_attention._addressed`'s rule, read as ids
-in SQL, the newest 500) or a write held for their review. Candidates: company, team, members threads, DMs (1:1 and group) and task threads the viewer
+Catch up. An item is an open root the viewer reads with at least one new message over its subtree that they may read
+(the thread check for each sub-thread and the per-message check for each message; bot activity alone is never unread,
+nor are one's own messages), or with an open mention or ask the viewer may read (`thread_attention._addressed`'s rule, read as ids
+in SQL, the newest 500) or a write held for their review (`org_rule_check.held_for`: only the viewer's own candidates,
+their own holds, their bots' and the ones they review, through `org_rule_holds_author` and `org_rule_holds_reviewer`,
+the oldest 500 native posts and edits). Candidates: company, team, members threads, DMs (1:1 and group) and task threads the viewer
 is in (a task's thread only with unread under the task rules, `H.delivery_counts_sql`), and the viewer's own Home;
-another's Home only through a mention, an ask or a hold. A root the viewer follows with notify `muted` is left out unless it
+another's Home only through a mention, an ask or a hold. A root the viewer follows with notify `muted` is left out in SQL unless it
 mentions them; a migrated Home they read only for its history counts only by its attention items. Order: items that
 mention the viewer (an open mention or ask, or a new message delivered to them as a mention, ask or assignment) first,
 then newest activity, then id (newest first). Roots are read and checked 100 at a time (batched read checks and
-subtree counts), at most 1,000; counting stops at 99 and reads no message text. `new_count` is `me.unread`, or 1 for
-an attention item alone. `messages` are the new messages (past the viewer's mark in each thread, under the unread rule)
+subtree counts), at most 1,000 over all the pages: the cursor carries how many came before it, so the pages, `count`
+and `catch_up_ids` hold the same items. Counting stops at 99 and reads no message text. `new_count` is how many new
+messages of the subtree the viewer may read (a plain message counts in SQL; a restricted one or a migrated Home's old history is
+read whole for its check, at most 200 a batch of roots), or 1 for an attention item alone. The sidebar's `me.unread`
+still counts before the per-message check (follow-up). `messages` are the new messages (past the viewer's mark in each thread, under the unread rule)
 plus an open mention's or ask's own message, each through the per-message check, in tree order (a message, then the
-sub-thread under it, each with `depth`): the order is worked out on ids and seqs first (at most 25 a thread, 200
-threads), then only the messages shown are read whole. At most 20 a card, and cards and messages stop at the page's
+sub-thread under it, each with `depth`): candidates are merged in tree order from every unread sub-thread (at most
+1,000), 25 a thread at a time on ids and seqs, and read whole 25 at a time, at most 5 batches, until 20 pass. At most 20 a card, and cards and messages stop at the page's
 byte budget (512 KiB; the first card's first message always goes); a text over 4,000 characters is cut, with
-`"clipped": true`. `more` counts every other new message (a COUNT over the subtree). `count` is every item across
+`"clipped": true`, and a message too big for what is left goes clipped without its refs and reactions, its text cut to
+500. `more` counts every other new message the viewer may read (`new_count`, plus open mentions and asks already read,
+less the ones shown). `count` is every item across
 pages, at most 99 (the sidebar badge). Reading an item is `POST .../read-all`; muting it is `PUT .../follow {"notify": "muted"}`. The older
 `POST /api/v2/threads/{id}/catch-up` (`hub thread catchup`) is a different thing: a written summary of one thread.
 
