@@ -24,6 +24,7 @@ TABLES = {
     rows.ThreadRankingRow: "thread_rankings",
     rows.FeedbackRow: "feedbacks",
     rows.UsageFactRow: "usage_facts",
+    rows.UsageMeterReadRow: "usage_meter_reads",
     rows.BudgetNodeRow: "budget_nodes",
 }
 

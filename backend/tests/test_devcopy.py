@@ -220,3 +220,22 @@ def test_a_dev_copy_cuts_old_audit_rows_and_keeps_the_audit_log_append_only(tmp_
         assert [r[0] for r in c.execute("SELECT id FROM audit_log ORDER BY id")] == ["new"]
         triggers = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
         assert {"audit_log_no_update", "audit_log_no_delete"} <= triggers
+
+
+def test_a_copy_of_a_database_from_before_usage_facts_keeps_what_the_migration_moves(tmp_path):
+    """devcopy prunes before the copy is migrated: the tables 0053 and 0054 move from keep their rows."""
+    source = source_db(tmp_path)
+    with closing(sqlite3.connect(source)) as c:
+        c.execute("CREATE TABLE turn_usage_segments (turn_id TEXT, position INTEGER, est_cost_usd REAL)")
+        c.execute("CREATE TABLE usage_limits (bot TEXT PRIMARY KEY, daily_usd REAL)")
+        c.execute("CREATE TABLE usage_pools (scope TEXT PRIMARY KEY, daily_usd REAL)")
+        c.execute("INSERT INTO turn_usage_segments VALUES ('t1', 0, 0.25)")
+        c.execute("INSERT INTO usage_limits VALUES ('sales', 5)")
+        c.execute("INSERT INTO usage_pools VALUES ('company', 80)")
+        c.commit()
+    dest = tmp_path / "copy" / "hub.sqlite"
+    _, loose = devcopy.build(source, dest, days=30)
+    assert loose == []
+    with closing(sqlite3.connect(dest)) as c:
+        assert [c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
+                for t in ("turn_usage_segments", "usage_limits", "usage_pools")] == [1, 1, 1]

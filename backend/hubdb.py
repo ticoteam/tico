@@ -9213,14 +9213,19 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, 
         reason = "cost_unpriced" if usage.get("est_cost_usd") is None else None
     else:
         reason, usage = usage_reason, NO_USAGE
-    conn.execute("UPDATE turns SET input_tokens=:input_tokens, cached_tokens=:cached_tokens, "
-                 "output_tokens=:output_tokens, model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
-                 "billing=:billing, prompt_tokens=:prompt_tokens, usage_reason=:usage_reason WHERE id=:id",
-                 {"input_tokens": None, "cached_tokens": None, "output_tokens": None, "model": None,
-                  "provider": None, "est_cost_usd": None, "billing": None, "prompt_tokens": None, **usage,
-                  "usage_reason": reason, "id": turn_id})
+    # Once a run's usage is kept as facts the first report stands for its own row too: a late result (or a lease
+    # that ran out after the result) leaves the columns the facts were taken from as they are.
+    recorded = conn.execute("SELECT 1 FROM usage_facts WHERE run_id=? AND source='estimate' LIMIT 1",
+                            (turn_id,)).fetchone()
+    if not recorded:
+        conn.execute("UPDATE turns SET input_tokens=:input_tokens, cached_tokens=:cached_tokens, "
+                     "output_tokens=:output_tokens, model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
+                     "billing=:billing, prompt_tokens=:prompt_tokens, usage_reason=:usage_reason WHERE id=:id",
+                     {"input_tokens": None, "cached_tokens": None, "output_tokens": None, "model": None,
+                      "provider": None, "est_cost_usd": None, "billing": None, "prompt_tokens": None, **usage,
+                      "usage_reason": reason, "id": turn_id})
     row = _one(conn, "SELECT * FROM turns WHERE id=?", (turn_id,))
-    if measured:
+    if measured and not recorded:
         # One append-only fact per segment it measured (backend/usage_facts.py); every usage reader sums those.
         from . import usage_facts
         usage_facts.record_run(conn, row, measured, ts)

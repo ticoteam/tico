@@ -71,29 +71,34 @@ def record_run(c, run, usage, at):
 
 
 def record_meter(c, month, as_of, charged, at):
-    """One read of the Gateway's meter for `month` (YYYY-MM): {model: month-to-date charged nanodollars}. Each model
-    gets a fact for what moved since the facts already kept; a read older than the newest kept for the month adds
-    nothing, so an out-of-order fetch never walks the total back. The facts added."""
-    keys = month_keys(month)
-    newest = c.execute("SELECT max(metered_at) FROM usage_facts WHERE meter_key >= ? AND meter_key < ? "
-                       "AND source='meter'", keys).fetchone()[0]
-    if newest and as_of < newest:
+    """One read of the Gateway's meter for `month` (YYYY-MM): {model: month-to-date charged nanodollars}, the whole
+    month. Taken only when it is the month's newest: a read older than the newest taken adds nothing, and one at the
+    same time only when its total is higher (the rule a Finance snapshot is kept by, backend/finance/store/usage.py
+    `add_snapshot`). A taken read moves the month's newest (usage_meter_reads) even when nothing changed, so a
+    delayed older read never walks the total back. Each model gets a fact for what moved since the facts kept: a model
+    the read leaves out goes back to 0, and a model's first reading is kept even at 0, so the meter is preferred for
+    it. The facts added."""
+    total = sum(int(amount) for amount in charged.values())
+    newest = c.execute("SELECT as_of, total_nano FROM usage_meter_reads WHERE month=?", (month,)).fetchone()
+    if newest and (as_of < newest[0] or as_of == newest[0] and total <= int(newest[1])):
         return 0
+    c.execute("INSERT INTO usage_meter_reads(month, as_of, total_nano, read_at) VALUES(?,?,?,?) ON CONFLICT(month) "
+              "DO UPDATE SET as_of=excluded.as_of, total_nano=excluded.total_nano, read_at=excluded.read_at",
+              (month, as_of, total, at))
     kept = {row[0]: int(row[1] or 0) for row in c.execute(
-        "SELECT meter_key, sum(cost_nano) FROM usage_facts WHERE meter_key >= ? AND meter_key < ? AND source='meter' "
-        "GROUP BY meter_key", keys)}
+        "SELECT model, sum(cost_nano) FROM usage_facts WHERE meter_key >= ? AND meter_key < ? AND source='meter' "
+        "GROUP BY meter_key", month_keys(month))}
     from .usage_records import family
     added = 0
-    for model in sorted(charged):
-        key = meter_key(month, model)
-        moved = int(charged[model]) - kept.get(key, 0)
-        if not moved:
+    for model in sorted(set(charged) | set(kept)):
+        moved = int(charged.get(model, 0)) - kept.get(model, 0)
+        if not moved and model in kept:
             continue
         c.execute(INSERT, {
             **{name: None for name in COLUMNS}, "source": "meter", "position": 0, "model": model,
             "family": family({"model": model}), "billing": "api", "input_tokens": 0, "cached_tokens": 0,
-            "output_tokens": 0, "cost_nano": moved, "meter_key": key, "started_at": f"{month}-01T00:00:00.000000Z",
-            "metered_at": as_of, "created_at": at})
+            "output_tokens": 0, "cost_nano": moved, "meter_key": meter_key(month, model),
+            "started_at": f"{month}-01T00:00:00.000000Z", "metered_at": as_of, "created_at": at})
         added += 1
     return added
 

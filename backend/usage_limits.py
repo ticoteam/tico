@@ -94,14 +94,32 @@ def nano(amount):
     return int((Decimal(repr(float(amount))) * NANO).to_integral_value(ROUND_HALF_EVEN))
 
 
+def _kept(key, value):
+    """The amount a scope keeps for one period, as the release before budget nodes kept it. The company default keeps
+    only an amount above zero (`_amount`). A bot or a pool also keeps 0 (the API stores an amount under $0.0000005 as
+    0): on a bot it is the bot's own value, so the default does not apply, and like a pool's 0 it caps nothing (the
+    checks skip a cap of 0)."""
+    if key == DEFAULT:
+        return _amount(value)
+    try:
+        number = round(float(value), 6)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if 0 <= number <= MAX_USD else None
+
+
 def save_caps(c, key, caps, actor):
-    """Set the caps of one scope: a period with an amount gets that node, one with none loses its node."""
+    """Set the caps of one scope: a period with an amount gets that node, one with none loses its node. A pool with no
+    amount above zero goes whole, as its row did."""
     scope, team, bot, per_bot = _target(key)
     where = ("scope=? AND coalesce(team_id, bot_id, '')=? AND per_bot=? AND period=?")
     at = H.now()
+    kept = {name: _kept(key, caps.get(name + "_usd")) for name, _ in PERIODS}
+    if key[0] == "pool" and not any(kept.values()):
+        kept = dict.fromkeys(kept)
     for name, _ in PERIODS:
         args = (scope, team or bot or "", per_bot, name)
-        amount = _amount(caps.get(name + "_usd"))
+        amount = kept[name]
         if amount is None:
             c.execute(f"DELETE FROM budget_nodes WHERE {where}", args)
             continue
@@ -148,7 +166,8 @@ def company(c):
     except ValueError:
         stored = {}
     stored = stored if isinstance(stored, dict) else {}
-    return Default({**_stored(c, DEFAULT), "count_subscription": stored.get("count_subscription") is not False})
+    caps = {key: (amount or None) for key, amount in _stored(c, DEFAULT).items()}      # the default has no 0
+    return Default({**caps, "count_subscription": stored.get("count_subscription") is not False})
 
 
 def save_default(c, caps, count_subscription, actor):
@@ -238,7 +257,8 @@ def pools(c, default=None):
     """{scope: caps} for every pool with a cap set: `company` and `group:<id>`."""
     memo = default.memo if isinstance(default, Default) else {}
     if "pools" not in memo:
-        memo["pools"] = {key[1]: _stored(c, key) for key in nodes(c) if key[0] == "pool"}
+        found = {key[1]: _stored(c, key) for key in nodes(c) if key[0] == "pool"}
+        memo["pools"] = {scope: caps for scope, caps in found.items() if any(caps.values())}
     return memo["pools"]
 
 

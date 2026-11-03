@@ -268,6 +268,16 @@ class UsageFactRow(TypedDict):
     created_at: str
 
 
+class UsageMeterReadRow(TypedDict):
+    """One `usage_meter_reads` row (SELECT *): the newest read of the Gateway's meter taken for a month
+    (backend/usage_facts.py `record_meter`)."""
+    id: int
+    month: str
+    as_of: str
+    total_nano: int
+    read_at: str
+
+
 class BudgetNodeRow(TypedDict):
     """One `budget_nodes` row (SELECT *): a money limit, its amount, period and scope (backend/usage_limits.py)."""
     id: str

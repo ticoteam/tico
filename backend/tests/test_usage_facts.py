@@ -137,3 +137,53 @@ def test_a_cost_becomes_exact_nanodollars_and_a_bad_one_becomes_no_cost():
     assert [usage_facts.nano(v) for v in (0.35, 0.1 + 0.2, 1234.567891, 0.0000000005, 0.0000000015, -0.5)] == [
         350_000_000, 300_000_000, 1_234_567_891_000, 0, 2, -500_000_000]
     assert [usage_facts.nano(v) for v in (None, "abc", float("inf"), float("nan"))] == [None] * 4
+
+
+def meter_total(c, month, model):
+    return usage_facts.reconciled(c, month).get(model)
+
+
+def test_a_first_meter_reading_of_zero_is_kept_and_preferred_over_the_estimate(api):
+    with api.app.state.store.transaction() as c:
+        turn(c, "r5")
+        H.turn_finish(c, H.KEEPER, "r5", usage={**TICO, "segments": [TICO]})
+        month = facts(c, "r5")[0]["metered_at"][:7]
+        model = TICO["model"]
+        assert usage_facts.record_meter(c, month, f"{month}-02T00:00:00.000000Z", {model: 0}, H.now()) == 1
+        assert meter_total(c, month, model) == {"estimated_nano": 2_000_000, "metered_nano": 0, "amount_nano": 0}
+
+
+def test_a_model_a_newer_reading_leaves_out_goes_back_to_zero(api):
+    with api.app.state.store.transaction() as c:
+        month, at = "2026-10", H.now()
+        usage_facts.record_meter(c, month, "2026-10-02T00:00:00.000000Z", {"tico-a": 700, "tico-b": 300}, at)
+        assert usage_facts.record_meter(c, month, "2026-10-03T00:00:00.000000Z", {"tico-a": 900}, at) == 2
+        found = usage_facts.reconciled(c, month)
+        assert (found["tico-a"]["metered_nano"], found["tico-b"]["metered_nano"]) == (900, 0)
+
+
+def test_an_unchanged_reading_moves_the_newest_so_a_delayed_older_one_cannot_lower_the_total(api):
+    with api.app.state.store.transaction() as c:
+        month, at, model = "2026-10", H.now(), "tico-a"
+        assert usage_facts.record_meter(c, month, "2026-10-15T04:00:00.000000Z", {model: 600}, at) == 1
+        assert usage_facts.record_meter(c, month, "2026-10-15T06:00:00.000000Z", {model: 600}, at) == 0
+        assert usage_facts.record_meter(c, month, "2026-10-15T05:00:00.000000Z", {model: 550}, at) == 0
+        assert meter_total(c, month, model)["metered_nano"] == 600
+        assert c.execute("SELECT as_of FROM usage_meter_reads WHERE month=?", (month,)).fetchone()[0] == \
+            "2026-10-15T06:00:00.000000Z"
+        # At the same time, only a higher total replaces the read (Finance's snapshot rule).
+        assert usage_facts.record_meter(c, month, "2026-10-15T06:00:00.000000Z", {model: 500}, at) == 0
+        assert usage_facts.record_meter(c, month, "2026-10-15T06:00:00.000000Z", {model: 650}, at) == 1
+        assert meter_total(c, month, model)["metered_nano"] == 650
+
+
+def test_a_late_report_leaves_the_runs_own_usage_columns_as_its_facts_have_them(api):
+    """The first measured report stands for the turn's columns too, so they never disagree with its facts."""
+    with api.app.state.store.transaction() as c:
+        turn(c, "r6")
+        H.turn_finish(c, H.KEEPER, "r6", usage={**TICO, "input_tokens": 1500, "segments": [TICO]})
+        H.turn_finish(c, H.KEEPER, "r6", usage={**SONNET, "segments": [SONNET]})
+        H.turn_finish(c, H.KEEPER, "r6", exit_code="interrupted", usage_reason="no_result")
+        row = c.execute("SELECT input_tokens, model, est_cost_usd, usage_reason FROM turns WHERE id='r6'").fetchone()
+        assert tuple(row) == (1500, TICO["model"], TICO["est_cost_usd"], None)
+        assert [(r["model"], r["cost_nano"]) for r in facts(c, "r6")] == [(TICO["model"], 2_000_000)]

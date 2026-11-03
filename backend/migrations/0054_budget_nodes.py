@@ -2,9 +2,10 @@
 
 A bot's own limits (usage_limits) become `bot` nodes, the whole team's combined limit (usage_pools `company`) a
 `company` node, a group's (`group:<id>`) a `team` node, and the company default for bots with no limit of their own
-(registry_metadata `usage_limits`) `company` nodes with `per_bot` set. Amounts move from float USD to whole nanodollars;
-an amount the readers already ignored (not above zero, or above the largest limit) is left behind. The default's
-`count_subscription` switch stays in registry_metadata. Then usage_limits and usage_pools go.
+(registry_metadata `usage_limits`) `company` nodes with `per_bot` set. Amounts move from float USD to whole nanodollars.
+A bot's or a pool's 0 stays a 0 node (on a bot it is an own value, so the default does not apply; it caps nothing); an
+amount below zero or above the largest limit is left behind, and so is the default's 0, which its reader ignored. The
+default's `count_subscription` switch stays in registry_metadata. Then usage_limits and usage_pools go.
 
 The conversion is exact: a stored amount is rounded to six decimals as the readers rounded it (usage_limits._amount),
 then multiplied in decimal, so $0.35 is 350000000 and reads back as 0.35. A few hundred rows at most; it runs in the
@@ -24,7 +25,7 @@ CREATE TABLE IF NOT EXISTS budget_nodes (
   bot_id TEXT,
   per_bot INTEGER NOT NULL DEFAULT 0 CHECK (per_bot IN (0, 1)),
   period TEXT NOT NULL CHECK (period IN ('per_30m', 'hourly', 'daily', 'weekly', 'monthly')),
-  amount_nano INTEGER NOT NULL CHECK (amount_nano > 0),
+  amount_nano INTEGER NOT NULL CHECK (amount_nano >= 0 AND (per_bot = 0 OR amount_nano > 0)),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   updated_by_id TEXT,
@@ -39,13 +40,15 @@ MAX_USD = 10_000_000
 KEY = "usage_limits"
 
 
-def _nano(value):
-    """A stored USD amount as whole nanodollars, or None for one the readers ignored (usage_limits._amount)."""
+def _nano(value, zero=True):
+    """A stored USD amount as whole nanodollars, or None for one left behind. A bot's or a pool's 0 stays (`zero`): the
+    API stores an amount under $0.0000005 as 0.0, and a bot's own 0 keeps the company default from applying while
+    capping nothing. The default never kept a 0 (usage_limits._amount)."""
     try:
         number = round(float(value), 6)
     except (TypeError, ValueError, OverflowError):
         return None
-    if not 0 < number <= MAX_USD:
+    if not (0 <= number if zero else 0 < number) or not number <= MAX_USD:
         return None
     return int((Decimal(repr(number)) * 10**9).to_integral_value(ROUND_HALF_EVEN))
 
@@ -62,8 +65,12 @@ def _rows(conn, sql):
 
 
 def _insert(conn, scope, team_id, bot_id, per_bot, row, found, stamp):
+    amounts = {period: _nano(row[period + "_usd"], zero=not per_bot) if period + "_usd" in found else None
+               for period in PERIODS}
+    if scope != "bot" and not per_bot and not any(amounts.values()):
+        return                             # a pool with no amount above zero was no pool (usage_limits.pools)
     for period in PERIODS:
-        amount = _nano(row[period + "_usd"]) if period + "_usd" in found else None
+        amount = amounts[period]
         if amount is None:
             continue
         at = (row["updated_at"] if "updated_at" in found else None) or stamp

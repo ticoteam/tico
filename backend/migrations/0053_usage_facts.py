@@ -46,6 +46,17 @@ CREATE TABLE IF NOT EXISTS usage_facts (
   CHECK (source = 'estimate' OR meter_key IS NOT NULL))
 """
 
+# The newest read of the Gateway's meter taken for each month (usage_facts.record_meter): what an older or a smaller
+# same-time read is checked against, moved by every read taken, even one where nothing changed.
+READS = """
+CREATE TABLE IF NOT EXISTS usage_meter_reads (
+  id INTEGER PRIMARY KEY,
+  month TEXT NOT NULL UNIQUE,
+  as_of TEXT NOT NULL,
+  total_nano INTEGER NOT NULL,
+  read_at TEXT NOT NULL)
+"""
+
 # The run index comes first: the backfill's INSERT OR IGNORE and NOT EXISTS use it. The read indexes follow the backfill.
 RUN_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS usage_facts_run ON usage_facts(run_id, position) WHERE source = 'estimate'"
 INDEXES = (
@@ -83,6 +94,7 @@ def _runs_table(conn):
 
 def up(conn):
     conn.execute(TABLE)
+    conn.execute(READS)
     conn.execute(RUN_INDEX)
     conn.create_function("usage_family", 1, lambda model: family({"model": model}), deterministic=True)
     conn.create_function("usage_nano", 1, nano, deterministic=True)      # the rounding record_run uses, exactly

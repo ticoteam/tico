@@ -104,16 +104,19 @@ def snapshot(c: sqlite3.Connection, payload: Mapping[str, object], *, fetched_at
                      "calls": calls if isinstance(calls, int) and not isinstance(calls, bool) else 0,
                      "price_nano": price, "line": line})
     as_of = stamp(payload.get("as_of"), fetched_at)
-    charged: dict[str, int] = {}
-    for r in kept:
-        model = str(r["model"])
-        charged[model] = charged.get(model, 0) + int(str(r["price_nano"]))
-    tico.record_meter(c, month, as_of, charged, fetched_at)
     remember(c, month, by, fetched_at)
     if fetched_at >= _final_after(month):
         _final_read(c, month, by, fetched_at)   # an unchanged final read still closes the month
-    return SU.add_snapshot(c, month=month, as_of=as_of, ai_nano=totals["ai"], video_nano=totals["video"], rows=kept,
-                           by=by, at=fetched_at)
+    sid = SU.add_snapshot(c, month=month, as_of=as_of, ai_nano=totals["ai"], video_nano=totals["video"], rows=kept,
+                          by=by, at=fetched_at)
+    if sid:
+        # The usage facts take a read only when its snapshot was kept, by the same rule (backend/usage_facts.py).
+        charged: dict[str, int] = {}
+        for r in kept:
+            model = str(r["model"])
+            charged[model] = charged.get(model, 0) + int(str(r["price_nano"]))
+        tico.record_meter(c, month, as_of, charged, fetched_at)
+    return sid
 
 
 def video_models(snap: Mapping[str, object]) -> list[str]:
