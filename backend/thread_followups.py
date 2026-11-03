@@ -21,22 +21,10 @@ from datetime import timedelta
 from . import hubdb as H
 
 LOG = logging.getLogger("tico.thread_followups")
-SCHEMA = [
-    "CREATE TABLE IF NOT EXISTS thread_followups (message_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, "
-    "to_actor TEXT NOT NULL, nudge_message_id TEXT, created_at TEXT NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS thread_followups_conversation ON thread_followups(conversation_id, created_at)",
-    "CREATE TABLE IF NOT EXISTS thread_earlier_notices (bot TEXT NOT NULL, actor TEXT NOT NULL, message_id TEXT, "
-    "created_at TEXT NOT NULL, PRIMARY KEY (bot, actor))",
-]
 AFTER = timedelta(hours=24)     # an ask unanswered this long gets its one nudge
 TOO_OLD = timedelta(days=7)     # an ask older than this when first seen is history, not something to nudge
 NUDGE_LIMIT = 50                # asks nudged per run; the rest wait for the next run
 QUOTE_CHARS = 160
-
-
-def ensure(c):
-    for statement in SCHEMA:
-        c.execute(statement)
 
 
 def _quote(body):

@@ -4,6 +4,7 @@ Every test runs against a fresh database in a temp directory with a small fake r
 nothing here reads `registry/` or the real `runtime/hub.db`.
 """
 import hashlib
+import importlib
 import json
 import re
 import sqlite3
@@ -183,13 +184,23 @@ ALTER TABLE growth_settings ADD COLUMN verdict_win_pct REAL NOT NULL DEFAULT 60;
 
     def before_rethink(self):
         """The file as the release before the rethink left it: every migration before it (not the ones after, which
-        would then sort after an applied one), and the strategy tables store.py makes at startup."""
+        would then sort after an applied one), the threads schema that release's modules made after the migrations
+        (0047 makes it now, unrecorded here so the full migrate still runs it), and the strategy tables store.py makes
+        at startup."""
         conn = sqlite3.connect(self.path, isolation_level=None)
         conn.row_factory = sqlite3.Row
         self.addCleanup(conn.close)
         every = migrations.files()
+        apply = migrations.apply
+        threads = importlib.import_module("backend.migrations.0047_native_threads_schema")
+
+        def apply_then_threads(conn, directory=None):
+            apply(conn, directory)
+            threads.up(conn)
+
         with unittest.mock.patch.object(migrations, "files",
-                                        lambda directory=None: [m for m in every if m.version < "0035_growth_rethink"]):
+                                        lambda directory=None: [m for m in every if m.version < "0035_growth_rethink"]), \
+                unittest.mock.patch.object(migrations, "apply", apply_then_threads):
             H.migrate(conn)
         for statement in migrations.statements(self.BEFORE):
             conn.execute(statement)

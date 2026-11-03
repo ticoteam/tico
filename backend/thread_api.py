@@ -504,9 +504,8 @@ def install(app, store, auth, mutate, rule_check):
             return {"thread": threads.get(c, v, thread_id), "message": _thread_message(H.message(c, posted["id"]))}
         return await asyncio.to_thread(app.state.uploads.write, request, body, uploads, work)
 
-    # The search index follows every write from here on (its triggers) and is filled from the messages that exist when
-    # it is made. Install can run before the schema, so the first call that finds the tables makes it (at boot if they
-    # are there, else on the first search); a write before then is indexed by that fill.
+    # The search index (migration 0047) follows every write through its triggers. Install can run before the schema,
+    # so the first call that finds the index marks search ready (at boot if it is there, else on the first search).
     ready = []
 
     def search_index():
