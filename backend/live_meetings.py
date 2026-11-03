@@ -1387,6 +1387,8 @@ def install_live_meetings(app, store, auth, write):
                 _event(c, rid, "meeting.access", {"visibility": visibility, "added": added, "removed": removed,
                                                    "changed_by": who.actor})
             return _view(c, auth, who, rid)
+        if body.visibility is not None:
+            app.state.meeting_frames.stop(rid)
         result = mutate(request, body, work)
         if body.visibility is not None:
             app.state.meeting_frames.stop(rid)

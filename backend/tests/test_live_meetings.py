@@ -1400,3 +1400,21 @@ def test_a_contended_screen_lock_does_not_block_the_async_server(live):
     finally:
         release.set()
         holder.join()
+
+
+def test_idle_screen_wait_does_not_fill_slow_request_diagnostics(live):
+    from backend import flight
+    mid = connect(live)['id']
+    prefix = f'/api/v2/live-meetings/{mid}/screen'
+    assert live.post(prefix + '/start', headers=headers()).status_code == 200
+    recorder = flight.Recorder()
+    live.app.state.timing.recorder = recorder
+    try:
+        response = live.get(prefix + '/frame?wait=1.1', headers=headers())
+        assert response.status_code == 204
+        recorder.drain()
+        assert not recorder.slow
+        route = next(row for row in live.app.state.timing.summary()['routes'] if row['route'].endswith('/screen/frame'))
+        assert route['max'] < 1000, route
+    finally:
+        live.app.state.timing.recorder = None

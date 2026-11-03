@@ -78,6 +78,7 @@ async function main() {
         return json(world.detail);
       }
       if (p === '/api/v2/live-meetings/denied') return route.fulfill({status:404, contentType:'application/json', body:JSON.stringify({error:{detail:'Meeting not found'}})});
+      if (p.includes('/screen/')) world.screenReads = (world.screenReads || 0) + 1;
       if (p === '/api/v2/live-meetings/live-1/screen/status') return world.screen ? json({generation:'fixture'}) : route.fulfill({status:410});
       if (p === '/api/v2/live-meetings/live-1/screen/frame') {
         if (!world.screen) return route.fulfill({status:410});
@@ -258,6 +259,10 @@ async function main() {
     await page.locator('.live-finalized').waitFor();
     await page.locator('.live-card-head').getByText('From Tico Recorder').waitFor();
     assert.equal(await page.evaluate(() => LIVE_MEETINGS.selected), 'live-1');
+    assert.equal(await page.evaluate(() => LIVE_MEETINGS.screen), null, 'An ended meeting never starts a screen loop');
+    const endedScreenReads = world.screenReads || 0;
+    await page.waitForTimeout(1100);
+    assert.equal(world.screenReads || 0, endedScreenReads, 'Ended meeting pages do not poll screen routes');
     world.meetings = [makeDetail('live-1')];
     await page.goto('https://tico-ui.test/#/meetings/live/denied');
     await page.getByText('This meeting is not available to you, or it does not exist.').waitFor();

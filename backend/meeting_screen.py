@@ -231,4 +231,9 @@ def install(app, store, auth, require_read, connector):
                     "ETag": f'"{version}"', "X-Screen-Version": version})
             if time.monotonic() >= deadline or await request.is_disconnected():
                 return Response(status_code=204, headers=HEADERS)
-            await asyncio.sleep(.2)
+            began = time.perf_counter()
+            try:
+                await asyncio.sleep(.2)
+            finally:
+                # Intentional idle waiting is not server processing; loop stalls still count.
+                request.state.idle_wait_ms = getattr(request.state, "idle_wait_ms", 0) + min(200, (time.perf_counter() - began) * 1000)

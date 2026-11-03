@@ -1302,3 +1302,34 @@ fn a_title_without_a_quote_requires_fresh_review_after_each_edit() {
         true
     );
 }
+
+#[test]
+fn screen_controls_honor_local_pause_and_pending_discard() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let record = store.create("Synthetic screen controls").unwrap();
+    let mut app = app(store.clone(), directory.path());
+    app.open(&record.id).unwrap();
+    assert_eq!(
+        full_view(&mut app)["meeting"]["data"]["can_share_screen"],
+        true
+    );
+    for discarded in [false, true] {
+        store
+            .update_context(&record.id, |context| {
+                context.live_id = "synthetic-live".into();
+                context.live_state = "live".into();
+                context.locally_paused = !discarded;
+                context.live_discarded = discarded;
+                Ok(())
+            })
+            .unwrap();
+        app.context = store.context(&record.id).unwrap();
+        app.bump();
+        assert_eq!(
+            full_view(&mut app)["meeting"]["data"]["can_share_screen"],
+            false
+        );
+        assert!(super::screen::require_live(&app.context).is_err());
+    }
+}

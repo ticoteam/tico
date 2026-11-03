@@ -2178,3 +2178,72 @@ fn browser_links_require_server_support_and_a_safe_browser_address() {
     assert!(tico.browser_url().is_err());
     worker.join().unwrap();
 }
+
+#[test]
+fn browser_lookup_failure_never_creates_an_unlinked_task_and_old_personal_tokens_keep_links() {
+    for old in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        let record = transcript(&store, "Synthetic task links");
+        store
+            .update_context(&record.id, |context| {
+                context.items.push(crate::workspace::Item {
+                    id: "link-item".into(),
+                    title: "Follow up".into(),
+                    ..Default::default()
+                });
+                Ok(())
+            })
+            .unwrap();
+        let mut replies = vec![
+            Some(json!({"actor":"human:test","name":"Fixture"})),
+            Some(json!({"status": if old {404} else {503}})),
+        ];
+        if old {
+            replies.push(Some(json!({"task":{"id":"synthetic-task"}})));
+        }
+        let (tico, seen, worker) = server(replies);
+        let result = tico.send_task(
+            &store,
+            &record.id,
+            "link-item",
+            "bot:fixture",
+            "Fixture",
+            true,
+        );
+        worker.join().unwrap();
+        let requests = seen.lock().unwrap();
+        if old {
+            result.unwrap();
+            assert!(
+                store.context(&record.id).unwrap().items[0]
+                    .task_url
+                    .ends_with("/#/task/synthetic-task")
+            );
+        } else {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("task was not sent")
+            );
+            assert!(requests.iter().all(|row| !row.0.starts_with("POST")));
+            assert!(
+                store.context(&record.id).unwrap().items[0]
+                    .task_id
+                    .is_empty()
+            );
+        }
+    }
+    let (mut tico, _, worker) = server(vec![Some(json!({"status":404}))]);
+    tico.oauth = true;
+    assert!(
+        tico.task_browser_url().is_err(),
+        "An OAuth runner hostname must never be used as the browser fallback"
+    );
+    worker.join().unwrap();
+    let (tico, _, worker) = server(vec![Some(json!({"url":"https://acme.example"}))]);
+    assert_eq!(tico.browser_url().unwrap(), "https://acme.example");
+    assert_eq!(tico.browser_url().unwrap(), "https://acme.example");
+    worker.join().unwrap();
+}

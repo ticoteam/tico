@@ -1184,6 +1184,8 @@ impl Recorder {
     pub fn update_hold(&self) -> Option<&'static str> {
         if self.active.is_some() {
             Some("After this recording")
+        } else if self.screen.view()["active"] == true {
+            Some("After screen sharing stops")
         } else if self
             .records
             .iter()
@@ -2373,6 +2375,8 @@ impl Recorder {
         json!({
             "id": record.id,
             "link_ready": !self.context.live_id.is_empty() || !record.deliveries.is_empty(),
+            "can_share_screen": record.deliveries.is_empty() && !self.context.live_discarded && !self.context.locally_paused
+                && (self.context.live_id.is_empty() || self.context.live_state == "live"),
             "title": record.title,
             "started_at": record.started_at,
             "duration_ms": record.chunks.iter().map(|chunk| chunk.end_ms).max().unwrap_or(0),

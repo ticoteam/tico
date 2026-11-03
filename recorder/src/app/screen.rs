@@ -8,14 +8,32 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 use tauri::Emitter;
-use tico_recorder_native::{network::Tico, settings, signin};
+use tico_recorder_native::{network::Tico, settings, signin, store::Store, workspace};
 #[cfg(target_os = "macos")]
 #[path = "screen_macos.rs"]
 mod native;
 
+/// Every screen entry and upload honors durable local controls, including an unacknowledged Pause.
+pub fn require_live(context: &workspace::Context) -> Result<()> {
+    ensure!(
+        !context.live_discarded,
+        "This meeting was discarded; its recording stays local"
+    );
+    ensure!(
+        !context.locally_paused && context.live_state != "paused",
+        "Resume sharing before sharing your screen"
+    );
+    ensure!(
+        !context.live_id.is_empty() && context.live_state == "live",
+        "Put this meeting in Tico before sharing a screen"
+    );
+    Ok(())
+}
+
 #[derive(Clone, Default)]
 pub struct ScreenShare(Arc<Mutex<Option<Arc<Session>>>>);
 pub struct Session {
+    pub store: Option<Store>,
     pub stopped: AtomicBool,
     pub meeting: String,
     pub destination: String,
@@ -113,6 +131,7 @@ impl ScreenShare {
         meeting: String,
         live_id: String,
         title: String,
+        store: Store,
         expected_team: bool,
     ) -> Result<()> {
         ensure!(
@@ -127,6 +146,7 @@ impl ScreenShare {
             "Stop the current screen share first"
         );
         let session = Arc::new(Session {
+            store: Some(store),
             stopped: AtomicBool::new(false),
             meeting,
             destination: tico.destination.id.clone(),
@@ -271,6 +291,13 @@ impl Session {
         body: Option<Vec<u8>>,
         key: Option<&str>,
     ) -> Result<reqwest::blocking::Response> {
+        if let Some(store) = &self.store {
+            require_live(&store.context(&self.meeting)?)?;
+        }
+        ensure!(
+            !self.stopped.load(Ordering::Acquire),
+            "Screen sharing cancelled"
+        );
         let token = self.access_token.lock().unwrap().clone();
         let token = if token.is_empty() {
             let fresh = (self.auth)(None)?;
@@ -435,8 +462,9 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
-    fn session(prefix: String) -> Arc<Session> {
+    pub(super) fn session(prefix: String) -> Arc<Session> {
         Arc::new(Session {
+            store: None,
             stopped: AtomicBool::new(false),
             meeting: "one".into(),
             destination: "fixture".into(),
@@ -616,5 +644,53 @@ mod tests {
             "Stop must reach the server while a frame upload is blocked"
         );
         assert!(s.latest.lock().unwrap().is_none());
+    }
+}
+
+#[cfg(test)]
+mod privacy_tests {
+    use super::*;
+
+    #[test]
+    fn unacknowledged_pause_and_discard_block_every_screen_request() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        let record = store.create("Synthetic screen privacy").unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut session =
+            super::tests::session(format!("http://{}", listener.local_addr().unwrap()));
+        let target = Arc::get_mut(&mut session).unwrap();
+        target.store = Some(store.clone());
+        target.meeting = record.id.clone();
+        for discarded in [false, true] {
+            store
+                .update_context(&record.id, |context| {
+                    context.live_id = "synthetic-live".into();
+                    context.live_state = "live".into();
+                    context.locally_paused = !discarded;
+                    context.live_discarded = discarded;
+                    Ok(())
+                })
+                .unwrap();
+            for (path, body) in [("", None), ("/start", None), ("/frame", Some(vec![0; 8]))] {
+                let error = session
+                    .request(path, body, Some("synthetic-request"))
+                    .unwrap_err()
+                    .to_string();
+                assert!(
+                    error.contains(if discarded {
+                        "discarded"
+                    } else {
+                        "Resume sharing"
+                    }),
+                    "{error}"
+                );
+            }
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        }
     }
 }

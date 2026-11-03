@@ -351,6 +351,8 @@ pub struct Tico {
     pub destination: Destination,
     token: String,
     client: Client,
+    browser: std::sync::Mutex<Option<String>>,
+    oauth: bool,
 }
 impl Tico {
     pub fn saved(config: &Settings, id: &str) -> Result<Self> {
@@ -361,7 +363,9 @@ impl Tico {
             .context("Choose a Tico connection")?
             .clone();
         let token = crate::signin::token(id)?;
-        Self::new(destination, token)
+        let mut tico = Self::new(destination, token)?;
+        tico.oauth = !settings::secret(&format!("tico-grant:{id}"))?.is_empty();
+        Ok(tico)
     }
     pub fn new(destination: Destination, token: String) -> Result<Self> {
         settings::safe_url(&destination.base_url)?;
@@ -370,6 +374,8 @@ impl Tico {
             destination,
             token,
             client: client()?,
+            browser: std::sync::Mutex::new(None),
+            oauth: false,
         })
     }
     pub fn call(&self, path: &str, body: Option<&Value>, key: &str) -> Result<Value> {
@@ -460,6 +466,9 @@ impl Tico {
     }
     /// The server supplies the browser address; an OAuth runner host may serve only API routes.
     pub fn browser_url(&self) -> Result<String> {
+        if let Some(browser) = self.browser.lock().unwrap().clone() {
+            return Ok(browser);
+        }
         let response = self.call("/api/v2/recorder/browser", None, "")?;
         let browser = settings::safe_url(
             response["url"]
@@ -475,7 +484,19 @@ impl Tico {
             local(&remote) || !local(&target),
             "Tico returned a local browser address for a remote connection"
         );
+        *self.browser.lock().unwrap() = Some(browser.clone());
         Ok(browser)
+    }
+    fn task_browser_url(&self) -> Result<String> {
+        match self.browser_url() {
+            Ok(browser) => Ok(browser),
+            Err(error)
+                if !self.oauth && error.chain().any(|cause| cause.to_string() == OLD_TICO) =>
+            {
+                settings::safe_url(&self.destination.base_url)
+            }
+            Err(error) => Err(error).context("Could not resolve Tico links; the task was not sent"),
+        }
     }
     pub fn verify(&self) -> Result<Value> {
         let who = self.call("/api/v2/me", None, "")?;
@@ -795,7 +816,7 @@ impl Tico {
             owner.starts_with("bot:") || owner.starts_with("human:"),
             "Choose who gets it"
         );
-        let base = self.browser_url().unwrap_or_default();
+        let base = self.task_browser_url()?;
         let filed = record.deliveries.iter().find(|entry| {
             entry.destination_id == self.destination.id && !entry.meeting_id.is_empty()
         });

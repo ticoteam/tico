@@ -1076,7 +1076,9 @@ def create_app(settings=None):
             # The flight recorder's caller kind, status and size (backend/flight.py); a raised error counts as a 500.
             who = getattr(request.state, "identity", None)
             size = response.headers.get("content-length") if response is not None else None
-            app.state.timing.end(key, request.state.auth_ms, (time.perf_counter() - started) * 1000,
+            # Screen long-polls wait for new pixels; retain SQL/lock/processing time, exclude only deliberate sleeps.
+            active_ms = max(0, (time.perf_counter() - started) * 1000 - getattr(request.state, "idle_wait_ms", 0))
+            app.state.timing.end(key, request.state.auth_ms, active_ms,
                                  flight.caller_kind(who), response.status_code if response is not None else 500,
                                  int(size) if size and size.isdigit() else 0, getattr(who, "actor", "") or "", cost)
             if cost_token is not None:

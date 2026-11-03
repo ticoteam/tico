@@ -373,6 +373,7 @@
     view: ({ have }) => {
       const id = state.status.meeting;
       const rec = state.status.recording;
+      for (const m of Object.values(state.meetings)) m.can_share_screen = !m.sent && !m.discarded && !m.locally_paused && (!m.live_state || m.live_state === 'live');
       return {
         status: clone(state.status),
         live: { notices: clone(state.notices[id] || []) },

@@ -161,6 +161,7 @@ fn meeting_link(
     (|| -> anyhow::Result<Value> {
         let record = store.get(&id)?;
         let context = store.context(&id)?;
+        anyhow::ensure!(!context.live_discarded, "This meeting was discarded; its recording stays local");
         anyhow::ensure!(context.live_destination.is_empty() || context.live_destination == destination, "Choose this meeting's Tico");
         let tico = tico_recorder_native::network::Tico::saved(&config, &destination)?;
         let browser = tico.browser_url()?;
@@ -190,10 +191,7 @@ fn share_screen(
     };
     (|| -> anyhow::Result<()> {
         let context = store.context(&id)?;
-        anyhow::ensure!(
-            !context.live_id.is_empty() && context.live_state == "live",
-            "Put this meeting in Tico before sharing a screen"
-        );
+        screen::require_live(&context)?;
         anyhow::ensure!(
             store.get(&id)?.deliveries.is_empty(),
             "This recording was already sent"
@@ -205,6 +203,7 @@ fn share_screen(
             id.clone(),
             context.live_id,
             store.get(&id)?.title,
+            store,
             expected_team,
         )
     })()

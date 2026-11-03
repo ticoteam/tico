@@ -192,7 +192,7 @@
       if (m.can_finish && !sending) right += `<button class="btn small" data-act="finish" ${st.busy ? 'disabled' : ''}>Finish meeting</button>`;
       if (m.can_control && !sending) right += `<button class="btn small" data-act="control-live" data-action="${m.live_state === 'paused' ? 'resume' : 'pause'}" ${st.busy ? 'disabled' : ''}>${m.live_state === 'paused' ? 'Resume sharing' : 'Pause sharing'}</button>`;
       if (m.can_discard && !sending) right += `<button class="btn small" data-act="pop" data-pop="discard" ${st.busy ? 'disabled' : ''}>Discard…</button>`;
-      if (!screen?.active && !m.sent) right += `<button class="btn small screen-start" data-act="share-screen" title="Share a screen or window">${icon('screen', 13)}<span>Share screen</span></button>`;
+      if (!screen?.active && m.can_share_screen) right += `<button class="btn small screen-start" data-act="share-screen" title="Share a screen or window">${icon('screen', 13)}<span>Share screen</span></button>`;
       right += peopleButton(m.people);
       if (m.discarded) right += badge(m.discard_pending ? 'Discard pending · saved locally' : 'Discarded · saved locally', m.discard_pending ? 'amber' : 'muted');
       else if (m.sent) right += badge(`${icon('check', 12)}In Tico`, 'accent');
@@ -773,6 +773,7 @@
       const button = `<button class="btn small" data-act="set-team" data-team="${!p.team}" ${p.can_share ? '' : 'disabled'} title="${esc(p.blocked)}">${p.team ? 'Make private' : 'Make public'}</button>`;
       html += `<div class="vis">${icon(p.team ? 'globe' : 'lock')}<span class="grow">${label}</span>${button}</div>`;
     }
+    if (S.status.screen?.active && S.status.screen.meeting === S.meeting.id) html += '<div class="pop-text">People you add will also see your screen.</div>';
     if (p.blocked && p.org) html += `<div class="pop-text">${esc(p.blocked)}</div>`;
     if (p.blocked) return html;
     html += `<input class="pop-input" data-model="peopleQuery" data-enter="people-enter" data-list placeholder="Add a person or bot" spellcheck="false" aria-label="Type a name to add a person or bot">`;

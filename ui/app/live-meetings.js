@@ -259,7 +259,8 @@ async function liveLoadDetail(state, id) {
     if (LIVE_MEETINGS !== state || state.busy || state.selected !== id || state.detailVersions[id] !== version) return;
     state.detail = detail;
     livePaintDetail(state, detail);
-    liveScreenStart(state, id);
+    if (detail.state === 'live') liveScreenStart(state, id);
+    else liveScreenStop(state);
   } catch (error) {
     if (LIVE_MEETINGS !== state || state.selected !== id) return;
     if ([403,404].includes(error.status)) {
@@ -281,7 +282,7 @@ function liveSubscribe(state, id, after) {
     'meeting.bot_reply', 'meeting.router', 'meeting.finalized'];
   source.addEventListener('expired', () => { liveScreenStop(state); source.close(); void liveLoadDetail(state, id); });
   for (const type of types) source.addEventListener(type, event => {
-    if (type === 'meeting.state') liveScreenClear(state);
+    if (type === 'meeting.state') liveScreenStop(state);
     // Access changes revalidate on the next frame request; they must not blank a static slide.
     state.cursor[id] = Number(event.lastEventId) || state.cursor[id] || 0;
     clearTimeout(state.refreshTimer);
@@ -371,7 +372,7 @@ function liveScreenStart(state, id) {
   const screen = state.screen = {id, after: '', url: '', generation: '', abort: new AbortController(), running:false};
   const current = () => LIVE_MEETINGS === state && state.screen === screen && !screen.abort.signal.aborted;
   const next = async () => {
-    if (!current() || screen.running) return;
+    if (!current() || screen.running || !screen.generation) return;
     if (document.hidden) { liveScreenClear(state); screen.after = ''; return; }
     screen.running = true;
     screen.request = new AbortController();
@@ -387,7 +388,7 @@ function liveScreenStart(state, id) {
         timeout = setTimeout(() => screen.request.abort(), Math.min(15000, 4000 + size / 65536 * 1000));
         const version = response.headers.get('X-Screen-Version') || '';
         const blob = await response.blob();
-        if (!current() || document.hidden || !screen.generation || !version.startsWith(screen.generation + ':')) { screen.after = ''; return; }
+        if (!current() || document.hidden || !screen.generation || !version.startsWith(screen.generation + ':')) { screen.after = ''; delay = 30; return; }
         liveScreenClear(state);
         screen.url = URL.createObjectURL(blob);
         screen.after = version;
@@ -395,11 +396,11 @@ function liveScreenStart(state, id) {
         if (host) { host.hidden = false; host.querySelector('img').src = screen.url; }
         delay = 30;
       } else if (response.status === 204) delay = 30;
-      else { liveScreenClear(state); screen.after = ''; if ([401,403,404].includes(response.status)) delay = 5000; }
+      else { liveScreenClear(state); screen.after = ''; if ([401,403,404,410].includes(response.status)) screen.generation = ''; }
     } catch { liveScreenClear(state); screen.after = ''; }
     finally {
       clearTimeout(timeout); screen.running = false;
-      if (current() && !document.hidden) screen.timer = setTimeout(next, delay);
+      if (current() && !document.hidden && screen.generation) screen.timer = setTimeout(next, delay);
     }
   };
   // Stop/revocation remains visible even while a large image downloads on a slow connection.
@@ -415,9 +416,10 @@ function liveScreenStart(state, id) {
         const value = await response.json();
         if (screen.generation && screen.generation !== value.generation) { screen.request?.abort(); liveScreenClear(state); }
         screen.generation = value.generation || '';
+        if (!screen.running && screen.generation) void next();
       } else { screen.generation = ''; screen.request?.abort(); liveScreenClear(state); }
     } catch { screen.generation = ''; screen.request?.abort(); liveScreenClear(state); }
-    finally { clearTimeout(timeout); if (current() && !document.hidden) screen.statusTimer = setTimeout(status, 1000); }
+    finally { clearTimeout(timeout); if (current() && !document.hidden) screen.statusTimer = setTimeout(status, screen.generation ? 1000 : 10000); }
   };
   screen.visibility = () => {
     clearTimeout(screen.timer); clearTimeout(screen.statusTimer);
@@ -426,5 +428,4 @@ function liveScreenStart(state, id) {
   };
   document.addEventListener('visibilitychange', screen.visibility);
   void status();
-  void next();
 }
