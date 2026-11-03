@@ -1890,3 +1890,153 @@ def test_an_order_the_provider_holds_that_cannot_be_linked_here_stays_failed_and
                                        (key,)).fetchone()
         assert status == "failed" and "could not be linked here" in last_error, (status, last_error)
         assert c.execute("SELECT COUNT(*) FROM fin_purchase_orders").fetchone()[0] == 0
+
+
+def _order_line_state(books, line: str) -> tuple[int, int, list[tuple[str, str, int]], tuple[int, int, int]]:
+    """An order line's room and billed, every live hold (source, source id, amount) and the Software budget's actual,
+    held and remaining. A void must leave these the same whether its give-back lands once or twice."""
+    with books.read() as c:
+        holds = [(str(r[0]), str(r[1]), int(r[2])) for r in c.execute(
+            "SELECT source, source_id, amount FROM fin_holds WHERE status='held' ORDER BY source, source_id")]
+        return SP.line_room(c, line), SP.billed(c, line), holds, _software_budget(c)
+
+
+def _post_bill_on_order(books, fake: FakeBooks, cid: str, line: str, amount: int) -> None:
+    """A bill for `amount` on an order line, confirmed by the provider at revision 1 as bill 111."""
+    with books.transaction() as c:
+        SK.outbox_add(c, connection_id=cid, action_id="", op="bill.create", payload=_bill_body(c, line, amount, "B-111"),
+                      key="bill.create:voided-1", by=OWNER, at=AT)
+    fake.replies = [mirror.Sent(True, kind="Bill", external_id="111", revision="1", lines=("L1",))]
+    assert _drain(books, fake, cid, now=LATER2) == []
+
+
+def _zero_bill(revision: str) -> M.Document:
+    """The provider's bill 111 after it was voided there: a zero total at this revision."""
+    return M.Document(M.Ext("Bill", "111", revision), party="Vendor:9", number="B-111", day="2026-10-05", due="",
+                      total=0, lines=())
+
+
+def _count_give_backs(monkeypatch) -> list[int]:
+    """Counts the order-line give-backs (the purchase order holds a bill's voiding moves back): one entry per restore."""
+    restores: list[int] = []
+    orig = BG.transfer
+
+    def counted(*args, **kwargs):
+        if kwargs.get("source") == "purchase_order":
+            restores.append(int(kwargs["amount"]))
+        return orig(*args, **kwargs)
+    monkeypatch.setattr(BG, "transfer", counted)
+    return restores
+
+
+def test_a_provider_echo_of_a_tico_void_that_lands_while_the_void_is_in_flight_gives_the_order_line_back_once(
+        books, monkeypatch):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": _local(c, "Account:2", "fin_accounts"),
+                                               "amount": 10_000, "at_limit": "decline", "parent_id": None})
+        assert made.status == "committed", made
+    _, line = _approved_order(books, fake, cid, 10_000)
+    _post_bill_on_order(books, fake, cid, line, 4_000)
+    with books.transaction() as c:
+        bill = str(c.execute("SELECT id FROM fin_bills WHERE number='B-111'").fetchone()[0])
+        assert act(c, OWNER, "bill_void", {"bill_id": bill}).status == "committed"
+    restores = _count_give_backs(monkeypatch)
+    orig_send = fake.send
+    seen: dict[str, Any] = {}
+
+    def send(op: str, body: Any, key: str) -> mirror.Sent:
+        # The provider's change feed reads the void while Tico's send of it is still in flight: the feed brings the void
+        # in first, and the answer to the send then confirms the same void.
+        sent = orig_send(op, body, key)
+        if op == "bill.void" and not seen:
+            fake.changes = [_zero_bill("2")]
+            seen["problems"] = _drain(books, fake, cid, now="2026-10-15T16:30:00.000000Z")
+            seen["first"], seen["first_restores"] = _order_line_state(books, line), len(restores)
+        return sent
+    fake.send = send
+    fake.replies = [mirror.Sent(True, kind="Bill", external_id="111", revision="2")]
+    assert _drain(books, fake, cid, now=LATER3) == []
+    assert seen["problems"] == []
+    assert seen["first_restores"] == 1                             # the feed's read of the void gives the line back once
+    assert _order_line_state(books, line) == seen["first"]         # the answer to the send changes nothing
+    assert len(restores) == seen["first_restores"]                 # and gives nothing back a second time
+    assert seen["first"][0] == 10_000 and seen["first"][3] == (0, 10_000, 0)
+    # The bill's ref is still bound as void: a later read of the same zero bill is the same record.
+    fake.changes = [_zero_bill("3")]
+    assert _drain(books, fake, cid, now="2026-10-15T17:00:00.000000Z") == []
+    assert _order_line_state(books, line) == seen["first"]
+    assert len(restores) == seen["first_restores"]
+
+
+def test_a_zero_total_void_read_twice_gives_the_order_line_back_once(books, monkeypatch):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": _local(c, "Account:2", "fin_accounts"),
+                                               "amount": 10_000, "at_limit": "decline", "parent_id": None})
+        assert made.status == "committed", made
+    _, line = _approved_order(books, fake, cid, 10_000)
+    _post_bill_on_order(books, fake, cid, line, 4_000)
+    restores = _count_give_backs(monkeypatch)
+    fake.changes = [_zero_bill("2")]
+    assert _drain(books, fake, cid, now=LATER3) == []
+    first = _order_line_state(books, line)
+    assert first[0] == 10_000 and first[3] == (0, 10_000, 0)
+    assert len(restores) == 1
+    fake.changes = [_zero_bill("3")]
+    assert _drain(books, fake, cid, now="2026-10-15T16:00:00.000000Z") == []
+    assert _order_line_state(books, line) == first
+    assert len(restores) == 1
+
+
+def test_a_provider_deletion_of_a_bill_whose_entry_is_already_reversed_gives_the_order_line_nothing_back(
+        books, monkeypatch):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": _local(c, "Account:2", "fin_accounts"),
+                                               "amount": 10_000, "at_limit": "decline", "parent_id": None})
+        assert made.status == "committed", made
+    _, line = _approved_order(books, fake, cid, 10_000)
+    _post_bill_on_order(books, fake, cid, line, 4_000)
+    with books.transaction() as c:
+        # The bill's spend is already out of the books (its entry reversed) while the bill itself still stands.
+        c.execute("UPDATE fin_entries SET status='reversed' WHERE id=(SELECT entry_id FROM fin_bills WHERE number='B-111')")
+    restores = _count_give_backs(monkeypatch)
+    fake.changes = [M.Ext("Bill", "111", "2", True)]
+    assert _drain(books, fake, cid, now=LATER3) == []
+    assert restores == []                                          # its spend is not in the books: no room back
+    assert _order_line_state(books, line)[0] == 10_000             # the order's room is its whole amount, held
+
+
+def test_a_provider_deletion_of_a_posted_bill_gives_its_order_line_back_once(books, monkeypatch):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": _local(c, "Account:2", "fin_accounts"),
+                                               "amount": 10_000, "at_limit": "decline", "parent_id": None})
+        assert made.status == "committed", made
+    _, line = _approved_order(books, fake, cid, 10_000)
+    _post_bill_on_order(books, fake, cid, line, 4_000)
+    restores = _count_give_backs(monkeypatch)
+    fake.changes = [M.Ext("Bill", "111", "2", True)]
+    assert _drain(books, fake, cid, now=LATER3) == []
+    assert restores == [4_000]
+    assert _order_line_state(books, line)[0] == 10_000
+    fake.changes = [M.Ext("Bill", "111", "3", True)]
+    assert _drain(books, fake, cid, now="2026-10-15T16:00:00.000000Z") == []
+    assert restores == [4_000]

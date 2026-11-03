@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from backend import hubdb as H
+from backend import invites
 from backend import migrations
 from backend.config import Settings
 from backend.store import Store
@@ -314,7 +315,7 @@ def test_an_older_threads_shape_gets_the_missing_columns_tables_triggers_and_sea
     path = fresh(tmp_path)
     new = _shape(path)
     with sqlite3.connect(path) as c:
-        for table, column in (("calls", "finalized_at"), ("federation_states", "company"), ("inbound_inboxes", "audience"),
+        for table, column in (("calls", "finalized_at"), ("inbound_inboxes", "audience"),
                               ("org_rules", "where_terms"), ("slack_posts", "recipient_actor"),
                               ("live_meetings", "thread_id")):
             c.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
@@ -341,15 +342,26 @@ def test_an_older_threads_shape_gets_the_missing_columns_tables_triggers_and_sea
     assert snapshot(path) == once
 
 
-def test_a_start_puts_back_the_federation_state_row_a_devcopy_emptied(tmp_path):
-    """federation_states holds one row that Relay.status reads unguarded; migration 0047 makes it once, and every start
-    puts it back when a devcopy emptied the table."""
+def test_migration_0058_drops_the_federation_tables_with_their_rows_and_nothing_else(tmp_path):
+    """Migration 0058 drops the federation tables migration 0047 made (rows and indexes with them), and the unsent index
+    that only they used. A fresh database has no federation table, and a second boot changes nothing."""
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
-        c.execute("DELETE FROM federation_states")
+        assert not [name for name in _tables(c) if name.startswith("federation")]
+    with sqlite3.connect(path) as c:
+        c.execute("CREATE TABLE federation_peerings(id TEXT PRIMARY KEY, peer_install TEXT NOT NULL)")
+        c.execute("INSERT INTO federation_peerings VALUES('fp-1','gi_0123456789abcdef01234567')")
+        c.execute("CREATE INDEX message_deliveries_unsent ON message_deliveries(root_id, recipient) "
+                  "WHERE (state='failed' OR (state='pending' AND attempts>=8))")
+    _back_to_before(path, "0058")
     boot(path)
     with sqlite3.connect(path) as c:
-        assert c.execute("SELECT singleton FROM federation_states").fetchall() == [(1,)]
+        assert not [name for name in _tables(c) if name.startswith("federation")]
+        assert c.execute("SELECT 1 FROM sqlite_master WHERE name='message_deliveries_unsent'").fetchone() is None
+        assert c.execute("SELECT 1 FROM schema_migrations WHERE version='0058_drop_federation'").fetchone()
+    once = snapshot(path)
+    boot(path)
+    assert snapshot(path) == once
 
 def test_an_existing_bots_runtime_model_and_host_move_into_its_config_then_the_columns_go(tmp_path):
     """Migration 0043: a runtime, model or host the config lacks is copied into it (the config keeps what it has), and
@@ -465,6 +477,170 @@ def test_a_standalone_kpi_keeps_its_target_and_the_migration_runs(tmp_path):
         links = c.execute("SELECT count(*) FROM goal_kpis WHERE kpi_id IN ('k-loose','k-orphan')").fetchone()[0]
     assert "goal_id" not in columns and "target" in columns
     assert targets == {"k-loose": 3, "k-orphan": 5} and links == 0
+
+
+def _migration(name):
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parents[1] / "migrations" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_session_link_keeps_its_thread_once_in_its_url():
+    """Migration 0049 strips the thread_id copy from session rows whose url gives that thread back, and leaves every
+    other row alone: a url that only contains the id, or names another thread, keeps its copy."""
+    up = _migration("0049_task_session_thread_once").up
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE task_links(id TEXT PRIMARY KEY, kind TEXT, url TEXT, detail TEXT)")
+    rows = {
+        "bot": ("session", "session:ops/t-1", '{"primary": true, "harness": "codex", "bot": "ops", "thread_id": "t-1"}'),
+        "resume": ("session", "session:cd /tmp/ops && codex resume abc123",
+                   '{"primary": false, "harness": "codex", "thread_id": "abc123"}'),
+        "reference": ("session", "session:orca ref", '{"primary": false, "thread_id": "elsewhere"}'),
+        "contains": ("session", "session:orca ref t-9", '{"primary": false, "harness": "orca", "thread_id": "t-9"}'),
+        "moved": ("session", "session:ops/t-new", '{"primary": true, "bot": "ops", "thread_id": "t-old"}'),
+        "pr": ("pr", "https://github.com/acme/app/pull/1", '{"thread_id": "t-1"}'),
+        "broken": ("session", "session:ops/t-2", "not json"),
+        "list": ("session", "session:ops/t-3", "[1]"),
+    }
+    conn.executemany("INSERT INTO task_links VALUES(?,?,?,?)", [(key, *row) for key, row in rows.items()])
+    up(conn)
+    stored = dict(conn.execute("SELECT id, detail FROM task_links").fetchall())
+    assert {key: json.loads(stored[key]) for key in ("bot", "resume")} == {
+        "bot": {"primary": True, "harness": "codex", "bot": "ops"}, "resume": {"primary": False, "harness": "codex"}}
+    assert {key: stored[key] for key in rows if key not in ("bot", "resume")} == {
+        key: row[2] for key, row in rows.items() if key not in ("bot", "resume")}
+    # What the API shows for the stripped rows is what it showed before.
+    for key in ("bot", "resume"):
+        shown = H._with_thread({"kind": "session", "url": rows[key][1], "detail": stored[key]})
+        assert json.loads(shown["detail"]) == json.loads(rows[key][2])
+    up(conn)
+    assert dict(conn.execute("SELECT id, detail FROM task_links").fetchall()) == stored
+    up(sqlite3.connect(":memory:"))                 # a database with no task_links has nothing to strip
+
+
+# The tables 0050_idempotency_one_table.py moves into `idempotency`, as migration 0049 and earlier left them.
+LEGACY_TABLES = (
+    "CREATE TABLE idempotency(actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL, "
+    "request_hash TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(actor,operation,key))",
+    "CREATE INDEX idempotency_by_created ON idempotency(created_at)",
+    "CREATE TABLE invite_sends(actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL, "
+    "request_hash TEXT NOT NULL, person TEXT NOT NULL, "
+    "state TEXT NOT NULL CHECK(state IN ('sending','sent','refused')), error_code TEXT, error_detail TEXT, "
+    "created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(actor,operation,key))",
+    "CREATE TABLE github_product_repo_operations(actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL, "
+    "request_hash TEXT NOT NULL, target_org TEXT NOT NULL, target_name TEXT NOT NULL, "
+    "state TEXT NOT NULL CHECK(state IN ('pending','completed','rejected')), response TEXT, error_code TEXT, "
+    "error_detail TEXT, error_status INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+    "PRIMARY KEY(actor,operation,key), CHECK(state!='completed' OR response IS NOT NULL), "
+    "CHECK(state!='rejected' OR (error_code IS NOT NULL AND error_detail IS NOT NULL AND error_status IS NOT NULL)))",
+    "CREATE TABLE github_review_operations(actor TEXT NOT NULL, key TEXT NOT NULL, request_hash TEXT NOT NULL, "
+    "response TEXT, PRIMARY KEY(actor,key))",
+)
+PRODUCT, REVIEWS = "/api/v2/github/product-repos", "/api/v2/github/reviews"
+ONBOARDING = "/api/v2/onboarding/company/people/{}/invite"
+TS = "2026-10-01T00:00:00.000000Z"
+
+
+def test_a_populated_legacy_database_moves_each_row_and_keeps_its_behaviour(tmp_path):
+    path = fresh(tmp_path)
+    invite = "/api/v2/access/people/{}/invite"
+    with sqlite3.connect(path) as c:
+        c.execute("DROP TABLE idempotency")                    # the one table, with its triggers
+        for ddl in LEGACY_TABLES:
+            c.execute(ddl)
+        c.executemany("INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) "
+                      "VALUES('human:ana',?,?,?,?,?)", [
+            ("/api/v2/tasks/t1/files", "ans-1", "h1", '{"ok": true}', TS),
+            (PRODUCT, "receipt", "h2", '{"repository": "Acme/tico-receipt", "html_url": "x"}', TS),
+            (invite.format("cara"), "collide", "h3", '{"id": "m1", "sender_id": "human:ana"}', TS),   # and a send
+            ("/api/v2/messages", "ans-2", "h9", '{"id": "m2", "sender_id": "human:ana"}', TS),
+            # An older onboarding route's roster add, committed before its invite was bound: nothing was sent.
+            (ONBOARDING.format("gus"), "left-over", "h10", '{"id": "m3", "sender_id": "human:ana"}', TS),
+            (invite.format("hal"), "timed", "h11", '"2026-10-01T00:00:01.000000Z"', TS),   # the recorded time
+        ])
+        # What the answer triggers had indexed (the test's DROP took the triggers): each answer that quotes a message.
+        c.executemany("INSERT INTO idempotency_messages VALUES(?, 'human:ana', ?, ?)", [
+            ("m1", invite.format("cara"), "collide"), ("m2", "/api/v2/messages", "ans-2"),
+            ("m3", ONBOARDING.format("gus"), "left-over")])
+        c.executemany("INSERT INTO invite_sends VALUES('human:ana',?,?,?,?,?,?,?,?,?)", [
+            (invite.format("cara"), "collide", "h3", "cara", "sent", None, None, TS, TS),
+            (invite.format("dan"), "sending", "h4", "dan", "sending", None, None, TS, TS),
+            (invite.format("eve"), "refused", "h5", "eve", "refused", "too_many", "Too many invites", TS, TS),
+            # Fay was removed: people_remove scrubbed her binding (no hash, the refusal text that named her replaced).
+            (invite.format("fay"), "scrubbed", "", "fay", "refused", "invite_failed", invites.REMOVED, TS, TS),
+            (invite.format("hal"), "timed", "h11", "hal", "sent", None, None, TS, TS),
+        ])
+        c.executemany("INSERT INTO github_product_repo_operations VALUES('human:ana',?,?,?,?,?,?,?,?,?,?,?,?)", [
+            (PRODUCT, "prod-pending", "h6", "Acme", "tico-new", "pending", None, None, None, None, TS, TS),
+            (PRODUCT, "prod-done", "h7", "Acme", "tico-done", "completed", '{"repository": "Acme/tico-done"}',
+             None, None, None, TS, TS),
+            (PRODUCT, "prod-rejected", "h8", "Acme", "tico-bad", "rejected", None, "github_repo", "Taken", 409, TS, TS),
+        ])
+        c.executemany("INSERT INTO github_review_operations VALUES('human:ana',?,?,?)", [
+            ("rev-pending", "r1", None), ("rev-done", "r2", '{"id": 1}'),
+        ])
+        before = dict(c.execute("SELECT key, rowid FROM idempotency").fetchall())
+        c.execute("DELETE FROM schema_migrations WHERE version>='0050' AND version NOT LIKE 'legacy_%'")
+    boot(path)
+
+    with sqlite3.connect(path) as c:
+        c.row_factory = sqlite3.Row
+        rows = {(r["operation"], r["key"]): dict(r) for r in c.execute("SELECT rowid, * FROM idempotency")}
+        assert len(rows) == 13, sorted(rows)
+        answer = rows[("/api/v2/tasks/t1/files", "ans-1")]
+        assert (answer["binding"], answer["state"], answer["response"]) == (None, "completed", '{"ok": true}')
+        assert answer["rowid"] == before["ans-1"], "a stored answer keeps its rowid"
+        assert rows[("/api/v2/messages", "ans-2")]["rowid"] == before["ans-2"]
+        collide = rows[(invite.format("cara"), "collide")]
+        assert (collide["binding"], collide["subject"], collide["state"], collide["response"]) == \
+            ("invites", "cara", "completed", None), "the binding wins over the answer that shared its key"
+        assert rows[(invite.format("dan"), "sending")]["state"] == "pending"
+        eve = rows[(invite.format("eve"), "refused")]
+        assert (eve["state"], eve["error_code"], eve["error_detail"]) == ("refused", "too_many", "Too many invites")
+        assert (ONBOARDING.format("gus"), "left-over") not in rows, "an invite route's answer with no binding goes"
+        hal = rows[(invite.format("hal"), "timed")]
+        assert (hal["binding"], hal["state"], json.loads(hal["response"])) == \
+            ("invites", "completed", {"invited_at": "2026-10-01T00:00:01.000000Z"}), "the binding keeps the time"
+        fay = rows[(invite.format("fay"), "scrubbed")]
+        assert (fay["subject"], fay["state"], fay["request_hash"], fay["error_detail"]) == \
+            ("fay", "refused", "", invites.REMOVED), "a scrubbed binding stays scrubbed"
+        receipt = rows[(PRODUCT, "receipt")]
+        assert (receipt["binding"], receipt["subject"], receipt["state"]) == \
+            ("github_product_repo", "Acme/tico-receipt", "completed")
+        assert receipt["response"] == '{"repository": "Acme/tico-receipt", "html_url": "x"}'
+        assert rows[(PRODUCT, "prod-pending")]["state"] == "pending"
+        assert rows[(PRODUCT, "prod-pending")]["subject"] == "Acme/tico-new"
+        assert rows[(PRODUCT, "prod-done")]["response"] == '{"repository": "Acme/tico-done"}'
+        rejected = rows[(PRODUCT, "prod-rejected")]
+        assert (rejected["state"], rejected["error_code"], rejected["error_status"]) == ("refused", "github_repo", 409)
+        review = rows[(REVIEWS, "rev-pending")]
+        assert (review["binding"], review["subject"], review["state"], review["response"]) == \
+            ("github_review", "", "pending", None)
+        assert rows[(REVIEWS, "rev-done")]["state"] == "completed"
+        assert not {"invite_sends", "github_product_repo_operations", "github_review_operations"} & _tables(c)
+        assert [r[1] for r in c.execute("PRAGMA table_info(idempotency)")] == [
+            "actor", "operation", "key", "request_hash", "response", "created_at", "updated_at", "binding", "subject",
+            "state", "error_code", "error_detail", "error_status"]
+        indexes = {r[1] for r in c.execute("PRAGMA index_list(idempotency)")}
+        assert {"idempotency_answers_by_created", "idempotency_bindings"} <= indexes
+        assert "idempotency_by_created" not in indexes
+        # The answer index keeps the answer, not the one that became a binding; the triggers are back.
+        assert [tuple(r) for r in c.execute("SELECT message_id, key FROM idempotency_messages")] == [("m2", "ans-2")]
+        triggers = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='idempotency'")}
+        assert {"idempotency_messages_insert", "idempotency_messages_update", "idempotency_messages_delete"} <= triggers
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
+def test_the_idempotency_table_the_migration_builds_is_the_one_store_declares():
+    source = STORE_SOURCE.read_text()
+    declared = re.search(r"CREATE TABLE IF NOT EXISTS (idempotency\(.*?PRIMARY KEY\(actor,operation,key\)\));", source, re.S)
+    migration = _migration("0050_idempotency_one_table")
+    squash = lambda sql: re.sub(r"\s+", "", sql)
+    assert declared and squash("CREATE TABLE " + declared.group(1)) == squash(migration.TABLE)
+    assert migration.INDEXES[0] + ";" in source      # the answers' index; the bindings' one is the migration's own
 
 
 def test_the_threads_delivery_trigger_follows_hubdbs_task_news_rule(tmp_path):

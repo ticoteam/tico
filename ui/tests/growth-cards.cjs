@@ -165,6 +165,16 @@ async function shot(page, name) {
       assert.equal(await page.locator('[data-gr-settings]').count(), 1);
       assert.equal(await page.locator('.dash-actions').isVisible(), true);
       assert.equal(await page.locator('[data-dash-add="page"]').count(), 1, 'an owner pins pages too');
+      // Arranging is in edit mode: Edit shows the grips, menus and + Card / + Page; Done hides them.
+      const editControls = '[data-dash-grip], [data-dash-menu], [data-dash-add], [data-dash-mode="done"]';
+      const shown = sel => page.locator(sel).evaluateAll(els => els.filter(el => el.checkVisibility()).length);
+      assert.equal(await shown(editControls), 0, 'viewing shows no edit controls');
+      await page.locator('[data-dash-mode="edit"]').click();
+      assert.ok(await shown('[data-dash-grip]') > 0, 'Edit shows the grips');
+      assert.equal(await shown('[data-dash-add]'), 2, '+ Card and + Page');
+      assert.equal(await shown('[data-dash-mode="edit"]'), 0);
+      await page.locator('[data-dash-mode="done"]').click();
+      assert.equal(await shown(editControls), 0, 'Done hides them');
 
       // A Number: the value, its change coloured by what is good, its trend; a carried value says its month.
       const nums = page.locator('#dash-grid .grc-num-v');
@@ -230,6 +240,7 @@ async function shot(page, name) {
       await page.waitForFunction(() => document.querySelector('#dash-grid .grc-num-v')?.textContent === '41');
 
       // Add a Number from its form: a metric for one channel, a tile by default; the defaults are saved first.
+      await page.locator('[data-dash-mode="edit"]').click();
       await page.locator('[data-dash-add="card"]').click();
       const dlg = page.locator('#dash-dialog[open]');
       assert.equal(await dlg.locator('[name="template"]').inputValue(), 'growth_number', 'a Number first');
@@ -279,6 +290,7 @@ async function shot(page, name) {
       await page.locator('#dash-grid .grc-funnel').waitFor();
       assert.equal(await page.locator('.dash-actions').isVisible(), false);
       assert.equal(await page.locator('[data-dash-grip], [data-dash-menu], [data-gr-settings]').count(), 0);
+      assert.equal(await page.locator('[data-dash-mode="edit"]').isVisible(), false, 'no Edit');
       assert.equal(await page.locator('.dash-head a[data-gr-sources]').getAttribute('href'), '#/growth/sources');
       assert.equal(await page.locator('[data-gr-board]').count(), 1);
       assert.deepEqual(fake.writes, []);

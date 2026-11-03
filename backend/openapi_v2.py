@@ -335,6 +335,7 @@ STABLE = [
     ("/api/v2/stale-review/{suggestion_id}", "post", "Needs you", "decideStaleSuggestion",
      "Accept or skip one suggestion on your Stale tickets card; accept sends the task version it showed "
      "(409 version_conflict otherwise)", None),
+    ("/api/v2/approvals", "get", "Needs you", "listApprovals", "The approvals addressed to you: pending (what Needs you counts), approved or declined", None),
     ("/api/v2/approvals/{aid}", "get", "Needs you", "getApproval", "One approval request", None),
     ("/api/v2/approvals/{aid}", "post", "Needs you", "decideApproval", "Approve or reject", None),
     ("/api/v2/approvals/{aid}/undo", "post", "Needs you", "undoApproval",
@@ -2423,8 +2424,8 @@ TAGS['Model subscriptions'] = ("The company's saved model logins and keys, given
                                "sent only to add or reconnect one; no answer carries it.")
 STABLE.extend([
     ('/api/v2/model-subscriptions', 'get', 'Model subscriptions', 'listModelSubscriptions', 'Saved subscriptions and the kinds that can be added', 'ModelSubscriptionList'),
-    ('/api/v2/model-subscriptions', 'post', 'Model subscriptions', 'addModelSubscription', 'Add a subscription: a kind, a name and the pasted value (owners and admins)', 'ModelSubscription'),
-    ('/api/v2/model-subscriptions/{sid}', 'post', 'Model subscriptions', 'changeModelSubscription', 'Rename a subscription and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true', 'ModelSubscription'),
+    ('/api/v2/model-subscriptions', 'post', 'Model subscriptions', 'addModelSubscription', 'Add a subscription: a kind, a name, the pasted value and, for a plan, optionally its owner, a person (default: you; an API key has none; owners and admins)', 'ModelSubscription'),
+    ('/api/v2/model-subscriptions/{sid}', 'post', 'Model subscriptions', 'changeModelSubscription', 'Rename a subscription, change a plan owner and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true', 'ModelSubscription'),
     ('/api/v2/model-subscriptions/{sid}', 'delete', 'Model subscriptions', 'removeModelSubscription', 'Remove a subscription and take it off every computer; 409 `confirm_restart` while runs would stop unless `confirm=1`', 'ModelSubscriptionDeleted'),
     ('/api/v2/computer-subscriptions', 'get', 'Model subscriptions', 'listComputerSubscriptions', 'Which subscription each computer uses per runtime, and the computers that can take one', 'ComputerSubscriptionList'),
     ('/api/v2/computer-subscriptions', 'put', 'Model subscriptions', 'setComputerSubscription', 'Give a computer a subscription for one runtime, switch it, or clear it (null); 409 `confirm_restart` while live runs would stop unless `confirm` is true', 'ComputerSubscriptionResult'),
@@ -2437,12 +2438,12 @@ SCHEMAS['ModelSubscription'] = obj({
     'usage': {'anyOf': [obj({'window': {'type': ['string', 'null'], 'enum': ['5h', 'week', None]}, 'used_pct': NUM_N,
                              'cost_usd_month': NUM_N, 'resets_at': 'n'}, required=['window', 'used_pct', 'cost_usd_month']),
                         {'type': 'null'}]},
-    'added_by': 's', 'added_by_name': 's', 'created_at': 's', 'updated_at': 's'},
+    'added_by': 's', 'added_by_name': 's', 'owner_id': 's', 'owner_name': 's', 'created_at': 's', 'updated_at': 's'},
     required=['id', 'name', 'kind', 'runtime', 'label', 'status', 'status_detail', 'status_at', 'preview', 'revision',
-              'computers', 'usage', 'added_by', 'added_by_name', 'created_at', 'updated_at'])
+              'computers', 'usage', 'added_by', 'added_by_name', 'owner_id', 'owner_name', 'created_at', 'updated_at'])
 SCHEMAS['ModelSubscriptionList'] = obj({
     'subscriptions': items(ref('ModelSubscription')),
-    'kinds': items(obj({'kind': _SUB_KIND, 'label': 's', 'runtime': {'enum': ['claude', 'codex']}, 'secret_label': 's', 'help': 's'}))})
+    'kinds': items(obj({'kind': _SUB_KIND, 'label': 's', 'runtime': {'enum': ['claude', 'codex']}, 'secret_label': 's', 'help': 's', 'connect': 'b', 'owned': 'b'}))})
 SCHEMAS['ModelSubscriptionDeleted'] = obj({'deleted': 'b', 'id': 's', 'computers': 'i', 'stopped': 'i', 'sessions_reset': 'i'})
 SCHEMAS['ComputerSubscriptionList'] = obj({
     'assignments': items(obj({'runner_id': 's', 'runtime': {'enum': ['claude', 'codex']}, 'subscription_id': 's'})),
@@ -2530,21 +2531,6 @@ def _refs(node, found):
             _refs(value, found)
 
 
-TAGS['Federation'] = ("Shared threads between Tico installs through Tico HQ: this install's key, peerings (both installs "
-                      "approve, and a pause stops one) and the threads it shares (docs/federation.md).")
-STABLE.extend([
-    ('/api/v2/federation', 'get', 'Federation', 'getFederation', "This install's key id, Gateway, one page of peerings and shared threads with cursors (no key material)", None),
-    ('/api/v2/federation/keys', 'post', 'Federation', 'createFederationKey', "Make this install's federation key and register it with Tico HQ", None),
-    ('/api/v2/federation/keys/rotate', 'post', 'Federation', 'rotateFederationKey', 'A new key; the old one is retired and every peering needs approving again', None),
-    ('/api/v2/federation/peerings', 'post', 'Federation', 'requestFederationPeering', 'Ask another install to peer; an Idempotency-Key is required', None),
-    ('/api/v2/federation/peerings/{peering_id}/approve', 'post', 'Federation', 'approveFederationPeering', "Approve a peering after checking the other install's key; active once both approve", None),
-    ('/api/v2/federation/peerings/{peering_id}/pause', 'post', 'Federation', 'setFederationPeeringPause', 'The kill switch: while paused nothing crosses the peering in either direction', None),
-    ('/api/v2/federation/peerings/{peering_id}/revoke', 'post', 'Federation', 'revokeFederationPeering', 'End a peering; a new request starts over', None),
-    ('/api/v2/federation/threads/{thread_id}/installs', 'post', 'Federation', 'shareFederationThread', 'Share a thread this install owns with an active peer; it gets the thread from now on', None),
-    ('/api/v2/federation/threads/{thread_id}/installs/{install_id}', 'delete', 'Federation', 'unshareFederationThread', 'Remove an install from a thread this install owns; it gets the removal and nothing after', None),
-    ('/api/v2/federation/threads/{thread_id}/installs/{install_id}/retry', 'post', 'Federation', 'retryFederationThreadInstall', 'Send again now what another install has not taken from this thread; for whoever manages the thread', None),
-    ('/api/v2/federation/threads/{thread_id}/readers', 'post', 'Federation', 'addFederationThreadReader', 'Let a local person read a shared thread copy on this install; an admin who reads it adds readers', None),
-])
 # Threads (docs/dev/threads-contract.md §10): a thread is a conversation read through threads.view, and its messages
 # carry thread_id, root_id-free fields as _message_out writes them.
 TAGS["Threads"] = ("Threads: the sidebar, a thread and its timeline, read marks, search, members, follow, and the messages "
@@ -3003,6 +2989,30 @@ STABLE.extend([
     ("/api/v2/reader-messages", "get", "Company page", "listReaderMessages",
      "What readers sent the page (replies and requests), newest first; they never wake a bot", None),
 ])
+
+
+# What the Assistant did for you, the Needs you summary and why an item is here (docs/assistant.md).
+STABLE.extend([
+    ("/api/v2/needs-you/summary", "get", "Needs you", "getNeedsYouSummary",
+     "The Needs you count split by kind and by the bot that put each item there, with this week's and older counts; "
+     "the same query as the board, so the numbers match it (`limit` caps the list of bots)", "NeedsSummary"),
+    ("/api/v2/origins/{ref}", "get", "Needs you", "getOrigin",
+     "Why a task, bot question or approval is on your list: who made it, its cause (automation, rule, parent task or bot), "
+     "its siblings in the last seven days and up to three commands that would stop the source; 404 when you cannot read it", "Origin"),
+    ("/api/v2/assistant/changes", "get", "Assistant", "listAssistantChanges",
+     "What your Assistant changed for you in the last `days` (default 30), newest first, each with the words it acted on "
+     "and whether it can still be undone; paged with `limit` and `before`", "AssistantChangeList"),
+    ("/api/v2/assistant/changes/{cid}/restore", "post", "Assistant", "restoreAssistantChange",
+     "Undo one change your Assistant made for you where the record allows it; repeating it answers `already: true`", "AssistantChangeResult"),
+])
+SCHEMAS.update({
+    "NeedsSummary": obj({"actor": "s", "total": "i", "this_week": "i", "by_kind": "o", "by_bot": items({"type": "object"}),
+                         "bots_left": "i"}),
+    "Origin": obj({"ref": "s", "kind": "s", "id": "s", "title": "s", "created_at": "s", "made_by": "o",
+                   "task": {"type": ["string", "null"]}, "cause": "o", "siblings": "o", "stop": items({"type": "object"})}),
+    "AssistantChangeList": obj({"changes": items({"type": "object"}), "next": {"type": ["string", "null"]}}),
+    "AssistantChangeResult": obj({"id": "s", "restored": "b", "already": "b", "object": "s"}),
+})
 
 
 def generate():

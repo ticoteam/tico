@@ -62,7 +62,6 @@ def check(c, who, auth, settings):
     ids = [bot["id"] for bot in bots]
     views.prime_machines(c, ids)
     events.prime_bot_rows(c, ids)
-    usage_limits.prime_own(c, ids)
     # The tool listing of every active or paused bot (bot_tools.listing) and each paused bot's last pause reason,
     # read together rather than once per bot.
     from .repositories import Reads

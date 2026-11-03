@@ -203,7 +203,7 @@ def test_review_missing_from_reviewer_installation_refuses_before_claim_or_post(
     assert reply.json()["error"]["code"] == "github_repo_not_accessible"
     assert seen["reviews"] == []
     with api.app_state.store.read_transaction() as c:
-        assert c.execute("SELECT count(*) FROM github_review_operations").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM idempotency WHERE binding='github_review'").fetchone()[0] == 0
 
 
 def test_github_refusing_a_review_403_files_one_devops_task_not_the_type_manager(api, gh, tmp_path, monkeypatch):

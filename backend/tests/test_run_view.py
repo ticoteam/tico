@@ -6,6 +6,7 @@ from backend.store import H
 from backend.tests.test_shared_logins import queued_login  # noqa: F401
 from backend.tests.test_api import api, assign, claim, expire, get, post, put, ready, runner  # noqa: F401
 from backend.tests.test_execution_review import aged, sweep
+from backend.enqueue import enqueue_stored
 
 
 def task_attempt(api, machine, title="Count the words"):
@@ -228,6 +229,7 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
         cid = H.task(c, tid)["conversation_id"]
         c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                   "VALUES('msg-coo',?,'bot:ops','bot:coo','chat','Over to you','{}',?)", (cid, H.now()))
+        enqueue_stored(c, 'msg-coo')
         assert c.execute("SELECT bot_id FROM jobs WHERE message_id='msg-coo'").fetchone()["bot_id"] == "coo"
     assert get(api, f"tasks/{tid}")["execution"]["run_id"] == attempt["id"], "a bot's message to a bot is not it"
     # A person owns the task and the bot that asked it answers them. A plain comment there is deferred a day

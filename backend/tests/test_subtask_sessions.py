@@ -4,7 +4,7 @@ import json
 
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
-from runner import state
+from runner_support import state
 
 
 def tasks(api, *specs):
@@ -112,6 +112,11 @@ def test_a_subtask_turn_runs_in_its_parents_lane_and_session_and_links_and_check
     with api.app.state.store.read() as c:
         assert [link["url"] for link in H.task_links(c, parent) if link["kind"] == "session"] == ["session:ops/t-parent"]
         assert [link for link in H.task_links(c, sub) if link["kind"] == "session"] == []
+        # The thread lives in the url; the API's detail still names it, and the stored detail does not repeat it.
+        [parent_link] = [link for link in H.task_links(c, parent) if link["kind"] == "session"]
+        assert json.loads(parent_link["detail"])["thread_id"] == "t-parent"
+        stored = c.execute("SELECT detail FROM task_links WHERE id=?", (parent_link["id"],)).fetchone()[0]
+        assert "thread_id" not in json.loads(stored) and json.loads(stored)["bot"] == "ops"
     assert get(api, "tasks/" + parent)["task"]["checkpoint"] == "Step 1 drafted."
     assert not get(api, "tasks/" + sub)["task"].get("checkpoint")
 

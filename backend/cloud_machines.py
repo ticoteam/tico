@@ -57,6 +57,7 @@ machine; a shared machine's facts are its member bots' together:
              later of its start, its last activity and its want (a job queued for it, a watcher due: work its runner
              has not taken yet), it is stopped, unless Always on: the shared one only once every member is idle. A
              watcher running often keeps it on by itself, and so does a runner still updating (`runner_updating`).
+             A machine whose last stop was shorter than `idle_stop_s` waits SHORT_GAP_FACTOR times that (`idle_for`).
              With no active bot left on it, it stops, once no turn is out and no update under way: every stop but out
              of credit's waits for both.
     guard    a machine woken for one want that saw no activity is not woken again for that same want: a job its
@@ -126,6 +127,7 @@ TICK = 10                       # seconds between looks
 SYNC = 60                       # seconds between HQ lists
 HEARTBEAT = 60
 IDLE_FALLBACK = 600             # a size HQ has not listed stops soonest: stopping early never makes a bill large
+SHORT_GAP_FACTOR = 4            # woken again sooner than break-even after a stop: stays on this many times longer
 BACKOFF, BACKOFF_MAX = 15, 900
 STOPPING_RETRY = 5              # boat answers 409 sandbox_stopping to a resume right after a stop
 FROZEN_RETRY = 600              # a 402 is asked again this late, or as soon as HQ says the company is open
@@ -413,6 +415,15 @@ def idle_after(c, size, known=None):
         if found["name"] == size:
             return found["idle_stop_s"]
     return IDLE_FALLBACK
+
+
+def idle_for(current, idle_s):
+    """The idle time before machine row `current` stops: `idle_s`, or SHORT_GAP_FACTOR times it when its last stop
+    was shorter than `idle_s` (that stop cost more than staying on would have). Unreadable times leave `idle_s`."""
+    stopped, started = epoch(current.get("stopped_at")), epoch(current.get("started_at"))
+    if stopped is None or started is None or not 0 <= started - stopped < idle_s:
+        return idle_s
+    return idle_s * SHORT_GAP_FACTOR
 
 
 # ----------------------------------------------------------------------------- enrollment
@@ -769,7 +780,8 @@ def reserve(c, settings, key, action, machine_id):
     if not current or current["machine_id"] != machine_id:
         return None
     found = facts(c, settings, current, at)
-    if decide(current, found, at, idle_after(c, current["machine_size"] or current["size"]))[0] != action:
+    idle_s = idle_for(current, idle_after(c, current["machine_size"] or current["size"]))
+    if decide(current, found, at, idle_s)[0] != action:
         return None
     if current["runner_id"] and c.execute("SELECT 1 FROM attempts WHERE runner_id=? AND state IN ('leased','running') "
                                           "LIMIT 1", (current["runner_id"],)).fetchone():
@@ -807,6 +819,7 @@ class Manager:
         self.lock = threading.Lock()
         self.synced = None
         self.relist = False             # a create was refused: no other create until HQ's list has been read
+        self.list_refused = None        # the code of HQ's last refused list, None once one is read: a waiting create says it
 
     @property
     def off(self):
@@ -838,7 +851,11 @@ class Manager:
             if hq is None:
                 return
         if self.synced is None or at - self.synced >= SYNC:
-            self.sync(hq, at)                               # also how this server learns HQ makes machines at all
+            try:
+                self.sync(hq, at)                           # also how this server learns HQ makes machines at all
+            except Exception as exc:  # noqa: BLE001 - the looks still run; a create waiting on the list says why
+                log.exception("Reading HQ's cloud machine list failed")
+                self.list_refused = type(exc).__name__[:60]
         with self.store.read() as c:
             if not offered(c, self.settings):
                 return
@@ -851,8 +868,22 @@ class Manager:
         for key in keys:
             try:
                 self.step(hq, key, at)
-            except Exception:  # noqa: BLE001 - one machine's failure never holds the others
+            except Exception as exc:  # noqa: BLE001 - one machine's failure never holds the others
                 log.exception("Cloud machine step failed for %s", key)
+                self.failed(key, exc)
+
+    def failed(self, key, exc):
+        """Name a look's failure on machine `key`'s row, so its bots' work says why (the log has the trace)."""
+        code = (str(exc.code) if isinstance(exc, Problem) else type(exc).__name__)[:60]
+        try:
+            with self.store.transaction() as c:
+                current = row(c, key)
+                # A problem already named (out of credit, a refusal, stuck) says more, and its retries key on it.
+                if current and (current["problem"] == "" or current["problem"].startswith("error:")) \
+                        and current["problem"] != "error:" + code:
+                    save(c, key, problem="error:" + code, problem_at=H.now())
+        except Exception:  # noqa: BLE001 - recording the failure never breaks the loop
+            log.exception("Naming a cloud machine's failure failed for %s", key)
 
     def sync(self, hq, at):
         """HQ's list: every machine's state, size, cost and starts onto its row (by key), and the sizes. The first sizes
@@ -863,12 +894,17 @@ class Manager:
         try:
             listed = hq.list()
         except Refused as refused:
+            self.list_refused = refused.code
             if refused.status == 503 and refused.code == "not_configured":   # off, or turned off for this company
                 with self.store.transaction() as c:
                     c.execute("DELETE FROM registry_metadata WHERE key=?", (SIZES_KEY,))
             return None
         self.relist = False
+        self.list_refused = None
         with self.store.transaction() as c:
+            # What a create waiting on the list said: an hq: problem with no refusal of its own (a refused create or
+            # start counts a failure), whatever the code and across restarts.
+            c.execute("UPDATE cloud_machines SET problem='',problem_at=NULL WHERE problem LIKE 'hq:%' AND failures=0")
             learned = bool(listed["sizes"]) and (first or not sizes(c))
             if listed["sizes"]:
                 c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
@@ -931,7 +967,7 @@ class Manager:
             if not current:
                 return None
             found = facts(c, self.settings, current, at)
-            idle_s = idle_after(c, current["machine_size"] or current["size"])
+            idle_s = idle_for(current, idle_after(c, current["machine_size"] or current["size"]))
         action, problem = decide(current, found, at, idle_s)
         if problem is not None and problem != current["problem"] and not action:
             with self.store.transaction() as c:
@@ -939,6 +975,9 @@ class Manager:
         elif problem is None and not action and current["problem"] == "stuck" \
                 and not covers(current["wake_key"], found["want"]):
             with self.store.transaction() as c:
+                save(c, key, problem="", problem_at=None)
+        elif problem is None and not action and current["problem"].startswith("error:"):
+            with self.store.transaction() as c:                 # a look that ran clean again
                 save(c, key, problem="", problem_at=None)
         if action:
             self.act(hq, current, action, found, at)
@@ -953,7 +992,12 @@ class Manager:
             if current is None:
                 return                                      # a claim came first, or the facts changed: not now
         if action == "create" and self.relist:
-            return                                          # the last create was refused, and HQ's list not read since
+            # The last create was refused, and HQ's list not read since. A refused list is said on this row, so the
+            # bot's work says why; a list not yet asked for is waited on silently.
+            if self.list_refused and current["problem"] != "hq:" + self.list_refused:
+                with self.store.transaction() as c:
+                    save(c, key, problem="hq:" + self.list_refused, problem_at=H.now())
+            return
         if action == "create":
             with self.store.transaction() as c:
                 code = mint(c, key, self.execution.auth.owner_id(c) if key == SHARED else None)
@@ -1070,6 +1114,8 @@ def problem_words(problem):
         return ""
     if problem.startswith("hq:"):
         return f"Didn't start ({problem[3:]}): trying again"
+    if problem.startswith("error:"):
+        return f"Couldn't be made or started ({problem[6:]}): trying again"
     return PROBLEMS.get(problem, problem)
 
 
@@ -1083,6 +1129,8 @@ def waiting(c, bot):
         return "out of credit: its cloud machine can't start"
     if machine["problem"].startswith("hq:"):
         return f"its cloud machine didn't start ({machine['problem'][3:]}); trying again"
+    if machine["problem"].startswith("error:"):
+        return f"its cloud machine couldn't be made or started ({machine['problem'][6:]}); trying again"
     if machine["problem"] == "stuck":
         return "its cloud machine started, but this did not run there"
     if machine["problem"] == "no_enroll":
@@ -1161,9 +1209,11 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
     fields = {"changed_by": who.actor, "enroll_fails": 0}        # a person's choice lets a machine be made again
     if before["problem"] == "no_enroll":
         fields["problem"] = ""
-    if mode is not None:
+    # The same choice again is no change: a refusal it has (a start HQ said no to) and its wake guard stay, so a repost
+    # that only reads the view does not hide why the machine is not running.
+    if mode is not None and mode != before["mode"]:
         fields.update(mode=mode, wake_key=None, problem="")
-    if placement is not None:
+    if placement is not None and placement != before["placement"]:
         fields.update(placement=placement, wake_key=None, problem="")
     if size is not None:
         fields["size"] = size

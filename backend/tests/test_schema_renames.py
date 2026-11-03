@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.enqueue import enqueue_stored
 from backend.migrations import renames as schema_renames
 from backend.config import Settings
 from backend.migrations.renames_data import COLUMNS
@@ -68,12 +69,23 @@ def restore(path):
     return before
 
 
-# Dropped as redundant by backend/migrations/0042_drop_unused_indexes.sql, and kpis_goal by
-# backend/migrations/0044_drop_kpi_goal_columns.py with kpis.goal_id, the column it indexes.
-DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "tasks_private_parties", "kpis_goal"}
-# Dropped by backend/migrations/0035_growth_rethink.py after the renames ran on them.
+# Dropped as redundant by backend/migrations/0042_drop_unused_indexes.sql, kpis_goal by
+# backend/migrations/0044_drop_kpi_goal_columns.py with kpis.goal_id, the column it indexes, and idempotency_by_created
+# by backend/migrations/0050_idempotency_one_table.py (the answers' partial index replaces it).
+DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "tasks_private_parties", "kpis_goal",
+                   "idempotency_by_created"}
+# Dropped by backend/migrations/0052_drop_queue_bot_message.sql: backend/enqueue.py queues the job in Python now.
+DROPPED_TRIGGERS = {"queue_bot_message"}
+# Dropped after the renames ran on them: by backend/migrations/0035_growth_rethink.py, the operation-binding tables
+# 0050_idempotency_one_table.py moves into `idempotency`, 0053_usage_facts.py (its rows are usage facts) and
+# 0054_budget_nodes.py (its rows are budget nodes), and the federation tables 0058_drop_federation.sql drops with
+# their indexes.
 RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",
-           "gtm_versions", "gtm_drafts"}
+           "gtm_versions", "gtm_drafts", "invite_sends", "github_product_repo_operations", "github_review_operations",
+           "turn_usage_segments", "usage_limits", "usage_pools",
+           "federation_deferrals", "federation_outbox_items", "federation_receipts", "federation_messages",
+           "federation_items", "federation_members", "federation_threads", "federation_directory_entries",
+           "federation_peerings", "federation_keys", "federation_states"}
 
 
 @pytest.fixture(scope="module")
@@ -127,10 +139,11 @@ def test_indexes_triggers_and_views_survive_and_name_no_old_column(upgraded):
     _store, conn, before = upgraded
     for kind in ("index", "trigger", "view"):
         now = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type=?", (kind,))}
-        # The tables 0035_growth_rethink retires take their indexes with them; later migrations drop DROPPED_INDEXES.
+        # The tables 0035_growth_rethink retires take their indexes with them; later migrations drop DROPPED_INDEXES
+        # and DROPPED_TRIGGERS.
         kept = {name for name in before[kind + "es" if kind == "index" else kind + "s"]
                 if not any(table in name for table in RETIRED) and not name.startswith("growth_idea")
-                and name not in DROPPED_INDEXES}
+                and name not in DROPPED_INDEXES | DROPPED_TRIGGERS}
         assert kept <= now, kind
     # An old name may live on as a column elsewhere (or as another rename's new name), so look only for names
     # that no table has any more, outside string literals.
@@ -150,13 +163,16 @@ def test_a_message_to_a_bot_still_queues_a_job(upgraded):
     _store, conn, _before = upgraded
     refs = new("messages", "refs_json")
     created = new("messages", "created")
+    assert not conn.execute("SELECT 1 FROM sqlite_master WHERE name='queue_bot_message'").fetchone()
     conn.execute(f"INSERT INTO messages(id, conversation_id, sender_id, recipient_id, kind, body, {refs}, {created}) "
                  "VALUES('msg-2', 'conv-1', 'human:ana', 'bot:ops', 'chat', 'please ship', '{}', ?)", (NOW,))
+    enqueue_stored(conn, "msg-2")
     job = conn.execute("SELECT * FROM jobs WHERE message_id='msg-2'").fetchone()
     assert job and job["bot_id"] == "ops" and job["state"] == "queued" and job[new("jobs", "created")] == NOW
     # A quiet message (read through the renamed refs column) queues nothing.
     conn.execute(f"INSERT INTO messages(id, conversation_id, sender_id, recipient_id, kind, body, {refs}, {created}) "
                  "VALUES('msg-3', 'conv-1', 'human:ana', 'bot:ops', 'chat', 'fyi', '{\"quiet\":1}', ?)", (NOW,))
+    enqueue_stored(conn, "msg-3")
     assert not conn.execute("SELECT 1 FROM jobs WHERE message_id='msg-3'").fetchone()
     conn.rollback()
 

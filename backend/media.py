@@ -138,7 +138,7 @@ def replay_upload(store, request, payload):
     key = upload_key(request)
     with store.read() as c:
         validate_identity(c, who)
-        row = c.execute("SELECT request_hash,response FROM idempotency WHERE actor=? AND operation=? AND key=?",
+        row = c.execute("SELECT request_hash,response FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                         (principal, request.url.path, key)).fetchone()
     if row is None:
         return None

@@ -44,6 +44,7 @@ from . import models as M
 from . import people as P
 from . import rooms
 from .blobs import register
+from .enqueue import enqueue
 from .store import H, Problem, encode
 
 # A routine runs on a schedule of days, not minutes: a bot synced within the last day and a bit
@@ -354,12 +355,14 @@ def import_messages(c, provider, person, slug, ext_id, messages, images=None, wh
                 attached.append(register(c, who, *row))
         if attached:
             refs["attachments"] = attached
+        dumped = encode(refs)
         cur = c.execute(
             "INSERT OR IGNORE INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, "
             "refs, created_at, delivered_at, read_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (mid, room["id"], sender, target, "say", text, encode(refs), created, now, now))
+            (mid, room["id"], sender, target, "say", text, dumped, created, now, now))
         added += cur.rowcount
-        if cur.rowcount:
+        if cur.rowcount:           # an ignored row was not inserted, so it queues nothing (the trigger never fired either)
+            enqueue(c, {"id": mid, "sender_id": sender, "recipient_id": target, "refs": dumped, "created_at": created})
             for item in attached:
                 c.execute("INSERT INTO message_assets VALUES(?,?)", (mid, item["id"]))
     if added:

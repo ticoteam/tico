@@ -20,7 +20,7 @@ def act(api, attempt, method, path, body=None, ref="turn"):
     kwargs = {"headers": {**headers(attempt["token"]), **({"X-Tico-On-Behalf-Of": ref} if ref else {})}}
     if body is not None:
         kwargs["json"] = body
-    return getattr(api, method.lower())("/api/v2/" + path, **kwargs)
+    return api.request(method.upper(), "/api/v2/" + path, **kwargs)
 
 
 def bot_id(api, slug):

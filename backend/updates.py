@@ -590,11 +590,11 @@ def draft_facts(c, author, kind, day):
                         "ORDER BY e.created_at DESC LIMIT ?", (author, since, DRAFT_LIST_MAX)).fetchall()
     # ...and their answers to asks, then their comments; a message counts only when every task it names is shared.
     said = lambda where: [(title, m["body"]) for m in c.execute(
-        "SELECT * FROM messages WHERE sender_id=? AND deleted_at IS NULL AND created_at>=? AND " + where
+        "SELECT * FROM message_refs WHERE sender_id=? AND deleted_at IS NULL AND created_at>=? AND " + where
         + " ORDER BY created_at DESC LIMIT ?", (author, since, DRAFT_SCAN_MAX)).fetchall()
         if (title := _shared_message(c, m, shared))][:DRAFT_LIST_MAX]
     answers = said("kind='answer'")
-    comments = said("kind IN ('say','ask') AND json_extract(refs,'$.task') IS NOT NULL "
+    comments = said("kind IN ('say','ask') AND ref_task_id IS NOT NULL "
                     "AND json_extract(refs,'$.comment')")
     # The shared meetings they owned or were in (media.shared_meeting; sql.py has the same rule): live,
     # not private, not deleted, with a summary.

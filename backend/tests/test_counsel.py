@@ -851,9 +851,11 @@ def test_the_assistant_is_offered_the_document_read_the_question_and_the_single_
     tools = {t["name"]: t for t in hubtools.TOOLS}
     assert tools["hub_rules_get"]["writes"] is False
     assert tools["hub_rules_read"]["writes"] is True and "on_behalf_of" in tools["hub_rules_read"]["inputSchema"]["properties"]
-    assert A.instructed_org("POST", "/api/v2/rules/read", b"{}")
-    assert A.instructed_org("POST", "/api/v2/rules/ask", b"{}")
-    assert not A.instructed_org("GET", "/api/v2/rules/read", b"{}")
+    # The rule reads are writes the Assistant's turn may make on the person's cited words (`admits_on_turn`); a read
+    # (GET) is never a write, so it is not held.
+    assert A.admits_on_turn("POST", "/api/v2/rules/read", b"{}")
+    assert A.admits_on_turn("POST", "/api/v2/rules/ask", b"{}")
+    assert not A.admits_on_turn("GET", "/api/v2/rules/read", b"{}")
 
 
 def test_a_replay_returns_the_saved_answer_and_fetches_nothing(api, monkeypatch):
