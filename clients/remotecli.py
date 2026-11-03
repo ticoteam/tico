@@ -311,6 +311,7 @@ def run(args, who=None):
               "update create", "update redo", "update list", "update show", "update mark-read", "update reply", "update settings",
               "changelog list", "changelog mark-read",
               "needs-you start", "needs-you next", "needs-you respond", "needs-you commit", "needs-you abandon",
+              "needs-you show", "origin show",
               "brief", "pipeline", "mcp stats", "calendar list", "calendar status", "team show", "team budget", "org order", "org reports-to", "run list",
               "message list", "message mark-read", "bot recent", "agent pair show", "agent pair approve", "agent pair decline",
               "slack channel list", "slack channel add", "slack channel remove", "slack channel import",
@@ -422,7 +423,7 @@ def run(args, who=None):
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "assistant":
         from clients import hubtools
-        if args.sub in ("read", "send", "learn", "learned", "withdraw", "proposals"):
+        if args.sub in ("read", "send", "learn", "learned", "withdraw", "proposals", "change"):
             return via_tool(client, args)
         try:
             body = json.loads(args.body or "{}")

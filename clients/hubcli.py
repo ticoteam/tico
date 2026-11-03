@@ -209,6 +209,12 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub assistant withdraw <id> [--reason "..."]
                                            take back a Confirm card that waits: it never runs, and the owner's chat
                                            says who withdrew it (only the owner confirms)
+    hub assistant change list [--days N] [--limit N] [--before NEXT]
+                                           what your Assistant did for you, with the words it acted on, and whether
+                                           each can be undone (and why not)
+    hub assistant change restore <id>      undo one of those changes as you; restoring it again changes nothing
+    hub origin show <ref>                  why an item is on your list: who made it, its cause (automation, rule,
+                                           parent task, bot), its siblings this week, and commands that stop it
     hub replay show [--from ISO] [--to ISO] [--bot B|--person P|--team T]
                                            what happened in a window (default the last 24 hours), as you may see it
     hub goal list [--owner me|X] [--all]   what you are for: your goals in order, the chain above
@@ -471,6 +477,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub brief [--since ISO]                alerts, who needs the person, what bots said since --since
     hub mcp stats [--days N] [--via LABEL] per-tool timing and answer size of assistants' calls
     hub needs-you start|next|respond|commit|abandon   a person's walk through what needs them (backend/batch.py)
+    hub needs-you show [--by bot|kind] [--limit N]    what needs you, counted as the board counts it, per kind and
+                                                      per bot, with each bot's newest items
     hub calendar list [--calendar EMAIL]
                                            appointments visible on a company calendar
     hub calendar schedule --title "..." --start ISO --end ISO [--calendar EMAIL]
@@ -1380,6 +1388,16 @@ def parser():
     s.add_argument("id", help="the card's proposal id (hub assistant proposals)")
     s.add_argument("--reason", default="", help="why, in one short sentence: the person reads it in their chat")
     s.set_defaults(fn="assistant withdraw")
+    change = assistant.add_parser("change", help="what your Assistant did for you, and undoing one of those changes") \
+        .add_subparsers(dest="subsub")
+    s = change.add_parser("list", help="the Assistant's changes for you, newest first, with the words it acted on")
+    s.add_argument("--days", type=int, help="how far back (default 30, at most 90)")
+    s.add_argument("--limit", type=int, help="changes per page (default 50, at most 100)")
+    s.add_argument("--before", help="the `next` of the page before, to read older changes")
+    s.set_defaults(fn="assistant change list")
+    s = change.add_parser("restore", help="undo one change as you; restoring it again changes nothing")
+    s.add_argument("id", help="the change's id (hub assistant change list)")
+    s.set_defaults(fn="assistant change restore")
     s = assistant.add_parser("proposals", help="the Confirm cards still waiting for their owner (find one to withdraw)")
     s.add_argument("--proposer", choices=["botops", "assistant"], default=None, help="only the cards one proposed")
     s.add_argument("--owner", default=None, help="only one person's cards, e.g. human:ana")
@@ -3010,6 +3028,10 @@ def parser():
     s.add_argument("--days", type=int)
     s.add_argument("--via", help="one assistant's token label, e.g. grok-bot")
     s.set_defaults(fn="mcp stats")
+    origin = sub.add_parser("origin", help="why an item is on a person's list").add_subparsers(dest="sub")
+    s = origin.add_parser("show", help="who made a task, message or approval, its cause, its siblings and what stops it")
+    s.add_argument("ref", help="a task id (or its first 8 characters), a message id or an approval id")
+    s.set_defaults(fn="origin show")
     bt = sub.add_parser("needs-you", help="a person's walk through what needs them: respond, commit "
                                           "(backend/batch.py)").add_subparsers(dest="sub")
     s = bt.add_parser("start", help="start the batch of the bot that most needs you, or resume the one in progress")
@@ -3034,6 +3056,10 @@ def parser():
     s = bt.add_parser("abandon", help="drop the batch without applying anything")
     s.add_argument("batch")
     s.set_defaults(fn="needs-you abandon")
+    s = bt.add_parser("show", help="what needs you, counted as the board counts it: per kind and per bot")
+    s.add_argument("--by", choices=["bot", "kind"], default="bot", help="print the counts per bot (default) or per kind")
+    s.add_argument("--limit", type=int, help="the newest items listed under each bot (default 5, at most 10)")
+    s.set_defaults(fn="needs-you show")
 
     runs = sub.add_parser("run", help="a bot's runs").add_subparsers(dest="sub")
     s = runs.add_parser("list", help="a bot's recent runs")
