@@ -133,6 +133,8 @@ pub async fn read_codex(profile: &crate::profiles::Profile, canceled: &AtomicBoo
     if tokio::time::timeout(Duration::from_secs(5), child.wait()).await.is_err() {
         let _ = child.kill().await;
     }
+    // Again after the child's shutdown wait: a sign-in during it makes this read someone else's as well.
+    let current = current && crate::accounts::read_started(&profile.name, "codex") == since;
     match result {
         Ok(reply) if current => weekly(&reply, crate::util::epoch_s()),
         _ => json!({"state": "failed"}),
