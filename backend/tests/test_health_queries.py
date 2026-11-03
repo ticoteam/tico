@@ -1,8 +1,11 @@
 """GET /api/v2/health reads each computer, its bots and its failed runs in batches, so the statements it takes grow by a
 constant (at most one a computer, for a computer's login hold) rather than by a few a computer or a bot."""
 import contextlib
+import random
+import uuid
 
-from backend.store import H
+from backend import queue_refusals as Q
+from backend.store import H, encode
 from backend.tests.test_api import api, headers, post, runner  # noqa: F401  (the api fixture)
 from backend.tests.test_run_backoff import at, setup
 from backend.tests.test_status_reads import busy
@@ -68,3 +71,33 @@ def test_health_takes_the_same_statements_however_many_computers_bots_and_failed
     assert many - few <= 12, (
         f"GET /api/v2/health takes {many} statements with 15 computers against {few} with 3: a read runs once per "
         "computer or bot again instead of once for the whole page. Read the rows for all of them at once.")
+
+
+def test_health_takes_the_same_statements_however_many_refused_queues_it_shows(api, monkeypatch):
+    """Each refused queue's job and message are read together, and its bots' access in one check, so a page that shows
+    more refused queues takes no more statements than one that shows fewer."""
+    rng = random.Random(7)                                 # ids decide which queues refuse: the same ones each run
+    monkeypatch.setattr(H, "new_id", lambda: str(uuid.UUID(int=rng.getrandbits(128), version=4)))
+    monkeypatch.setattr(H, "uuid7", lambda: str(uuid.UUID(int=rng.getrandbits(128), version=4)))
+    machine = setup(api, monkeypatch, tasks=2)
+    at(monkeypatch, api, "2026-10-24T12:00:00.000000Z")
+    busy(api, machine, 0, 40)
+    at(monkeypatch, api, "2026-10-24T12:40:00.000000Z")
+    store = api.app.state.store
+    with store.read() as c:
+        values = {f"busy-{k}": Q.current(c, store.settings, f"busy-{k}") for k in range(40)}
+    refusable = sorted(slug for slug, value in values.items() if value and value["reason"] != "lane_held")
+    assert len(refusable) >= 12, len(refusable)
+    statements, done = {}, 0
+    for count in (0, 4, 12):
+        with store.transaction() as c:
+            for slug in refusable[done:count]:                   # refused for over 12 hours, as the sweep leaves them
+                c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (Q.KEY + slug, encode(
+                    {**values[slug], "since": "2026-10-23T00:00:00.000000Z", "observed_at": H.now()})))
+        done = count
+        body, statements[count] = counted(api, monkeypatch, "/api/v2/health")
+        shown = next((row for row in body["checks"] if row["id"] == "queue_refused"), {}).get("items", [])
+        assert len(shown) == count, (count, len(shown))
+    assert statements[12] == statements[4], (
+        f"GET /api/v2/health takes {statements[12]} statements with 12 refused queues against {statements[4]} with 4: a "
+        "refused queue reads its bot's access, job or message on its own again instead of once for the page.")

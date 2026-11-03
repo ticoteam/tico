@@ -205,6 +205,7 @@ const CP_DRAW = {transparency: cpTransparency, editions: cpEditions, audiences: 
 function cpDraw(id) {
   const el = $('#cp-' + id); if (!el || !CP) return;
   el.innerHTML = CP.err[id] ? cpSection(id, '', cpFail(id, CP.err[id])) : CP_DRAW[id]();
+  if (CP.tab && id === 'transparency') cpDraw('readers');     // the Share dialog's People follow the level
 }
 // A write's result: read the part again and draw it, so the screen shows what the server holds.
 const cpReload = (...ids) => Promise.all(ids.map(id => cpLoad(CP, id)));
@@ -236,6 +237,7 @@ function cpClick(ev) {
   if (d.cpReaderEdit) return cpEditReader(d.cpReaderEdit);
   if (d.cpReaderRemove) return cpRemoveReader(d.cpReaderRemove);
   if ('cpNewInvite' in d) return void cpNewInvite();
+  if ('cpShareInvite' in d) return void cpShareInvite(b);
   if (d.cpInviteRevoke) return cpRevokeInvite(d.cpInviteRevoke);
 }
 function cpChange(ev) {
@@ -284,7 +286,8 @@ function cpTransparency() {
   // An install with its own reader address has nothing to set here. With a page domain, the address is what Open needs first.
   const set = !s.reader_origin && s.page_domain ? cpBtn('data-cp-address', s.slug ? 'Change address' : 'Set address') : '';
   const note = noWhere ? '<p class="cp-note" data-cp-no-address>No page address yet</p>' : privateOn ? '' : cpPrivateOff();
-  return cpSection('transparency', '', `<div class="cp-level">${seg}${address}${set}</div>${note}${CP.tab ? '' : cpLook(s)}`);
+  const row = `<div class="cp-level">${seg}${address}${set}</div>${note}`;
+  return CP.tab ? row : cpSection('transparency', '', row + cpLook(s));
 }
 async function cpCopyAddress(button) {
   const host = button.closest('dialog');
@@ -926,6 +929,7 @@ function cpInviteRow(x) {
   return `<li class="cp-reader" data-cp-invite="${esc(x.id)}"><span class="cp-reader-t"><span>${esc(`${state} · made ${finDayLabel(x.created_at)}`)}</span>${state === 'Open' && x.expires_at ? `<span class="muted">Expires ${esc(finDayLabel(x.expires_at))}</span>` : ''}</span>${state === 'Open' ? cpBtn(`data-cp-invite-revoke="${esc(x.id)}"`, 'Revoke') : ''}</li>`;
 }
 function cpReaders() {
+  if (CP.tab) return cpShareReaders();
   if (CP.readers === null) return cpSection('readers', '', skelRows(2, {dot: false}));
   if (!cpPrivateOn()) return cpSection('readers', '', cpPrivateOff());
   const adds = cpBtn('data-cp-add-reader', '+ Reader') + cpBtn('data-cp-import', 'CSV');
@@ -938,6 +942,40 @@ function cpReaders() {
     ${invites.length ? `<ul class="cp-readers">${invites.map(cpInviteRow).join('')}</ul>` : '<p class="muted cp-small">No links</p>'}`;
   const email = CP.emailAvailable ? '' : '<p class="cp-note" data-cp-email-off>Email is off on this install. Readers see new editions on the page.</p>';
   return cpSection('readers', CP.readers.length ? adds : '', email + people + links);
+}
+// The Share dialog's People: who has access and one line to add someone. Lists of links, CSV and per-reader settings stay
+// in Manage. Nothing to show while the page is Closed or private audiences are off (the level's note says why).
+function cpShareReaders() {
+  const auds = cpPrivateAudiences();
+  if ((CP.settings?.transparency || 'closed') === 'closed' || !cpPrivateOn() || !auds.length || CP.readers === null) return '';
+  const many = auds.length > 1, id = CP.pick.invites || auds[0].id;
+  const row = r => {
+    const names = (r.audiences || []).map(x => x.name).filter(Boolean).join(', ');
+    return `<li class="cp-reader" data-cp-reader="${esc(r.id)}"><span class="cp-reader-t"><b>${esc(r.name || r.email)}</b>${many || r.name ? `<span class="muted">${esc([r.name ? r.email : '', many ? names : ''].filter(Boolean).join(' · '))}</span>` : ''}</span>
+      <button type="button" class="ghost tmodal-x" data-cp-reader-remove="${esc(r.id)}" aria-label="Remove ${esc(r.email)}" title="Remove">✕</button></li>`;
+  };
+  const pick = many ? `<select name="audience" aria-label="Audience">${cpAudOptions(auds, id)}</select>` : `<input type="hidden" name="audience" value="${esc(id)}">`;
+  return `<h4 class="label cp-h">People</h4>${CP.readers.length ? `<ul class="cp-readers">${CP.readers.map(row).join('')}</ul>` : ''}${CP.readersNext ? cpBtn('data-cp-readers-more', 'Show more', 'ghost small cp-more') : ''}
+    <form class="cp-share-add" data-cp-share-add novalidate><input type="email" name="email" placeholder="Email" aria-label="Email" autocomplete="off">${pick}<button type="submit">Add</button></form>
+    ${cpBtn('data-cp-share-invite', 'Copy invite link', 'ghost small cp-share-invite')}`;
+}
+async function cpShareAdd(form) {
+  const email = form.email.value.trim(), audience = form.audience.value, host = form.closest('dialog');
+  if (!/^[^@\s]+@[^@\s]+$/.test(email)) return void toast('Enter an email', true, null, {host});
+  const button = form.querySelector('[type=submit]'); button.disabled = true;
+  try { CP.pick.invites = audience; await post('/v2/readers', {email, name: '', audience_ids: [audience]}); await cpReload('readers'); }
+  catch (e) { button.disabled = false; toast(e.message, true, null, {host}); }
+}
+// A one-time link for the chosen audience, straight to the clipboard. If the clipboard says no, the link is shown instead.
+async function cpShareInvite(button) {
+  const host = button.closest('dialog'), id = host?.querySelector('[data-cp-share-add] [name=audience]')?.value || CP.pick.invites;
+  if (!id) return;
+  CP.pick.invites = id;
+  let url = '';
+  try { url = (await post(`/v2/audiences/${cpId(id)}/invites`, {}))?.url || ''; }
+  catch (e) { return void toast(e.message, true, null, {host}); }
+  try { await navigator.clipboard.writeText(url); toast('Invite link copied', false, null, {host}); }
+  catch { cpShowInvite(id, url); }
 }
 const cpAudienceChecks = (checked = []) => `<fieldset class="cp-picks"><legend>Audiences</legend>${cpPrivateAudiences().map(a => `<label class="cp-check-l"><input type="checkbox" name="audience" value="${esc(a.id)}"${checked.includes(a.id) ? ' checked' : ''}>${esc(a.name)}</label>`).join('')}</fieldset>`;
 function cpAddReader() {
@@ -995,13 +1033,16 @@ async function cpNewInvite() {
   try {
     const r = await post(`/v2/audiences/${cpId(id)}/invites`, {});
     await cpReload('readers');
-    const dlg = cpDialog(`Invite to ${cpAudName(id)}`, `<label>Link<input name="url" readonly value="${esc(r?.url || '')}"></label><p class="cp-line">Works once. Shown only now.</p>${cpBtn('data-copy', 'Copy')}`, '', null);
-    dlg.querySelector('[data-copy]').onclick = async () => {
-      const input = dlg.querySelector('[name=url]');
-      try { await navigator.clipboard.writeText(input.value); toast('Copied', false, null, {host: dlg}); }
-      catch { input.select(); }
-    };
+    cpShowInvite(id, r?.url || '');
   } catch (e) { toast(e.message, true); }
+}
+function cpShowInvite(id, url) {
+  const dlg = cpDialog(`Invite to ${cpAudName(id)}`, `<label>Link<input name="url" readonly value="${esc(url)}"></label><p class="cp-line">Works once. Shown only now.</p>${cpBtn('data-copy', 'Copy')}`, '', null);
+  dlg.querySelector('[data-copy]').onclick = async () => {
+    const input = dlg.querySelector('[name=url]');
+    try { await navigator.clipboard.writeText(input.value); toast('Copied', false, null, {host: dlg}); }
+    catch { input.select(); }
+  };
 }
 function cpRevokeInvite(inviteId) {
   const id = CP.pick.invites;
@@ -1084,21 +1125,22 @@ async function cpTabFrame(state) {
   body.innerHTML = failure ? `<div class="cp-tab-line">${cpFail('frame', failure)}</div>`
     : `<iframe class="cp-frame" title="Company page" sandbox="allow-scripts" referrerpolicy="no-referrer" src="${esc(src)}"></iframe>`;
 }
-// Who can see it: the level, the address, the readers and invite links. The same parts the section draws, so they read,
-// warn and fail alike.
+// Who can see it: the level and address, then the people with access and one line to add someone. Everything else is
+// in Manage.
 function cpShareOpen() {
   document.querySelectorAll('dialog.cp-share').forEach(d => d.close());
   const dlg = document.createElement('dialog');
   dlg.className = 'tmodal cp-dlg cp-share';
   dlg.setAttribute('aria-label', 'Share');
   dlg.innerHTML = `<div class="tmodal-head"><b>Share</b><span class="spacer"></span><button type="button" class="ghost tmodal-x" data-close aria-label="Close">✕</button></div>
-    <div class="tmodal-body cp-share-body"><section class="cp-sec" id="cp-transparency"></section><section class="cp-sec" id="cp-readers"></section></div>`;
+    <div class="tmodal-body cp-share-body"><div id="cp-transparency"></div><div id="cp-readers"></div></div>`;
   document.body.appendChild(dlg);
   dlg.querySelector('[data-close]').onclick = () => dlg.close();
   dlg.onclose = () => dlg.remove();
   const body = dlg.querySelector('.cp-share-body');
   body.addEventListener('click', cpClick);
   body.addEventListener('change', cpChange);
-  cpDraw('transparency'); cpDraw('readers');
+  body.addEventListener('submit', ev => { const f = ev.target.closest('[data-cp-share-add]'); if (f) { ev.preventDefault(); void cpShareAdd(f); } });
+  cpDraw('transparency');
   dlg.showModal();
 }

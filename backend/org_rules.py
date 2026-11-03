@@ -81,7 +81,7 @@ SCHEMA = (
 def ensure(c):
     for statement in SCHEMA:
         c.execute(statement)
-    # A database made before `where:` got org_rules.where_terms from migration 0045.
+    # A database made before `where:` got org_rules.where_terms from migration 0046.
     D.ensure(c)
 
 

@@ -3,6 +3,8 @@ migration rolls back its DDL and its row and runs again once fixed, an applied f
 code must not open is refused before anything is written to it."""
 import gzip
 import hashlib
+import importlib.util
+import json
 import re
 import shutil
 import sqlite3
@@ -134,13 +136,13 @@ def test_an_existing_database_loses_the_redundant_task_indexes_once(tmp_path):
 
 
 def test_an_existing_database_loses_the_two_duplicate_indexes_once(tmp_path):
-    """Migration 0041 drops invariants_lease (a prefix of attempts_live_lease) and invariants_open_approvals (a copy of
+    """Migration 0042 drops invariants_lease (a prefix of attempts_live_lease) and invariants_open_approvals (a copy of
     approvals_open_created); the indexes that serve the same reads stay, and booting again changes nothing."""
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
         c.execute("CREATE INDEX invariants_lease ON attempts(lease_until) WHERE state IN ('leased','running')")
         c.execute("CREATE INDEX invariants_open_approvals ON approvals(created_at) WHERE decision IS NULL")
-        c.execute("DELETE FROM schema_migrations WHERE version>='0041' AND version NOT LIKE 'legacy_%'")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0042' AND version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
         indexes = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
@@ -152,7 +154,7 @@ def test_an_existing_database_loses_the_two_duplicate_indexes_once(tmp_path):
 
 
 def test_an_existing_database_loses_the_private_parties_index_and_the_parties_read_stays_covered(tmp_path):
-    """Migration 0041 drops tasks_private_parties, a prefix of tasks_private_status under the same WHERE. The private
+    """Migration 0042 drops tasks_private_parties, a prefix of tasks_private_status under the same WHERE. The private
     tasks' parties read (row_clock.PARTIES) names tasks_private_status and reads the index alone; booting again changes
     nothing."""
     from backend import row_clock
@@ -160,7 +162,7 @@ def test_an_existing_database_loses_the_private_parties_index_and_the_parties_re
     with sqlite3.connect(path) as c:
         c.execute("CREATE INDEX tasks_private_parties ON tasks(id, requester_id, owner_id, guest, private) "
                   "WHERE private IS NOT 0")
-        c.execute("DELETE FROM schema_migrations WHERE version>='0041' AND version NOT LIKE 'legacy_%'")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0042' AND version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
         indexes = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
@@ -306,7 +308,7 @@ def _shape(path):
 
 
 def test_an_older_threads_shape_gets_the_missing_columns_tables_triggers_and_search_index_once(tmp_path):
-    """Migration 0045: the threads schema the modules used to make on every start. A file missing some of it (columns
+    """Migration 0046: the threads schema the modules used to make on every start. A file missing some of it (columns
     added later, a helper table, an older trigger, the search index) ends with the shape a new file has, the new search
     index holds the messages already there, and a second boot changes nothing."""
     path = fresh(tmp_path)
@@ -328,7 +330,7 @@ def test_an_older_threads_shape_gets_the_missing_columns_tables_triggers_and_sea
         c.execute("INSERT INTO conversations(id,kind,created_at) VALUES('c-acme','direct','2026-01-01T00:00:00Z')")
         c.execute("INSERT INTO messages(id,conversation_id,sender_id,kind,body,created_at) "
                   "VALUES('m-acme','c-acme','human:ana','say','Acme quarterly memo','2026-01-01T00:00:00Z')")
-    _back_to_before(path, "0045")
+    _back_to_before(path, "0046")
     boot(path)
     once = snapshot(path)
     assert _shape(path) == new
@@ -340,7 +342,7 @@ def test_an_older_threads_shape_gets_the_missing_columns_tables_triggers_and_sea
 
 
 def test_a_start_puts_back_the_federation_state_row_a_devcopy_emptied(tmp_path):
-    """federation_states holds one row that Relay.status reads unguarded; migration 0045 makes it once, and every start
+    """federation_states holds one row that Relay.status reads unguarded; migration 0046 makes it once, and every start
     puts it back when a devcopy emptied the table."""
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
@@ -348,3 +350,125 @@ def test_a_start_puts_back_the_federation_state_row_a_devcopy_emptied(tmp_path):
     boot(path)
     with sqlite3.connect(path) as c:
         assert c.execute("SELECT singleton FROM federation_states").fetchall() == [(1,)]
+
+def test_an_existing_bots_runtime_model_and_host_move_into_its_config_then_the_columns_go(tmp_path):
+    """Migration 0043: a runtime, model or host the config lacks is copied into it (the config keeps what it has), and
+    the six legacy columns are dropped. cwd, thread_id and token_hash have nothing to move."""
+    path = fresh(tmp_path)
+    slug = "acme-bot"
+    with sqlite3.connect(path) as c:
+        for column in ("runtime", "model", "host", "cwd", "thread_id", "token_hash"):
+            c.execute(f"ALTER TABLE bots ADD COLUMN {column} TEXT")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES(?,?,'Acme Bot','low','active','2026-01-01T00:00:00Z')", (slug, slug))
+        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'human:ana')",
+                  (slug, '{"name":"x","reasoning_effort":"low","model":"kept-in-config"}'))
+        c.execute("UPDATE bots SET runtime='codex', model='column-model', host='keeper', cwd='/work/x', "
+                  "thread_id='t1', token_hash='h' WHERE id=?", (slug,))
+    _back_to_before(path, "0043")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        columns = {row[1] for row in c.execute("PRAGMA table_info(bots)")}
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+    assert not {"runtime", "model", "host", "cwd", "thread_id", "token_hash"} & columns
+    assert {"id", "slug", "effort", "state"} <= columns
+    # boot adds its own defaults to every config (profile, wake_preset, ...); only the three keys this moves are checked
+    assert {k: config.get(k) for k in ("name", "reasoning_effort", "model", "runtime", "host")} == {
+        "name": "x", "reasoning_effort": "low", "model": "kept-in-config", "runtime": "codex", "host": "keeper"}
+
+
+def _run_0043(c):
+    spec = importlib.util.spec_from_file_location(
+        "m0043", Path(__file__).resolve().parents[1] / "migrations" / "0043_drop_bot_legacy_columns.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.up(c)
+
+
+def test_a_null_config_takes_the_columns_and_one_not_an_object_stops_0043(tmp_path):
+    """Migration 0043: a config of JSON null counts as {} and gets the column values; a config that is not a JSON object
+    stops the migration instead of dropping a runtime or model it cannot copy."""
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        for column in ("runtime", "model", "host", "cwd", "thread_id", "token_hash"):
+            c.execute(f"ALTER TABLE bots ADD COLUMN {column} TEXT")
+        for slug, config in (("null-bot", "null"), ("list-bot", "[]")):
+            c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at,runtime,model) "
+                      "VALUES(?,?,'B','low','active','2026-01-01T00:00:00Z','codex','m1')", (slug, slug))
+            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'human:ana')", (slug, config))
+    with sqlite3.connect(path) as c:
+        with pytest.raises(RuntimeError, match="list-bot"):
+            _run_0043(c)
+    with sqlite3.connect(path) as c:
+        c.execute("UPDATE bot_config SET config='{}' WHERE bot='list-bot'")
+    _back_to_before(path, "0043")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='null-bot'").fetchone()[0])
+    assert (config.get("runtime"), config.get("model")) == ("codex", "m1")
+
+
+def _old_kpis(c):
+    """kpis as a database before 0044 has it: goal_id (NOT NULL, '' for none) and the kpis_goal index."""
+    c.execute("ALTER TABLE kpis ADD COLUMN goal_id TEXT NOT NULL DEFAULT ''")
+    c.execute("CREATE INDEX kpis_goal ON kpis(goal_id)")
+
+
+def _old_kpi(c, kid, goal, target):
+    c.execute("INSERT INTO kpis(id,slug,name,unit,target,goal_id,owner_id,direction,cadence,created_at,created_by_id,"
+              "definition_version,updated_at) VALUES(?,?,?,'',?,?,'company','up','weekly','2026-01-01T00:00:00Z',"
+              "'human:ana',1,'2026-01-01T00:00:00Z')", (kid, kid, kid.title(), target, goal))
+
+
+def test_kpi_goal_id_goes_and_a_kpi_taken_off_its_goal_stays_off(tmp_path):
+    """Migration 0044 drops kpis.goal_id and its index. A link that exists keeps its own target; a KPI whose goal_id has
+    no link (a person took it off the goal) is not linked again. kpis.target stays."""
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        for goal in ("g-old", "g-linked"):
+            c.execute("INSERT INTO goals(id,title,owner_id,created_at,created_by_id,updated_at) VALUES(?,'Grow revenue',"
+                      "'company','2026-01-01T00:00:00Z','human:ana','2026-01-01T00:00:00Z')", (goal,))
+        _old_kpis(c)
+        _old_kpi(c, "k-off", "g-old", 7.5)
+        _old_kpi(c, "k-linked", "g-linked", 4)
+        c.execute("INSERT INTO goal_kpis(id,goal_id,kpi_id,kind,target,deadline,created_at,created_by_id,updated_at,"
+                  "updated_by_id) VALUES('k-linked','g-linked','k-linked','improve',9,'2026-12-31','2026-01-01T00:00:00Z',"
+                  "'human:ana','2026-01-01T00:00:00Z','human:ana')")
+    _back_to_before(path, "0044")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        columns = {row[1] for row in c.execute("PRAGMA table_info(kpis)")}
+        links = {r[0]: r[1:] for r in c.execute("SELECT kpi_id, goal_id, kind, target FROM goal_kpis")}
+        indexes = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        targets = dict(c.execute("SELECT id, target FROM kpis"))
+    assert "goal_id" not in columns and "kpis_goal" not in indexes
+    assert links == {"k-linked": ("g-linked", "improve", 9)}
+    assert targets == {"k-off": 7.5, "k-linked": 4}
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
+def test_a_standalone_kpi_keeps_its_target_and_the_migration_runs(tmp_path):
+    """Migration 0044 does not stop on a KPI that has a target and no goal, nor on one whose goal is gone: each stays
+    a standalone KPI with its target on the KPI, and links to nothing."""
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        _old_kpis(c)
+        _old_kpi(c, "k-loose", "", 3)
+        _old_kpi(c, "k-orphan", "g-deleted", 5)
+    _back_to_before(path, "0044")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        columns = {row[1] for row in c.execute("PRAGMA table_info(kpis)")}
+        targets = dict(c.execute("SELECT id, target FROM kpis"))
+        links = c.execute("SELECT count(*) FROM goal_kpis WHERE kpi_id IN ('k-loose','k-orphan')").fetchone()[0]
+    assert "goal_id" not in columns and "target" in columns
+    assert targets == {"k-loose": 3, "k-orphan": 5} and links == 0
+
+
+def test_the_threads_delivery_trigger_follows_hubdbs_task_news_rule():
+    """Migration 0046 makes threads_primary_delivery from literal SQL; the condition must stay hubdb's
+    delivery_counts_sql, which every read side uses, or task news would wake people again on a new install."""
+    module = importlib.import_module("backend.migrations.0046_native_threads_schema")
+    assert H.delivery_counts_sql("NEW", "NEW.recipient_id") in module.THREAD_TRIGGERS["threads_primary_delivery"]

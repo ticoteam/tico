@@ -1859,7 +1859,6 @@ def needs_marks(items):
     return marks, version
 
 
-FLEET_CACHE_S = 15
 NEEDS_IDS_MAX = 100     # the most a live `needs` event names; more changed than that reads the list whole
 NEEDS_PAGE = 50         # a page of Needs you when `cursor` comes without `limit`
 NEEDS_PAGE_MAX = 200
@@ -1915,13 +1914,6 @@ def needs_actor(it, me):
             actor = (next((a for a in options if H.is_bot(a) and a != me), None)
                      or next((a for a in options if a and a != me), None))
     return actor
-_FLEET_CACHE = {}
-
-
-def fleet_snapshot_cached(c, auth, identity, task_view, ttl=FLEET_CACHE_S):
-    """Build a fresh snapshot so participant changes revoke every read immediately."""
-    # Participant changes revoke reads immediately, including already warmed snapshots.
-    return fleet_snapshot(c, auth, identity, task_view)
 
 
 def fleet_snapshot(c, auth, identity, task_view):
@@ -2921,7 +2913,7 @@ def runnable_choices(c, who, auth, settings):
     # computer, shared by its bots) and each bot's config are read once here, not once per check.
     for row in c.execute("SELECT bot,runner_id FROM assignments").fetchall():
         read_cache.prime(c, PLACED_SQL, {(row["bot"],): read_cache.one(c, RUNNER_SQL, (row["runner_id"],))})
-    rows = c.execute("SELECT a.bot,b.runtime,bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
+    rows = c.execute("SELECT a.bot,bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
                      "LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE b.state<>'archived' ORDER BY a.bot").fetchall()
     read_cache.prime(c, CONFIG_SQL, {(row["bot"],): row for row in rows})
     for row in rows:
@@ -2929,7 +2921,7 @@ def runnable_choices(c, who, auth, settings):
         if not auth.bot_manager(c, who, bot):
             continue
         # The bot's own harness too: the picker keeps it shown when its provider is no longer offered.
-        own = resolve_harness(H._json(row["config"], {}) or {}, row["runtime"])
+        own = resolve_harness(H._json(row["config"], {}) or {}, None)
         for harness in sorted(set(harnesses) | ({own} if own in HARNESS_BY_ID and not HARNESS_BY_ID[own].get("external") else set())):
             runtime = HARNESS_BY_ID[harness]["runtime"]
             answer = runtime_choice(c, bot, runtime, who, computers, harness=harness)

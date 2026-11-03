@@ -5,8 +5,8 @@ track builds against this page. Owner: `threads/core`. A change here is announce
 ("contract:"), and additive changes are preferred over renames.
 
 Terms in UI and docs: **Thread, Home, DM, Sub-thread, Call**. Internally the table stays `conversations` and a
-thread id **is** a conversation id. `bots.thread_id` and `turns.thread_id` are provider sessions: never read or
-reuse them as thread ids.
+thread id **is** a conversation id. `turns.thread_id` (like `bot_sessions`) is a provider session: never read or
+reuse it as a thread id.
 
 ## 0. Files core owns
 
@@ -25,7 +25,7 @@ Don't edit these except where your brief says so; ask core in your report.
 
 ## 1. Schema
 
-The columns, tables, triggers and indexes below are migration `backend/migrations/0045_native_threads_schema.py`, which
+The columns, tables, triggers and indexes below are migration `backend/migrations/0046_native_threads_schema.py`, which
 also makes the search index and the tables of the thread helpers, the Slack bridge, Tico Meet calls and federation. It
 runs once; a change to any of that SQL is a new migration. The five message indexes are built by `threads.migrate` after
 its backfill. The one-time data migration (§7) is recorded under `registry_metadata` key `threads-migration` and runs
@@ -482,10 +482,12 @@ threads.unread(c, viewer, thread_id) -> {"unread": n, "activity": bool}
 ```
 - Join: read up to now. Deletes and backfill (imports, migration, replays) are never unread. Losing access: the
   follower row is dropped on the next read. A task's own thread is read up to now by its maker when the task is made
-  (`threads.task_opened`), and a requester who did not make it gets its first notice as a silent delivery (mode `none`).
+  (`threads.task_opened`). Task news (a keeper message with `refs.task`, `hubdb.task_news`) is the task's own history:
+  it is written to the task's conversation and no person gets a delivery for it, so the requester who did not make the
+  task hears nothing in the thread (no unread, Inbox row, digest or push). Bots still get it as a delivery.
 - Unread count for a viewer = messages in the thread with `seq > last_read_seq` that are human-authored or
-  addressed to that viewer (a delivery row for them), excluding their own. Other bot posts are **activity** (a
-  dot, never a count).
+  addressed to that viewer (a delivery row for them, except task news, which no person has a delivery for), excluding
+  their own. Other bot posts are **activity** (a dot, never a count).
 
 Retention: a root may set `conversations.retention_days` (1 to `RETENTION_MAX_DAYS`; null keeps messages for good;
 never on a task or meeting thread). `backend/thread_retention.py` deletes what is past it in the root and its sub-threads,

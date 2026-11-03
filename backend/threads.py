@@ -110,9 +110,9 @@ def _now():
 
 
 # ----------------------------------------------------------------------------- schema
-# The tables, columns, triggers and other indexes are migration backend/migrations/0045_native_threads_schema.py. The
+# The tables, columns, triggers and other indexes are migration backend/migrations/0046_native_threads_schema.py. The
 # message indexes are built here, by migrate, after its one-time backfill (building them over unstamped rows first is
-# slow, and it stalls); 0045 makes them only on a file whose backfill already ran.
+# slow, and it stalls); 0046 makes them only on a file whose backfill already ran.
 _MESSAGE_INDEXES = (
     # Not unique: an insert copying another row's seq or origin must not fail before the stamp trigger replaces them.
     # The sequence makes seqs unique; message_revisions makes (origin_id, revision) unique.
@@ -160,7 +160,7 @@ def _backfill_sql(r):
 
 def ensure(c):
     """Every start (hubdb.migrate): the one data step a file migrated before it existed still needs. The schema is
-    migration 0045."""
+    migration 0046."""
     _neutral_titles_once(c)
 
 
@@ -1236,9 +1236,11 @@ def _deliver_person(c, thread, root, message, person, reason, replay, warnings):
             return None
         unsolicited = True
     did = _insert_delivery(c, message, person, thread, root, "queue", reason if reason in REASONS else "member")
-    if unsolicited:
+    if unsolicited and did:
         c.execute("UPDATE message_deliveries SET unsolicited=1 WHERE id=?", (did,))
     _follow(c, thread["id"], person, "mentioned" if reason == "mention" else "joined", (message.get("seq") or 1) - 1)
+    if did is None:
+        return None
     return {"recipient": person, "mode": "queue", "reason": reason}
 
 
@@ -1381,6 +1383,10 @@ def _outside(c, thread_id):
 
 
 def _insert_delivery(c, message, recipient, thread, root, mode, reason, *, state="pending"):
+    """One delivery row, or None when the message is task news a person gets no delivery for (hubdb.task_news): it stays
+    in the task's conversation only. Every person's delivery in Python passes here (_deliver_person, task_opened)."""
+    if recipient.startswith("human:") and H.task_news(message.get("sender_id"), message.get("refs")):
+        return None
     did = _new_id()
     now = _now()
     c.execute("INSERT OR IGNORE INTO message_deliveries(id,message_id,recipient,thread_id,root_id,mode,reason,cause,"
@@ -1876,14 +1882,17 @@ def remote_member(c, root, actor):
 
 
 def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None, via=None,
-         origin=None, checked=None, attachments=None, as_actor=None, start=None, in_reply_to=None):
+         origin=None, checked=None, attachments=None, as_actor=None, start=None, in_reply_to=None, reach=False):
     """Write a message (contract §3.1). Inside the caller's write transaction; `checked` is the org-rule verdict its
     preflight returned outside it. `as_actor`: a remote author (federation, spec §7.2), only for the keeper writing
     `via="peer"`, and only in the signing install's namespace (`<kind>:<name>@<origin install>`).
 
     A post that would make a thread (`start`: a new thread's `create` arguments, or `{"dm": [...], "title"}`, with
     `thread_id` None; or a `parent_message_id` with no sub-thread yet) is checked first: a held message makes
-    nothing, and its Send anyway replays this same post."""
+    nothing, and its Send anyway replays this same post.
+
+    `reach`: the post is a bot's own write through the API, so whoever it reaches must be in the bot's reach
+    (backend/reach.py check_post); a run's reply to what woke it, and a held post a person sends anyway, are not."""
     actor, v = _actor_of(principal)
     if as_actor is not None:
         install = str((origin or {}).get("install") or "")
@@ -1959,6 +1968,10 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
     elif audience_of(root_of(c, thread)) in ("personal", "participants") and not thread.get("parent_id"):
         others = [a for a in _dm_members(c, root_of(c, thread)) if a != actor]
         target = others[0] if len(others) == 1 else None
+    if reach and v is not None and as_actor is None:
+        from . import reach as R
+        R.check_post(c, v.who, thread, [a for a, _ in found], target if target and not str(target).startswith(
+            OUTSIDE_PREFIXES) else None, in_reply_to=in_reply_to)
     if checked is not None:
         # The org-rule verdict its preflight returned, applied inside the write: a hold writes nothing (no message, no
         # delivery) and answers with the hold; a warning goes on the recipients' copy. The payload is the body the
@@ -2791,9 +2804,8 @@ def _read_to(c, row, actor, seq):
 
 def task_opened(c, conversation, actor, requester, notice):
     """A task's own thread, as hubdb.task_create makes it (a thread of its own, not a chat it was filed from). Its maker
-    reads the thread up to now, so the notice their own action wrote is not unread for them. A requester who did not
-    make the task hears of it as new: a silent delivery (mode none, which wakes and pushes nothing), so the thread
-    lists in the sidebar until they read it."""
+    reads the thread up to now, so the notice their own action wrote is not unread for them. The requester gets no
+    delivery for the "New task from" notice: it is task news (hubdb.task_news), shown on the task only."""
     row = thread_row(c, conversation["id"])
     if row is None:
         return
@@ -2823,7 +2835,8 @@ def unread_message_sql(m="m"):
     that counts unread (the thread, the sidebar, DMs, email digests) reads this one rule."""
     return (f"{m}.deleted_at IS NULL AND {m}.sender_id<>? AND NOT {_backfill_sql(m)} "
             f"AND ({m}.sender_id LIKE 'human:%' OR EXISTS (SELECT 1 "
-            f"FROM message_deliveries unread_d WHERE unread_d.message_id={m}.id AND unread_d.recipient=?))")
+            f"FROM message_deliveries unread_d WHERE unread_d.message_id={m}.id AND unread_d.recipient=? "
+            f"AND {H.delivery_counts_sql(m, 'unread_d.recipient')}))")
 
 
 def unread(c, v, thread_id, *, follower=None):
@@ -3267,7 +3280,8 @@ def _branch_stats(c, v, branches, below):
             f"WITH cut(tid,below,mark) AS (VALUES {cuts}) SELECT cut.tid, COUNT(*), SUM(m.seq<cut.below), "
             "SUM(m.seq<cut.below AND m.seq>cut.mark AND m.sender_id<>?), "
             "SUM(m.seq>cut.mark AND m.sender_id<>? AND (m.sender_id LIKE 'human:%' OR EXISTS (SELECT 1 FROM "
-            "message_deliveries d WHERE d.message_id=m.id AND d.recipient=?))) "
+            "message_deliveries d WHERE d.message_id=m.id AND d.recipient=? "
+            f"AND {H.delivery_counts_sql('m', 'd.recipient')}))) "
             "FROM cut JOIN messages m ON m.conversation_id=cut.tid WHERE m.seq IS NOT NULL AND m.deleted_at IS NULL "
             "AND m.restricted=0 AND m.legacy_audience IS NULL GROUP BY cut.tid", (*args, me, me, me)):
         stats[r[0]].update(count=r[1], older=r[2] or 0, unseen=r[3] or 0, unread=r[4] or 0)
@@ -3577,6 +3591,7 @@ def _sidebar_page(c, v, cursor, limit, sort):
     to_viewer = ("r.id IN (SELECT s.root_id FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
                  "JOIN conversations s ON s.id=d.thread_id LEFT JOIN thread_followers f ON f.thread_id=s.id "
                  "AND f.actor=d.recipient WHERE d.recipient=:me AND d.state IN ('pending','delivered','capped','held') "
+                 f"AND {H.delivery_counts_sql('m', 'd.recipient')} "
                  f"AND {_SUBTREE_OPEN} AND m.seq>{mark} AND m.sender_id<>:me AND m.deleted_at IS NULL)")
     place = f"CASE WHEN {is_needing} THEN 0 WHEN NOT {is_history} AND ({by_person} OR {to_viewer}) THEN 1 ELSE 2 END"
     from . import thread_rank
@@ -3743,7 +3758,7 @@ def migrate(c):
     Resumable. The per-message backfill runs in chunks of MIGRATION_CHUNK rows, each a transaction of its own that
     also records how far it got (`threads-migration-progress`), so a crash or a restart resumes there and the write
     lock is held for one chunk at a time. Each step is idempotent per row, so a chunk that ran before a crash runs
-    again harmlessly. The message indexes are built after the backfill (migration 0045 skips them until then).
+    again harmlessly. The message indexes are built after the backfill (migration 0046 skips them until then).
     Inside a caller's transaction the chunks join it, and the whole migration is one transaction, as before."""
     if migrated(c):
         return False

@@ -127,8 +127,8 @@ def test_the_journey_seeds_an_install_whose_starter_bot_has_its_own_id(tmp_path)
     boot(path)
     with sqlite3.connect(path) as c:
         if not c.execute("SELECT 1 FROM bots WHERE slug='coo'").fetchone():
-            c.execute("INSERT INTO bots(id,slug,display_name,runtime,state,created_at) "
-                      "VALUES('0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b','coo','COO','codex','active','2026-01-01T00:00:00Z')")
+            c.execute("INSERT INTO bots(id,slug,display_name,state,created_at) "
+                      "VALUES('0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b','coo','COO','active','2026-01-01T00:00:00Z')")
         own = c.execute("SELECT id FROM bots WHERE slug='coo'").fetchone()[0]
     assert own != "coo"
     fixture.seed_into(str(path))

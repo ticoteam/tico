@@ -97,7 +97,7 @@ def test_covering_indexes_return_the_same_rows(tmp_path):
         conn.commit()
         names = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
         assert {"tasks_private_status", "conversations_id_task"} <= names
-        assert "tasks_private_parties" not in names     # a prefix of tasks_private_status (migration 0041)
+        assert "tasks_private_parties" not in names     # a prefix of tasks_private_status (migration 0042)
         id_plan = " ".join(row[3] for row in conn.execute("EXPLAIN QUERY PLAN SELECT id FROM tasks"))
         assert "COVERING INDEX" in id_plan
         plain = [tuple(row) for row in conn.execute(

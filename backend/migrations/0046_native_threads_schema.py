@@ -140,7 +140,9 @@ THREAD_TRIGGERS = {
     "threads_primary_delivery": (
         'CREATE TRIGGER threads_primary_delivery AFTER INSERT ON messages WHEN '
         "COALESCE(NEW.recipient_id,'')<>'' AND NOT COALESCE(json_extract(CASE WHEN json_valid(NEW.refs) THEN "
-        "NEW.refs END,'$.carries'),'')<>'' BEGIN INSERT OR IGNORE INTO "
+        "NEW.refs END,'$.carries'),'')<>'' AND NOT (NEW.recipient_id LIKE 'human:%' AND (NEW.sender_id='keeper' AND "
+        "COALESCE(json_extract(CASE WHEN json_valid(NEW.refs) THEN NEW.refs END,'$.task'),'')<>'')) "
+        "BEGIN INSERT OR IGNORE INTO "
         'message_deliveries(id,message_id,recipient,thread_id,root_id,mode,reason,cause,state,revision,'
         'delivered_at,read_at,created_at,updated_at,unsolicited) '
         'VALUES(lower(hex(randomblob(16))),NEW.id,NEW.recipient_id,NEW.conversation_id,(SELECT '
