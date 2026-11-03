@@ -18,8 +18,7 @@ cloud machine" under Computer).
   every bot on it has had no turn out and no activity for its Pause after (`pause_minutes`: 30 by default, whole
   minutes from 5 to 1440, NULL for the default; Always on never pauses). Its size, Pause after and Always on are the
   company's, set by owners and admins (`POST /api/v2/cloud-machines/shared`, which takes `pause_minutes` too). They can
-  also delete it, to replace a
-  broken one (`DELETE /api/v2/cloud-machines/shared`): HQ deletes its disk, its computer is revoked, its size, Always on
+  also delete it, to replace a broken one (`DELETE /api/v2/cloud-machines/shared`): HQ deletes its disk, its computer is revoked, its size, Always on
   and members stay, and a member's next work makes a fresh one. The row keeps the old id as `deleted`: HQ keeps the
   machine live until boat confirms, and a create meanwhile answers with it, which is not taken for the new one. A bot's own machine is deleted once the bot runs
   elsewhere (`DELETE /api/v2/bots/{bot}/cloud-machine`).

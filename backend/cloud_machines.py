@@ -22,10 +22,9 @@ A machine is a boat.dev VM Tico HQ owns (tico-services); HQ keeps the boat key, 
 shared one, so each is made once. HQ counts the shared machine as one machine against its caps.
 
 One row per bot (`cloud_machines`): where it runs (`mode` cloud, or computer: any other Computer), on which cloud
-machine (`placement` shared, the default, or own), its own machine's size, Always on and Pause after, and that machine as
-HQ last described it. The shared machine is one more row, keyed SHARED, with the company's size, Always on and Pause
-after for it. A bot's
-placement defaults by role when its row is made (`default_placement`): `own` for a bot from a template in OWN_TEMPLATES
+machine (`placement` shared, the default, or own), its own machine's size, Always on and Pause after, and that machine
+as HQ last described it. The shared machine is one more row, keyed SHARED, with the company's size, Always on and Pause
+after for it. A bot's placement defaults by role when its row is made (`default_placement`): `own` for a bot from a template in OWN_TEMPLATES
 (the video producer) or in the Engineering department of the team chart, `shared` for every other; a person switches
 it either way. Off a cloud company (cloud_access.state is None) there are no rows, the option is hidden and nothing here
 runs; on one, the same until HQ has listed its sizes (`offered`). On one, a bot with no computer defaults to a cloud
@@ -1242,7 +1241,8 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
         if moving and target and chose and MS.is_admin(auth, who):
             lend_plans(c, execution, bot, target, who.actor)
     H.event(c, who.actor, "cloud_machine.changed", bot, {
-        key: after[key] for key in ("mode", "placement", "size", "always_on", "pause_minutes") if after[key] != before[key]})
+        key: after[key] for key in ("mode", "placement", "size", "always_on", "pause_minutes")
+        if after[key] != before[key]})
     return view(c, bot, execution.store.settings)
 
 
@@ -1322,8 +1322,8 @@ def remove(store, hq, who, auth, key):
         current = removable(c, auth, who, key)
         if current["runner_id"]:
             c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), current["runner_id"]))
-        # The machine goes; the choices stay (size, Always on, Pause after, where the bot runs): a bot's own is not made again unless
-        # someone picks it, and the shared one is made again at a member's next work (or at once if Always on). Its id
+        # The machine goes; the choices stay (size, Always on, Pause after, where the bot runs): a bot's own is not made
+        # again unless someone picks it, and the shared one is made again at a member's next work (or at once if Always on). Its id
         # stays, as deleted, as never_enrolled leaves it: a create before boat confirms the delete gets this machine
         # back from HQ (idempotent on key), which `act` takes for no new one and tries again later.
         save(c, key, runner_id=None, state="deleted", machine_size=None, started_at=None,
