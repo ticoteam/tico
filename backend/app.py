@@ -1540,7 +1540,11 @@ def create_app(settings=None):
         if body.conversation_id:
             conv = auth.conversation(c, who, body.conversation_id, write=True)
             from . import threads
-            if to not in threads.legacy_participants(c, conv):
+            if conv.get("audience") == "home":
+                # A bot's Home is read by its readers, not by its participant list (which names the bot alone).
+                if not threads.readable(c, threads.actor_viewer(c, to), conv["id"]):
+                    raise Problem("forbidden", "Recipient is not a conversation participant", 403)
+            elif to not in threads.legacy_participants(c, conv):
                 raise Problem("forbidden", "Recipient is not a conversation participant", 403)
         if body.in_reply_to:
             msg = H.message(c, body.in_reply_to)

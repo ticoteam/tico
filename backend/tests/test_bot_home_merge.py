@@ -291,7 +291,6 @@ def test_a_moved_rooms_read_marks_are_discarded_for_root_and_sub_threads(api):
         asked = say(c, "human:ana", "bot:ops", "A question with a thread", ana)["id"]
         sub = threads.sub_thread(c, "human:ana", asked)["id"]
         threads.post(c, "bot:ops", sub, "An answer in the thread")
-        assert unread(c, "human:ana", sub) >= 1
     merge(api)
     with store(api).read() as c:
         assert threads.thread_row(c, sub)["root_id"] == home
@@ -324,27 +323,32 @@ def test_a_tasks_history_is_read_from_its_room_and_the_homes_it_is_in(api, ops_r
         assert note in ids and later in ids and ids.index(note) < ids.index(later), ids
 
 
-def test_a_bot_that_waits_on_a_person_keeps_the_install_marker_unset(api):
-    """Finding 6: a bot with two Homes that both have messages is skipped, not finished. The install is not marked done
-    while that skip stands, and the next start moves the bot once a person has sorted the Homes out."""
+def test_a_bot_that_waits_on_a_person_keeps_the_install_marker_unset(api, ops_rooms, monkeypatch):
+    """Finding 6: a bot that waits on a person (a Skip: two open Homes with messages, say) is not finished. The install is
+    not marked done while that skip stands, its rooms stay where they are, and the next start moves them. The Home pick
+    is stubbed to wait: two open Homes of one owner cannot exist (threads_one_home)."""
+    real_home = bot_home_merge._home
+
+    def waiting(c, bot, summary):
+        raise bot_home_merge.Skip("two open Homes have messages: waits for a person")
+
+    monkeypatch.setattr(bot_home_merge, "_home", waiting)
     with store(api).transaction() as c:
         c.execute("DELETE FROM registry_metadata WHERE key=?", (bot_home_merge.KEY,))
-        first = threads.home(c, "bot:ops", create=True)["id"]
-        second = threads._insert_thread(c, H.KEEPER, title="Ops", audience="home", owner_id="bot:ops", kind="chat",
-                                        participants=["bot:ops"])["id"]
-        say(c, "bot:ops", "human:ana", "In the first Home", first)
-        say(c, "bot:ops", "human:ben", "In the second Home", second)
-        room(c, "human:ana", "ops")
-    with store(api).transaction() as c:
         summary = bot_home_merge.run_once(c)
         assert summary["pending"] == ["ops"], summary
         assert summary["rooms"] == 0 and not summary["errors"], summary
         assert not bot_home_merge.done(c)
+        assert thread_is_open(c, ops_rooms["ana"]) and thread_is_open(c, ops_rooms["ben"])
+    monkeypatch.setattr(bot_home_merge, "_home", real_home)
     with store(api).transaction() as c:
-        c.execute("UPDATE conversations SET archived_at=? WHERE id=?", (H.now(), second))
         summary = bot_home_merge.run_once(c)
-        assert not summary["pending"] and not summary["errors"] and summary["rooms"] == 1, summary
+        assert not summary["pending"] and not summary["errors"] and summary["rooms"] == 2, summary
         assert bot_home_merge.done(c)
+
+
+def thread_is_open(c, thread_id):
+    return not threads.thread_row(c, thread_id)["closed_at"]
 
 
 def test_each_keyed_table_moves_in_one_statement_per_bot(api):

@@ -128,12 +128,13 @@ def home_for(c, conversation_id, *, create=True):
 
 def home_for_chat(c, person, bot_ref, *, create=True):
     """The Home a person's chat with this bot goes into once the bot's chats have moved (rooms.personal_room, the chat and
-    work rooms, a bot's message with no room named). None where the move leaves the chat as it is: the Assistant and the
-    Strategy Bot, a bot synced from an outside app, a Home linked to another install, a person who may not read the
-    Home, and a bot with no Home when `create` is False."""
+    work rooms, a bot's message with no room named). Only a covered bot is one whose rooms the move took (it has
+    home_merges rows); a bot the move never reached, and a fresh install's, keep their chats as they are. None where the
+    move leaves the chat as it is: the Assistant and the Strategy Bot, a bot synced from an outside app, a Home linked to
+    another install, a person who may not read the Home, and a bot with no Home when `create` is False."""
     from . import threads
     bot = H.resolve_bot(c, bot_ref) if bot_ref else None
-    if not bot or {bot["id"], bot["slug"]} & _excluded_bots() or _synced(c, bot):
+    if not bot or {bot["id"], bot["slug"]} & _excluded_bots() or not _covered(c, bot["id"]) or _synced(c, bot):
         return None
     home = threads.home(c, "bot:" + bot["id"], create=create)
     if home is None:
@@ -152,6 +153,14 @@ def history_ids(c, conversation_id):
     if row is not None:
         ids += [row[0], home_for(c, conversation_id, create=False)]
     return list(dict.fromkeys(ids))
+
+
+def _covered(c, bot_id):
+    """Whether the move took this bot's rooms: its chats are its Home's now."""
+    try:
+        return c.execute("SELECT 1 FROM home_merges WHERE bot_id=? LIMIT 1", (bot_id,)).fetchone() is not None
+    except sqlite3.OperationalError:      # a database from before migration 0060
+        return False
 
 
 def _moved(c, conversation_id):
