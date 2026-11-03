@@ -968,7 +968,8 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     which = (f"AND (j.bot_id=? OR {person}) " if bot and people else "AND j.bot_id=? " if bot
              else f"AND {person} " if people else "")
     # A send the duplicate trigger dismissed (wake_presets.HOLD_TRIGGER) repeats a run still going: the chat shows that run.
-    job = c.execute("SELECT j.*,m.sender_id AS sender,a.state AS attempt_state,a.lease_until,a.stop_requested_at "
+    # person_sent: the message is a person's, or the keeper carrier of one (the sender alone is the keeper).
+    job = c.execute(f"SELECT j.*,m.sender_id AS sender,{person} AS person_sent,a.state AS attempt_state,a.lease_until,a.stop_requested_at "
                     "FROM jobs j JOIN messages m ON m.id=j.message_id "
                     "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
                     "AND coalesce(json_extract(m.refs,'$.maintenance'),'')!='checkpoint' "
@@ -1007,7 +1008,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
                                "WHERE m.conversation_id=? AND j.bot_id=? AND a.state IN ('leased','running') LIMIT 1",
                                (cid, job["bot_id"])).fetchone()
             label, readiness_reason = queued_label(c, job["bot_id"], location, settings,
-                                                   human=H.is_human(message.get("sender_id") or ""), behind=bool(behind),
+                                                   human=bool(job["person_sent"]), behind=bool(behind),
                                                    queued=(message.get("refs") or {}).get("delivery") == "queue")
             if ((H.status(c, job['bot_id']) or {}).get('state') == 'limited'
                     and (reason := login_holds.fallback_resume_reason(c, job['attempt_id']))):
@@ -1026,7 +1027,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
         execution = {"job_id": job["id"], "message_id": job["message_id"], "bot_id": job["bot_id"],
                      "attempt_id": job["attempt_id"], "state": state, "label": label,
                      "text": "\n\n".join(p["text"] for p in parts if p["kind"] != "tool"), "parts": parts,
-                     "from_person": H.is_human(job["sender"]), **location}
+                     "from_person": bool(job["person_sent"]), **location}
         if omitted:
             execution["parts_omitted"] = omitted
         if waiting:
