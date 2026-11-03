@@ -260,8 +260,9 @@ def test_legacy_runner_preparation_survives_upgrade_and_three_minutes(api, monke
         assert start_places.managed(c, fresh['id'])
 
 
-def test_legacy_wait_keeps_capacity_until_its_unchecked_start_finishes(api):
-    """A worker without start-place support cannot release capacity then start over the limit."""
+def test_legacy_wait_takes_one_of_the_two_claims_the_limit_allows_until_its_unchecked_start_finishes(api):
+    """A worker without start-place support keeps its claim while it waits. Claims go on to twice the limit (2 here),
+    so the wait leaves one claim for another bot and the start it has not confirmed releases nothing early."""
     from backend.tests.test_api import runner
     computer = runner(api)
     assign(api, computer, 'ops')
@@ -275,11 +276,9 @@ def test_legacy_wait_keeps_capacity_until_its_unchecked_start_finishes(api):
         {'seq': 1, 'kind': 'status', 'payload': {'waiting': 'shared login', 'login': 'ChatGPT'}}
     ]}, computer['token'])
     post(api, 'chat/finance', {'text': 'New protocol contender'})
-    assert claim(api, computer, 'finance') is None
-    post(api, f"attempts/{old['id']}/started", {'thread_id': 'legacy'}, computer['token'])
-    assert claim(api, computer, 'finance') is None
-    post(api, f"attempts/{old['id']}/complete", {'outcome': 'completed', 'text': '', 'last_seq': 1}, computer['token'])
     assert claim(api, computer, 'finance') is not None
+    post(api, f"attempts/{old['id']}/started", {'thread_id': 'legacy'}, computer['token'])
+    post(api, f"attempts/{old['id']}/complete", {'outcome': 'completed', 'text': '', 'last_seq': 1}, computer['token'])
 
 
 def test_a_turn_waiting_for_a_docker_turn_user_gives_its_place_back(api):
