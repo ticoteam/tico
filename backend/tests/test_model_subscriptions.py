@@ -17,6 +17,7 @@ from backend.tests.test_credentials import setup
 TOKEN = "sk-ant-oat01-" + "a" * 24
 OTHER = "sk-ant-oat01-" + "b" * 24
 CLAUDE_LIMIT = "You've hit your limit · resets 2:40am (UTC)"
+NO_COMPUTER = {"window": None, "used_pct": None, "cost_usd_month": None, "reason": "Not on a computer yet"}
 
 
 def limit_notice_soon():
@@ -84,7 +85,7 @@ def test_owners_and_admins_save_the_company_subscriptions_and_nobody_reads_a_val
     company(api, enabled=["openai"])
     saved = add(api)
     assert saved["kind"] == "claude_token" and saved["status"] == "new" and saved["runtime"] == "claude"
-    assert saved["added_by"] == "human:ana" and saved["computers"] == [] and saved["usage"] is None
+    assert saved["added_by"] == "human:ana" and saved["computers"] == [] and saved["usage"] == NO_COMPUTER
     assert TOKEN not in json.dumps(saved) and saved["preview"].endswith(TOKEN[-4:])
     # Saving it turns its provider on, so its models are offered.
     with api.app.state.store.read() as c:
@@ -1171,3 +1172,99 @@ def test_the_owner_migration_backfills_a_plan_from_a_person_who_added_it_and_ski
     assert conn.execute("SELECT id,owner_id FROM model_subscriptions ORDER BY id").fetchall() == [
         ("a", "human:ana"), ("b", ""), ("c", "")]
     assert conn.execute("SELECT owner_id FROM subscription_connects").fetchall() == [("",)]
+
+
+def usage_of(api, sid):
+    return next(s for s in listed(api) if s["id"] == sid)["usage"]
+
+
+def window_reading(used, resets_in, reported_ago=timedelta(minutes=1)):
+    """A usage window as a computer reports it: `used` percent (None when the plan sends none), resetting `resets_in`
+    after the reading, which was taken `reported_ago` ago."""
+    reported = datetime.now(timezone.utc) - reported_ago
+    return {"used_percent": used, "resets_at": (reported + resets_in).isoformat(), "reported_at": reported.isoformat()}
+
+
+def beat(api, m, profiles, *, takes=True, logins=True, signed_in=True, runtime="claude"):
+    """A heartbeat: each login profile's runtimes as the computer reports them. `logins` names its default login (a
+    computer that does not names none); `takes` says it can take a subscription."""
+    readiness = {"schema_version": 1, "bots": {},
+                 "runtimes": {runtime: {"installed": True, "authenticated": "ready" if signed_in else "missing"}}}
+    if logins:
+        readiness["computer_profile"] = "own"
+    capabilities = ([MS.CAPABILITY] if takes else []) + (["computer_logins_v1"] if logins else [])
+    return post(api, "runners/heartbeat", {
+        "version": "test", "platform": "test", "capabilities": capabilities, "readiness": readiness,
+        "profiles": [{"name": name, "runtimes": runtimes} for name, runtimes in profiles.items()]}, token=m["token"])
+
+
+def test_a_plan_says_why_it_shows_no_usage_yet(api):
+    setup(api)
+    company(api)
+    sid = add(api)["id"]
+    assert usage_of(api, sid) == NO_COMPUTER
+    # An older computer signs in with its own login, so its windows are not this plan's: it is only given the plan.
+    old = machine(api, takes=False, label="Old Mac")
+    give(api, old, "claude", sid)
+    assert usage_of(api, sid)["reason"] == "Update the computer to see usage"
+    m = runner(api, label="Plan Mac")
+    beat(api, m, {})
+    give(api, m, "claude", sid)
+    assert usage_of(api, sid)["reason"] == "Waiting for a computer to report"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", ("2000-01-01T00:00:00.000000Z", m["runner_id"]))
+    assert usage_of(api, sid)["reason"] == "Its computers are offline"
+    beat(api, m, {})
+    with api.app.state.store.transaction() as c:
+        MS._status(c, sid, "needs_reconnect", "Token expired")
+    assert usage_of(api, sid)["reason"] == "Reconnect to see usage"
+
+
+def test_a_plan_shows_the_most_used_window_its_computer_reads_even_at_zero(api):
+    setup(api)
+    company(api)
+    sid = add(api)["id"]
+    m = runner(api, label="Plan Mac")
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(0, timedelta(days=3))}}})
+    give(api, m, "claude", sid)
+    usage = usage_of(api, sid)
+    assert (usage["window"], usage["used_pct"]) == ("week", 0) and "reason" not in usage
+    # Its 5-hour window is the most used now, then its week again.
+    beat(api, m, {"own": {"claude": {"signed_in": True, "five_hour": window_reading(40, timedelta(hours=2))}}})
+    assert (usage_of(api, sid)["window"], usage_of(api, sid)["used_pct"]) == ("5h", 40)
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(70, timedelta(days=3))}}})
+    assert (usage_of(api, sid)["window"], usage_of(api, sid)["used_pct"]) == ("week", 70)
+    # Another login on the computer is not this plan's, however used it is: its 99% is not read; the open 40% stands.
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(10, timedelta(days=3))}},
+                  "work": {"claude": {"signed_in": True, "weekly": window_reading(99, timedelta(days=3))}}})
+    assert (usage_of(api, sid)["window"], usage_of(api, sid)["used_pct"]) == ("5h", 40)
+    # A limit met on the plan holds it at 100, whatever its computers last read.
+    hold_plan(api, sid)
+    assert usage_of(api, sid)["used_pct"] == 100
+
+
+def test_a_window_that_has_reset_or_sends_no_percent_is_not_a_reading(api):
+    setup(api)
+    company(api)
+    sid = add(api)["id"]
+    m = runner(api, label="Plan Mac")
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(
+        55, timedelta(days=1), reported_ago=timedelta(days=2))}}})
+    give(api, m, "claude", sid)
+    # Its week reset a day ago, so the 55% read before it is no longer this plan's usage.
+    assert usage_of(api, sid)["reason"] == "Waiting for a computer to report"
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": window_reading(None, timedelta(days=3))}}})
+    assert usage_of(api, sid)["reason"] == "No percentage from the plan"
+
+
+def test_only_a_computer_that_names_its_default_login_and_takes_plans_reads_usage(api):
+    setup(api)
+    company(api)
+    sid = add(api)["id"]
+    m = runner(api, label="Plan Mac")
+    weekly = {"own": {"claude": {"signed_in": True, "weekly": window_reading(30, timedelta(days=3))}}}
+    beat(api, m, weekly, logins=False)
+    give(api, m, "claude", sid)
+    assert usage_of(api, sid)["reason"] == "Update the computer to see usage"
+    beat(api, m, weekly)
+    assert usage_of(api, sid)["used_pct"] == 30

@@ -69,6 +69,7 @@ one.
 """
 import base64
 import json
+from datetime import datetime, timezone
 
 from pydantic import Field, SecretStr
 
@@ -341,7 +342,8 @@ def covered(ready, runtimes):
 # ------------------------------------------------------------------------------------------------ views
 def _usage(c, sub):
     """What is known of a subscription's use without new telemetry: an API key's cost this month from the runs that
-    used it; a plan's limit while its hold stands (backend/login_holds.py). None when nothing is known."""
+    used it; a plan's limit while its hold stands (backend/login_holds.py), else its used percent from its computers'
+    reports (`_plan_usage`). A plan always answers: with no reading, `reason` says why in a short line."""
     from . import login_holds
     spec = KINDS.get(sub["kind"]) or {}
     if spec.get("billing") == "api":
@@ -356,7 +358,68 @@ def _usage(c, sub):
         kind = login_holds.window(hold.get("error"))
         window = "week" if "weekly" in kind else "5h" if "5-hour" in kind else None
         return {"window": window, "used_pct": 100, "cost_usd_month": None, "resets_at": hold["until"]}
-    return None
+    return _plan_usage(c, sub, spec.get("runtime", ""))
+
+
+def _reason(text):
+    """A plan's usage when no percent is known: the one short line why, which the Usage column shows muted."""
+    return {"window": None, "used_pct": None, "cost_usd_month": None, "reason": text}
+
+
+def _at(ts):
+    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+
+def _plan_usage(c, sub, runtime):
+    """A plan's used percent from the computers it is given to. Each signs in with it on its turns, and the runner files
+    those turns' usage windows under the computer's default profile (runner-rs drive.rs `remember_weekly`, with the
+    profile `turn_profile` picks, which the heartbeat names as readiness `computer_profile`). So that profile's windows
+    for `runtime` are this plan's. Only a computer whose turns run that way can say so (`runner_takes` and
+    `computer_logins`); an older one's windows belong to its own login, so they are never read. A window whose reset
+    has passed is no longer this reading. The most-used window wins, its freshest report breaking a tie. Otherwise the
+    reason is what the data tells: not on a computer, a reconnect due, a computer too old, a plan that sends no percent,
+    computers offline, or a computer yet to report."""
+    from . import model_login
+    from .subscriptions import WINDOWS, computer_logins, reported_runtimes
+    computers = c.execute("SELECT r.* FROM computer_subscriptions g JOIN runners r ON r.id=g.runner_id "
+                          "WHERE g.subscription_id=? AND r.revoked_at IS NULL ORDER BY r.id", (sub["id"],)).fetchall()
+    if not computers:
+        return _reason("Not on a computer yet")
+    if sub["status"] == "needs_reconnect":
+        return _reason("Reconnect to see usage")
+    readers = [r for r in computers if runner_takes(r) and computer_logins(r)]
+    if not readers:
+        return _reason("Update the computer to see usage")
+    now = datetime.now(timezone.utc)
+    best, percent_missing = None, False
+    for runner in readers:
+        profile = readiness_document(runner["readiness"]).get("computer_profile") or ""
+        found = c.execute("SELECT runtimes FROM computer_profiles WHERE runner_id=? AND profile=?",
+                          (runner["id"], profile)).fetchone()
+        runtimes = reported_runtimes(c, runner["id"], profile, found[0]) if found else {}
+        state = runtimes.get(runtime) or {}
+        for window, label in (("weekly", "week"), ("five_hour", "5h")):
+            reading = state.get(window)
+            if not reading:
+                continue
+            reported = _at(reading["reported_at"])
+            ends = _at(reading["resets_at"]) if reading.get("resets_at") else reported + WINDOWS[window]
+            if ends <= now:
+                continue
+            if reading.get("used_percent") is None:
+                percent_missing = True
+                continue
+            candidate = (reading["used_percent"], reported, label, reading.get("resets_at"))
+            if best is None or candidate[:2] > best[:2]:
+                best = candidate
+    if best:
+        used, _, label, resets = best
+        return {"window": label, "used_pct": used, "cost_usd_month": None, "resets_at": resets}
+    if percent_missing:
+        return _reason("No percentage from the plan")
+    if not any(model_login._online(r) for r in readers):
+        return _reason("Its computers are offline")
+    return _reason("Waiting for a computer to report")
 
 
 def view(c, sub):
