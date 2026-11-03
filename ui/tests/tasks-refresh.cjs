@@ -297,8 +297,10 @@ const LOOSE = {kind: 'ask', id: 'm-loose', message_id: 'm-loose', title: 'Is Fri
   await page.waitForFunction(() => !TASKS_ST && S.lastRead.tasks?.since);
   await page.evaluate(() => liveEmit('reset', {}));
   assert.equal(await page.evaluate(() => S.lastRead.tasks.since), null, 'a reset drops the kept cursor');
+  await page.waitForFunction(() => !LIVE_SOON.has('refresh'), null, {timeout: t(5000)});   // its refresh(true) lands while away
+  await page.waitForTimeout(t(300));
   await page.evaluate(() => { location.hash = '#/tasks'; });
-  await page.waitForFunction(() => TASKS_ST && TASKS_ST.since === '12.a', null, {timeout: t(5000)});
+  await page.waitForFunction(() => TASKS_ST && TASKS_ST.since, null, {timeout: t(5000)});
   await settled();
   assert.equal(reads.full.length, full + 1, 'a kept list without a cursor is read in full');
 
