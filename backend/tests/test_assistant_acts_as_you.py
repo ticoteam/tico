@@ -3,6 +3,7 @@
 ceiling, the owner's switch, and approvals that only the person decides stay as they were."""
 
 import inspect
+import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -310,18 +311,46 @@ def test_every_route_that_touches_a_credential_or_a_sign_in_is_never_a_chat_writ
     assert not offenders, offenders
 
 
-def test_the_assistant_turn_is_offered_every_tool_its_gate_admits_and_the_template_commands(api):
-    """Only the NEVER tools are hidden from an Assistant turn (hubtools.ASSISTANT_HIDDEN); every command the Assistant
-    template tells it to run maps to a tool it is offered, and the Assistant bot's routine may propose a card for a person."""
-    everything = {t["name"] for t in hubtools.TOOLS}
-    offered = {t["name"] for t in hubtools.listing(local=True, kind="assistant")}
-    assert everything - offered == set(hubtools.ASSISTANT_HIDDEN) and set(hubtools.ASSISTANT_HIDDEN) <= everything
-    template = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "assistant"
-    commands = set()
-    for path in template.rglob("*.md"):
-        commands.update(re.findall(r"\bhub ([a-z][a-z-]*(?: [a-z][a-z-]*)?)", path.read_text(encoding="utf-8")))
-    mapped = {"hub_" + c.replace(" ", "_").replace("-", "_") for c in commands} & everything
-    assert len(mapped) >= 40, sorted(mapped)
-    assert mapped - offered == set(), sorted(mapped - offered)
-    assert "hub_assistant_propose" in {t["name"] for t in hubtools.listing(local=True, kind="bot")}
+def _template_tools():
+    """Every command the Assistant template tells it to run, as the tool it runs: the hubcli command tree walked for each
+    `hub ...` span (clients/remotecli.tool_name names the tool), not a pattern."""
+    import argparse
+    from clients import hubcli, remotecli
 
+    def fn_of(words):
+        node, fn = hubcli.parser(), None
+        for word in words:
+            sub = next((a for a in node._actions if isinstance(a, argparse._SubParsersAction)), None)
+            if not sub or word not in sub.choices:
+                break
+            node = sub.choices[word]
+            fn = node._defaults.get("fn", fn)
+        return fn
+
+    template = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "assistant"
+    tools = set()
+    for path in template.rglob("*.md"):
+        for span in re.findall(r"\bhub ([^\n`]+)", path.read_text(encoding="utf-8")):
+            words = []
+            for token in span.split():
+                if not re.fullmatch(r"[a-z][a-z-]*", token):
+                    break
+                words.append(token)
+            fn = fn_of(words)
+            if fn:
+                tools.add(remotecli.tool_name(fn))
+    return tools
+
+
+def test_the_assistant_turn_is_offered_the_tools_its_template_runs_and_never_the_hidden_ones():
+    """The Assistant's MCP listing: every tool its template runs is offered, the NEVER tools are not, and the listing stays
+    small enough for the model (about 165 KB today; the cliff is past 200 KB)."""
+    everything = {t["name"] for t in hubtools.TOOLS}
+    offered = hubtools.listing(local=True, kind="assistant")
+    names = {t["name"] for t in offered}
+    template = _template_tools()
+    assert len(template) >= 40, sorted(template)
+    assert template - names == set(), sorted(template - names)
+    assert not set(hubtools.ASSISTANT_HIDDEN) & names and set(hubtools.ASSISTANT_HIDDEN) <= everything
+    assert len(json.dumps(offered)) <= 200_000, len(json.dumps(offered))
+    assert "hub_assistant_propose" in {t["name"] for t in hubtools.listing(local=True, kind="bot")}

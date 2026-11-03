@@ -69,5 +69,5 @@ def test_the_assistant_is_offered_reads_its_own_writes_and_its_proposal_tool():
     assert "hub_assistant_propose" in names and "hub_task_create" in names and "hub_health_check" in names
     # Only the NEVER tools are hidden from an Assistant turn (hubtools.ASSISTANT_HIDDEN): the server's gate decides the rest.
     assert not set(hubtools.ASSISTANT_HIDDEN) & names and "hub_sql" not in names
-    assert {"hub_message_send", "hub_update_create", "hub_bot_update"} <= names
+    assert "hub_message_send" in names and "hub_update_create" not in names
     assert {t["name"] for t in hubtools.listing()} >= names                # no kind: everything, the server decides
