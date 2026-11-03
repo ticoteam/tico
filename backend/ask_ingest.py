@@ -805,14 +805,17 @@ _ACTIVE_AT = ("owner_id=? AND created_at<? AND (done_at IS NULL OR done_at>?) AN
 
 def replay_items(c, person, start, end, assistant_bot=None):
     """What bots put on this person between `start` and `end`, oldest first, as the gate would have seen each: tasks
-    filed for them and questions asked of them (on a task or loose). Today's owner stands in for the owner then. A
-    question carries its structured questions (refs.questions); a task row carries none, its questions are the ask
-    messages replayed beside it."""
+    filed for them and questions asked of them (on a task or loose). Today's owner stands in for the owner then. A task
+    the filter acted on (sent back, FYI or merged) stays with its bot, so it is found by its ask row for this person as
+    well: a replay counts what On would have kept off, not only what landed. A question carries its structured questions
+    (refs.questions); a task row carries none, its questions are the ask messages replayed beside it."""
     skip = H.bot_actor(assistant_bot) if assistant_bot else ""
     out = [{"kind": "task", "ref": r["id"], "asker": r["requester_id"], "title": r["title"] or "", "text": r["body"] or "",
             "asked": None, "created_at": r["created_at"]}
-           for r in c.execute("SELECT id,title,body,requester_id,created_at FROM tasks WHERE owner_id=? AND created_at>=? AND "
-                              "created_at<? AND requester_id LIKE 'bot:%' AND requester_id<>?", (person, start, end, skip))]
+           for r in c.execute("SELECT id,title,body,requester_id,created_at FROM tasks WHERE (owner_id=? OR id IN "
+                              "(SELECT ref FROM ask_ingest_items WHERE person=? AND kind='task')) AND created_at>=? AND "
+                              "created_at<? AND requester_id LIKE 'bot:%' AND requester_id<>?",
+                              (person, person, start, end, skip))]
     for m in H._rows(c.execute("SELECT * FROM messages WHERE recipient_id=? AND kind='ask' AND created_at>=? AND created_at<? "
                                "AND sender_id LIKE 'bot:%' AND sender_id<>?", (person, start, end, skip))):
         msg = H.message(c, m["id"]) or m
