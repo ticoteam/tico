@@ -888,11 +888,11 @@ class Manager:
                     c.execute("DELETE FROM registry_metadata WHERE key=?", (SIZES_KEY,))
             return None
         self.relist = False
-        was, self.list_refused = self.list_refused, None
+        self.list_refused = None
         with self.store.transaction() as c:
-            if was:                                         # what a create waiting on the list said (no refusal of its own)
-                c.execute("UPDATE cloud_machines SET problem='',problem_at=NULL WHERE problem=? AND failures=0",
-                          ("hq:" + was,))
+            # What a create waiting on the list said: an hq: problem with no refusal of its own (a refused create or
+            # start counts a failure), whatever the code and across restarts.
+            c.execute("UPDATE cloud_machines SET problem='',problem_at=NULL WHERE problem LIKE 'hq:%' AND failures=0")
             learned = bool(listed["sizes"]) and (first or not sizes(c))
             if listed["sizes"]:
                 c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
