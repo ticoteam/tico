@@ -270,7 +270,10 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       : (el.matches('.you') ? 'me: ' : 'them: ') + [...el.children].map(c => c.textContent).join(' | ')));
     assert.deepEqual(order.filter(x => x !== 'day'), ['me: Can bots share a computer? | Diagnostics attached', 'them: Tico team | Yes.', 'me: Thanks',
       'me: Bots stopped', 'them: Mia | Restarted the runner.', 'them: Try now.', 'them: Tico team | Anything else?'], `in time order: ${order}`);
-    assert.equal(order.filter(x => x === 'day').length, 2, 'a date line for each day');
+    // One line per local day the messages fall on: two, or three when the test runs just after midnight.
+    const days = await page.evaluate(ts => new Set(ts.map(t => new Date(t).toDateString())).size,
+      [at(50), at(49), at(40), at(3 * 24 * 60 - 4), at(3 * 24 * 60 - 5), at(60), at(3 * 24 * 60)]);
+    assert.equal(order.filter(x => x === 'day').length, days, 'a date line for each day');
     assert.equal(await chat.locator('.support-day').last().innerText(), 'Today');
     assert.ok(await chat.locator('[data-thread]').evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 4), 'opens at the newest');
     assert.doesNotMatch(await chat.innerText(), DESK);
