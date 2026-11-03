@@ -74,6 +74,7 @@ import ipaddress
 import json
 import os
 import re
+import urllib.parse
 import secrets
 import shutil
 import socket
@@ -348,6 +349,19 @@ def check_host(value: str, flag: str, cell_domain: str) -> str:
     if not st.DOMAIN_RE.fullmatch(host) or host in (cell_domain, ROUTER_HEALTH_HOST):
         raise CellError("bad_domain", f"{flag} is a plain hostname such as hub.example.com (not {cell_domain} itself)")
     return host
+
+
+def refuse_server_host(host: str, env: dict[str, str], flag: str) -> None:
+    """bad_domain when a page host is the app's, visuals' or runners' host in the company's settings: its server refuses
+    to start with that reader origin (backend/company_page/reader_app.py)."""
+    for key in ("TICO_PUBLIC_URL", "TICO_VISUAL_ORIGIN", "TICO_RUNNER_URL"):
+        value = (env.get(key) or "").strip()
+        try:
+            other = urllib.parse.urlsplit(value if "://" in value else "//" + value).hostname if value else None
+        except ValueError:
+            other = None
+        if host and other and other.lower() == host:
+            raise CellError("bad_domain", f"{flag} {host} is the company's {key}")
 
 
 def carried_env(text: str) -> dict[str, str]:
@@ -1369,6 +1383,7 @@ class Cell:
                 ignored = sorted(k for k in extra if k in written or cell_owned(k))
                 extra = {k: v for k, v in extra.items() if v and k not in ignored}
                 env.update(extra)
+                refuse_server_host(host, env, "--page-host")
                 changed = False
                 if carried is not None:
                     changed = _write_atomic(d / "extra.env", "# Carried from the install this company moved from "
@@ -1696,6 +1711,7 @@ class Cell:
             d = self.dir(slug)
             env = envfile.parse(_read(d / ".env"))
             self.secrets += [v for k, v in env.items() if k in contract.SECRET_KEYS and v and v not in self.secrets]
+            refuse_server_host(host, env, "--host")
             with self.lock("cell"):     # the host's owner is checked and recorded under one lock, as add does
                 self.refuse_taken(slug, {host} if host else set())
                 if host:

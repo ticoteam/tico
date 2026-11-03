@@ -2475,6 +2475,15 @@ def test_set_page_host_that_failed_to_start_is_redone_in_full_when_given_again(r
     assert "acme.tico.page" in caddyfile(ready)
 
 
+def test_a_page_host_that_is_the_companys_visual_or_runner_host_is_refused(ready):
+    ready(*add_args(ready, "acme"))
+    env = ready.root / "companies" / "acme" / ".env"
+    env.write_text(env.read_text() + "TICO_VISUAL_ORIGIN=https://vis.acme.example\nTICO_RUNNER_URL=https://run.acme.example/x\n")
+    for taken in ("vis.acme.example", "run.acme.example"):
+        assert ready("set-page-host", "--company", "acme", "--host", taken)["error"] == "bad_domain"
+    assert "page_host" not in record(ready, "acme")
+
+
 def test_set_page_host_refuses_a_host_that_is_taken_or_the_companys_own(ready):
     ready(*add_args(ready, "alpha", "--page-host", "alpha.tico.page"))
     ready(*add_args(ready, "bravo"))
