@@ -1140,8 +1140,6 @@ class Store:
             c.executescript(_task_rules.SCHEMA)
             from . import teammate_access as _teammate_access
             _teammate_access.ensure(c)              # people's and groups' See/Read/Write (docs/permissions.md)
-            from . import federation_schema as _federation_schema
-            _federation_schema.seed(c)              # the relay's one state row; a devcopy empties it
             from . import rules as _rules
             c.executescript(_rules.SCHEMA)
             _rules.ensure_schema(c)

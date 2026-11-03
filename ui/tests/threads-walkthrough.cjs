@@ -512,7 +512,7 @@ async function messageMenu(page, text, item) {
       }
     }
 
-    // ------------------------------------------------------------------ Connect: Slack, Other companies, search, Catch up, Make task
+    // ------------------------------------------------------------------ Connect: Slack, search, Catch up, Make task
     await journey(browser, hub, 'connect', 'dana', async (page, phone, name) => {
       await step(page, 'connections page', phone, name, async () => {
         await shell(page, '#/library/connections', '#cn-slack')();
@@ -521,10 +521,6 @@ async function messageMenu(page, text, item) {
       await step(page, 'Slack section', phone, name, async () => {
         await page.locator('#cn-slack').scrollIntoViewIfNeeded();
         await snap(page, 'connect-slack', phone);
-      });
-      await step(page, 'Other companies section', phone, name, async () => {
-        await page.locator('#cn-peers').scrollIntoViewIfNeeded();
-        await snap(page, 'connect-other-companies', phone);
       });
       await step(page, 'search threads', phone, name, async () => {
         await shell(page, '#/threads')();
