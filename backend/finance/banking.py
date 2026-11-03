@@ -230,6 +230,24 @@ def set_balance(ctx: Ctx, money_id: str, current: int | None, available: int | N
                                                       "balance_as_of": as_of, "updated_at": ctx.at})
 
 
+def tidy_name(ctx: Ctx, money_id: str) -> None:
+    """A money account named before names were kept bare ("Mercury Savings ••9465") loses the trailing copy of its last
+    four, and so does the line made for it then ("Mercury Savings ••9465 ••9465"), only while that line still has the
+    name Finance gave it (a person's rename stays)."""
+    money = SK.get(ctx.c, "fin_money_accounts", money_id)
+    if money is None:
+        return
+    name, four = str(money["name"] or ""), str(money["last4"] or "")
+    bare = F.bare_name(name, four)
+    if bare == name:
+        return
+    SK.update(ctx.c, "fin_money_accounts", money_id, {"name": bare, "updated_at": ctx.at})
+    line = ctx.accounts.get(str(money["account_id"] or ""))
+    if line is not None and line.name == f"{name} ••{four}":
+        SL.update_account(ctx.c, replace(line, name=f"{bare} ••{four}"[:120]), ctx.at)
+        ctx.changed()
+
+
 # ------------------------------------------------------------------------------------------------ opening balance
 def _opening_line(ctx: Ctx) -> L.Account:
     """Opening balance equity: setup makes it; an older book gets it the first time an opening balance posts."""

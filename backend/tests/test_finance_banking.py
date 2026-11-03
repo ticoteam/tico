@@ -1260,3 +1260,28 @@ def test_an_older_connection_whose_opening_went_to_zero_gets_it_back_from_the_ba
     sync_once(books, fake, NEXT_DAY)
     with books.read() as c:
         assert _opening(c) == made
+
+
+def test_names_made_before_bare_names_lose_the_doubled_last_four_on_the_next_pass(books):
+    """A money account named with its own last four, and the line Finance made from that name, come back bare on the
+    next pass; a line a person renamed keeps its name."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        rows = c.execute("SELECT m.id, m.name, m.last4, m.account_id, a.code FROM fin_money_accounts m JOIN "
+                         "fin_accounts a ON a.id=m.account_id WHERE m.kind='bank' AND a.code<>'1000' AND m.last4 "
+                         "IS NOT NULL ORDER BY m.id").fetchall()
+        assert rows
+        mid, name, four, line = str(rows[0][0]), str(rows[0][1]), str(rows[0][2]), str(rows[0][3])
+        c.execute("UPDATE fin_money_accounts SET name=? WHERE id=?", (f"{name} ••{four}", mid))
+        c.execute("UPDATE fin_accounts SET name=? WHERE id=?", (f"{name} ••{four} ••{four}", line))
+    sync_once(books, fake)
+    with books.transaction() as c:
+        assert c.execute("SELECT name FROM fin_money_accounts WHERE id=?", (mid,)).fetchone()[0] == name
+        assert c.execute("SELECT name FROM fin_accounts WHERE id=?", (line,)).fetchone()[0] == f"{name} ••{four}"
+        c.execute("UPDATE fin_money_accounts SET name=? WHERE id=?", (f"{name} ••{four}", mid))
+        c.execute("UPDATE fin_accounts SET name='Reserve' WHERE id=?", (line,))
+    sync_once(books, fake, LATER)
+    with books.read() as c:
+        assert c.execute("SELECT name FROM fin_money_accounts WHERE id=?", (mid,)).fetchone()[0] == name
+        assert c.execute("SELECT name FROM fin_accounts WHERE id=?", (line,)).fetchone()[0] == "Reserve"
