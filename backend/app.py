@@ -2052,8 +2052,8 @@ def create_app(settings=None):
             person = P.person(pid, views.roster(c))
         if not person or person.get("hidden"):
             raise Problem("not_found", "Person not found", 404)
-        invites.once(store, auth, settings, who, request, body, person)
-        at = mutate(request, body, lambda c: invites.record(c, who.actor, pid))   # a repeat replays its receipt
+        sent = invites.once(store, auth, settings, who, request, body, person)
+        at = invites.record_send(store, who, pid, sent)     # a repeat keeps the time the first send recorded
         return {"person": pid, "invited_at": at}
 
     @app.post("/api/v2/access/people/{pid}/password")
@@ -2296,7 +2296,9 @@ def create_app(settings=None):
         from . import company_import
         who = request.state.identity
         owner_only(who, "invites the people from setup")
-        row = mutate(request, body, lambda c: company_import.add_invitee(onboarding, c, who, key, body.email))
+        # Not `mutate`: the invite binding below is this request's record under the same key. add_invitee answers the
+        # same roster row again when the person is already added, so a repeat needs no stored answer.
+        row = store.write(who, lambda c: company_import.add_invitee(onboarding, c, who, key, body.email))
         sent = invites.once(store, auth, settings, who, request, body, row)
         with store.transaction() as c:                  # not a second `mutate`: one request has one idempotency key
             if sent or row["id"] not in invites.sent(c):      # a repeat keeps the first send's time
@@ -3309,7 +3311,7 @@ def create_app(settings=None):
 
         def admit(c):                         # read with the gate, inside the check's time budget
             from .shared_bots import route
-            if c.execute("SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
+            if c.execute("SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                          (who.actor, path, key)).fetchone():
                 return False
             target = H.actor_id(route(c, who.actor, "bot:" + bot))
@@ -8094,7 +8096,7 @@ def create_app(settings=None):
         if 0 < len(key) <= 200:
             with store.read_transaction() as c:
                 validate_identity(c, request.state.identity)
-                if not c.execute("SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
+                if not c.execute("SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                                  (request.state.identity.actor, request.url.path, key)).fetchone():
                     idle = execution.idle_inputs(c, request.state.identity, aid)
                     if idle is not None:

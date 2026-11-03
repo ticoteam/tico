@@ -230,8 +230,9 @@ def redact_value(c, person, value, env, conversation_id="", attempt_id="", messa
     scrub_value(c, value, label, attempt_id, conversation_id)
     # The answers kept for retries (the chat send that carried it, the claim that delivered it to the run).
     for form in forms:
-        for row in c.execute("SELECT actor,operation,key,response FROM idempotency WHERE instr(response, ?) > 0", (form,)).fetchall():
-            c.execute("UPDATE idempotency SET response=? WHERE actor=? AND operation=? AND key=?",
+        for row in c.execute("SELECT actor,operation,key,response FROM idempotency "
+                             "WHERE binding IS NULL AND instr(response, ?) > 0", (form,)).fetchall():
+            c.execute("UPDATE idempotency SET response=? WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                       (row["response"].replace(form, label), row["actor"], row["operation"], row["key"]))
     if count:
         H.event(c, person.actor, "message.redacted", conversation_id or message_id, {"messages": count, "env": env})

@@ -79,7 +79,7 @@ UNTYPED = frozenset({
     "granola_connections", "growth_channels", "growth_cohorts",     "growth_settings", "gtm_sources", "health_findings", "health_reports",
     "hook_relay_state", "hosting_enrollments", "human_tokens", "humans", "idempotency", "idempotency_messages",
     "import_refs", "inbound_inboxes", "inbound_messages", "inbound_sync", "intake_items", "invariant_state",
-    "invite_sends", "job_recovery", "jobs", "kpi_definitions", "kpi_readings", "kpis", "learned_entries",
+    "job_recovery", "jobs", "kpi_definitions", "kpi_readings", "kpis", "learned_entries",
     "learning_cursors", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs",
     "linked_docs", "listen_items", "listen_judgments", "listen_runs", "listening_destinations", "live_meeting_access",
     "live_meeting_bots", "live_meeting_chat", "live_meeting_chat_routes", "live_meeting_chunk_versions",

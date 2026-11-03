@@ -1,5 +1,6 @@
-"""Which stored retry answers (the `idempotency` table) quote which message, so a comment edit or delete finds them
-by index instead of reading every stored answer while it holds the write lock.
+"""Which stored retry answers (the `idempotency` table, binding NULL) quote which message, so a comment edit or delete
+finds them by index instead of reading every stored answer while it holds the write lock. Operation bindings (binding
+set: backend/invites.py, backend/github_app.py, backend/github_reviews.py) are not answers and are never indexed.
 
 A retry gets back the answer its first try got. When a comment is edited or deleted, `hubdb._refresh_comment_replies`
 rewrites every stored answer that quotes it, so a retry never replays withdrawn words. A quoted message is any JSON
@@ -8,7 +9,7 @@ the comment's id took 35-37 s inside the write transaction on a 665k-row table (
 waited behind it. So each answer's quoted message ids are kept here:
 
 - triggers keep `idempotency_messages` in step with every insert, update and delete on `idempotency`, whoever writes
-  it (`Store.mutate`, credentials, the GitHub app, the retention sweep);
+  it (`Store.mutate`, credentials, the retention sweep); an insert of a binding is not indexed;
 - rows an older server wrote are filled in beside the running server (`backfill_store`, started with it), in short
   batches, reading outside the write lock; until that first pass has finished (`READY`), an edit reads the answers the
   old way. On 665k synthetic answers it took about 26 s; the server does not wait for it to start.
@@ -47,7 +48,7 @@ SCHEMA = (
     "operation TEXT NOT NULL, key TEXT NOT NULL, PRIMARY KEY(message_id, actor, operation, key)) WITHOUT ROWID",
     "CREATE INDEX IF NOT EXISTS idempotency_messages_answer ON idempotency_messages(actor, operation, key)",
     "CREATE TRIGGER IF NOT EXISTS idempotency_messages_insert AFTER INSERT ON idempotency "
-    f"WHEN {_MAY_QUOTE.format(src='NEW.response')} BEGIN "
+    f"WHEN NEW.binding IS NULL AND {_MAY_QUOTE.format(src='NEW.response')} BEGIN "
     f"INSERT OR IGNORE INTO idempotency_messages {_quoted('NEW')}; END",
     "CREATE TRIGGER IF NOT EXISTS idempotency_messages_update AFTER UPDATE ON idempotency BEGIN "
     "DELETE FROM idempotency_messages WHERE actor=OLD.actor AND operation=OLD.operation AND key=OLD.key; "
@@ -72,8 +73,8 @@ def quoting(conn, message_id):
     if not _get(conn, READY):
         return None
     return conn.execute("SELECT i.rowid, i.response FROM idempotency_messages m JOIN idempotency i "
-                        "ON i.actor=m.actor AND i.operation=m.operation AND i.key=m.key WHERE m.message_id=? "
-                        "OR (m.message_id=? AND instr(i.response, ?)>0)",
+                        "ON i.actor=m.actor AND i.operation=m.operation AND i.key=m.key WHERE i.binding IS NULL "
+                        "AND (m.message_id=? OR (m.message_id=? AND instr(i.response, ?)>0))",
                         (message_id, UNREAD, message_id)).fetchall()
 
 
@@ -103,7 +104,8 @@ def backfill(conn, batch=BATCH, span=SPAN, stop=None):
         if stopped():
             return done
         rowids = [r[0] for r in conn.execute(
-            f"SELECT rowid FROM idempotency WHERE rowid>? AND rowid<=? AND {_MAY_QUOTE.format(src='response')}",
+            f"SELECT rowid FROM idempotency WHERE rowid>? AND rowid<=? AND binding IS NULL "
+            f"AND {_MAY_QUOTE.format(src='response')}",
             (after, after + span))]
         after += span
         for start in range(0, len(rowids), batch):
