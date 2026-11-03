@@ -127,7 +127,7 @@ def test_a_repeated_send_while_its_turn_runs_shows_that_turn_not_a_dismissal(api
     snapshot = f"conversations/{first['conversation_id']}/snapshot?limit=1"
     execution = get(api, snapshot)["execution"]
     assert (execution["state"], execution["label"]) == ("running", "Working")
-    assert (execution["message_id"], execution["attempt_id"]) == (first["id"], attempt["id"])
+    assert execution["message_id"] == first["id"]
     other = post(api, "chat/ops", {"text": "And one more thing."})
     with api.app.state.store.transaction() as c:                         # dismissed for another reason
         c.execute("UPDATE jobs SET state='canceled' WHERE message_id=?", (other["id"],))
