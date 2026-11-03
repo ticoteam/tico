@@ -241,9 +241,9 @@ const tasksPlateView = state => state.view === 'foryou' && state.side !== 'asked
 function taskOnPlate(t, actor) {
   if (!t || !actor || taskFinished(t)) return false;
   if (actor === myActor()) return taskNeedsViewer(t);
+  if (t.status === 'declined') return taskDeclinedToWho(t, actor);
   const on = t.status === 'waiting' && t.waiting_on ? t.waiting_on : '';
-  return (on ? on === actor : t.owner_id === actor) || (t.ask?.recipient_id === actor && !t.ask?.older)
-    || (t.status === 'declined' && taskRequester(t) === actor && !actorPerson(t.owner_id));
+  return (on ? on === actor : t.owner_id === actor) || (t.ask?.recipient_id === actor && !t.ask?.older);
 }
 const taskAskedBy = (t, actor) => !!actor && taskRequester(t) === actor && t.owner_id !== actor;
 function tasksFirstTabHas(state, it) {
