@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS flight_requests(created_at INTEGER NOT NULL, span INT
   caller TEXT NOT NULL, n INTEGER NOT NULL, errors INTEGER NOT NULL, bytes INTEGER NOT NULL, total_ms REAL NOT NULL,
   p50 REAL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(created_at, span, route, caller)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS flight_slow(id INTEGER PRIMARY KEY, created_at INTEGER NOT NULL, route TEXT, caller TEXT,
-  actor TEXT, ms REAL, bytes INTEGER, status INTEGER, sql_ms REAL, wait_ms REAL, queries INTEGER, top_json TEXT);
+  actor TEXT, ms REAL, bytes INTEGER, status INTEGER, sql_ms REAL, wait_ms REAL, queries INTEGER, top TEXT);
 CREATE TABLE IF NOT EXISTS flight_process(created_at INTEGER PRIMARY KEY, cpu REAL, rss INTEGER, threads INTEGER,
   fds INTEGER, sockets INTEGER, lag_p95 REAL, lag_max REAL, requests INTEGER, queries INTEGER, sql_ms REAL,
   txns INTEGER, wait_max REAL, hold_max REAL, hold_p95 REAL, locked INTEGER, dropped INTEGER);
@@ -506,7 +506,7 @@ class Recorder:
 
 def write(c, taken):
     c.executemany("INSERT OR REPLACE INTO flight_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", taken["requests"])
-    c.executemany("INSERT INTO flight_slow(created_at,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries,top_json) "
+    c.executemany("INSERT INTO flight_slow(created_at,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries,top) "
                   "VALUES(?,?,?,?,?,?,?,?,?,?,?)", taken["slow"])
     c.execute("INSERT OR REPLACE INTO flight_process VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", taken["process"])
     c.executemany("INSERT OR REPLACE INTO flight_sql VALUES(?,?,?,?,?,?,?)", taken["sql"])
@@ -1151,9 +1151,9 @@ def view(c, minutes=60, sections=SECTIONS, now=None):
     if "requests" in sections:
         out["requests"] = _requests(c, since)
     if "slow" in sections:
-        out["slow"] = [{**{k: r[k] for k in r.keys() if k != "top_json"},
-                        **({"top": json.loads(r["top_json"])} if r["top_json"] else {})} for r in c.execute(
-            "SELECT created_at,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries,top_json FROM flight_slow "
+        out["slow"] = [{**{k: r[k] for k in r.keys() if k != "top"},
+                        **({"top": json.loads(r["top"])} if r["top"] else {})} for r in c.execute(
+            "SELECT created_at,route,caller,actor,ms,bytes,status,sql_ms,wait_ms,queries,top FROM flight_slow "
             "WHERE created_at>=? ORDER BY id DESC LIMIT 50", (since,))]
     if "process" in sections:
         out["process"] = _process(c, since)
