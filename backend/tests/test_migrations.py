@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from backend import hubdb as H
+from backend import invites
 from backend import migrations
 from backend.config import Settings
 from backend.store import Store
@@ -299,6 +300,58 @@ def _back_to_before(path, version):
         c.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy_%'", (version,))
 
 
+def _shape(path):
+    """Each table's columns (an added column sits last, so not the CREATE text) and every other object's SQL."""
+    with sqlite3.connect(path) as c:
+        tables = {name: sorted(tuple(row)[1:] for row in c.execute(f'PRAGMA table_info("{name}")'))
+                  for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        return tables, sorted(c.execute("SELECT type,name,sql FROM sqlite_master WHERE type<>'table'").fetchall())
+
+
+def test_an_older_threads_shape_gets_the_missing_columns_tables_triggers_and_search_index_once(tmp_path):
+    """Migration 0047: the threads schema the modules used to make on every start. A file missing some of it (columns
+    added later, a helper table, an older trigger, the search index) ends with the shape a new file has, the new search
+    index holds the messages already there, and a second boot changes nothing."""
+    path = fresh(tmp_path)
+    new = _shape(path)
+    with sqlite3.connect(path) as c:
+        for table, column in (("calls", "finalized_at"), ("federation_states", "company"), ("inbound_inboxes", "audience"),
+                              ("org_rules", "where_terms"), ("slack_posts", "recipient_actor"),
+                              ("live_meetings", "thread_id")):
+            c.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+        c.execute("DROP TABLE thread_digests")
+        c.execute("DROP TABLE teammate_accesses")
+        c.execute("DROP TRIGGER threads_revisions_deleted")
+        c.execute("CREATE TRIGGER threads_revisions_deleted AFTER UPDATE OF deleted_at ON messages BEGIN SELECT 1; END")
+        for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'message_search_%'"
+                                 ).fetchall():
+            c.execute(f"DROP TRIGGER {name}")
+        c.execute("DROP TABLE message_search")
+        c.execute("DROP TABLE message_search_keys")
+        c.execute("INSERT INTO conversations(id,kind,created_at) VALUES('c-acme','direct','2026-01-01T00:00:00Z')")
+        c.execute("INSERT INTO messages(id,conversation_id,sender_id,kind,body,created_at) "
+                  "VALUES('m-acme','c-acme','human:ana','say','Acme quarterly memo','2026-01-01T00:00:00Z')")
+    _back_to_before(path, "0047")
+    boot(path)
+    once = snapshot(path)
+    assert _shape(path) == new
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT k.message_id FROM message_search JOIN message_search_keys k ON k.id=message_search.rowid "
+                         "WHERE message_search MATCH 'quarterly'").fetchall() == [("m-acme",)]
+    boot(path)
+    assert snapshot(path) == once
+
+
+def test_a_start_puts_back_the_federation_state_row_a_devcopy_emptied(tmp_path):
+    """federation_states holds one row that Relay.status reads unguarded; migration 0047 makes it once, and every start
+    puts it back when a devcopy emptied the table."""
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("DELETE FROM federation_states")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT singleton FROM federation_states").fetchall() == [(1,)]
+
 def test_an_existing_bots_runtime_model_and_host_move_into_its_config_then_the_columns_go(tmp_path):
     """Migration 0043: a runtime, model or host the config lacks is copied into it (the config keeps what it has), and
     the six legacy columns are dropped. cwd, thread_id and token_hash have nothing to move."""
@@ -423,9 +476,9 @@ def _migration(name):
 
 
 def test_a_session_link_keeps_its_thread_once_in_its_url():
-    """Migration 0047 strips the thread_id copy from session rows whose url gives that thread back, and leaves every
+    """Migration 0048 strips the thread_id copy from session rows whose url gives that thread back, and leaves every
     other row alone: a url that only contains the id, or names another thread, keeps its copy."""
-    up = _migration("0047_task_session_thread_once").up
+    up = _migration("0048_task_session_thread_once").up
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE task_links(id TEXT PRIMARY KEY, kind TEXT, url TEXT, detail TEXT)")
     rows = {
@@ -455,7 +508,7 @@ def test_a_session_link_keeps_its_thread_once_in_its_url():
     up(sqlite3.connect(":memory:"))                 # a database with no task_links has nothing to strip
 
 
-# The tables 0048_idempotency_one_table.py moves into `idempotency`, as migration 0047 and earlier left them.
+# The tables 0049_idempotency_one_table.py moves into `idempotency`, as migration 0048 and earlier left them.
 LEGACY_TABLES = (
     "CREATE TABLE idempotency(actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL, "
     "request_hash TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(actor,operation,key))",
@@ -498,6 +551,8 @@ def test_a_populated_legacy_database_moves_each_row_and_keeps_its_behaviour(tmp_
             (invite.format("cara"), "collide", "h3", "cara", "sent", None, None, TS, TS),
             (invite.format("dan"), "sending", "h4", "dan", "sending", None, None, TS, TS),
             (invite.format("eve"), "refused", "h5", "eve", "refused", "too_many", "Too many invites", TS, TS),
+            # Fay was removed: people_remove scrubbed her binding (no hash, the refusal text that named her replaced).
+            (invite.format("fay"), "scrubbed", "", "fay", "refused", "invite_failed", invites.REMOVED, TS, TS),
         ])
         c.executemany("INSERT INTO github_product_repo_operations VALUES('human:ana',?,?,?,?,?,?,?,?,?,?,?,?)", [
             (PRODUCT, "prod-pending", "h6", "Acme", "tico-new", "pending", None, None, None, None, TS, TS),
@@ -509,13 +564,13 @@ def test_a_populated_legacy_database_moves_each_row_and_keeps_its_behaviour(tmp_
             ("rev-pending", "r1", None), ("rev-done", "r2", '{"id": 1}'),
         ])
         before = dict(c.execute("SELECT key, rowid FROM idempotency").fetchall())
-        c.execute("DELETE FROM schema_migrations WHERE version>='0048' AND version NOT LIKE 'legacy_%'")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0049' AND version NOT LIKE 'legacy_%'")
     boot(path)
 
     with sqlite3.connect(path) as c:
         c.row_factory = sqlite3.Row
         rows = {(r["operation"], r["key"]): dict(r) for r in c.execute("SELECT rowid, * FROM idempotency")}
-        assert len(rows) == 11, sorted(rows)
+        assert len(rows) == 12, sorted(rows)
         answer = rows[("/api/v2/tasks/t1/files", "ans-1")]
         assert (answer["binding"], answer["state"], answer["response"]) == (None, "completed", '{"ok": true}')
         assert answer["rowid"] == before["ans-1"], "a stored answer keeps its rowid"
@@ -526,6 +581,9 @@ def test_a_populated_legacy_database_moves_each_row_and_keeps_its_behaviour(tmp_
         assert rows[(invite.format("dan"), "sending")]["state"] == "pending"
         eve = rows[(invite.format("eve"), "refused")]
         assert (eve["state"], eve["error_code"], eve["error_detail"]) == ("refused", "too_many", "Too many invites")
+        fay = rows[(invite.format("fay"), "scrubbed")]
+        assert (fay["subject"], fay["state"], fay["request_hash"], fay["error_detail"]) == \
+            ("fay", "refused", "", invites.REMOVED), "a scrubbed binding stays scrubbed"
         receipt = rows[(PRODUCT, "receipt")]
         assert (receipt["binding"], receipt["subject"], receipt["state"]) == \
             ("github_product_repo", "Acme/tico-receipt", "completed")
@@ -558,7 +616,14 @@ def test_a_populated_legacy_database_moves_each_row_and_keeps_its_behaviour(tmp_
 def test_the_idempotency_table_the_migration_builds_is_the_one_store_declares():
     source = STORE_SOURCE.read_text()
     declared = re.search(r"CREATE TABLE IF NOT EXISTS (idempotency\(.*?PRIMARY KEY\(actor,operation,key\)\));", source, re.S)
-    migration = _migration("0048_idempotency_one_table")
+    migration = _migration("0049_idempotency_one_table")
     squash = lambda sql: re.sub(r"\s+", "", sql)
     assert declared and squash("CREATE TABLE " + declared.group(1)) == squash(migration.TABLE)
     assert migration.INDEXES[0] + ";" in source      # the answers' index; the bindings' one is the migration's own
+
+
+def test_the_threads_delivery_trigger_follows_hubdbs_task_news_rule():
+    """Migration 0047 makes threads_primary_delivery from literal SQL; the condition must stay hubdb's
+    delivery_counts_sql, which every read side uses, or task news would wake people again on a new install."""
+    module = importlib.import_module("backend.migrations.0047_native_threads_schema")
+    assert H.delivery_counts_sql("NEW", "NEW.recipient_id") in module.THREAD_TRIGGERS["threads_primary_delivery"]

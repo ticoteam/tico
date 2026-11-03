@@ -3,6 +3,7 @@ import copy
 import json
 import re
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -185,20 +186,21 @@ def invited_from_setup(api, finance):
 
     # On a Tico account sign-in the issuer sends it: Invite again sends to the person already added, once. A repeat of
     # one request (same Idempotency-Key, ui/app/api.js) sends nothing more, nor does a copy overlapping it.
-    from backend import invites
+    from backend import company_import, invites
     keyed = lambda key, email="someone-else@acme.example": api.post(
         "/api/v2/onboarding/company/people/ana/invite", json={"email": email},
         headers={**signed_in(), "Idempotency-Key": key})
 
     class Issuer:
         name, calls, overlap = "oidc", [], []
+        answer = (202, {"status": "sent"})
 
         def invite(self, email):
             if not self.overlap:
                 self.overlap.append(None)
                 self.overlap[0] = keyed("k-1")
             self.calls.append(email)
-            return 202, {"status": "sent"}
+            return self.answer
     api.app.state.auth.proxy = Issuer()
     try:
         sent = keyed("k-1")
@@ -218,6 +220,16 @@ def invited_from_setup(api, finance):
         finally:
             invites.record = record
         assert keyed("k-2").status_code == 200 and len(Issuer.calls) == 2
+        # A repeat answers from its binding: the roster is not written again.
+        with mock.patch.object(company_import, "add_invitee", side_effect=AssertionError("roster written")):
+            assert keyed("k-1").status_code == 200 and len(Issuer.calls) == 2
+        # A send the issuer refuses is bound too, and its refusal names the address: removal must scrub that.
+        Issuer.answer = (202, {"error": "not_sent"})
+        try:
+            assert keyed("k-3").status_code == 422
+        finally:
+            Issuer.answer = (202, {"status": "sent"})
+        sends = list(Issuer.calls)
         assert invite("nobody", "x@acme.example").status_code == 404
         # Removed since: the seats her invite moved under her are not her history, so Remove is offered, and they go
         # back to the owner removing her.
@@ -232,6 +244,21 @@ def invited_from_setup(api, finance):
             assert not c.execute("SELECT 1 FROM seats WHERE reports_to=?", ("human:" + ana["id"],)).fetchone()
             assert all(c.execute("SELECT reports_to FROM seats WHERE id=?", (s,)).fetchone()[0].startswith("human:")
                        for s in under)
+        assert ana["id"] not in [p["id"] for p in api.get("/api/people", headers=signed_in()).json()["people"]]
+        # Removed, a repeat of a bound key still answers from its binding and never invites her again. The binding keeps
+        # neither the address (its hash) nor the refusal text that named it.
+        bound = rows(api, "SELECT key,state,request_hash,error_detail FROM idempotency WHERE binding='invites' AND subject=?",
+                     (ana["id"],))
+        assert {row["state"] for row in bound} == {"completed", "refused"}
+        assert all(row["request_hash"] == "" for row in bound)
+        assert not [row for row in bound if "acme.example" in (row["error_detail"] or "")]
+        refused_key, = [row["key"] for row in bound if row["state"] == "refused"]
+        with mock.patch.object(company_import, "add_invitee", side_effect=AssertionError("roster written")):
+            replayed = api.post("/api/v2/onboarding/company/people/ana/invite", json={"email": "ana@acme.example"},
+                                headers={**signed_in(), "Idempotency-Key": refused_key})
+            assert replayed.status_code == 422 and replayed.json()["error"]["code"] == "invite_failed"
+            assert replayed.json()["error"]["detail"] == invites.REMOVED
+            assert keyed("k-1").status_code == 200 and Issuer.calls == sends
         assert ana["id"] not in [p["id"] for p in api.get("/api/people", headers=signed_in()).json()["people"]]
     finally:
         api.app.state.auth.proxy = None

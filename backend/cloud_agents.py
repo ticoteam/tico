@@ -417,9 +417,6 @@ def _add_bot(c, auth, onboarding, settings_admin, who, agent, body):
     row = lifecycle.seat(c, seat_id)
     row = lifecycle.refuse_if_requested(row, c)
     placed = lifecycle.placement(auth, c, who, row["reports_to"], seat_id)
-    if str(row["reports_to"] or "").startswith(lifecycle.SEAT_PREFIX):
-        # A bot cannot report to a seat, and filling the seat above later would leave this bot under the wrong manager.
-        raise Problem("manager_seat", "Fill the seat this one reports to first", 409)
     team = _joins(c, row, placed)
     if team:
         Groups.may_add(c, auth, who, team)          # the bot joins this team: the rule every add to a team obeys
