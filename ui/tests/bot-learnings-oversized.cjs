@@ -49,6 +49,7 @@ const {chromium} = require('playwright');
       const row = subject => ({subject, author: 'ops', when: '2026-10-27T10:00:00Z', files: ['memory/learnings.md']});
       window.ago = () => 'today';
       window.get = async url => {
+        if (url.endsWith('/dream')) return {dream: null};          // the panel's dream read, not a memory read
         reads.push(url);
         if (url.includes('before=')) return {updates: [row('Older update')], next_before: null};
         if (url.includes('include_documents=false')) return {documents: {}, document_status: status};

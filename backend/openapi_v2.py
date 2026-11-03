@@ -2482,6 +2482,21 @@ SCHEMAS['MemoryTidyCard'] = obj({
 SCHEMAS['MemoryTidyCards'] = obj({'cards': items(ref('MemoryTidyCard'))})
 SCHEMAS['MemoryTidyCardResult'] = obj({'card': ref('MemoryTidyCard')})
 
+# A bot's Dream (backend/dream.py): a cleanup task over its own memory, with up to three questions to its requester.
+STABLE.extend([
+    ('/api/v2/bots/{bot}/dream', 'get', 'Bots', 'getBotDream',
+     "The bot's open dream, or else its newest one finished in the last day; dream is null otherwise", 'BotDreamView'),
+    ('/api/v2/bots/{bot}/dream', 'post', 'Bots', 'startBotDream',
+     'Start a dream: a `dream` task for the bot, with the rights `POST /api/v2/tasks` needs. Its open dream is returned '
+     'instead of a second; 409 stateless for a bot that keeps no memory', 'BotDreamView'),
+])
+SCHEMAS['BotDreamView'] = obj({'dream': {'oneOf': [obj({
+    'task': 's', 'status': 's', 'state': {'enum': ['starting', 'dreaming', 'asking', 'done', 'stopped']},
+    'questions': {'oneOf': [obj({'message_id': 's', 'text': 's', 'mine': {
+        'type': 'boolean', 'description': 'The question is put to the caller, who answers it at POST /api/v2/messages/{mid}/answer'}}),
+        {'type': 'null'}]},
+    'summary': 'n', 'closed_at': 'n', 'started_at': 's'}), {'type': 'null'}]}})
+
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "
     "never removed or renamed, and a breaking change is a new /api/v3. Routes not listed are internal. "
