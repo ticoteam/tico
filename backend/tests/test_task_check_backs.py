@@ -472,16 +472,17 @@ def test_results_returned_while_disabled_remain_audit_only_after_enable(followup
         assert CB.coverage(c)["results"] == 2
 
 
-def test_due_passes_while_a_notice_is_queued_leave_exactly_one_job(followups):
+def test_due_moving_while_a_notice_is_queued_replaces_it_with_one_live_notice(followups):
     with followups.app.state.store.transaction() as c:
         row = due(c, task(c))
         assert CB.sweep(c)["woke"] == [row["id"]]
-        # The due time moves again while the first notice still waits (a snooze end, a deferral, a repair).
+        # The due time moves again while the first notice still waits (a snooze end, a deferral, a repair). That
+        # notice is for a time that no longer holds: it is canceled, the current one queued, and nothing more follows.
         c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (H.shift(H.now(), seconds=-2), row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]
         assert CB.sweep(c)["woke"] == []
-        assert CB.sweep(c)["woke"] == []
-        assert c.execute("SELECT count(*) FROM task_check_back_wakes WHERE task_id=?", (row["id"],)).fetchone()[0] == 1
-        assert [w["job_state"] for w in wakes(c, row["id"])] == ["queued"]
+        assert c.execute("SELECT count(*) FROM task_check_back_wakes WHERE task_id=?", (row["id"],)).fetchone()[0] == 2
+        assert sorted(w["job_state"] for w in wakes(c, row["id"])) == ["canceled", "queued"]
 
 
 def test_later_due_time_wakes_again_once_the_first_notice_is_handled(followups):
