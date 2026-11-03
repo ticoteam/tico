@@ -36,6 +36,7 @@ function auCondText(c) {
   if (c.op === 'is' && (v === true || v === 'yes') && min) return f + min;
   // A task event's type reads as the type's name, not its id.
   if (c.field === 'event.data.type_id' && c.op === 'is') return 'Type is ' + (TASK_TYPES.find(t => t.id === v)?.name || v);
+  if (c.field === 'event.data.step' && c.op === 'is') return 'Step is ' + (TASK_TYPES.flatMap(t => t.steps || []).find(st => st.id === v)?.name || v);
   if (c.op === 'contains') return `${f} has “${v ?? ''}”`;
   if (c.op === 'matches') return `${f} matches /${v ?? ''}/`;
   // An event a condition names reads as its words ("Task finished"), not its id (task.done).

@@ -130,6 +130,15 @@ function auEventField(t, ed) {
   const pick = auSel('evpick', list, custom ? AU_EV_CUSTOM : t.name, `aria-label="Event"${t.name && !custom ? ` title="${esc(t.name)}"` : ''}`);
   return auFld('Event', pick + (custom ? auIn('trigger.name', t.name, 'custom.name', 'aria-label="Custom event"') : ''));
 }
+// A "task step changed" trigger names its step: the step filter already saved, or the one picked here (Dev 666).
+const AU_STEP_FIELD = 'event.data.step';
+const auStepPick = (t, ed) => ed?.stepPick ?? (t.filters || []).find(f => f.field === AU_STEP_FIELD)?.value ?? '';
+function auStepChoices(t) {
+  const typeId = (t.filters || []).find(f => f.field === 'event.data.type_id')?.value;
+  const seen = new Map();
+  (typeId ? TASK_TYPES.filter(x => x.id === typeId) : TASK_TYPES).forEach(x => (x.steps || []).forEach(st => seen.has(st.id) || seen.set(st.id, st.name)));
+  return [...seen];
+}
 function auTriggerFields(t, ed) {
   const src = {message: () => auFld('Inbox', auIn('trigger.inbox', t.inbox)),
     task_received: () => auFld('To', auSel('trigger.to', auWithCur([...auPeople(), ...auBots()], t.to, auActorName(t.to)), t.to)),
@@ -143,7 +152,9 @@ function auTriggerFields(t, ed) {
       + auFld('Time zone', auIn('trigger.tz', t.tz))}[t.type];
   // When: a schedule, an event or a due date (a kind made elsewhere, such as a message, shows as itself).
   const when = auFld('When', auSel('ttype', auWithCur(AU_WHEN, t.type, AU_TRIGGER_WORDS[t.type] || t.type), t.type));
-  return when + (src ? src() : '')
+  const pick = auStepPick(t, ed), stepped = t.type === 'event' && t.name === 'task.step_changed';
+  const step = stepped ? auFld('Step', auSel('stepPick', auWithCur([['', 'Choose a step'], ...auStepChoices(t)], pick, pick), pick, 'aria-label="Step"')) : '';
+  return when + (src ? src() : '') + step
     + auBox('Filters', auCondRows('trigger.filters', t.filters) + auPlus('trigger.filters', 'cond', 'Filter'));
 }
 function auFilterFields(s) {
@@ -317,6 +328,13 @@ async function auEdSave(button) {
   if (ed.kind === 'trigger') {
     body = {trigger: ed.trigger.type === 'event' ? {...ed.trigger, name: String(ed.trigger.name || '').trim()} : ed.trigger};
     if (ed.trigger.type === 'event' && !body.trigger.name) { toast('Name the event', true); if (button) button.disabled = false; return; }
+    if (body.trigger.name === 'task.step_changed') {
+      // "Enters a step" is not saved until a step is chosen.
+      const pick = auStepPick(ed.trigger, ed);
+      if (!pick) { toast('Choose a step', true); if (button) button.disabled = false; return; }
+      body.trigger = {...body.trigger, filters: [...(body.trigger.filters || []).filter(f => f.field !== AU_STEP_FIELD),
+        {field: AU_STEP_FIELD, op: 'is', value: pick}]};
+    }
     if (ed.trigger.type === 'due') {
       const t = body.trigger, days = Number(t.open_days ?? 14);
       const bad = !/^\d{4}-\d{2}-\d{2}$/.test(String(t.first_due || '')) ? 'Pick the first due date'
