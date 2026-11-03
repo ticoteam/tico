@@ -135,7 +135,9 @@ def test_the_rail_is_the_threads_one_is_in_by_title_and_never_a_one_to_one_dm_or
     rail = listed(api, "rail", "ben-test")
     assert ids(rail["threads"]) == [alpha["id"], beta["id"], gamma["id"]]
     assert rail["pinned"] == [] and rail["next_cursor"] is None
-    assert dm["id"] not in str(rail) and home["id"] not in str(rail) and zeta["id"] not in str(rail)
+    listed_ids = ids(rail["pinned"] + rail["threads"])
+    assert dm["id"] not in listed_ids and home["id"] not in listed_ids and zeta["id"] not in listed_ids
+    assert dm["id"] in rail["catch_up_ids"]                     # the DM's unread is Catch up's, not a rail row
     assert rail["dms"] == {"human:ana": 1} and rail["catch_up"] == len(rail["catch_up_ids"])
     followed = api.put(f"/api/v2/threads/{zeta['id']}/follow", json={}, headers=headers("ben-test"))
     assert followed.status_code == 200, followed.text
@@ -366,7 +368,7 @@ def test_an_activity_event_says_whether_its_message_is_unread_for_each_viewer(ap
 
 def test_a_hundred_long_pins_page_through_the_cursor_and_none_is_lost(api):
     with api.app.state.store.transaction() as c:
-        made = [threads.create(c, "human:ana", title=f"Pinned {n:03d} " + "x" * 400, audience="company")["id"]
+        made = [threads.create(c, "human:ana", title=f"Pinned {n:03d} " + "x" * 1500, audience="company")["id"]
                 for n in range(100)]
         c.executemany("INSERT INTO thread_pins(id,thread_id,actor,pinned,created_at,updated_at) "
                       "VALUES(?,?,'human:ben',1,'2026-11-03','2026-11-03')", [("pin-" + t, t) for t in made])
