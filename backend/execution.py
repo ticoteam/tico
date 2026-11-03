@@ -3660,9 +3660,9 @@ class Execution:
                   "VALUES(?,?,?,?,?,?,'leased',?,?,?)",
                   (aid, row["id"], row["bot_id"], who.runner_id, row["generation"], digest(token), until, H.now(), lane))
         if body.start_places:
-            # Decided now, under this write lock: granted while the computer holds fewer places than its turn limit, else
-            # parked "computer busy". A turn past the limit is leased (it counts toward live_limit) and starts nothing.
-            start_places.admit(c, aid, self.store.settings)
+            # Decided now, under this write lock: granted a place while the computer holds fewer than its turn limit. A turn
+            # past the limit is leased (it counts toward live_limit) and holds no place until one frees.
+            start_places.admit(c, aid, runner, self.store.settings)
         c.execute('DELETE FROM org_turn_waits WHERE job_id=?', (row['id'],))
         from . import run_diagnostics
         run_diagnostics.touch(c, aid, "leased")

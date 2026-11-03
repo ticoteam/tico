@@ -255,13 +255,17 @@ def claim(c, aid):
               (aid, H.shift(H.now(), seconds=START_SECONDS)))
 
 
-def admit(c, aid, settings=None):
+def admit(c, aid, runner, settings=None):
     """A claimed turn's start place, decided when its lease is written under the claim's write lock. The row is managed
-    from the start but has no start yet, so the new lease does not count as held while `reserve` decides: reserve grants
-    the place while the computer holds fewer than its turn limit, and otherwise parks the turn "computer busy". A turn past
-    the limit is still leased (it counts toward `live_limit`) but starts nothing until a place frees."""
+    from the start, with no start yet, so the new lease does not count as held while it is decided. While the computer
+    holds fewer places than its turn limit, `reserve` grants this turn one. A turn claimed past that limit holds no place
+    and is not yet waiting: it is leased (it counts toward `live_limit`), and its start is refused "computer busy" until a
+    place frees, when the runner asks for it (`reserve`, from start-place or started)."""
     c.execute("INSERT INTO start_places(attempt_id,managed) VALUES(?,1)", (aid,))
-    return reserve(c, c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone(), settings)
+    attempt = c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
+    if sum(held(c, attempt['runner_id']).values()) >= turn_limit(runner):
+        return {"reserved": False}
+    return reserve(c, attempt, settings)
 
 
 def waiting(c, aid, reason):

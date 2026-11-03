@@ -62,8 +62,8 @@ bots, tasks, people or accounts. The bot list still follows each viewer's access
 
 On an upgraded runner, a turn holds its place from its claim until it ends. A computer runs up to its turn limit, and
 holds at most twice that in claimed work, waiting turns included; the rest stays queued on the server, unleased, until
-a claim ends. A turn claimed past the limit waits as "computer busy": its start is refused until a place frees. A login,
-quota or other pre-start wait is parked: the turn keeps its claim but takes no start place, so
+a claim ends. A turn claimed past the limit holds no place: its start is refused as "computer busy" until one frees. A
+login, quota or other pre-start wait is parked: the turn keeps its claim but takes no start place, so
 other work can start beside it. Waiting for
 a lane or login releases only the start reservation; continuing requires a fresh atomic reservation. Two turns cannot
 take the last start reservation together. Codex's shared ChatGPT login does not normally queue turns
