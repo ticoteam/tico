@@ -4,6 +4,7 @@ from backend.events import prime_status_lines, status_line
 from backend.store import H
 from backend.tests.test_api import api, assign, claim, post, ready  # noqa: F401
 from backend.tests.test_run_backoff import hold_bot, setup
+from backend import usage_limits
 
 
 def lines(api, slugs, primed):
@@ -35,7 +36,7 @@ def test_primed_status_lines_match_each_bots_own_and_read_each_table_once(api, m
         c.execute("INSERT INTO bot_budget(bot,held_at,window,runs,budget) VALUES('cpo',?,'hour',301,300)", (H.now(),))
         c.execute("INSERT INTO run_backoff(bot,fails,wait_until) VALUES('finance',2,?)",
                   (H.shift(H.now(), seconds=600),))
-        c.execute("INSERT INTO usage_limits(bot,daily_usd) VALUES('coo',0.000001)")
+        usage_limits.save_own(c, "coo", {"daily_usd": 0.000001}, "human:ana")
     slugs = ["coo", "cpo", "doc-updater", "finance", "inbox", "ops", "product-design"]
     each, plain = lines(api, slugs, primed=False)
     together, primed = lines(api, slugs, primed=True)

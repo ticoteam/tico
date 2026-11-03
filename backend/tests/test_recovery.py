@@ -17,8 +17,9 @@ def test_store_drops_legacy_queue_trigger_and_drains_queued_self_messages(tmp_pa
         H.sync_registry(c, {"coo": {"name": "coo", "status": "active"}},
                         {"people": []})
         c.execute("DELETE FROM cloud_migrations WHERE version=8")
-        # A database as an older release left it: it never recorded migration 0052, and still has the trigger.
-        c.execute("DELETE FROM schema_migrations WHERE version='0052_drop_queue_bot_message'")
+        # A database as an older release left it: it never recorded migration 0052 (nor any later one, which would run
+        # again after it), and still has the trigger.
+        c.execute("DELETE FROM schema_migrations WHERE version>='0052' AND version NOT LIKE 'legacy_%'")
         c.execute("DROP TRIGGER IF EXISTS queue_bot_message")
         c.execute("CREATE TRIGGER queue_bot_message AFTER INSERT ON messages "
                   "WHEN NEW.recipient_id LIKE 'bot:%' BEGIN "

@@ -5,7 +5,7 @@
 #
 # Pairs per rule at generation:
 #   ASYNC109     1   owner: engineering
-#   B007        17   owner: engineering
+#   B007        16   owner: engineering
 #   B008         1   owner: engineering
 #   B018         8   owner: engineering
 #   B023        18   owner: engineering
@@ -108,7 +108,7 @@
 "backend/providers.py" = ["B905"]
 "backend/queue_refusals.py" = ["BLE001"]
 "backend/read_deps.py" = ["BLE001", "F401"]
-"backend/redesign_migration.py" = ["B007", "B904", "BLE001"]
+"backend/redesign_migration.py" = ["B904", "BLE001"]
 "backend/releases.py" = ["BLE001"]
 "backend/replication.py" = ["BLE001"]
 "backend/repo_waits.py" = ["BLE001"]

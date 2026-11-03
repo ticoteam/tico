@@ -4,6 +4,7 @@ import pytest
 
 from backend import hubdb as H, rules, verdict_moves as V
 from backend.tests.test_github import PR, _status, _suite, api, hook, post, pr_event  # noqa: F401
+from backend.tests.usage_rows import segment
 
 HEAD, NEW, BASE = "a" * 40, "d" * 40, "c" * 40
 STEPS = [("On Deck", "open"), ("In Progress", "doing"), ("Review 1", "review"), ("Review 1 Fixes", "doing"),
@@ -16,14 +17,13 @@ def receipt(api, task, head=HEAD):
         c.execute("UPDATE tasks SET note=? WHERE id=?", (f"Tests: base {BASE} head {head}: 9 passed, 0 failed", task["id"]))
 
 
-def usage(c, task_id, bot, model="claude-sonnet-5-5", provider="anthropic"):
+def usage(c, task_id, bot, model="claude-sonnet-5-5", provider="anthropic", runtime=None):
     turn = H.new_id()
     c.execute("INSERT INTO turns(id,bot,started_at,finished_at,task_id) VALUES(?,?,?,?,?)",
               (turn, bot, H.now(), H.now(), task_id))
-    c.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,output_tokens,model,provider,runtime,"
-              "harness,effort) VALUES(?,0,20,20,?,?,? ,?,'high')",
-              (turn, model, provider, "claude" if provider == "anthropic" else "codex",
-               "claude" if provider == "anthropic" else "codex"))
+    runtime = runtime or ("claude" if provider == "anthropic" else "codex")
+    segment(c, turn, input_tokens=20, output_tokens=20, model=model, provider=provider, runtime=runtime,
+            harness=runtime, effort="high")
     return turn
 
 
@@ -44,10 +44,11 @@ def ticket(api, step="Review 1", labels=()):
     return task
 
 
-def check(api, task, title="Review 1: PR #412", owner="bot:cmo"):
+def check(api, task, title="Review 1: PR #412", owner="bot:cmo", **ran):
+    """A check `owner` ran on the ticket; `ran` names the model it ran on (usage's model, provider, runtime)."""
     with api.app.state.store.transaction() as c:
         row = H.task_create(c, "bot:cpo", title, f"Check PR #412 head {HEAD}", owner, parent_id=task["id"], lint=False)
-        turn = usage(c, row["id"], H.actor_id(owner))
+        turn = usage(c, row["id"], H.actor_id(owner), **ran)
         from backend.check_independence import capture_attempt
         capture_attempt(c, task["id"], row["id"], HEAD, turn)
         c.execute("DELETE FROM jobs")
@@ -156,15 +157,7 @@ def test_duplicate_delivery_of_the_same_eligible_verdict_moves_only_once(api):
 
 def test_configured_other_family_checker_fallback_verdict_still_moves(api):
     task = ticket(api)
-    review = check(api, task)
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM turn_usage_segments WHERE turn_id IN (SELECT id FROM turns WHERE task_id=?)",
-                  (review["id"],))
-        turn = c.execute("SELECT id FROM turns WHERE task_id=?", (review["id"],)).fetchone()[0]
-        c.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,output_tokens,model,provider,runtime,"
-                  "harness,effort) VALUES(?,0,20,20,'gpt-6.1-sol','openai','codex','codex','high')", (turn,))
-        from backend.check_independence import capture_attempt
-        capture_attempt(c, task["id"], review["id"], HEAD, turn)
+    review = check(api, task, model="gpt-6.1-sol", provider="openai")
     verdict(api, review, "approve")
     assert step(api, task) == "Review 1 Fixes"
     with api.app.state.store.read() as c:
@@ -180,13 +173,7 @@ def test_configured_other_family_checker_fallback_verdict_still_moves(api):
 
 def test_unknown_executed_checker_family_is_recorded_but_does_not_block_verdict(api):
     task = ticket(api)
-    review = check(api, task)
-    with api.app.state.store.transaction() as c:
-        turn = c.execute("SELECT id FROM turns WHERE task_id=?", (review["id"],)).fetchone()[0]
-        c.execute("UPDATE turn_usage_segments SET model='synthetic-unknown-model',provider='unknown' WHERE turn_id=?",
-                  (turn,))
-        from backend.check_independence import capture_attempt
-        capture_attempt(c, task["id"], review["id"], HEAD, turn)
+    review = check(api, task, model="synthetic-unknown-model", provider="unknown", runtime="claude")
     verdict(api, review, "approve")
     assert step(api, task) == "Review 1 Fixes"
     with api.app.state.store.read() as c:
