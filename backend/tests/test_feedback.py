@@ -11,7 +11,8 @@ from backend.auth import Identity
 from backend.store import H, Problem
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.test_api import api, as_member, headers, post  # noqa: F401
-from backend.tests.test_threads_note_boundaries import bot_runner, bot_says, drain, new_thread, say
+from backend.tests.test_threads_note_boundaries import bot_runner, bot_says, drain, finish, new_thread, say
+from backend.tests.test_assistant import assistant_turn
 
 
 def give(api, subject_id, rating="down", token="ana-test", expected=200, subject_type="message", **more):
@@ -86,10 +87,12 @@ def test_only_a_bots_work_that_the_rater_reads_takes_feedback_and_only_from_a_pe
 
 
 def test_a_private_assistant_chats_feedback_is_its_persons_alone(api):
-    said = post(api, "assistant/messages", {"text": "hi"}, token="cara-test")
-    reply = said["reply"]["id"]
+    r, attempt = assistant_turn(api, "cara-test", text="hi")       # the Assistant's bot turn answers, as the model does
+    finish(api, r, attempt, "Hi Cara, what can I do?")
+    chat = api.get("/api/v2/assistant", headers=headers("cara-test")).json()["messages"]
+    reply = [m for m in chat if m["sender_id"] == "bot:coo" and m["body"] == "Hi Cara, what can I do?"][-1]["id"]
     rated = give(api, reply, token="cara-test", reason="Too chirpy")
-    assert rows(api, "SELECT attempt_id FROM feedbacks WHERE id=?", rated["id"])[0]["attempt_id"] is None   # fast path
+    assert rows(api, "SELECT attempt_id FROM feedbacks WHERE id=?", rated["id"])[0]["attempt_id"] == attempt["id"]
     assert [m["id"] for m in markers(api, [reply], token="cara-test")] == [rated["id"]]
     # Who rated a private reply, and how, is not in the audit trail the owner reads whole.
     assert rows(api, "SELECT count(*) AS n FROM events WHERE action LIKE 'feedback.%'")[0]["n"] == 0

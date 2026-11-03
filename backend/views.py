@@ -119,6 +119,8 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
             ((bot,) if bot is not None else ()) + (since, since, limit)))
     stored = H.prime_messages(c, [row["message_id"] for row in found])
     privacy.prime_messages(c, list(stored.values()))
+    from . import threads
+    threads.prime_members(c, who, [row["conversation_id"] for row in stored.values()])
     privacy.prime_attempts(c, [row["id"] for row in found])
     prime_attempt_details(c, [row["id"] for row in found])
     for row in found:

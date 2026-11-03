@@ -28,7 +28,6 @@ import dataclasses
 import importlib
 import json
 import os
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -118,8 +117,8 @@ def today_sets(settings):
             who = identities(c, auth)
             conversations = {}
             for row in c.execute("SELECT id,audience FROM conversations ORDER BY id").fetchall():
-                if row["audience"] == "home" and uuid.UUID(row["id"]).version == 4:
-                    continue    # a Home threads made for itself while the demo seeded (an update card): not legacy data
+                # Every Home thread counts. (The demo patches uuid4 to a digest of its counter, so a Home thread's
+                # version nibble is chance: skipping "version 4" dropped real Home threads on some seeds.)
                 conversations[row["id"]] = {actor for actor, identity in who.items()
                                             if can_read(auth, c, identity, row["id"])}
             messages = {}

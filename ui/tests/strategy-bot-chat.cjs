@@ -42,7 +42,7 @@ async function open(browser, me, view, strategyName) {
     if (/^\/api\/v2\/(?:uploads\/)?assistant\/messages$/.test(p)) {
       const request = route.request(), form = !p.includes('/uploads/');
       sent.push({path: p, body: form ? request.postDataJSON() : request.postDataBuffer().toString('latin1')});
-      return json({message: msg('s' + sent.length, 'human:' + me.id, 'sent'), reply: null, fast: false, intent: null});
+      return json({message: msg('s' + sent.length, 'human:' + me.id, 'sent'), });
     }
     if (p === `/api/v2/conversations/${view.room_id}/snapshot`) return json({messages: view.messages, execution: null, has_more: false, next_before: null});
     if (p === '/api/v2/conversations/old1/messages') {

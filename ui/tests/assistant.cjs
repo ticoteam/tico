@@ -73,9 +73,9 @@ function fixture() {
     messages: state.messages, has_more: false, next_before: null, execution: null, actions: {act1: state.card, act2: state.bulk, act3: state.enrol}, pending: []});
   state.reply = () => {
     const user = msg('u' + state.sent.length, 'human:ana', state.sent.at(-1));
-    const bot = msg('b' + state.sent.length, 'bot:coo', '1 thing waiting on you:\n- Task: [Pick a launch date](#/task/t1)', {fast: true});
+    const bot = msg('b' + state.sent.length, 'bot:coo', '1 thing waiting on you:\n- Task: [Pick a launch date](#/task/t1)');
     state.messages.push(user, bot);
-    return {message: user, reply: bot, fast: true, intent: 'waiting'};
+    return {message: user};
   };
   return state;
 }
@@ -112,7 +112,7 @@ function fixture() {
       await link.waitFor();
       assert.deepEqual(state.sent, ["What's waiting on me?"], tag + ': the chip sent its words once');
       assert.equal(await page.locator('#conv-thread .asst-hints').count(), 0, tag + ': no suggestions once it has messages');
-      assert.equal(await page.locator('#conv-thread .thinking').count(), 0, tag + ': a fast answer has no thinking state');
+      assert.equal(await page.locator('#conv-thread .thinking').count(), 0, tag + ': the answer in the thread has no thinking state');
 
       // The old link lands here; search no longer offers the Assistant (Ask does, on every page).
       await page.goto('https://tico-ui.test/#/person/ana/assistant');
@@ -214,7 +214,7 @@ function fixture() {
       assert.match(await pill.innerText(), /New reply/, 'stick: the pill says a reply came');
       await page.locator('#chat-composer .p-text').fill('what changed?');
       await page.locator('#chat-composer .p-send').click();
-      await page.waitForFunction(() => document.querySelectorAll('#conv-thread .bubble').length === 27);
+      await page.waitForFunction(() => document.querySelectorAll('#conv-thread .bubble').length === 26);
       assert.ok(await gap() <= 1, 'stick: your own message takes you to the bottom');
       assert.equal(await pill.isHidden(), true, 'stick: and the pill goes');
       assert.deepEqual(errors, [], 'stick: no page errors');
