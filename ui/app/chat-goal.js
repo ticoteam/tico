@@ -174,7 +174,7 @@ function chatGoalRender(state, force = false) {
     const actions = host.querySelector('.cg-actions'); if (actions) actions.hidden = !state.goalOpen;
   }
   const P = cgPill(state), btn = P && pq(P, '.p-goal');
-  // The old chat's composer (pill.js, P.ways) has no target: Set as goal is in its ways menu, for one goal.
+  // A bot's thread composer (thread-view.js, P.ways) has no target: Set as goal is in its ways menu, for one goal.
   if (P && (btn || P.ways)) {
     if (P.goalMode == null) P.goalMode = !P.ways && chatGoalModeSaved(state.slug);
     // A pinned goal is edited and cleared from its bar, so the composer is for chatting: no target, and Send sends.

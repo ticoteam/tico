@@ -1200,19 +1200,27 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
                 out.append(sent)
         if any(actor == primary for actor, _ in in_audience):
             _follow(c, thread["id"], primary, "mentioned", (message.get("seq") or 1) - 1)
+    way = named_way(refs) if posting is not None and _cause(author) == "human" else None
     if primary and primary.startswith("bot:"):
         if never_wakes(refs, primary):
             c.execute("UPDATE message_deliveries SET mode='none', updated_at=? WHERE message_id=? AND recipient=?",
                       (_now(), message["id"], primary))
         else:
             _guard_primary(c, root, message, primary)
+            if way == "defer":
+                # Quiet (no job): the session's next turn takes it, or its deadline starts one (backend/delivery.py).
+                from . import delivery
+                delivery.defer(c, primary, "message", message["id"], conversation_id=thread["id"],
+                               defer_for=refs.get("send_defer_for"))
+                c.execute("UPDATE message_deliveries SET mode='defer', updated_at=? WHERE message_id=? AND recipient=?",
+                          (_now(), message["id"], primary))
     for actor, reason in wanted.items():
         if actor == primary:
             continue
         if actor.startswith("human:"):
             sent = _deliver_person(c, thread, root, message, actor, reason, replay, warnings)
         elif actor.startswith("bot:"):
-            sent = _deliver_bot(c, thread, root, message, actor, reason, replay)
+            sent = _deliver_bot(c, thread, root, message, actor, reason, replay, way=way)
         else:
             sent = None
         if sent:
@@ -1252,13 +1260,29 @@ def _deliver_person(c, thread, root, message, person, reason, replay, warnings):
     return {"recipient": person, "mode": "queue", "reason": reason}
 
 
-def _deliver_bot(c, thread, root, message, bot, reason, replay=False):
-    """One bot's delivery and wake, under the wake rule and the loop guard. None when it gets no delivery."""
+# The marks the thread routes write for a post's named `delivery` (backend/thread_api.py): route-only, refused from a
+# client, so a client's own refs.delivery goes as it always did.
+WAY_KEYS = ("send_way", "send_defer_for")
+
+
+def named_way(refs):
+    """The way a person's post named for the bots it reaches (refs.send_way, which the thread routes write from
+    `delivery`): 'queue' or 'defer', else None, the thread's own rule (into a running turn, as always)."""
+    way = refs.get("send_way") if isinstance(refs, dict) else None
+    return way if way in ("queue", "defer") else None
+
+
+def _deliver_bot(c, thread, root, message, bot, reason, replay=False, way=None):
+    """One bot's delivery and wake, under the wake rule and the loop guard. None when it gets no delivery. `way`: the
+    way the post named (named_way): a queue's run waits for the bot's running turn, a defer's starts at its deadline."""
     if reason == "mention":
         _follow(c, thread["id"], bot, "mentioned", (message.get("seq") or 1) - 1)
     if replay or not _reachable(c, bot):
         return None
-    mode, rule = wake_mode(c, thread, message, bot, reason)
+    # The wake rule judges the message as written, without the marks its named way added (quiet, delivery, send_*).
+    judged = message if way is None else {**message, "refs": {k: v for k, v in (message.get("refs") or {}).items()
+                                                              if k not in ("quiet", "delivery", *WAY_KEYS)}}
+    mode, rule = wake_mode(c, thread, judged, bot, reason)
     if mode is None:
         return None
     author = message.get("sender_id") or ""
@@ -1269,11 +1293,18 @@ def _deliver_bot(c, thread, root, message, bot, reason, replay=False):
     if state == "capped":
         _capped_notice(c, root)
     elif mode in ("queue", "steer"):
-        carrier = _carrier(c, thread, message, bot, reason, rule)
+        carrier = _carrier(c, thread, message, bot, reason, rule, way=way)
         if carrier is None:
             c.execute("UPDATE message_deliveries SET state='moot', updated_at=? WHERE id=?", (_now(), did))
             return {"recipient": bot, "mode": mode, "reason": reason, "state": "moot"}
         c.execute("UPDATE message_deliveries SET carrier_id=? WHERE id=?", (carrier, did))
+        if way == "defer":
+            # The carrier waits, quiet: the bot's next turn here takes it, or its deadline starts its run.
+            from . import delivery
+            delivery.defer(c, bot, "message", carrier, conversation_id=thread["id"],
+                           defer_for=(message.get("refs") or {}).get("send_defer_for"))
+            c.execute("UPDATE message_deliveries SET mode='defer', updated_at=? WHERE id=?", (_now(), did))
+            mode = "defer"
     elif mode == "defer":
         _defer_note(c, message, bot)
     return {"recipient": bot, "mode": mode, "reason": reason, "state": state}
@@ -1652,17 +1683,22 @@ def _run_session(c, attempt_id):
     return (conv["root_id"], conv["audience_class"]) if conv else (None, None)
 
 
-def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None):
+def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, way=None):
     """A keeper notice to `bot` in the same thread whose job starts its run for `message`, or None when the bot may not
     read that message. No seq: no timeline, counter or SSE thread view shows it. It carries the source's provenance
     by reference: the per-message check reads a carrier as the message it carries (task_privacy.message_readable),
-    and its legacy audience is copied."""
+    and its legacy audience is copied. `way` (named_way): a queued carrier stays out of a running turn
+    (execution.inputs); a deferred one is quiet, and starts no run until its deadline."""
     if not _source_readable(c, thread, message, bot):
         return None
     cid = _new_id()
     refs = {"carries": message["id"], "wake": wake, "reason": reason, "from": message.get("sender_id")}
     if rule:
         refs["rule"] = rule
+    if way == "queue":
+        refs["delivery"] = "queue"
+    elif way == "defer":
+        refs["quiet"] = True
     author = message.get("sender_id") or ""
     body = body or f"{author} in this thread: {message.get('body') or ''}"
     legacy = c.execute("SELECT legacy_audience FROM messages WHERE id=?", (message["id"],)).fetchone()
