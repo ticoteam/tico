@@ -23,11 +23,27 @@ WORKFLOW = 'remote-run.yml'
 TAIL = 200
 
 
-def gh(*args, capture=True):
-    result = subprocess.run(['gh', *args], cwd=ROOT, capture_output=capture, text=True)
-    if result.returncode != 0:
-        raise SystemExit(f'remote: gh {" ".join(args[:2])} failed: {(result.stderr or "").strip()}')
-    return result.stdout
+def rate_limit_wait():
+    """Seconds until GitHub's core API limit resets: at most 15 minutes, and 60 when the reset is unknown or past (a
+    secondary limit has no reset time of its own)."""
+    reset = subprocess.run(['gh', 'api', 'rate_limit', '--jq', '.resources.core.reset'], cwd=ROOT, capture_output=True,
+                           text=True).stdout.strip()
+    seconds = int(reset) - int(time.time()) if reset.isdigit() else 0
+    return min(seconds, 900) if seconds > 0 else 60
+
+
+def gh(*args, capture=True, poll=False):
+    """`gh`. With `poll` (a call in a poll loop), a rate-limit failure waits for the reset, then makes the call again."""
+    while True:
+        result = subprocess.run(['gh', *args], cwd=ROOT, capture_output=capture, text=True)
+        if result.returncode == 0:
+            return result.stdout
+        error = (result.stderr or '').strip()
+        if not poll or not ('rate limit' in error.lower() or 'http 429' in error.lower()):
+            raise SystemExit(f'remote: gh {" ".join(args[:2])} failed: {error}')
+        seconds = rate_limit_wait()
+        print(f'remote: GitHub API rate limit hit; retrying in {seconds} s', file=sys.stderr, flush=True)
+        time.sleep(seconds)
 
 
 def git(*args):
@@ -76,26 +92,27 @@ def setup_for(command):
 
 def find_run(run_id, deadline):
     title = f'Remote run {run_id}'
+    time.sleep(5)  # the dispatched run takes a few seconds to reach the list
     while time.monotonic() < deadline:
         runs = json.loads(gh('run', 'list', '--workflow', WORKFLOW, '--event', 'workflow_dispatch', '--limit', '30',
-                             '--json', 'databaseId,displayTitle,url'))
+                             '--json', 'databaseId,displayTitle,url', poll=True))
         for run in runs:
             if run['displayTitle'] == title:
                 return run
-        time.sleep(3)
+        time.sleep(10)
     raise SystemExit(f'remote: dispatched, but "{title}" did not appear; see the Remote run workflow in Actions')
 
 
 def wait(run):
     last = None
     while True:
-        view = json.loads(gh('run', 'view', str(run['databaseId']), '--json', 'status,conclusion'))
+        view = json.loads(gh('run', 'view', str(run['databaseId']), '--json', 'status,conclusion', poll=True))
         if view['status'] != last:
             print(f'remote: {view["status"]}', file=sys.stderr, flush=True)
             last = view['status']
         if view['status'] == 'completed':
             return view['conclusion']
-        time.sleep(10)
+        time.sleep(30)
 
 
 def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
