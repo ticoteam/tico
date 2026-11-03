@@ -7970,7 +7970,7 @@ def next_run_tasks_by(conn, bots):
     return out
 
 
-def own_stuck_blockers(conn, row, at=None):
+def own_stuck_blockers(conn, row, at=None, blockers=None):
     """The blockers of `row` when every one is its own subtask that nothing visible will finish, else [].
 
     Such a subtask belongs to a bot, has gone quiet, and waits on no task, no person's answer and no time of
@@ -7986,7 +7986,8 @@ def own_stuck_blockers(conn, row, at=None):
     at = at or now()
     if row.get("status") == "waiting" and is_human(row.get("waiting_on")):
         return []
-    blockers = TR.live_blockers(conn, row["id"], ACTIVE_STATUSES)
+    if blockers is None:
+        blockers = TR.live_blockers(conn, row["id"], ACTIVE_STATUSES)
     if not blockers:
         return []
     quiet = shift(at, seconds=-STALL_MINUTES * 60)
@@ -7999,6 +8000,18 @@ def own_stuck_blockers(conn, row, at=None):
                 or milestone_pending(conn, block["id"]) or own_job(conn, block, claimable=True)):
             return []
     return [block["id"] for block in blockers]
+
+
+def prime_own_stuck(conn, blockers):
+    """own_stuck_blockers' reads for every blocker in `blockers` ({task: its live blockers}), in set reads seeded into
+    the snapshot: each blocker's live blocker, pending milestone, approvals, ancestry and claimable job."""
+    from . import auto_tasks, quiet_work
+    found = [block for rows in blockers.values() for block in rows]
+    if not found:
+        return
+    auto_tasks.prime_waits(conn, found)
+    TR.prime_ancestry(conn, [block["id"] for block in found])
+    quiet_work.prime_own_jobs(conn, found, claimable=True)
 
 
 def stuck_tasks(conn, hours=STUCK_HOURS, hidden=()):
