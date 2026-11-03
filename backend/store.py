@@ -228,11 +228,18 @@ CREATE TABLE IF NOT EXISTS attempt_captures(
 CREATE INDEX IF NOT EXISTS attempt_captures_created ON attempt_captures(created_at);
 -- A run that had a secret taken out while it was going: its capture, handed in at the end, is not kept.
 CREATE TABLE IF NOT EXISTS attempt_capture_drops(attempt_id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
+-- One table for the request cache (binding NULL: a saved answer, swept after IDEMPOTENCY_RETENTION_HOURS) and the
+-- retained operation bindings (binding names the operation; never swept). docs/status-and-state.md has the states.
+-- Migration 0050_idempotency_one_table.py builds this same table, with its indexes, on every file (test_migrations
+-- checks the two match), so this statement only declares it.
 CREATE TABLE IF NOT EXISTS idempotency(
  actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL,
- request_hash TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL,
+ request_hash TEXT NOT NULL, response TEXT, created_at TEXT NOT NULL, updated_at TEXT,
+ binding TEXT CHECK(binding IS NULL OR binding IN ('invites','github_product_repo','github_review')),
+ subject TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'completed' CHECK(state IN ('pending','completed','refused')),
+ error_code TEXT, error_detail TEXT, error_status INTEGER,
  PRIMARY KEY(actor,operation,key));
-CREATE INDEX IF NOT EXISTS idempotency_by_created ON idempotency(created_at);
+CREATE INDEX IF NOT EXISTS idempotency_answers_by_created ON idempotency(created_at) WHERE binding IS NULL;
 CREATE TABLE IF NOT EXISTS schedule_occurrences(
  schedule_id TEXT NOT NULL REFERENCES schedules(id), occurrence TEXT NOT NULL,
  task_id TEXT REFERENCES tasks(id), outcome TEXT NOT NULL,
@@ -433,7 +440,8 @@ def refused(c, identity, exc, savepoint="domain_write"):
 
 # A client retries a failed write with the same Idempotency-Key within seconds, so two
 # days of stored responses is generous. Without a bound the table kept every mutating
-# request's response forever: most of the database file.
+# request's response forever: most of the database file. Operation bindings share the table
+# (binding is not NULL) and are never swept: an ambiguous external call is never repeated.
 IDEMPOTENCY_RETENTION_HOURS = 48
 MAIL_RETENTION_DAYS = 180
 # Polls carry nothing a retry could double: a replayed heartbeat or lease renewal just
@@ -484,7 +492,8 @@ def sweep_idempotency(store, now=None, batch=5000):
     while True:
         with store.transaction() as c:
             removed = c.execute("DELETE FROM idempotency WHERE rowid IN "
-                                "(SELECT rowid FROM idempotency WHERE created_at<? LIMIT ?)", (cutoff, batch)).rowcount
+                                "(SELECT rowid FROM idempotency WHERE binding IS NULL AND created_at<? LIMIT ?)",
+                                (cutoff, batch)).rowcount
         deleted += removed
         if removed < batch:
             return deleted
@@ -1232,8 +1241,6 @@ class Store:
                 H.add_column(c, "flight_slow", column, kind)
             from . import performance as _performance
             c.executescript(_performance.SCHEMA)
-            from . import invites as _invites
-            c.executescript(_invites.SCHEMA)
             _updates.purge_rejected(c)
             # Which stored retry answers quote which message (backend/idempotency_messages.py).
             idempotency_messages.ensure(c)
@@ -2347,7 +2354,7 @@ class Store:
         """Whether this Idempotency-Key already has a saved answer here: `mutate` replays it (or refuses other content
         under the key) without running the write again, so a check made before `mutate` must not refuse it."""
         return bool(key) and len(key) <= 200 and c.execute(
-            "SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
+            "SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
             (self._principal(identity), operation, key)).fetchone() is not None
 
     def mutate(self, identity, operation, key, body, fn, check=None, durable=False):
@@ -2363,7 +2370,7 @@ class Store:
             validate_identity(c, identity)
             if check:
                 check(c)
-            row = c.execute("SELECT * FROM idempotency WHERE actor=? AND operation=? AND key=?",
+            row = c.execute("SELECT * FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                             (principal, operation, key)).fetchone()
             if row:
                 if row["request_hash"] != hashed:
@@ -2430,7 +2437,7 @@ class Store:
             if not is_poll(operation, result):
                 cached = ({k: v for k, v in result.items() if k != 'requester_token'}
                           if isinstance(result, dict) else result)
-                c.execute("INSERT INTO idempotency VALUES(?,?,?,?,?,?)",
+                c.execute("INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)",
                           (principal, operation, key, hashed, encode(cached), H.now()))
         self.ring(logged)
         if refusal:
