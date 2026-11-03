@@ -1352,12 +1352,13 @@ mod tests {
         let _guard = crate::readiness::probe_tests::PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let root = std::env::temp_dir().join(format!("tico-runner-gate-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(root.join("projects")).unwrap();
-        let (log, path) = crate::readiness::probe_tests::fake_runtimes(&root, "2.1.303");
+        let (_log, path) = crate::readiness::probe_tests::fake_runtimes(&root, "2.1.303");
         let runner = probe_runner(&root);
         let held = runner.probe_gate.lock().await;
         assert!(tokio::time::timeout(Duration::from_millis(100), runner.probe_now()).await.is_err(), "a probe waits while another holds the gate");
         assert!(!runner.probed.lock().unwrap().schedule.ran_before(), "and stores nothing meanwhile");
-        assert!(std::fs::read_to_string(&log).unwrap_or_default().is_empty(), "and starts no process meanwhile");
+        // Not the fake runtimes' spawn log: PATH is process-wide, so a test elsewhere may run them meanwhile.
+        assert!(runner.probed.lock().unwrap().rows.is_empty(), "and holds no rows meanwhile");
         drop(held);
         runner.probe_now().await;
         assert!(runner.probed.lock().unwrap().schedule.ran_before());
