@@ -99,7 +99,6 @@ async function open(browser, role) {
   });
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('#settings-tabs').waitFor();
-  await page.locator('#settings-more summary').click();
   await page.locator('[data-settings-tab="automation"]').click();
   await page.locator('[data-system-routine="stale_review"]').waitFor();
   return {page, errors, asked, writes};

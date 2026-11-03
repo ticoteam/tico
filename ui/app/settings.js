@@ -108,8 +108,8 @@ const SETTINGS_PLACES = {
   providers: ['models'], chat: ['models'],   // chat: the old Chat tab, then the Models card; Models is AI models' first card
   gateway: ['models', '#settings-gateway'], 'turn-levels': ['limits', '#settings-limits'],
   billing: ['limits', '#settings-billing'],
-  system: ['automation'], recurring: ['automation'], rules: ['automation'], routines: ['automation', '#set-routines-card'],
-  listening: ['automation', '#settings-listening'],
+  system: ['automation'], recurring: ['automation'], rules: ['automation'], routines: ['automation'],
+  listening: ['automation'],
   tags: ['tasks', '#settings-tags'], types: ['tasks', '#settings-types'],
   mail: ['connections', '#settings-mail'], repos: ['connections', '#settings-repos'], repositories: ['connections', '#settings-repos'],
   inbound: ['connections', '#settings-inbound'], 'email-phone': ['connections', '#settings-inbound'],
@@ -251,16 +251,16 @@ function pageSettings() {
       <div id="settings-assistant"></div>
       <section class="card" id="settings-inbox"><header><h2>Your Google account</h2></header><div id="set-google"></div></section>`)}
     ${settingsIsAdmin() ? pane('people', '<div id="settings-people"><div id="set-people">' + skelRows(3, {card: true, dot: false}) + '</div></div>') : ''}
-    ${pane('bots', `<section class="card settings-bots-card" id="settings-bots-card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="primary" type="button" id="settings-add-bot" disabled>Add bot</button><button class="ghost" type="button" id="settings-add-catalog" disabled><span class="sb-wide">Add from template</span><span class="sb-narrow">From template</span></button></div>' : ''}</header><div id="set-bots">${skelRows(3, {card: true, dot: false})}</div></section>`)}
-    ${pane('models', `<section class="card" id="settings-subs"><header><h2>Subscriptions</h2><button class="primary settings-head-act" type="button" id="subs-add" hidden>Add subscription</button></header><div id="set-subs">${skelRows(2, {card: true, dot: false})}</div></section>
+    ${pane('bots', `<div id="settings-bots"><section class="card settings-bots-card" id="settings-bots-card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="primary" type="button" id="settings-add-bot" disabled>Add bot</button><button class="ghost" type="button" id="settings-add-catalog" disabled><span class="sb-wide">Add from template</span><span class="sb-narrow">From template</span></button></div>' : ''}</header><div id="set-bots">${skelRows(3, {card: true, dot: false})}</div></section></div>`)}
+    ${pane('models', `<div id="settings-models"><section class="card" id="settings-subs"><header><h2>Subscriptions</h2><button class="primary settings-head-act" type="button" id="subs-add" hidden>Add subscription</button></header><div id="set-subs">${skelRows(2, {card: true, dot: false})}</div></section>
       <section class="card" id="settings-gateway-card"><header><h2>Tico Gateway</h2></header><div id="set-gateway-card">${skelRows(1, {card: true, dot: false})}</div></section>
       ${settingsIsAdmin() ? '<div id="settings-gateway"><div id="set-gateway-page"></div></div>' : ''}
-      <section class="card" id="settings-defaults"><header><h2>Defaults</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
+      <section class="card" id="settings-defaults"><header><h2>Defaults</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section></div>
 `)}
-    ${pane('computers', `
+    ${pane('computers', `<div id="settings-devices">
       <section class="card" id="settings-computers"><header><h2>Computers</h2><button class="primary settings-head-act" type="button" id="machine-add-open">Add computer</button></header><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
       ${settingsIsAdmin() ? '<section class="card" id="settings-hosted" hidden><header><h2>Hosted servers</h2></header><div id="set-hosted"></div></section>' : ''}
-      <section class="card" id="settings-sleep" hidden><header><h2>Sleep when idle</h2></header><div id="set-sleep"></div></section>
+      <section class="card" id="settings-sleep" hidden><header><h2>Sleep when idle</h2></header><div id="set-sleep"></div></section></div>
 `)}
     ${settingsIsAdmin() ? pane('limits', `<section class="card" id="settings-spend-limits" hidden><header><h2>Bot spend limits</h2></header><div id="set-spend-limits"></div></section>
       <section class="card" id="settings-turn-budgets" hidden><header><h2>Run budget</h2></header><div id="set-turn-budgets"></div></section>

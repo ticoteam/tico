@@ -963,7 +963,7 @@ async function settingsCatalogPicker() {
 function renderSettingsSpendLimits() {
   const card = $('#settings-spend-limits'), el = $('#set-spend-limits'), limits = SETTINGS_DATA.limits;
   if (!card || !el) return;
-  const bots = (S.emps || []).filter(e => limits?.bots?.[e.name] && !e.archived);
+  const bots = (S.emps || []).filter(e => limits?.bots?.[e.id] && !e.archived);
   card.hidden = !limits?.bots;
   if (card.hidden) return;
   const reload = async () => {
@@ -972,7 +972,7 @@ function renderSettingsSpendLimits() {
   };
   el.innerHTML = `<div class="sb-rows"><div class="sb-row"><span>Default for each bot</span><span>${esc(useLimitText(limits.default) || 'No limit')}</span>
       ${limits.may_edit_default ? '<button type="button" class="linkish" data-spend-default>Change</button>' : '<span></span>'}</div>
-    ${bots.map(e => `<div class="sb-row"><span>${esc(settingsBotName(e.name))}</span>${useLimitButton(e.name, settingsBotName(e.name), limits.bots[e.name])}<span></span></div>`).join('')}</div>
+    ${bots.map(e => `<div class="sb-row"><span>${esc(settingsBotName(e.id))}</span>${useLimitButton(e.id, settingsBotName(e.id), limits.bots[e.id])}<span></span></div>`).join('')}</div>
     <p class="settings-cell-note">Team and group limits: <a href="#/usage">Usage</a>.</p>`;
   el.onclick = event => {
     if (event.target.closest('[data-spend-default]')) return void useDefaultDialog(limits, reload);

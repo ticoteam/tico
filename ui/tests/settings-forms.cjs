@@ -146,7 +146,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(writes.filter(row => row.p === '/api/v2/providers').at(-1).body.check_models, ['grok', 'codex']);
     await page.locator('[data-settings-tab=people]').click();
     await page.locator('#people-add').waitFor();
-    await page.locator('[data-settings-tab=devices]').click();
+    await page.locator('[data-settings-tab=computers]').click();
     await page.locator('#set-machines .machine-name[data-computer-open=computer-1]').click();
     await page.locator('[data-computer-remove]').click();
     await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();

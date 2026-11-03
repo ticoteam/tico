@@ -80,27 +80,27 @@ const address = page => page.evaluate(() => location.hash);
     {
       // A first visit opens General.
       const {page, context, errors} = await open(browser);
-      assert.equal(await selected(page), 'general', 'Settings opens on General');
+      assert.equal(await selected(page), 'you', 'Settings opens on General');
       assert.equal(await page.locator('#settings-denied').isVisible(), false);
 
       // Every link the app draws to a Settings address opens a tab Settings knows, for the owner, with no "admins" line.
-      const known = await page.evaluate(() => ({tabs: SETTINGS_TABS, alias: Object.keys(SETTINGS_ALIAS)}));
+      const known = await page.evaluate(() => ({tabs: SETTINGS_TABS, alias: Object.keys(SETTINGS_PLACES)}));
       for (const name of settingsLinks()) {
         assert.ok(known.tabs.includes(name) || known.alias.includes(name) || SPECIAL.includes(name),
           `#/settings/${name} is linked in the app but Settings has no such tab`);
         await go(page, `#/settings/${name}`);
         assert.equal(await page.locator('#settings-denied').isVisible(), false, `#/settings/${name} opens for the owner`);
-        if (known.tabs.includes(name)) assert.equal(await selected(page), name, `#/settings/${name} opens that tab`);
+        if (known.tabs.includes(name)) assert.equal(await selected(page), await page.evaluate(n => settingsPlace(n).group, name), `#/settings/${name} opens that tab`);
       }
 
       // Gateway and Models, by address and by the links between them.
       await go(page, '#/settings/gateway');
-      assert.equal(await selected(page), 'gateway');
+      assert.equal(await selected(page), 'models');
       await go(page, '#/settings/models');
       assert.equal(await selected(page), 'models');
-      await page.locator('#settings-models [data-gateway-advanced] > summary').click();
-      await page.locator('#settings-models a[href="#/settings/gateway"]').click();
-      await page.waitForFunction(() => location.hash === '#/settings/gateway' && SETTINGS_TAB === 'gateway');
+      await page.locator('#settings-gateway-card [data-gateway-advanced] > summary').click();
+      await page.locator('#settings-gateway-card a[href="#/settings/gateway"]').click();
+      await page.waitForFunction(() => location.hash === '#/settings/models' && SETTINGS_TAB === 'models');
       await page.locator('[data-gateway-key-link]').click();
       await page.waitForFunction(() => location.hash === '#/settings/models' && SETTINGS_TAB === 'models');
       await page.waitForFunction(() => { const r = document.querySelector('#settings-models')?.getBoundingClientRect(); return r && r.top < innerHeight && r.bottom > 0; });
@@ -108,7 +108,7 @@ const address = page => page.evaluate(() => location.hash);
       // A Settings address survives a refresh in a new tab: the address, not the last tab, decides.
       const fresh = await context.newPage();
       await fresh.goto('https://tico-ui.test/#/settings/system');
-      await fresh.waitForFunction(() => typeof SETTINGS_TAB !== 'undefined' && SETTINGS_TAB === 'system' && location.hash === '#/settings/system');
+      await fresh.waitForFunction(() => typeof SETTINGS_TAB !== 'undefined' && SETTINGS_TAB === 'automation' && location.hash === '#/settings/automation');
       await fresh.close();
       assert.deepEqual(errors, []);
       await context.close();
@@ -116,8 +116,8 @@ const address = page => page.evaluate(() => location.hash);
     {
       // The address bar names the tab shown, so it can be copied, bookmarked or shared.
       const {page, context, errors} = await open(browser, {hash: '#/settings/gateway'});
-      await page.waitForFunction(() => SETTINGS_TAB === 'gateway');
-      assert.equal(await address(page), '#/settings/gateway', 'an opened tab keeps its address');
+      await page.waitForFunction(() => SETTINGS_TAB === 'models');
+      assert.equal(await address(page), '#/settings/models', 'an opened tab keeps its address');
       const steps = await page.evaluate(() => history.length);
       await page.locator('#settings-tabs [data-settings-tab=bots]').click();
       await page.waitForFunction(() => location.hash === '#/settings/bots');
@@ -132,14 +132,14 @@ const address = page => page.evaluate(() => location.hash);
       await go(page, '#/settings/devices/settings-models');
       assert.equal(await address(page), '#/settings/models', 'the old Models card on Computers opens Models');
       await go(page, '#/settings/computers');
-      assert.equal(await address(page), '#/settings/devices');
+      assert.equal(await address(page), '#/settings/computers');
       // The old Rules and Routines addresses open System, and a redraw keeps Settings and the tab.
       for (const old of ['#/settings/rules', '#/settings/rules?task=t1', '#/settings/routines', '#/settings/recurring']) {
         await go(page, old);
-        assert.equal(await address(page), '#/settings/system', old);
+        assert.equal(await address(page), '#/settings/automation', old);
       }
       await page.evaluate(() => route());
-      assert.deepEqual(await page.evaluate(() => [S.route, SETTINGS_TAB, location.hash]), ['#/settings', 'system', '#/settings/system']);
+      assert.deepEqual(await page.evaluate(() => [S.route, SETTINGS_TAB, location.hash]), ['#/settings', 'automation', '#/settings/automation']);
       // Leaving Settings and coming back by Back reopens the tab the address names.
       await page.evaluate(() => { location.hash = '#/settings/health'; });
       await page.waitForFunction(() => location.hash === '#/settings/health' && SETTINGS_TAB === 'health');
@@ -153,13 +153,13 @@ const address = page => page.evaluate(() => location.hash);
     {
       // A tab this person can't see opens General and says why; one that doesn't exist opens General quietly.
       const {page, context, errors} = await open(browser, {role: 'member', hash: '#/settings/people'});
-      await page.waitForFunction(() => SETTINGS_TAB === 'general');
-      assert.equal(await selected(page), 'general');
+      await page.waitForFunction(() => SETTINGS_TAB === 'you');
+      assert.equal(await selected(page), 'you');
       assert.equal(await page.locator('#settings-denied').isVisible(), true);
       assert.match(await page.locator('#settings-denied').innerText(), /That page is for admins/);
-      assert.equal(await address(page), '#/settings/general', 'the address names the tab shown, not the one refused');
+      assert.equal(await address(page), '#/settings/you', 'the address names the tab shown, not the one refused');
       await go(page, '#/settings/nothing-here');
-      assert.equal(await selected(page), 'general');
+      assert.equal(await selected(page), 'you');
       assert.equal(await page.locator('#settings-denied').isVisible(), false, 'an unknown address says nothing about admins');
       assert.deepEqual(errors, []);
       await context.close();
