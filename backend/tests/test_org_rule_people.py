@@ -555,6 +555,23 @@ def test_a_moved_bots_archived_home_is_made_again_before_a_persons_message_is_ch
         assert T.thread_row(c, fresh)["audience"] == "home"
 
 
+def test_a_persons_message_naming_a_moved_bot_by_slug_or_id_is_checked_in_its_home(ruled):
+    """A person's message names a bot by its bare slug or its id as well as by `bot:<slug>`. Each spelling is the same bot,
+    so each lands in its Home and a `where: thread:<home>` rule holds it there."""
+    api, _ = ruled
+    home, _ = moved_chat(api)
+    block_everyone(api, where=[f"thread:{home}"])
+    with api.app.state.store.read() as c:
+        bot_id = H.resolve_bot(c, "ops")["id"]
+    for to in ("ops", bot_id):
+        got = api.post("/api/v2/messages", json={"to": to, "text": f"Our favorite color is gold, sent to {to}."},
+                       headers=headers("ana-test"))
+        assert got.status_code == 200, got.text
+        hold = hold_row(api, got.json()["held"]["id"])
+        assert json.loads(hold["payload"])["provenance"]["place"]["thread"] == home, to
+    assert not bodies(api, "favorite color is gold")
+
+
 def test_a_native_post_to_a_moved_room_is_checked_in_its_home(ruled):
     """A native thread post that names a moved room is checked as the Home it is written to (where `thread:<home>` reads
     it), not as the old room."""

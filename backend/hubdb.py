@@ -4434,13 +4434,17 @@ def supersede_asks(conn, task_id, *, from_actor=None, to_actor=None, keep=None, 
     or all of them. They stay
     in the thread and leave every queue and count. A question to one person never replaces a different person's
     question. `why` is the task event's note."""
-    # Only the task's own thread, where its queue and counts look (open_task_asks): a lookup by conversation, not a
-    # scan of every pending ask on the server each time a task finishes.
+    # The task's history, as open_task_asks reads its queue and counts (bot_home_merge.history_ids): its own room and the
+    # Homes that room's messages moved into, so a question asked before the move is superseded like one asked after it.
+    # A lookup by conversation, not a scan of every pending ask on the server each time a task finishes.
+    from . import bot_home_merge
+    room = conn.execute("SELECT conversation_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+    history = bot_home_merge.history_ids(conn, room[0]) if room and room[0] else []
     sql = ("SELECT m.id FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-           "WHERE m.conversation_id=(SELECT conversation_id FROM tasks WHERE id=?) "
+           "WHERE m.conversation_id IN (SELECT value FROM json_each(?)) "
            f"AND m.kind='ask' AND m.deleted_at IS NULL AND m.recipient_id LIKE 'human:%' AND {OPEN_ASK_SQL} "
            f"AND {MESSAGE_TASK_SQL}=?")
-    args = [task_id, task_id]
+    args = [_dump(history), task_id]
     if from_actor:
         sql += " AND m.sender_id=?"
         args.append(from_actor)
@@ -9915,16 +9919,27 @@ def tasks_asked_of(conn, actor):
     """Live tasks with an unanswered ask addressed to this actor, even if they do not own them. A done task stays
     while it asks its requester to accept what it delivered (ACCEPTANCE_ASK_SQL).
 
-    The ask is the small side: start from messages addressed to this actor, then the task that message is in.
-    The join is the same one as reading every task's room first (`m.conversation_id=t.conversation_id` and
-    `MESSAGE_TASK_SQL=t.id`), so an ask in some other room still does not attach."""
-    return _rows(conn.execute(
-        "SELECT t.* FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
-        f"JOIN tasks t ON t.conversation_id=m.conversation_id AND t.id={MESSAGE_TASK_SQL} "
+    The ask is the small side: start from messages addressed to this actor, then the task that message is in
+    (`MESSAGE_TASK_SQL=t.id`). The ask must be in one of the task's rooms as open_task_asks reads them
+    (bot_home_merge.histories): its own room, and the Homes that room's messages moved into, so an ask written before the
+    move still attaches. An ask in some other room does not."""
+    from . import bot_home_merge
+    asked = _rows(conn.execute(
+        "SELECT t.*, m.conversation_id AS ask_conversation_id FROM messages m "
+        "JOIN conversations cv ON cv.id=m.conversation_id "
+        f"JOIN tasks t ON t.id={MESSAGE_TASK_SQL} "
         f"WHERE m.kind='ask' AND m.recipient_id=? AND {OPEN_ASK_SQL} "
         f"AND (t.status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) "
         f"OR ({ACCEPTANCE_ASK_SQL})) "
-        "GROUP BY t.id ORDER BY t.created_at", (actor,)))
+        "ORDER BY t.created_at", (actor,)))
+    known = bot_home_merge.histories(conn, [row["conversation_id"] for row in asked])
+    tasks, seen = [], set()
+    for row in asked:
+        ask_room = row.pop("ask_conversation_id")
+        if row["id"] not in seen and ask_room in known.get(row["conversation_id"], ()):
+            seen.add(row["id"])
+            tasks.append(row)
+    return tasks
 
 
 def loose_asks_to(conn, actor):

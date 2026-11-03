@@ -3262,16 +3262,19 @@ def create_app(settings=None):
             # cannot reach a Home the checks never named.
             with store.transaction() as c:
                 body.conversation_id = named_destination(c, who, body)
-        elif str(body.to).startswith("bot:"):
+        elif str(body.to).lower() != "assistant":
             # A person's message to a bot that names no room is written to the bot's personal room (rooms.chat_room), which
-            # is the chat's Home once the bot's chats have moved (rooms.personal_room). The checks name that Home too, so
-            # `where: thread:<home>` sees it, and it is made first when archived, as the write would make it. A shared
-            # bot's shared room is not a Home: a member's message there is checked where it is written.
+            # is the chat's Home once the bot's chats have moved (rooms.personal_room). The recipient is resolved as the
+            # write resolves it (auth.target: `bot:<slug>`, a bare slug or an id), so every spelling of one bot gets the same
+            # Home. The checks name that Home too, so `where: thread:<home>` sees it, and it is made first when archived, as
+            # the write would make it. A shared bot's shared room is not a Home: a member's message there is checked where it
+            # is written. The Assistant's own room is not a Home either (send routes it apart).
             from .shared_bots import route as shared_route
             with store.read() as c:
-                target = H.actor_id(shared_route(c, who.actor, body.to))
-                personal = not (rooms.thread_mode(c, target) == rooms.SHARED
-                                and rooms.shared_member(c, auth, who.actor, target))
+                to = auth.target(c, who, body.to)
+                target = H.actor_id(shared_route(c, who.actor, to)) if to.startswith("bot:") else ""
+                personal = bool(target) and target != settings.assistant_bot and not (
+                    rooms.thread_mode(c, target) == rooms.SHARED and rooms.shared_member(c, auth, who.actor, target))
                 make = personal and bot_home_merge.chat_home_missing(c, who.actor, target)
                 home = None if make or not personal else bot_home_merge.home_for_chat(c, who.actor, target, create=False)
             if make:

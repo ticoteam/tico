@@ -542,3 +542,56 @@ def test_a_question_on_a_moved_task_stays_open_before_and_after_the_move(api, op
                 assert [a["id"] for a in batch[row["id"]]] == \
                     [a["id"] for a in H.open_task_asks(c, row, actor=actor)], (actor, row["id"])
         assert {a["id"] for a in H.open_tasks_asks(c, [row_first], actor="human:ana")[first]} == {before, after}
+
+
+QUESTIONS = [{"id": "q1", "header": "Pick", "question": "Which one?", "options": [], "multi": False, "other": True}]
+
+
+def test_a_question_asked_before_its_task_room_moved_still_lists_the_task_in_needs_you(api, ops_rooms):
+    """Needs you (hubdb.tasks_asked_of) reads a task's asks from its history as its queue does: a question asked before the
+    task's room moved into a Home lists the task for the person it is addressed to, and so does one asked after the move."""
+    first = post(api, "tasks", {"owner": "ops", "title": "First", "body": "Pick for the first."})["id"]
+    second = post(api, "tasks", {"owner": "ops", "title": "Second", "body": "Pick for the second."})["id"]
+    with store(api).transaction() as c:
+        c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (ops_rooms["ana"], first))
+        c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (ops_rooms["ben"], second))
+        say(c, "bot:ops", "human:ana", "Which one for the first?", ops_rooms["ana"], kind="ask",
+            refs={"task": first, "questions": QUESTIONS})
+        say(c, "bot:ops", "human:ben", "Which one for the second?", ops_rooms["ben"], kind="ask",
+            refs={"task": second, "questions": QUESTIONS})
+    merge(api)
+    with store(api).transaction() as c:
+        say(c, "bot:ops", "human:ana", "Which one for the first, again?", ops_rooms["ana"], kind="ask",
+            refs={"task": first, "questions": QUESTIONS})
+    with store(api).read() as c:
+        ana = [t["id"] for t in H.tasks_asked_of(c, "human:ana")]
+        ben = [t["id"] for t in H.tasks_asked_of(c, "human:ben")]
+    assert first in ana and second not in ana, ana
+    assert second in ben and first not in ben, ben
+
+
+def test_a_question_asked_before_the_move_is_superseded_by_a_replacement_and_by_the_task_end(api, ops_rooms):
+    """supersede_asks reads a task's history as its queue does: a question asked before the task's room moved is replaced by a
+    newer one to the same person (`keep`), and finishing the task (no filter) supersedes the question still open for it. A
+    question to another person, or on another task, is left alone."""
+    first = post(api, "tasks", {"owner": "ops", "title": "First", "body": "Pick for the first."})["id"]
+    second = post(api, "tasks", {"owner": "ops", "title": "Second", "body": "Pick for the second."})["id"]
+    with store(api).transaction() as c:
+        c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (ops_rooms["ana"], first))
+        c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (ops_rooms["ben"], second))
+        old = say(c, "bot:ops", "human:ana", "Which one for the first?", ops_rooms["ana"], kind="ask",
+                  refs={"task": first, "questions": QUESTIONS})["id"]
+        left = say(c, "bot:ops", "human:ben", "Which one for the second?", ops_rooms["ben"], kind="ask",
+                   refs={"task": second, "questions": QUESTIONS})["id"]
+    merge(api)
+    with store(api).transaction() as c:
+        newer = say(c, "bot:ops", "human:ana", "Which one for the first, again?", ops_rooms["ana"], kind="ask",
+                    refs={"task": first, "questions": QUESTIONS})["id"]
+        assert H.message(c, newer)["conversation_id"] == ops_rooms["home"]
+        assert H.supersede_asks(c, first, from_actor="bot:ops", to_actor="human:ana", keep=newer) == [old]
+    with store(api).transaction() as c:
+        assert H.supersede_asks(c, first, to_actor="human:ben") == []
+        assert H.supersede_asks(c, first) == [newer]
+    with store(api).read() as c:
+        assert H.message(c, old)["superseded_at"] and H.message(c, newer)["superseded_at"]
+        assert H.message(c, left)["superseded_at"] is None
