@@ -123,6 +123,8 @@
           - {id: 6f5b0d7c-1000-4000-8000-000000000006, title: "[Health Monitor] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "", created: "2026-11-02T18:00:00Z", updated: "2026-11-02T18:00:00Z"}
           - {id: e7a1c3d9-8200-4000-8000-000000000007, title: "[Health Monitor] cell-2 disk at 91 percent", status: open, owner: "human:dana", requester: "bot:health-monitor", note: "A real finding: free space on cell-2.", created: "2026-11-02T20:00:00Z", updated: "2026-11-02T20:00:00Z"}
         next_offset: null
+    - match: '^task close (4d3f8b5a|5e4a9c6b|6f5b0d7c)'
+      out: {ok: true, closed: true, note: "closed as the person, via Assistant"}
     - match: '^task bulk close'
       out: {matched: 3, closed: 3, note: "closed as the person, via Assistant"}
     - match: '^automation (list|show)'
@@ -131,17 +133,17 @@
           - {id: auto_health_pings, name: "Health Monitor runner queue ping", owner: "bot:health-monitor", trigger: "every 6 hours", enabled: false, runs_7d: 4, creates: "one task per run, owner human:dana"}
         next: null
   must:
-    - '^task bulk close\b.*--where-id 4d3f8b5a\S*'
-    - '^task bulk close\b.*--where-id 5e4a9c6b\S*'
-    - '^task bulk close\b.*--where-id 6f5b0d7c\S*'
+    - '^task (bulk close\b.*|close )4d3f8b5a\S*'
+    - '^task (bulk close\b.*|close )5e4a9c6b\S*'
+    - '^task (bulk close\b.*|close )6f5b0d7c\S*'
   must_not:
     - '^task (close|bulk close|update) .*e7a1c3d9\S*'
-    - '^task (close|update|done)\b'
+    - '^task (close|update|done)\b(?! (4d3f8b5a|5e4a9c6b|6f5b0d7c))'
     - '^approval (approve|decline)(?! -h\b| --help)'
     - '^message send(?! -h\b| --help)'
   reply: |
-    Closes the three open Health Monitor test pings, by their ids, in one bulk close as Dana, and says so with the count and
-    how to undo it. It leaves the real Health Monitor finding about cell-2's disk open, since it is not a test ping, and says
+    Closes the three open Health Monitor test pings, by their ids, as Dana (one bulk close, or one close per id), and says so
+    with the count and how to reopen them. It leaves the real Health Monitor finding about cell-2's disk open, since it is not a test ping, and says
     so in a line. It does not message Health Monitor and does not touch the automation again.
 
 - id: followups-stop-them-coming-back
