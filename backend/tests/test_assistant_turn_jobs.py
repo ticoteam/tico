@@ -3,10 +3,12 @@ and no `--on-behalf-of` header. Each write the person could make on their words 
 `confirm_required`); each write that stays the person's own tap is refused. The eval's fake hub answers ok to all of it,
 so this file is where a server refusal shows up."""
 
+import json
+
 import pytest
 
 from backend import hubdb as H
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.test_api import api, assign, get, headers, post, runner, setup_attempt  # noqa: F401
 from backend.tests.test_assistant import assistant_turn, say
 from backend.tests.test_automation_access import flow
 from backend.tests.test_batch import approval_for_ana
@@ -44,6 +46,21 @@ def set_setting(api, token, key, value):
     assert r.status_code == 200, (key, r.status_code, r.text)
 
 
+def repo_bot(api, bot="ops"):
+    """A bot with its repository built, as backend/tests/test_bot_tools.py makes one: its config names the repo and its
+    computer reports the repository present, so a pause or a resume can place it."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET config=?, repo=? WHERE bot=?",
+                  (json.dumps({"name": bot, "runtime": "codex", "model": "gpt-6-luna", "reasoning_effort": "high"}),
+                   "acme-co/emp-" + bot, bot))
+    machine = runner(api)
+    assign(api, machine, bot)
+    row = {"ready": True, "runtime": "codex", "model": "gpt-6-luna", "repository_present": True,
+           "configuration_valid": True, "problems": []}
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test",
+                                    "readiness": {"schema_version": 1, "bots": {bot: row}}}, token=machine["token"])
+
+
 def ana_task(api, owner="bot:ops", title="Send the invoice"):
     with api.app.state.store.transaction() as c:
         return H.task_create(c, owner, title, "Monday.", "human:ana")["id"]
@@ -59,9 +76,13 @@ def test_a_turn_closes_a_task_directly(api):
 
 def test_a_turn_closes_tasks_in_bulk(api):
     ids = [ana_task(api, title=f"Follow up {n}") for n in range(2)]
+    outside = ana_task(api, title="Not in the list")
     token = turn(api)
-    done = call(api, token, "POST", "task-bulk", {"filter": {"owner": "human:ana", "status": "open"}, "action": "close"})
-    assert done["changed"] >= 2, done
+    done = call(api, token, "POST", "task-bulk", {"filter": {"ids": ids}, "action": "close"})
+    assert done["changed"] == 2, done
+    with api.app.state.store.read() as c:
+        assert [H.task(c, t)["status"] for t in ids] == ["done", "done"]
+        assert H.task(c, outside)["status"] == "open"
 
 
 def test_a_turn_changes_a_task_owner(api):
@@ -115,15 +136,18 @@ def test_a_turn_restores_an_earlier_automation_version(api):
 
 
 def test_a_turn_pauses_and_resumes_a_bot(api):
+    repo_bot(api)
     token = turn(api, "Pause Ops until I say")
-    # The route may answer for the bot's repository (not built in a test) after the gate admits the change.
     rev = call(api, token, "GET", "bots/ops/access")["revision"]
-    no_card(api, token, "POST", "bots/ops/control", {"action": "pause", "expected_revision": rev})
+    call(api, token, "POST", "bots/ops/control", {"action": "pause", "expected_revision": rev})
+    assert call(api, token, "GET", "bots/ops")["state"] == "paused"
     rev = call(api, token, "GET", "bots/ops/access")["revision"]
-    no_card(api, token, "POST", "bots/ops/control", {"action": "resume", "expected_revision": rev})
+    call(api, token, "POST", "bots/ops/control", {"action": "resume", "expected_revision": rev})
+    assert call(api, token, "GET", "bots/ops")["state"] == "active"
 
 
 def test_a_turn_sets_a_bot_model(api):
+    repo_bot(api)
     catalog = get(api, "models")
     model = next(m["id"] for m in catalog["models"] if not m.get("deprecated"))
     token = turn(api, "Use the cheaper model for Ops")
