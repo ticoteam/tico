@@ -1383,12 +1383,10 @@ def migrate(conn, adopt_legacy=False):
     task_columns = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
     if "private" in task_columns:
         if "guest" in task_columns:
-            # The few private tasks, which every privacy-checked read loads (backend/privacy_index.py). The predicate
-            # matches privacy_index's query word for word and the index holds only these columns, so no body is read.
-            conn.execute("CREATE INDEX IF NOT EXISTS tasks_private_parties ON tasks("
-                         "id, requester_id, owner_id, guest, private) WHERE private IS NOT 0")
-            # A bot's private tasks for its status rows (task_privacy.status_tasks_sql) with the two columns it reads
-            # beyond the parties: each private row was a body-page read before this.
+            # The few private tasks: their parties, which every privacy-checked read loads (backend/row_clock.py PARTIES,
+            # backend/privacy_index.py), and a bot's private tasks for its status rows (task_privacy.status_tasks_sql)
+            # with the two columns those read beyond the parties. The predicate matches both queries word for word and
+            # the index holds every column they read, so no body is read.
             conn.execute("CREATE INDEX IF NOT EXISTS tasks_private_status ON tasks("
                          "id, requester_id, owner_id, guest, private, status, waiting_on) WHERE private IS NOT 0")
             # A task list's visibility and queue order, and a bot's status rows (task_privacy.status_tasks_sql), each
@@ -1666,7 +1664,9 @@ def private_task_write(fn):
 
 def event(conn, actor, action, target="", detail=None):
     """Append the audit row every write leaves behind."""
-    if action == "approval.consume" and RUN.get():
+    # The run that spent an approval, asked for one or filed a task: what feedback on that work names as its run
+    # (backend/feedback.py), since neither a task nor an approval keeps the run that made it.
+    if action in ("approval.consume", "approval.request", "task.create") and RUN.get():
         detail = {**(detail or {}), "attempt_id": RUN.get()}
     if VIA.get() and (detail is None or isinstance(detail, dict)):
         detail = {**(detail or {}), "via": VIA.get()}
@@ -9836,6 +9836,11 @@ def loose_asks_to(conn, actor):
         "AND (m.expires_at IS NULL OR m.expires_at>?) ORDER BY m.created_at", (actor, now()))))
 
 
+# How long a declined task stays on its requester's Needs you (the UI's taskNeedsViewer in ui/app/tasks.js holds the same
+# number: change both together).
+DECLINED_NEEDS_HOURS = 24
+
+
 def needs_you(conn, who):
     """The "Needs you" list: my open tasks, unanswered asks to me, bot tasks waiting on me,
     approvals, declined-to-me.
@@ -9876,7 +9881,10 @@ def needs_you(conn, who):
     # A declined task on a steps-only type (the Product roadmap) stays on its Declined step, where the board and
     # the public roadmap show it: closing it off the list would take it off both, so it is not on the list.
     by_step = {r["id"] for r in conn.execute("SELECT id FROM task_types WHERE steps_only=1")}
-    declined = tasks(conn, requester=actor, status="declined", tickets=False, snoozed="hide", limit=None)
+    # A declined one leaves its requester's list DECLINED_NEEDS_HOURS after its last change: it stays on the board
+    # and in the task's own read, but a notice from weeks ago is nothing the requester still has to act on.
+    declined = tasks(conn, requester=actor, status="declined", tickets=False, snoozed="hide", limit=None,
+                     updated_since=shift(now(), hours=-DECLINED_NEEDS_HOURS))
     # The rows just read are this snapshot's task rows: a card's task, its ancestors and what they block are primed
     # from them (prime_tasks), not read again by id. Copies, so nothing the caller adds to a row reaches the cache.
     prime_task_rows(conn, [*owned, *asked, *waited, *declined])

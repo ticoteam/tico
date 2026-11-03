@@ -134,8 +134,11 @@ a.th-who:hover{text-decoration:underline}
 .thv-composer .p-chips:empty{display:none}
 .thv-goal{flex:none}
 .th-main .chat-goal-line{margin:2px 0}
-/* a phone's bot page has the composer on the bottom edge (ui/styles/chat.css): a little room under it */
-@media (max-width:760px){.thv-attach-menu{right:auto;left:0}#bot-thread .thv-composer{padding-bottom:max(6px,env(safe-area-inset-bottom))}}
+/* a phone's bot page has the composer on the bottom edge (ui/styles/chat.css): a little room under it. The bot being
+   talked to sits at the bar's left edge, before Attach; a tap opens the switcher (org-fan.js). A computer has none. */
+@media (max-width:760px){.thv-attach-menu{right:auto;left:0}#bot-thread .thv-composer{padding-bottom:max(6px,env(safe-area-inset-bottom))}
+  .pill-thread .p-pill>.p-bot{display:inline-flex;order:-2;flex:none;width:36px;height:36px;padding:0;border:0;background:none;border-radius:50%;align-items:center;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent}}
+.thv-composer .p-cmd[hidden]{display:none}
 .thv-mentions{position:absolute;top:auto;left:0;bottom:calc(100% + 6px);z-index:5;min-width:220px;max-height:240px;overflow-y:auto}
 .thv-mentions [aria-selected="true"]{background:var(--surface2)}
 .thv-lib{position:absolute;top:auto;left:0;right:0;bottom:calc(100% + 6px);z-index:5;max-height:300px;display:flex;flex-direction:column;padding:8px;border:1px solid var(--line);border-radius:var(--radius);background:var(--raised,var(--surface));box-shadow:0 8px 24px rgba(0,0,0,.12)}

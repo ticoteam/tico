@@ -292,6 +292,7 @@ async function askLoad(chat) {
       }, {fresh: !!rendered});
       askRowsIn(thread, seenRows, !!rendered);
       rendered = html;
+      fbSync();                         // the Assistant's replies' 👍 / 👎, read for this panel too (ui/app/feedback.js)
     }
     chat.drawn = true;
     // Opened from a peek: the card it spoke of, in view.

@@ -229,6 +229,11 @@ records `assistant.action.confirmed` and the operation's own events via assistan
 task's `version` is given the one the task has (a change in between is still a `409`), and `{"status": "closed"}`
 is taken as the close it means (`close: true`), so such a card runs, including one stored before this rule.
 
+Any teammate, person or bot, can withdraw a Confirm card that still waits (`hub assistant withdraw <id>`, `POST
+/api/v2/assistant/actions/{aid}/withdraw`, or `hub_assistant_withdraw`; `hub assistant proposals` lists the waiting cards
+with their ids). The card is marked withdrawn and never runs, and the owner's DM says who withdrew it, with the reason if
+one was given. Only the card's owner can confirm it, and the owner can still Cancel it.
+
 **Many at once is one card.** Clearing your Needs you (closing twenty stale tasks, declining eleven old publish batches,
 answering a bot) is one bulk card, never one each: `POST /api/v2/assistant/actions` with path `/api/v2/assistant/batch`
 and body `{"actions": [{"method": "POST", "path": "/api/v2/tasks/<id>", "body": {...}}, ...]}`, 1 to 100 task changes,

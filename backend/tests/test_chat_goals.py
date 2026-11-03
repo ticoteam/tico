@@ -279,3 +279,23 @@ def test_a_bot_dm_or_home_thread_takes_a_goal(api, where):
     attempt = claim(api, machine)
     assert attempt['message']['body'] == '/goal Ship the Acme pricing page'
     assert attempt['message']['refs']['goal_action'] == 'set'
+
+
+@pytest.mark.parametrize('where', ['dm', 'home'])
+def test_a_bot_dm_or_home_thread_takes_a_harness_command_and_shows_its_run(api, where):
+    # The bot page's composer (ui/app/thread-view.js) sends a harness's own "/" command as the old chat did: a message
+    # marked as a command, to the bot, in the thread (POST /v2/messages with the thread as its conversation). Its Stop
+    # reads the thread's run from the thread's conversation snapshot.
+    machine, old = setup(api)
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE conversations SET closed_at=? WHERE id=?', (H.now(), old))
+    thread = post(api, 'threads/dm', {'members': ['bot:ops']}) if where == 'dm' else get(api, 'threads/home/bot:ops')
+    tid = thread['id']
+    post(api, 'messages', {'to': 'bot:ops', 'text': '/compact', 'conversation_id': tid, 'command': True})
+    assert get(api, f'conversations/{tid}/snapshot?limit=1')['execution']['state'] == 'queued'
+    attempt = claim(api, machine)
+    assert attempt['message']['body'] == '/compact' and attempt['message']['refs']['command'] is True
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'fake-thread'}, machine['token'])
+    execution = get(api, f'conversations/{tid}/snapshot?limit=1')['execution']
+    assert execution['state'] == 'running' and execution['run_id'] == attempt['id']
+    assert post(api, 'bots/ops/stop', {'run_id': execution['run_id']})['stopping'] is True

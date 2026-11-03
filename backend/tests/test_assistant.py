@@ -924,3 +924,4 @@ def test_a_model_picked_help_intent_is_not_answered_from_the_docs(api, monkeypat
 def test_a_docs_excerpt_leaves_code_blocks_out():
     text, _ = assistant.help_answer("how do I set a task to waiting on a blocker")
     assert text and "```" not in text and "hub task relate --kind" not in text
+
