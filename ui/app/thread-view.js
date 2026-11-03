@@ -112,6 +112,7 @@ async function thvLoad(view) {
     thvMarkRead(view);
     void callLoad(view);
     void thvHoldsLoad(view);
+    void thvMembersLoad(view);
     if (view.opts.focus) void thvFocus(view, view.opts.focus);
   } catch (e) {
     if (view.gone) return;
@@ -256,23 +257,60 @@ async function thvExpand(view, button) {
 // ----------------------------------------------------------------- drawing
 const thvCanPost = view => view.opts.canPost ?? (view.thread ? !!view.thread.me?.can_post : view.state === 'empty' && !!view.opts.dm);
 function thvActsHTML(view) {
-  const t = view.thread;
+  const t = view.thread, list = view.memberList;
+  const members = !t.parent_id && ['members', 'personal', 'company', 'team'].includes(t.audience);
+  // On the Threads page the members show as faces and a count, which open the same list.
+  const n = list ? list.length : 0, more = view.memberMore ? '+' : '';
+  const people = members && list ? `<button type="button" class="thv-people" data-thv-members aria-label="Members, ${n}${more}" title="Members">${
+      list.slice(0, 3).map(m => actorAvatar(m.actor, 22)).join('')}<span class="thv-people-n">${n}${more}</span></button>`
+    : members ? '<button type="button" class="ghost small" data-thv-members>Members</button>' : '';
   return `${callHeadHTML(view)}
-      ${!t.parent_id && ['members', 'personal', 'company', 'team'].includes(t.audience) ? '<button type="button" class="ghost small" data-thv-members>Members</button>' : ''}
+      ${people}
       <button type="button" class="ghost thv-menu-btn" data-thv-menu aria-haspopup="menu" aria-expanded="false" aria-label="Thread menu" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`;
 }
+// The viewer's own pin, on a thread the rail lists (a server with pins says `me.pinned`).
+const thvPinnable = t => !!t?.me && 'pinned' in t.me && threadOnRail(t);
+const thvPinHTML = t => thvPinnable(t) ? `<button type="button" class="thv-pin${t.me.pinned ? ' on' : ''}" data-thv-pin aria-pressed="${!!t.me.pinned}" aria-label="Pin" title="${t.me.pinned ? 'Unpin' : 'Pin'}">${TR_SVG.pin(!!t.me.pinned)}</button>` : '';
 function thvHeadHTML(view) {
   const t = view.thread;
   if (!t) return '';
   if (view.opts.header === 'compact') return `<div class="thv-titleline thv-compact"><span class="spacer"></span>${thvActsHTML(view)}</div>`;
   const crumbs = (view.breadcrumb || []).filter(c => c.id !== t.id);
-  const aud = t.audience === 'company' ? 'Company' : t.audience === 'team' ? groupName(t.audience_group_id)
+  // A thread the rail lists says what it is with its mark (# or a lock); a Home or a DM says it in words.
+  const hash = threadOnRail(t);
+  const aud = hash ? '' : t.audience === 'company' ? 'Company' : t.audience === 'team' ? groupName(t.audience_group_id)
     : t.audience === 'home' ? 'Home' : threadPrivate(t) ? 'Private' : '';
+  const back = crumbs.length ? `<a class="thv-back" href="${threadHref(crumbs[crumbs.length - 1].id)}" aria-label="Back" title="Back">‹</a>`
+    : view.opts.back ? `<a class="thv-back thv-back-rail" href="${esc(view.opts.back)}" aria-label="Threads" title="Threads">‹</a>` : '';
   return `${crumbs.length ? `<nav class="thv-crumbs" aria-label="Thread path">${crumbs.map(c =>
       `<a href="${threadHref(c.id)}">${esc(c.title || 'Thread')}</a>`).join('<span aria-hidden="true">›</span>')}</nav>` : ''}
-    <div class="thv-titleline">${crumbs.length ? `<a class="thv-back" href="${threadHref(crumbs[crumbs.length - 1].id)}" aria-label="Back" title="Back">‹</a>` : ''}
-      ${threadMarkHTML(t, 22)}<h1 class="thv-title">${esc(threadTitle(t))}</h1>
+    <div class="thv-titleline">${back}
+      ${hash ? '' : threadMarkHTML(t, 22)}<h1 class="thv-title">${hash ? threadHashHTML(t) : ''}${esc(threadTitle(t))}</h1>${thvPinHTML(t)}
       ${aud ? `<span class="thv-aud muted">${esc(aud)}</span>` : ''}<span class="spacer"></span>${thvActsHTML(view)}</div>`;
+}
+// Who is in it, for the faces in the header: a thread the rail lists, on the Threads page (`opts.members`). A DM keeps
+// its Members button, so a phone has room for the name.
+async function thvMembersLoad(view) {
+  const t = view.thread;
+  if (!view.opts.members || !threadOnRail(t)) return;
+  try {
+    const r = await get(thvPath(t.id) + '/members?limit=100', {fresh: true});
+    if (view.gone) return;
+    view.memberList = r?.members || []; view.memberMore = !!r?.next_cursor;
+    thvDraw(view);
+  } catch { /* the Members button stays */ }
+}
+// Pin or unpin for the viewer; the rail moves the row at once.
+async function thvPinToggle(view, button) {
+  const t = view.thread; if (!thvPinnable(t)) return;
+  const on = !t.me.pinned;
+  button.disabled = true;
+  try {
+    const r = on ? await put(thvPath(t.id) + '/pin', {}) : await writeRequest('DELETE', thvPath(t.id) + '/pin');
+    view.thread = {...t, ...(r?.id ? r : {}), me: {...t.me, ...(r?.me || {}), pinned: r?.me ? !!r.me.pinned : on}};
+    threadsPut(view.thread);
+    thvDraw(view);
+  } catch (e) { toast(e.message, true); button.disabled = false; }
 }
 // A message the viewer may not read is one quiet row, never its words. Earlier shared history folds into one "Earlier
 // messages" row; two such rows meet where one page of it ends and the next begins.
@@ -421,9 +459,12 @@ function thvListHTML(view) {
     if (key) { afterParent.set(key, [...(afterParent.get(key) || []), p]); placed.add(p); }
   }
   const replyAt = view.replyTo ? thvBranchEnd(view, view.replyTo) : '';
+  let divided = false;
   for (const row of rows) {
     // Updates have their own page (Updates); a Home does not repeat them as cards.
     if (view.opts.home && row.m && thvIsUpdateCard(row.m)) continue;
+    // One "New" line above the first message the viewer had not read when the thread opened.
+    if (!divided && row.m && thvIsNew(view, row.m)) { out.push('<div class="th-newline" role="separator" aria-label="New"><span>New</span></div>'); divided = true; }
     out.push(row.fold ? thvFoldHTML(view, row) : row.more ? thvMoreHTML(view, row.more) : thvMsgHTML(view, row.m));
     for (const id of row.ids || [row.m?.id || row.id]) {
       for (const p of afterParent.get(id) || []) out.push(thvPendingHTML(view, p));
@@ -525,6 +566,7 @@ function threadViewsLive(topic, d) {
       if (d.thread_id === view.id && d.thread) { view.thread = {...view.thread, ...d.thread}; thvDraw(view); }
       if (d.thread_id === view.id && String(d.kind || '').startsWith('call.')) liveSoon('call:' + view.key, () => callLoad(view), 200);
       // Who may read changed, or a sub-thread opened under a message on screen: read again.
+      if (d.thread_id === view.id && d.kind === 'members') liveSoon('thv-members:' + view.key, () => thvMembersLoad(view), 300);
       if ((d.thread_id === view.id && ['audience', 'members'].includes(d.kind)) || (d.kind === 'sub_thread' && view.messages.some(m => m.id === d.thread?.parent_message_id)))
         liveSoon('thv:' + view.key, () => thvRefresh(view), 150);
       continue;
@@ -927,6 +969,7 @@ async function thvClick(view, ev) {
   if (t.closest('[data-th-file]')) { const b = t.closest('[data-th-file]'); void openFileLink(b.dataset.thFile, b.dataset.name); return; }
   if (t.closest('[data-th-expand]')) { void thvExpand(view, t.closest('[data-th-expand]')); return; }
   if (t.closest('[data-thv-members]')) { threadMembersOpen(view); return; }
+  if (t.closest('[data-thv-pin]')) { void thvPinToggle(view, t.closest('[data-thv-pin]')); return; }
   if (t.closest('[data-call]')) { void callAction(view, t.closest('[data-call]').dataset.call); return; }
   if (t.closest('[data-thv-menu]')) { threadMenuOpen(view, t.closest('[data-thv-menu]')); return; }
   if (t.closest('[data-th-earlier]')) {

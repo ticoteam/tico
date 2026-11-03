@@ -91,7 +91,7 @@ async function tcnPeerAct(id, act) {
 // reader may not open has no title to show.
 const TCN_TITLES = new Map();
 async function tcnThreadTitle(id) {
-  const known = [...(THREADS.attention || []), ...(THREADS.threads || []), ...(THREADS.dms || [])].find(t => t?.id === id);
+  const known = [...(THREADS.pinned || []), ...(THREADS.threads || [])].find(t => t?.id === id);
   if (known) return threadTitle(known);
   if (!TCN_TITLES.has(id)) TCN_TITLES.set(id, get('/v2/threads/' + encodeURIComponent(id)).then(threadTitle, () => 'Thread'));
   return TCN_TITLES.get(id);
