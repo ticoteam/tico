@@ -9,7 +9,6 @@ request the `hub` CLI would make, with the turn's own credential (`HUB_API_URL`,
 or decides a rule; the schema and the tool bodies are `clients/hubtools.py`.
 """
 import json
-import os
 import sys
 from pathlib import Path
 
