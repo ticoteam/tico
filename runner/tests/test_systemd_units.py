@@ -68,6 +68,10 @@ def fake_linux(tmp_path, linger="no"):
     config.chmod(0o600)
     # A turn's shell startup hook must not restore PATH over the fake supervisor commands.
     env = {k: os.environ[k] for k in ("PYTHONPATH", "LANG") if k in os.environ}
+    # HOME is a temp directory below, so rustup and cargo keep their real toolchains through their own homes.
+    real_home = Path.home()
+    env.update({"RUSTUP_HOME": os.environ.get("RUSTUP_HOME", str(real_home / ".rustup")),
+                "CARGO_HOME": os.environ.get("CARGO_HOME", str(real_home / ".cargo"))})
     env.update({"TICO_OS": "Linux", "PATH": f"{bin_dir}:{os.environ.get('PATH', os.defpath)}", "HOME": str(tmp_path / "home"),
            "TICO_RUNNER_PYTHON": sys.executable, "TICO_RUNNER_CONFIG": str(config), "TICO_SYSTEMD_USER_DIR": str(tmp_path / "units"),
            "XDG_CONFIG_HOME": str(tmp_path / "xdg"), "USER": "ana"})
