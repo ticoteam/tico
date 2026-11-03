@@ -273,8 +273,12 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
       : (el.matches('.you') ? 'me: ' : 'them: ') + [...el.children].map(c => c.textContent).join(' | ')));
     assert.deepEqual(order.filter(x => x !== 'day'), ['me: Can bots share a computer? | Diagnostics attached', 'them: Tico team | Yes.', 'me: Thanks',
       'me: Bots stopped', 'them: Mia | Restarted the runner.', 'them: Try now.', 'them: Tico team | Anything else?'], `in time order: ${order}`);
-    assert.equal(order.filter(x => x === 'day').length, 2, 'a date line for each day');
-    assert.equal(await chat.locator('.support-day').last().innerText(), shift ? 'Yesterday' : 'Today');
+    // Days are the browser's own (its time zone may not be this script's): count them there.
+    const seen = await page.evaluate(times => ({days: new Set(times.map(t => new Date(t).toDateString())).size,
+      today: new Date(times[0]).toDateString() === new Date().toDateString()}),
+      [atDay(40), atDay(49), atDay(50), atDay(60), atDay(3 * 24 * 60), atDay(3 * 24 * 60 - 4), atDay(3 * 24 * 60 - 5)]);
+    assert.equal(order.filter(x => x === 'day').length, seen.days, 'a date line for each day');
+    assert.equal(await chat.locator('.support-day').last().innerText(), seen.today ? 'Today' : 'Yesterday');
     assert.ok(await chat.locator('[data-thread]').evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight < 4), 'opens at the newest');
     assert.doesNotMatch(await chat.innerText(), DESK);
     await page.locator('#support-open:not(.has-unread)').waitFor();
