@@ -44041,12 +44041,25 @@
                   },
                   "started_at": {
                     "type": "string"
+                  },
+                  "auto": {
+                    "type": "boolean",
+                    "description": "Started by the nightly run (Auto dream), not by a person"
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "An auto dream's reason: the first line of its body"
                   }
                 },
                 "required": [
+                  "auto",
                   "closed_at",
                   "doing",
                   "questions",
+                  "reason",
                   "started_at",
                   "state",
                   "status",

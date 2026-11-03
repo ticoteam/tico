@@ -4,8 +4,8 @@
    and the bot's learnings.md and decisions.md, working rules first and then newest entries first (learnNewestFirst).
    Opening it marks the updates seen.
    Dream (backend/dream.py): a button at the top of the panel starts a cleanup task for the bot over its own memory.
-   While it runs the panel is in dream mode: a status line, its questions as cards to answer, then its summary and
-   the commits it made. A question also shows as a small card on the bot's page, and the button carries a mark. */
+   While it runs the panel is in dream mode: a status line (with the reason, for an auto dream), its questions as cards
+   to answer, then its summary and the commits it made. A question also shows as a small card on the bot's page, and the button carries a mark. */
 'use strict';
 
 const learnApi = slug => `/v2/bots/${encodeURIComponent(slug)}/memory`;
@@ -263,6 +263,7 @@ function learnOpen(slug, data, dream = null) {
     }
     body.innerHTML = `<div class="dream-view">
       <p class="dream-line" role="status">${esc(line)}</p>
+      ${latest.auto && latest.reason ? `<p class="dream-reason">${esc(latest.reason)}</p>` : ''}
       <p class="dream-doing" aria-live="polite"></p>
       <div class="dream-content">${content}</div>
       ${dreamOpen(latest) ? `<div class="dream-foot"><a href="#/task/${encodeURIComponent(latest.task)}">Task</a>
