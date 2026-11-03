@@ -2450,7 +2450,8 @@ def path_mentioned(conn, actor, what, text, task_id=None):
         return ""
     found = escape_found(text, actor, conn)
     if found:
-        event(conn, actor, "path.mentioned", task_id or "",
+        # The task id a bot's ref names: a list is its first task (_task_ref), so it binds into the event as a string.
+        event(conn, actor, "path.mentioned", _task_ref(task_id) or "",
               {"what": what} if PRIVATE_WRITE.get() else {"what": what, "found": found})
     return found
 
@@ -7696,11 +7697,16 @@ def _task_ref(value):
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def refs_task_id(refs):
+    """The task a message's refs name, as one id or None: `refs.task`, else `refs.task_id`, read by `_task_ref` (so a
+    list names its first task, and anything else is no task). Callers that bind it into SQL or a reach check use this."""
+    refs = refs if isinstance(refs, dict) else {}
+    return _task_ref(refs.get("task")) or _task_ref(refs.get("task_id"))
+
+
 def message_task_id(message, conversation=None):
     """The task a message is about: refs on the message, else a dedicated task conversation."""
-    refs = (message or {}).get("refs") or {}
-    return (_task_ref(refs.get("task")) or _task_ref(refs.get("task_id"))
-            or _task_ref((conversation or {}).get("task_id")))
+    return refs_task_id((message or {}).get("refs") or {}) or _task_ref((conversation or {}).get("task_id"))
 
 
 def _task_ref_sql(path):

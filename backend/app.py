@@ -1458,7 +1458,12 @@ def create_app(settings=None):
         # Validate referenced objects rather than trusting an arbitrary ID in a payload.
         for kind, values in refs.items():
             if kind in ("task", "task_id"):
-                for value in values if isinstance(values, list) else [values]:
+                # One task id, or a list of them (bots send `task:<id>` as a list); each must be one the caller can read.
+                # Anything else is refused here, before a SQL bind of it could fail.
+                items = values if isinstance(values, list) else [values]
+                if any(value and not isinstance(value, str) for value in items):
+                    raise Problem("reference", "A task reference is a task id or a list of task ids", 422)
+                for value in items:
                     if value:
                         auth.task(c, who, value)
             elif kind == "live":
@@ -1530,11 +1535,9 @@ def create_app(settings=None):
                     body.conversation_id = assistant_mod.chat_room(c, settings, who)["id"]
                     in_assistant_room = True
                 auth.require_write(c, who, H.actor_id(to), missing="Unknown recipient")
-        auth.require_bot_contact(c, who, to, body.conversation_id,
-                                 (body.refs or {}).get("task") or (body.refs or {}).get("task_id"),
-                                 kind="message")
+        auth.require_bot_contact(c, who, to, body.conversation_id, H.refs_task_id(body.refs), kind="message")
         # A bot's message to a teammate out of its reach (docs/reach.md) is refused before anything is written.
-        reach.check(c, who, to, "chat", task_id=(body.refs or {}).get("task") or (body.refs or {}).get("task_id"),
+        reach.check(c, who, to, "chat", task_id=H.refs_task_id(body.refs),
                     conversation_id=body.conversation_id, in_reply_to=body.in_reply_to)
         if body.conversation_id:
             conv = auth.conversation(c, who, body.conversation_id, write=True)
@@ -1567,9 +1570,10 @@ def create_app(settings=None):
         if in_assistant_room:
             refs["assistant"] = True           # the server's mark: this turn acts for the person
         conversation_id = body.conversation_id
-        if not conversation_id and body.kind == "steer" and who.role == "bot" and refs.get("task"):
+        steer_task = H._task_ref(refs.get("task"))
+        if not conversation_id and body.kind == "steer" and who.role == "bot" and steer_task:
             # A requester's steer goes to the task's own room, which its owner's running turn takes input from.
-            task = H.task(c, refs["task"])
+            task = H.task(c, steer_task)
             if not task or task["requester_id"] != who.actor or task["owner_id"] != to or not task.get("conversation_id"):
                 raise Problem("steer_target", "Steer a task you requested, sent to its owner", 422)
             conversation_id = task["conversation_id"]
@@ -1590,14 +1594,14 @@ def create_app(settings=None):
         message = H.say(c, who.actor, to, body.text, conversation_id=conversation_id,
                         kind=body.kind, refs=refs, in_reply_to=body.in_reply_to, wait_s=body.wait_s)
         # Everyone else it reached (its @mentions, a DM's members) is checked too; a refusal rolls the send back.
-        reach.check_delivered(c, who, message["id"], task_id=refs.get("task") or refs.get("task_id"),
+        reach.check_delivered(c, who, message["id"], task_id=H.refs_task_id(refs),
                               conversation_id=message.get("conversation_id"), in_reply_to=body.in_reply_to)
         due = None
         if to.startswith("bot:") and way == "defer":
             if who.role == "bot":
                 # A bot's deferred message rides with the recipient's next run of any kind, as a waiting
                 # bot-to-bot message does: its own DM may not see another turn.
-                task_ref = refs.get("task") if isinstance(refs.get("task"), str) else None
+                task_ref = H._task_ref(refs.get("task"))
                 held_note = bot_to_bot.hold(c, message, H.task(c, task_ref) if task_ref else None)
                 due = delivery.defer(c, to, "note", held_note["id"], defer_for=body.defer_for)
             else:
@@ -2986,9 +2990,8 @@ def create_app(settings=None):
                 refs = H._json(row["refs"], {}) or {}
                 if refs.get("goal_action") or refs.get("maintenance") or not privacy.message_readable(c, privacy.actor(who), row):
                     continue
-                task, tid = None, refs.get("task") or refs.get("task_id")
-                tid = tid[0] if isinstance(tid, list) and tid else tid
-                if isinstance(tid, str) and (t := H.task(c, tid)) and privacy.task_readable(c, who, t):
+                task, tid = None, H.refs_task_id(refs)
+                if tid and (t := H.task(c, tid)) and privacy.task_readable(c, who, t):
                     task = {"id": tid, "title": t["title"]}
                 text = " ".join(str(row["body"] or "").split())
                 prompts.append({"id": row["id"], "created_at": row["created_at"], "task": task,
@@ -3170,9 +3173,8 @@ def create_app(settings=None):
         if body.kind != "ask":
             return None
         title = body.text.strip().split("\n")[0][:300]
-        tref = (body.refs or {}).get("task")
-        tref = tref[0] if isinstance(tref, list) and tref else tref
-        if isinstance(tref, str) and ask_ingest.gated(who, settings.assistant_bot):
+        tref = H._task_ref((body.refs or {}).get("task"))
+        if tref and ask_ingest.gated(who, settings.assistant_bot):
             # The task's title is judged only when the bot may read the task; the send refuses it otherwise.
             with store.read() as c:
                 try:
@@ -3218,7 +3220,7 @@ def create_app(settings=None):
         the route does not name a conversation (`rule_message_place`)."""
         reach.precheck(store, who, lambda c: reach.check(
             c, who, auth.target(c, who, body.to), "chat", conversation_id=body.conversation_id,
-            task_id=(body.refs or {}).get("task") or (body.refs or {}).get("task_id"), in_reply_to=body.in_reply_to))
+            task_id=H.refs_task_id(body.refs), in_reply_to=body.in_reply_to))
         rc = rule_check(who, operation, body.text, lambda c: rule_message_audience(c, who, body),
                         place=place or rule_message_place(who, body))
         return rc, (None if org_rule_check.holds(rc) or retry else message_ingest(who, body))
