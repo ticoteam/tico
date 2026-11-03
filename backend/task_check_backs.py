@@ -318,7 +318,7 @@ def _computer_out(c, bot, at):
         return False
     if not place["last_seen_at"] or place["last_seen_at"] < H.shift(at, seconds=-REACHABLE_SECONDS):
         return True
-    hold = start_places.computer_hold(c, place["id"], now=at)
+    hold = start_places.computer_hold(c, place["id"])  # reads the real clock, as every other caller does
     return bool(hold) and hold[0] in (start_places.NOT_REPORTING, start_places.MEMORY_HOLD)
 
 

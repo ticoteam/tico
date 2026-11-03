@@ -501,12 +501,12 @@ def test_sleeping_computer_takes_no_notices_and_each_task_wakes_once_it_returns(
     with followups.app.state.store.transaction() as c:
         rows = [due(c, H.task_create(c, "human:ana", "Inspect sleeping result " + str(i), "x", "bot:ops", lint=False))
                 for i in range(3)]
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), minutes=-10), r["id"]))
+        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), minutes=-10), r["runner_id"]))
         for _ in range(3):
             assert CB.sweep(c)["woke"] == []
         assert all(not wakes(c, row["id"]) for row in rows)
         assert CB.view(H.task(c, rows[0]["id"]), c)["delivery"] == "computer_unavailable"
-        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.now(), r["id"]))
+        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.now(), r["runner_id"]))
         assert sorted(CB.sweep(c)["woke"]) == sorted(row["id"] for row in rows)
         assert CB.sweep(c)["woke"] == []
         assert all(len(wakes(c, row["id"])) == 1 for row in rows)
@@ -521,7 +521,7 @@ def test_idle_reachable_bot_is_woken_a_bounded_number_of_times(followups, monkey
         row = due(c, task(c))
         woke, at = [], H.now()
         for _ in range(24 * 6):  # a day of sweeps every ten minutes; every notice is handled without a next time
-            c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (at, r["id"]))
+            c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (at, r["runner_id"]))
             if CB.sweep(c, at)["woke"]:
                 woke.append(at)
             handled(c, row["id"])
