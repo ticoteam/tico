@@ -1148,7 +1148,7 @@ def create_app(settings=None):
             raise Problem("forbidden", "Request timings are for the owner and BotOps", 403)
         return app.state.timing.summary()
 
-    def mutate(request, body, fn, check=None):
+    def mutate(request, body, fn, check=None, durable=False):
         def current_access(c):
             # Privacy can narrow after middleware preflight, including before a cached retry.
             source = getattr(request.state, "privacy_source", request.state.identity)
@@ -1172,8 +1172,11 @@ def create_app(settings=None):
             finally:
                 org_rule_check.PATH.reset(path)
                 H.PRIVATE_WRITE.reset(token)
+        # Money writes and approval decisions pass `durable`; every other keyed write keeps the call it always made.
+        money = {"durable": True} if durable else {}
         result = store.mutate(request.state.identity, request.url.path,
-                              request.headers.get("idempotency-key"), body.model_dump(), protected_write, check=current_access)
+                              request.headers.get("idempotency-key"), body.model_dump(), protected_write,
+                              check=current_access, **money)
 
         if isinstance(result, dict) and "_refusal" in result:
             refusal = result["_refusal"]
@@ -1507,6 +1510,9 @@ def create_app(settings=None):
         auth.require_bot_contact(c, who, to, body.conversation_id,
                                  (body.refs or {}).get("task") or (body.refs or {}).get("task_id"),
                                  kind="message")
+        # A bot's message to a teammate out of its reach (docs/reach.md) is refused before anything is written.
+        reach.check(c, who, to, "chat", task_id=(body.refs or {}).get("task") or (body.refs or {}).get("task_id"),
+                    conversation_id=body.conversation_id, in_reply_to=body.in_reply_to)
         if body.conversation_id:
             conv = auth.conversation(c, who, body.conversation_id, write=True)
             from . import threads
@@ -1560,6 +1566,9 @@ def create_app(settings=None):
             refs["quiet"] = True                 # no job: the session's next turn, or its deadline, takes it
         message = H.say(c, who.actor, to, body.text, conversation_id=conversation_id,
                         kind=body.kind, refs=refs, in_reply_to=body.in_reply_to, wait_s=body.wait_s)
+        # Everyone else it reached (its @mentions, a DM's members) is checked too; a refusal rolls the send back.
+        reach.check_delivered(c, who, message["id"], task_id=refs.get("task") or refs.get("task_id"),
+                              conversation_id=message.get("conversation_id"), in_reply_to=body.in_reply_to)
         due = None
         if to.startswith("bot:") and way == "defer":
             if who.role == "bot":
@@ -2422,7 +2431,9 @@ def create_app(settings=None):
         """One bot as the bot list and the bot detail show it: everything for a caller who may read
         it, only its profile for one who may only see it. `rows` (backend/bot_rows.py) holds what
         was read for every bot in the answer."""
-        row = {k: v for k, v in bot.items() if k not in ("token_hash", "cwd", "thread_id")}
+        row = dict(bot)
+        # runtime, model and host are the bot's config (bot_config.config); a bot with no config has none of them.
+        row.update({"model": "", "runtime": "", "host": "dispatcher"})
         config = rows.config(bot["id"])
         assignment = rows.assignments.get(bot["id"]) if level["read"] else None
         row["access"] = level
@@ -2442,13 +2453,15 @@ def create_app(settings=None):
             from .shared_bots import follow
             declared = follow(c, bot["id"], json.loads(config["config"]) if config["config"] else {},
                               rows.config)
+            row.update({"model": declared.get("model") or "", "runtime": declared.get("runtime") or "",
+                        "host": declared.get("host") or "dispatcher"})
             if declared.get("shared_from"):
                 repo = declared.get("repo") or repo
                 row.update({"model": declared.get("model") or "", "runtime": declared.get("runtime") or "",
                             "effort": declared.get("reasoning_effort") or "", "session": declared.get("session"),
                             "fallback": declared.get("fallback")})
             row.update({"description": config["description"] or "",
-                        "harness": resolve_harness(declared, bot.get("runtime")),
+                        "harness": resolve_harness(declared, None),
                         "reports_to": config["reports_to"], "repo": repo,
                         "repo_url": repo_url(repo, settings.github_owner),
                         # Its checkout's folder on a computer: clients find its files by this, never by its slug.
@@ -3170,6 +3183,9 @@ def create_app(settings=None):
         """Both checks of one message, outside the write: the rule check, then ask ingest (a held one skips it, and so
         does a saved retry, `retry`: `mutate` replays its answer without the write). `place`: the message's place when
         the route does not name a conversation (`rule_message_place`)."""
+        reach.precheck(store, who, lambda c: reach.check(
+            c, who, auth.target(c, who, body.to), "chat", conversation_id=body.conversation_id,
+            task_id=(body.refs or {}).get("task") or (body.refs or {}).get("task_id"), in_reply_to=body.in_reply_to))
         rc = rule_check(who, operation, body.text, lambda c: rule_message_audience(c, who, body),
                         place=place or rule_message_place(who, body))
         return rc, (None if org_rule_check.holds(rc) or retry else message_ingest(who, body))
@@ -3573,7 +3589,7 @@ def create_app(settings=None):
         def work(c):
             privacy.require_batch(c, who, batch.current(c, who.actor))
             items = views.needs_items(c, auth, who, task_view)
-            snapshot = views.fleet_snapshot_cached(c, auth, who, task_view)
+            snapshot = views.fleet_snapshot(c, auth, who, task_view)
             scope = body.bot if body.bot == batch.NEXT else (H.resolve_bot(c, body.bot) or {}).get("id", body.bot)
             return batch.start(c, who.actor, items, snapshot, scope=scope)
         return mutate(request, body, work)
@@ -3590,7 +3606,7 @@ def create_app(settings=None):
         start = views.since_time(since) or H.shift(H.now(), hours=-12)
         with store.read() as c:
             items = views.needs_items(c, auth, who, task_view)
-            snapshot = views.fleet_snapshot_cached(c, auth, who, task_view)
+            snapshot = views.fleet_snapshot(c, auth, who, task_view)
             rows, notes, reports = batch.candidates(c, who.actor, items)
             said = []
             for m in c.execute("SELECT * FROM messages WHERE recipient_id=? AND "
@@ -3681,7 +3697,7 @@ def create_app(settings=None):
             rows, notes, _ = batch.candidates(c, who.actor, views.needs_items(c, auth, who, task_view))
             line = batch.lineup(c, who.actor, notes + rows)
             return {**out, "lineup": line, "up_next": batch.up_next(line, out["scope"])}
-        result = mutate(request, body, work)
+        result = mutate(request, body, work, durable=True)     # a batch can approve a payment
         from .company_page import editions
         for board in boards:
             editions.release_board(store, board)                 # after the commit, as the decide route does
@@ -3972,6 +3988,7 @@ def create_app(settings=None):
     def note_write(c, who, body, rc=None):
         to = auth.target(c, who, body.to, need="write")
         auth.require_bot_contact(c, who, to, kind="note")
+        reach.check(c, who, to, "chat")
         lifecycle.refuse_send(c, who, to, what="a note")
         rule = org_rule_check.apply(c, rc, body.text, {"body": body.model_dump(mode="json", by_alias=True)})
         if rule and rule.get("held"):
@@ -3984,6 +4001,7 @@ def create_app(settings=None):
     @app.post("/api/v2/notes")
     def create_note(request: Request, body: M.NoteCreate):
         who = request.state.identity
+        reach.precheck(store, who, lambda c: reach.check(c, who, auth.target(c, who, body.to, need="write"), "chat"))
         rc = rule_check(who, "note", body.text, lambda c: [rule_target(c, who, body.to)])
         return mutate(request, body, lambda c: note_write(c, who, body, rc))
 
@@ -4250,6 +4268,10 @@ def create_app(settings=None):
         original = auth.target(c, who, body.owner, need="write")
         owner = auth.target(c, who, route(c, who.actor, original), need="write")
         task_caps.check(c, who.actor, owner)      # the first hub check on a send (CONTRACT §1): nothing is written
+        # A bot's task for a teammate out of its reach, or its question to one (docs/reach.md), is refused next.
+        reach.check(c, who, owner, "task", task_id=parent_id)
+        if asked:
+            reach.check(c, who, asked, "task", task_id=parent_id)
         asked_botops = None
         if request_id and who.via == "assistant":
             # The Assistant handing a helper (BotOps, the Strategy Bot, the Librarian; assistant.HELPERS) what the
@@ -4526,9 +4548,10 @@ def create_app(settings=None):
             prs = review_gate.links(c, row)
         return review_gate.snapshot(app.state.github_app, prs) if prs else {}
 
-    def cap_before_preflight(request, who, owner_ref):
-        """The task cap (CONTRACT §1) before any LLM preflight: a refused send spends no judgment and writes nothing.
-        A retry whose Idempotency-Key already has a saved answer is not checked: `mutate` replays that answer."""
+    def cap_before_preflight(request, who, owner_ref, parent_ref=None):
+        """The task cap (CONTRACT §1) and reach (docs/reach.md) before any LLM preflight: a refused send spends no
+        judgment and writes nothing. A retry whose Idempotency-Key already has a saved answer is not checked: `mutate`
+        replays that answer."""
         if not owner_ref:
             return
         from .shared_bots import route
@@ -4536,7 +4559,10 @@ def create_app(settings=None):
             if store.saved(c, who, request.url.path, request.headers.get("idempotency-key")):
                 return
             original = auth.target(c, who, owner_ref, need="write")
-            task_caps.check(c, who.actor, auth.target(c, who, route(c, who.actor, original), need="write"))
+            owner = auth.target(c, who, route(c, who.actor, original), need="write")
+            task_caps.check(c, who.actor, owner)
+        reach.precheck(store, who, lambda c: reach.check(
+            c, who, owner, "task", task_id=auth.resolve_task(c, who, parent_ref) if parent_ref else None))
 
     def saved_retry(request, who):
         """Whether this request's Idempotency-Key already has a saved answer: `mutate` replays it without the write, so
@@ -4547,7 +4573,7 @@ def create_app(settings=None):
     @app.post("/api/v2/tasks")
     def create_task(request: Request, body: M.TaskCreate):
         parents = [r.task for r in body.relations if r.kind == "parent"]
-        cap_before_preflight(request, request.state.identity, body.owner)
+        cap_before_preflight(request, request.state.identity, body.owner, parents[0] if parents else None)
         snapshots = review_preflight(request.state.identity, parents[0], child_title=body.title.strip()) if parents else None
         who = request.state.identity
         rc = rule_check(who, "task_create", rule_create_text(body),
@@ -4597,6 +4623,7 @@ def create_app(settings=None):
             raise Problem("version_conflict", "Task changed; fetch it and retry your update", 409)
         if body.owner:
             auth.require_bot_contact(c, who, auth.target(c, who, body.owner, need="write"), task_id=task_id, kind="task")
+        reach_update(c, who, row, body)
         if body.due and (not H.parse_ts(body.due) or H.parse_ts(body.due).tzinfo is None):
             raise Problem("date", "due must be an ISO-8601 date/time with a timezone", 422)
         if body.goal_id and not G.goal(c, body.goal_id):
@@ -4677,9 +4704,24 @@ def create_app(settings=None):
                 **({"warnings": warnings} if warnings else {}),
                 **(ask_ingest.reply(*gates) if not body.close else {}), **org_rule_check.answer(rule_gate)}
 
+    def reach_update(c, who, row, body):
+        """Reach (docs/reach.md) on a change: a bot handing its task to a teammate, or waiting on one, out of its reach
+        is refused. Handing it back to someone already on it passes (reach.on_task)."""
+        if body.owner:
+            owner = auth.target(c, who, body.owner, need="write")
+            if owner != row["owner_id"]:
+                reach.check(c, who, owner, "task", task_id=row["id"])
+        if body.waiting_on:
+            waits = H.resolve_actor(c, body.waiting_on)
+            if waits and waits != row.get("waiting_on"):
+                reach.check(c, who, waits, "task", task_id=row["id"])
+
     @app.post("/api/v2/tasks/{tid}")
     def update_task(request: Request, tid: str, body: M.TaskUpdate):
         caller = request.state.identity
+        if body.owner or body.waiting_on:
+            reach.precheck(store, caller, lambda c: reach_update(
+                c, caller, auth.task(c, caller, auth.resolve_task(c, caller, tid)), body))
         if body.owner:
             with store.read() as c:
                 try:
@@ -5055,6 +5097,10 @@ def create_app(settings=None):
     def task_ask_ingest(who, tid, body):
         if not ask_ingest.gated(who, settings.assistant_bot) or not (row := readable_task(who, tid)):
             return None
+        from . import dream
+        with store.read() as c:
+            if dream.exempt(c, row):
+                return None             # the person started the dream to be asked (backend/dream.py)
         return ask_ingest.preflight(store, app.state.judge, who, row["requester_id"], row["title"], body.text,
                                     kind="task_ask")
 
@@ -5658,7 +5704,7 @@ def create_app(settings=None):
                 from .finance import actions as finance
                 finance.approval_decided(c, aid)                 # Finance acts on it in the same transaction
             return decided
-        result = mutate(request, body, work)
+        result = mutate(request, body, work, durable=True)     # approving a payment moves money: durable, like every decision
         from .company_page import editions
         for board in boards:
             editions.release_board(store, board)                 # after the commit: the rebuild takes its own transaction
@@ -6671,6 +6717,8 @@ def create_app(settings=None):
             found = list(H.turns(c, bot, since=since_at))
             stored = H.prime_messages(c, [turn["message_id"] for turn in found])
             privacy.prime_messages(c, list(stored.values()))
+            from . import threads
+            threads.prime_members(c, who, [row["conversation_id"] for row in stored.values()])
             privacy.prime_attempts(c, [turn["id"] for turn in found])
             views.prime_attempt_details(c, [turn["id"] for turn in found])
             result = []
@@ -7693,8 +7741,8 @@ def create_app(settings=None):
             if row["revision"] != body.expected_revision:
                 raise Problem("version_conflict", "Bot configuration changed; refresh before changing models", 409)
             config = json.loads(row["config"])
-            old_model = config.get("model") or H.bot(c, bot).get("model")
-            old_runtime = config.get("runtime") or H.bot(c, bot).get("runtime")
+            old_model = config.get("model") or ""
+            old_runtime = config.get("runtime") or ""
             old_effort = config.get("reasoning_effort") or H.bot(c, bot).get("effort")
             old_harness = resolve_harness(config, old_runtime)
             effort = settings_admin._effort(choice, body.effort, old_effort)
@@ -7722,8 +7770,7 @@ def create_app(settings=None):
                            "model_managed_by": "cloud"})
             c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?",
                       (encode(config), bot))
-            c.execute("UPDATE bots SET model=?,runtime=?,effort=? WHERE id=?",
-                      (choice["id"], runtime, effort, bot))
+            c.execute("UPDATE bots SET effort=? WHERE id=?", (effort, bot))
             # Its shared copies follow it, so any bot may have moved onto another tool.
             model_login.hold_removals(c, settings)
             lift_after_model_change(c, settings, who.actor, bot, was)
@@ -8358,6 +8405,8 @@ def create_app(settings=None):
     install_integrations(app, store, auth, mutate)
     from .memory_history import MAX_REPORT_BYTES, install_memory_history
     install_memory_history(app, store, auth, mutate)
+    from . import dream
+    dream.install(app, store, auth, mutate, task_create, cap_before_preflight)     # a bot's Dream (docs/learnings.md)
     from .learnings import install as install_learnings
     install_learnings(app, store, auth, mutate)
     from .learned import install as install_learned

@@ -966,10 +966,13 @@ class Onboarding:
         choice = {"template": card["template"], "display_name": card["name"], "instructions": card["instructions"]}
         restored = bool(row and row["state"] == "archived")
         if restored:
-            # The restore keeps the bot's own model and settings; only the name and description are renewed.
+            # The restore keeps the bot's own model and settings; only the name and description are renewed. The model
+            # is in the bot's config (bot_config.config): bots has no model column since migration 0043.
+            kept = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+            kept_model = (H._json(kept[0], {}) or {}).get("model") if kept else ""
             self.admin.create_bot(c, who, M.BotDefinitionCreate(
                 slug=slug, display_name=choice["display_name"], description=str(card.get("summary") or ""),
-                status="planned", repo=self._recorded_repo(c, slug), thread_mode="personal", model=row.get("model") or "restore",
+                status="planned", repo=self._recorded_repo(c, slug), thread_mode="personal", model=kept_model or "restore",
                 effort=row.get("effort") or "high", owners=[H.actor_id(who.actor)]))
         elif not row:
             self._define(c, who, slug, choice, card)
@@ -1260,7 +1263,7 @@ class Onboarding:
         for key in ("runtime", "model", "harness", "reasoning_effort"):
             declared.pop(key, None)
         self._write_config(c, slug, declared)
-        c.execute("UPDATE bots SET runtime='',model='',effort='' WHERE id=?", (slug,))
+        c.execute("UPDATE bots SET effort='' WHERE id=?", (slug,))
 
     def _setup_task(self, c, who, slug, choice, card, answers):
         """BotOps builds every bot people picked. A bootstrap template (the assistant, BotOps

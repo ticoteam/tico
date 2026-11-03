@@ -48,7 +48,7 @@ async function open(browser, viewport, state) {
       const user = msg('u' + state.sent.length, 'human:ben', body.text, new Date().toISOString());
       const bot = msg('b' + state.sent.length, 'bot:coo', "I can't fix that one. [Talk to the Tico team](#/support)", new Date().toISOString());
       state.messages.push(user, bot);
-      return json({message: user, reply: bot, fast: true});
+      return json({message: user});
     }
     if (p === '/api/v2/uploads/assistant/messages') {
       const raw = route.request().postDataBuffer().toString('latin1'), field = name => raw.match(new RegExp(`name="${name}"\\r\\n\\r\\n([^\\r]*)`))?.[1];
@@ -56,7 +56,7 @@ async function open(browser, viewport, state) {
       state.uploaded = (state.uploaded || []).concat([body]);
       const user = msg('f' + state.uploaded.length, 'human:ben', body.text, new Date().toISOString());
       state.messages.push(user, msg('g' + state.uploaded.length, 'bot:coo', 'Read it.', new Date().toISOString()));   // the turn's reply, by the snapshot
-      return json({message: user, reply: null, fast: false});
+      return json({message: user});
     }
     const ticket = p.match(/^\/api\/v2\/support\/tickets\/([^/]+)\/(messages|read)$/), listing = () => json({enabled: state.supportOff !== true, tickets: state.tickets, unread: state.unreadCount ?? state.tickets.filter(t => t.unread).length});
     if (ticket) {

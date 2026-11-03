@@ -119,6 +119,10 @@ function answer(hub, method, p, url, payload) {
     Object.assign(r, rest, {audiences: AUDIENCES.filter(a => audience_ids.includes(a.id)).map(({id, name, kind}) => ({id, name, kind}))});
     return [200, r];
   }
+  if (p === '/api/v2/readers') {
+    const r = {id: 'r9', email: payload.email, name: payload.name || null, notify: true, audiences: AUDIENCES.filter(a => payload.audience_ids.includes(a.id)).map(({id, name, kind}) => ({id, name, kind}))};
+    hub.readers.push(r); return [200, r];
+  }
   if ((m = /^\/api\/v2\/readers\/([^/]+)$/.exec(p)) && method === 'DELETE') { hub.readers = hub.readers.filter(r => r.id !== m[1]); return [200, {}]; }
   return null;
 }
@@ -640,11 +644,11 @@ async function shotPart(page, id, name) {
     assert.equal(await page.locator('[data-cp-share]').evaluate(b => b.textContent.trim()), '');
     await page.locator('[data-cp-share]').click();
     const panel = page.locator('dialog.cp-share');
-    await panel.locator('[data-cp-reader="r1"]').waitFor();
+    await panel.locator('[data-cp-level]').waitFor();
     assert.equal(await panel.locator('[data-cp-level] [data-v="closed"]').getAttribute('aria-checked'), 'true');
     assert.equal(await panel.locator('.cp-address').count(), 0);
     assert.equal(await panel.locator('.cp-look').count(), 0, 'accent and logo stay in Manage');
-    assert.equal(await panel.locator('[data-cp-new-invite]').count(), 1, 'invite links are here');
+    assert.equal(await panel.locator('[data-cp-reader], [data-cp-share-add]').count(), 0, 'nobody to add while Closed');
     await panel.locator('[data-cp-level] [data-v="open"]').click();
     const sure = page.locator('dialog.cp-dlg:not(.cp-share)');
     assert.match(await sure.innerText(), /public internet/);
@@ -653,6 +657,29 @@ async function shotPart(page, id, name) {
     await panel.locator('[data-cp-not-live]').waitFor();
     assert.deepEqual(hub.writes.at(-1), ['PATCH', '/api/v2/company-page', {transparency: 'open'}]);
     assert.equal(await panel.locator('a.cp-address, [data-cp-copy]').count(), 0, 'not a link until it is live');
+
+    // People: who has access and one line to add someone. Headings, CSV, link lists and the email note stay in Manage.
+    await panel.locator('[data-cp-reader="r1"]').waitFor();
+    assert.equal(await panel.locator('h2, [data-cp-import], [data-cp-new-invite], [data-cp-invite], [data-cp-email-off], [data-cp-reader-edit]').count(), 0);
+    await panel.locator('[data-cp-share-add] [name=email]').fill('lee@acme.example');
+    await panel.locator('[data-cp-share-add] select').selectOption('a-inv');
+    await panel.locator('[data-cp-share-add] button[type=submit]').click();
+    await panel.locator('[data-cp-reader="r9"]').waitFor();
+    assert.deepEqual(hub.writes.at(-1), ['POST', '/api/v2/readers', {email: 'lee@acme.example', name: '', audience_ids: ['a-inv']}]);
+    assert.equal(await panel.locator('[data-cp-share-add] select').inputValue(), 'a-inv', 'the audience chosen holds');
+    await shot(page, 'share-people-1280');
+    // The invite link goes straight to the clipboard; one the clipboard refuses is shown instead.
+    await page.evaluate(() => { window.__copied = []; Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async t => { window.__copied.push(t); }}}); });
+    await panel.locator('[data-cp-share-invite]').click();
+    await page.waitForFunction(() => window.__copied.length);
+    assert.deepEqual(await page.evaluate(() => window.__copied), ['https://acme.tico.page/invite/one-time']);
+    assert.deepEqual(hub.writes.at(-1), ['POST', '/api/v2/audiences/a-inv/invites', {}]);
+    await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async () => { throw new Error('no'); }}}));
+    await panel.locator('[data-cp-share-invite]').click();
+    const shown = page.locator('dialog.cp-dlg:not(.cp-share)');
+    assert.equal(await shown.locator('input[name=url]').inputValue(), 'https://acme.tico.page/invite/one-time');
+    await shown.locator('[data-close], .tmodal-x').first().click();
+    await shown.waitFor({state: 'detached'});
     hub.settings.public_live = true;
     await panel.locator('[data-close]').click();
     await panel.waitFor({state: 'detached'});
@@ -668,7 +695,7 @@ async function shotPart(page, id, name) {
     assert.match(await frame.getAttribute('src'), /audience=a-pub/, 'the audience chosen holds');
 
     // The live address copies.
-    await page.evaluate(() => { window.__copied = []; Object.defineProperty(navigator, 'clipboard', {value: {writeText: async t => { window.__copied.push(t); }}}); });
+    await page.evaluate(() => { window.__copied = []; Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {writeText: async t => { window.__copied.push(t); }}}); });
     await page.locator('[data-cp-share]').click();
     await panel.locator('a.cp-address').waitFor();
     await panel.locator('[data-cp-copy]').click();
@@ -742,7 +769,7 @@ async function shotPart(page, id, name) {
       }
       await shot(page, `tab-${w}-${theme}`);
       await page.locator('[data-cp-share]').click();
-      await page.locator('dialog.cp-share [data-cp-reader="r1"]').waitFor();
+      await page.locator('dialog.cp-share [data-cp-level]').waitFor();
       await flat(page, `the share panel at ${w}`);
       await shot(page, `tab-share-${w}-${theme}`);
       assert.deepEqual(errors, []);

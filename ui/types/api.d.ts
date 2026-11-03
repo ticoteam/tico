@@ -92,10 +92,7 @@ export type AssistantReadBack = {
 };
 
 export type AssistantSent = {
-  fast: boolean;
-  intent?: string | null;
   message: Message;
-  reply?: Record<string, unknown> | null;
 };
 
 export type AssistantSettings = {
@@ -448,6 +445,22 @@ export type BotDetail = {
   template?: string;
   template_version?: string;
   turns_at_once?: number | null;
+};
+
+export type BotDreamView = {
+  dream: {
+  closed_at: string | null;
+  questions: {
+  message_id: string;
+  mine: boolean;
+  text: string;
+} | null;
+  started_at: string;
+  state: "starting" | "dreaming" | "asking" | "done" | "stopped";
+  status: string;
+  summary: string | null;
+  task: string;
+} | null;
 };
 
 export type BotFile = {
@@ -6734,6 +6747,13 @@ export type GetBotBudgetParams = {
 export type GetBotBudgetBody = never;
 export type GetBotBudgetResponse = BotBudgetState;
 
+/** GET /api/v2/bots/{bot}/dream */
+export type GetBotDreamParams = {
+  bot: string;
+};
+export type GetBotDreamBody = never;
+export type GetBotDreamResponse = BotDreamView;
+
 /** GET /api/v2/bots/{bot}/instructions */
 export type GetBotInstructionsParams = {
   bot: string;
@@ -9958,6 +9978,14 @@ export type SnoozeTaskParams = {
 };
 export type SnoozeTaskBody = TaskSnooze;
 export type SnoozeTaskResponse = TaskResult;
+
+/** POST /api/v2/bots/{bot}/dream */
+export type StartBotDreamParams = {
+  "Idempotency-Key": string;
+  bot: string;
+};
+export type StartBotDreamBody = Empty;
+export type StartBotDreamResponse = BotDreamView;
 
 /** POST /api/v2/threads/{thread_id}/calls */
 export type StartCallParams = {

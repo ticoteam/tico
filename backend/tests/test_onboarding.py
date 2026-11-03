@@ -468,3 +468,19 @@ def test_a_companys_own_bot_named_counsel_is_never_taken_for_the_built_in_counse
     assert asked.status_code == 200, asked.text
     task = api.get("/api/v2/tasks/" + asked.json()["task_id"], headers=signed_in()).json()
     assert (task.get("task") or task)["owner_id"] == "bot:" + H.COUNSEL
+
+
+def test_a_restored_bot_keeps_the_model_its_config_names(environment):
+    """A restore reads the bot's model from its config: bots has no model column (migration 0043), and a read of the
+    dropped column gave the restore no model at all."""
+    # Only the assistant is brought back this way (create_bot restores it; any other archived slug is a duplicate).
+    api = environment(seed={"coo": {"name": "Coo", "status": "archived", "template": "assistant",
+                                    "model": "claude-opus-5-5", "runtime": "claude"}})
+    store = api.app.state.store
+    with store.transaction() as c:
+        who = api.app.state.auth.owner_identity(c)
+        done = api.app.state.onboarding._turn_on(c, who, "coo", "assistant", "Coo", "bot.turned_on")
+    assert done["restored"] is True
+    with store.read() as c:
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='coo'").fetchone()[0])
+    assert config["model"] == "claude-opus-5-5"

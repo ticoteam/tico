@@ -3,11 +3,9 @@
 One room per person (`rooms.ASSISTANT_ROOM`, scope personal, owner_actor the person): only they
 read it or post in it, the owner and administrators included. A message goes one of two ways:
 
-* the fast path answers on the server, from Tico's own data, with no runner turn: what is waiting
-  on you, a search, "open X", what a bot did today, how to do something (docs/*.md). The person
-  sees the answer at once (a bot turn is 30 seconds or more);
-* everything else is a turn of the assistant bot on the company's runner. That turn acts as the
-  person and never more: `Auth.authenticate` maps its token to the person (`assistant_principal`),
+* every message is a turn of the assistant bot on the company's runner, which reads the question and
+  answers it from Tico's own data (no canned answers, no keyword routing);
+* that turn acts as the person and never more: `Auth.authenticate` maps its token to the person (`assistant_principal`),
   so every hub tool it calls is checked, and audited "via assistant", exactly as if they had made
   the call. Low-risk writes run directly (`write_allowed`); a task change, comment or link the
   person asked for in their own words runs directly when the turn cites their message
@@ -22,8 +20,7 @@ import re
 import secrets
 import unicodedata
 import uuid
-from pathlib import Path
-from urllib.parse import quote, unquote
+from urllib.parse import unquote
 
 import httpx
 from fastapi import Request
@@ -39,8 +36,6 @@ from .store import H, Problem, digest
 RUNNING_TTL_S = 120                # a confirm that has not settled in two minutes failed
 CONFIRM_TTL_H = 24                 # a proposal nobody confirmed for a day is not run
 MAX_PENDING = 20
-GITHUB_DOCS = "https://github.com/ticoteam/tico/blob/main/docs/"
-DOCS_DIR = Path(__file__).resolve().parents[1] / "docs"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS assistant_actions (
@@ -1153,92 +1148,7 @@ def actions_for(c, actor, ids):
     return {row["id"]: action_view(dict(row), c) for row in rows}
 
 
-# ------------------------------------------------------------------ the fast path
-STOP = set("a an the of to in on for and or is are was were be do does did i me my we our you your it its this that these "
-           "those with about from at by as how what which who where when can could should would please tell show give "
-           "get have has had there here into out up any some".split())
-KINDS = {"task": "tasks", "tasks": "tasks", "issue": "tasks", "doc": "docs", "docs": "docs", "document": "docs",
-         "documents": "docs", "meeting": "meetings", "meetings": "meetings", "call": "meetings",
-         "file": "files", "files": "files", "person": "people", "people": "people", "bot": "bots", "bots": "bots"}
-PAGES = {"tasks": "#/tasks", "board": "#/board", "meetings": "#/meetings", "updates": "#/updates",
-         "docs": "#/docs", "documentation": "#/docs", "settings": "#/settings", "help": "#/help", "goals": "#/goals",
-         "integrations": "#/integrations", "health": "#/settings", "overview": "#/overview", "changelog": "#/changelog"}
-
-WAITING = re.compile(r"\b(waiting (on|for) me|needs? (my|me)\b|need(s)? you|my (inbox|queue|to-?do)|"
-                     r"what should i (do|work on)|what do i need to|anything (for me|waiting)|pending (for|on) me)")
-GREETING = re.compile(r"^(?:hi|hello|hey|good morning|good afternoon|good evening)$")
-TASK_TYPE_INVENTORY = re.compile(
-    r"^(?:for\s+[a-z][a-z0-9&'-]{0,40},\s*)?(?:what|which)\s+(?:kind\s+of\s+)?"
-    r"(?:task\s+types?|types?\s+of\s+tasks?)\s+"
-    r"(?:do\s+we\s+use(?:\s+here)?|does\s+(?:this\s+)?(?:team|workspace)\s+use|are\s+available|exist)"
-)
-TASK_TYPE_INVENTORY_ARE = re.compile(
-    r"^(?:what|which)\s+are\s+(?:the\s+)?(?:task\s+types?|types?\s+of\s+tasks?)"
-    r"(?:\s+(?:here|in\s+this\s+workspace))?$"
-)
-NAVIGATE = re.compile(r"^(open|go to|goto|take me to|show me|where is|where's|wheres|navigate to|pull up|bring up)\b\s*(.*)$")
-SEARCH = re.compile(r"^(search( for)?|find|look ?up|look for)\b\s*(.*)$")
-HELP = re.compile(r"^(help\b[:,\s]*|how (do|can|should|would|does|to)\b|how'?s? (it|tico)\b|explain\b|what is a\b|what are\b|"
-                  r"what does .* mean|where do i\b|can i\b.*\?|what'?s the difference)")
-BOT_TODAY = re.compile(r"\b(today|this morning|last 24|yesterday|lately|so far)\b|\bwhat (did|has|have|is|was)\b.*\b(do|done|doing|up to|work)")
-# A problem to look into ("I see stuck tasks, what is going on?") needs the company's own state, not a docs excerpt or a
-# canned list: the model takes it.
-TROUBLE = re.compile(r"\b(stuck|broken|broke|failing|failed|wrong|not working|doesn'?t work|isn'?t working|going on|"
-                     r"why|fix|fixed|problem|issue|error)\b")
-ACTION_WORDS = re.compile(r"\b(create|make|add|assign|ask|tell|send|approve|decline|reject|archive|delete|remove|"
-                          r"build|set up|schedule|publish|post|change|update|rename|close|cancel|remind|clear|dismiss|answer)\b")
-
-
-def words(text):
-    return [w for w in re.findall(r"[\w'-]+", text.casefold()) if w not in STOP]
-
-
-def route(text, bots=()):
-    """(intent, arg) for the fast path, or (None, None) when the model should take it.
-
-    Keyword and structure first; a verb that asks for something to be done always goes to the model."""
-    t = re.sub(r"\s+", " ", text.strip().casefold()).strip(" ?!.")
-    if not t or len(t) > 400:
-        return None, None
-    if GREETING.fullmatch(t):
-        return "greeting", None
-    if TROUBLE.search(t):
-        return "trouble", None
-    # "for <team>," can be any word, a verb too ("for create, ..."), so the action check still applies.
-    if (TASK_TYPE_INVENTORY.fullmatch(t) or TASK_TYPE_INVENTORY_ARE.fullmatch(t)) and not ACTION_WORDS.search(t):
-        return "task_types", None
-    if WAITING.search(t) and not ACTION_WORDS.search(t):     # "clear my queue" is work, not a question
-        return "waiting", None
-    named = next((b for b in bots if b["slug"] in t.split() or b["slug"].replace("-", " ") in t
-                  or b["name"].casefold() in t), None)
-    if named and BOT_TODAY.search(t) and not ACTION_WORDS.search(t):
-        return "bot_today", named["slug"]
-    m = NAVIGATE.match(t)
-    if m and m.group(2).strip():
-        return "navigate", m.group(2).strip()
-    m = SEARCH.match(t)
-    if m and m.group(3).strip() and not ACTION_WORDS.search(m.group(3)):
-        return "search", m.group(3).strip()
-    if HELP.search(t) and not re.search(r"\b(for me|on my behalf)\b", t):
-        return "help", t
-    return None, None
-
-
-def link(title, href):
-    return "[" + re.sub(r"[\[\]]", "", str(title or "Untitled")).strip()[:120] + "](" + href + ")"
-
-
-def _terms(arg):
-    hint, terms = None, []
-    for w in words(arg):
-        if w in KINDS:
-            hint = hint or KINDS[w]
-        else:
-            terms.append(w)
-    return hint, terms
-
-
-# Cards whose answer carries a one-time value for the person who taps: the route and the fields shown to them.
+# ------------------------------------------------------------------ the confirm path's helpers
 SHOWN_ONCE = {"/api/v2/enrollments": ("code", "expires_at", "operator")}
 
 
@@ -1264,8 +1174,8 @@ def outcome(response):
 
 
 class Internal:
-    """Reads Tico's own API in-process as the person, with the credential they came in with, so a
-    fast answer can show exactly what the page would: never more."""
+    """Reads Tico's own API in-process as the person, with the credential they came in with, so a confirmed
+    proposal runs exactly as the page would run it: never more."""
 
     def __init__(self, request):
         self.app = request.app
@@ -1295,294 +1205,6 @@ class Internal:
             return None
 
 
-def _task_href(item):
-    return "#/task/" + quote(str(item.get("task_id") or item.get("id")), safe="")
-
-
-async def fast_waiting(api, who, bots):
-    data = await api.get("needs-you") or {}
-    items = data.get("items") or []
-    if not items:
-        return "Nothing is waiting on you.", []
-    label = {"task": "Task", "question": "Question", "declined": "Declined", "approval": "Approval"}
-    links, lines = [], []
-    for item in items[:8]:
-        href = _task_href(item) if item.get("kind") != "approval" or item.get("task_id") else "#/tasks"
-        links.append({"title": item.get("title") or "", "href": href, "kind": "task"})
-        lines.append(f"- {label.get(item.get('kind'), 'Item')}: {link(item.get('title'), href)}")
-    more = len(items) - 8
-    head = f"{len(items)} thing{'s' if len(items) != 1 else ''} waiting on you" + (":" if items else ".")
-    return head + "\n" + "\n".join(lines) + (f"\n…and {more} more in {link('Tasks', '#/tasks')}." if more > 0 else ""), links
-
-
-async def search_all(api, arg, bots, limit=4):
-    hint, terms = _terms(arg)
-    if not terms:
-        return hint, terms, {}
-    q = " ".join(terms)
-
-    def matches(*parts):
-        blob = " ".join(str(p or "") for p in parts).casefold()
-        return all(t in blob for t in terms)
-
-    async def tasks():
-        data = await api.get("tasks", limit=500) or {}
-        rows = [t for t in data.get("tasks") or [] if matches(t.get("title"), t.get("id"))]
-        rows.sort(key=lambda t: (t.get("status") in ("done", "closed", "declined"), t.get("updated_at") or ""), reverse=False)
-        return [{"title": t["title"], "href": _task_href(t), "note": t.get("status")} for t in rows[:limit]]
-
-    async def docs():
-        data = await api.get("context/search", q=q, source="docs", limit=limit) or {}
-        return [{"title": d.get("title"), "href": d.get("url") or "#/docs", "note": d.get("collection")}
-                for d in (data.get("results") or [])[:limit]]
-
-    async def meetings():
-        data = await api.get("meetings/search", q=q, limit=limit) or {}
-        return [{"title": m.get("title"), "href": m.get("url") or "#/meetings", "note": (m.get("started_at") or m.get("created_at") or "")[:10]}
-                for m in (data.get("results") or [])[:limit]]
-
-    async def org():
-        data = await api.get("org") or {}
-        out = {"people": [], "bots": []}
-        for p in data.get("people") or []:
-            if not p.get("hidden") and matches(p.get("name"), p.get("title"), p.get("id")):
-                out["people"].append({"title": p.get("name") or p["id"], "href": "#/person/" + quote(p["id"], safe=""),
-                                      "note": p.get("title")})
-        for b in data.get("bots") or []:
-            if b.get("status") != "archived" and matches(b.get("display_name"), b.get("id"), b.get("description")):
-                out["bots"].append({"title": b.get("display_name") or b["id"], "href": "#/bot/" + quote(b["id"], safe=""),
-                                    "note": b.get("status")})
-        return {k: v[:limit] for k, v in out.items()}
-
-    async def files():
-        found = []
-
-        async def one(bot):
-            data = await api.get(f"bots/{bot['id']}/files", limit=50) or {}
-            for f in data.get("files") or []:
-                if matches(f.get("title"), f.get("name")):
-                    op = f.get("open") or {}
-                    href = op.get("url") if op.get("type") == "external" and str(op.get("url", "")).startswith("https://") \
-                        else "#/bot/" + quote(bot["id"], safe="")
-                    found.append({"title": f.get("title") or f.get("name"), "href": href, "note": bot["name"]})
-        await asyncio.gather(*(one(b) for b in bots[:25]))
-        return found[:limit]
-
-    wanted = [hint] if hint else ["tasks", "docs", "meetings", "people", "bots", "files"]
-    jobs = {"tasks": tasks, "docs": docs, "meetings": meetings, "files": files}
-    results = {}
-    coros = {k: jobs[k]() for k in wanted if k in jobs}
-    if "people" in wanted or "bots" in wanted:
-        coros["org"] = org()
-    done = await asyncio.gather(*coros.values(), return_exceptions=True)
-    for key, value in zip(coros, done):
-        if isinstance(value, Exception):
-            continue
-        if key == "org":
-            for k in ("people", "bots"):
-                if k in wanted and value[k]:
-                    results[k] = value[k]
-        elif value:
-            results[key] = value
-    return hint, terms, results
-
-
-GROUP = {"tasks": "Tasks", "docs": "Docs", "meetings": "Meetings", "files": "Files", "people": "Humans", "bots": "Bots"}
-
-
-def _rows(results):
-    text, links = [], []
-    for key in ("tasks", "docs", "meetings", "files", "people", "bots"):
-        if key not in results:
-            continue
-        text.append(f"**{GROUP[key]}**")
-        for r in results[key]:
-            text.append(f"- {link(r['title'], r['href'])}" + (f" ({r['note']})" if r.get("note") else ""))
-            links.append({"title": r["title"], "href": r["href"], "kind": key})
-    return "\n".join(text), links
-
-
-async def fast_search(api, who, bots, arg):
-    hint, terms, results = await search_all(api, arg, bots)
-    if not terms:
-        return None, []
-    if not results:
-        return f"I found nothing for “{' '.join(terms)}”. Try fewer words, or ask me to look into it.", []
-    body, links = _rows(results)
-    return f"Found for “{' '.join(terms)}”:\n{body}", links
-
-
-async def fast_navigate(api, who, bots, arg):
-    page = PAGES.get(re.sub(r"^(the|my)\s+|\s+(page|tab)$", "", arg.strip()))
-    if page:
-        return f"Here it is: {link(arg.strip().title(), page)}", [{"title": arg, "href": page, "kind": "page"}]
-    hint, terms, results = await search_all(api, arg, bots, limit=3)
-    if not terms:
-        return None, []
-    flat = [(k, r) for k, rows in results.items() for r in rows]
-    if not flat:
-        return f"I could not find “{' '.join(terms)}”. Try a search: “search {' '.join(terms)}”.", []
-    kind, best = flat[0]
-    others = flat[1:5]
-    text = f"Opening the best match: {link(best['title'], best['href'])}"
-    if others:
-        text += "\nOthers:\n" + "\n".join(f"- {link(r['title'], r['href'])} ({k})" for k, r in others)
-    return text, [{"title": best["title"], "href": best["href"], "kind": kind, "open": True}] + \
-        [{"title": r["title"], "href": r["href"], "kind": k} for k, r in others]
-
-
-async def fast_bot_today(api, who, bots, slug):
-    bot = next((b for b in bots if b["slug"] == slug), None)
-    if not bot:
-        return None, []
-    since = H.shift(H.now(), hours=-24)
-    updates = await api.get("updates", bot=bot["id"], limit=10) or {}
-    recent = [u for u in updates.get("updates") or [] if str(u.get("created_at") or "") >= since]
-    tasks = await api.get("tasks", owner=bot["id"], limit=100) or {}
-    touched = [t for t in tasks.get("tasks") or [] if str(t.get("updated_at") or "") >= since]
-    lines, links = [], []
-    for u in recent[:3]:
-        lines.append(f"- {u.get('kind', 'update').title()} update: {link(u.get('headline') or 'Update', '#/updates')}")
-    for t in touched[:6]:
-        lines.append(f"- {link(t['title'], _task_href(t))} ({t.get('status')})")
-        links.append({"title": t["title"], "href": _task_href(t), "kind": "task"})
-    href = "#/bot/" + quote(bot["id"], safe="")
-    links.append({"title": bot["name"], "href": href, "kind": "bots"})
-    if not lines:
-        return f"{link(bot['name'], href)} has posted no update and touched no task in the last 24 hours.", links
-    return f"{link(bot['name'], href)} in the last 24 hours:\n" + "\n".join(lines), links
-
-
-async def fast_task_types(api):
-    """List only the task types the authenticated Tico API returned for this workspace."""
-    data = await api.get("task-types")
-    rows = data.get("types") if isinstance(data, dict) else None
-    if not isinstance(rows, list) or any(not isinstance(row, dict) or not isinstance(row.get("name"), str)
-                                         or not row["name"].strip() for row in rows):
-        return "I couldn't read the task types for this Tico workspace. Please try again later.", []
-    if not rows:
-        return "No task types are configured in this Tico workspace.", []
-    return "Task types in this Tico workspace:\n" + "\n".join(f"- {row['name']}" for row in rows), []
-
-
-_SECTIONS = None
-
-
-def doc_sections():
-    """docs/*.md split at their second-level headings: (file, heading, anchor, text)."""
-    global _SECTIONS
-    if _SECTIONS is None:
-        out = []
-        try:
-            for path in sorted(DOCS_DIR.glob("*.md")):
-                text = path.read_text(errors="replace")
-                title = (re.match(r"#\s+(.+)", text) or [None, path.stem])[1]
-                parts = re.split(r"(?m)^##\s+", text)
-                out.append((path.name, title, "", parts[0]))
-                for part in parts[1:]:
-                    heading, _, body = part.partition("\n")
-                    anchor = re.sub(r"[^\w\- ]", "", heading.casefold()).strip().replace(" ", "-")
-                    out.append((path.name, heading.strip(), anchor, body))
-        except OSError:
-            out = []
-        _SECTIONS = out
-    return _SECTIONS
-
-
-def help_answer(question):
-    terms = [w for w in words(question) if w not in ("help", "explain", "tico", "use", "using")]
-    if not terms:
-        return None, []
-    scored = []
-    for file, heading, anchor, body in doc_sections():
-        h, b = heading.casefold(), body.casefold()
-        score = sum(3 * (t in h) + min(b.count(t), 3) + (2 * (t in file) if t in file else 0) for t in terms)
-        hits = sum(1 for t in terms if t in h or t in b or t in file)
-        if hits >= max(1, (len(terms) + 1) // 2) and score >= 3:
-            scored.append((score, file, heading, anchor, body))
-    if not scored:
-        return None, []
-    scored.sort(key=lambda s: -s[0])
-    _, file, heading, anchor, body = scored[0]
-    body = re.sub(r"```.*?(```|$)", "", body, flags=re.S)     # a code block reads as noise once flattened into a line
-    clean = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", body)
-    clean = re.sub(r"`", "", clean)
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", clean) if p.strip() and not p.strip().startswith("|")]
-    excerpt = ""
-    for p in paragraphs:
-        excerpt += ("\n\n" if excerpt else "") + re.sub(r"\s*\n\s*", " ", p) if not p.startswith(("-", "*", "1.")) else \
-            ("\n" if excerpt else "") + p
-        if len(excerpt) > 450:
-            break
-    excerpt = excerpt[:700].rstrip()
-    href = GITHUB_DOCS + file + ("#" + anchor if anchor else "")
-    links = [{"title": f"docs/{file}", "href": href, "kind": "docs"}]
-    text = f"From {link(heading, href)}:\n\n{excerpt}"
-    for _, f2, h2, a2, _b in scored[1:3]:
-        if (f2, h2) != (file, heading):
-            u = GITHUB_DOCS + f2 + ("#" + a2 if a2 else "")
-            text += f"\n\nSee also: {link(h2, u)}"
-            links.append({"title": h2, "href": u, "kind": "docs"})
-    return text, links
-
-
-INTENT_CHOICES = {"waiting": "They ask what is waiting on them, what needs their attention or decision.",
-                  "search": "They want to find or list tasks, docs, meetings, files, people or bots by a word.",
-                  "navigate": "They want to open a specific page or item, or ask where something is.",
-                  "help": "They ask how to do something in Tico or how Tico works.",
-                  "other": "Anything else: a request to do something, write something, or think something through."}
-
-
-async def decide(api, text):
-    """A `choice` decision question when the company has a decisions provider; else (None, 0)."""
-    try:
-        info = await api.get("decisions")
-        if not info or not info.get("configured") or ACTION_WORDS.search(text.casefold()) or len(text) > 200:
-            return None
-        response = await api.call("POST", "decisions", body={
-            "state": {"message": text}, "label": "assistant-intent@1",
-            "questions": {"intent": {"type": "choice", "criteria": INTENT_CHOICES,
-                                     "instructions": "What does this message to a company assistant ask for?"}}})
-        if response.status_code != 200:
-            return None
-        answer = (response.json().get("answers") or {}).get("intent") or {}
-        # "help" is not taken from the model: a docs excerpt picked by keywords answered "what is going on with my
-        # tasks?" with an unrelated section. Only the how-to wording (route's HELP) gets one; the model takes the rest.
-        if answer.get("choice") in ("waiting", "search", "navigate") and float(answer.get("confidence") or 0) >= 0.75:
-            return answer["choice"]
-    except (httpx.HTTPError, ValueError, TypeError):
-        return None
-    return None
-
-
-async def fast_answer(api, who, bots, text):
-    """(intent, reply text, links), or (None, None, []) when the model should answer."""
-    intent, arg = route(text, bots)
-    if intent == "trouble":
-        return None, None, []
-    if intent is None:
-        intent = await decide(api, text)
-        arg = text if intent else None
-    if intent is None:
-        return None, None, []
-    if intent == "greeting":
-        reply, links = "Hi! How can I help?", []
-    elif intent == "task_types":
-        reply, links = await fast_task_types(api)
-    elif intent == "waiting":
-        reply, links = await fast_waiting(api, who, bots)
-    elif intent == "bot_today":
-        reply, links = await fast_bot_today(api, who, bots, arg)
-    elif intent == "navigate":
-        reply, links = await fast_navigate(api, who, bots, arg)
-    elif intent == "search":
-        reply, links = await fast_search(api, who, bots, arg)
-    else:
-        reply, links = help_answer(arg)
-    if not reply:
-        return None, None, []
-    return intent, reply, links
-
 
 # ------------------------------------------------------------------ the routes
 def install(app, store, auth, mutate, onboarding):
@@ -1600,11 +1222,6 @@ def install(app, store, auth, mutate, onboarding):
         if who.via:
             raise Problem("forbidden", "Only the person can do this, not the " + settings.assistant_name, 403)
         return who
-
-    def bots_for(c, who):
-        access = auth.bot_accesses(c, who)
-        return [{"id": r["id"], "slug": r["slug"], "name": r["display_name"] or r["slug"]} for r in H.bots(c)
-                if r["state"] not in ("archived",) and access.get(r["id"], auth.FULL)["see"]]
 
     def view(c, who, room):
         from .views import conversation_snapshot
@@ -1662,11 +1279,11 @@ def install(app, store, auth, mutate, onboarding):
                                         place=lambda c, author, recipients: org_rule_check.place_for(
                                             c, author, recipients, room_id))
 
-    def assistant_say(c, who, bot, room, text, refs, rc, uploads=None, titles=(), fast=None):
+    def assistant_say(c, who, bot, room, text, refs, rc, uploads=None, titles=()):
         """One person's message to their Assistant, as the route and Send anyway write it: the org rule check's verdict
-        first (held: nothing is written and the hold is the answer), then the message with its files, then the quick
-        answer when `fast` (said, intent, links) is given. `uploads` are the files' digests, sizes and names, kept
-        already; a replay carries them, so Send anyway attaches the same files."""
+        first (held: nothing is written and the hold is the answer), then the message with its files. `uploads` are the
+        files' digests, sizes and names, kept already; a replay carries them, so Send anyway attaches the same files.
+        Its bot turn answers it."""
         titles = list(titles or [])
         gate = org_rule_check.apply(c, rc, text, {"text": text, "to": "bot:" + bot, "refs": refs,
                                                   "uploads": uploads, "titles": titles})
@@ -1676,36 +1293,20 @@ def install(app, store, auth, mutate, onboarding):
                         conversation_id=room["id"], kind="say", refs=refs)
         if uploads is not None:
             message = app.state.uploads.attach(c, who, bot, message, uploads, titles)
-        said, kind, links = fast or (None, None, [])
-        out = {"message": message, "reply": None, "fast": said is not None, "intent": kind,
-               **org_rule_check.answer(gate)}
-        if said is not None:
-            out["reply"] = H._write_message(c, "bot:" + bot, who.actor, said, room, "say",
-                                            {"assistant": True, "fast": True, "intent": kind, "links": links},
-                                            message["id"], None, delivered_at=H.now())
-            H.event(c, who.actor, "assistant.fast", message["id"], {"intent": kind})
-        return out
+        return {"message": message, **org_rule_check.answer(gate)}
 
-    def post_message_sync(request, body, who, intent, reply, links, uploads=None, rc=None):
+    def post_message_sync(request, body, who, uploads=None, rc=None):
         def work(c):
             bot = chat_bot_for(c, who)
             room = chat_room(c, settings, who)
-            said, kind, fast_links = reply, intent, links
-            # The canned hello only opens a chat: a "hi" after anything the person said goes to the model, which knows
-            # what came before, rather than repeating the same line.
-            if kind == "greeting" and c.execute("SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? LIMIT 1",
-                                                (room["id"], who.actor)).fetchone():
-                said, kind, fast_links = None, None, []
             refs = {"assistant": True}
             if getattr(body, "place", None) == "updates":
                 refs["updates"] = True        # its turn is handed the updates they may read (backend/updates_chat.py)
             page = getattr(body, "page", None)
             if page and page.path.startswith("#/"):
                 refs["page"] = {"path": page.path, "title": page.title}   # where they asked from (runner-rs prompt.rs)
-            if said is not None:
-                refs["quiet"] = True
             return assistant_say(c, who, bot, room, body.text, refs, rc, uploads,
-                                 getattr(body, "titles", None) or [], fast=(said, kind, fast_links))
+                                 getattr(body, "titles", None) or [])
         if uploads is not None:
             return app.state.uploads.write(request, body, uploads, work)
         return mutate(request, body, work)
@@ -1727,19 +1328,15 @@ def install(app, store, auth, mutate, onboarding):
 
         def read():
             with store.read() as c:
-                return availability(c, settings, who), bots_for(c, who)
-        info, bots = await asyncio.to_thread(read)
+                return availability(c, settings, who)
+        info = await asyncio.to_thread(read)
         if not info["available"]:
             raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
         rc = await asyncio.to_thread(assistant_checks, who, info["bot"], body.text)
-        # A question from the Updates chat is about the updates its turn is handed, which the quick answers never
-        # read. A held message gets no quick answer: nothing of it is written, so nothing is answered.
-        intent, reply, links = (None, None, []) if body.place == "updates" or org_rule_check.holds(rc) \
-            else await fast_answer(Internal(request), who, bots, body.text)
-        return await asyncio.to_thread(post_message_sync, request, body, who, intent, reply, links, None, rc)
+        return await asyncio.to_thread(post_message_sync, request, body, who, None, rc)
 
     # Files and pictures in a person's own Assistant chat (the Ask panel, the Assistant page), stored on the message like
-    # any bot chat's, in their room's conversation. They skip the quick answers, which read words only.
+    # any bot chat's, in their room's conversation.
     @app.post("/api/v2/uploads/assistant/messages", openapi_extra=upload_contract(M.AssistantUpload))
     async def assistant_upload(request: Request):
         who = own(request)
@@ -1754,7 +1351,7 @@ def install(app, store, auth, mutate, onboarding):
                 return chat_bot_for(c, who)
         bot = await asyncio.to_thread(bot_of)
         rc = await asyncio.to_thread(assistant_checks, who, bot, body.text)
-        return await asyncio.to_thread(post_message_sync, request, body, who, None, None, [], uploads, rc)
+        return await asyncio.to_thread(post_message_sync, request, body, who, uploads, rc)
 
     @app.post("/api/v2/assistant/turn-on")
     def turn_on(request: Request, body: M.Empty):
