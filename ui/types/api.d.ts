@@ -3287,6 +3287,8 @@ export type ModelSubscription = {
   kind: "claude_token" | "codex_login" | "anthropic_key" | "openai_key";
   label: string;
   name: string;
+  owner_id: string;
+  owner_name: string;
   preview: string;
   revision: number;
   runtime: "claude" | "codex";
@@ -3312,9 +3314,11 @@ export type ModelSubscriptionDeleted = {
 
 export type ModelSubscriptionList = {
   kinds: Array<{
+  connect: boolean;
   help: string;
   kind: "claude_token" | "codex_login" | "anthropic_key" | "openai_key";
   label: string;
+  owned: boolean;
   runtime: "claude" | "codex";
   secret_label: string;
 }>;
@@ -4561,6 +4565,7 @@ export type SubscriptionWrite = {
   confirm?: boolean;
   kind?: string | null;
   name?: string | null;
+  owner_id?: string | null;
   secret?: string | null;
 };
 
