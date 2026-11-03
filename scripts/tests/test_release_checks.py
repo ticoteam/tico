@@ -127,7 +127,7 @@ def test_each_part_runs_only_its_own_slice_of_the_gate(tmp_path, monkeypatch):
         if part == 'python':   # alone on its VM, the Python slice uses every core, in batches of its own files
             plan = json.loads((tmp_path / f'{next(iter(expected))}-batches.json').read_text())
             assert all(command[command.index('-n') + 1] == '4' for command in plan)
-            files = [name for command in plan for name in command if name.endswith('.py')]
+            files = [name for command in plan for name in command if name.endswith('.py') and not name.startswith('-')]
             assert files == (['group2of4.py'] if shard else ['all.py'])
         if shard and part == 'browser':   # only its own scripts, not --all
             assert calls['browser-1-of-2'][2:] == ['page1of2']
@@ -417,6 +417,6 @@ def test_batches_write_their_own_junit_report_when_the_release_step_names_one(tm
     assert [[arg for arg in command if arg.startswith('--junitxml=')] for command in commands] == [
         [f'--junitxml={tmp_path}/python-1-of-2-b01.xml'], [f'--junitxml={tmp_path}/python-1-of-2-b02.xml']]
     assert [command[-1] for command in commands] == ['a.py', 'b.py']
-    assert all(command[command.index('-m') + 1] == 'slow or not slow' for command in commands)
+    assert all(command[command.index('-m', 2) + 1] == 'slow or not slow' for command in commands)   # index 1 is python's -m
     # With no junit report in PYTEST_ADDOPTS, no batch adds one.
     assert not any('--junitxml' in command for command in release_checks.batch_commands([['a.py']], '4', (), {}))
