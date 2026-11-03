@@ -286,13 +286,28 @@ def test_an_uncanned_list_read_is_an_empty_list_with_a_note(tmp_path, monkeypatc
     assert out["messages"] == [] and out["note"] == "no canned data"
 
 
-def test_approval_list_is_built_from_the_message_list_and_follows_a_decline(tmp_path, monkeypatch):
-    approval = "2a7f0c9e-4000-4000-8000-000000000001"
-    message = {"id": "m1", "from_actor": "bot:release", "text": "Approve this publish", "refs": {"approval": approval}}
-    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^message list", "out": {"messages": [message]}}])
-    rows = json.loads(answer(["approval", "list"], "cli")[0])["items"]
-    assert [(r["id"], r["status"]) for r in rows] == [(approval, "pending")]
-    answer(["approval", "decline", "2a7f0c9e"], "cli")
-    rows = json.loads(answer(["approval", "list"], "cli")[0])["items"]
-    assert rows[0]["status"] == "declined"
-
+def test_approval_list_is_built_from_the_message_list_in_the_real_shape(tmp_path, monkeypatch):
+    old, new = "2a7f0c9e-4000-4000-8000-000000000001", "5f3e21c0-4000-4000-8000-000000000002"
+    long_text = "Approve this spend: " + "x" * 300
+    messages = [
+        {"id": "m1", "from_actor": "bot:release", "text": "Approve this publish:\n{\"release\": \"v0.5.17\"}",
+         "refs": {"approval": old, "task": "b1c2d3e4"}, "created": "2026-10-30T10:00:00Z"},
+        {"id": "m2", "from_actor": "bot:growth", "text": long_text, "refs": {"approval": new},
+         "created": "2026-11-01T09:00:00Z"}]
+    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^message list", "out": {"actor": "human:dana",
+                         "messages": messages}}])
+    env = json.loads(answer(["approval", "list"], "cli")[0])
+    assert set(env) == {"actor", "status", "total", "approvals", "next"}
+    assert (env["actor"], env["status"], env["total"], env["next"]) == ("human:dana", "pending", 2, None)
+    rows = env["approvals"]
+    assert [r["id"] for r in rows] == [new, old]          # newest first
+    assert set(rows[0]) == {"id", "status", "from_actor", "summary", "message_id", "task_id", "created", "link"}
+    assert rows[0]["task_id"] is None and rows[0]["link"] is None
+    assert len(rows[0]["summary"]) <= 200 and rows[0]["summary"].endswith("...")
+    assert rows[1]["summary"] == 'Approve this publish: {"release": "v0.5.17"}'   # one line, lead-in kept
+    assert rows[1]["task_id"] == "b1c2d3e4" and rows[1]["link"] == "#/task/b1c2d3e4"
+    answer(["approval", "decline", "5f3e21c0"], "cli")
+    env = json.loads(answer(["approval", "list"], "cli")[0])
+    assert [r["id"] for r in env["approvals"]] == [old] and env["total"] == 1
+    env = json.loads(answer(["approval", "list", "--status", "declined"], "cli")[0])
+    assert env["status"] == "declined" and [(r["id"], r["status"]) for r in env["approvals"]] == [(new, "declined")]

@@ -234,19 +234,40 @@ def no_data(words):
     return {"items": [], "next_offset": None, "note": note}
 
 
-def approvals_from_messages(canned):
-    """`approval list` with no canned row: the approvals the case's canned `message list` refers to, as pending rows."""
+def one_line(text, limit=200):
+    """The message text on one line, at most `limit` characters (a cut one ends in '...')."""
+    flat = " ".join(str(text or "").split())
+    return flat if len(flat) <= limit else flat[:limit - 3] + "..."
+
+
+def approvals_from_messages(canned, state, words):
+    """`approval list` with no canned row, in the shape of the real command: the approvals the canned `message list`
+    refers to, newest first. `--status` picks the rows (pending when left out); a status a write in this run set
+    (`approval approve|decline`) moves a row to that status."""
+    want = (flag_values(words, "--status") or ["pending"])[-1]
+    actor, msgs = "human:dana", []
     for r in canned:
         if re.search(r["match"], "message list") and isinstance(r.get("out"), dict):
-            items = []
-            for m in r["out"].get("messages") or []:
-                refs = m.get("refs") or {}
-                if refs.get("approval"):
-                    items.append({"id": refs["approval"], "status": "pending", "from_actor": m.get("from_actor"),
-                                  "text": m.get("text", ""), "task": refs.get("task"), "created": m.get("created"),
-                                  "message_id": m.get("id")})
-            return {"items": items, "next_offset": None}
-    return {"items": [], "next_offset": None, "note": "no canned data"}
+            actor = r["out"].get("actor", actor)
+            msgs = r["out"].get("messages") or []
+            break
+    decided = state.get("overrides", {}).get("approval", {})
+    rows = []
+    for m in msgs:
+        refs = m.get("refs") or {}
+        if not refs.get("approval"):
+            continue
+        aid = refs["approval"]
+        key = lookup(decided, aid)
+        status = decided[key].get("status", "pending") if key is not None else "pending"
+        if status != want:
+            continue
+        task_id = refs.get("task") or None
+        rows.append({"id": aid, "status": status, "from_actor": m.get("from_actor"),
+                     "summary": one_line(m.get("text")), "message_id": m.get("id"), "task_id": task_id,
+                     "created": m.get("created"), "link": f"#/task/{task_id}" if task_id else None})
+    rows.sort(key=lambda r: r["created"] or "", reverse=True)
+    return {"actor": actor, "status": want, "total": len(rows), "approvals": rows, "next": None}
 
 
 def add_rows(out, rows):
@@ -330,7 +351,7 @@ def answer(argv, via, tool=None):
     if row:
         out = row.get("out", "")
     elif words[:2] == ["approval", "list"]:
-        out = approvals_from_messages(canned)
+        out = approvals_from_messages(canned, state, words)
     elif words[:2] == ["task", "show"] and len(words) > 2 and any(k.startswith(words[2]) for k in created):
         k = next(k for k in created if k.startswith(words[2]))
         out = {**created[k], "status": state["tasks"].get(k, created[k]["status"])}
