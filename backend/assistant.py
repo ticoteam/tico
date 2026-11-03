@@ -33,6 +33,7 @@ from . import models as M
 from . import visuals
 from .media import upload_contract
 from . import rooms
+from . import settings_asks
 from .store import H, Problem, digest
 
 RUNNING_TTL_S = 120                # a confirm that has not settled in two minutes failed
@@ -53,7 +54,8 @@ CREATE INDEX IF NOT EXISTS assistant_actions_owner ON assistant_actions(owner, s
 def ensure_schema(c):
     c.executescript(SCHEMA)
     have = {r[1] for r in c.execute("PRAGMA table_info(assistant_actions)")}
-    for column in ("confirm_hash", "running_since", "description", "diff", "proposer"):
+    # ask: the ask a card carries to someone who may (backend/settings_asks.py), settled with the card.
+    for column in ("confirm_hash", "running_since", "description", "diff", "proposer", "ask"):
         if column not in have:
             c.execute("ALTER TABLE assistant_actions ADD COLUMN %s TEXT" % column)
     if not any(r[1] == "via" for r in c.execute("PRAGMA table_info(task_events)")):
@@ -90,6 +92,10 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # Confirm card in the person's chat (which `create_proposal` checks as any card), and the change itself meets the
     # checks below.
     if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/plan", path):
+        return True
+    # Asking someone who can (backend/settings_asks.py) changes nothing either: it puts a card in front of a person who
+    # may, and the route itself requires the person's cited words.
+    if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/ask", path):
         return True
     # The mail tool's org rule check before a send, and its report of checks Tico never answered, change nothing: a
     # person's own mail is never checked (backend/org_rule_check.py), and the send itself meets its own checks.
@@ -493,6 +499,21 @@ _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     ("POST", r"/api/v2/access/owner"), ("POST", r"/api/v2/enrollments"), ("POST", r"/api/v2/seats/[^/]+/hire"),
     # A webhook moved to another destination while it holds secret headers (app.py `destination_card`).
     ("POST", r"/api/v2/webhooks/[^/]+/update"),
+    # Settings a person may change only with a yes (backend/settings_entries.py, confirm): none hands back a secret, and
+    # each route takes the person's tap as their own click.
+    ("POST", r"/api/v2/assistant/turn-on"), ("POST", r"/api/v2/system/usage-count/reset"),
+    ("DELETE", r"/api/v2/company/server-connection"), ("DELETE", r"/api/v2/system/storage"),
+    ("POST", r"/api/v2/system/storage/move"), ("DELETE", r"/api/v2/(?:people|humans)/[^/]+"),
+    ("POST", r"/api/v2/settings/turn-levels"), ("POST", r"/api/v2/me/tokens/[^/]+/revoke"),
+    ("POST", r"/api/v2/bots/[^/]+/budget"), ("POST", r"/api/v2/strategy-bot/(checks|level)"),
+    ("POST", r"/api/v2/bots/[^/]+/cloud-machine"), ("POST", r"/api/v2/cloud-machines/shared"),
+    ("POST", r"/api/v2/postal/orders"),
+    ("POST", r"/api/v2/github/product-repos"), ("POST", r"/api/v2/tasks/[^/]+/requesters"), ("POST", r"/api/v2/tasks/[^/]+/requesters/[^/]+"),
+    ("POST", r"/api/v2/tasks/[^/]+/requesters/[^/]+/delete"), ("POST", r"/api/v2/tasks/[^/]+/links"),
+    ("DELETE", r"/api/v2/tasks/[^/]+/links/[^/]+"),
+    ("PUT", r"/api/v2/listening/destinations/[^/]+"), ("POST", r"/api/v2/listening/destinations/[^/]+/remove"),
+    ("POST", r"/api/v2/roadmaps/settings"), ("POST", r"/api/v2/inbound/inboxes/[^/]+/release"),
+    ("POST", r"/api/v2/inbound/phone-requests(/[^/]+/accept)?"),
     # Who reads an inbox (backend/inbound.py `set_audience`): owner and admins, on their own click.
     ("PUT", r"/api/v2/inbound/inboxes/[^/]+/audience"),
 )]
@@ -714,7 +735,8 @@ def describe(c, method, path, body):
         (r"/api/v2/repositories/([^/]+)/([^/]+)", lambda g: f"Change repository {g[1]}: " + fields(body)),
         (r"/api/v2/credentials/([^/]+)", lambda g: "Delete the stored credential “" + ((c.execute(
             "SELECT name FROM credentials WHERE id=?", (g[0],)).fetchone() or {"name": g[0]})["name"]) + "”"),
-        (r"/api/v2/(?:people|humans)/([^/]+)", lambda g: f"Edit person {who(g[0])}: " + fields(body)),
+        (r"/api/v2/(?:people|humans)/([^/]+)", lambda g: f"Delete {who('human:' + g[0])} from the team for good"
+         if method == "DELETE" else f"Edit person {who(g[0])}: " + fields(body)),
         (r"/api/v2/access/(?:people|humans)", lambda g: f"Add {body.get('name') or body.get('email', '')} ({body.get('email', '')}) "
          "to the roster, and let them sign in" + "".join(f"; {k} {body[k]}" for k in ("team", "reports_to", "title") if body.get(k))),
         (r"/api/v2/access/(?:people|humans)/([^/]+)", lambda g: "Change " + who("human:" + g[0]) + ": "
@@ -736,7 +758,44 @@ def describe(c, method, path, body):
         (r"/api/v2/support/tickets", lambda g: "Send this to the Tico team: " + preview(body.get("message"))),
         (r"/api/v2/directory(/sync|/preview)?", lambda g: "Change the people directory sync"),
         (r"/api/v2/(slack|github/app)/disconnect", lambda g: "Disconnect " + g[0].split("/")[0].title()),
+        (r"/api/v2/tasks/([^/]+)/requesters/([^/]+)/delete", lambda g: "Remove a requester from this task"),
+        (r"/api/v2/tasks/([^/]+)/requesters/([^/]+)", lambda g: "Change a requester on this task"),
+        (r"/api/v2/tasks/([^/]+)/links", lambda g: ("Remove a link from this task" if body.get("remove") else "Add a link to this task")),
+        (r"/api/v2/tasks/([^/]+)/links/([^/]+)", lambda g: "Remove a link from this task"),
+        (r"/api/v2/tasks/([^/]+)/requesters", lambda g: "Add " + (who(body.get("actor")) if body.get("actor") else (body.get("name") or body.get("email") or "a contact")) + " as a requester on this task"),
         (r"/api/v2/files/([^/]+)", lambda g: "Delete a file for good" if method == "DELETE" else "Change a file's listing"),
+        (r"/api/v2/assistant/turn-on", lambda g: "Turn the Assistant on for the team"),
+        (r"/api/v2/system/usage-count/reset", lambda g: "Reset this Tico's install ID for the usage count"),
+        (r"/api/v2/company/server-connection", lambda g: "Disconnect this Tico from the Tico company server"),
+        (r"/api/v2/system/storage", lambda g: "Stop storing new files in company storage (files already there are "
+         "still read from it)"),
+        (r"/api/v2/system/storage/move", lambda g: "Copy every file into company storage"
+         + (f", about {format(body['expect_bytes'] / 1e9, '.2g')} GB" if isinstance(body.get("expect_bytes"), int)
+            else "") + "; nothing is deleted where it was"),
+        (r"/api/v2/settings/turn-levels", lambda g: "Change the company's turn levels: " + values(body)),
+        (r"/api/v2/me/tokens/([^/]+)/revoke", lambda g: "Revoke the API token “" + ((c.execute(
+            "SELECT label FROM human_tokens WHERE id=?", (g[0],)).fetchone() or {"label": g[0]})["label"]) + "”"),
+        (r"/api/v2/bots/([^/]+)/cloud-machine", lambda g: f"Change bot {bot(g[0])}'s cloud machine: " + values(body)),
+        (r"/api/v2/cloud-machines/shared", lambda g: "Change the shared cloud machine: " + values(body)),
+        (r"/api/v2/postal/orders", lambda g: "Order a postal address for the mailbox: " + values(body)),
+        (r"/api/v2/bots/([^/]+)/budget", lambda g: f"Change bot {bot(g[0])}'s run budget: " + values(body)),
+        (r"/api/v2/strategy-bot/checks", lambda g: ("Turn the Strategy Bot's regular checks on" if body.get("on")
+                                               else "Turn the Strategy Bot's regular checks off")),
+        (r"/api/v2/strategy-bot/level", lambda g: "Set how much the Strategy Bot does: " + {
+            1: "passive", 2: "suggests actions", 3: "acts on its own"}.get(body.get("level"), "a level")),
+        (r"/api/v2/github/product-repos", lambda g: f"Create the private, empty GitHub repository "
+         f"{body.get('org', '')}/{body.get('name', '')}"),
+        (r"/api/v2/listening/destinations/([^/]+)", lambda g: f"Change the listening destination “{g[0]}”: "
+         + values(body)),
+        (r"/api/v2/listening/destinations/([^/]+)/remove", lambda g: f"Remove the listening destination “{g[0]}”"),
+        (r"/api/v2/roadmaps/settings", lambda g: "Change the public roadmap: " + values(body)),
+        (r"/api/v2/inbound/inboxes/([^/]+)/release", lambda g: "Release the inbox " + ((c.execute(
+            "SELECT address FROM inbound_inboxes WHERE inbox_id=?", (g[0],)).fetchone()
+            if c.execute("SELECT 1 FROM sqlite_master WHERE name='inbound_inboxes'").fetchone() else None)
+            or {"address": g[0]})["address"]),
+        (r"/api/v2/inbound/phone-requests", lambda g: f"Ask for a phone number named “{body.get('name') or 'Mobile number'}”"),
+        (r"/api/v2/inbound/phone-requests/([^/]+)/accept", lambda g: "Accept the phone number's price: "
+         + (f"${body['price_micros'] / 1e6:,.2f}" if isinstance(body.get("price_micros"), int) else "the price shown")),
     )
     for pattern, fn in rules:
         if (mm := re.fullmatch(pattern, path)):
@@ -1113,6 +1172,10 @@ SEARCH = re.compile(r"^(search( for)?|find|look ?up|look for)\b\s*(.*)$")
 HELP = re.compile(r"^(help\b[:,\s]*|how (do|can|should|would|does|to)\b|how'?s? (it|tico)\b|explain\b|what is a\b|what are\b|"
                   r"what does .* mean|where do i\b|can i\b.*\?|what'?s the difference)")
 BOT_TODAY = re.compile(r"\b(today|this morning|last 24|yesterday|lately|so far)\b|\bwhat (did|has|have|is|was)\b.*\b(do|done|doing|up to|work)")
+# A problem to look into ("I see stuck tasks, what is going on?") needs the company's own state, not a docs excerpt or a
+# canned list: the model takes it.
+TROUBLE = re.compile(r"\b(stuck|broken|broke|failing|failed|wrong|not working|doesn'?t work|isn'?t working|going on|"
+                     r"why|fix|fixed|problem|issue|error)\b")
 ACTION_WORDS = re.compile(r"\b(create|make|add|assign|ask|tell|send|approve|decline|reject|archive|delete|remove|"
                           r"build|set up|schedule|publish|post|change|update|rename|close|cancel|remind|clear|dismiss|answer)\b")
 
@@ -1130,6 +1193,8 @@ def route(text, bots=()):
         return None, None
     if GREETING.fullmatch(t):
         return "greeting", None
+    if TROUBLE.search(t):
+        return "trouble", None
     # "for <team>," can be any word, a verb too ("for create, ..."), so the action check still applies.
     if (TASK_TYPE_INVENTORY.fullmatch(t) or TASK_TYPE_INVENTORY_ARE.fullmatch(t)) and not ACTION_WORDS.search(t):
         return "task_types", None
@@ -1430,6 +1495,7 @@ def help_answer(question):
         return None, []
     scored.sort(key=lambda s: -s[0])
     _, file, heading, anchor, body = scored[0]
+    body = re.sub(r"```.*?(```|$)", "", body, flags=re.S)     # a code block reads as noise once flattened into a line
     clean = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", body)
     clean = re.sub(r"`", "", clean)
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", clean) if p.strip() and not p.strip().startswith("|")]
@@ -1471,7 +1537,9 @@ async def decide(api, text):
         if response.status_code != 200:
             return None
         answer = (response.json().get("answers") or {}).get("intent") or {}
-        if answer.get("choice") in ("waiting", "search", "navigate", "help") and float(answer.get("confidence") or 0) >= 0.75:
+        # "help" is not taken from the model: a docs excerpt picked by keywords answered "what is going on with my
+        # tasks?" with an unrelated section. Only the how-to wording (route's HELP) gets one; the model takes the rest.
+        if answer.get("choice") in ("waiting", "search", "navigate") and float(answer.get("confidence") or 0) >= 0.75:
             return answer["choice"]
     except (httpx.HTTPError, ValueError, TypeError):
         return None
@@ -1481,6 +1549,8 @@ async def decide(api, text):
 async def fast_answer(api, who, bots, text):
     """(intent, reply text, links), or (None, None, []) when the model should answer."""
     intent, arg = route(text, bots)
+    if intent == "trouble":
+        return None, None, []
     if intent is None:
         intent = await decide(api, text)
         arg = text if intent else None
@@ -1679,7 +1749,9 @@ def install(app, store, auth, mutate, onboarding):
 
     @app.post("/api/v2/assistant/turn-on")
     def turn_on(request: Request, body: M.Empty):
-        who = own(request)
+        who = person(request)
+        if who.via and not who.confirmed:      # the owner's own click, or their tap on a Confirm card
+            raise Problem("forbidden", "Only the person can do this, not the " + settings.assistant_name, 403)
         if who.role != "owner":
             raise Problem("forbidden", "Only the owner turns the " + settings.assistant_name + " on", 403)
         return mutate(request, body, lambda c: onboarding.turn_on_assistant(c, who))
@@ -1813,7 +1885,9 @@ def install(app, store, auth, mutate, onboarding):
                          (H.shift(H.now(), seconds=-RUNNING_TTL_S),)).fetchone()
 
     def expire(c):
-        """A confirm that never settled (a restart, a dropped connection) fails after two minutes."""
+        """A confirm that never settled (a restart, a dropped connection) fails after two minutes; an asked one also
+        settles its ask (backend/settings_asks.py), its asker told it may not have finished."""
+        settings_asks.recover(c)
         c.execute("UPDATE assistant_actions SET status='failed', decided_at=?, confirm_hash=NULL, result=? "
                   "WHERE status='running' AND running_since<?",
                   (H.now(), json.dumps({"status_code": 0, "error": "It did not finish; ask again"}),
@@ -1836,6 +1910,7 @@ def install(app, store, auth, mutate, onboarding):
             c.execute("UPDATE assistant_actions SET status=?, decided_at=?, result=?, confirm_hash=NULL WHERE id=?",
                       (status, H.now(), json.dumps(result), aid))
             row = load(c, who, aid)
+            settings_asks.settled(c, row, status, result)
             room = H.conversation(c, row["conversation_id"]) if row["conversation_id"] else None
             if room and note:
                 by = row.get("proposer") or "assistant"
@@ -1854,6 +1929,7 @@ def install(app, store, auth, mutate, onboarding):
                 raise Problem("state", "This proposal is already " + row["status"], 409)
             c.execute("UPDATE assistant_actions SET status='canceled', decided_at=? WHERE id=?", (H.now(), aid))
             H.event(c, who.actor, "assistant.action.canceled", aid, {})
+            settings_asks.settled(c, row, "canceled")
             return {"action": action_view(load(c, who, aid), c)}
         return mutate(request, body, work)
 
@@ -1873,6 +1949,7 @@ def install(app, store, auth, mutate, onboarding):
                 if row["created_at"] < H.shift(H.now(), hours=-CONFIRM_TTL_H):
                     # Recorded here, raised after the transaction commits (raising inside it rolls it back).
                     c.execute("UPDATE assistant_actions SET status='expired', decided_at=? WHERE id=?", (H.now(), aid))
+                    settings_asks.settled(c, row, "expired")
                     return None
                 # Only the run that holds this secret (the in-process call below) is "confirmed".
                 c.execute("UPDATE assistant_actions SET status='running', decided_at=?, running_since=?, "

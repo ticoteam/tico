@@ -46,6 +46,7 @@
 .org-head>.section-toggle{flex:1;min-width:0}
 .org-history{flex:none;width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:6px;background:none;cursor:pointer;padding:0}
 .org-history:hover{background:var(--surface2)}
+a.org-history{color:var(--muted);text-decoration:none}a.org-history:hover{color:var(--ink)}
 .org-history .nav-icon{font-size:18px}
 .org-history[aria-pressed="true"]{background:color-mix(in srgb,var(--ink) 8%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--ink) 40%,transparent)}
 .org-history[aria-pressed="true"] .nav-icon{color:var(--ink)}

@@ -36,12 +36,14 @@ from . import org_rule_check
 from .roadmaps import exact_approval
 from . import login_holds
 from . import cloud_access
+from . import demo_billing
+from .usage import own_bots as usage_bots
 from . import counsel
 from . import thread_api
 from . import step_age
 from . import task_holds
 from . import runs
-from . import bot_stops, turn_budgets, proposals, task_caps
+from . import bot_stops, turn_budgets, proposals, task_caps, reach
 from . import (auto_tasks, check_models, profiles, run_triggers, task_models, task_run_models, team_rules, update_feeds,
                topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits)
 from . import task_privacy as privacy
@@ -64,6 +66,7 @@ from . import fast_json
 from . import names as actor_names
 from .openapi_v2 import STABLE as STABLE_ROUTES
 from .route_renames import old_paths as old_route_paths
+from . import settings_catalog
 from . import updates
 from .files import raw_media
 from clients import gateway as gateway_client
@@ -511,6 +514,12 @@ def create_app(settings=None):
     app.state.observability = telemetry
     app.state.census = census
 
+    def raw_who_may(c, request, acting):
+        """The catalogue's who-may line for a setting's write its route refused this person (settings_catalog)."""
+        return settings_catalog.raw_refusal(c, auth, acting, request.method, request.url.path,
+                                            botops_act.parse_body(getattr(request, "_body", b"")),
+                                            settings.public_url)
+
     @app.exception_handler(Problem)
     async def problem_handler(request, exc):
         if getattr(exc, "payload", None) is not None:
@@ -534,10 +543,27 @@ def create_app(settings=None):
                 with store.read() as c:
                     names = actor_names.lookup(c, [acting.actor] + (["bot:" + (H.resolve_bot(c, parts[4]) or {}).get("id", parts[4])]
                                                                      if parts[3:4] == ["bots"] and len(parts) > 4 else []))
-                return botops_act.fix(request.url.path, exc.code, exc.status, acting, names, settings.public_url)
+                hint = botops_act.fix(request.url.path, exc.code, exc.status, acting, names, settings.public_url)
+                if (hint and hint["fix"].startswith(botops_act.ROLE_FIX) and exc.code == "forbidden"
+                        and H.is_human(acting.actor)):
+                    # A setting's own route said no to a person it isn't theirs to change: rather than "ask an owner
+                    # or admin", who may, as `hub settings` says it.
+                    with store.read() as c:
+                        hint = raw_who_may(c, request, acting) or hint
+                return hint
             found = await asyncio.get_running_loop().run_in_executor(None, hint)
             if found:
                 exc.extra = {**getattr(exc, "extra", {}), **found}
+        acting = getattr(request.state, "identity", None)
+        if (exc.status == 403 and exc.code == "forbidden" and getattr(acting, "via", None) == "assistant"
+                and H.is_human(acting.actor) and "fix" not in getattr(exc, "extra", {})):
+            # The person's Assistant wrote for them and the setting's route said no: who may, as `hub settings` says.
+            def assistant_who_may():
+                with store.read() as c:
+                    return raw_who_may(c, request, acting)
+            said = await asyncio.get_running_loop().run_in_executor(None, assistant_who_may)
+            if said:
+                exc.extra = {**getattr(exc, "extra", {}), **said}
         if getattr(exc, "extra", None) and str(exc.extra.get("link") or "").startswith("#/"):
             exc.extra = absolute_link(exc.extra, settings.public_url)
         return JSONResponse({"error": {"code": exc.code, "detail": exc.detail,
@@ -1901,7 +1927,11 @@ def create_app(settings=None):
     def billing_view(request: Request, month: str = ""):
         """The company's balance and status, credits, usage by day and the month's statement, from Tico HQ; a Tico
         Cloud company's access (`cloud`) too, kept at once so the app and the page agree (backend/cloud_access.py)."""
-        answer = company_billing.read(*billing_key(request.state.identity), month)
+        key_base = billing_key(request.state.identity)
+        if settings.demo:       # a sample from the demo's own usage (backend/demo_billing.py); HQ is not reached
+            with store.read() as c:
+                return demo_billing.read(c, usage_bots(c, auth, request.state.identity), month)
+        answer = company_billing.read(*key_base, month)
         cloud_access.from_billing(store, answer)
         return answer
 
@@ -1915,12 +1945,21 @@ def create_app(settings=None):
     @app.get("/api/v2/billing/usage")
     def billing_day(request: Request, day: str = ""):
         """One day's usage by hour, from Tico HQ."""
-        return company_billing.day(*billing_key(request.state.identity), day)
+        key_base = billing_key(request.state.identity)
+        if settings.demo:       # the same sample as the page's, hour by hour (backend/demo_billing.py)
+            with store.read() as c:
+                return demo_billing.day(c, usage_bots(c, auth, request.state.identity), day)
+        return company_billing.day(*key_base, day)
 
     @app.get("/api/v2/billing/statements/{month}.csv")
     def billing_statement_csv(request: Request, month: str):
         """The month's statement as CSV, the same lines and numbers as on screen."""
-        body = company_billing.statement_csv(*billing_key(request.state.identity), month)
+        key_base = billing_key(request.state.identity)
+        if settings.demo:       # the same lines as the page's statement (backend/demo_billing.py)
+            with store.read() as c:
+                body = demo_billing.statement_csv(c, usage_bots(c, auth, request.state.identity), month)
+        else:
+            body = company_billing.statement_csv(*key_base, month)
         return Response(body, media_type="text/csv; charset=utf-8", headers={
             "X-Content-Type-Options": "nosniff",
             "Content-Disposition": 'attachment; filename="tico-statement-%s.csv"' % month})
@@ -1929,14 +1968,20 @@ def create_app(settings=None):
     @app.get("/api/v2/hosted-servers")
     def hosted_servers(request: Request):
         """The company's Tico server and bot computers HQ hosts, each on or stopped; `none` when HQ hosts nothing."""
-        return company_billing.servers(*billing_key(request.state.identity, "sees hosted servers"))
+        key_base = billing_key(request.state.identity, "sees hosted servers")
+        if settings.demo:       # the sample key goes nowhere: HQ hosts nothing the demo can show
+            return {"state": "none"}
+        return company_billing.servers(*key_base)
 
     @app.post("/api/v2/hosted-servers/{server_id}/start")
     def hosted_server_start(request: Request, server_id: str):
         """Start one stopped hosted server; `paused` with the add-credit words while the company is out of credit."""
         if settings.rehearsal:      # a copy of real data sends nothing: never a real server's power
             raise Problem("rehearsal", "Hosted servers can't be started from a rehearsal", 409)
-        return company_billing.start(*billing_key(request.state.identity, "starts hosted servers"), server_id)
+        key_base = billing_key(request.state.identity, "starts hosted servers")
+        if settings.demo:       # the sample key goes nowhere: a demo never starts a real server
+            raise Problem("demo", "Hosted servers can't be started from the demo", 409)
+        return company_billing.start(*key_base, server_id)
 
     @app.get("/api/v2/access")
     def access_view(request: Request):
@@ -5249,6 +5294,10 @@ def create_app(settings=None):
             who = request.state.identity
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
+            if who.via == "botops" and not who.confirmed:
+                # BotOps acting for a person unlinks only on that person's own tap (a Confirm card).
+                return app.state.botops_propose(c, who, "DELETE", f"/api/v2/tasks/{tid}/links/{link_id}", {},
+                                                "Remove a link from “" + H.task(c, task_id)["title"] + "”")
             H.task_unlink(c, who.actor, task_id, link_id, mover=mover(c, who))
             return {"links": H.task_links(c, task_id)}
         return mutate(request, M.Empty(), work)
@@ -5401,6 +5450,11 @@ def create_app(settings=None):
         def work(c):
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
+            if who.via == "botops" and not who.confirmed and (body.remove or body.url):
+                # BotOps acting for a person adds or removes a link only on that person's own tap (a Confirm card).
+                what = ("Remove a link from " if body.remove else "Add a link to ") + "“" + H.task(c, task_id)["title"] + "”"
+                return app.state.botops_propose(c, who, "POST", f"/api/v2/tasks/{tid}/links",
+                                                body.model_dump(exclude_none=True), what)
             if body.remove:
                 H.task_unlink(c, who.actor, task_id, body.remove, mover=mover(c, who))
             elif body.url:
@@ -6311,7 +6365,11 @@ def create_app(settings=None):
         if not path or not botops_act.card_for_person(method, path, body, rules, lowers,
                                                        force_confirm=gateway_key_address_change or bool(moved)):
             return None
-        # Told at once, not handed a card that fails on the tap.
+        # Told at once, not handed a card that fails on the tap: first in the catalogue's words, which know whose a
+        # trigger, webhook or computer is (backend/settings_catalog.py).
+        said = settings_catalog.raw_refusal(c, auth, acting, method, path, body, settings.public_url)
+        if said:
+            raise Problem("forbidden", said["fix"], 403, extra=said)
         who_may = ("the owner" if botops_act.owner_only(method, path, body) and acting.role != "owner"
                    else "an owner or an admin" if botops_act.admin_only(method, path) and acting.role != "owner"
                    and not auth.bot_admin(acting) else "")
@@ -7816,7 +7874,7 @@ def create_app(settings=None):
                      "paused_by": paused_by, "open_tasks": count}
             key, base = gateway_connection.target(c, app.state.vault, settings)[:2]
         # HQ calls must never hold a database transaction. Only the pause bit leaves this route.
-        value["company_paused"] = company_billing.paused(key, base)
+        value["company_paused"] = False if settings.demo else company_billing.paused(key, base)
         return value
 
     @app.post("/api/v2/bots/{bot}/control")
@@ -8249,6 +8307,7 @@ def create_app(settings=None):
     thread_tasks.install(app, store, auth, create_task, settings.public_url or "")    # Make task from a message
     counsel.install(app, store, auth, mutate)      # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
+    reach.install(app, store, auth, mutate)        # Rules › Internal: who reaches whom (docs/reach.md)
     profiles.install(app, store, auth, mutate, settings_admin)
     from . import release_flow
     release_flow.install(app, store, auth, mutate)

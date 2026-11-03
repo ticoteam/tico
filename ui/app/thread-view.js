@@ -374,7 +374,7 @@ function thvPendingHTML(view, p) {
   const depth = thvDepth(view, p.depth);
   const text = `<div class="th-body">${esc(p.text)}${p.files?.length ? ` <span class="muted">· ${p.files.length} file${p.files.length === 1 ? '' : 's'}</span>` : ''}</div>`;
   if (p.state === 'held') {
-    const h = p.held || {}, rules = (h.rules || []).map(r => `<div class="th-held-rule">${esc(r.text)}</div>`).join('');
+    const h = p.held || {}, rules = (h.rules || []).map(r => `<div class="th-held-rule">${ruTextHTML(r.text)}</div>`).join('');
     return `<div class="th-msg th-mine th-held" data-pending="${p.key}" style="--d:${depth}"><div class="th-av">${actorAvatar(myActor(), 28)}</div>
       <div class="th-main"><div class="th-head"><span class="th-who">You</span><span class="th-state">${p.editOf ? 'Edit ' : ''}${h.outcome === 'escalated' ? (p.editOf ? 'waiting for review' : 'Waiting for review') : (p.editOf ? 'held' : 'Held')}</span></div>${text}${rules}
         <div class="th-held-acts"><button type="button" class="ghost small" data-held-edit>Edit</button>${
@@ -412,6 +412,8 @@ function thvListHTML(view) {
   }
   const replyAt = view.replyTo ? thvBranchEnd(view, view.replyTo) : '';
   for (const row of rows) {
+    // Updates have their own page (Updates); a Home does not repeat them as cards.
+    if (view.opts.home && row.m && thvIsUpdateCard(row.m)) continue;
     out.push(row.fold ? thvFoldHTML(view, row) : row.more ? thvMoreHTML(view, row.more) : thvMsgHTML(view, row.m));
     for (const id of row.ids || [row.m?.id || row.id]) {
       for (const p of afterParent.get(id) || []) out.push(thvPendingHTML(view, p));
@@ -775,7 +777,6 @@ async function thvClick(view, ev) {
   if (t.closest('[data-th-file]')) { const b = t.closest('[data-th-file]'); void openFileLink(b.dataset.thFile, b.dataset.name); return; }
   if (t.closest('[data-th-expand]')) { void thvExpand(view, t.closest('[data-th-expand]')); return; }
   if (t.closest('[data-thv-members]')) { threadMembersOpen(view); return; }
-  if (t.closest('[data-call-setup]')) { window.supportStart('Please set up calls on our Tico server.'); return; }
   if (t.closest('[data-call]')) { void callAction(view, t.closest('[data-call]').dataset.call); return; }
   if (t.closest('[data-thv-menu]')) { threadMenuOpen(view, t.closest('[data-thv-menu]')); return; }
   if (t.closest('[data-th-earlier]')) {

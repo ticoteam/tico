@@ -5950,7 +5950,7 @@
     },
     "/api/v2/cards/choices": {
       "get": {
-        "summary": "Card templates and their settings, the teams, and the KPIs and pages the caller may pick",
+        "summary": "Card templates and their settings, the teams, the KPIs and pages the caller may pick, the Growth page's metrics and channels; `place=growth` adds its templates",
         "operationId": "getCardChoices",
         "parameters": [
           {
@@ -5961,6 +5961,16 @@
               "type": "string",
               "default": "",
               "title": "Team"
+            }
+          },
+          {
+            "name": "place",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Place"
             }
           }
         ],
@@ -25373,7 +25383,7 @@
     },
     "/api/v2/places/{place}": {
       "get": {
-        "summary": "A place's pins in order (dashboard, team:<group>, bot:<id>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable pages are left out",
+        "summary": "A place's pins in order (dashboard, growth, team:<group>, bot:<id>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable pages are left out. growth takes `month` (YYYY-MM) and answers `month` and `months`, the picker's choices",
         "operationId": "getPlace",
         "parameters": [
           {
@@ -25383,6 +25393,22 @@
             "schema": {
               "type": "string",
               "title": "Place"
+            }
+          },
+          {
+            "name": "month",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Month"
             }
           }
         ],
@@ -35473,6 +35499,22 @@
               ],
               "title": "With"
             }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sort"
+            }
           }
         ],
         "responses": {
@@ -38618,7 +38660,7 @@
     },
     "/api/v2/usage": {
       "get": {
-        "summary": "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, harness, model, effort or subscription, filterable by those run dimensions and department (__unknown__ selects missing values). The owner and bot administrators see every bot; anyone else sees the bots they run or own. ?bot=<bot id or slug> is that bot's daily series and top routines instead",
+        "summary": "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, task (the top 25), harness, model, effort or subscription, filterable by those run dimensions, department (__unknown__ selects missing values) and bots (slugs, comma separated). The owner and bot administrators see every bot; anyone else sees the bots they run or own. ?bot=<bot id or slug> is that bot's daily series and top routines instead",
         "operationId": "getUsage",
         "parameters": [
           {
@@ -44458,7 +44500,12 @@
               "needs_attention",
               "unread_threads",
               "my_tasks",
-              "updates"
+              "updates",
+              "growth_number",
+              "growth_funnel",
+              "growth_channels",
+              "growth_retention",
+              "growth_board"
             ]
           },
           "title": {
@@ -57806,6 +57853,7 @@
           "kind": {
             "enum": [
               "dashboard",
+              "growth",
               "team",
               "bot",
               "task",
@@ -57817,6 +57865,17 @@
           },
           "can_edit": {
             "type": "boolean"
+          },
+          "month": {
+            "type": "string",
+            "description": "growth: the month its cards read (YYYY-MM)"
+          },
+          "months": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "growth: the newest 24 months with cohort rows, oldest first"
           },
           "pins": {
             "type": "array",
@@ -67888,6 +67947,7 @@
               "bot",
               "day",
               "routine",
+              "task",
               "harness",
               "model",
               "effort",
@@ -67907,7 +67967,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "By bot: bot, name, department; by day: day; by routine: routine (null for runs that came from none), title, bot, name. Every row has the usage figures and `share`, its part of the total (estimate plus API-equivalent)",
+              "description": "By bot: bot, name, department; by day: day; by routine: routine (null for runs that came from none), title, bot, name; by task: value and name (its title, 'A private task', or null and 'Chats and other runs' for runs with none). Every row has the usage figures and `share`, its part of the total (estimate plus API-equivalent)",
               "additionalProperties": true
             }
           },

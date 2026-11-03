@@ -319,6 +319,7 @@ def balances(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
             if a is not None:
                 banking.set_balance(ctx, str(m["id"]), _cents(a.get("currentBalance")),
                                     _cents(a.get("availableBalance")), now)
+            banking.tidy_name(ctx, str(m["id"]))
     return []
 
 
@@ -382,14 +383,17 @@ def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
         done = not raws or cursor == before or not next_page(page) and len(raws) < 500 or seen and repeat
         repeat = seen
         with store.transaction() as c:
+            fresh = _settings(SK.get(c, "fin_connections", cid))
             SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings": SK.dump(
-                {**conf, "backfilled": True}) if done else row["settings"]})
+                {**fresh, "backfilled": True, "opened": []}) if done else SK.dump(fresh)})
             if done:
-                # The balances read at the start of this pass and the whole feed: each account's opening balance.
+                # The balances read at the start of this pass and the whole feed: each account's opening balance. One
+                # with no balance read yet gets its opening on a later pass (banking.refresh_opening).
                 ctx = load(c, now)
-                for m in SK.money_accounts(c, ctx.book.id):
-                    if str(m["connection_id"] or "") == cid:
-                        banking.opening_balance(ctx, str(m["id"]))
+                mine = [m for m in SK.money_accounts(c, ctx.book.id) if str(m["connection_id"] or "") == cid]
+                for m in mine:
+                    banking.opening_balance(ctx, str(m["id"]))
+                banking.mark_opened(ctx, cid, [str(m["id"]) for m in mine if m["balance"] is not None and m["account_id"]])
         if done:
             break
     return []

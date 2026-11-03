@@ -174,7 +174,6 @@ async function botGoalsCardLoad(slug) {
   const live = (r.goals || []).filter(goalLive).sort(goalRank);
   const all = goals.some(g => g.id === live[0]?.id) ? goals : [...goals, ...live];
   host.innerHTML = live.map(g => `<div class="bot-goal-row">${goalEditorHtml(g, all)}</div>`).join('')
-    + '<div class="bot-goal-row" id="bot-goal-adding" hidden></div>'
     + (live.length ? '' : '<div class="empty" id="bot-goals-none">No goal yet.</div>')
     + '<div id="bot-goals-finished"></div>';
   for (const el of host.querySelectorAll('[data-goal-ed]')) {
@@ -188,11 +187,11 @@ async function botGoalsCardLoad(slug) {
   if (!finished || BOT?.slug !== slug || !host.isConnected) return;
   goalFinishedMount(host.querySelector('#bot-goals-finished'), 'bot:' + slug, [...all, ...(finished.goals || [])], () => goalsRefresh());
 }
-function botGoalAdd(slug) {
-  const host = $('#bot-goal-adding');
-  if (!host) return;
-  host.hidden = false; $('#bot-goals-none')?.remove();
-  goalAddInline(host, 'bot:' + slug, () => botGoalsCardLoad(slug));
+// "Set goal" and the Goals card's add open the Goals page's goal sheet, the owner filled in (ui/app/goals.js).
+async function botGoalAdd(slug) {
+  const goals = await goalOptions();
+  if (BOT?.slug !== slug) return;
+  goalSheetOpen({goals}, {owner: 'bot:' + slug});
 }
 function botGoalRender(slug, g, count) {
   const el = $('#bot-goal');
@@ -204,11 +203,7 @@ function botGoalRender(slug, g, count) {
   if (!g) {
     el.dataset.status = 'none';
     el.innerHTML = '<a href="#" class="bot-goal-set" id="bot-goal-set">Set goal</a>';
-    $('#bot-goal-set').onclick = async e => {
-      e.preventDefault();
-      el.innerHTML = '<span class="bot-goal-new"></span>';
-      goalAddInline(el.firstChild, 'bot:' + slug, () => botGoalLoad(slug));
-    };
+    $('#bot-goal-set').onclick = e => { e.preventDefault(); void botGoalAdd(slug); };
     return;
   }
   el.dataset.status = 'set';
@@ -384,7 +379,7 @@ async function pageBot(slug, tab) {
   <div id="pane-chat" hidden>
     ${limited ? '' : `<div class="bot-talk-bar">${talkTabs.length > 1 ? `<div class="bot-talk-switch" role="tablist" aria-label="Home or DM">${talkTabs.map(t =>
       `<button type="button" role="tab" data-talk="${t}">${BOT_TAB_LABELS[t]}</button>`).join('')}</div>` : ''}<span class="spacer"></span>
-      <a class="bot-threads-link" href="${THREADS_ROUTE}?with=${encodeURIComponent('bot:' + slug)}">Threads with ${esc(e.display_name || slug)}</a><span class="bot-talk-acts"></span></div>`}
+      <span class="bot-talk-acts"></span></div>`}
     <div id="conv-paused" class="conv-paused" role="status" hidden></div>
     <div class="bot-thread" id="bot-thread"></div>
   </div>

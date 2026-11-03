@@ -76,7 +76,9 @@ lives on other pages; on this page the button is **+ Add document**.
 1. **Bot › Rules tab** (board 1): **Internal** (written rules where the bot is in Who, then its settings as
    sentences, each opening the setting), then **External**.
 2. **Rules › Internal** (board 2): list with Rule | Who | With | Due; filters Who, With, and "Settings too" (off).
-   Clicking a rule opens a side panel: rule, description, Who, With, If broken (Block / Escalate / Warn), due date; Retire / Save.
+   Clicking a rule opens a side panel: rule, description, Who, With, If broken (Block / Escalate / Warn, shown as Stop / Ask first / Warn), due date; Retire / Save.
+   Who may reach whom, how often, and the lines between teammates (each line's rule an internal rule): see
+   [reach.md](reach.md).
 3. **Blocked** (board 3): what a blocked bot gets back and does next (Block, the default), and an Escalate review task
    for the bot's manager (Keep blocked / Send anyway / Edit rule). **Nav:** Rules is a top-level item under Automations and Library, collapsed by default.
 4. **Rules › External** (board 4): the page is **Rules** with tabs **Internal · External · Due · Suggested**. External
@@ -285,8 +287,9 @@ ahead of time so it doesn't try.
   - The reviewer is the rule's reviewer, else `report_managers.person_above` (first human up the chain), else the
     bot's operator, else the default person (screening's `person_for` order), else the team owner, else an admin;
     someone who left or whose sign-in is off is skipped. Never a bot. With no person at all, an Escalate stays a Block.
-    The owner or an admin can read, keep or send any hold whose reviewer is missing or gone, and the review task's
-    hold list shows it to them.
+    The owner can always read, keep or send a bot's hold, its reviewer named or not (whoever can change a block's
+    source can waive it). An admin does the same once the reviewer is missing or gone. The review task's hold list
+    shows it to them.
   - The held output lives in its own `org_rule_holds` row (operation, payload, author, destinations, rules, verdict),
     readable by the author bot, the reviewer and the person it is held for (who may withdraw it, not release it). It is
     never a message or task row: an undelivered message is

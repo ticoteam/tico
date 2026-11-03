@@ -85,6 +85,7 @@
  "question answer": "validation",
  "release now": "not_found",
  "rules add": "validation",
+ "settings ask": "not_found",
  "settings set": "not_found",
  "settings show": "not_found",
  "skill copy": "same_bot",

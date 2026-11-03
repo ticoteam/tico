@@ -58,7 +58,7 @@ async function open(browser, server, width = 1440) {
   return {page, errors};
 }
 const goalLines = page => page.locator('#goal-tree > li').evaluateAll(els => els
-  .map(el => `${el.dataset.owner || (el.classList.contains('gt-group') ? 'group:' + el.textContent.trim() : '')}@${el.style.getPropertyValue('--d')}`)
+  .map(el => `${el.dataset.owner || (el.classList.contains('gt-group') ? 'group:' + (el.querySelector('.gt-name')?.textContent || '').trim() : '')}@${el.style.getPropertyValue('--d')}`)
   .filter(l => l.startsWith('bot:') || l.startsWith('group:')));
 // Every chart node above this one, nearest first.
 const above = (page, key) => page.locator(`#tree [data-org="${key}"]`).first().evaluate(el => {
@@ -109,7 +109,8 @@ async function check(page, name = 'Strategy Bot') {
       assert.deepEqual(await above(page, 'b:scribe'), ['p:ana', 'g:home'], `${width}: Scribe under the owner`);
       assert.deepEqual(await above(page, 'g:marketing'), ['p:ana', 'g:home'], `${width}: Marketing under the owner`);
       assert.deepEqual(await above(page, 'b:seo'), ['b:cmo', 'g:marketing', 'p:ana', 'g:home']);
-      assert.deepEqual(await goalLines(page), ['group:Home@0', 'bot:scribe@2', 'group:Marketing@2', 'bot:cmo@3', 'bot:seo@4']);
+      // Goals draws as the Org tab does: the owner on top, so their own group is not a line above them.
+      assert.deepEqual(await goalLines(page), ['bot:scribe@1', 'group:Marketing@1', 'bot:cmo@2', 'bot:seo@3']);
       assert.deepEqual(errors, []);
       await page.close();
     }

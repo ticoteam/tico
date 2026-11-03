@@ -951,9 +951,10 @@ def _is_author(who, hold):
 
 def _is_reviewer(who, hold, c=None, auth=None):
     """Whether `who` reviews the hold: may send it or keep it. Not exclusive of authorship: a rule's author or editor,
-    or an Admin, reviews their own hold too. A bot's hold is reviewed by its reviewer, and by an Admin when the reviewer
-    is missing or gone (with `c` and `auth`); a person's hold by the reviewer it names and the editors and Admins of its
-    rules (`_person_reviewer`). An Assistant or BotOps acting for a person releases nothing."""
+    or an Admin, reviews their own hold too. A bot's hold is reviewed by its reviewer, by the owner always (whoever can
+    change a block's source can waive it, reviewer named or not), and by an Admin when the reviewer is missing or gone
+    (with `c` and `auth`); a person's hold by the reviewer it names and the editors and Admins of its rules
+    (`_person_reviewer`). An Assistant or BotOps acting for a person releases nothing."""
     actor = who.actor
     if not H.is_human(actor) or who.via in ("botops", "assistant"):
         return False
@@ -961,8 +962,11 @@ def _is_reviewer(who, hold, c=None, auth=None):
         return c is not None and auth is not None and _person_reviewer(c, who, hold, auth)
     if actor == hold["reviewer"]:
         return True
-    return c is not None and auth is not None and auth.bot_admin(who) and \
-        not (hold["reviewer"] and _present(c, hold["reviewer"]))
+    if c is None or auth is None:
+        return False
+    if who.role == "owner":
+        return True
+    return auth.bot_admin(who) and not (hold["reviewer"] and _present(c, hold["reviewer"]))
 
 
 def _is_represented(who, hold, c=None):

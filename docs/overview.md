@@ -22,13 +22,15 @@ in the sidebar tree; its arrow still folds it) is the same grid for one group. B
 | Place | Who sees it | Who arranges it |
 |---|---|---|
 | `dashboard` | Everyone | The owner and admins |
+| `growth` | Everyone (the [Growth page](growth.md), `#/growth`) | The owner, admins, and a bot acting as itself, which pins only its own cards there |
 | `team:<group>` | Whoever may Read the group: **Seen by** opens the group's Access (permissions.md, People and groups) | The owner, admins, and a person who leads the group or a group above it |
 | `bot:<slug>` | Whoever may Read the bot | The bot itself, or a person who manages it |
 | `task:<id>` | Whoever may read the task | The bot on it (owner or requester), its people, someone who can move it |
 | `person:<id>` | That person only (My dashboard) | That person, or BotOps and the Assistant acting for them |
 
 A Dashboard nobody arranged shows Tasks by status, Done per week, Needs you and Latest pages for the company; a team page
-shows the first three for its team. The first change saves them as real pins. Arranging: drag a card by its grip, and its
+shows the first three for its team; the Growth page shows its five growth cards (see [growth.md](growth.md)). The first
+change saves them as real pins. Arranging: drag a card by its grip, and its
 ⋯ menu edits it, resizes it (small, medium, large) or removes it; **Add card** and **Add page** add one. On a phone the
 grid is one column.
 
@@ -47,6 +49,13 @@ grid is one column.
 | Unread threads | Threads with something new for the reader: unread (a human message or one addressed to them) first, then bot activity | count (1 to 10) |
 | My tasks | Open tasks the reader owns, the soonest due first | count (1 to 10) |
 | Updates | The newest updates the reader may read, and how many are unread | count (1 to 10) |
+| Growth number | One [Growth](growth.md) metric for the month picked on the Growth page, with its change and a sparkline | metric, channel (a slug; empty for all) |
+| Growth funnel | The five funnel stages' KPIs, their conversion, and the North Star | none |
+| Growth channels | Each channel's new customers, CAC and LTV:CAC for the month, with its open tests | count (1 to 20) |
+| Growth retention | Cohort retention at 30, 90 and 180 days | months (3 to 12) |
+| Growth board | Open marketing tests by stage: Testing, Scaling, Idea | count per lane (1 to 5) |
+
+The growth cards go on the Growth page only; a growth card at any other place is refused.
 
 Every card is drawn for whoever reads it, from what they may already see: tasks they may read, their own Needs you, KPIs
 whose owner they may read, automations they may see. Spend shows to the owner and admins, and to a lead for a group they
@@ -64,7 +73,9 @@ People change cards from the ⋯ menu; bots and BotOps (with the rights of the p
 list|add|update|remove` and `hub pin add|update|remove`, the `hub_card_*` and `hub_pin_*` tools, or the API:
 `GET|PUT /api/v2/places/{place}`, `POST /api/v2/places/{place}/order`, `POST /api/v2/pins`,
 `PATCH|DELETE /api/v2/pins/{id}`, `GET|POST /api/v2/cards`, `PATCH|DELETE /api/v2/cards/{id}` and
-`GET /api/v2/cards/choices`. Tests: `backend/tests/test_cards.py`, `ui/tests/dashboard.cjs`.
+`GET /api/v2/cards/choices`. `GET /api/v2/places/growth?month=YYYY-MM` reads the Growth page for one month and answers
+`month` and `months` for its picker; `GET /api/v2/cards/choices?place=growth` adds the growth templates, the metrics and
+the live channels. Tests: `backend/tests/test_cards.py`, `backend/tests/test_growth_cards.py`, `ui/tests/dashboard.cjs`.
 
 ## Campus
 

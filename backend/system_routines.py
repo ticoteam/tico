@@ -183,6 +183,7 @@ ACTIONS = {
     "sync_meetings": ("bring in meeting notes from each person's Granola", ("meetings", "granola", "notes")),
     "sync_docs": ("refresh linked documents from their sources", ("documents", "docs")),
     "start_fresh": ("start a fresh session, like Clear", ("chat", "fresh", "clear", "session")),
+    "rank_threads": ("rank each thread with new messages from 1 to 10", ("threads", "rank", "important", "decide")),
     "triage_quiet": ("have Decide read its last messages: set the wait it names, close it if finished, or let one wake through",
                      ("decide", "stalled", "tasks", "wait", "close", "wake")),
 }
@@ -327,6 +328,9 @@ JOBS = [
     Job("topic_fresh", "Start fresh when the topic changes",
         "In a direct chat, a message on a new topic starts a fresh session, like Clear.",
         CHAT, "When it happens", records=False, when="topic_changed", then=("start_fresh",)),
+    Job("thread_rank", "Thread ranking",
+        "Ranks threads with new messages from 1 to 10 for the Important view in Threads, each at most once an hour.",
+        CHAT, "Every 5 minutes", 300, ai=True, labels=("thread-rank",), then=("rank_threads",)),
 ]
 BY_KEY = {job.key: job for job in JOBS}
 

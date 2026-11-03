@@ -9,7 +9,6 @@
 - The message bots' mailboxes (`message_bot_mailboxes` and friends), which mail and the converter read."""
 import json
 import re
-from datetime import datetime, timezone
 
 from clients.manifest import tools_of
 from clients.routines import DEFAULT_ZONE, validate_schedules
@@ -38,7 +37,7 @@ FIELDS = ("title", "cron", "on", "timezone", "text")
 
 
 def _clock(at):
-    return at or datetime.now(timezone.utc)
+    return at or H.parse_ts(H.now())      # the hub clock: a demo build's routines are due by its own now
 
 
 def validate(fields):

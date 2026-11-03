@@ -741,7 +741,7 @@ export type Card = {
   name?: string;
   settings: Record<string, unknown>;
   team_name?: string;
-  template: "tasks_by_status" | "done_per_week" | "needs_you" | "spend" | "kpi" | "automation_runs" | "latest_pages" | "needs_attention" | "unread_threads" | "my_tasks" | "updates";
+  template: "tasks_by_status" | "done_per_week" | "needs_you" | "spend" | "kpi" | "automation_runs" | "latest_pages" | "needs_attention" | "unread_threads" | "my_tasks" | "updates" | "growth_number" | "growth_funnel" | "growth_channels" | "growth_retention" | "growth_board";
   title?: string;
 };
 
@@ -3439,7 +3439,9 @@ export type Place = {
   audience?: Record<string, unknown>;
   can_edit: boolean;
   group?: string;
-  kind: "dashboard" | "team" | "bot" | "task" | "person";
+  kind: "dashboard" | "growth" | "team" | "bot" | "task" | "person";
+  month?: string;
+  months?: Array<string>;
   name?: string;
   pins: Array<{
   card?: Card;
@@ -5297,7 +5299,7 @@ export type Usage = {
   dimension_labels?: Record<string, unknown>;
   dimensions?: Record<string, unknown>;
   from: string;
-  group?: "bot" | "day" | "routine" | "harness" | "model" | "effort" | "subscription";
+  group?: "bot" | "day" | "routine" | "task" | "harness" | "model" | "effort" | "subscription";
   name?: string;
   prices_as_of: string;
   routines?: Array<Record<string, unknown>>;
@@ -6700,6 +6702,7 @@ export type GetCallResponse = Call;
 
 /** GET /api/v2/cards/choices */
 export type GetCardChoicesParams = {
+  place?: string;
   team?: string;
 };
 export type GetCardChoicesBody = never;
@@ -7199,6 +7202,7 @@ export type GetPersonAssistantResponse = PersonAssistant;
 
 /** GET /api/v2/places/{place} */
 export type GetPlaceParams = {
+  month?: string | null;
   place: string;
 };
 export type GetPlaceBody = never;
@@ -8465,6 +8469,7 @@ export type ListThreadMembersResponse = ThreadMembers;
 export type ListThreadsParams = {
   cursor?: string | null;
   limit?: number | null;
+  sort?: string | null;
   with?: string | null;
 };
 export type ListThreadsBody = never;

@@ -1,5 +1,6 @@
 // The Rules page (ui/app/org-rules.js) on a real hub seeded with the scenario org and its groups: Dana adds an internal
-// rule with a Who and a With and sees it listed, edits it in the side panel, a stale save is refused and the panel
+// rule from the Engineering Lead's Reach panel (Who already the Engineering Lead) with a With, and its panel opens (its panel says who follows it with whom, and If broken reads Stop / Ask
+// first / Warn), a rule naming a teammate as @slug shows a mention chip that opens them, edits it in the side panel, a stale save is refused and the panel
 // reloads, a due date is added, marked satisfied, its repeat changed and a routine set, a second date shows beside
 // it, the Engineering Lead's Rules tab shows the rule and its settings, a teammate who manages nothing reads the rule
 // without Save or Retire, and the Engineering Lead's suggestions are added all at once. With RULES_SHOTS=<dir>, it also
@@ -28,6 +29,8 @@ const ready = page => page.waitForFunction(() => {
   return who !== '' && who !== 'Signing in…' && document.querySelector('#main')?.children.length > 0;
 }, null, {timeout: t(20000)});
 const go = async (page, hash) => { await page.evaluate(h => { location.hash = h; }, hash); };
+const hashParam = async (page, k) => new URLSearchParams((await page.evaluate(() => location.hash)).split('?')[1]).get(k);
+const LEAD = '#/rules?party=' + encodeURIComponent('bot:engineering-lead');
 const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISOString().slice(0, 10); };
 
 (async () => {
@@ -48,41 +51,70 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     page.on('dialog', d => d.accept());
     await ready(page);
 
-    // Add an internal rule: Who the Engineering Lead, With Engineering.
-    await go(page, '#/rules');
-    await page.locator('.ru-ph [data-ru-add]').click();
+    // Add an internal rule from the Engineering Lead's Reach panel: Who is the Engineering Lead already; With Engineering.
+    // Saving it opens its panel over the party's.
+    await go(page, LEAD);
+    await page.locator('.rr-panel[data-party="bot:engineering-lead"] [data-rr-add-rule]').click({timeout: t(15000)});
     const modal = page.locator('#ru-add');
     await modal.locator('textarea[name=text]').fill('Ask before a production deploy');
-    await modal.locator('[data-scope="who"] [data-seg="bots"]').click();
-    await modal.locator('[data-scope="who"] .ru-addsel').selectOption('engineering-lead');
+    assert.match(await modal.locator(`[data-scope="who"] .ru-chip`).innerText(), /engineering.lead/i);
     await modal.locator('[data-scope="with"] [data-seg="groups"]').click();
     await modal.locator('[data-scope="with"] .ru-addsel').selectOption({label: 'Engineering'});
     await modal.locator('button[type=submit]').click();
-    const row = page.locator('.ru-int a.ru-row', {hasText: 'Ask before a production deploy'});
-    await row.waitFor({timeout: t(10000)});
-    const ruleId = await row.getAttribute('data-rule');
+    await page.waitForFunction(() => /[?&]rule=/.test(location.hash) && /party=bot%3Aengineering-lead/.test(location.hash), null, {timeout: t(10000)});
+    const ruleId = await hashParam(page, 'rule');
     let rule = await ok(page, 'GET', '/v2/rules/' + ruleId);
     assert.equal(rule.status, 'active');
     assert.deepEqual(rule.who.bots.map(b => b.id), ['engineering-lead']);
     assert.equal(rule.with.groups.length, 1);
     assert.ok(rule.can_edit);
-
-    // Where: a thread the viewer can read is in the picker, and the rule keeps it.
-    const thread = await ok(page, 'POST', '/v2/conversations', {kind: 'chat', participants: ['bot:engineering-lead'], subject: 'Deploy talk'});
+    assert.deepEqual(await page.locator('.ru-tabs a').allInnerTexts(), ['Internal', 'External', 'Due', 'Suggested'], 'tabs carry no counts');
+    // Its panel: one sentence from Who and With, the If broken labels say what happens, and the reviewer shows only
+    // under Ask first.
+    await go(page, '#/rules?rule=' + ruleId);
+    const follow = page.locator(`#ru-side form[data-rule="${ruleId}"] .ru-follow`);
+    await follow.waitFor({timeout: t(10000)});
+    assert.match(await follow.textContent(), /^\S.* follows this with Engineering\.$/);
+    assert.deepEqual(await page.locator('#ru-side [data-ru-seg="if_broken"] button').allInnerTexts(), ['Stop', 'Ask first', 'Warn']);
+    assert.equal(await page.locator('#ru-side .ru-reviewer').isHidden(), true);
+    await page.locator('#ru-side [data-ru-seg="if_broken"] [data-v="escalate"]').click();
+    assert.equal(await page.locator('#ru-side .ru-reviewer').isVisible(), true);
+    assert.equal(await page.locator('#ru-side [data-ru-hint]').textContent(), 'Held until the reviewer OKs it.');
     await go(page, '#/rules');
-    await page.locator('.ru-ph [data-ru-add]').click();
+
+    // A teammate named @slug in a rule's text is a mention chip; in a party's rules (all bots' rules, folded until
+    // opened) it opens the teammate, not the rule.
+    const named = await ok(page, 'POST', '/v2/rules', {kind: 'internal', text: 'Ask @engineering-lead before you merge.', who: {all_bots: true}});
+    await go(page, '#/overview');
+    await page.locator('#ru-root').waitFor({state: 'detached', timeout: t(10000)});   // so Rules reads them again
+    await go(page, LEAD);
+    await page.locator('.rr-panel [data-rr-inh="all_bots"]').click({timeout: t(15000)});
+    const chip = page.locator(`.rr-panel a.rr-rule[data-rule="${named.id}"] .ru-at`);
+    await chip.waitFor({timeout: t(10000)});
+    assert.equal(await chip.getAttribute('data-href'), '#/bot/engineering-lead');
+    assert.ok((await chip.textContent()).startsWith('@'));
+    await chip.click();
+    await page.waitForFunction(() => location.hash.startsWith('#/bot/engineering-lead'), null, {timeout: t(10000)});
+    await go(page, '#/rules?rule=' + named.id);
+    await page.locator('#ru-side .ru-read a.ru-at[href="#/bot/engineering-lead"]').waitFor({timeout: t(10000)});
+    await ok(page, 'POST', `/v2/rules/${named.id}/retire`, {version: named.version});
+    await go(page, '#/rules');
+
+    // Add rule from a bot's panel: no Where (rules cover every internal and external action).
+    await go(page, LEAD);
+    await page.locator('.rr-panel[data-party="bot:engineering-lead"] [data-rr-add-rule]').click({timeout: t(15000)});
     const threaded = page.locator('#ru-add');
     await threaded.locator('textarea[name=text]').fill('Post deploy notes in the thread');
-    await threaded.locator('[data-scope="who"] [data-seg="bots"]').click();
-    await threaded.locator('[data-scope="who"] .ru-addsel').selectOption('engineering-lead');
-    await threaded.locator('input[name=where_kind][value=thread]').check();
-    await threaded.locator('select[name=where_thread]').selectOption(thread.id);
+    assert.equal(await threaded.locator('input[name=where_kind]').count(), 0);
+    // If broken in Add rule: Ask first with a reviewer.
+    await threaded.locator('[data-ru-seg="if_broken"] [data-v="escalate"]').click();
+    await threaded.locator('select[name=reviewer]').selectOption('dana');
     await threaded.locator('button[type=submit]').click();
-    const threadRow = page.locator('.ru-int a.ru-row', {hasText: 'Post deploy notes in the thread'});
-    await threadRow.waitFor({timeout: t(10000)});
-    const threadRule = await ok(page, 'GET', '/v2/rules/' + (await threadRow.getAttribute('data-rule')));
-    assert.deepEqual(threadRule.where, ['thread:' + thread.id]);
-    await row.click();   // saving the threaded rule opened its panel; the edit below is for the first rule
+    await page.waitForFunction(id => { const r = new URLSearchParams(location.hash.split('?')[1]).get('rule'); return r && r !== id; }, ruleId, {timeout: t(10000)});
+    const threadRule = await ok(page, 'GET', '/v2/rules/' + await hashParam(page, 'rule'));
+    assert.deepEqual(threadRule.where, []);
+    assert.equal(threadRule.if_broken, 'escalate');
+    assert.equal(threadRule.reviewer.id, 'dana');
     // Outside editions travels with the rule: shown in its Who, and still set after a save that doesn't touch Who.
     let outside = await ok(page, 'POST', '/v2/rules', {kind: 'internal', text: 'Never name a customer outside the company', who: {outside_editions: true}});
     assert.equal(outside.who.outside_editions, true);
@@ -168,13 +200,12 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     await page.waitForFunction(id => /10 days before/.test(document.querySelector(`a.ru-row[data-due="${id}"] [data-l=Routine]`)?.textContent || ''),
       liveId, {timeout: t(10000)});
 
-    // A second, earlier date on the same rule (the hub's clock decides overdue or due soon): the list shows the most
-    // urgent one and +1, the panel lists both.
+    // A second, earlier date on the same rule (the hub's clock decides overdue or due soon): the panel lists both,
+    // the most urgent first.
     const sooner = await ok(page, 'POST', `/v2/rules/${ruleId}/due`, {first_due: day(-3), repeats: 'once', owner: 'human:dana'});
     await go(page, `#/rules?rule=${ruleId}`);
     await page.waitForFunction(() => document.querySelectorAll('#ru-side .ru-duebox').length === 2, null, {timeout: t(10000)});
     assert.equal(await side.locator('.ru-duebox').first().getAttribute('data-due'), sooner.id);
-    assert.equal(await page.locator(`.ru-int a.ru-row[data-rule="${ruleId}"] .ru-plus`).textContent(), '+1');
     assert.equal(await side.locator('.ru-adddue[href*="due=new"]').count(), 1, 'more dates can still be added');
 
     // The Engineering Lead's Rules tab: the rule, then its settings as sentences, each opening its own editor; the
@@ -217,7 +248,7 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
   }
 })().catch(error => { console.error(error); process.exit(1); });
 
-// Each screen at 1440 and 390, light and dark: Internal with the rule's panel, External, Due with its panel,
+// Each screen at 1440 and 390, light and dark: Internal with a party's panel and with the rule's panel, External, Due with its panel,
 // Suggested, Add rule and the bot's Rules tab.
 async function shots(browser, hub, bot, {ruleId, dueId}) {
   const dir = process.env.RULES_SHOTS;
@@ -231,11 +262,12 @@ async function shots(browser, hub, bot, {ruleId, dueId}) {
   for (const text of ['Ship orders within 2 business days', 'Use the customer portal for returns'])
     await ok(bot, 'POST', '/v2/rules', {kind: 'external', text, who: {all_bots: true}, source_id: customer.id});
   const screens = [
-    ['internal', `#/rules?rule=${ruleId}`, `#ru-side form[data-rule="${ruleId}"]`],
+    ['reach', LEAD, '.rr-panel[data-party="bot:engineering-lead"]'],
+    ['internal', `${LEAD}&rule=${ruleId}`, `#ru-side form[data-rule="${ruleId}"]`],
     ['external', '#/rules/external', '.ru-ext a.ru-row'],
     ['due', `#/rules/due?due=${dueId}`, '#ru-side .ru-mark'],
     ['suggested', '#/rules/suggested', '.ru-sg .ru-prop'],
-    ['add-rule', '#/rules', '#ru-add[open]', async page => { await page.locator('.ru-ph [data-ru-add]').click(); }],
+    ['add-rule', LEAD, '#ru-add[open]', async page => { await page.locator('.rr-panel [data-rr-add-rule]').click(); }],
     ['bot-rules', '#/bot/engineering-lead/rules', '#bot-rules .ru-setting'],
   ];
   for (const theme of ['light', 'dark']) {
@@ -249,7 +281,7 @@ async function shots(browser, hub, bot, {ruleId, dueId}) {
         for (const [name, hash, wait, act] of screens) {
           await go(page, '#/overview');
           await go(page, hash);
-          if (act) { await page.locator('.ru-ph [data-ru-add]').waitFor({timeout: t(10000)}); await act(page); }
+          if (act) { await page.locator('.rr-panel [data-rr-add-rule]').waitFor({timeout: t(10000)}); await act(page); }
           await page.locator(wait).first().waitFor({timeout: t(15000)});
           await page.waitForTimeout(400);
           await page.screenshot({path: path.join(dir, `${name}-${phone ? 390 : 1440}-${theme}.png`)});
