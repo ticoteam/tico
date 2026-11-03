@@ -691,9 +691,13 @@ def ended(api, attempt):
 @pytest.mark.parametrize("reported", [False, True])
 def test_a_rate_limited_gateway_waits_its_retry_after_and_is_not_called_a_cap(api, monkeypatch, reported):
     machine, attempt = tico_run(api, monkeypatch)
+    # The clock is pinned so the reset and the attempt's finish share one instant: a whole second passing between them
+    # reads the reported wait a second short.
+    at = H.now()
+    monkeypatch.setattr(H, "now", lambda: at)
     finish(api, machine, attempt, "Tico AI Gateway: rate limited after too many refused keys from this address; wait "
            "an hour (rate_limited)", limited=True,
-           **({"limit_resets_at": H.shift(H.now(), seconds=3600)} if reported else {}))
+           **({"limit_resets_at": H.shift(at, seconds=3600)} if reported else {}))
     status, job = ended(api, attempt)
     assert status["state"] == "limited" and job == "queued"
     assert status["focus"].startswith("Tico AI Gateway rate limited at ") and "cap" not in status["focus"]

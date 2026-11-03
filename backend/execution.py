@@ -1357,14 +1357,19 @@ def continuation_thread(c, job_id):
     return row[0] if row else None
 
 
+LAST_LIMIT_SQL = ("SELECT id,finished_at,json_extract(result,'$.limit_resets_at') AS resets_at "
+                  "FROM attempts WHERE bot_id=? AND state IN ('failed','interrupted') "
+                  "AND finished_at IS NOT NULL AND json_extract(result,'$.limited')=1 "
+                  "AND json_extract(result,'$.check') IS NULL "
+                  "ORDER BY finished_at DESC LIMIT 1")
+
+
 def last_limit(c, bot):
-    """The bot's most recent attempt that ended on a usage limit."""
+    """The bot's most recent attempt that ended on a usage limit. Read through the snapshot: a page asks for it several
+    times per limited bot (limit_cooldown, limit_until, the status check)."""
     # Another lane begun before the limit can finish afterwards without lifting the bot's hold.
-    return c.execute("SELECT id,finished_at,json_extract(result,'$.limit_resets_at') AS resets_at "
-                     "FROM attempts WHERE bot_id=? AND state IN ('failed','interrupted') "
-                     "AND finished_at IS NOT NULL AND json_extract(result,'$.limited')=1 "
-                     "AND json_extract(result,'$.check') IS NULL "
-                     "ORDER BY finished_at DESC LIMIT 1", (bot,)).fetchone()
+    from .read_cache import one
+    return one(c, LAST_LIMIT_SQL, (bot,))
 
 
 def billing_limit(c, bot=None, attempt_id=None):
