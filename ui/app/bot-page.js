@@ -493,13 +493,13 @@ async function pageBot(slug, tab) {
   if (!limited) void botGoalLoad(slug);
   $('#btabs').onclick = ev => {
     const b = ev.target.closest('[data-bt]'); if (!b) return;
-    location.hash = b.dataset.bt === work[0] ? base : `${base}/${b.dataset.bt}`;
+    location.hash = b.dataset.bt === work[0] && !talkTabs.includes(b.dataset.bt) ? base : `${base}/${b.dataset.bt}`;
   };
   // Wide, the top tabs give way to Home and DM beside Tasks; this switch picks which one the left side shows.
   const talk = $('#pane-chat .bot-talk-switch');
   if (talk) talk.onclick = ev => {
     const b = ev.target.closest('[data-talk]'); if (!b) return;
-    location.hash = b.dataset.talk === work[0] ? base : `${base}/${b.dataset.talk}`;
+    location.hash = `${base}/${b.dataset.talk}`;
   };
   // "The back arrow in a bot should always go back to home. Not previous page."
   $('#bot-back-arrow').onclick = () => { location.hash = UPDATES; };   // home
@@ -629,7 +629,8 @@ function showBotTab(tab) {
   const wantTools = tab === 'tools';
   const aliases = {more: 'info', docs: 'instructions', session: 'history', tools: 'info', chat: 'dm'};
   const tabs = botTabs(BOT.slug);
-  const view = tabs.includes(aliases[tab] || tab) ? aliases[tab] || tab : tabs[0];
+  const asked = tabs.includes(aliases[tab] || tab);
+  const view = asked ? aliases[tab] || tab : tabs[0];
   BOT.tab = view;
   const work = BOT_WORK_TABS.includes(view);
   const talk = tabs.filter(t => t === 'home' || t === 'dm');
@@ -664,6 +665,7 @@ function showBotTab(tab) {
   // Home or DM on the left: the one asked for, else (Tasks beside it) the last one shown, else the first.
   if (chat) botThreadShow(view === 'home' || view === 'dm' ? view : talk.includes(BOT.thread?.kind) ? BOT.thread.kind : talk[0]);
   else botThreadStop();
+  if (chat && !asked && talk.includes('dm') && talk.includes('home')) void botTalkDefault(BOT.slug);
   $('#pane-chat').querySelectorAll('[data-talk]').forEach(b => { const on = b.dataset.talk === BOT.thread?.kind; b.classList.toggle('cur', on); b.setAttribute('aria-selected', String(on)); });
   const once = (key, fn) => { if (!BOT.loaded.has(key)) { BOT.loaded.add(key); fn(BOT.slug); } };
   if (split || view === 'tasks') {
@@ -689,6 +691,21 @@ function showBotTab(tab) {
 
 }
 BOT_WIDE.addEventListener('change', () => { if (BOT && $('#btabs')) showBotTab(BOT.tab); });
+// A bot page opened without Home or DM named shows the DM when you have one with messages and the Home has none.
+// Each person's chat with a bot from before Homes is now their DM with it: on an empty Home, its history looked gone.
+async function botTalkDefault(slug) {
+  let dm = false;
+  try {
+    const [r, home] = await Promise.all([
+      get('/v2/threads/dm?create=false&with=' + encodeURIComponent('bot:' + slug), {fresh: true}),
+      get('/v2/threads/home/' + encodeURIComponent('bot:' + slug)).catch(() => null)]);
+    const t = r?.thread !== undefined ? r.thread : r;
+    dm = Number(t?.last_seq) > 0 && !(Number(home?.last_seq) > 0);
+  } catch { /* no DM yet (404) or unreadable: Home stays */ }
+  // Still on this bot with nothing picked meanwhile: show the DM as if it had been asked for.
+  if (dm && BOT?.slug === slug && BOT.thread?.kind === 'home' && location.hash === `#/bot/${encodeURIComponent(slug)}`)
+    location.replace(`#/bot/${encodeURIComponent(slug)}/dm`);
+}
 // The thread on the bot page: its Home, or the viewer's DM with it (made on the first message). It stops following
 // when another tab, page or bot takes its place.
 function botThreadShow(kind) {

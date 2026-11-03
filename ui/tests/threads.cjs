@@ -89,10 +89,15 @@ const timeline = {
     {...msg('ed1', 1, 'human:ana', 'Open at 40.'), thread_id: 't-edit'},
   ]}),
 };
+timeline['h-ops-empty'] = () => ({thread: {id: 'h-ops-empty', audience: 'home', home: {actor: 'bot:ops'}, last_seq: 0, me: me()}, breadcrumb: [], next_cursor: null, messages: []});
+timeline['d-ops'] = () => ({thread: {id: 'd-ops', audience: 'personal', last_seq: 1, me: me()}, breadcrumb: [], next_cursor: null, messages: [
+  {...msg('do1', 1, 'bot:ops', 'Our chat from before Homes.'), thread_id: 'd-ops'},
+]});
 const homes = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'human:cy': 'h-cy', 'human:di': 'h-di', 'group:ops': ''};
 
 // What a block below changes for the pages it opens: DM rows as the server sends them, and a server with calls off.
-let dmRows = null, callsOff = false;
+// opsDm: Ops's Home is empty and Ana's DM with it holds their chat from before Homes.
+let dmRows = null, callsOff = false, opsDm = false;
 async function open(browser, who, {phone = false} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
@@ -141,8 +146,10 @@ async function open(browser, who, {phone = false} = {}) {
       const actor = decodeURIComponent(home[1]); seen.homes.push(actor);
       // Bob may see the bot but not read it: its Home is not his to open.
       if (bob && actor === 'bot:ops') return json({error: 'not_found'}, 404);
+      if (opsDm && actor === 'bot:ops') return json(timeline['h-ops-empty']().thread);
       return homes[actor] ? json(timeline[homes[actor]]().thread) : json({error: 'not_found'}, 404);
     }
+    if (p === '/api/v2/threads/dm' && opsDm && !bob && url.searchParams.get('with') === 'bot:ops') return json(timeline['d-ops']().thread);
     if (p === '/api/v2/threads/dm') return json({error: 'not_found'}, 404);
     const tl = p.match(/^\/api\/v2\/threads\/([^/]+)\/timeline$/);
     if (tl && timeline[tl[1]]) return json(timeline[tl[1]]());
@@ -766,6 +773,23 @@ let browser = null;
     assert.equal(await member.page.locator('.thv-call-note, [data-call]').count(), 0);
     await member.page.close();
     dmRows = null; callsOff = false;
+  }
+  {
+    // A bot page opened plainly, its Home empty and your DM with it holding your earlier chat: the DM, not an empty Home.
+    opsDm = true;
+    const {page} = await open(browser, 'ana');
+    await page.goto('https://tico-ui.test/#/bot/ops');
+    await page.waitForFunction(() => location.hash === '#/bot/ops/dm');
+    await page.getByText('Our chat from before Homes.').waitFor();
+    assert.equal(await page.locator('#pane-chat [data-talk="dm"]').getAttribute('aria-selected'), 'true');
+    // Home picked by hand stays Home.
+    await page.locator('#pane-chat [data-talk="home"]').click();
+    await page.waitForFunction(() => location.hash === '#/bot/ops/home');
+    await page.locator('#pane-chat [data-talk="home"][aria-selected="true"]').waitFor();
+    await page.waitForTimeout(300);
+    assert.equal(await page.evaluate(() => location.hash), '#/bot/ops/home');
+    await page.close();
+    opsDm = false;
   }
   {
     const {page} = await open(browser, 'bob', {phone: true});
