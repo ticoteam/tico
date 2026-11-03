@@ -5035,6 +5035,10 @@ def create_app(settings=None):
     def task_ask_ingest(who, tid, body):
         if not ask_ingest.gated(who, settings.assistant_bot) or not (row := readable_task(who, tid)):
             return None
+        from . import dream
+        with store.read() as c:
+            if dream.exempt(c, row):
+                return None             # the person started the dream to be asked (backend/dream.py)
         return ask_ingest.preflight(store, app.state.judge, who, row["requester_id"], row["title"], body.text,
                                     kind="task_ask")
 
@@ -6651,6 +6655,8 @@ def create_app(settings=None):
             found = list(H.turns(c, bot, since=since_at))
             stored = H.prime_messages(c, [turn["message_id"] for turn in found])
             privacy.prime_messages(c, list(stored.values()))
+            from . import threads
+            threads.prime_members(c, who, [row["conversation_id"] for row in stored.values()])
             privacy.prime_attempts(c, [turn["id"] for turn in found])
             views.prime_attempt_details(c, [turn["id"] for turn in found])
             result = []
@@ -8308,6 +8314,8 @@ def create_app(settings=None):
     counsel.install(app, store, auth, mutate)      # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
     reach.install(app, store, auth, mutate)        # Rules › Internal: who reaches whom (docs/reach.md)
+    from . import feedback
+    feedback.install(app, store, auth, mutate)     # 👍/👎 on bot work (backend/feedback.py)
     profiles.install(app, store, auth, mutate, settings_admin)
     from . import release_flow
     release_flow.install(app, store, auth, mutate)
@@ -8336,6 +8344,8 @@ def create_app(settings=None):
     install_integrations(app, store, auth, mutate)
     from .memory_history import MAX_REPORT_BYTES, install_memory_history
     install_memory_history(app, store, auth, mutate)
+    from . import dream
+    dream.install(app, store, auth, mutate, task_create, cap_before_preflight)     # a bot's Dream (docs/learnings.md)
     from .learnings import install as install_learnings
     install_learnings(app, store, auth, mutate)
     from .learned import install as install_learned

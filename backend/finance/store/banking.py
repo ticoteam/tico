@@ -262,6 +262,13 @@ def transfer_candidates(c: sqlite3.Connection, money_account_ids: Sequence[str],
                      ).fetchall()
 
 
+def waiting_credits(c: sqlite3.Connection, money_account_id: str) -> list[Any]:
+    """Settled, unposted money-in rows on this money account with no card or request: a card payment's side, maybe."""
+    return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND status='new' AND entry_id IS NULL AND "
+                     "pending=0 AND amount>0 AND card_id IS NULL AND (request_id IS NULL OR request_id='') AND "
+                     "reconciliation_id IS NULL ORDER BY txn_date, id", (money_account_id,)).fetchall()
+
+
 def rows_of_entry(c: sqlite3.Connection, entry_id: str) -> list[Any]:
     return c.execute("SELECT * FROM fin_feed_txns WHERE entry_id=? ORDER BY id", (entry_id,)).fetchall()
 

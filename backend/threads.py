@@ -54,6 +54,7 @@ import time
 import uuid
 
 from . import people as P
+from . import read_cache
 from .store import H, Problem
 
 AUDIENCES = ("company", "team", "members", "task", "home", "personal", "participants", "meeting")
@@ -109,9 +110,9 @@ def _now():
 
 
 # ----------------------------------------------------------------------------- schema
-# The tables, columns, triggers and other indexes are migration backend/migrations/0044_native_threads_schema.py. The
+# The tables, columns, triggers and other indexes are migration backend/migrations/0045_native_threads_schema.py. The
 # message indexes are built here, by migrate, after its one-time backfill (building them over unstamped rows first is
-# slow, and it stalls); 0044 makes them only on a file whose backfill already ran.
+# slow, and it stalls); 0045 makes them only on a file whose backfill already ran.
 _MESSAGE_INDEXES = (
     # Not unique: an insert copying another row's seq or origin must not fail before the stamp trigger replaces them.
     # The sequence makes seqs unique; message_revisions makes (origin_id, revision) unique.
@@ -159,7 +160,7 @@ def _backfill_sql(r):
 
 def ensure(c):
     """Every start (hubdb.migrate): the one data step a file migrated before it existed still needs. The schema is
-    migration 0044."""
+    migration 0045."""
     _neutral_titles_once(c)
 
 
@@ -434,12 +435,16 @@ def _task_readable(c, v, task_id):
     return bool(row) and H.task_private_readable(c, v.actor, row)
 
 
+def _member_sql(names):
+    return "SELECT 1 FROM thread_members WHERE thread_id=? AND actor IN (%s) LIMIT 1" % ",".join("?" * len(names))
+
+
 def _is_member(c, v, thread_id):
     if v._members is not None and thread_id in v._members:
         return v._members[thread_id]
     names = v.member_names(c)
-    return c.execute("SELECT 1 FROM thread_members WHERE thread_id=? AND actor IN (%s) LIMIT 1"
-                     % ",".join("?" * len(names)), (thread_id, *names)).fetchone() is not None
+    # prime_members seeds these rows for a page's threads, so each check that follows reads none of them again.
+    return read_cache.one(c, _member_sql(names), (thread_id, *names)) is not None
 
 
 def _bot_grant(c, v, row):
@@ -3495,6 +3500,23 @@ def _prefetch_members(c, v, ids):
     return {thread_id: thread_id in found for thread_id in ids}
 
 
+def prime_members(c, who, conversation_ids):
+    """Seed `_is_member` for the rooms these conversations sit in (each one's root), in one query a chunk, for the
+    checks that follow in this snapshot. A check builds its own Viewer (`conversation`), so the page's rows cannot
+    share `_prefetch_members`' dict; the seeded rows are the same rows `_is_member` reads."""
+    if read_cache.cache(c) is None:
+        return
+    v = viewer(None, who)
+    ids = list(dict.fromkeys(i for i in conversation_ids if i))
+    roots = set()
+    for part in H.chunks(ids):
+        for r in c.execute("SELECT id,root_id FROM conversations WHERE id IN (%s)" % ",".join("?" * len(part)), part):
+            roots.add(r["root_id"] or r["id"])
+    names = v.member_names(c)
+    member = _prefetch_members(c, v, sorted(roots))
+    read_cache.prime(c, _member_sql(names), {(tid, *names): (1,) if yes else None for tid, yes in member.items()})
+
+
 def _followers_of(c, v, ids):
     """{thread id: the viewer's follower row} for `ids`, in one query a chunk; a thread the viewer does not follow has
     none. `view` reads a page's rows from here."""
@@ -3721,7 +3743,7 @@ def migrate(c):
     Resumable. The per-message backfill runs in chunks of MIGRATION_CHUNK rows, each a transaction of its own that
     also records how far it got (`threads-migration-progress`), so a crash or a restart resumes there and the write
     lock is held for one chunk at a time. Each step is idempotent per row, so a chunk that ran before a crash runs
-    again harmlessly. The message indexes are built after the backfill (migration 0044 skips them until then).
+    again harmlessly. The message indexes are built after the backfill (migration 0045 skips them until then).
     Inside a caller's transaction the chunks join it, and the whole migration is one transaction, as before."""
     if migrated(c):
         return False

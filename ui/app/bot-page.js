@@ -372,7 +372,7 @@ async function pageBot(slug, tab) {
     <a class="ghost bot-more-btn" id="bot-more-btn" href="${base}/info" aria-label="Info" title="Info"><span class="nav-icon" aria-hidden="true">more_vert</span></a>
   </div>
   <div id="bot-banners"><div id="bot-limit-host">${limited ? '' : botLimitHTML(slug)}</div>
-  <div id="bot-onboard-host">${frBotBannerHTML(e)}</div></div>
+  <div id="bot-onboard-host">${frBotBannerHTML(e)}</div><div id="bot-dream-host"></div></div>
   <a class="bot-back" id="bot-back" href="${base}" hidden>‹ ${BOT_TAB_LABELS[work[0]] || 'Tasks'}</a>
 
   <div class="bot-work" id="bot-work">
@@ -488,6 +488,7 @@ async function pageBot(slug, tab) {
   if (!limited) {
     void botBranchesLoad(slug);
     void botLearningsLoad(slug);
+    void botDreamLoad(slug);
   }
   if (!limited) void botGoalLoad(slug);
   $('#btabs').onclick = ev => {
@@ -696,8 +697,9 @@ function botThreadShow(kind) {
   if (BOT.thread?.kind === kind && BOT.thread.view.host === host && !BOT.thread.view.gone) return;
   botThreadStop();
   const actor = 'bot:' + BOT.slug;
-  // The thread's actions (call, Members, menu) sit in the Home/DM bar instead of a title line.
-  const acts = {header: 'compact', actsHost: $('#pane-chat .bot-talk-acts')};
+  // The thread's actions (call, Members, menu) sit in the Home/DM bar instead of a title line. Both keep the bot
+  // chat's goal (chat-goal.js): the target in the composer, the pinned goal above the thread.
+  const acts = {header: 'compact', actsHost: $('#pane-chat .bot-talk-acts'), goals: BOT.slug};
   const view = threadMount(host, kind === 'home' ? {home: actor, ...acts} : {dm: actor, ...acts});
   BOT.thread = {kind, view};
 }

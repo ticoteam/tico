@@ -127,7 +127,46 @@ def test_an_existing_database_loses_the_redundant_task_indexes_once(tmp_path):
     with sqlite3.connect(path) as c:
         indexes = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
         assert not {"tasks_owner_status", "tasks_requester_status", "tasks_private"} & indexes
-        assert {"tasks_owner_status_cover", "tasks_requester_status_cover", "tasks_private_parties"} <= indexes
+        assert {"tasks_owner_status_cover", "tasks_requester_status_cover", "tasks_private_status"} <= indexes
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
+def test_an_existing_database_loses_the_two_duplicate_indexes_once(tmp_path):
+    """Migration 0041 drops invariants_lease (a prefix of attempts_live_lease) and invariants_open_approvals (a copy of
+    approvals_open_created); the indexes that serve the same reads stay, and booting again changes nothing."""
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("CREATE INDEX invariants_lease ON attempts(lease_until) WHERE state IN ('leased','running')")
+        c.execute("CREATE INDEX invariants_open_approvals ON approvals(created_at) WHERE decision IS NULL")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0041' AND version NOT LIKE 'legacy_%'")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        indexes = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        assert not {"invariants_lease", "invariants_open_approvals"} & indexes
+        assert {"attempts_live_lease", "approvals_open_created"} <= indexes
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
+def test_an_existing_database_loses_the_private_parties_index_and_the_parties_read_stays_covered(tmp_path):
+    """Migration 0041 drops tasks_private_parties, a prefix of tasks_private_status under the same WHERE. The private
+    tasks' parties read (row_clock.PARTIES) names tasks_private_status and reads the index alone; booting again changes
+    nothing."""
+    from backend import row_clock
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("CREATE INDEX tasks_private_parties ON tasks(id, requester_id, owner_id, guest, private) "
+                  "WHERE private IS NOT 0")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0041' AND version NOT LIKE 'legacy_%'")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        indexes = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        plan = " ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + row_clock.PARTIES))
+    assert "tasks_private_parties" not in indexes and "tasks_private_status" in indexes
+    assert "COVERING INDEX tasks_private_status" in plan, plan
     first = snapshot(path)
     boot(path)
     assert snapshot(path) == first
@@ -267,7 +306,7 @@ def _shape(path):
 
 
 def test_an_older_threads_shape_gets_the_missing_columns_tables_triggers_and_search_index_once(tmp_path):
-    """Migration 0044: the threads schema the modules used to make on every start. A file missing some of it (columns
+    """Migration 0045: the threads schema the modules used to make on every start. A file missing some of it (columns
     added later, a helper table, an older trigger, the search index) ends with the shape a new file has, the new search
     index holds the messages already there, and a second boot changes nothing."""
     path = fresh(tmp_path)
@@ -289,7 +328,7 @@ def test_an_older_threads_shape_gets_the_missing_columns_tables_triggers_and_sea
         c.execute("INSERT INTO conversations(id,kind,created_at) VALUES('c-acme','direct','2026-01-01T00:00:00Z')")
         c.execute("INSERT INTO messages(id,conversation_id,sender_id,kind,body,created_at) "
                   "VALUES('m-acme','c-acme','human:ana','say','Acme quarterly memo','2026-01-01T00:00:00Z')")
-    _back_to_before(path, "0044")
+    _back_to_before(path, "0045")
     boot(path)
     once = snapshot(path)
     assert _shape(path) == new

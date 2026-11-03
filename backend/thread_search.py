@@ -22,13 +22,13 @@ HITS_MAX = 50             # hits in one page
 SCAN_BATCH = 200          # candidates read at a time
 SCAN_MAX = 2000           # candidates one page decides; a full scan with hits still offers the next page
 MATCH_WORDS = 16          # words a query may use; the rest are dropped
-TEXT_MAX = 20_000         # characters of a body that are indexed (written into migration 0044's triggers)
+TEXT_MAX = 20_000         # characters of a body that are indexed (written into migration 0045's triggers)
 EXCERPT_WORDS = 16        # words of text each hit shows
 WORD = re.compile(r"\w+")
 
 
 def ensure(c):
-    """Whether the index is there to search: migration 0044 makes it, its key table and its triggers, and fills it from
+    """Whether the index is there to search: migration 0045 makes it, its key table and its triggers, and fills it from
     the messages a file already has. False on a SQLite built without FTS5 (search then finds nothing)."""
     return c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_search'").fetchone() is not None
 

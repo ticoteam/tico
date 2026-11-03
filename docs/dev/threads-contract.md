@@ -25,7 +25,7 @@ Don't edit these except where your brief says so; ask core in your report.
 
 ## 1. Schema
 
-The columns, tables, triggers and indexes below are migration `backend/migrations/0044_native_threads_schema.py`, which
+The columns, tables, triggers and indexes below are migration `backend/migrations/0045_native_threads_schema.py`, which
 also makes the search index and the tables of the thread helpers, the Slack bridge, Tico Meet calls and federation. It
 runs once; a change to any of that SQL is a new migration. The five message indexes are built by `threads.migrate` after
 its backfill. The one-time data migration (§7) is recorded under `registry_metadata` key `threads-migration` and runs

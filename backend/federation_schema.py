@@ -1,5 +1,5 @@
 """The tables behind peering between Tico installs (backend/federation*.py). They are made by migration
-backend/migrations/0044_native_threads_schema.py; this module only describes them.
+backend/migrations/0045_native_threads_schema.py; this module only describes them.
 
 - `federation_keys`: this install's Ed25519 keys, the private half sealed by the vault. One is current (`retired_at`
   NULL); registering a new one with HQ resets every peering (HQ side and here).

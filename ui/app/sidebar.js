@@ -5,6 +5,8 @@
 // ----------------------------------------------------------------- sidebar + heartbeat
 const NAV_COLLAPSED_KEY = 'hub.nav.collapsed';
 let navCollapsed = new Set(); try { navCollapsed = new Set(JSON.parse(localStorage.getItem(NAV_COLLAPSED_KEY) || '[]')); } catch {}
+// Inbox no longer folds: one folded before is open (and forgotten with the next fold kept).
+navCollapsed.delete('inbox');
 function renderNavSections() {
   document.querySelectorAll('[data-section-toggle]').forEach(button => {
     const key = button.dataset.sectionToggle, isCollapsed = navCollapsed.has(key);
@@ -944,6 +946,7 @@ function renderTree() {
       (a.dataset.nav === 'replay' && S.route.startsWith('#/replay')) ||
       (a.dataset.nav === 'updates' && (S.route === UPDATES || S.route.startsWith(UPDATES + '?'))) ||
       (a.dataset.nav === 'threads' && (S.route.startsWith(THREADS_ROUTE) || S.route.startsWith(THREAD_ROUTE))) ||
+      (a.dataset.nav === 'inbox' && (S.route === INBOX_ROUTE || S.route.startsWith(INBOX_ROUTE + '&'))) ||
       (a.dataset.nav === 'more' && !mobilePrimary) ||
       redesignNavCurrent(a.dataset.nav);
     a.classList.toggle('cur', isCurrent);
