@@ -163,8 +163,8 @@ def test_the_history_join_is_served_by_an_index_not_a_scan(api, monkeypatch):
     with api.app.state.store.transaction() as c:
         c.execute("ANALYZE")
     _, seen = history_statements(api, monkeypatch, "status=approved")
-    [sql] = [s for s in seen if "JOIN messages m ON m.id=a.message_id" in s and "ORDER BY a.created_at" in s]
+    [sql] = [s for s in seen if "CROSS JOIN approvals a" in s and "ORDER BY a.created_at" in s]
     with api.app.state.store.read() as c:
         plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql)]
     assert any("approvals_message" in line for line in plan), plan
-    assert not [line for line in plan if line.startswith(("SCAN approvals", "SCAN messages"))], plan
+    assert not [line for line in plan if line.startswith("SCAN ")], plan

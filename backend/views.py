@@ -2053,13 +2053,14 @@ def history_rows(c, auth, who, status, from_actor, before, since, need):
         clauses.append("a.created_at >= ?")
         args.append(since)
     where = " AND ".join(clauses)
-    total = c.execute("SELECT COUNT(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE " + where,
+    total = c.execute("SELECT COUNT(*) FROM messages m CROSS JOIN approvals a WHERE a.message_id=m.id AND " + where,
                       args).fetchone()[0]
     message_cols = [r[1] for r in c.execute("PRAGMA table_info(messages)")]
     select = ", ".join(["a.id", "a.kind", "a.task_id", "a.message_id", "a.payload", "a.requested_by_id", "a.created_at",
                         "a.decision", "t.title AS task_title"]
                        + [f'm."{k}" AS "m_{k}"' for k in message_cols])
-    sql = (f"SELECT {select} FROM approvals a JOIN messages m ON m.id=a.message_id "
+    # CROSS JOIN keeps messages as the outer loop: the recipient index seeks the caller's messages, not a scan of approvals.
+    sql = (f"SELECT {select} FROM messages m CROSS JOIN approvals a ON a.message_id=m.id "
            f"LEFT JOIN tasks t ON t.id=a.task_id WHERE {where}")
     visible_task = auth.task_sql(c, who)
     visible, cursor, window = [], None, max(2 * need, 40)
