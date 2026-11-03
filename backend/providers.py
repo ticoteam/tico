@@ -276,12 +276,14 @@ PRICES = _Priced({
 # included, and each request is priced on its own. Anthropic's pricing page ("Long context pricing"), read
 # 2026-10-17: only Claude Haiku 5.5; Claude 4.6 and later models bill their whole context at the standard rate.
 # The Gateway's (Low tiers, Cheap 1.1) come from its own price (backend/gateway_tiers.py), not Anthropic's page.
-# gpt-6.1-terra's row is Tico's approved long-prompt tier (Product, 2026-11-01), not a provider page: its 272,000
-# threshold is not yet confirmed on OpenRouter's model page, which must happen before availability is opened.
+# gpt-6.1-terra's row is Tico's approved long-prompt tier (Product, 2026-11-01), set at or over 272,000 tokens
+# as ruled on 2026-11-03; Product is confirming the wording before the row ships.
 LONG_PROMPT_AS_OF = "2026-10-17"
 LONG_PROMPT = _Priced({
     "claude-haiku-5-5": (100_000, (0.50, 0.05, 2.50)),
-    "gpt-6.1-terra": (272_000, (2.50, 0.125, 9.375)),
+    # At or over 272,000 prompt tokens (OpenRouter's min_prompt_tokens; Gateway owner ruling 2026-11-03). The rule
+    # below is strictly over, so the limit is one token lower.
+    "gpt-6.1-terra": (271_999, (2.50, 0.125, 9.375)),
 }, gateway_tiers.long_prompt_for)
 
 
