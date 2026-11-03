@@ -1223,3 +1223,28 @@ def test_task_check_back_reaches_the_same_api_from_cli_and_mcp(monkeypatch):
     remotecli.run(hubcli.parser().parse_args(["task", "check-back", "t1", "--in", "45m", "--for", "Inspect the result."]))
     hubtools.task_check_back(Api(), {"id": "t1", "at": "45m", "note": "Inspect the result."})
     assert calls == [("tasks/t1/check-back", {"at": "45m", "note": "Inspect the result."})] * 2
+
+
+def test_the_background_card_names_its_person_on_the_wire(monkeypatch):
+    """`hub assistant propose --for human:<id>` reaches the server as the body's `for`: remotecli.run used to drop it."""
+    from clients import hubcli, remotecli
+    client = mock.Mock()
+    client.post.return_value = {"action": {"id": "a1"}}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["assistant", "propose", "--summary", "Archive the Ops bot",
+                                              "--path", "/api/v2/bots/ops/archive", "--body", '{"expected_revision": 1}',
+                                              "--for", "human:ana"]))
+    path, body = client.post.call_args.args[0], client.post.call_args.args[1]
+    assert path == "assistant/actions"
+    assert body["for"] == "human:ana" and body["path"] == "/api/v2/bots/ops/archive" and body["method"] == "POST"
+
+
+def test_a_propose_without_for_sends_no_recipient(monkeypatch):
+    from clients import hubcli, remotecli
+    client = mock.Mock()
+    client.post.return_value = {"action": {"id": "a1"}}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["assistant", "propose", "--summary", "Archive", "--path", "/api/v2/bots/ops/archive"]))
+    assert "for" not in client.post.call_args.args[1]

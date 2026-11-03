@@ -2,11 +2,15 @@
 (backend/assistant.py `admits_on_turn`, backend/app.py request_guard). The NEVER list, the 30-minute window, the member's
 ceiling, the owner's switch, and approvals that only the person decides stay as they were."""
 
+import inspect
+import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from backend import assistant
+from clients import hubtools
 from backend import hubdb as H
 from backend.tests.test_api import api, as_member, get, headers, post, setup_attempt  # noqa: F401
 from backend.tests.test_assistant import assistant_turn, say
@@ -231,7 +235,93 @@ def test_a_routine_run_of_the_assistant_bot_is_never_the_persons_turn(api):
 
 
 def test_the_providers_keys_are_never_a_chat_write(api):
-    assert not admits_on_turn("PUT", "/api/v2/providers", {"enabled": []})
+    assert not assistant.admits_on_turn("PUT", "/api/v2/providers", {"enabled": []})
     token = assistant_turn(api, "ana-test")[1]["token"]
     res = api.put("/api/v2/providers", json={"enabled": [], "expected_revision": 0}, headers=headers(token))
     assert res.status_code == 403 and res.json()["error"]["code"] == "confirm_required", res.text
+
+
+def _turn_message_id(api, attempt):
+    """The person's message that started this turn (the `turn` a run cites)."""
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
+                         (attempt["id"],)).fetchone()["message_id"]
+
+
+def test_a_turn_never_edits_deletes_or_redacts_a_message_the_person_wrote(api):
+    """A "No" the person wrote cannot become a "yes" on a turn: the edit, the delete and the redaction are the person's own
+    tap, so the gate holds them (NEVER), and the message keeps its words."""
+    _, attempt = assistant_turn(api, "ana-test", "No")
+    mid = _turn_message_id(api, attempt)
+    cited = {**headers(attempt["token"]), "X-Tico-On-Behalf-Of": "turn"}
+    assert not assistant.admits_on_turn("PATCH", f"/api/v2/messages/{mid}", {"body": "yes"})
+    assert not assistant.admits_on_turn("DELETE", f"/api/v2/messages/{mid}")
+    assert not assistant.admits_on_turn("POST", f"/api/v2/messages/{mid}/redact", {})
+    for method, body in (("PATCH", {"body": "yes"}), ("DELETE", None), ("POST", {})):
+        raw = api.request(method, f"/api/v2/messages/{mid}", json=body, headers=cited)
+        assert raw.status_code == 403 and raw.json()["error"]["code"] == "confirm_required", (method, raw.text)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT body FROM messages WHERE id=?", (mid,)).fetchone()["body"] == "No"
+
+
+def test_a_message_edited_after_it_was_posted_lends_no_words(api):
+    """`instruction` refuses a cited message that was edited, or that has any revision row: the words are not what the
+    person posted (backend/assistant.py `edited`)."""
+    _, attempt = assistant_turn(api, "ana-test", "Archive the Ops bot")
+    mid = _turn_message_id(api, attempt)
+    cited = {**headers(attempt["token"]), "X-Tico-On-Behalf-Of": "turn"}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET edited_at=? WHERE id=?", (H.now(), mid))
+    raw = api.post("/api/v2/bots/ops/archive", json={"expected_revision": 1}, headers=cited)
+    assert raw.status_code == 403 and raw.json()["error"]["code"] == "on_behalf_of" and "edited" in raw.text, raw.text
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET edited_at=NULL WHERE id=?", (mid,))
+        assert not assistant.edited(c, {"id": mid, "edited_at": None, "revision": 0})
+        c.execute("INSERT INTO message_revisions(id,message_id,origin_id,revision,body,deleted,actor,created_at) "
+                  "VALUES(?,?,?,?,?,?,?,?)", ("rev-1", mid, "origin-1", 1, "yes", 0, "human:ana", H.now()))
+        assert assistant.edited(c, {"id": mid, "edited_at": None, "revision": 0})
+        assert assistant.edited(c, {"id": mid, "edited_at": None, "revision": 1})
+
+
+def test_every_route_that_touches_a_credential_or_a_sign_in_is_never_a_chat_write(api):
+    """Walks app.routes: any route whose handler reads or writes a credential, a grant, a computer's sign-in or keys, a
+    subscription, a federation or signing key, an invite, or the providers, must be on NEVER for every write it takes.
+    A new such route that is not listed fails here, not in a chat."""
+    touches = re.compile(r"credential|model_login|computer_keys|shared_key|attach_shared|login|logout|password|service_key|"
+                         r"enroll|pairing|subscription|federation|signing|replace_lost|invite|provider")
+    checked, offenders = 0, []
+    for route in api.app.routes:
+        methods = getattr(route, "methods", None)
+        endpoint = getattr(route, "endpoint", None)
+        if not methods or endpoint is None:
+            continue
+        try:
+            source = inspect.getsource(endpoint)
+        except (OSError, TypeError):
+            continue
+        if not touches.search(source):
+            continue
+        path = re.sub(r"\{[^}]+\}", "x1", route.path)
+        for method in sorted(set(methods) - {"GET", "HEAD", "OPTIONS"}):
+            checked += 1
+            if assistant.admits_on_turn(method, path, None):
+                offenders.append(f"{method} {route.path}")
+    assert checked >= 20, checked
+    assert not offenders, offenders
+
+
+def test_the_assistant_turn_is_offered_every_tool_its_gate_admits_and_the_template_commands(api):
+    """Only the NEVER tools are hidden from an Assistant turn (hubtools.ASSISTANT_HIDDEN); every command the Assistant
+    template tells it to run maps to a tool it is offered, and the Assistant bot's routine may propose a card for a person."""
+    everything = {t["name"] for t in hubtools.TOOLS}
+    offered = {t["name"] for t in hubtools.listing(local=True, kind="assistant")}
+    assert everything - offered == set(hubtools.ASSISTANT_HIDDEN) and set(hubtools.ASSISTANT_HIDDEN) <= everything
+    template = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "assistant"
+    commands = set()
+    for path in template.rglob("*.md"):
+        commands.update(re.findall(r"\bhub ([a-z][a-z-]*(?: [a-z][a-z-]*)?)", path.read_text(encoding="utf-8")))
+    mapped = {"hub_" + c.replace(" ", "_").replace("-", "_") for c in commands} & everything
+    assert len(mapped) >= 40, sorted(mapped)
+    assert mapped - offered == set(), sorted(mapped - offered)
+    assert "hub_assistant_propose" in {t["name"] for t in hubtools.listing(local=True, kind="bot")}
+
