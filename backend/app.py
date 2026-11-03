@@ -397,8 +397,6 @@ def create_app(settings=None):
             books_sync.start(store, app.state.vault, settings, rehearsal=settings.rehearsal)
         # Webhooks waiting at Tico Gateway; the loop does nothing without a relay or a key.
         hook_relay_task = asyncio.create_task(app.state.hook_relay.loop(stop)) if timers else None
-        # Shared threads between installs (backend/federation_relay.py): peerings and envelopes through Tico HQ.
-        federation_task = asyncio.create_task(app.state.federation_relay.loop(stop)) if timers else None
         # Physical mail (backend/postal_mail.py): reads and routes the letters the relay and the mail-intake inbox kept.
         postal_mail_task = asyncio.create_task(app.state.postal_mail.loop(stop)) if timers else None
         # Sleep when idle (backend/sleep_idle.py): looks every five minutes (a cell: every minute), and only on a hosted server that asked for it.
@@ -443,8 +441,6 @@ def create_app(settings=None):
                 await inbound_task
             if hook_relay_task:
                 await hook_relay_task
-            if federation_task:
-                await federation_task
             if postal_mail_task:
                 await postal_mail_task
             if sleep_idle_task:
@@ -8401,8 +8397,6 @@ def create_app(settings=None):
     org_rule_check.REPLAY["automation"] = replay_step
     org_rule_check.AUDIENCE.update(rule_audiences())
     org_rule_check.AUDIENCE["automation"] = replay_audience
-    from .federation_routes import release_replayer
-    org_rule_check.REPLAY["federated_message"] = release_replayer(app)
     org_rule_check.install(app, store, auth, mutate)
     thread_api.install(app, store, auth, mutate, rule_check)     # thread routes (§3.4); /threads/search before /threads/{id}
     from . import thread_tasks
@@ -8530,8 +8524,6 @@ def create_app(settings=None):
     install_inbound(app, store, settings, auth)
     from .hook_relay import install as install_hook_relay
     install_hook_relay(app, settings, store, auth)
-    from .federation_routes import install as install_federation
-    install_federation(app, settings, store, auth)
     from .postal_mail import install as install_postal_mail
     install_postal_mail(app, settings, store, auth)
     from .sleep_idle import install as install_sleep_idle

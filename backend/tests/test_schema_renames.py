@@ -78,10 +78,14 @@ DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "tasks_priva
 DROPPED_TRIGGERS = {"queue_bot_message"}
 # Dropped after the renames ran on them: by backend/migrations/0035_growth_rethink.py, the operation-binding tables
 # 0050_idempotency_one_table.py moves into `idempotency`, 0053_usage_facts.py (its rows are usage facts) and
-# 0054_budget_nodes.py (its rows are budget nodes).
+# 0054_budget_nodes.py (its rows are budget nodes), and the federation tables 0058_drop_federation.sql drops with
+# their indexes.
 RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",
            "gtm_versions", "gtm_drafts", "invite_sends", "github_product_repo_operations", "github_review_operations",
-           "turn_usage_segments", "usage_limits", "usage_pools"}
+           "turn_usage_segments", "usage_limits", "usage_pools",
+           "federation_deferrals", "federation_outbox_items", "federation_receipts", "federation_messages",
+           "federation_items", "federation_members", "federation_threads", "federation_directory_entries",
+           "federation_peerings", "federation_keys", "federation_states"}
 
 
 @pytest.fixture(scope="module")
