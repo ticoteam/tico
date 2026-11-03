@@ -305,11 +305,11 @@ class HistoryEventRow(TypedDict):
     subject_type: str
     subject_id: str
     actor_id: str | None
-    kind: str
+    kind: str | None
     old: str | None
     new: str | None
     note: str | None
     action_id: str | None
     via: str | None
     data: str | None
-    created_at: str
+    created_at: str | None
