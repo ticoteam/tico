@@ -5,7 +5,9 @@ thread_id is the live session's id (bot_sessions). token_hash had no reader and 
 
 Where config has no runtime, model or host of its own and the column holds one, the column's value is copied into
 config first, so no setting is lost. A config that has the key keeps it. A host of "dispatcher" is the default and
-is not copied. Then the columns are dropped; SQLite refuses a column an index, view or trigger still names, and none does.
+is not copied. A config of JSON null or empty text counts as {}. A config that is not a JSON object stops the migration
+when there is a value to copy, rather than dropping the value. Then the columns are dropped; SQLite refuses a column an
+index, view or trigger still names, and none does.
 """
 import json
 
@@ -19,9 +21,11 @@ def _table(conn, name):
 
 def _config(text):
     try:
-        value = json.loads(text or "{}")
+        value = json.loads(text or "null")
     except (TypeError, ValueError):
         return None
+    if value is None:
+        return {}
     return value if isinstance(value, dict) else None
 
 
@@ -34,10 +38,13 @@ def up(conn):
         select = ", ".join(f"b.{name}" for name in copied)
         for row in conn.execute(f"SELECT bc.bot, bc.config, {select} FROM bot_config bc "
                                 "JOIN bots b ON b.id=bc.bot").fetchall():
+            values = dict(zip(copied, row[2:], strict=True))
             config = _config(row[1])
             if config is None:
+                if values.get("runtime") or values.get("model") or values.get("host") not in (None, "", "dispatcher"):
+                    raise RuntimeError(f"bot {row[0]}: bot_config.config is not a JSON object, so its runtime, model and "
+                                       "host columns cannot be copied into it; fix the config, then restart.")
                 continue
-            values = dict(zip(copied, row[2:], strict=True))
             changed = False
             for name in ("runtime", "model"):
                 if name in values and values[name] and not config.get(name):

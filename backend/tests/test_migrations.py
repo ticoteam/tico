@@ -3,6 +3,7 @@ migration rolls back its DDL and its row and runs again once fixed, an applied f
 code must not open is refused before anything is written to it."""
 import gzip
 import hashlib
+import importlib.util
 import json
 import re
 import shutil
@@ -285,6 +286,37 @@ def test_an_existing_bots_runtime_model_and_host_move_into_its_config_then_the_c
         "name": "x", "reasoning_effort": "low", "model": "kept-in-config", "runtime": "codex", "host": "keeper"}
 
 
+def _run_0042(c):
+    spec = importlib.util.spec_from_file_location(
+        "m0042", Path(__file__).resolve().parents[1] / "migrations" / "0042_drop_bot_legacy_columns.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.up(c)
+
+
+def test_a_null_config_takes_the_columns_and_one_not_an_object_stops_0042(tmp_path):
+    """Migration 0042: a config of JSON null counts as {} and gets the column values; a config that is not a JSON object
+    stops the migration instead of dropping a runtime or model it cannot copy."""
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        for column in ("runtime", "model", "host", "cwd", "thread_id", "token_hash"):
+            c.execute(f"ALTER TABLE bots ADD COLUMN {column} TEXT")
+        for slug, config in (("null-bot", "null"), ("list-bot", "[]")):
+            c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at,runtime,model) "
+                      "VALUES(?,?,'B','low','active','2026-01-01T00:00:00Z','codex','m1')", (slug, slug))
+            c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES(?,?,'human:ana')", (slug, config))
+    with sqlite3.connect(path) as c:
+        with pytest.raises(RuntimeError, match="list-bot"):
+            _run_0042(c)
+    with sqlite3.connect(path) as c:
+        c.execute("UPDATE bot_config SET config='{}' WHERE bot='list-bot'")
+    _back_to_before(path, "0042")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='null-bot'").fetchone()[0])
+    assert (config.get("runtime"), config.get("model")) == ("codex", "m1")
+
+
 def _old_kpis(c):
     """kpis as a database before 0043 has it: goal_id (NOT NULL, '' for none) and the kpis_goal index."""
     c.execute("ALTER TABLE kpis ADD COLUMN goal_id TEXT NOT NULL DEFAULT ''")
@@ -297,17 +329,16 @@ def _old_kpi(c, kid, goal, target):
               "'human:ana',1,'2026-01-01T00:00:00Z')", (kid, kid, kid.title(), target, goal))
 
 
-def test_an_existing_kpi_goal_becomes_a_goal_link_holding_its_target_then_goal_id_goes(tmp_path):
-    """Migration 0043: a KPI with a goal but no link to it gets one, holding its target as an improvement; a link
-    already made keeps its own target; then kpis.goal_id and its index are dropped. kpis.target stays."""
+def test_kpi_goal_id_goes_and_a_kpi_taken_off_its_goal_stays_off(tmp_path):
+    """Migration 0043 drops kpis.goal_id and its index. A link that exists keeps its own target; a KPI whose goal_id has
+    no link (a person took it off the goal) is not linked again. kpis.target stays."""
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
         for goal in ("g-old", "g-linked"):
             c.execute("INSERT INTO goals(id,title,owner_id,created_at,created_by_id,updated_at) VALUES(?,'Grow revenue',"
                       "'company','2026-01-01T00:00:00Z','human:ana','2026-01-01T00:00:00Z')", (goal,))
         _old_kpis(c)
-        _old_kpi(c, "k-old", "g-old", 7.5)
-        _old_kpi(c, "k-plain", "g-old", None)
+        _old_kpi(c, "k-off", "g-old", 7.5)
         _old_kpi(c, "k-linked", "g-linked", 4)
         c.execute("INSERT INTO goal_kpis(id,goal_id,kpi_id,kind,target,deadline,created_at,created_by_id,updated_at,"
                   "updated_by_id) VALUES('k-linked','g-linked','k-linked','improve',9,'2026-12-31','2026-01-01T00:00:00Z',"
@@ -320,9 +351,8 @@ def test_an_existing_kpi_goal_becomes_a_goal_link_holding_its_target_then_goal_i
         indexes = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
         targets = dict(c.execute("SELECT id, target FROM kpis"))
     assert "goal_id" not in columns and "kpis_goal" not in indexes
-    assert links == {"k-old": ("g-old", "improve", 7.5), "k-plain": ("g-old", "none", None),
-                     "k-linked": ("g-linked", "improve", 9)}
-    assert targets == {"k-old": 7.5, "k-plain": None, "k-linked": 4}
+    assert links == {"k-linked": ("g-linked", "improve", 9)}
+    assert targets == {"k-off": 7.5, "k-linked": 4}
     first = snapshot(path)
     boot(path)
     assert snapshot(path) == first
