@@ -5000,9 +5000,25 @@ RESUME_COMMAND = re.compile(r"^(?:cd \S+ && )?(claude|codex|gemini|grok|pi|curso
 
 def _session_detail(link):
     try:
-        return json.loads(link.get("detail") or "{}")
+        detail = json.loads(link.get("detail") or "{}")
     except ValueError:
         return {}
+    return detail if isinstance(detail, dict) else {}
+
+
+def _with_thread(link):
+    """A session link as the API shows it: the provider thread id joins its detail. The url is the one place the
+    thread is stored (`session:<bot>/<thread>`, or the resume command it came from), so the detail does not repeat it."""
+    if not link or link.get("kind") != "session":
+        return link
+    detail, url = _session_detail(link), str(link.get("url") or "")
+    thread = None
+    if detail.get("bot") and url.startswith(f"session:{detail['bot']}/"):
+        thread = url[len(f"session:{detail['bot']}/"):]
+    elif detail.get("harness") and url.startswith("session:"):
+        resume = RESUME_COMMAND.match(url[len("session:"):])
+        thread = resume.group(2) if resume else None
+    return {**link, "detail": json.dumps({**detail, "thread_id": thread})} if thread else link
 
 
 def _task_session_link(conn, actor, task_id, value, title):
@@ -5014,9 +5030,9 @@ def _task_session_link(conn, actor, task_id, value, title):
     url = value if re.match(r"^https?://\S+$", value) else "session:" + value
     have = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND url=?", (task_id, url))
     if have:
-        return have
+        return _with_thread(have)
     resume = RESUME_COMMAND.match(value)
-    detail = {"primary": False, **({"harness": resume.group(1), "thread_id": resume.group(2)} if resume else {})}
+    detail = {"primary": False, **({"harness": resume.group(1)} if resume else {})}
     title = str(title or "").strip() or (urlsplit(value).netloc if url == value else
                                          f"{resume.group(1)} {resume.group(2)[:8]}" if resume else value[:60])
     link = {"id": new_id(), "task_id": task_id, "url": url, "title": title[:200], "added_by": actor,
@@ -5026,7 +5042,7 @@ def _task_session_link(conn, actor, task_id, value, title):
     _task_event(conn, task_id, actor, "link", None, url, title)
     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))
     event(conn, actor, "task.link", task_id, {"url": url, "kind": "session"})
-    return _one(conn, "SELECT * FROM task_links WHERE id=?", (link["id"],))
+    return _with_thread(_one(conn, "SELECT * FROM task_links WHERE id=?", (link["id"],)))
 
 
 def _demote_sessions(conn, task_id, owner=None):
@@ -5118,7 +5134,7 @@ def task_session_started(conn, bot, lane, message_id, thread_id, runtime):
     if not thread_id or not row or row["owner_id"] != "bot:" + bot:
         return
     url = f"session:{bot}/{thread_id}"
-    detail = json.dumps({"primary": True, "harness": runtime, "thread_id": thread_id, "bot": bot})
+    detail = json.dumps({"primary": True, "harness": runtime, "bot": bot})
     links = _rows(conn.execute("SELECT * FROM task_links WHERE task_id=? AND kind='session'", (task_id,)))
     # The row this thread already has, else the bot's primary from an earlier thread (a reset, a
     # compaction), which this one replaces in place.
@@ -5555,7 +5571,8 @@ def _private_followups(conn, task_id):
 
 
 def task_links(conn, task_id):
-    return _rows(conn.execute("SELECT * FROM task_links WHERE task_id=? ORDER BY created_at", (task_id,)))
+    return [_with_thread(link) for link in _rows(conn.execute(
+        "SELECT * FROM task_links WHERE task_id=? ORDER BY created_at", (task_id,)))]
 
 
 

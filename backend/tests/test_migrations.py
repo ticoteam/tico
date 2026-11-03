@@ -413,3 +413,43 @@ def test_a_standalone_kpi_keeps_its_target_and_the_migration_runs(tmp_path):
         links = c.execute("SELECT count(*) FROM goal_kpis WHERE kpi_id IN ('k-loose','k-orphan')").fetchone()[0]
     assert "goal_id" not in columns and "target" in columns
     assert targets == {"k-loose": 3, "k-orphan": 5} and links == 0
+
+
+def _migration(name):
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parents[1] / "migrations" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_session_link_keeps_its_thread_once_in_its_url():
+    """Migration 0047 strips the thread_id copy from session rows whose url gives that thread back, and leaves every
+    other row alone: a url that only contains the id, or names another thread, keeps its copy."""
+    up = _migration("0047_task_session_thread_once").up
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE task_links(id TEXT PRIMARY KEY, kind TEXT, url TEXT, detail TEXT)")
+    rows = {
+        "bot": ("session", "session:ops/t-1", '{"primary": true, "harness": "codex", "bot": "ops", "thread_id": "t-1"}'),
+        "resume": ("session", "session:cd /tmp/ops && codex resume abc123",
+                   '{"primary": false, "harness": "codex", "thread_id": "abc123"}'),
+        "reference": ("session", "session:orca ref", '{"primary": false, "thread_id": "elsewhere"}'),
+        "contains": ("session", "session:orca ref t-9", '{"primary": false, "harness": "orca", "thread_id": "t-9"}'),
+        "moved": ("session", "session:ops/t-new", '{"primary": true, "bot": "ops", "thread_id": "t-old"}'),
+        "pr": ("pr", "https://github.com/acme/app/pull/1", '{"thread_id": "t-1"}'),
+        "broken": ("session", "session:ops/t-2", "not json"),
+        "list": ("session", "session:ops/t-3", "[1]"),
+    }
+    conn.executemany("INSERT INTO task_links VALUES(?,?,?,?)", [(key, *row) for key, row in rows.items()])
+    up(conn)
+    stored = dict(conn.execute("SELECT id, detail FROM task_links").fetchall())
+    assert {key: json.loads(stored[key]) for key in ("bot", "resume")} == {
+        "bot": {"primary": True, "harness": "codex", "bot": "ops"}, "resume": {"primary": False, "harness": "codex"}}
+    assert {key: stored[key] for key in rows if key not in ("bot", "resume")} == {
+        key: row[2] for key, row in rows.items() if key not in ("bot", "resume")}
+    # What the API shows for the stripped rows is what it showed before.
+    for key in ("bot", "resume"):
+        shown = H._with_thread({"kind": "session", "url": rows[key][1], "detail": stored[key]})
+        assert json.loads(shown["detail"]) == json.loads(rows[key][2])
+    up(conn)
+    assert dict(conn.execute("SELECT id, detail FROM task_links").fetchall()) == stored
+    up(sqlite3.connect(":memory:"))                 # a database with no task_links has nothing to strip
