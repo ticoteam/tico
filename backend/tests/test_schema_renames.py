@@ -126,7 +126,7 @@ def test_indexes_triggers_and_views_survive_and_name_no_old_column(upgraded):
     _store, conn, before = upgraded
     for kind in ("index", "trigger", "view"):
         now = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type=?", (kind,))}
-        # The tables 0035_growth_rethink retires take their indexes with them, and 0041 drops DROPPED_INDEXES.
+        # The tables 0035_growth_rethink retires take their indexes with them, and 0042 drops DROPPED_INDEXES.
         kept = {name for name in before[kind + "es" if kind == "index" else kind + "s"]
                 if not any(table in name for table in RETIRED) and not name.startswith("growth_idea")
                 and name not in DROPPED_INDEXES}
