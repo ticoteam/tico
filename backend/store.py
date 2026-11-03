@@ -1970,6 +1970,8 @@ class Store:
                                    ("approvals_open", "approvals(task_id) WHERE decision IS NULL"),
                                    ("approvals_open_requester", "approvals(requested_by_id) WHERE decision IS NULL"),
                                    ("approvals_open_created", "approvals(created_at) WHERE decision IS NULL"),
+                                   # A requester's consumed approvals, one lookup per stopped run (execution.retry_facts).
+                                   ("approvals_requested_consumed", "approvals(requested_by_id, consumed_at)"),
                                    # Live jobs (/api/status), an attempt's jobs (lease expiry, finish) and uncertain
                                    # jobs (auto_reconcile). Partial, so the claim reads keep jobs_queue and jobs_queued.
                                    ("jobs_live_created", "jobs(created_at) WHERE state IN ('queued','leased','running','input')"),

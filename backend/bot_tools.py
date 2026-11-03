@@ -206,7 +206,7 @@ def _app_token(entry):
 
 def github_app_covers(c, bot):
     """Whether each run gets GH_TOKEN/GITHUB_TOKEN minted from the GitHub App: the App is connected and the bot's
-    repository is in its organization (the same test as POST /api/v2/github/token; runner/git_credentials.py)."""
+    repository is in its organization (the same test as POST /api/v2/github/token; runner_support/git_credentials.py)."""
     if not H._has_table(c, "github_app"):
         return False
     app = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
@@ -233,8 +233,9 @@ def granted(c, bot, raw):
     if not missing:
         return raw
     from .credentials import granted
+    from .read_cache import rows
     held = granted(c, "bot:" + bot)
-    have = {row["env"] for row in c.execute("SELECT id,env FROM credentials WHERE ciphertext IS NOT NULL AND env!=''")
+    have = {row["env"] for row in rows(c, "SELECT id,env FROM credentials WHERE ciphertext IS NOT NULL AND env!=''")
             if row["env"] in missing and row["id"] in held}
     return [dict(e, credential="present", granted=True) if e.get("credential") == "missing" and e.get("env") in have else e
             for e in raw]
@@ -264,9 +265,11 @@ REQUESTS_SQL = "SELECT * FROM bot_tool_requests WHERE bot=? AND state='pending' 
 def prime_state(c, bots):
     """Each bot's configuration, computer and pending tool requests, read together for every bot's listing (per 500
     bots, not three reads per bot). Outside a snapshot nothing is kept."""
+    from .credentials import prime_granted
     from .read_cache import cache, prime, prime_rows
     if cache(c) is None:
         return
+    prime_granted(c, ["bot:" + bot for bot in set(bots)])
     for part in H.chunks(sorted(set(bots))):
         marks = ",".join("?" * len(part))
         configs = {r["bot"]: r for r in c.execute(

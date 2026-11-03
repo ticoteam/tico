@@ -27,10 +27,12 @@ class FakeModel:
     def __init__(self, clear=0.95, kind="decision", meets=None, urgency=1.0, recommends=0.1, covered=None):
         self.clear, self.kind, self.meets, self.urgency = clear, kind, meets, urgency
         self.recommends, self.covered = recommends, covered
-        self.calls, self.fail, self.hold = [], None, None
+        self.calls, self.fail, self.hold, self.before = [], None, None, None
 
     def __call__(self, state, questions, label=None):
         self.calls.append({"state": state, "questions": questions, "label": label})
+        if self.before:                  # a test changes the world between the judgment and the write
+            self.before()
         if self.hold:
             self.hold.wait(5)
         if self.fail:
@@ -582,6 +584,109 @@ def test_in_rehearsal_a_repeat_still_reaches_the_person(gate):
     api.post(f"/api/v2/tasks/{first['id']}/comments", json={"text": "Nov 10."}, headers=headers("ben-test"))
     with api.app.state.store.read() as c:
         assert not [m for m in H.task_comments(c, second["task"]["id"]) if "Nov 10." in (m["body"] or "")]
+
+
+# ---- source access: a repeat joins only an item its bot may read in full (synthetic fixtures only) -----------------
+
+RESTRICTED = {"see": {"everyone": True}, "read": {"people": ["ana"], "teams": [], "bots": []},
+              "write": {"everyone": True}}
+
+
+def add_task(api, actor, title, owner, private):
+    with api.app.state.store.transaction() as c:
+        return H.task_create(c, actor, title, "", owner, lint=False, private=private)
+
+
+def restrict(api, slug):
+    """The bot's activity is read by Ana alone: its see stays open, so Ops sees the task and cannot read it."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET access=? WHERE bot=?", (json.dumps(RESTRICTED), slug))
+
+
+def test_a_repeat_from_an_unrelated_bot_never_sees_another_bots_private_item(gate):
+    api, model, token = gate
+    first = add_task(api, "bot:cmo", "Acme pricing secret", "human:ben", private=True)["id"]
+    model.covered = "Acme pricing"
+    second = file(api, token, "Acme pricing again?", "Is the Acme price still $40?")["task"]
+    assert all("covered" not in call["questions"] for call in model.calls), "no covered option was offered"
+    assert all("Acme pricing secret" not in json.dumps(call) for call in model.calls)
+    assert "Acme pricing secret" not in json.dumps(second)
+    assert second["owner_id"] == "human:ben", "judged as new, under budget: it reaches the person"
+    api.post(f"/api/v2/tasks/{first}/comments", json={"text": "Use $40."}, headers=headers("ben-test"))
+    with api.app.state.store.read() as c:
+        told = c.execute("SELECT 1 FROM messages WHERE recipient_id='bot:ops' AND body LIKE '%Use $40.%'").fetchall()
+        assert not told
+        assert not [m for m in H.task_comments(c, second["id"]) if "Use $40." in (m["body"] or "")]
+
+
+def test_a_company_task_whose_bot_hides_its_activity_from_the_asker_is_not_offered(gate):
+    api, model, token = gate
+    add_task(api, "bot:cmo", "Vendor escrow terms", "human:ben", private=False)
+    restrict(api, "cmo")
+    model.covered = "Vendor escrow terms"
+    second = file(api, token, "Escrow terms for the vendor?", "Which escrow term do we take?")["task"]
+    assert all("covered" not in call["questions"] for call in model.calls)
+    assert "Vendor escrow terms" not in json.dumps(model.calls)
+    assert second["owner_id"] == "human:ben" and [i["merged_into"] for i in items(api)] == [None]
+
+
+@pytest.mark.parametrize("how", ["private", "access", "plate"])
+def test_an_item_lost_between_judgment_and_write_names_no_source(gate, how):
+    api, model, token = gate
+    first = add_task(api, "bot:cmo", "Vendor escrow terms", "human:ben", private=False)["id"]
+
+    def lose_access():
+        if how == "private":
+            with api.app.state.store.transaction() as c:
+                c.execute("UPDATE tasks SET private=1 WHERE id=?", (first,))
+        elif how == "plate":            # still open and readable, but no longer the person's: handed to Ana
+            with api.app.state.store.transaction() as c:
+                c.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (first,))
+        else:
+            restrict(api, "cmo")
+    model.before, model.covered = lose_access, "Vendor escrow terms"
+    second = file(api, token, "Escrow terms for the vendor?", "Which escrow term do we take?")
+    assert model.calls, "the repeat was judged"
+    with api.app.state.store.read() as c:
+        assert H.task(c, first)["status"] in H.ACTIVE_STATUSES, "the source stays open: only the lost right fails"
+    assert "Vendor escrow terms" not in json.dumps(second), "no title in the write's reply"
+    assert second["task"]["owner_id"] == "human:ben", "the fallback is the ordinary fail-open path"
+    [row] = [i for i in items(api) if i["ref"] == second["task"]["id"]]
+    # covered_gone can only follow a merge the model picked: the offered source was the one it chose
+    assert (row["outcome"], row["reason"], row["merged_into"]) == (A.FAILED_OPEN, "covered_gone", None)
+
+
+@pytest.mark.parametrize("how", ["private", "access"])
+def test_a_reply_is_not_forwarded_once_the_asker_lost_the_item(gate, how):
+    api, model, token = gate
+    first = add_task(api, "bot:cmo", "Vendor escrow terms", "human:ben", private=False)["id"]
+    model.covered = "Vendor escrow terms"
+    second = file(api, token, "Escrow terms for the vendor?", "Which escrow term do we take?")["task"]
+    assert second["owner_id"] == "bot:ops", "merged: the asker keeps its own task"
+    if how == "private":
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE tasks SET private=1 WHERE id=?", (first,))
+    else:
+        restrict(api, "cmo")
+    api.post(f"/api/v2/tasks/{first}/comments", json={"text": "Take the 30-day term."}, headers=headers("ben-test"))
+    with api.app.state.store.read() as c:
+        told = c.execute("SELECT 1 FROM messages WHERE recipient_id='bot:ops' AND body LIKE '%30-day term%'").fetchall()
+        assert not told
+        assert not [m for m in H.task_comments(c, second["id"]) if "30-day" in (m["body"] or "")]
+        assert c.execute("SELECT passed_at FROM ask_ingest_items WHERE merged_into=?", (first,)).fetchone()[0] is None
+
+
+def test_a_readable_repeat_merges_and_its_answer_is_delivered_once(gate):
+    api, model, token = gate
+    first = add_task(api, "bot:cmo", "Vendor escrow terms", "human:ben", private=False)["id"]
+    model.covered = "Vendor escrow terms"
+    second = file(api, token, "Escrow terms for the vendor?", "Which escrow term do we take?")
+    assert second["ingest"]["outcome"] == A.MERGED
+    api.post(f"/api/v2/tasks/{first}/comments", json={"text": "Take the 30-day term."}, headers=headers("ben-test"))
+    api.post(f"/api/v2/tasks/{first}/comments", json={"text": "Still the 30-day term."}, headers=headers("ben-test"))
+    with api.app.state.store.read() as c:
+        told = [m for m in H.task_comments(c, second["task"]["id"]) if "30-day term" in (m["body"] or "")]
+    assert len(told) == 1 and "Vendor escrow terms" in told[0]["body"]
 
 
 # ---- Hands needed and the way back to the team default ---------------------------------------------------------

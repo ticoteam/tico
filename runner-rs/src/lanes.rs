@@ -1,5 +1,5 @@
 //! Task lanes (task_lanes_v2): a task-keyed turn runs in its own lane beside the bot's other work, one turn at
-//! a time per (bot, lane) on this computer (sessions::Lanes; runner/worktrees.py lane_lock). The claim names
+//! a time per (bot, lane) on this computer (sessions::Lanes; runner_support/worktrees.py lane_lock). The claim names
 //! the lanes busy here (`busy_lanes`); the heartbeat advertises the capabilities, each dropped for ten minutes
 //! by a server that refuses it.
 

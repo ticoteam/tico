@@ -83,23 +83,39 @@ CARRIED_SQL = "SELECT created_at, detail FROM events WHERE action=? AND target=?
 ATTEMPT_SQL = "SELECT id, bot_id, state, started_at, created_at, finished_at FROM attempts WHERE id=?"
 
 
+def _eligibility(claimable):
+    if not claimable:
+        return ""
+    from .execution import scoped_sql, unfenced_sql
+    from .statuses import PARKED_SQL
+    # Queued work behind the runner's task fences cannot move the blocker. Already active jobs still count.
+    return ("AND (j.state!='queued' OR m.sender_id LIKE 'human:%' OR NOT EXISTS "
+            "(SELECT 1 FROM bot_config pc WHERE pc.bot=j.bot_id "
+            f"AND pc.onboarding_state IN {PARKED_SQL} "
+            "AND m.sender_id<>'bot:'||coalesce(pc.reports_to,''))) "
+            f"AND (j.state!='queued' OR ({unfenced_sql()} AND {scoped_sql()})) ")
+
+
 def _own_job_sql(claimable=False):
-    eligibility = ""
-    if claimable:
-        from .execution import scoped_sql, unfenced_sql
-        from .statuses import PARKED_SQL
-        # Queued work behind the runner's task fences cannot move the blocker. Already active jobs still count.
-        eligibility = ("AND (j.state!='queued' OR m.sender_id LIKE 'human:%' OR NOT EXISTS "
-                       "(SELECT 1 FROM bot_config pc WHERE pc.bot=j.bot_id "
-                       f"AND pc.onboarding_state IN {PARKED_SQL} "
-                       "AND m.sender_id<>'bot:'||coalesce(pc.reports_to,''))) "
-                       f"AND (j.state!='queued' OR ({unfenced_sql()} AND {scoped_sql()})) ")
     return ("SELECT j.id, j.attempt_id, j.created_at, j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations cv ON cv.id=m.conversation_id "
             f"WHERE j.bot_id=? AND j.state IN ('queued','leased','running') AND {_H().unheld_sql()} "
             f"AND {_H().MESSAGE_TASK_SQL}=? "
-            + eligibility +
+            + _eligibility(claimable) +
             "ORDER BY j.created_at LIMIT 1")
+
+
+def _own_jobs_sql(claimable, bots, tasks):
+    """_own_job_sql for many owners and tasks at once: every candidate job of those bots and tasks, oldest first, with
+    the bot and task each one belongs to (prime_own_jobs keeps the first per pair)."""
+    H = _H()
+    return ("SELECT j.id, j.attempt_id, j.created_at, j.state, j.bot_id AS bot_key, "
+            f"{H.MESSAGE_TASK_SQL} AS task_key FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "JOIN conversations cv ON cv.id=m.conversation_id "
+            f"WHERE j.bot_id IN ({','.join('?' * bots)}) AND j.state IN ('queued','leased','running') "
+            f"AND {H.unheld_sql()} AND {H.MESSAGE_TASK_SQL} IN ({','.join('?' * tasks)}) "
+            + _eligibility(claimable) +
+            "ORDER BY j.created_at")
 
 
 def _last_sql(outcomes):
@@ -115,6 +131,32 @@ def own_job(conn, row, *, claimable=False):
         return one(conn, _own_job_sql(claimable), (H.actor_id(row["owner_id"]), row["id"]))
     except Exception:  # noqa: BLE001 - a local hub has no jobs table
         return None
+
+
+def prime_own_jobs(conn, rows, *, claimable=False):
+    """own_job for many tasks in one read per 250 pairs (read_cache.prime): each (owner, task) pair's first job, as its
+    own_job read returns it, so a loop of own_job calls reads none of them again."""
+    from .read_cache import cache, prime
+    H = _H()
+    if cache(conn) is None:
+        return
+    wanted = sorted({(H.actor_id(row["owner_id"]), row["id"]) for row in rows if row.get("owner_id") and row.get("id")})
+    if not wanted:
+        return
+    pairs, first = set(wanted), {}
+    try:
+        for start in range(0, len(wanted), 250):
+            part = wanted[start:start + 250]
+            bots = sorted({bot for bot, _ in part})
+            tasks = sorted({tid for _, tid in part})
+            for row in conn.execute(_own_jobs_sql(claimable, len(bots), len(tasks)), (*bots, *tasks)):
+                key = (row["bot_key"], row["task_key"])
+                if key in pairs and key not in first:
+                    first[key] = {"id": row["id"], "attempt_id": row["attempt_id"],
+                                  "created_at": row["created_at"], "state": row["state"]}
+    except Exception:  # noqa: BLE001 - a local hub has no jobs table; own_job reads for itself
+        return
+    prime(conn, _own_job_sql(claimable), {key: first.get(key) for key in wanted})
 
 
 def carried_at(conn, aid, task_id):
