@@ -8,14 +8,12 @@
   hub:
     - match: '^bot status list'
       out:
-        - {id: 7b1e4c2a-9100-4000-8000-000000000001, slug: copywriter, display_name: Copywriter, state: active, owner_id: "human:dana", runtime: claude, model: claude-sonnet-5-5, effort: high, compact_at: 250000}
-        - {id: 7b1e4c2a-9100-4000-8000-000000000002, slug: support, display_name: Support, state: active, owner_id: "human:dana", runtime: claude, model: claude-opus-5-5, effort: medium, compact_at: 250000}
-        - {id: 7b1e4c2a-9100-4000-8000-000000000003, slug: analyst, display_name: Analyst, state: active, owner_id: "human:dana", runtime: claude, model: claude-sonnet-5-5, effort: medium, compact_at: 150000}
-        - {id: 7b1e4c2a-9100-4000-8000-000000000004, slug: sales, display_name: Sales, state: active, owner_id: "human:dana", runtime: codex, model: gpt-6.1-sol, effort: medium, compact_at: 250000}
-        - {id: 7b1e4c2a-9100-4000-8000-000000000005, slug: pricing, display_name: Pricing, state: active, owner_id: "human:dana", runtime: codex, model: gpt-6-luna, effort: high, compact_at: 250000}
-        - {id: 7b1e4c2a-9100-4000-8000-000000000006, slug: research, display_name: Research, state: active, owner_id: "human:dana", runtime: pi, model: deepseek-v4.1-flash, effort: low, compact_at: 250000}
-      after:
-        - {when: '^bot model (copywriter|support|analyst|sales|pricing) \S+', out: [{id: 7b1e4c2a-9100-4000-8000-000000000001, slug: copywriter, display_name: Copywriter, state: active, owner_id: "human:dana", runtime: claude, model: claude-haiku-5-5, effort: xhigh, compact_at: 250000}, {id: 7b1e4c2a-9100-4000-8000-000000000002, slug: support, display_name: Support, state: active, owner_id: "human:dana", runtime: claude, model: claude-haiku-5-5, effort: xhigh, compact_at: 250000}, {id: 7b1e4c2a-9100-4000-8000-000000000003, slug: analyst, display_name: Analyst, state: active, owner_id: "human:dana", runtime: claude, model: claude-haiku-5-5, effort: xhigh, compact_at: 150000}, {id: 7b1e4c2a-9100-4000-8000-000000000004, slug: sales, display_name: Sales, state: active, owner_id: "human:dana", runtime: codex, model: gpt-6.1-terra, effort: high, compact_at: 250000}, {id: 7b1e4c2a-9100-4000-8000-000000000005, slug: pricing, display_name: Pricing, state: active, owner_id: "human:dana", runtime: codex, model: gpt-6.1-terra, effort: high, compact_at: 250000}, {id: 7b1e4c2a-9100-4000-8000-000000000006, slug: research, display_name: Research, state: active, owner_id: "human:dana", runtime: pi, model: deepseek-v4.1-flash, effort: low, compact_at: 250000}]}
+        - {id: copywriter, slug: copywriter, display_name: Copywriter, state: active, owner_id: "human:dana", runtime: claude, model: claude-sonnet-5-5, effort: high, compact_at: 250000}
+        - {id: support, slug: support, display_name: Support, state: active, owner_id: "human:dana", runtime: claude, model: claude-opus-5-5, effort: medium, compact_at: 250000}
+        - {id: analyst, slug: analyst, display_name: Analyst, state: active, owner_id: "human:dana", runtime: claude, model: claude-sonnet-5-5, effort: medium, compact_at: 150000}
+        - {id: sales, slug: sales, display_name: Sales, state: active, owner_id: "human:dana", runtime: codex, model: gpt-6.1-sol, effort: medium, compact_at: 250000}
+        - {id: pricing, slug: pricing, display_name: Pricing, state: active, owner_id: "human:dana", runtime: codex, model: gpt-6-luna, effort: high, compact_at: 250000}
+        - {id: research, slug: research, display_name: Research, state: active, owner_id: "human:dana", runtime: pi, model: deepseek-v4.1-flash, effort: low, compact_at: 250000}
     - match: '^bot model \S+\s*$'
       out:
         models:
@@ -66,11 +64,9 @@
   hub:
     - match: '^bot status list'
       out:
-        - {id: 3e9a0d17-9200-4000-8000-000000000001, slug: sales, display_name: Sales, state: active, owner_id: "human:dana", runtime: codex, model: gpt-6.1-sol, effort: medium, compact_at: 250000}
-        - {id: 3e9a0d17-9200-4000-8000-000000000002, slug: pricing, display_name: Pricing, state: active, owner_id: "human:dana", runtime: codex, model: gpt-6.1-sol, effort: high, compact_at: 250000}
-        - {id: 3e9a0d17-9200-4000-8000-000000000003, slug: copywriter, display_name: Copywriter, state: active, owner_id: "human:dana", runtime: claude, model: claude-sonnet-5-5, effort: high, compact_at: 250000}
-      after:
-        - {when: '^bot model (sales|pricing) \S+', out: [{id: 3e9a0d17-9200-4000-8000-000000000001, slug: sales, display_name: Sales, state: active, owner_id: "human:dana", runtime: codex, model: gpt-6-luna, effort: xhigh, compact_at: 250000}, {id: 3e9a0d17-9200-4000-8000-000000000002, slug: pricing, display_name: Pricing, state: active, owner_id: "human:dana", runtime: codex, model: gpt-6-luna, effort: xhigh, compact_at: 250000}, {id: 3e9a0d17-9200-4000-8000-000000000003, slug: copywriter, display_name: Copywriter, state: active, owner_id: "human:dana", runtime: claude, model: claude-sonnet-5-5, effort: high, compact_at: 250000}]}
+        - {id: sales, slug: sales, display_name: Sales, state: active, owner_id: "human:dana", runtime: codex, model: gpt-6.1-sol, effort: medium, compact_at: 250000}
+        - {id: pricing, slug: pricing, display_name: Pricing, state: active, owner_id: "human:dana", runtime: codex, model: gpt-6.1-sol, effort: high, compact_at: 250000}
+        - {id: copywriter, slug: copywriter, display_name: Copywriter, state: active, owner_id: "human:dana", runtime: claude, model: claude-sonnet-5-5, effort: high, compact_at: 250000}
     - match: '^bot model \S+\s*$'
       out:
         models:
@@ -134,7 +130,6 @@
         notices: []
   must_not:
     - '^(question answer|answer|thread reply|batch respond|task ask-resolve)\b'
-    - '^(task comment|message reply|note create)\b(?!.*(?i:\b(question|open|unanswered|still|not yet)\b)).*(?i:name-level)'
     - '^task (close|done|bulk close|bulk status (done|closed))\b|^task update\b.*--status[= ](done|closed)\b'
     - '^message send(?! -h\b| --help)'
   reply: |

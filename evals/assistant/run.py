@@ -173,9 +173,10 @@ def write_answer(words, state, mutate, argv, ids):
             record(state, "bot", tid, {"status": status})
         return {"ok": True, "bot": {"id": tid, "status": status}}
     if noun == "bot" and verb == "model" and tid and len(words) > 3 and not words[3].startswith("-"):
+        fields = {"model": words[3], **({"effort": e[-1]} if (e := argv_flag(argv or [], "--effort")) else {})}
         if mutate:
-            record(state, "bot", tid, {"model": words[3]})
-        return {"ok": True, "bot": {"id": tid, "model": words[3]}}
+            record(state, "bot", tid, fields)
+        return {"ok": True, "bot": {"id": tid, **fields}}
     if noun == "approval" and verb in ("decline", "approve") and tid:
         status = "declined" if verb == "decline" else "approved"
         if mutate:
