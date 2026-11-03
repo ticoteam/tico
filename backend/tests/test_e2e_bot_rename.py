@@ -14,7 +14,7 @@ import pytest
 from backend.store import encode
 from backend.tests.test_api import api, assign, get, headers, post  # noqa: F401
 from backend.tests.live import live  # noqa: F401
-from runner.tests.test_conformance import MODELS, Computer, reply_to, rust_binary, until  # noqa: F401
+from runner_support.tests.test_conformance import MODELS, Computer, reply_to, rust_binary, until  # noqa: F401
 
 pytestmark = pytest.mark.slow
 

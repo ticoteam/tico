@@ -143,7 +143,7 @@ def _add_via_assistant(api, turn, args):
     return hubtools.BY_NAME["hub_rules_add"]["fn"](turn, {**args, "on_behalf_of": "turn"})
 
 
-def test_the_assistant_adds_a_rule_its_owner_may_make_and_refuses_an_uncited_one(api):
+def test_the_assistant_adds_a_rule_its_owner_may_make_and_refuses_a_citation_that_is_not_theirs(api):
     org(api)
     _, attempt = assistant_turn(api, "ana-test", "Add a rule: everyone logs time.")
     turn = _Turn(api, attempt["token"])
@@ -154,9 +154,10 @@ def test_the_assistant_adds_a_rule_its_owner_may_make_and_refuses_an_uncited_one
     group = _add_via_assistant(api, turn, {"kind": "internal", "text": "Support logs refunds.",
                                            "who": {"groups": ["support"]}})
     assert group["status"] == "active"
+    # A citation that is not the person's own message in their Assistant chat lends nothing.
     with pytest.raises(APIError):
-        hubtools.BY_NAME["hub_rules_add"]["fn"](turn, {"kind": "internal", "text": "Uncited add.",
-                                                       "who": {"groups": ["support"]}})
+        hubtools.BY_NAME["hub_rules_add"]["fn"](turn, {"kind": "internal", "text": "Not theirs.",
+                                                       "who": {"groups": ["support"]}, "on_behalf_of": "nope"})
 
 
 def test_the_assistant_refuses_an_everyone_rule_for_a_plain_member_and_suggests_a_group_rule(api):

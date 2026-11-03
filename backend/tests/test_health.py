@@ -9,6 +9,8 @@ from backend.auth import Identity
 from backend.store import H
 from backend.tests.test_getting_started import SIGNED_IN, add_bot, enrolled, heartbeat  # noqa: F401
 from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
+from backend.enqueue import enqueue_stored
+from backend.tests.usage_rows import segment
 
 
 @pytest.fixture(autouse=True)
@@ -110,10 +112,11 @@ def silent_computer(api, seconds_ago):
         c.execute("UPDATE runners SET owner_id='riley' WHERE id=?", (runner,))
         c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
                   (runner, H.now()))
-        # A chat message in a conversation, as the product writes them: the trigger queues its job, and Pipeline counts it.
+        # A chat message in a conversation, as the product writes them: it queues its job, and Pipeline counts it.
         c.execute("INSERT INTO conversations(id,kind,participants,created_at) VALUES('cv1','chat','[]',?)", (H.now(),))
         c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at) "
-                  "VALUES('m1','cv1','human:ana','bot:helper','chat','hi',?)", (H.now(),))       # queues its job
+                  "VALUES('m1','cv1','human:ana','bot:helper','chat','hi',?)", (H.now(),))
+        enqueue_stored(c, 'm1')
     heartbeat(api, runner, seconds_ago=seconds_ago, runtimes=SIGNED_IN)
     return runner
 
@@ -492,9 +495,10 @@ def test_a_bot_over_the_daily_token_threshold_is_flagged(environment):
     add_bot(api, "loop")
     api.app.state.store.settings.token_alert_input = 1000
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO turns(id,bot,started_at,input_tokens,cached_tokens) VALUES('t1','loop',?,1100,90000)", (H.now(),))
-        c.execute("INSERT INTO turns(id,bot,started_at,input_tokens,cached_tokens) VALUES('t0','loop',?,9000,0)",
-                  (H.shift(H.now(), hours=-30),))
+        c.execute("INSERT INTO turns(id,bot,started_at) VALUES('t1','loop',?)", (H.now(),))
+        c.execute("INSERT INTO turns(id,bot,started_at) VALUES('t0','loop',?)", (H.shift(H.now(), hours=-30),))
+        segment(c, "t1", input_tokens=1100, cached_tokens=90000)
+        segment(c, "t0", input_tokens=9000)
     checks = health_of(api)[1]
     assert checks["tokens"]["status"] == "warn" and "1,100 uncached input tokens in 24 h" in checks["tokens"]["summary"]
 

@@ -67,7 +67,7 @@ def repository_present(c, bot):
 
 # Where a bot's conversation compacts, in tokens (runner-rs/src/hosts/mod.rs DEFAULT_COMPACT_AT): the choices offered,
 # and what a bot that never chose one gets.
-COMPACT_AT = (150_000, 250_000, 400_000, 600_000, 1_000_000)
+COMPACT_AT = (100_000, 150_000, 250_000, 400_000, 600_000, 1_000_000)
 DEFAULT_COMPACT_AT = 250_000
 
 
@@ -1268,13 +1268,20 @@ class SettingsAdmin:
         """Whether a change is one a manager bot made to its report, which anyone who manages the bot may undo."""
         return row["via"] == report_managers.VIA and row["field"] in REPORT_UNDO
 
-    def _undoer(self, c, who, change):
-        """The owner undoes any change. A person who manages the bot undoes what its manager bot changed on it, and nothing else."""
+    def may_undo(self, c, who, change):
+        """Whether `who` may undo this settings change. The owner undoes any change. A person who manages the bot undoes
+        what its manager bot changed on it, and what their own Assistant changed for them as themselves (the same right
+        that made it, held now)."""
         if who.role == "owner":
-            return
-        if not self._report_undo(change) or not self.auth.bot_manager(c, who, change["bot"]):
+            return True
+        if not self.auth.bot_manager(c, who, change["bot"]):
+            return False
+        return self._report_undo(change) or (change["via"] == "assistant" and change["actor"] == who.actor)
+
+    def _undoer(self, c, who, change):
+        if not self.may_undo(c, who, change):
             raise Problem("forbidden", "Only the owner may undo this settings change; a person who manages the bot may "
-                          "undo what its manager bot changed", 403)
+                          "undo what its manager bot changed, and what their own Assistant changed for them", 403)
 
     def undo(self, c, who, change_id, body):
         change = c.execute("SELECT * FROM settings_changes WHERE id=?", (change_id,)).fetchone()

@@ -1,6 +1,6 @@
 """Wake rules: one engine decides what a message to a bot does, and names the rule that decided it.
 
-A message to a bot starts a run (store.QUEUE_TRIGGER queues a job) unless it is quiet. `judge` is asked once for every
+A message to a bot starts a run (backend/enqueue.py queues a job) unless it is quiet. `judge` is asked once for every
 message H._write_message is about to write to a bot, and answers with an outcome and the id of the rule behind it:
 
 - `wake`: queue a run now.

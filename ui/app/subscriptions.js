@@ -22,8 +22,8 @@ function subsSettle(form) {
 const SUBS = {rows: [], kinds: [], connect: null, assignments: [], capable: null, listed: false, error: '', loaded: false, pending: null};
 // The kinds, in the server's order, when it sends none.
 const SUBS_KINDS = [
-  {kind: 'claude_token', label: 'Claude plan', runtime: 'claude', secret_label: 'Token from claude setup-token'},
-  {kind: 'codex_login', label: 'ChatGPT plan', runtime: 'codex', secret_label: "Codex's auth.json"},
+  {kind: 'claude_token', label: 'Claude plan', runtime: 'claude', secret_label: 'Token from claude setup-token', owned: true},
+  {kind: 'codex_login', label: 'ChatGPT plan', runtime: 'codex', secret_label: "Codex's auth.json", owned: true},
   {kind: 'anthropic_key', label: 'Anthropic API key', runtime: 'claude', secret_label: 'API key'},
   {kind: 'openai_key', label: 'OpenAI API key', runtime: 'codex', secret_label: 'API key'}];
 // Example values for the fields, and the one line of help each kind gets.
@@ -34,6 +34,8 @@ const SUBS_EXAMPLE = {
   openai_key: {name: 'OpenAI API', secret: 'sk-proj-…'}};
 const subsToolName = runtime => harnessRow(runtime)?.name || harnessWords(runtime);
 const subsKind = kind => SUBS.kinds.find(row => row.kind === kind) || SUBS_KINDS.find(row => row.kind === kind) || {kind, label: kind, runtime: ''};
+// A plan has an owner; an API key has none.
+const subsOwned = kind => { const row = subsKind(kind); return 'owned' in row ? !!row.owned : !!SUBS_KINDS.find(k => k.kind === kind)?.owned; };
 const subsRuntime = sub => sub?.runtime || subsKind(sub?.kind).runtime;
 // The AI tools a subscription can be given to, in the kinds' order (Claude Code, then Codex).
 const subsTools = () => [...new Set((SUBS.kinds.length ? SUBS.kinds : SUBS_KINDS).map(row => row.runtime).filter(Boolean))];
@@ -97,6 +99,7 @@ function subsRowHTML(sub) {
   return `<tr data-subs-row="${esc(sub.id)}">
     <td class="subs-name">${esc(sub.name)}</td>
     <td class="muted subs-kind">${esc(sub.label || subsKind(sub.kind).label)}</td>
+    <td class="subs-owner">${esc(sub.owner_name || '')}</td>
     <td class="subs-count" title="${esc(names || 'No computers')}"><span class="nav-icon" aria-hidden="true">computer</span><span class="tnum">${count}</span><span class="sr-only"> ${count === 1 ? 'computer' : 'computers'}</span></td>
     <td class="subs-use">${subsStatusHTML(sub) || subsUsageHTML(sub)}</td>
     <td class="subs-more-cell">${subsMayEdit() ? `<button type="button" class="ghost subs-more" data-subs-more="${esc(sub.id)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(sub.name)}">⋯</button>` : ''}</td></tr>`;
@@ -110,7 +113,7 @@ async function renderSettingsSubs() {
   let html;
   if (!SUBS.listed) html = `<p class="${SUBS.error ? 'err' : 'muted'}">${esc(SUBS.error || 'This server does not keep subscriptions yet.')}</p>`;
   else if (!SUBS.rows.length) html = `<div class="subs-empty"><span class="muted">No subscriptions yet.</span>${subsMayEdit() ? '<button type="button" class="ghost" data-subs-add>Add subscription</button>' : ''}</div>`;
-  else html = `<div class="scroll"><table class="settings-table subs-table"><thead><tr><th>Name</th><th>Kind</th><th><span class="sr-only">Computers</span></th><th>Usage</th><th><span class="sr-only">Actions</span></th></tr></thead>
+  else html = `<div class="scroll"><table class="settings-table subs-table"><thead><tr><th>Name</th><th>Kind</th><th>Owner</th><th><span class="sr-only">Computers</span></th><th>Usage</th><th><span class="sr-only">Actions</span></th></tr></thead>
     <tbody>${SUBS.rows.map(subsRowHTML).join('')}</tbody></table></div>`;
   const restore = computerFocusRestore(el);
   patchHTML(el, html);
@@ -123,7 +126,7 @@ async function renderSettingsSubs() {
     if (more) subsMenu(more, subsById(more.dataset.subsMore));
   };
 }
-// Rename, Reconnect, Remove: the shared menu pop-over (styles/task-list.css .tl-pop; a sheet on a phone).
+// Edit, Reconnect, Remove: the shared menu pop-over (styles/task-list.css .tl-pop; a sheet on a phone).
 function subsMenu(anchor, sub) {
   if (!sub) return;
   let pop = $('#subs-menu');
@@ -140,7 +143,7 @@ function subsMenu(anchor, sub) {
   }
   pop.anchor = anchor;
   pop.innerHTML = `<div class="tl-menu" role="menu" aria-label="${esc(sub.name)}">
-    <button type="button" class="tl-mi" role="menuitem" data-subs-act="rename">Rename</button>
+    <button type="button" class="tl-mi" role="menuitem" data-subs-act="edit">Edit</button>
     <button type="button" class="tl-mi" role="menuitem" data-subs-act="reconnect">Reconnect</button>
     <button type="button" class="tl-mi danger" role="menuitem" data-subs-act="remove">Remove</button></div>`;
   pop.onclick = event => {
@@ -230,19 +233,36 @@ function subsKindComboWire(form, onPick) {
   list.onmousedown = event => event.preventDefault();   // keeps focus in the box while a click picks
   list.onclick = event => pick(event.target.closest('[role=option]'));
 }
-// Add (kind, name, value), Rename (name) or Reconnect (a new value) in one small dialog. Giving a subscription to
-// computers is on the Computers tab.
+// A plan's owner: a person of the company whose sign-in is on (the server checks). Ids here are bare; the server's are
+// `human:<id>`. A saved one's owner who has since left stays listed so the field shows who it is.
+const subsPersonId = actor => String(actor || '').replace(/^human:/, '');
+function subsOwnerHTML(current, shown) {
+  const people = (SETTINGS_DATA.people?.length ? SETTINGS_DATA.people : (S.people || [])).filter(p => !p.hidden && p.sign_in !== false);
+  if (!people.length) return '';
+  const rows = current && !people.some(p => p.id === current) ? [{id: current, name: current}, ...people] : people;
+  return `<label class="subs-field" data-subs-owned${shown ? '' : ' hidden'}><span class="k">Owner</span><select name="owner" data-current="${esc(current)}">${current ? '' : '<option value="" selected></option>'}${rows.map(p =>
+    `<option value="${esc(p.id)}"${p.id === current ? ' selected' : ''}>${esc(p.name || p.email || p.id)}</option>`).join('')}</select></label>`;
+}
+// The owner to send: for a plan, only a change from the default (the person adding it, or the saved owner).
+const subsOwnerPicked = form => {
+  const o = form.elements.owner;
+  return o && !o.closest('[data-subs-owned]').hidden && o.value && o.value !== o.dataset.current ? {owner_id: 'human:' + o.value} : {};
+};
+// Add (kind, name, owner, value), Edit (name, owner) or Reconnect (a new value) in one small dialog. Giving a
+// subscription to computers is on the Computers tab.
 function subsDialog(mode, sub = null) {
   if (mode !== 'add' && !sub) return;
   const kind = sub?.kind || (SUBS.kinds[0] || SUBS_KINDS[0]).kind;
-  const title = mode === 'add' ? 'Add subscription' : mode === 'rename' ? `Rename ${sub.name}` : `Reconnect ${sub.name}`;
+  const title = mode === 'add' ? 'Add subscription' : mode === 'edit' ? `Edit ${sub.name}` : `Reconnect ${sub.name}`;
   const dialog = document.createElement('dialog');
   dialog.className = 'tmodal tmodal-shell subs-dialog'; dialog.setAttribute('aria-label', title);
   dialog.innerHTML = `<form data-subs-form="${mode}" novalidate><header><h2>${esc(title)}</h2><button class="ghost" type="button" data-close>Close</button></header>
     <div class="tmodal-body subs-form">
       ${mode === 'add' ? `<div class="subs-field"><span class="k"><label for="subs-kind">Kind</label></span>${subsKindComboHTML(kind)}</div>` : ''}
       ${mode !== 'reconnect' ? `<label class="subs-field"><span class="k">Name</span><input name="name" type="text" required maxlength="80" autocomplete="off" value="${esc(sub?.name || '')}" placeholder="${esc(SUBS_EXAMPLE[kind]?.name || '')}"></label>` : ''}
-      ${mode !== 'rename' ? `<div data-subs-secret-slot>${subsSecretHTML(kind)}</div>` : ''}
+      ${mode === 'add' || (mode === 'edit' && subsOwned(kind)) ? subsOwnerHTML(mode === 'add' ? S.me?.id || '' : subsPersonId(sub.owner_id), subsOwned(kind)) : ''}
+      ${mode !== 'edit' ? `<div data-subs-secret-slot>${subsSecretHTML(kind)}</div>` : ''}
+      ${mode === 'add' ? `<p class="muted subs-note" data-subs-owned${subsOwned(kind) ? '' : ' hidden'}>Only use your subscription on your own bots, not shared ones.</p>` : ''}
     </div>
     <div class="tmodal-foot onb-actions"><button class="ghost" type="button" data-close>Cancel</button><span class="spacer"></span><button class="primary" type="submit">Save</button></div></form>`;
   const form = dialog.querySelector('form');
@@ -255,6 +275,7 @@ function subsDialog(mode, sub = null) {
   if (mode === 'add') subsKindComboWire(form, next => {
     form.querySelector('[data-subs-secret-slot]').innerHTML = subsSecretHTML(next);
     form.elements.name.placeholder = SUBS_EXAMPLE[next]?.name || '';
+    form.querySelectorAll('[data-subs-owned]').forEach(el => { el.hidden = !subsOwned(next); });
     saveLook();
   });
   // A red line goes once the person types in that field again.
@@ -266,8 +287,8 @@ function subsDialog(mode, sub = null) {
     form.querySelectorAll('[data-field-err]').forEach(line => line.remove());
     const name = form.elements.name?.value.trim();
     if (form.elements.name && !name) { settingsFieldError(form.elements.name, 'Enter a name'); form.elements.name.focus(); return; }
-    const chosen = mode === 'add' ? form.querySelector('#subs-kind').dataset.kind : sub.kind;
-    const start = confirm => post('/v2/model-subscriptions/connect', mode === 'add' ? {kind: chosen, name} : confirm ? {subscription: sub.id, confirm} : {subscription: sub.id});
+    const chosen = mode === 'add' ? form.querySelector('#subs-kind').dataset.kind : sub.kind, owner = subsOwnerPicked(form);
+    const start = confirm => post('/v2/model-subscriptions/connect', mode === 'add' ? {kind: chosen, name, ...owner} : confirm ? {subscription: sub.id, confirm} : {subscription: sub.id});
     button.disabled = true;
     try {
       // A new value restarts the runs on each computer given it: with runs going, the page asks before the sign-in.
@@ -280,7 +301,8 @@ function subsDialog(mode, sub = null) {
         done: mode === 'add' ? `${name} added` : `${sub.name} reconnected`}});
     } catch (error) {
       button.disabled = false;
-      if (subsProblem(error).code === 'name') { settingsFieldError(form.elements.name, error.message); form.elements.name.focus(); } else toast(error.message, true);
+      const field = {name: form.elements.name, owner: form.elements.owner}[subsProblem(error).code];
+      if (field) { settingsFieldError(field, error.message); field.focus(); } else toast(error.message, true);
     }
   };
   form.onsubmit = async event => {
@@ -291,8 +313,8 @@ function subsDialog(mode, sub = null) {
     if (form.elements.secret && !secret) { settingsFieldError(form.elements.secret, 'Paste the token or key'); form.elements.secret.focus(); return; }
     const button = form.querySelector('button[type=submit]'); button.disabled = true;
     try {
-      if (mode === 'add') await post('/v2/model-subscriptions', {kind: form.querySelector('#subs-kind').dataset.kind, name, secret});
-      else if (mode === 'rename') await post(`/v2/model-subscriptions/${encodeURIComponent(sub.id)}`, {name});
+      if (mode === 'add') await post('/v2/model-subscriptions', {kind: form.querySelector('#subs-kind').dataset.kind, name, ...subsOwnerPicked(form), secret});
+      else if (mode === 'edit') await post(`/v2/model-subscriptions/${encodeURIComponent(sub.id)}`, {name, ...subsOwnerPicked(form)});
       else {
         // A new value restarts the runs on each computer given it: with runs going, the page asks first.
         const done = await subsConfirmed(confirm => post(`/v2/model-subscriptions/${encodeURIComponent(sub.id)}`, confirm ? {secret, confirm} : {secret}),
@@ -300,11 +322,11 @@ function subsDialog(mode, sub = null) {
         if (!done) { button.disabled = false; return; }
       }
       if (form.elements.secret) form.elements.secret.value = '';   // nothing on the page keeps the value once sent
-      toast(mode === 'add' ? `${name} added` : mode === 'rename' ? 'Renamed' : `${sub.name} reconnected`);
+      toast(mode === 'add' ? `${name} added` : mode === 'edit' ? 'Saved' : `${sub.name} reconnected`);
       dialog.close();
     } catch (error) {
       const code = subsProblem(error).code;
-      const field = code === 'name' ? form.elements.name : code === 'kind' ? form.querySelector('#subs-kind') : code === 'secret' ? form.elements.secret : null;
+      const field = code === 'name' ? form.elements.name : code === 'owner' ? form.elements.owner : code === 'kind' ? form.querySelector('#subs-kind') : code === 'secret' ? form.elements.secret : null;
       if (field) { settingsFieldError(field, error.message); field.focus(); } else toast(error.message, true);
       button.disabled = false;
     }

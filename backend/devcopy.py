@@ -39,9 +39,8 @@ from .hubdb import now, shift
 EMPTY = (
     # queued work
     "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "task_check_back_wakes", "calendar_actions",
-    "meeting_deliveries", "worktree_waits", "check_waits", "check_head_provenance", "idempotency",
+    "meeting_deliveries", "worktree_waits", "check_waits", "check_head_provenance", "idempotency",   # bindings too
     "idempotency_messages", "blob_media_retries", "seat_requests",   # a cloud agent request's key: a replay re-files
-    "github_product_repo_operations", "github_review_operations", "invite_sends",
     # milestone waits: each pending row is a wake the copy could send; the milestones seen only settle those
     "task_milestone_waits", "milestones",
     # reconnect cards: an open one is a wake the copy could send; the refusals only settle those
@@ -99,11 +98,6 @@ EMPTY = (
     # Calls: a live call's room and recorder are on the source's LiveKit, so the copy holds no live call. Its
     # transcripts and action items are thread messages, kept with the history.
     "calls", "call_participants", "call_holds",
-    # Federation: the install's keys, its peerings and what it sends or received from other installs; a copy never
-    # speaks for the source to another company (the shared threads' messages are kept with the history).
-    "federation_keys", "federation_peerings", "federation_outbox_items", "federation_receipts", "federation_states",
-    "federation_directory_entries", "federation_threads", "federation_members", "federation_items", "federation_messages",
-    "federation_deferrals",
     # Slack links: an active link posts to Slack both ways; its queue and message map only serve that link.
     "slack_thread_links", "slack_link_members", "slack_message_links", "slack_inbound_events",
     # The Company page: the readers (their addresses, sessions and invite hashes, the messages they wrote, what they read,
@@ -151,8 +145,11 @@ KEEP = frozenset((
     "system_runs", "tags", "task_assets",
     "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
     "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
-    "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
-    "usage_limits", "usage_pools", "task_caps", "reach_settings", "reach_lines",
+    "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
+    "usage_facts", "usage_meter_reads", "budget_nodes", "task_caps", "reach_settings", "reach_lines",
+    # A copy of a database from before migrations 0053/0054 still holds these: kept, so the dev server's first start
+    # moves them into usage_facts and budget_nodes (the copy is pruned before it is migrated).
+    "turn_usage_segments", "usage_limits", "usage_pools",
     "feedbacks",       # 👍/👎 on bot work (backend/feedback.py)
     # Shared records (backend/records): locations, items and projects
     "items", "locations", "projects", "record_aliases",
@@ -378,7 +375,7 @@ def prune(c, days, keep_automations=False):
                 delete(table, "message_id NOT IN (SELECT id FROM messages)")
     if "message_deliveries" in present:
         c.execute("UPDATE message_deliveries SET state='moot' WHERE state IN ('pending','capped','held') "
-                  "AND (recipient LIKE 'slack:%' OR recipient LIKE 'peer:%')")
+                  "AND recipient LIKE 'slack:%'")
     return {t: n for t, n in removed.items() if n}
 
 

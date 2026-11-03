@@ -29,6 +29,7 @@ from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifecycle, mcp_oauth, recruiting, harness_actions, model_login, oidc, personal_tokens, views
 from . import outcome_stats
+from . import assistant_changes, why_here
 from . import teammate_access
 from . import start_places
 from . import ask_ingest, delivery, strategy_bot, invites, owner_link
@@ -197,6 +198,12 @@ def create_app(settings=None):
                 onboarding.ensure_counsel(c)
         except Exception as exc:
             telemetry.capture("librarian", exc)
+        # The active Assistant gets its daily sweep if it has never had it (backend/onboarding.py): once, never back.
+        try:
+            with store.transaction() as c:
+                onboarding.ensure_builtin_routines(c)
+        except Exception as exc:
+            telemetry.capture("builtin_routines", exc)
         # Finance on every install (backend/finance/setup.py): idempotent, after the migrations, one short transaction.
         try:
             from .finance import actions as finance
@@ -390,8 +397,6 @@ def create_app(settings=None):
             books_sync.start(store, app.state.vault, settings, rehearsal=settings.rehearsal)
         # Webhooks waiting at Tico Gateway; the loop does nothing without a relay or a key.
         hook_relay_task = asyncio.create_task(app.state.hook_relay.loop(stop)) if timers else None
-        # Shared threads between installs (backend/federation_relay.py): peerings and envelopes through Tico HQ.
-        federation_task = asyncio.create_task(app.state.federation_relay.loop(stop)) if timers else None
         # Physical mail (backend/postal_mail.py): reads and routes the letters the relay and the mail-intake inbox kept.
         postal_mail_task = asyncio.create_task(app.state.postal_mail.loop(stop)) if timers else None
         # Sleep when idle (backend/sleep_idle.py): looks every five minutes (a cell: every minute), and only on a hosted server that asked for it.
@@ -436,8 +441,6 @@ def create_app(settings=None):
                 await inbound_task
             if hook_relay_task:
                 await hook_relay_task
-            if federation_task:
-                await federation_task
             if postal_mail_task:
                 await postal_mail_task
             if sleep_idle_task:
@@ -609,7 +612,7 @@ def create_app(settings=None):
     from .assistant import write_allowed as assistant_writes, own_room as assistant_room, create_proposal
     from .assistant import valid_operation as assistant_valid
     from .assistant import describe as describe_action
-    from .assistant import instructed_route as assistant_instructed, instruction as assistant_instruction
+    from .assistant import instruction as assistant_instruction
     from . import goal_read_back
     from . import assistant as assistant_mod
     from . import botops_act
@@ -626,7 +629,8 @@ def create_app(settings=None):
                 return all(a == actor or not str(a).startswith("human:") for a in people)
             if row["owner_id"] != actor:
                 return False
-            if any(str(a).startswith("bot:") for a in people):
+            # Alone: no bot and no other person on it (a human requester is another person, who would see the comment).
+            if any(str(a).startswith("bot:") or (str(a).startswith("human:") and a != actor) for a in people):
                 return False
             return not c.execute("SELECT 1 FROM task_delegations WHERE task_id=? AND expires_at>?",
                                  (task_id, H.now())).fetchone()
@@ -642,6 +646,13 @@ def create_app(settings=None):
     def assistant_decides(actor):
         with store.read() as c:
             return assistant_mod.decides(c, actor)
+
+    def assistant_confirm_hint():
+        """What a write the person's Assistant may not make on its own is refused with (`confirm_required`)."""
+        return ("The " + settings.assistant_name + " does not make this on its own: it is a credential, sign-in, owner, "
+                "support or deletion change, one of its own switches, or the owner turned off \u201cAssistant acts without "
+                "asking\u201d. Propose it with `hub assistant propose` (or POST /api/v2/assistant/actions) and the person "
+                "confirms a card in " + settings.app_name + ".")
 
     @app.middleware("http")
     async def request_guard(request, call_next):
@@ -812,10 +823,11 @@ def create_app(settings=None):
                             request.state.identity.actor,
                             lambda tid, shared: assistant_owns(tid, request.state.identity.actor, shared),
                             assistant_direct(), assistant_to_bot))):
-                    # A task change, comment or link, a decline or an answer the person asked for in their own Assistant
-                    # chat: the turn cites their message and it runs as them, recorded via assistant for that message
-                    # (backend/assistant.py).
-                    asked = request.headers.get(botops_act.HEADER)
+                    # A write the person's own Assistant run makes (backend/assistant.py): the run cites the message that
+                    # started it (its turn), unless the request names another (`X-Tico-On-Behalf-Of`), and the write runs as
+                    # the person, recorded via assistant for that message. Their rights are the ceiling: the route checks them.
+                    header = request.headers.get(botops_act.HEADER)
+                    asked = header or "turn"
                     raw = getattr(request, "_body", b"")
                     # Approving on the person's words: only when they let their Assistant decide approvals (and the
                     # team allows it); otherwise the one sentence it tells them about the setting.
@@ -824,35 +836,34 @@ def create_app(settings=None):
                     state = assistant_decides(request.state.identity.actor) if approves else None
                     if approves and not state["active"]:
                         raise Problem("approve_setting_off", assistant_mod.approve_hint(settings, state), 403)
-                    # A direct setting from the catalogue the person asked for runs on their words the same way.
+                    # A setting from the catalogue is refused here only when only the person may change it (class `person`,
+                    # `require_direct_setting`).
                     setting = (not approves and request.state.identity.via == "assistant"
-                               and assistant_mod.instructed_setting(request.method, request.url.path, raw))
-                    # An org change they asked for (a Strategy Bot suggestion they said to make) runs the same way.
-                    org = (not approves and request.state.identity.via == "assistant"
-                           and assistant_mod.instructed_org(request.method, request.url.path, raw))
+                               and assistant_mod.catalogue_setting(request.method, request.url.path, raw))
                     # The owner's yes to a goal read-back in their own Assistant chat (backend/goal_read_back.py): the
                     # goal, measure and suggestion routes save exactly what it read back, or nothing (`not_agreed`).
                     goal_yes = (not approves and goal_read_back.strategy_turn(request.state.identity)
                                 and goal_read_back.saving(request.method, request.url.path))
                     # The owner's "no" to a suggestion in their chat (backend/goal_read_back.py `turns_down`): admitted on
-                    # their cited turn, and not on the autonomous-action setting, which only gates the other instructed writes.
+                    # their cited turn, and not on the autonomous-action setting, which only gates the other writes.
                     goal_no = (not approves and asked and request.state.identity.via == "assistant"
                                and goal_read_back.turns_down(request.method, request.url.path))
-                    if goal_yes and not asked:
+                    if goal_yes and not header:
                         raise goal_read_back.not_agreed("A goal change is saved only on the owner's yes to its "
                                                         "read-back, citing it (`--on-behalf-of turn`)")
-                    if not goal_yes and not goal_no and not (asked and request.state.identity.via == "assistant" and assistant_direct()
-                            and (setting or org or assistant_instructed(request.method, request.url.path, raw,
-                                                                 decides=bool(approves)))):
-                        raise Problem("confirm_required", "The " + settings.assistant_name + " may not do this on its "
-                                      "own. A task change, comment or link, declining an approval, answering a bot's "
-                                      "question, a direct setting (`hub settings set`) or an org change (groups, leads, "
-                                      "reports to) that the person clearly asked for in this chat runs when you cite their "
-                                      "message (`--on-behalf-of turn`). Otherwise propose it with `hub assistant propose` "
-                                      "(or POST /api/v2/assistant/actions), several actions on one card (path "
-                                      "/api/v2/assistant/batch); approving is a card unless the person lets you "
-                                      "decide approvals, then their cited words. The person confirms a card in "
-                                      + settings.app_name, 403)
+                    # Every write the turn makes is admitted on its cited words, except what the Assistant may not do as the
+                    # person (`admits_on_turn`); an approve is admitted only on its read-back and the person's yes (`approves`).
+                    # A settings route's write that is not exactly one catalogue setting, and a change to an automation that
+                    # sends outside, are cards whatever the rest of the turn may do (backend/assistant.py).
+                    on_turn = request.state.identity.via == "assistant" and not approves
+                    unmatched = on_turn and assistant_mod.settings_route_unmatched(request.method, request.url.path, raw)
+                    outside = on_turn and await asyncio.to_thread(
+                        assistant_mod.automation_sends_outside, store, request.method, request.url.path, raw)
+                    admitted = (request.state.identity.via == "assistant" and assistant_direct()
+                                and (approves or (not unmatched and not outside
+                                                  and assistant_mod.admits_on_turn(request.method, request.url.path, raw))))
+                    if not goal_yes and not goal_no and not admitted:
+                        raise Problem("confirm_required", assistant_confirm_hint(), 403)
                     def cited():
                         with store.read() as c:
                             if goal_yes:
@@ -865,7 +876,13 @@ def create_app(settings=None):
                                 return {**record, "assistant": request.state.identity.task_actor,
                                         **goal_read_back.agreement(c, request.state.identity, record["cited"],
                                                                    request.method, request.url.path, raw, auth=auth)}
-                            record = assistant_instruction(c, request.state.identity, asked)
+                            try:
+                                record = assistant_instruction(c, request.state.identity, asked)
+                            except Problem:
+                                if header:
+                                    raise
+                                # No message of the person's own is behind this run, so it is a card, as it always was.
+                                raise Problem("confirm_required", assistant_confirm_hint(), 403) from None
                             assistant_mod.require_on_task(c, auth, request.state.identity, request.url.path)
                             if setting:
                                 def trial(e, target, body):
@@ -2053,7 +2070,7 @@ def create_app(settings=None):
         if not person or person.get("hidden"):
             raise Problem("not_found", "Person not found", 404)
         invites.once(store, auth, settings, who, request, body, person)
-        at = mutate(request, body, lambda c: invites.record(c, who.actor, pid))   # a repeat replays its receipt
+        at = invites.record_send(store, who, request, pid)  # a repeat answers the time its own send recorded
         return {"person": pid, "invited_at": at}
 
     @app.post("/api/v2/access/people/{pid}/password")
@@ -2304,7 +2321,9 @@ def create_app(settings=None):
                 if bound not in invites.sent(c) and c.execute("SELECT 1 FROM humans WHERE id=?", (bound,)).fetchone():
                     invites.record(c, who.actor, bound)
                 return onboarding.view(c, who)
-        row = mutate(request, body, lambda c: company_import.add_invitee(onboarding, c, who, key, body.email))
+        # Not `mutate`: the invite binding below is this request's record under the same key (one row per key).
+        # add_invitee answers the same roster row again when the person is already added.
+        row = store.write(who, lambda c: company_import.add_invitee(onboarding, c, who, key, body.email))
         sent = invites.once(store, auth, settings, who, request, body, row)
         with store.transaction() as c:                  # not a second `mutate`: one request has one idempotency key
             if sent or row["id"] not in invites.sent(c):      # a repeat keeps the first send's time
@@ -3317,7 +3336,7 @@ def create_app(settings=None):
 
         def admit(c):                         # read with the gate, inside the check's time budget
             from .shared_bots import route
-            if c.execute("SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
+            if c.execute("SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                          (who.actor, path, key)).fetchone():
                 return False
             target = H.actor_id(route(c, who.actor, "bot:" + bot))
@@ -8125,7 +8144,7 @@ def create_app(settings=None):
         if 0 < len(key) <= 200:
             with store.read_transaction() as c:
                 validate_identity(c, request.state.identity)
-                if not c.execute("SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
+                if not c.execute("SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                                  (request.state.identity.actor, request.url.path, key)).fetchone():
                     idle = execution.idle_inputs(c, request.state.identity, aid)
                     if idle is not None:
@@ -8401,14 +8420,14 @@ def create_app(settings=None):
     org_rule_check.REPLAY["automation"] = replay_step
     org_rule_check.AUDIENCE.update(rule_audiences())
     org_rule_check.AUDIENCE["automation"] = replay_audience
-    from .federation_routes import release_replayer
-    org_rule_check.REPLAY["federated_message"] = release_replayer(app)
     org_rule_check.install(app, store, auth, mutate)
     thread_api.install(app, store, auth, mutate, rule_check)     # thread routes (§3.4); /threads/search before /threads/{id}
     from . import thread_tasks
     thread_tasks.install(app, store, auth, create_task, settings.public_url or "")    # Make task from a message
     counsel.install(app, store, auth, mutate)      # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
+    why_here.install(app, store, auth)               # GET /api/v2/origins/{ref}: why an item is on the list
+    assistant_changes.install(app, store, auth, mutate, settings_admin)  # the Assistant's changes, and undoing one
     reach.install(app, store, auth, mutate)        # Rules › Internal: who reaches whom (docs/reach.md)
     from . import feedback
     feedback.install(app, store, auth, mutate)     # 👍/👎 on bot work (backend/feedback.py)
@@ -8528,8 +8547,6 @@ def create_app(settings=None):
     install_inbound(app, store, settings, auth)
     from .hook_relay import install as install_hook_relay
     install_hook_relay(app, settings, store, auth)
-    from .federation_routes import install as install_federation
-    install_federation(app, settings, store, auth)
     from .postal_mail import install as install_postal_mail
     install_postal_mail(app, settings, store, auth)
     from .sleep_idle import install as install_sleep_idle

@@ -219,9 +219,25 @@ def counsel_held(args):
         raise SystemExit(f"{fn} is not available to Counsel: it has no credentials and sends nothing")
 
 
+# The aliases hubcli.parser() declares. Argparse keeps the spelling typed (`hub tasks list` sets cmd to "tasks"), and the
+# dispatch below tests the canonical names, so each alias is renamed once, here, before anything is dispatched on it.
+COMMAND_ALIASES = {"tasks": "task", "approvals": "approval", "automations": "automation", "bots": "bot", "rule": "rules"}
+SUBCOMMAND_ALIASES = {("task", "defer"): "later"}
+
+
+def canonical_names(args):
+    """Rename an aliased command or subcommand on a parsed line to the name it stands for. `fn` is already the canonical
+    name, set by each leaf of the parser."""
+    args.cmd = COMMAND_ALIASES.get(args.cmd, args.cmd)
+    if hasattr(args, "sub"):
+        args.sub = SUBCOMMAND_ALIASES.get((args.cmd, args.sub), args.sub)
+    return args
+
+
 def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
+    canonical_names(args)
     counsel_held(args)
     # A query may run for 20 s on the server before it is stopped, a decision's providers 25 s; leave room for that.
     client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=45 if args.cmd in ("decision", "gateway") else 30 if args.cmd == "sql" else 120 if args.cmd == "listening" or args.fn == "market import" else 130 if args.cmd == "inbound" else 15)
@@ -246,8 +262,6 @@ def run(args, who=None):
         return via_tool(client, args)
     if fn.startswith(("trigger relay ", "relay ", "sleep ")):
         return via_tool(client, args)
-    if fn.startswith("peer "):                  # federation: this install's peerings and shared threads
-        return via_tool(client, args)
     # The other webhook leaves of docs/webhooks.md: each runs the tool of its own name, as on the server's own shell.
     if fn.startswith(("trigger ", "notice ")) or fn == "event-types":
         return via_tool(client, args)
@@ -255,7 +269,7 @@ def run(args, who=None):
         with Path(args.file).open("rb") as source:
             return client.post_bytes("team/icon", source)
     if fn in ("task worktree add", "task worktree attach", "task worktree setup"):
-        from runner.worktrees import command
+        from runner_support.worktrees import command
         return command(client, args.worktree_sub, getattr(args, 'repo', None) or getattr(args, 'path', None), args.task)
     if args.cmd == "repo":
         from clients import hubtools
@@ -311,6 +325,7 @@ def run(args, who=None):
               "update create", "update redo", "update list", "update show", "update mark-read", "update reply", "update settings",
               "changelog list", "changelog mark-read",
               "needs-you start", "needs-you next", "needs-you respond", "needs-you commit", "needs-you abandon",
+              "needs-you show", "origin show",
               "brief", "pipeline", "mcp stats", "calendar list", "calendar status", "team show", "team budget", "org order", "org reports-to", "run list",
               "message list", "message mark-read", "bot recent", "agent pair show", "agent pair approve", "agent pair decline",
               "slack channel list", "slack channel add", "slack channel remove", "slack channel import",
@@ -422,7 +437,7 @@ def run(args, who=None):
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "assistant":
         from clients import hubtools
-        if args.sub in ("read", "send", "learn", "learned", "withdraw", "proposals"):
+        if args.sub in ("read", "send", "learn", "learned", "withdraw", "proposals", "change"):
             return via_tool(client, args)
         try:
             body = json.loads(args.body or "{}")
@@ -430,6 +445,7 @@ def run(args, who=None):
             raise APIError("body", "--body must be JSON") from None
         return hubtools.BY_NAME["hub_assistant_propose"]["fn"](client, {
             "summary": args.summary, "path": args.path, "method": args.method, "body": body,
+            "for_person": getattr(args, "for_person", None),
             "operation_id": os.environ.get("HUB_OPERATION_ID")})
     if args.cmd == "db":
         # Runs here, beside the credential; the hub only checks who is asking and keeps the audit.
@@ -859,6 +875,10 @@ def run(args, who=None):
     if cmd == "approval":
         if sub == "show":
             return client.get("approvals/" + args.id)
+        if sub == "list":
+            query = {"status": args.status, "limit": args.limit, "offset": args.offset}
+            query.update({k: v for k, v in (("from", args.from_actor), ("before", args.before), ("since", args.since)) if v})
+            return client.get("approvals", **query)
         if sub == "read-back":
             return post("assistant/read-back", {"approvals": args.ids})
         if sub in ("approve", "decline"):
@@ -967,7 +987,7 @@ def bots(client, args):
             return hubtools.BY_NAME["hub_bot_update"]["fn"](client, fields)
         except ValueError as exc:
             raise APIError("not_found", str(exc)) from None
-    if args.fn in ("bot access", "bot mail", "bot owners", "bot setup-done", "bot ready", "bot place", "bot go-live", "bot model", "bot pause",
+    if args.fn in ("bot show", "bot access", "bot mail", "bot owners", "bot setup-done", "bot ready", "bot place", "bot go-live", "bot model", "bot pause",
                    "bot resume", "bot scope", "bot restore", "bot archive", "bot budget", "bot release", "bot profile",
                    "bot task-model") or (args.fn == "bot create" and args.record_only):
         from clients import hubtools

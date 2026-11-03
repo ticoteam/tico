@@ -19,6 +19,7 @@ from backend.store import H
 from backend.tests.test_goal_manager import BASE
 from backend.tests.test_onboarding import as_person, draft, environment, machine, signed_in  # noqa: F401
 from backend.tests.test_support import FakeHQ
+from backend.enqueue import enqueue_stored
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "health-monitor"
 SECRET_TASK = "Acme payroll for March"
@@ -391,6 +392,7 @@ def test_a_setup_finding_naming_a_bot_is_never_reported_to_hq(environment, hq):
                   (SECRET_BOT, runner["runner_id"], H.now()))
         c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m-silent','human:ana',?,'chat','hi',?)",
                   ("bot:" + SECRET_BOT, H.now()))
+        enqueue_stored(c, 'm-silent')
         c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), minutes=-15), runner["runner_id"]))
     found = scan(api)
     silent = "computer_silent:" + runner["runner_id"]

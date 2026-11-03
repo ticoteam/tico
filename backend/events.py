@@ -470,12 +470,6 @@ THREAD_TRIGGERS = [
           where=_ATTENTION_CHANGE_WHERE)
      + _row("threads", "capped", "NEW.root_id", conversation="NEW.root_id",
             where="(OLD.state='capped' OR NEW.state='capped') AND NEW.root_id IS NOT NULL")),
-    # `unsent` (a message to another company's Tico became stuck, or stopped being): backend/federation_threads.py
-    # UNSENT_WHERE. Its managers' Needs you moved; a trigger can't list them, so the thread's readers re-read theirs.
-    ("changes_threads_unsent_deliveries", "UPDATE", "message_deliveries",
-     "NEW.recipient LIKE 'peer:%' AND (OLD.state='failed' OR (OLD.state='pending' AND OLD.attempts>=8)) "
-     "IS NOT (NEW.state='failed' OR (NEW.state='pending' AND NEW.attempts>=8))",
-     _row("threads", "unsent", "NEW.root_id", conversation="NEW.root_id", where="NEW.root_id IS NOT NULL")),
     ("changes_threads_attention_followers", "UPDATE", "thread_followers",
      _changed("last_read_seq", "following"),
      _row("threads", "attention", "NEW.thread_id", ref="NEW.actor", conversation="NEW.thread_id")),
@@ -846,18 +840,17 @@ LIVE_SQL = ("SELECT id,created_at FROM attempts WHERE bot_id=? AND state IN ('le
 
 
 def prime_bot_rows(c, slugs):
-    """Each of these bots' own row in the six tables a claim check reads (status, bot, limit, back-off, budget, exit),
-    one query per table (per 500 bots), so a loop over bots reads none of them again. Outside a snapshot nothing is
-    kept."""
+    """Each of these bots' own row in the five tables a claim check reads (status, bot, back-off, budget, exit),
+    one query per table (per 500 bots), so a loop over bots reads none of them again; spend limits are one read of
+    every budget node (usage_limits.nodes). Outside a snapshot nothing is kept."""
     from .read_cache import cache, prime
-    from . import browser_exit, run_backoff, turn_budgets, usage_limits
+    from . import browser_exit, run_backoff, turn_budgets
     if cache(c) is None:
         return
     for part in H.chunks(sorted({H.actor_id(s) for s in slugs if s})):
         marks = ",".join("?" * len(part))
         for table, column, statement in (("bot_status", "bot", "SELECT * FROM bot_status WHERE bot=?"),
                                          ("bots", "id", "SELECT * FROM bots WHERE id=?"),
-                                         ("usage_limits", "bot", usage_limits.OWN_SQL),
                                          ("run_backoff", "bot", run_backoff.GET_SQL),
                                          ("bot_budget", "bot", turn_budgets.GET_SQL),
                                          ("bot_browser_exits", "bot", browser_exit.BOT_EXIT_SQL)):
@@ -1280,7 +1273,7 @@ def _threads(view, rows):
         elif kind == "counters":
             entry["counters"] = {"last_seq": found.get("last_seq") or 0,
                                  "last_unread_seq": found.get("last_unread_seq") or 0}
-        elif kind in ("attention", "unsent"):
+        elif kind == "attention":
             pass        # the reader's needs-you set moved: the client re-reads it, nothing else is sent
         elif kind == "ranked":
             # Its Important level moved (backend/thread_rank.py): the list is read again. Not to someone who reads only

@@ -2,6 +2,7 @@
 from backend import hubdb as H
 from backend.subscription_identity import connection_id
 from backend.tests.test_api import api, assign, get, post, put, runner  # noqa: F401
+from backend.enqueue import enqueue_stored
 
 
 def report(api, computer, profiles=None):
@@ -40,6 +41,7 @@ def usage_turn(c, tid, computer=None, bot='ops'):
     if computer:
         c.execute("INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES(?,'keeper',?,'notice','Fixture',?)",
                   ('message-' + tid, 'bot:' + bot, now))
+        enqueue_stored(c, 'message-' + tid)
         job = c.execute('SELECT id FROM jobs WHERE message_id=?', ('message-' + tid,)).fetchone()[0]
         c.execute("UPDATE jobs SET state='completed' WHERE id=?", (job,))
         c.execute('INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) '
@@ -70,4 +72,4 @@ def test_usage_groups_immutable_connections_and_rename_preserves_filter(api):
     assert selected['rows'][0]['name'] == 'North plan · North'
     assert get(api, 'usage?group=subscription', 'cara-test')['rows'] == []
     with api.app.state.store.read() as c:
-        assert {r[0] for r in c.execute('SELECT profile FROM turn_usage_segments')} == {'engineering'}
+        assert {r[0] for r in c.execute("SELECT profile FROM usage_facts WHERE source='estimate'")} == {'engineering'}

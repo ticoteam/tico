@@ -1,6 +1,6 @@
 """Which wakes may wait for a bot's next run (token saving 2/9, Dev 140).
 
-A message to a bot starts a run (store.QUEUE_TRIGGER queues a job) unless it is quiet. `gate` is asked once for
+A message to a bot starts a run (backend/enqueue.py queues a job) unless it is quiet. `gate` is asked once for
 every message about to be written to a bot that would start one (H._write_message), and decides with two rules:
 
 - `own_write`: the bot's own write caused it. Its own comments, step moves, status changes, relations and
@@ -235,17 +235,12 @@ MARK = "held_by"
 
 
 def _would_queue(conn, actor, target, refs):
-    """Whether store.QUEUE_TRIGGER would queue a run for this message: to a bot that a runner runs, not from itself,
-    not quiet and not a live transcript, decision or tool line."""
-    from .harnesses import EXTERNAL_HARNESSES
-    if not str(target).startswith("bot:") or actor == target or refs.get("quiet"):
+    """Whether backend/enqueue.py queues a run for this message: to a bot, not from itself, not quiet, not a live
+    transcript, decision or tool line, and not to a bot an external agent runs (unless a computer delivers it)."""
+    from . import enqueue
+    if not enqueue.wanted(actor, target, refs):
         return False
-    live = refs.get("live")
-    if isinstance(live, dict) and live.get("kind") in ("transcript", "decision", "tool"):
-        return False
-    row = conn.execute("SELECT json_extract(config,'$.harness') FROM bot_config WHERE bot=?",
-                       (str(target)[4:],)).fetchone()
-    return not (row and row[0] in EXTERNAL_HARNESSES)
+    return not conn.execute("SELECT " + enqueue.external_bot_sql("?"), (target,)).fetchone()[0]
 
 
 def state_of(conn, task_row):

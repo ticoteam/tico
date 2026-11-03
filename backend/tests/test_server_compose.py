@@ -98,6 +98,18 @@ def test_the_server_and_the_slack_gateway_get_the_hosted_mark_as_set_in_env():
         assert "TICO_HOSTED" in services[name]["environment"], name
         assert services[name]["environment"]["TICO_HOSTED"] is None, f"{name} takes it from .env as set, no default"
 
+
+def test_the_server_and_the_slack_gateway_both_get_the_link_preview_settings():
+    # The server builds the Slack manifest (GET /api/v2/slack/manifest) from TICO_SLACK_UNFURL_HOSTS, and the gateway
+    # posts the previews, so both need the same three settings passed through.
+    import yaml
+    services = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]
+    keys = {"TICO_SLACK_UNFURL_HOSTS", "TICO_SLACK_OPEN_LABEL", "TICO_SLACK_OPEN_URL"}
+    for name in ("server", "slack"):
+        assert keys <= set(services[name]["environment"]), name
+        assert all(services[name]["environment"][key] is None for key in keys), name
+
+
 def test_the_server_and_the_slack_gateway_get_the_decision_model_keys_but_not_other_services_secrets():
     import yaml
     services = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]

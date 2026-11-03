@@ -1,4 +1,4 @@
-"""The mechanics the delivery outboxes share: webhook sends, the federation outbox, the finance writes and the postal
+"""The mechanics the delivery outboxes share: webhook sends, the finance writes and the postal
 letters' retries. Each outbox keeps its own table and its own state names; this module only knows the table it is
 given (`Table`) and the columns and states that describe a row's life.
 

@@ -215,7 +215,7 @@ def test_spend_caps_meter_what_the_task_model_ran(api):
     _, turn = task_turn(api, machine)
     finish(api, machine, turn, HAIKU_RAN)
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT model,effort,est_cost_usd FROM turn_usage_segments WHERE turn_id=?",
+        rows = c.execute("SELECT model,effort,cost_nano/1e9 AS est_cost_usd FROM usage_facts WHERE run_id=?",
                          (turn["id"],)).fetchall()
         assert [tuple(r)[:2] for r in rows] == [("claude-haiku-5-5", "low")]
         cost = rows[0]["est_cost_usd"]
@@ -306,7 +306,7 @@ def test_under_the_gateway_preset_a_task_model_not_signed_in_runs_on_the_bots_mo
 
 def test_a_task_model_whose_sign_in_cannot_be_checked_runs_rather_than_falling_back_for_good(api):
     """Grok's sign-in can't be checked without starting it, so the runner always reports it `unknown`
-    (runner/harnesses/grok.toml `check = "none"`): a "don't know" runs the task model, it is not a reason to fall back."""
+    (runner-rs/harnesses/grok.toml `check = "none"`): a "don't know" runs the task model, it is not a reason to fall back."""
     machine = ops_on_sonnet(api)
     rust_heartbeat(api, machine, {"claude": {"installed": True, "authenticated": "ready"},
                                   "grok": {"installed": True, "authenticated": "unknown"}})
@@ -519,3 +519,11 @@ def test_an_old_task_model_record_runs_on_its_model_as_before(api):
     _, turn = task_turn(api, machine)
     assert (turn["config"]["model"], turn["config"]["reasoning_effort"]) == ("claude-haiku-5-5", "low")
     assert "compact_at" not in turn["config"]
+
+
+def test_a_task_context_length_of_100k_saves_and_reads_back(api):
+    ops_on_sonnet(api)
+    saved = set_task_model(api, {"effort": "high", "compact_at": 100000})
+    assert saved["task_model"] == {"harness": "", "model": "", "reasoning_effort": "high", "runtime": "",
+                                   "compact_at": 100000}
+    assert get(api, "bots/ops")["task_model"]["compact_at"] == 100000

@@ -99,8 +99,8 @@ def _runs(c, row):
         "ORDER BY coalesce(a.finished_at,a.created_at) DESC, a.id DESC LIMIT 20", (slug, *lanes)))
     live = any(a["state"] in ("leased", "running") for a in attempts)
     jobs = [r[0] for r in c.execute(
-        "SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
-        "AND j.state IN ('queued','held','uncertain') AND (m.conversation_id=? OR json_extract(m.refs,'$.task')=?)",
+        "SELECT j.state FROM jobs j JOIN message_refs m ON m.id=j.message_id WHERE j.bot_id=? "
+        "AND j.state IN ('queued','held','uncertain') AND (m.conversation_id=? OR m.ref_task_id=?)",
         (slug, row.get("conversation_id") or "", row["id"]))]
     return live, [a for a in attempts if a["state"] not in ("leased", "running")], jobs
 

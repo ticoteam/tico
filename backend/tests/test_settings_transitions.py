@@ -268,3 +268,20 @@ def test_compact_at_saves_without_a_fresh_session(api):
     with api.app.state.store.read() as c:
         assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='cpo'").fetchone()[0])["compact_at"] == 400_000
         assert not c.execute("SELECT 1 FROM session_epochs").fetchone()
+
+
+def test_compact_at_offers_100k_and_saves_it_without_moving_the_default(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO conversations(id,kind,participants) VALUES('c1','chat',?)", (encode(["bot:cpo"]),))
+    assert get(api, "bots/cpo")["compact_at"] == 250_000
+    revision = get(api, "bots/cpo")["revision"]
+    post(api, "bots/cpo/compact-at", {"compact_at": 150_000, "expected_revision": revision})
+    assert get(api, "bots/cpo")["compact_at"] == 150_000
+    revision = get(api, "bots/cpo")["revision"]
+    post(api, "bots/cpo/compact-at", {"compact_at": 100_000, "expected_revision": revision})
+    assert get(api, "bots/cpo")["compact_at"] == 100_000
+    with api.app.state.store.read() as c:
+        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='cpo'").fetchone()[0])["compact_at"] == 100_000
+    revision = get(api, "bots/cpo")["revision"]
+    post(api, "bots/cpo/compact-at", {"compact_at": 123_000, "expected_revision": revision}, expected=422)
+    assert get(api, "bots/cpo")["compact_at"] == 100_000

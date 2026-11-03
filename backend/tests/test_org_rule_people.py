@@ -149,7 +149,7 @@ def test_a_new_server_process_can_send_every_write_it_registered(tmp_path):
         table, prepare, audience = create_app(Settings(db_path=root / "hub.db", registry_dir=registry)).state.rule_tables
         assert set(K.REPLAY) == set(table), set(K.REPLAY) ^ set(table)
         assert set(K.PREPARE) == set(prepare) and set(K.AUDIENCE) == set(audience)
-        assert {{"threads_edit", "assistant_message", "slack_message", "federated_message"}} <= set(table), set(table)
+        assert {{"threads_edit", "assistant_message", "slack_message"}} <= set(table), set(table)
     """)
     root = pathlib.Path(__file__).resolve().parents[2]
     done = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True, timeout=120)
@@ -327,8 +327,8 @@ def test_an_inbound_message_with_no_principal_is_held_as_its_source(ruled):
     api, judge = ruled
     block_everyone(api)
     verdict = K.inbound(api.app.state.store, judge, None, "message", "Our favorite color is gold.", ["human:ben"],
-                        source="federation", origin="hub-b.example")
-    assert verdict["author"] == "federation:hub-b.example" and K.holds(verdict)
+                        source="slack", origin="C024BE91")
+    assert verdict["author"] == "slack:C024BE91" and K.holds(verdict)
 
 
 def test_send_anyway_posts_a_held_thread_message_once_as_the_person(ruled):

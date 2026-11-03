@@ -33,7 +33,7 @@ function settingsBotEditorRows(e) {
 }
 // Where the bot's conversation compacts (backend/settings_admin.py COMPACT_AT). Only a CLI whose manifest says
 // `compaction` takes it, and it saves on its own without a fresh session, like the computer.
-const SETTINGS_COMPACT_AT = [[150000, '150k'], [250000, '250k'], [400000, '400k'], [600000, '600k'], [1000000, '1M']];
+const SETTINGS_COMPACT_AT = [[100000, '100k'], [150000, '150k'], [250000, '250k'], [400000, '400k'], [600000, '600k'], [1000000, '1M']];
 const SETTINGS_COMPACT_DEFAULT = 250000;
 function settingsCompactRow(e) {
   const harness = e.harness || e.runtime || e.resolved_runtime;

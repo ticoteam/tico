@@ -1,4 +1,4 @@
-//! `enroll`, `adopt` and `doctor` (runner/__main__.py): register this computer, take bots onto it, and check
+//! `enroll`, `adopt` and `doctor` (runner_support/__main__.py): register this computer, take bots onto it, and check
 //! readiness without running a turn. Exit codes as Python's: 2 for a usage refusal, 1 for a failed request or a
 //! bot that is not ready.
 
@@ -111,7 +111,9 @@ pub async fn doctor(config: &Config, client: &Client) -> Result<(Value, bool), R
     crate::fallback::remember(&company);
     let computer_logins = crate::fallback::server_uses_computer_logins()
         && candidates.iter().all(|entry| entry["computer_logins_v1"] == true);
-    let runtimes = crate::readiness::runtime_report(config, &sign, client, &candidates, computer_logins).await;
+    // A one-off command reads every login now: there is no last probe to compose from.
+    let (rows, _) = crate::readiness::probe_all(config, &sign, client, &candidates, computer_logins, &Default::default()).await;
+    let runtimes = crate::readiness::runtime_report(config, &sign, &candidates, computer_logins, &rows);
     let mut checks = crate::readiness::preflight(config, &sign, &candidates, &runtimes, computer_logins).await;
     crate::perbot::PerBot::default().decorate(config, &mut checks, &candidates);
     let ready = checks.iter().all(|row| row["ready"] == true);

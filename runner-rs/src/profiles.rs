@@ -384,7 +384,7 @@ pub fn remove_profile(config: &Config, name: &str) -> Result<bool, String> {
     }
 }
 
-/// The `profile` subcommand: add, list (runner/__main__.py profile_command). Writes runner.json the
+/// The `profile` subcommand: add, list (runner_support/__main__.py profile_command). Writes runner.json the
 /// way Python does: every key kept, two-space indent.
 pub fn command(config: &mut Config, action: &str, name: Option<&str>, share_operator: bool) -> Result<String, String> {
     match action {
@@ -546,6 +546,9 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                 }
                 for runtime in crate::harness_tools::profile_runtimes() {
                     let runtime = runtime.as_str();
+                    // A sign-in or sign-out while this reads (accounts::forget) makes its answer stale: the account it read
+                    // is not kept, and a signed-out answer does not clear the new account.
+                    let since = crate::accounts::read_started(&name, runtime);
                     let status = crate::harness_tools::caps(runtime, "").sign_in_status;
                     let mut signed = Value::Null;
                     let budget = deadline.saturating_duration_since(Instant::now());
@@ -565,8 +568,12 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                                         serde_json::from_slice::<Value>(&out.stdout).ok().filter(|v| v.is_object()).map_or(Value::Null, |v| {
                                             if crate::harness_tools::caps(runtime, "").account == "status-json" {
                                                 match crate::accounts::from_status_json(&v) {
-                                                    Some(account) => crate::accounts::remember(&name, runtime, account),
-                                                    None => crate::accounts::forget(&name, runtime),
+                                                    Some(account) => {
+                                                        crate::accounts::keep_if_current(&name, runtime, since, || crate::accounts::remember(&name, runtime, account));
+                                                    }
+                                                    None => {
+                                                        crate::accounts::forget_if_current(&name, runtime, since);
+                                                    }
                                                 }
                                             }
                                             json!(v[&status.field] == true)
@@ -591,7 +598,7 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                     }
                     // A signed-out login has no account: the next sign-in, maybe as someone else, reads it afresh.
                     if signed == false {
-                        crate::accounts::forget(&name, runtime);
+                        crate::accounts::forget_if_current(&name, runtime, since);
                     }
                     runtimes.insert(runtime.into(), json!({"signed_in": signed}));
                 }

@@ -418,7 +418,7 @@ def test_a_gateway_segment_records_the_key_its_runner_was_handed_and_the_install
              {**claude, "input_tokens": 30, "output_tokens": 30}, {**tico, "input_tokens": 30, "output_tokens": 30}]}},
          machine["token"])
     with api.app.state.store.read() as c:
-        rows = {r["model"]: dict(r) for r in c.execute("SELECT * FROM turn_usage_segments")}
+        rows = {r["model"]: dict(r) for r in c.execute("SELECT * FROM usage_facts")}
         install = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='usage-count'").fetchone()[0])
     assert rows["tico-general-medium-1.0"]["gateway_key_id"] == paid
     assert rows["tico-general-medium-1.0"]["install_id"] == install["install_id"]

@@ -1,6 +1,7 @@
 """Proposals for the redesign's budgets (redesign CONTRACT §5): a change to a task cap or a spend limit, filed as an
 approval that a person decides. An org change is no proposal: the Strategy Bot suggests it in words and makes it when the
-person asks (backend/assistant.py `instructed_org`); the owner and group leads make it themselves on the Org tab.
+person asks (the Assistant makes it as them, backend/assistant.py `admits_on_turn`); the owner and group leads make it
+themselves on the Org tab.
 
   KINDS                      task_cap, spend_limit (backend/hubdb.py APPROVAL_KINDS)
   check(c, kind, payload)    refuses, when it is filed, a proposal the hub could not apply (and every one while off)
