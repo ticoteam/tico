@@ -132,6 +132,10 @@ const MIN_TOKEN: usize = 90;
 const TOKEN_GRACE: Duration = Duration::from_secs(10);
 #[cfg(test)]
 const TOKEN_GRACE: Duration = Duration::from_millis(500);
+/// How long after the code Enter is typed. `claude setup-token` takes a code and Enter written together as a paste and
+/// waits for an Enter that never comes ("Code sent. Waiting for the computer to finish…", Nov 3): typed alone a moment
+/// later, it signs in at once.
+const ENTER_AFTER_CODE: Duration = Duration::from_millis(1200);
 
 /// The token `prefix` starts, from what a Connect's command has printed so far. Until the command has `ended` a token
 /// counts only once something follows it: the rest of it may still be arriving.
@@ -830,6 +834,7 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
     let mut stopped_after_token = false;
     // After a Connect's code is typed: what the command shows, as a scrubbed line, when it changes (`after_code`).
     let mut watch: Option<AfterCode> = None;
+    let mut enter_at: Option<Instant> = None;
     let verdict: Option<(String, String)> = loop {
         match child.try_wait() {
             Ok(Some(_)) | Err(_) => break None,
@@ -860,15 +865,29 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         if let Some(w) = &writer {
             let code = s.inner.lock().unwrap().pending.take();
             if let Some(code) = code {
-                let line = format!("{code}\r");
-                let wrote = unsafe { libc::write(w.as_raw_fd(), line.as_ptr() as *const _, line.len()) };
-                if wrote == line.len() as isize {
+                // The code alone; Enter follows on its own write (ENTER_AFTER_CODE).
+                let wrote = unsafe { libc::write(w.as_raw_fd(), code.as_ptr() as *const _, code.len()) };
+                if wrote == code.len() as isize {
                     let mut i = s.inner.lock().unwrap();
                     i.typed = Some(code);
                     i.taken = true;
                     i.dirty = true;
                     s.trace("code_written", None);
                     watch = connect.then(|| AfterCode::new(i.seen));
+                    enter_at = Some(Instant::now() + ENTER_AFTER_CODE);
+                } else {
+                    s.trace("code_delivery_failed", None);
+                    kill(&mut child);
+                    break Some(("failed".into(), "The code could not reach the sign-in command. Choose Try again.".into()));
+                }
+            }
+        }
+        if let (Some(w), Some(at)) = (&writer, enter_at) {
+            if Instant::now() >= at {
+                enter_at = None;
+                let wrote = unsafe { libc::write(w.as_raw_fd(), b"\r".as_ptr() as *const _, 1) };
+                if wrote == 1 {
+                    s.trace("enter_written", None);
                 } else {
                     s.trace("code_delivery_failed", None);
                     kill(&mut child);
@@ -1767,7 +1786,13 @@ case "$*" in
   setup-token)
     test -z "$ANTHROPIC_API_KEY" || exit 3
     echo 'Use the url below to sign in'; echo 'https://claude.example/authorize?x=1'; echo 'Paste code here if prompted >'
-    read code
+    # Like the real CLI: an Enter that arrives with the code is part of a paste, and the sign-in never finishes.
+    stty -icanon min 1 time 0
+    code=$(head -c 11)
+    stty min 0 time 5
+    test -z "$(head -c 1)" || exit 6
+    stty icanon min 1
+    read rest
     test "$code" = pasted-code || exit 4
     if test -e "$HOME/rejects-code"; then
       trap 'touch "$HOME/rejected-stopped"; exit 0' TERM
@@ -1801,7 +1826,7 @@ esac
             std::fs::remove_dir_all(&root).ok();
             assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
             let diagnostics = String::from_utf8_lossy(&out.stdout);
-            for phase in ["cli_started", "instructions_ready", "code_received", "code_written", "oauth_code_rejected", "credential_captured", "cli_exited", "canceled"] {
+            for phase in ["cli_started", "instructions_ready", "code_received", "code_written", "enter_written", "oauth_code_rejected", "credential_captured", "cli_exited", "canceled"] {
                 assert!(diagnostics.contains(&format!("\"phase\":\"{phase}\"")), "missing {phase}: {diagnostics}");
             }
             assert!(!diagnostics.contains("pasted-code") && !diagnostics.contains("sk-ant-oat")
