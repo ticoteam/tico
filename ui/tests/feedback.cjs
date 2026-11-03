@@ -295,21 +295,16 @@ async function chatPhone(browser, theme = 'dark') {
 const APPROVAL = {id: 'ap-1', kind: 'approval', what: 'send', title: 'Approve this send', requester_id: 'bot:writer', requested_by: 'bot:writer',
   created_at: iso(), payload: {to: ['ava@customer.example'], subject: 'Your renewal', body: 'Hi Ava, your plan renews on the 14th.'}};
 async function decideCard(browser, {phone, theme = 'dark'}) {
-  const {page, errors} = await open(browser, {viewport: phone ? {width: 390, height: 844} : {width: 1440, height: 900}, hash: '#/tasks', theme});
+  let feedback;
+  const {page, errors} = await open(browser, {viewport: phone ? {width: 390, height: 844} : {width: 1440, height: 900}, hash: '#/tasks', theme,
+    beforeGoto: async page => { feedback = await feedbackFake(page); }});
   const t = (phone ? 'phone' : 'desktop') + (theme === 'dark' ? '' : '-' + theme);
-  const {writes} = await feedbackFake(page);
+  const {writes} = feedback;
   await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [APPROVAL]})}));
-  // The page loaded before the fake was in place, so it may have read feedback as off; start it over.
-  await page.evaluate(async () => { FB.on = null; FB.asked.clear(); await v2Refresh(); tasksRender(TASKS_ST); decideOpen('approval:ap-1'); });
+  await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); decideOpen('approval:ap-1'); });
   const card = page.locator('#need-card .dc-card[data-key="approval:ap-1"]');
   await card.waitFor();
-  // A read sent before the fake can still answer 404 after the reset and turn feedback off for good (slow VMs): reset
-  // and read again until the fake's answer turns it on.
-  await page.waitForFunction(() => {
-    if (document.body.classList.contains('fb-on')) return true;
-    if (FB.on === false) { FB.on = null; FB.asked.clear(); fbSync(); }
-    return false;
-  }, null, {polling: 250});
+  await page.waitForFunction(() => document.body.classList.contains('fb-on'));
   const up = card.getByRole('button', {name: 'Good', exact: true});
   assert.equal(await up.isVisible(), true, 'a small pair on the card');
   await up.click();
@@ -339,9 +334,10 @@ async function taskRows(browser) {
   const bot = {id: 't-bot', title: 'Draft the renewal emails', body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
     version: 1, created_at: iso(), updated_at: iso(), lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}};
   const person = {...bot, id: 't-person', title: 'Book the venue', requester_id: 'human:sam'};
-  const {page, errors} = await open(browser, {hash: '#/tasks', baseTasks: [bot, person]});
-  const {writes, reads} = await feedbackFake(page);
-  await page.evaluate(() => { FB.on = null; FB.asked.clear(); tasksRender(TASKS_ST); });     // as in decideCard
+  let feedback;
+  const {page, errors} = await open(browser, {hash: '#/tasks', baseTasks: [bot, person],
+    beforeGoto: async page => { feedback = await feedbackFake(page); }});
+  const {writes, reads} = feedback;
   await page.waitForFunction(() => document.body.classList.contains('fb-on'));
   assert.deepEqual(reads.filter(r => r.type), [{type: 'task', ids: ['t-bot']}], 'one read, only for the task a bot asked for');
   assert.equal(await page.locator('[data-task-key="tt-person"] [data-fb]').count(), 0);
@@ -448,9 +444,17 @@ async function askPanel(browser) {
 async function taskRowPress(browser) {
   const bot = {id: 't-bot', title: 'Draft the renewal emails', body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
     version: 1, created_at: iso(), updated_at: iso(), lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}};
-  const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks', baseTasks: [bot]});
-  const {writes} = await feedbackFake(page);
-  await page.evaluate(() => { FB.on = null; FB.asked.clear(); tasksRender(TASKS_ST); });     // as in decideCard
+  let feedback, release;
+  const initialRead = new Promise(resolve => { release = resolve; });
+  const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks', baseTasks: [bot],
+    beforeGoto: async page => {
+      feedback = await feedbackFake(page);
+      // Hold the first read past the initial drawing: a slow response must still reach the intended fake.
+      await page.route('**/api/v2/feedback?*', async route => { await initialRead; await route.fallback(); });
+    }});
+  const {writes} = feedback;
+  assert.equal(await page.evaluate(() => FB.on), null);
+  release();
   await page.waitForFunction(() => document.body.classList.contains('fb-on'));
   const title = page.locator('[data-task-key="tt-bot"] .tl-open');
   await press(page, title);
