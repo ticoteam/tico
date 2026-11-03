@@ -8,8 +8,7 @@ Inputs: `hub needs-you show` (the exact counts by kind and by the bot that asked
 
 1. For each person who has items on their Needs you, run `hub needs-you show`. If it shows nothing for them, stop: a clean
    queue gets no message at all.
-2. Pick out the items by id: tasks that are done but still hold an open ask (`done_but_open`), tasks replaced or superseded by a
-   newer one, and duplicates of one. Also note any source that filed 5 or more items this week (`hub origin show <id>` names it).
+2. Pick out the items by id: every task with status done that still sits on Needs you (each is a close), tasks replaced or superseded by a newer one, duplicates of one, and bot-made tasks with no activity for 14 days or more (close each, with a note). Also note any source that filed 5 or more items this week (`hub origin show <id>` names it).
 3. Build ONE batch for that person: a close for each id, as `{"path": "/api/v2/tasks/<id>", "body": {"close": true}}`, up to 100
    steps. Never a status filter: only the ids you picked.
 4. Propose it for that person: `hub assistant propose --for human:<person id> --summary "<the closes, with counts; the source

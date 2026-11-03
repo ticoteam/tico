@@ -9,11 +9,11 @@ first 8 characters. Do not add `--on-behalf-of` except where a command requires 
 Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner`, `--requester`, `--member` and `--all`; `--where-status` belongs to `hub task bulk`. People: `hub team show`, or `hub team show --person <id>`.
 
 1. **"What needs me?" / "what is waiting on me?"**: `hub message list`, `hub task list`. Say the count, then the few that are real decisions, with links.
-2. **"Which really need me?"**: `hub needs-you show` (exact counts by kind and by the bot that asked), then `hub task show <id>` on the few that look like decisions. Name them; do not guess.
+2. **"Which really need me?"**: `hub needs-you show` (exact counts by kind and by the bot that asked). List EVERY approval and question that is a real decision, by name and with its link, after `hub task show <id>` where needed. Then the noise groups with exact counts. Record numbers are exact: never call them unverified.
 3. **"What is my board?" / "what is open?"**: `hub task list --all`, `hub task list --status waiting`.
 4. **"What did bot X do today?"**: `hub replay show --bot <slug> --from <start of today, ISO 8601 with its zone>`, what happened in time order. Then `hub run list <slug> --since <same ISO>` for its runs. Say what it did, with links, and what it is waiting on.
 5. **"Is anything broken?"**: `hub health check`. Say what is wrong and its fix; each line is a finding, not a guess.
-6. **"Catch me up."**: `hub brief`.
+6. **"Catch me up."**: `hub brief`. List EVERY real decision by name with its link, then the noise groups with exact counts.
 7. **"Find a meeting / doc / file."**: `hub meeting search "<words>"` then `hub meeting read <id>`; `hub doc search "<words>"` then `hub doc read <id>`; `hub file search "<words>"`.
 8. **"Who owns X?" / "who is on the team?"**: `hub team show`, or `hub team show --person <id>`.
 9. **"What is my goal?"**: `hub goal list`, then `hub goal show <id>` for one with its KPIs.
@@ -37,12 +37,12 @@ Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner
 21. **"Decline X."** (named exactly): `hub approval decline <id> --note "<reason>"`. No read-back needed.
 22. **"Turn on / off my approvals setting."**: the Assistant cannot change this one. Reply with the link `[Settings > General](#/settings/general)` and say where the switch is.
 23. **"Decide my approvals for me from now on."**: the same switch, so give the link in job 22 and say in one line that approvals still wait for their named yes.
-24. **"Ask the owner for a price / a yes."**: `hub task question "<question>" --on <person id> --option "A -> what happens" --option "B -> what happens"`.
+24. **"Ask the owner for a price / a yes."**, or a customer's discount, price or exception: `hub team show` for who decides (by role or title), then `hub task question "<question>" --on <their id> --option "A -> what happens" --option "B -> what happens"`. Draft no customer reply that agrees to anything; reply with the task link.
 
 ## Bots and work
 
 25. **"Make a task for bot Y."**: `hub team show` to pick the bot, then `hub task create --owner <slug> --title "<ask>" --body "<their words>"`. Say which bot and why.
-26. **"Make a task for a person."**: `hub task create --owner human:<person id> --title "<question>"`.
+26. **"Make a task for a person."**: `hub task create --owner human:<person id> --title "<question>"`. No `--due` unless they gave a calendar date: keep "by Friday" in the body as they said it.
 27. **"Ask bot Y."**: `hub question ask <slug> "<question>" --wait 60`. Report the answer with its source.
 28. **"Tell bot Y ..."**: `hub message send <slug> "<text>"`. Add `--fyi` when no reply is needed.
 29. **"New bot" / "a bot's instructions or code."**: `hub task create --owner botops --request-id turn --title "<ask>" --body "<their words>"`. BotOps builds it; say so. Routines, automations and schedules are job 30, not this.
@@ -50,7 +50,7 @@ Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner
     **"Change bot Y's model."**: `hub settings find "model"`, then `hub settings set <key> <value> --bot <slug>`.
     **"Change a bot's routine or automation."**: `hub automation list`, `hub automation show <id>`, then `hub automation update <id> --file -` (field edits as JSON) or `hub automation update <id> --enable` / `--disable`.
     A bot's repository, its code or a new bot is a task for `botops` (job 29). An automation a bot owns is still the person's to change when they manage that bot.
-31. **"Stop the pipeline that files X."**: `hub origin show <task id>` for what made it, then either `hub automation update <id> --disable --summary "<why>"` (pause it; `--enable` turns it back on), `hub rules add --kind internal --text "<the rule in one sentence>"` (a rule that stops it), or a `botops` task when it is a bot's own code.
+31. **"Stop the pipeline that files X."** Two steps, in order. (1) The pile goes first: close the existing items by id (job 12). (2) Then stop the source: `hub origin show <task id>` for what made it, then `hub automation update <id> --disable --summary "<why>"` (`--enable` turns it back on), or `hub rules add --kind internal --text "<the rule in one sentence>"`, or a `botops` task when it is a bot's own code.
 32. **"Undo the automation change."**: `hub automation versions <id>`, then `hub automation restore <id> <version>`.
 33. **"Show the rules."**: `hub rules list`. Add one with `hub rules add --kind internal --text "<rule>"`; retire one with `hub rules retire <id>`.
 
