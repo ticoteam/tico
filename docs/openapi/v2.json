@@ -175,10 +175,6 @@
       "description": "Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks."
     },
     {
-      "name": "Federation",
-      "description": "Shared threads between Tico installs through Tico HQ: this install's key, peerings (both installs approve, and a pause stops one) and the threads it shares (docs/federation.md)."
-    },
-    {
       "name": "Threads",
       "description": "Threads: the sidebar, a thread and its timeline, read marks, search, members, follow, and the messages in a thread. A thread the viewer may not read answers 404, never 403."
     },
@@ -11301,700 +11297,6 @@
         },
         "tags": [
           "Live events"
-        ]
-      }
-    },
-    "/api/v2/federation": {
-      "get": {
-        "summary": "This install's key id, Gateway, one page of peerings and shared threads with cursors (no key material)",
-        "operationId": "getFederation",
-        "parameters": [
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 1,
-              "default": 50,
-              "title": "Limit"
-            }
-          },
-          {
-            "name": "cursor",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "",
-              "title": "Cursor"
-            }
-          },
-          {
-            "name": "threads_cursor",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "",
-              "title": "Threads Cursor"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
-        ]
-      }
-    },
-    "/api/v2/federation/keys": {
-      "post": {
-        "summary": "Make this install's federation key and register it with Tico HQ",
-        "operationId": "createFederationKey",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
-        ],
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ]
-      }
-    },
-    "/api/v2/federation/keys/rotate": {
-      "post": {
-        "summary": "A new key; the old one is retired and every peering needs approving again",
-        "operationId": "rotateFederationKey",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
-        ],
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ]
-      }
-    },
-    "/api/v2/federation/peerings": {
-      "post": {
-        "summary": "Ask another install to peer; an Idempotency-Key is required",
-        "operationId": "requestFederationPeering",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PeerBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
-        ],
-        "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ]
-      }
-    },
-    "/api/v2/federation/peerings/{peering_id}/approve": {
-      "post": {
-        "summary": "Approve a peering after checking the other install's key; active once both approve",
-        "operationId": "approveFederationPeering",
-        "parameters": [
-          {
-            "name": "peering_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Peering Id"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
-        ]
-      }
-    },
-    "/api/v2/federation/peerings/{peering_id}/pause": {
-      "post": {
-        "summary": "The kill switch: while paused nothing crosses the peering in either direction",
-        "operationId": "setFederationPeeringPause",
-        "parameters": [
-          {
-            "name": "peering_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Peering Id"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PauseBody"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
-        ]
-      }
-    },
-    "/api/v2/federation/peerings/{peering_id}/revoke": {
-      "post": {
-        "summary": "End a peering; a new request starts over",
-        "operationId": "revokeFederationPeering",
-        "parameters": [
-          {
-            "name": "peering_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Peering Id"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
-        ]
-      }
-    },
-    "/api/v2/federation/threads/{thread_id}/installs": {
-      "post": {
-        "summary": "Share a thread this install owns with an active peer; it gets the thread from now on",
-        "operationId": "shareFederationThread",
-        "parameters": [
-          {
-            "name": "thread_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Thread Id"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/InstallBody"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
-        ]
-      }
-    },
-    "/api/v2/federation/threads/{thread_id}/installs/{install_id}": {
-      "delete": {
-        "summary": "Remove an install from a thread this install owns; it gets the removal and nothing after",
-        "operationId": "unshareFederationThread",
-        "parameters": [
-          {
-            "name": "thread_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Thread Id"
-            }
-          },
-          {
-            "name": "install_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Install Id"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
-        ]
-      }
-    },
-    "/api/v2/federation/threads/{thread_id}/installs/{install_id}/retry": {
-      "post": {
-        "summary": "Send again now what another install has not taken from this thread; for whoever manages the thread",
-        "operationId": "retryFederationThreadInstall",
-        "parameters": [
-          {
-            "name": "thread_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Thread Id"
-            }
-          },
-          {
-            "name": "install_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Install Id"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
-        ]
-      }
-    },
-    "/api/v2/federation/threads/{thread_id}/readers": {
-      "post": {
-        "summary": "Let a local person read a shared thread copy on this install; an admin who reads it adds readers",
-        "operationId": "addFederationThreadReader",
-        "parameters": [
-          {
-            "name": "thread_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Thread Id"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReaderBody"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Federation"
         ]
       }
     },
@@ -25000,7 +24302,7 @@
         ]
       },
       "post": {
-        "summary": "Add a subscription: a kind, a name and the pasted value (owners and admins)",
+        "summary": "Add a subscription: a kind, a name, the pasted value and, for a plan, optionally its owner, a person (default: you; an API key has none; owners and admins)",
         "operationId": "addModelSubscription",
         "requestBody": {
           "content": {
@@ -25062,7 +24364,7 @@
     },
     "/api/v2/model-subscriptions/{sid}": {
       "post": {
-        "summary": "Rename a subscription and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true",
+        "summary": "Rename a subscription, change a plan owner and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true",
         "operationId": "changeModelSubscription",
         "parameters": [
           {
@@ -55891,20 +55193,6 @@
         ],
         "additionalProperties": true
       },
-      "InstallBody": {
-        "properties": {
-          "install": {
-            "type": "string",
-            "title": "Install"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "install"
-        ],
-        "title": "InstallBody"
-      },
       "InternalDoc": {
         "type": "object",
         "properties": {
@@ -58650,6 +57938,12 @@
           "added_by_name": {
             "type": "string"
           },
+          "owner_id": {
+            "type": "string"
+          },
+          "owner_name": {
+            "type": "string"
+          },
           "created_at": {
             "type": "string"
           },
@@ -58666,6 +57960,8 @@
           "kind",
           "label",
           "name",
+          "owner_id",
+          "owner_name",
           "preview",
           "revision",
           "runtime",
@@ -58741,12 +58037,20 @@
                 },
                 "help": {
                   "type": "string"
+                },
+                "connect": {
+                  "type": "boolean"
+                },
+                "owned": {
+                  "type": "boolean"
                 }
               },
               "required": [
+                "connect",
                 "help",
                 "kind",
                 "label",
+                "owned",
                 "runtime",
                 "secret_label"
               ],
@@ -59557,34 +58861,6 @@
         "additionalProperties": false,
         "type": "object",
         "title": "Pause"
-      },
-      "PauseBody": {
-        "properties": {
-          "paused": {
-            "type": "boolean",
-            "title": "Paused"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "paused"
-        ],
-        "title": "PauseBody"
-      },
-      "PeerBody": {
-        "properties": {
-          "peer": {
-            "type": "string",
-            "title": "Peer"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "peer"
-        ],
-        "title": "PeerBody"
       },
       "Person": {
         "type": "object",
@@ -60955,20 +60231,6 @@
           "seq"
         ],
         "title": "ReadMark"
-      },
-      "ReaderBody": {
-        "properties": {
-          "actor": {
-            "type": "string",
-            "title": "Actor"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "actor"
-        ],
-        "title": "ReaderBody"
       },
       "ReaderChange": {
         "properties": {
@@ -65251,6 +64513,18 @@
             ],
             "title": "Name"
           },
+          "owner_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Id"
+          },
           "kind": {
             "anyOf": [
               {
@@ -65286,7 +64560,7 @@
         "additionalProperties": false,
         "type": "object",
         "title": "SubscriptionWrite",
-        "description": "A new subscription, or a saved one's reconnect (a new `secret`) or rename. `confirm` accepts that a reconnect\nstops and restarts the live runs on every computer given it."
+        "description": "A new subscription, or a saved one's reconnect (a new `secret`), rename or new owner (`owner_id`, a person; a new\nplan defaults to whoever adds it; an API key has none). `confirm` accepts that a reconnect stops and restarts the\nlive runs on every computer given it."
       },
       "Suggestion": {
         "properties": {

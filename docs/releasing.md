@@ -369,7 +369,7 @@ at the same time, each with its own Docker names; the journey proceeds once thos
   the server restarts and the runner reconnects, the data survives down and up, and a runner box updates to the
   server's release and rolls back one that does not turn healthy;
 - `docker/side-jobs-smoke.sh`: a runner starts and stops the side job the hub assigns to it;
-- `runner/tests/test_isolation_docker.py`: Docker isolation against the candidate runner, with
+- `runner_support/tests/test_isolation_docker.py`: Docker isolation against the candidate runner, with
   `TICO_RUNNER_TEST_IMAGE=tico-rc-runner:local` and the same Python worker cap;
 - `scripts/journey-test.sh --release`: install the previous release from its checksummed bundle and seed it like a
   real team (older releases' rows, a computer on the previous runner, a team `HUB_` variable granted to BotOps, a bot
@@ -437,11 +437,11 @@ The workflow then:
   the relay's, and `tico-runner-SHA256SUMS` over them. A Mac or Linux checkout on the tag downloads its one
   ([updates](updates.md#the-runner-engine));
 - attaches the Mac runner and relay, `tico-runner-{macos-arm64,macos-x86_64}.gz`. No gate part runs on a Mac, so they
-  are not built by validation: when `runner-rs`, `relay-rs` and `runner/harnesses` did not change since the previous
+  are not built by validation: when `runner-rs` (its harness manifests included) and `relay-rs` did not change since the previous
   release, its Mac binaries are published with this one (a checkout checks a binary's `--build-id`, the source
   fingerprint). When they did change, the `macos` job builds them beside the publication and `macos-assets` adds them
   to the published release, then rewrites both checksum files. Until then a Mac checkout's update says `waiting`
-  (runner/release_update.py `binary_pending`) and tries again, instead of failing and waiting hours;
+  (runner_support/release_update.py `binary_pending`) and tries again, instead of failing and waiting hours;
 - checks each validated image says it is `vX.Y.Z`, then points `ghcr.io/ticoteam/{tico,tico-runner,tico-updater}:vX.Y.Z`
   (and `latest` for a stable version) at those digests before publishing, so no installer runs against missing images;
 - marks a tag with a suffix such as `v0.2.0-rc.1` a prerelease, which the update check ignores;

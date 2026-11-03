@@ -262,8 +262,6 @@ def run(args, who=None):
         return via_tool(client, args)
     if fn.startswith(("trigger relay ", "relay ", "sleep ")):
         return via_tool(client, args)
-    if fn.startswith("peer "):                  # federation: this install's peerings and shared threads
-        return via_tool(client, args)
     # The other webhook leaves of docs/webhooks.md: each runs the tool of its own name, as on the server's own shell.
     if fn.startswith(("trigger ", "notice ")) or fn == "event-types":
         return via_tool(client, args)
@@ -271,7 +269,7 @@ def run(args, who=None):
         with Path(args.file).open("rb") as source:
             return client.post_bytes("team/icon", source)
     if fn in ("task worktree add", "task worktree attach", "task worktree setup"):
-        from runner.worktrees import command
+        from runner_support.worktrees import command
         return command(client, args.worktree_sub, getattr(args, 'repo', None) or getattr(args, 'path', None), args.task)
     if args.cmd == "repo":
         from clients import hubtools

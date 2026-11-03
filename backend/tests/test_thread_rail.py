@@ -307,7 +307,7 @@ def test_the_migration_adds_pins_to_an_existing_database_once(tmp_path):
     try:
         assert {r[1] for r in conn.execute("PRAGMA table_info(thread_pins)")} >= {"thread_id", "actor", "pinned"}
         assert "pinned_for_everyone_at" in {r[1] for r in conn.execute("PRAGMA table_info(conversations)")}
-        importlib.import_module("backend.migrations.0058_thread_pins").up(conn)       # once more changes nothing
+        importlib.import_module("backend.migrations.0060_thread_pins").up(conn)       # once more changes nothing
     finally:
         conn.close()
 

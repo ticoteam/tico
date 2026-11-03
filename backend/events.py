@@ -470,12 +470,6 @@ THREAD_TRIGGERS = [
           where=_ATTENTION_CHANGE_WHERE)
      + _row("threads", "capped", "NEW.root_id", conversation="NEW.root_id",
             where="(OLD.state='capped' OR NEW.state='capped') AND NEW.root_id IS NOT NULL")),
-    # `unsent` (a message to another company's Tico became stuck, or stopped being): backend/federation_threads.py
-    # UNSENT_WHERE. Its managers' Needs you moved; a trigger can't list them, so the thread's readers re-read theirs.
-    ("changes_threads_unsent_deliveries", "UPDATE", "message_deliveries",
-     "NEW.recipient LIKE 'peer:%' AND (OLD.state='failed' OR (OLD.state='pending' AND OLD.attempts>=8)) "
-     "IS NOT (NEW.state='failed' OR (NEW.state='pending' AND NEW.attempts>=8))",
-     _row("threads", "unsent", "NEW.root_id", conversation="NEW.root_id", where="NEW.root_id IS NOT NULL")),
     ("changes_threads_attention_followers", "UPDATE", "thread_followers",
      _changed("last_read_seq", "following"),
      _row("threads", "attention", "NEW.thread_id", ref="NEW.actor", conversation="NEW.thread_id")),
@@ -1305,7 +1299,7 @@ def _threads(view, rows):
             own = threads.pin_rows(view.c, view.who.actor, [tid]).get(tid)
             entry.update(actor=view.who.actor, pinned_for_everyone=bool(found.get("pinned_for_everyone_at")),
                          pinned=threads.pinned(found.get("pinned_for_everyone_at"), own))
-        elif kind in ("attention", "unsent"):
+        elif kind == "attention":
             pass        # the reader's needs-you set moved: the client re-reads it, nothing else is sent
         elif kind == "ranked":
             # Its Important level moved (backend/thread_rank.py): the list is read again. Not to someone who reads only
