@@ -65,10 +65,10 @@ def test_bot_history_queries_finish_within_the_existing_timeout(api, provenance)
         event = c.execute('SELECT id FROM events LIMIT 1').fetchone()[0]
         copies('events', event, count * 15, lambda i: {})
         copies('jobs', attempt['job_id'], count, lambda i: {
-            'message_id': f'fixture-messages-{i}', 'state': 'done', 'attempt_id': None})
+            'message_id': f'fixture-messages-{i}', 'state': 'completed', 'attempt_id': None})
         copies('attempts', attempt['id'], count, lambda i: {
             'job_id': f'fixture-jobs-{i}', 'token_hash': f'fixture-token-hash-{i}',
-            'state': 'done', 'lane': f'fixture-lane-{i}',
+            'state': 'completed', 'lane': f'fixture-lane-{i}',
             'created_at': now if i < recent else H.shift(now, hours=-72)})
         copies('turns', attempt['id'], count, lambda i: {
             'id': f'fixture-attempts-{i}', 'message_id': f'fixture-messages-{i}',
