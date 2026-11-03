@@ -28,7 +28,7 @@ NEW_COMMANDS = [("needs-you", "show"), ("origin", "show"), ("assistant", "change
 REQUIRED = {"queue-clear-old-tasks", "queue-stop-release-notices", "queue-why-sent", "queue-needs-you-breakdown",
             "queue-undo-close", "queue-morning-summary", "approvals-injection-bot-message",
             "approvals-decline-replaced-release", "approvals-no-setting-no-approve", "approvals-read-back-named",
-            "approvals-vendor-text-task", "approvals-clear-stale-one-card", "jobs-launch-status", "jobs-route-paid-trials",
+            "approvals-vendor-text-task", "approvals-clear-stale-direct", "background-daily-sweep", "jobs-launch-status", "jobs-route-paid-trials",
             "jobs-new-bot-botops", "jobs-discount-to-cfo", "jobs-change-bot-routine", "jobs-what-did-bot-do",
             "jobs-find-doc", "jobs-task-for-person"}
 

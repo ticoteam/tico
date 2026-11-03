@@ -89,8 +89,18 @@ else:
 '''
 
 
-def opening():
-    """The standing part of an Assistant DM turn: the runner's opening lines, then the owner's personal-chat block."""
+def opening(background=False):
+    """The standing part of an Assistant turn: the runner's opening lines, then the owner's personal-chat block, or for a
+    background run (a routine the Assistant starts itself) the block that says it acts as the Assistant, not the person."""
+    person = [
+        f"You are privately assisting {OWNER}. ",
+        "This provider session and its conversation history belong only to that person. Never copy personal preferences, "
+        "messages, or attachments into shared repository files.",
+    ] if not background else [
+        f"This is a scheduled run for {OWNER}'s queue, not a chat. It acts as the Assistant, not as the person: a write uses "
+        "only the Assistant's own rights, and anything that needs the person's rights goes on a Confirm card "
+        "(`hub assistant propose`).",
+    ]
     return "\n".join([
         "You are the Assistant, the AI teammate at Acme that works in Tico, the company's operating system: its tasks, "
         "conversations, approvals and schedules all live there. Your repository is your durable workspace.",
@@ -99,9 +109,7 @@ def opening():
         "blocked; if blocked, report the concrete blocker and what you verified.",
         "Use the hub CLI for all tasks, messages, approvals and status. It calls the shared cloud API.",
         "Your final answer is saved in this conversation. Do not duplicate it with hub message send unless necessary.",
-        f"You are privately assisting {OWNER}. ",
-        "This provider session and its conversation history belong only to that person. Never copy personal preferences, "
-        "messages, or attachments into shared repository files.",
+        *person,
         "For live questions about running, queued, blocked, waiting, unhealthy, or approval work, run `hub health check`. "
         "Its response is already filtered to the signed-in person you represent.",
         "You may explain or propose an action, but only the human-facing Hub can record an approval decision.",
@@ -116,7 +124,13 @@ def opening():
 
 
 def turn_text(case):
-    """The whole prompt for one turn: the standing part, the earlier words of this chat, then the owner's message."""
+    """The whole prompt for one turn: the standing part, the earlier words of this chat, then the owner's message. A
+    background run gets its routine's standing text instead of a person's message, as the runner sends a scheduled routine."""
+    if case.get("background"):
+        return "\n\n".join([opening(background=True),
+                             f"Scheduled routine for {OWNER}: the assigned task's body is the routine's standing text, not a "
+                             "person's message. Do what it says for this occurrence.",
+                             case["prompt"].strip()])
     parts = [opening()]
     history = case.get("history") or []
     if history:
