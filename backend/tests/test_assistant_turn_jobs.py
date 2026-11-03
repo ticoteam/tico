@@ -53,7 +53,8 @@ def test_a_turn_closes_a_task_directly(api):
     task = ana_task(api)
     token = turn(api)
     current = call(api, token, "GET", f"tasks/{task}")["task"]
-    assert call(api, token, "POST", f"tasks/{task}", {"version": current["version"], "status": "done"})["status"] == "done"
+    closed = call(api, token, "POST", f"tasks/{task}", {"version": current["version"], "status": "done"})
+    assert (closed.get("task") or closed)["status"] == "done", closed
 
 
 def test_a_turn_closes_tasks_in_bulk(api):
@@ -79,10 +80,11 @@ def test_a_turn_declines_an_approval(api):
 def test_a_turn_approves_after_a_read_back_and_a_plain_yes_with_the_setting_on(api):
     approval = approval_for_ana(api)["id"]
     post(api, "assistant/settings", {"decides_approvals": True}, token="ana-test")
-    first = turn(api, "Go ahead with the ads")
-    call(api, first, "POST", "assistant/read-back", {"approvals": [approval]})
+    runner, first = assistant_turn(api, "ana-test", "Go ahead with the ads")
+    call(api, first["token"], "POST", "assistant/read-back", {"approvals": [approval]})
+    # The next turn is the same runner's: its yes is a new message, and the runner claims the next job.
     say(api, "Yes", "ana-test")
-    yes = turn(api, "Yes")
+    yes = post(api, "jobs/claim", {}, token=runner["token"])["attempt"]["token"]
     call(api, yes, "POST", f"approvals/{approval}", {"decision": "approved", "note": ""})
 
 
@@ -94,8 +96,8 @@ def test_a_turn_answers_a_question_the_bot_asked(api):
 
 def test_a_turn_sets_a_direct_setting_and_a_confirm_setting(api):
     token = turn(api, "Turn off the stale review and the Apollo rule")
-    set_setting(api, token, "stale_review", False)
-    set_setting(api, token, "botops_direct", False)
+    set_setting(api, token, "team.rules.stale_review", False)
+    set_setting(api, token, "team.rules.botops_direct", False)
 
 
 def test_a_turn_updates_an_automation_to_disabled_and_to_a_schedule(api):
@@ -114,17 +116,19 @@ def test_a_turn_restores_an_earlier_automation_version(api):
 
 def test_a_turn_pauses_and_resumes_a_bot(api):
     token = turn(api, "Pause Ops until I say")
+    # The route may answer for the bot's repository (not built in a test) after the gate admits the change.
     rev = call(api, token, "GET", "bots/ops/access")["revision"]
-    call(api, token, "POST", "bots/ops/control", {"action": "pause", "expected_revision": rev})
+    no_card(api, token, "POST", "bots/ops/control", {"action": "pause", "expected_revision": rev})
     rev = call(api, token, "GET", "bots/ops/access")["revision"]
-    call(api, token, "POST", "bots/ops/control", {"action": "resume", "expected_revision": rev})
+    no_card(api, token, "POST", "bots/ops/control", {"action": "resume", "expected_revision": rev})
 
 
 def test_a_turn_sets_a_bot_model(api):
     catalog = get(api, "models")
     model = next(m["id"] for m in catalog["models"] if not m.get("deprecated"))
     token = turn(api, "Use the cheaper model for Ops")
-    call(api, token, "POST", "bots/ops/model", {"model": model})
+    revision = call(api, token, "GET", "bots/ops")["revision"]
+    call(api, token, "POST", "bots/ops/model", {"model": model, "expected_revision": revision})
 
 
 def test_a_turn_adds_and_retires_a_rule(api):

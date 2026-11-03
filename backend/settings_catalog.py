@@ -536,6 +536,11 @@ def install(app, store, auth, settings):
                 except Problem:
                     cited = False
                 direct_ok = cited and bool(team_rules.load(c)["assistant_direct"])
+                # The rules the gate refuses on a turn (a credential, SQL, token or support grant, and the Assistant's own
+                # switches) stay a Confirm card: the person's own tap, as before.
+                rule = e.key[len("team.rules."):] if e.key.startswith("team.rules.") else ""
+                if rule in team_rules.CREDENTIAL_RULES or rule in ("assistant_direct", "assistant_approvals"):
+                    direct_ok = False
                 card_direct = not direct_ok
 
             return plan(c, auth, who, e, body.value, target, settings.public_url, propose=propose,
