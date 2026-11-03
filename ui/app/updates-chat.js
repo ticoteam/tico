@@ -132,19 +132,22 @@ async function updcLoad(chat) {
     // No words yet: what the turn is doing and for how long (ui/app/ask-rules.js), its time kept current by a tick.
     const working = !live && messages.length && !isReply(messages.at(-1)) ? askWorkingLine(execution) : '';
     if (live) rows.push(`<div data-updc-live>${v2MessageHTML({from_actor: 'bot:' + info.bot, body: live})}</div>`);
-    else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status" data-updc-working>${esc(working || execution?.label || 'Waiting for reply…')}</p>`);
+    // The thread holds the line without its time, so a redraw of the same chat leaves the thread be.
+    else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status" data-updc-working>${esc(working && askWorkingLine({...execution, started_at: null}) || execution?.label || 'Waiting for reply…')}</p>`);
     // The tick moves only the line's time, never the thread (its cards would load again).
     if (working && !tick) tick = setInterval(() => { const el = current() && thread.querySelector('[data-updc-working]'), t = askWorkingLine(execution);
       if (el && t) el.textContent = t; }, ASK_TICK_MS);
     else if (!working && tick) { clearInterval(tick); tick = null; }
     const html = rows.join('') || `<div class="updc-empty"><p class="muted">Ask ${esc(info.name)} about today's updates.</p>
       <button class="ghost" type="button" data-updc-hint="${esc(UPDC_HINT)}">${esc(UPDC_HINT)}</button></div>`;
-    if (html === rendered) return;
+    const time = () => { const wl = working && thread.querySelector('[data-updc-working]'); if (wl) wl.textContent = working; };
+    if (html === rendered) return time();
     stickScroll(thread).update(() => {
       thread.innerHTML = html;
       if (thread.querySelector('[data-action-host]')) void window.assistantChat?.cards(thread, {get, post, esc, toast, reload: snapshot});
     }, {fresh: !!rendered});
     rendered = html;
+    time();
   };
   const snapshot = async () => {
     if (!info?.room_id || !current()) return;

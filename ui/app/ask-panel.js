@@ -284,7 +284,8 @@ async function askLoad(chat) {
     // No words yet: what the turn is doing and for how long (ui/app/ask-rules.js), its time kept current by a tick.
     const working = !live && messages.length && !isReply(messages.at(-1)) ? askWorkingLine(execution) : '';
     if (live) rows.push(`<div data-ask-live>${v2MessageHTML({from_actor: 'bot:' + info.bot, body: live})}</div>`);
-    else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status" data-ask-working>${esc(working || execution?.label || 'Thinking…')}</p>`);
+    // The thread holds the line without its time, so a redraw of the same chat leaves the thread (and typed replies) be.
+    else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status" data-ask-working>${esc(working && askWorkingLine({...execution, started_at: null}) || execution?.label || 'Thinking…')}</p>`);
     // The tick moves only the line's time, never the thread (its cards would load again).
     if (working && !tick) tick = setInterval(() => { const el = current() && thread.querySelector('[data-ask-working]'), t = askWorkingLine(execution);
       if (el && t) el.textContent = t; }, ASK_TICK_MS);
@@ -300,6 +301,8 @@ async function askLoad(chat) {
       rendered = html;
       fbSync();                         // the Assistant's replies' 👍 / 👎, read for this panel too (ui/app/feedback.js)
     }
+    const wl = working && thread.querySelector('[data-ask-working]');
+    if (wl) wl.textContent = working;
     chat.drawn = true;
     // Opened from a peek: the card it spoke of, in view.
     const fq = chat.focusQ || '', q = fq && thread.querySelector(fq.startsWith('confirm:')

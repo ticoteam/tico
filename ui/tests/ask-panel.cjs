@@ -345,6 +345,13 @@ const words = text => text.trim().split(/\s+/).length;
     const working = page.locator('#ask-panel [data-ask-working]');
     await working.waitFor();
     assert.equal(await working.innerText(), 'Working · 4m · Closing tasks');
+    // The poll's next draw of the same chat, 5 s on, keeps the thread (and replies typed into it): only the line's time moves.
+    state.execution = {...state.execution, started_at: ago(0.25)};
+    await page.evaluate(() => ASK.refresh());
+    await page.evaluate(() => { document.querySelector('#ask-panel [data-ask-thread]').firstElementChild.dataset.kept = '1';
+      const real = Date.now; Date.now = () => real() + 5000; ASK.draw(); Date.now = real; });
+    assert.equal(await page.locator('#ask-panel [data-ask-thread] [data-kept]').count(), 1, 'a redraw of the same chat leaves the thread be');
+    assert.match(await working.innerText(), /^Working · 2\ds · Closing tasks$/);
     state.execution = {...state.execution, state: 'completed', label: 'Complete', parts: []};
     state.messages.push(msg('w2', 'bot:coo', 'Closed 12 tasks.'));
     await page.evaluate(() => ASK.refresh());
