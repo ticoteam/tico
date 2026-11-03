@@ -1904,3 +1904,30 @@ def test_a_money_action_commits_synced_and_its_connection_goes_back_at_the_defau
     with store.read() as c:
         assert c.execute("PRAGMA synchronous").fetchone()[0] == default
     assert store.pool and all(p.execute("PRAGMA synchronous").fetchone()[0] == default for p in store.pool)
+
+
+def test_approving_a_finance_action_commits_synced(api, monkeypatch):
+    """Approving a pending finance action applies it in the decision's transaction, so that commit is synchronous=FULL
+    too: a power cut after the 200 cannot lose the approved payee or payment."""
+    store = api.app.state.store
+    FA.use_vault(api.app.state.vault)
+    FA.banking_stop()
+    FA.use_vault(api.app.state.vault)
+    with store.transaction() as c:
+        FA.setup(c, OWNER, AT)
+    connect(store, FakeMercury())
+    with store.transaction() as c:
+        act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
+        _rule(c, OWNER, "Payees ask", {"kind": "recipient_add"}, {"outcome": "needs_approval", "who": "owner"},
+              [{"input": {"kind": "recipient_add"}, "expect": "needs_approval"}])
+    asked = post(api, "finance/actions", {"kind": "recipient_add", "payload": PAYEE}, token="ben-test", key="payee-sync")
+    seen = []
+    real = FA.approval_decided
+
+    def watched(c, *args, **kwargs):
+        seen.append(c.execute("PRAGMA synchronous").fetchone()[0])     # 2 = FULL
+        return real(c, *args, **kwargs)
+
+    monkeypatch.setattr(FA, "approval_decided", watched)
+    post(api, f"approvals/{asked['approval_id']}", {"decision": "approved"}, key="approve-sync")
+    assert seen == [2], seen
