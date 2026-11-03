@@ -461,6 +461,24 @@ def refresh_connection_openings(ctx: Ctx, connection_id: str) -> None:
             refresh_opening(ctx, str(account["id"]))
 
 
+def pair_card_payments(ctx: Ctx, connection_id: str) -> int:
+    """At the end of a sync pass: card payments taken in before both sides could pair (_card_payment) pair now. Each
+    unposted payment on the connection's credit card programs looks for its one bank side again. How many paired.
+    A mirror pairs nothing: its rows wait for the provider's own entries (mirror.settle_row)."""
+    if ctx.book.mode == "mirror":
+        return 0
+    paired = 0
+    for money in SK.money_accounts(ctx.c, ctx.book.id):
+        if str(money["connection_id"] or "") != connection_id or str(money["kind"]) != "card_program" \
+                or str(money["subtype"]) != "credit":
+            continue
+        for row in SK.waiting_credits(ctx.c, str(money["id"])):
+            if str(row["kind"]) in (*F.CARD_KINDS, *F.TRANSFER_KINDS) or covered_day(ctx, str(row["txn_date"])):
+                continue
+            paired += _card_payment(ctx, row, money)
+    return paired
+
+
 # ------------------------------------------------------------------------------------------------ taking in
 def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str | None:
     """Take in one provider transaction: insert or update its row and post what it means. The feed row id, or None
