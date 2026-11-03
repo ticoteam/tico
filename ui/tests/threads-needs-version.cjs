@@ -1,8 +1,6 @@
-// Reads the live stream makes unneeded (ui/app/hub-v2.js v2Refresh, ui/app/threads.js threadsSync):
-//  - each stream connect names the Needs you version; the version the page already holds reads nothing again, not the
-//    threads list either; a version that moved reads it;
-//  - the 2-minute clock's poll reads Needs you only every 5 minutes while the stream is connected (the stream mends the
-//    list as it changes); any other refresh reads it at once.
+// Reads the live stream makes unneeded (ui/app/threads.js threadsSync):
+//  - each stream connect names the Needs you version; the version the threads list was read at reads nothing again;
+//    a version that moved reads it, also when another read already took the new version.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -51,7 +49,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
   const quiet = () => page.waitForTimeout(t(800));
 
   await page.goto('https://tico-ui.test/#/updates');
-  await page.waitForFunction(() => S.v2.needsVersion === 'v1' && liveConnected() && THREADS.on && !THREADS.loading, null, {timeout: t(8000)});
+  await page.waitForFunction(() => S.v2.needsVersion === 'v1' && THREADS.needsSeen === 'v1' && liveConnected() && THREADS.on && !THREADS.loading, null, {timeout: t(8000)});
   await quiet();
 
   // A connect naming the version held: nothing is read again.
@@ -68,19 +66,14 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
   assert.ok(reads.needs > before.needs, 'a moved version reads Needs you');
   await quiet();
 
-  // The 2-minute clock's poll while the stream is connected: Needs you only every 5 minutes.
+  // Needs you read at a newer version by another read (the 2-minute poll) before its event comes: the threads list
+  // was read at the older one, so the event still reads it.
   before = {...reads};
-  await page.evaluate(() => refresh(false, true));
-  assert.equal(reads.needs, before.needs, 'a poll right after a read leaves Needs you to the stream');
-  await page.evaluate(() => { NEEDS_AT = Date.now() - 301e3; return refresh(false, true); });
-  assert.equal(reads.needs, before.needs + 1, 'five minutes on, the poll reads it as a precaution');
-  await page.evaluate(() => refresh(false));
-  assert.equal(reads.needs, before.needs + 2, 'a refresh after something the person did reads it at once');
-  // Without the stream, every poll reads it.
-  await page.evaluate(() => { LIVE.connected = false; return refresh(false, true); });
-  assert.equal(reads.needs, before.needs + 3, 'no stream: every poll reads it');
+  await page.evaluate(() => { S.v2.needsVersion = 'v3'; liveEmit('needs', {version: 'v3'}); });
+  for (const end = Date.now() + t(5000); reads.threads === before.threads && Date.now() < end;) await page.waitForTimeout(50);
+  assert.ok(reads.threads > before.threads, 'a version the threads list was not read at reads it');
 
   assert.deepEqual(errors, []);
   await browser.close();
-  console.log('live-quiet-polls: ok');
+  console.log('threads-needs-version: ok');
 })().catch(e => { console.error(e); process.exit(1); });

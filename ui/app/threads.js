@@ -10,7 +10,7 @@ const THREADS_ROUTE = '#/threads', THREAD_ROUTE = '#/thread/', INBOX_ROUTE = '#/
 const THREADS_SIDE_MAX = 5;
 // `on`: null until the server answered GET /v2/threads once; false when it has no threads (an older server).
 // `botDms`: {bot actor: unread} for the viewer's DMs with one bot, which the Team list shows on that bot (sidebar.js).
-const THREADS = {on: null, attention: [], threads: [], dms: [], botDms: {}, loading: null, wired: false};
+const THREADS = {on: null, attention: [], threads: [], dms: [], botDms: {}, loading: null, wired: false, needsSeen: null};
 // The list's order, the viewer's choice kept in this browser: Important (each thread's 1-10 level, then newest, noise
 // left out; the default) or Recent (newest first). GET /v2/threads?sort=.
 const THREADS_SORTS = [['important', 'Important'], ['recent', 'Recent']];
@@ -109,6 +109,8 @@ async function threadsLoad() {
   // A read still out for the other order is followed by one for this order, not taken for it.
   if (THREADS.loading) return THREADS.loadingSort === sort ? THREADS.loading : THREADS.loading.then(() => threadsLoad());
   THREADS.loadingSort = sort;
+  // The Needs you version known before the read: the list it answers is at least that new (the `needs` handler below).
+  const seen = S.v2.needsVersion || null;
   THREADS.loading = (async () => {
     try {
       const r = await get('/v2/threads?limit=50&sort=' + sort, {fresh: true});
@@ -119,7 +121,7 @@ async function threadsLoad() {
       // A page of a list whose every row waits on the viewer may have more of them past it.
       const ids = new Set((r.attention || []).map(t => t.id)), full = list => list.length >= 50 && list.every(t => ids.has(t.id));
       const attentionMore = !!r.next_cursor && (full(r.threads) || full(r.dms || []));
-      Object.assign(THREADS, {on: true, attention: r.attention || [], threads: r.threads, dms: r.dms || [], botDms, attentionMore});
+      Object.assign(THREADS, {on: true, attention: r.attention || [], threads: r.threads, dms: r.dms || [], botDms, attentionMore, needsSeen: seen});
       if (moved && typeof renderTree === 'function') renderTree();
       liveTopicAdd('threads');
     } catch (e) {
@@ -218,10 +220,10 @@ function threadsSync() {
     liveThrottle('threads-side', threadsLoad, 400);
     threadViewsLive('threads', d);
   });
-  // A hold or an ask moved on the viewer's Needs you list: the rows it marks are ranked first. A version the page
-  // already holds moved nothing (each stream connect names it), so the list is not read again for it.
+  // A hold or an ask moved on the viewer's Needs you list: the rows it marks are ranked first. The Needs you version the
+  // list was last read at moved nothing (each stream connect names the current one), so it is not read again for it.
   liveOn('needs', d => {
-    if (!THREADS.on || d?.version && d.version === S.v2.needsVersion) return;
+    if (!THREADS.on || d?.version && d.version === THREADS.needsSeen) return;
     liveThrottle('threads-side-live', threadsLoad, 3000);
   });
   // Needs you read again (its holds are Inbox's): the count follows the list as it now stands.
