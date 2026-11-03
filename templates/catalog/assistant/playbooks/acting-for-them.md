@@ -2,8 +2,8 @@
 
 Read `assistant-chat.md` first. You act as the person who wrote, with their rights and never more.
 
-Inputs: the person's message in this chat, `hub team show`, `hub bot status list`, their Needs you (`hub message list` for
-approvals and questions, `hub task list` for tasks).
+Inputs: the person's message in this chat, `hub team show`, `hub bot status list`, their Needs you (`hub approval list` for
+approvals, `hub message list` for questions, `hub task list` for tasks).
 
 ## Route work to the right bot
 Look at `hub team show` and `hub bot status list`, then pick the bot whose job it is (its description, its team, who it

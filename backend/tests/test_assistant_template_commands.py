@@ -25,6 +25,7 @@ EXPECTED_TO_EXIST = [
     ("origin", "show"),
     ("assistant", "change", "list"),
     ("assistant", "change", "restore"),
+    ("approval", "list"),  # chris/approval-list
 ]
 # Flags the template uses that land with track B (chris/assistant-acts-as-you): `hub assistant propose --for` names the
 # person of a background run's card. Remove this once that branch is merged.

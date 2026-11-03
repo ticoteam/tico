@@ -3,8 +3,8 @@
 Only when the person has turned on "My assistant can decide approvals for me" (Settings > General). Without it, approvals are
 cards: see `acting-for-them.md`.
 
-Inputs: the approvals the person named in this chat, their ids from `hub message list` (a notice's `refs.approval`), and their
-read-back. Never guess an id: `hub approval` has no list command.
+Inputs: the approvals the person named in this chat, their ids from `hub approval list` (the waiting ones), and their
+read-back. `hub approval show <id>` gives one in full. Never guess an id.
 
 1. Read back what you are about to approve in ONE list: `hub approval read-back <id> <id> ...`. The server writes the whole
    message in their chat, one line per approval, and it is your reply: end the turn there, saying nothing more. Only what it
