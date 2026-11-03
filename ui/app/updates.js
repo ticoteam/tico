@@ -80,11 +80,9 @@ function pageUpdates() {
       <button type="button" class="upd-chip" id="upd-layout" aria-pressed="${state.layout === 'list'}" aria-label="List" title="List: every update, newest first"${view === 'archive' ? ' hidden' : ''}><span class="nav-icon" aria-hidden="true">view_agenda</span><span class="upd-lbl">List</span></button>
       <button type="button" class="upd-chip upd-view" id="upd-view" aria-label="${view === 'archive' ? 'Open inbox' : 'Open archive'}" title="${view === 'archive' ? 'Inbox' : 'Archive'}"><span class="nav-icon" aria-hidden="true">${view === 'archive' ? 'inbox' : 'archive'}</span><span class="upd-lbl">${view === 'archive' ? 'Inbox' : 'Archive'}</span></button>
       <button type="button" class="ghost upd-allread" id="upd-allread"${view === 'archive' ? ' hidden' : ''}>Mark all read</button>
-      ${updcButtonHTML()}
     </div>
     <div id="upd-feed" class="upd-feed" aria-live="polite"></div>
   </div>`;
-  updcMount();
   if ($('#upd-day')) $('#upd-day').onclick = () => { location.hash = UPDATES + (state.kind === 'weekly' ? '?kind=weekly' : ''); };
   col.querySelector('.upd-seg').onclick = ev => {
     const b = ev.target.closest('[data-upd-kind]'); if (!b || b.dataset.updKind === state.kind) return;
@@ -198,19 +196,6 @@ function updAuthor(key) {
 // is written on the Daily tab any day and on the Weekly tab on Friday.
 const updToday = () => new Date().toLocaleDateString('en-CA', {timeZone: 'America/Los_Angeles'});
 const updCanWrite = state => state.kind === 'daily' || new Date(updToday() + 'T12:00:00Z').getUTCDay() === 5;
-// A manager's card links the reports' updates it was written from (only those you may read come back).
-function updFrom(u) {
-  if (!u.inputs?.length) return '';
-  return `<div class="upd-from muted">From: ${u.inputs.map(i => {
-    const who = updAuthor(i.author);
-    return `<a href="${who.href}" data-upd-input="${esc(i.id)}" data-upd-input-author="${esc(i.author)}">${esc(who.label)}</a>`;
-  }).join(', ')}</div>`;
-}
-// A person's update the Assistant drafted says so until they replace it with their own words.
-function updDraftPill(u) {
-  if (!u.drafted_by) return '';
-  return `<span class="upd-pill upd-draft">${u.edited_by ? 'Drafted by ' + esc(botDisplayName(u.drafted_by)) + ', edited' : 'Drafted by ' + esc(botDisplayName(u.drafted_by))}</span>`;
-}
 // The action row is icons; each one's name is its accessible label and its tooltip (title with a mouse, a long press
 // on a phone). Mark read and Archive are swapped in place, so they have their own builders.
 const updReadBtn = read => read
@@ -237,12 +222,12 @@ function updCard(u, i, state, kids = '') {
     <div class="upd-av">${who.avatar}</div>
     <div class="upd-main">
       <div class="upd-meta"><a href="${who.href}" class="upd-name" data-upd-bot>${who.name}</a>
-        ${u.kind === 'weekly' ? '<span class="upd-pill">Week in review</span>' : ''}${updDraftPill(u)}
-        <span class="muted">· ${esc(ago(u.updated_at || u.created_at))}</span>${alert ? '<span class="upd-dot" aria-label="Unread"></span>' : ''}</div>
+        ${u.kind === 'weekly' ? '<span class="upd-pill">Week in review</span>' : ''}
+        <span class="muted">· ${esc(ago(u.updated_at || u.created_at))}</span>${alert ? '<span class="upd-dot" aria-label="Unread"></span>' : ''}
+        <span class="upd-corner">${updReadBtn(u.read)}${updArchiveBtn(state.view === 'archive', state.archivePending.has(u.id))}</span></div>
       ${u.slides ? updDeck(u, state) : body ? `<div class="upd-body md">${safeMd(body, {shortLinks: true})}</div>` : ''}
-      ${updFrom(u)}
       <div class="upd-actions">
-        ${who.person ? '' : updReplyBtn(u)}${u.own && updCanWrite(state) ? updWriteBtn(u) : ''}${updReadBtn(u.read)}${updArchiveBtn(state.view === 'archive', state.archivePending.has(u.id))}${kids}
+        ${who.person ? '' : updReplyBtn(u)}${u.own && updCanWrite(state) ? updWriteBtn(u) : ''}${kids}
       </div>
       ${open ? `<div class="upd-thread">${thread ? thread.map(m => `<div class="upd-msg${String(m.sender_id).startsWith('bot:') ? ' bot' : ''}${m.pending ? ' pending' : ''}">
           <b>${esc(actorLabel(m.sender_id))}</b> ${String(m.sender_id).startsWith('bot:') ? `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>` : esc(String(m.body || '').replace(/^Re your update "[^"]*": /, ''))}
@@ -379,7 +364,6 @@ function updEditor(u, n, state, kids = '') {
   return `<form class="upd-card upd-edit" data-upd-editor data-upd-kind="${week ? 'weekly' : 'daily'}">
     <div class="upd-main"><div class="upd-meta"><b>${updAuthor(n.author).name}</b><span class="muted">· ${week ? 'this week in review' : "today's update"}</span></div>
       ${fields}
-      ${u?.drafted_by ? `<label class="upd-own"><input type="checkbox" data-upd-own> These are my own words (drop the Drafted by ${esc(botDisplayName(u.drafted_by))} label)</label>` : ''}
       <div class="upd-actions"><button class="primary" type="submit">Post</button><button type="button" class="ghost" data-upd-cancel>Cancel</button>${kids}</div>
       <div class="err" role="status" data-upd-edit-err></div></div></form>`;
 }

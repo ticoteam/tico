@@ -51,6 +51,14 @@
 .upd-deck-dot::after{content:"";width:6px;height:6px;border-radius:50%;background:var(--line);transition:background var(--dur-fast) var(--ease),width var(--dur-fast) var(--ease)}
 .upd-deck-dot[aria-current]::after{background:var(--ink);width:16px;border-radius:3px}
 .upd-actions{display:flex;flex-wrap:nowrap;align-items:center;gap:2px;margin:6px 0 0 -8px}
+.upd-actions:not(:has(*)){display:none}
+/* Mark read and Archive sit quietly at the card's top right. */
+.upd-corner{display:inline-flex;gap:0;margin:-6px -8px -6px auto;opacity:.55;transition:opacity .15s}
+.upd-card:hover .upd-corner,.upd-corner:focus-within{opacity:1}
+.upd-corner .upd-act{min-width:30px;height:30px;padding:0 6px}
+/* A nested card is narrow on a phone: the top line does not wrap, and the name and time give way (ellipsis) so the corner stays on it. */
+.upd-card .upd-meta{flex-wrap:nowrap}
+.upd-card .upd-meta>.upd-name,.upd-card .upd-meta>.muted{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* icons only: the name is the title (a long press on a phone shows it, data-tip-on) */
 .upd-act{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:34px;height:34px;flex:none;border:0;background:none;border-radius:999px;padding:0 8px;color:var(--muted);font-size:var(--t-sm);cursor:pointer;-webkit-touch-callout:none;user-select:none}
 .upd-act:hover{background:var(--surface2);color:var(--ink)}

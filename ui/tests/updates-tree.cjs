@@ -3,7 +3,7 @@
 // "Update cards nested by org chart. Manager card on top, an icon expands subordinate cards. By default you
 // see only cards below you in the org chart, with a toggle for the whole org chart. Unread alerts only for
 // direct reports (one level below you), not deeper." Your own card lets you write or edit your update, on
-// Friday the week in review too, and a manager's card links the reports' updates it was written from.
+// Friday the week in review too.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {html, uiFile} = require('./support/page.cjs');
@@ -18,7 +18,7 @@ const EIGHT = [['seo', 'AI SEO'], ['ads', 'Ads Bot'], ['copy', 'Copywriter'], ['
 const bots = [['cmo', 'AI CMO'], ...EIGHT, ['writer', 'Writer Bot']].map(([name, display_name]) =>
   ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team: 'marketing', owner_id: 'ana'}));
 const update = (id, bot, body, read, more = {}) => ({id, bot, kind: 'daily', day: today, headline: body.slice(2), body, read,
-  created_at: iso(-hour), updated_at: iso(-hour), replies: 0, drafted_by: null, edited_by: null, slides: null, inputs: [], ...more});
+  created_at: iso(-hour), updated_at: iso(-hour), replies: 0, slides: null, ...more});
 // Noon on the queue's clock (Pacific), for the Friday checks.
 const THURSDAY = '2026-10-15', FRIDAY = '2026-10-16', noon = day => new Date(`${day}T19:00:00Z`);
 const drafted = {goal: 'Open the Northwind office by November', done: ['Signed the lease'], focus: ['Hire an office manager'], blockers: [],
@@ -35,7 +35,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     }
     const seo = {key: 'b:seo', author: 'seo', name: 'AI SEO', direct: false, update: update('u-seo', 'seo', '- Published the checklist page', allSeen), children: []};
     const cmo = {key: 'b:cmo', author: 'cmo', name: 'AI CMO', direct: true,
-                 update: update('u-cmo', 'cmo', '- The team shipped the checklist', allSeen, {inputs: [{id: 'u-seo', author: 'seo'}]}), children: [seo]};
+                 update: update('u-cmo', 'cmo', '- The team shipped the checklist', allSeen), children: [seo]};
     if (eight) {      // eight reports, one with no update yet and one with a report of its own
       cmo.children.push(...EIGHT.slice(1).map(([bot, name], i) => ({key: 'b:' + bot, author: bot, name, direct: false, children: [],
         update: i === 3 ? null : update('u-' + bot, bot, `- ${name} finished its part of the checklist launch`, allSeen)})));
@@ -70,7 +70,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       if (p === '/api/v2/updates' && req.method() === 'POST') {
         const body = req.postDataJSON(); posted.push({path: p, body});
         if (body.kind === 'weekly') {
-          mineWeek = update('u-ana-week', 'human:ana', '', true, {kind: 'weekly', day: FRIDAY, slides: body.slides, edited_by: body.replace_draft ? null : 'human:ana'});
+          mineWeek = update('u-ana-week', 'human:ana', '', true, {kind: 'weekly', day: FRIDAY, slides: body.slides});
           return json({update: mineWeek});
         }
         mine = update('u-ana', 'human:ana', body.body, true);
@@ -98,22 +98,15 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     const seo = page.locator('#upd-feed [data-upd="u-seo"]');
     await seo.waitFor();
     assert.equal(await seo.locator('[data-upd-kids]').count(), 0, 'a card with no reports has no count');
-    assert.equal(await seo.locator('.upd-actions .upd-act').count(), 3, 'just Reply, Mark read and Archive');
+    assert.equal(await seo.locator('.upd-actions .upd-act').count(), 1, 'the bottom row has just Reply');
+    assert.deepEqual(await seo.locator('.upd-corner .upd-act').evaluateAll(els => els.map(b => b.getAttribute('aria-label'))), ['Mark read', 'Archive'],
+      'Mark read and Archive at the top right');
     assert.equal(await seo.locator('.upd-dot').count(), 0, 'one level down only: no dot two levels down');
     // Seen, the deeper card is marked read, and the badge (direct reports only) does not move.
     const read = id => posted.some(x => x.path === '/api/v2/updates/read' && x.body.ids?.includes(id));
     for (let i = 0; i < 50 && !(read('u-seo') && read('u-cmo')); i++) await page.waitForTimeout(100);
     assert.ok(read('u-seo') && read('u-cmo'), 'cards are read when seen, a deeper one too');
     assert.equal(await page.locator('[data-upd-badge]').first().textContent(), '1', 'reading a deeper card leaves the badge alone');
-    // The manager's card links the update it was written from; the link opens that card under it and goes to it.
-    await kids.click();
-    await seo.waitFor({state: 'detached'});
-    const from = cmo.locator('.upd-from [data-upd-input="u-seo"]');
-    assert.equal(await from.innerText(), 'AI SEO');
-    await from.click();
-    await page.locator('#upd-feed [data-upd="u-seo"].sel').waitFor();
-    assert.equal(await page.locator('#upd-feed [data-upd-kids="b:cmo"]').getAttribute('aria-expanded'), 'true');
-    assert.match(page.url(), /#\/updates$/, 'the link stays on the page');
     if (shots) await page.screenshot({path: `${shots}/updates-tree.png`});
     // Whole org shows the chart from the top; the choice is kept.
     await page.locator('#upd-scope').click();
@@ -166,8 +159,8 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     assert.deepEqual(posted.filter(x => x.path === '/api/v2/updates').at(-1).body, {kind: 'weekly', replace_draft: false, slides: {
       goal: 'Open the Northwind office by November', done: ['Signed the lease', 'Moved the desks in'], focus: ['Hire an office manager'],
       blockers: [], kpis: [{name: 'Leases signed', value: '1'}]}});
-    // The Assistant's draft: Edit opens it filled in, and your own words drop its label.
-    mineWeek = update('u-ana-week', 'human:ana', '', true, {kind: 'weekly', day: FRIDAY, slides: drafted, drafted_by: 'assistant'});
+    // An Assistant draft: Edit opens it filled in, and posting it sends replace_draft false (there is no own-words box).
+    mineWeek = update('u-ana-week', 'human:ana', '', true, {kind: 'weekly', day: FRIDAY, slides: drafted});
     await week.page.locator('[data-upd-kind="daily"]').click();
     await week.page.locator('#upd-feed [data-upd="u-cmo"]').waitFor();
     await week.page.locator('[data-upd-kind="weekly"]').click();
@@ -176,10 +169,9 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     assert.equal(await editor.locator('[data-upd-slide="done"]').inputValue(), 'Signed the lease');
     assert.equal(await editor.locator('[data-upd-slide="kpis"]').inputValue(), 'Leases signed: 1 lease');
     await editor.locator('[data-upd-slide="blockers"]').fill('Waiting on the landlord for keys');
-    await editor.locator('[data-upd-own]').check();
     await editor.locator('[type=submit]').click();
     await editor.waitFor({state: 'detached'});
-    assert.deepEqual(posted.filter(x => x.path === '/api/v2/updates').at(-1).body, {kind: 'weekly', replace_draft: true,
+    assert.deepEqual(posted.filter(x => x.path === '/api/v2/updates').at(-1).body, {kind: 'weekly', replace_draft: false,
       slides: {...drafted, blockers: ['Waiting on the landlord for keys']}}, 'an unchanged KPI line keeps its unit and note');
     assert.deepEqual(week.errors, []);
     await week.page.close();
@@ -188,14 +180,16 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     const posted1 = mine; mine = null;   // your own card as "No update yet", with Write your update and its count
     const icons = new Set(fs.readFileSync(uiFile('vendor/fonts/icons.txt'), 'utf8').split('\n').filter(Boolean));
     const fitsRow = async (p, label) => {
-      // Each action row, and the "No update yet" row that carries a count too: one line, no word broken over two.
-      const rows = await p.locator('#upd-feed .upd-actions, #upd-feed .upd-none').evaluateAll(els => els.map(row => {
+      // Each top line (name, time and the corner), each action row, and the "No update yet" row that carries a count too:
+      // one line, no word broken over two. A hidden row (an empty action row) is not measured.
+      const rows = await p.locator('#upd-feed .upd-meta, #upd-feed .upd-actions, #upd-feed .upd-none').evaluateAll(els => els.filter(row => getComputedStyle(row).display !== 'none').map(row => {
         const card = row.closest('.upd-card, .upd-none').getBoundingClientRect();
         const b = [...row.children].filter(c => getComputedStyle(c).display !== 'none').map(c => c.getBoundingClientRect());
         const texts = [], walk = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
-        for (let n; (n = walk.nextNode());) if (n.textContent.trim() && !n.parentElement.closest('.nav-icon')) { const r = document.createRange(); r.selectNodeContents(n); texts.push(r.getClientRects().length); }
+        // A text on a lower line than its first is wrapped; one cut short with an ellipsis stays on its line.
+        for (let n; (n = walk.nextNode());) if (n.textContent.trim() && !n.parentElement.closest('.nav-icon')) { const r = document.createRange(); r.selectNodeContents(n); const rects = [...r.getClientRects()]; texts.push(rects.some(b => b.top > rects[0].top + 4)); }
         return {line: Math.max(...b.map(r => r.top)) < Math.min(...b.map(r => r.bottom)), overlap: b.some((r, i) => i && r.left < b[i - 1].right - 0.5),
-                inside: b.every(r => r.right <= card.right - 4 && r.left >= card.left), wrapped: texts.some(n => n > 1)};
+                inside: b.every(r => r.right <= card.right - 4 && r.left >= card.left), wrapped: texts.some(Boolean)};
       }));
       assert.ok(rows.length > 0);
       rows.forEach((r, i) => assert.deepEqual(r, {line: true, overlap: false, inside: true, wrapped: false}, `${label}: row ${i} on one line, nothing overlapping`));
@@ -207,7 +201,9 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
       await boss.waitFor();
       const toggle = boss.locator('[data-upd-kids="b:cmo"]');
       assert.deepEqual(await boss.locator('.upd-actions .upd-act').evaluateAll(els => els.map(b => b.getAttribute('aria-label'))),
-        ['Reply', 'Mark unread', 'Archive', 'Show 8 reports'], `${label}: comment, unread, archive, then the count`);
+        ['Reply', 'Show 8 reports'], `${label}: comment, then the count`);
+      assert.deepEqual(await boss.locator('.upd-corner .upd-act').evaluateAll(els => els.map(b => b.getAttribute('aria-label'))),
+        ['Mark unread', 'Archive'], `${label}: unread and archive at the top right`);
       assert.equal(await toggle.evaluate(b => [...b.childNodes].filter(n => !n.classList?.contains('nav-icon')).map(n => n.textContent).join('').trim()), '8');
       assert.equal(await toggle.locator('.nav-icon').textContent(), 'chevron_right');
       const [row, main] = [await boss.locator('.upd-actions').boundingBox(), await toggle.boundingBox()];
@@ -302,7 +298,7 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     await fitsRow(phone.page, 'phone 360');
     if (shots) await phone.page.screenshot({path: `${shots}/updates-tree-phone.png`});
     assert.deepEqual(phone.errors, []);
-    console.log('PASS: Updates nested by the org chart: your card on top, direct reports open and alerting, "8" and a chevron at the right of a card open deeper cards that never alert, hung from it on one line with an elbow each, icon-only actions named by label, title and long press, Whole org from the top of the chart (kept), the badge from direct reports only, writing your own update from your card (as a daily), From links that open the report\'s card, Mark all read for a badge from another day (gone once read), the week in review on Friday (written and edited as slides), and a phone that fits.');
+    console.log('PASS: Updates nested by the org chart: your card on top, direct reports open and alerting, "8" and a chevron at the right of a card open deeper cards that never alert, hung from it on one line with an elbow each, icon-only actions named by label, title and long press, Whole org from the top of the chart (kept), the badge from direct reports only, writing your own update from your card (as a daily), Mark all read for a badge from another day (gone once read), the week in review on Friday (written and edited as slides), and a phone that fits.');
   } finally {
     await browser.close();
   }
