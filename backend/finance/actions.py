@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
+from .. import hubdb as tico_db
 from . import banking, budgeting, cards, catalog, documents, gateway_sync, gating, handlers, jobs, mirror, payments
 from . import prepaids, purchasing, topups
 from . import posting
@@ -311,6 +312,9 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
     if V.has_card_number(body):
         return ActionResult(status="failed", kind=kind, code=INVALID, reason=CARD_NUMBER_REFUSED)
     if not dry_run:
+        # Every caller's commit of a Finance action reaches the disk: a webhook rule, a books disconnect or a bills
+        # address change opens a plain transaction, and losing an acknowledged money write to a power cut is not OK.
+        tico_db.durable_commit(c)
         prior = SX.by_key(c, key)
         if prior is not None:
             if prior["kind"] != kind or not _same_request(json.loads(prior["payload"]), body) or \
@@ -528,6 +532,7 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
     row = SX.by_approval(c, approval_id)
     if row is None:
         return None
+    tico_db.durable_commit(c)                # approving can move money: its commit reaches the disk (act says why)
     if row["status"] != "needs_approval":
         return _stored(row)
     ctx = load(c, at)

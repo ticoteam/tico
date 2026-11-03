@@ -1782,3 +1782,83 @@ def test_decide_stops_a_paused_machine_out_of_credit_whatever_its_runner_does():
     for busy in ({"updating": True}, {"turns": True}, {}):
         assert CM.decide(on, facts(active=False, frozen=True, **busy), 1100, 300) == ("stop", "out_of_credit")
     assert CM.decide(machine_row(), facts(active=False, frozen=True), 1100, 300) == (None, "out_of_credit")
+
+
+
+def codex_heartbeat(cloud, computer):
+    """The computer reports Claude and Codex installed and neither signed in: a throwaway machine nobody signs in to."""
+    post(cloud.api, "runners/heartbeat", {
+        "version": "test", "platform": "linux", "capabilities": [MS.CAPABILITY],
+        "readiness": {"schema_version": 1, "runtimes": {
+            "claude": {"installed": True, "authenticated": "missing"},
+            "codex": {"installed": True, "authenticated": "missing"}}, "bots": {}}}, token=computer["token"])
+
+
+def test_a_codex_bot_moved_onto_a_running_shared_machine_takes_the_chatgpt_plan(cloud):
+    plan_company(cloud, "cpo")
+    shared = shared_for(cloud, "cpo", token="ben-test")
+    codex_heartbeat(cloud, shared)
+    csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    on(cloud.api, "ops", "codex", "gpt-6.1-sol")
+    box = runner(cloud.api, label="Box")
+    assign(cloud.api, box, "ops")
+    idle(cloud)
+    change_as(cloud, "ops", "ben-test", mode="cloud", placement="shared")
+    assert placed(cloud)["ops"] == shared["runner_id"]
+    assert given(cloud, shared["runner_id"]) == {"claude": given(cloud, shared["runner_id"])["claude"], "codex": csid}
+
+
+def health_of(cloud):
+    body = cloud.api.get("/api/v2/health", headers=headers("ana-test")).json()
+    return {check["id"]: check for check in body["checks"]}
+
+
+def issue_kinds(cloud):
+    return {i["kind"] for i in cloud.api.get("/api/v2/health/issues", headers=headers("ana-test")).json()["issues"]}
+
+
+def test_a_plan_on_the_computer_is_not_a_missing_sign_in_on_health(cloud):
+    plan_company(cloud, "cpo")
+    shared = shared_for(cloud, "cpo")
+    codex_heartbeat(cloud, shared)
+    on(cloud.api, "ops", "codex", "gpt-6.1-sol")
+    change_as(cloud, "ops", mode="cloud", placement="shared")
+    checks = health_of(cloud)
+    assert "Codex" in checks["computer_signin"]["summary"] and "Claude" not in checks["computer_signin"]["summary"]
+    assert checks["models"]["status"] == "ok"                # Claude signs in with the plan: the model is signed in
+    shared_row = next(x for x in cloud.api.get("/api/v2/health", headers=headers("ana-test")).json()["computers"]
+                      if x["id"] == shared["runner_id"])
+    claude = next(r for r in shared_row["runtimes"] if r["name"] == "claude")
+    assert claude["plan"] == "subscription" and claude["ready"] and not claude["signable"]
+    from backend import getting_started
+    with cloud.store.read() as c:
+        online = getting_started._online_runners(c)
+        assert getting_started._signed_in_runtime(online, {"claude"}, c) == "claude"
+        assert getting_started._login_target(online, {"claude"}, c) is None
+    add(cloud.api, "codex_login", codex_file(), name="ChatGPT")
+    with cloud.store.transaction() as c:
+        sid = c.execute("SELECT id FROM model_subscriptions WHERE kind='codex_login'").fetchone()[0]
+    give(cloud.api, shared, "codex", sid)
+    checks = health_of(cloud)
+    assert "computer_signin" not in checks and "computer_logins" not in checks
+
+
+def test_a_cloud_machine_stopped_when_idle_is_not_offline_on_health(cloud):
+    plan_company(cloud, "cpo")
+    shared = shared_for(cloud, "cpo")
+    hour_ago = H.shift(H.now(), hours=-1)
+    with cloud.store.transaction() as c:
+        CM.save(c, CM.SHARED, state="stopped")
+        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (hour_ago, shared["runner_id"]))
+    work(cloud, "cpo")                                       # work waits for it: it starts for that, it is not silent
+    checks = health_of(cloud)
+    assert checks["computers"]["status"] == "ok" and "stopped until work comes" in checks["computers"]["summary"]
+    assert not [k for k in checks if k.startswith("runner_load:")]
+    assert "computer_offline" not in issue_kinds(cloud)
+    with cloud.store.read() as c:
+        from backend import health
+        assert health.silent_computers(c) == []
+    with cloud.store.transaction() as c:                     # a machine with a problem is offline as before
+        CM.save(c, CM.SHARED, problem="out_of_credit")
+    assert health_of(cloud)["computers"]["summary"] == "Every computer is offline."
+    assert "computer_offline" in issue_kinds(cloud)

@@ -16,9 +16,10 @@ from backend.tests.test_assistant import asked, say, turn_message
 def strategy_bot(api):
     """The Strategy Bot every set-up install has."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES('goal-manager','goal-manager','Strategy Bot','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('goal-manager','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('goal-manager','goal-manager','Strategy Bot','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('goal-manager',?,NULL,'ana')",
+                  ('{"runtime":"fake","host":"keeper"}',))
 
 
 def personal(api, pid):
@@ -35,16 +36,17 @@ def turn(api, bot, person, text):
     r = runner(api)
     assign(api, r, bot)
     ready(api, r, [bot])
-    assert say(api, text, person)["fast"] is False
+    assert say(api, text, person)
     return r, post(api, "jobs/claim", {}, token=r["token"])["attempt"]
 
 
 def helper(api, slug, name):
     """Another built-in helper bot (the Librarian), active."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES(?,?,?,'fake','','','','keeper','active',?)", (slug, slug, name, H.now()))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,'{}',NULL,'ana')", (slug,))
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES(?,?,?,'','active',?)", (slug, slug, name, H.now()))
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES(?,?,NULL,'ana')",
+                  (slug, '{"runtime":"fake","host":"keeper"}'))
 
 
 def earlier_chat(api, owner="human:ana", said=("Grow revenue 20% this year", "Here is a plan for that.")):
@@ -158,7 +160,7 @@ def test_cards_waiting_in_the_earlier_chat_move_to_the_assistant_room_once(api):
 def _assistant_asks(api, r, helper_slug, token="ana-test", said="What should we focus on?", cite="turn",
                     expected=200):
     """The person asks their Assistant; its turn files the helper a task citing their words."""
-    assert say(api, said, token)["fast"] is False
+    assert say(api, said, token)
     coo = post(api, "jobs/claim", {"bot": "coo"}, token=r["token"])["attempt"]
     made = api.post("/api/v2/tasks", json={"owner": helper_slug, "title": "From the Assistant", "body": "They asked.",
                                            **({"request_id": cite} if cite else {})},
@@ -356,9 +358,9 @@ def test_a_file_in_an_assistant_chat_lands_on_the_persons_own_message_only(api):
         assert r.status_code == 200, r.text
         sent[token] = r.json()
     ana = sent["ana-test"]["message"]
-    # In her own room, with the page she asked from; a picture skips the quick answers.
+    # In her own room, with the page she asked from; a picture is a turn like any message.
     assert ana["conversation_id"] == rooms["ana-test"] != rooms["ben-test"]
-    assert sent["ana-test"]["reply"] is None and sent["ana-test"]["fast"] is False
+    assert "reply" not in sent["ana-test"]
     with api.app.state.store.read() as c:
         refs = json.loads(c.execute("SELECT refs FROM messages WHERE id=?", (ana["id"],)).fetchone()[0])
     assert refs["page"] == {"path": "#/tasks", "title": "Tasks"} and refs["assistant"] is True

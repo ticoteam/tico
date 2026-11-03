@@ -469,7 +469,8 @@ def test_bot_request_cannot_borrow_a_previous_human_request_through_any_route(ap
     with api.app.state.store.transaction() as c:
         H.task_create(c, "bot:ops", "Review the QA fixture", "Use the previous Owner request.", "bot:botops", lint=False)
     attempt = claim(api, botops, "botops")
-    assert api.get("/api/v2/credentials", headers=headers(attempt["token"])).status_code == 403
+    listed = api.get("/api/v2/credentials", headers=headers(attempt["token"])).json()   # the bot's own grants, by name
+    assert listed["can_manage"] is False and listed["people"] == [] and listed["bots"] == []
     assert act(api, attempt, "GET", "credentials", ref=origin).status_code == 403
     assert call(api, "post", "bots/ops/definition", attempt["token"],
                 {"display_name": "Changed", "expected_revision": 1, "on_behalf_of": origin}).status_code in (401, 403)
@@ -592,7 +593,9 @@ def test_bot_filed_subtask_never_borrows_its_parents_human_rights(api, botops, l
     api.app.add_api_route('/api/v2/qa-child-requester', identity, methods=['GET'])
     api.app.router.routes.insert(0, api.app.router.routes.pop())
     assert get(api, 'qa-child-requester', attempt['token']) == {'actor': 'bot:ops', 'role': 'bot'}
-    assert api.get('/api/v2/credentials', headers=headers(attempt['token'])).status_code == 403
+    listed = api.get('/api/v2/credentials', headers=headers(attempt['token'])).json()   # bot:ops's own grants only
+    assert listed['can_manage'] is False and listed['people'] == [] and listed['bots'] == []
+    assert all(not item['grants'] and 'preview' not in item for item in listed['credentials'])
     assert act(api, attempt, 'GET', 'credentials', ref=origin).status_code == 403
 
 

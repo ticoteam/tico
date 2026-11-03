@@ -72,8 +72,8 @@ def build(args):
     conn.execute("BEGIN")
     conn.executemany("INSERT INTO humans(id,name,email,teams) VALUES(?,?,?,?)",
                      [(h[6:], f"Person {i}", f"person{i}@acme.example", "[]") for i, h in enumerate(humans)])
-    conn.executemany("INSERT INTO bots(slug,display_name,runtime,host,state,created_at) VALUES(?,?,?,?,?,?)",
-                     [(b[4:], f"Bot {i}", "claude", "dispatcher", "active", stamp(0)) for i, b in enumerate(bots)])
+    conn.executemany("INSERT INTO bots(id,slug,display_name,state,created_at) VALUES(?,?,?,?,?)",
+                     [(b[4:], b[4:], f"Bot {i}", "active", stamp(0)) for i, b in enumerate(bots)])
 
     # Conversation mix: direct, shared rooms (one open per bot, the rest closed), personal, task. Main's unique
     # indexes allow one open personal room per (owner, room) and one open shared room per room key.

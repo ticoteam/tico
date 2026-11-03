@@ -16,7 +16,7 @@
   own write is checked: a person's, the keeper's and the hub's own hand-offs (step flows, routines, rule wakes) never
   come through here. Task caps (backend/task_caps.py) are still their own table.
 
-Tables: backend/migrations/0040_reach.sql (0043_reach_nearby.sql adds the `nearby` mode).
+Tables: backend/migrations/0040_reach.sql (0045_reach_nearby.sql adds the `nearby` mode).
 """
 import dataclasses
 import os

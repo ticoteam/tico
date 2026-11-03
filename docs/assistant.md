@@ -97,25 +97,14 @@ the template, puts it on the computer BotOps runs on and activates it, and every
 (`POST /api/v2/assistant/turn-on`). With no computer enrolled yet it is left planned and the button says so; enroll one
 and press it again. Once on, it cannot be archived again. Anyone else is told to ask the owner.
 
-## Two speeds
+## Every message is a turn
 
-Bot runs take 30 seconds or more, so lookups never wait for one. The server answers these itself, from Tico's own data
-and as you (what you may see, nothing more), with no run and no model:
+Each message you send your Assistant is a turn of the assistant bot on the team's computer, shown as "thinking" until it
+answers. Nothing is answered by keyword or from a fixed reply: "what is waiting on me", a search, "open X", what a bot
+did today and how to do something all reach the model, which reads the question and answers it from Tico's own data,
+as you (what you may see, nothing more), with links. A turn takes 30 seconds or more; a greeting is a turn too.
 
-| You ask | It answers from |
-|---|---|
-| A simple greeting (`hi`, `hello`, `hey`, or a time-of-day greeting) | A short greeting when it is the first thing said in the DM; no provider or runner turn (later, it goes to the model) |
-| What task types this workspace uses | The authenticated `GET /api/v2/task-types` response; if it cannot be read, it says so rather than showing an empty or guessed list |
-| What needs me | Needs you |
-| Search / find / look up *x* (add *tasks, docs, meetings, files, humans, bots* to narrow) | tasks, docs, meetings, bots' files, humans, bots |
-| Open / go to / where is *x* | the same search, with the best link first (or a page: Settings, Tasks…) |
-| What did *bot* do today | the bot's updates and the tasks it touched in the last 24 hours |
-| Help: how do I … | `docs/*.md`: a short excerpt and a link |
-
-The intent router is keywords and sentence shape first. When the team has a [decisions](../questions/README.md)
-provider, an unclear short message is classified by a `choice` question (`assistant-intent@1`); otherwise it goes to the
-model; the text of such a message is sent to the team's configured decisions provider to be classified. Anything that asks for something to be done always goes to the model. Everything else is a run of the
-assistant bot on the team's computer, shown as "thinking" until it answers.
+Org rules are checked before a message is written, as for any chat: a held message is not written and nothing is answered.
 
 ## It acts as you, never more
 
@@ -297,8 +286,8 @@ own session, not a personal token.
 
 | Request | Answer |
 |---|---|
-| `GET /api/v2/assistant` | `{"available", "state", "bot", "name", "can_turn_on", "room_id", "messages": [...], "has_more", "next_before", "execution", "actions": {id: action}, "pending": [...]}`. Creates your DM the first time. `execution` is the assistant's current run (null when idle): show a thinking state while it is set and poll again. A message whose `refs.action` names an id in `actions` is a Confirm / Cancel card; `refs.fast` marks a server answer; `refs.links` lists what it linked. |
-| `POST /api/v2/assistant/messages` `{"text", "place"}` | `{"message", "reply", "fast", "intent"}`. `fast: true` carries the answer as `reply`; otherwise the bot is working. `"place": "updates"` (the Updates DM) always takes a turn, handed the recent updates you may read. `409 assistant_off` when it is off. |
+| `GET /api/v2/assistant` | `{"available", "state", "bot", "name", "can_turn_on", "room_id", "messages": [...], "has_more", "next_before", "execution", "actions": {id: action}, "pending": [...]}`. Creates your DM the first time. `execution` is the assistant's current run (null when idle): show a thinking state while it is set and poll again. A message whose `refs.action` names an id in `actions` is a Confirm / Cancel card; `refs.links` lists what it linked. |
+| `POST /api/v2/assistant/messages` `{"text", "place"}` | `{"message"}` (with `held` or `rule_warning` when the org rule check has something to say). The bot is working on it: poll `GET /api/v2/assistant`. `"place": "updates"` (the Updates DM) always takes a turn, handed the recent updates you may read. `409 assistant_off` when it is off. |
 | `POST /api/v2/assistant/turn-on` | Owner only. `{"bot", "state", "restored", "placed"}`. |
 | `POST /api/v2/assistant/actions` `{"summary", "method", "path", "body"}` | A proposal `{"action": {...}}` (what the assistant's tool calls). |
 | `GET /api/v2/assistant/actions/{id}` | `{"action": {"status": "pending"\|"running"\|"done"\|"failed"\|"canceled"\|"expired", "result": {...}}}` |
