@@ -1540,6 +1540,17 @@ def review_children_sql(visible):
             f"AND coalesce(tasks.private,1)=0 AND ({visible}) ORDER BY tasks.created_at LIMIT 3")
 
 
+def _with_live_blockers(c, ids):
+    """The ids among `ids` with at least one blocker still active (task_relations.live_blockers), in set reads."""
+    found = set()
+    for part in H.chunks(sorted(set(ids))):
+        found.update(r[0] for r in c.execute(
+            "SELECT DISTINCT r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task "
+            f"WHERE r.kind='blocks' AND r.to_task IN ({','.join('?' * len(part))}) "
+            f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))})", (*part, *H.ACTIVE_STATUSES)))
+    return found
+
+
 def _aged_pr_checks(c, who, auth, full, kind):
     """Name visible bot PRs waiting over twelve hours, without contacting GitHub."""
     if not full and kind != "bot":
@@ -1908,19 +1919,19 @@ def view(c, who, settings, auth, github, config):
                     [_fix('Open tasks', '#/tasks')]))
     if full:
         from . import task_loops
-        if loops := task_loops.looping(c):
+        if loops := task_loops.looping(c, limit=3):         # the check names three
             # A private task is named only to someone who may read it.
             checks.append(_check("task_loops", "Task loops", "warn", "; ".join(
                 f"{item['title'] if not item['private'] or H.task_private_readable(c, who.actor, H.task(c, item['task_id'])) else 'A private task'}"
                 f" {task_loops.describe(item)}" for item in loops[:3]) + ". Likely a bug; nothing is blocked.",
                 [_fix("Open tasks", "#/tasks")]))
     if full and (silent := silent_waits(c)):
-        named = [(row, H.task_private_readable(c, who.actor, row)) for row in silent]
+        named = [(row, H.task_private_readable(c, who.actor, row)) for row in silent[:3]]     # only three are named
         checks.append(_check("silent_waits", "Waiting on people", "warn", "; ".join(
             f"{row['title'] if readable else 'A private task'} waits on "
             f"{(H.human(c, row['waiting_on']) or {}).get('name') or H.actor_id(row['waiting_on'])} but nothing was asked"
-            for row, readable in named[:3]) + ("." if len(named) <= 3 else f"; and {len(named) - 3} more."),
-            [_fix("Open " + (row["title"][:40] if readable else "task"), "#/task/" + row["id"]) for row, readable in named[:3]]))
+            for row, readable in named) + ("." if len(silent) <= 3 else f"; and {len(silent) - 3} more."),
+            [_fix("Open " + (row["title"][:40] if readable else "task"), "#/task/" + row["id"]) for row, readable in named]))
     if full and (missing_tools := _missing_tool_credentials(c, online_ids)):
         checks.append(_check("tool_credentials", "Tool credentials", "warn",
                              "Missing Credential: " + "; ".join(f"{tool} on {label}" for tool, label in missing_tools[:5])
@@ -2145,7 +2156,7 @@ def view(c, who, settings, auth, github, config):
     # Successful model turns can still make no task progress. Infrastructure and failed-run
     # checks alone miss that loop. Use the same task visibility as the rest of Tico.
     # Waiting tasks can also escalate when held only by their own quiet subtasks.
-    stalled = [row for row in c.execute(
+    candidates = c.execute(
         "SELECT id,title,number,owner_id,updated_at,status,waiting_on FROM tasks "
         "WHERE owner_id LIKE 'bot:%' AND status IN ('open','doing','waiting') "
         f"AND coalesce(private,1)=0 AND ({auth.task_sql(c, who)}) "
@@ -2157,8 +2168,12 @@ def view(c, who, settings, auth, github, config):
         # Redundant with the EXISTS; lets SQLite start from the few escalated tasks, not every task.
         "AND tasks.id IN (SELECT target FROM events WHERE action='task.stall_escalated') "
         "AND EXISTS (SELECT 1 FROM events e WHERE e.action='task.stall_escalated' "
-        "AND e.target=tasks.id AND e.created_at>=tasks.updated_at) ORDER BY updated_at", H.ACTIVE_STATUSES)
-        if row["status"] != "waiting" or H.own_stuck_blockers(c, dict(row))]
+        "AND e.target=tasks.id AND e.created_at>=tasks.updated_at) ORDER BY updated_at", H.ACTIVE_STATUSES).fetchall()
+    # own_stuck_blockers is [] for a task with no live blocker: one read says which waiting ones have any, so the
+    # rest cost no read each (a hub with many escalated waiting tasks made this a statement per task).
+    blocked_ids = _with_live_blockers(c, [row["id"] for row in candidates if row["status"] == "waiting"])
+    stalled = [row for row in candidates
+               if row["status"] != "waiting" or (row["id"] in blocked_ids and H.own_stuck_blockers(c, dict(row)))]
     if stalled:
         items = [{"bot": H.actor_id(row["owner_id"]), "name": row["title"][:200], "task": row["id"],
                   "quiet_minutes": quiet_minutes(row["updated_at"]),

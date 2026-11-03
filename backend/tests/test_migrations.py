@@ -342,8 +342,8 @@ def test_an_older_threads_shape_gets_the_missing_columns_tables_triggers_and_sea
     assert snapshot(path) == once
 
 
-def test_migration_0057_drops_the_federation_tables_with_their_rows_and_nothing_else(tmp_path):
-    """Migration 0057 drops the federation tables migration 0047 made (rows and indexes with them), and the unsent index
+def test_migration_0058_drops_the_federation_tables_with_their_rows_and_nothing_else(tmp_path):
+    """Migration 0058 drops the federation tables migration 0047 made (rows and indexes with them), and the unsent index
     that only they used. A fresh database has no federation table, and a second boot changes nothing."""
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
@@ -353,12 +353,12 @@ def test_migration_0057_drops_the_federation_tables_with_their_rows_and_nothing_
         c.execute("INSERT INTO federation_peerings VALUES('fp-1','gi_0123456789abcdef01234567')")
         c.execute("CREATE INDEX message_deliveries_unsent ON message_deliveries(root_id, recipient) "
                   "WHERE (state='failed' OR (state='pending' AND attempts>=8))")
-    _back_to_before(path, "0057")
+    _back_to_before(path, "0058")
     boot(path)
     with sqlite3.connect(path) as c:
         assert not [name for name in _tables(c) if name.startswith("federation")]
         assert c.execute("SELECT 1 FROM sqlite_master WHERE name='message_deliveries_unsent'").fetchone() is None
-        assert c.execute("SELECT 1 FROM schema_migrations WHERE version='0057_drop_federation'").fetchone()
+        assert c.execute("SELECT 1 FROM schema_migrations WHERE version='0058_drop_federation'").fetchone()
     once = snapshot(path)
     boot(path)
     assert snapshot(path) == once
