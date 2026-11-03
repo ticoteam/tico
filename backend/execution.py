@@ -3297,7 +3297,7 @@ class Execution:
                     or not self.awake(target['awake_since'], H.now()) or runner_versions.paused(c, rid)
                     or cloud_machines.held(c, rid)
                     or load_status(c, rid)['overloaded'] or start_places.ready_waiting(c, rid)
-                    or sum(turns_here(c, rid).values()) >= start_places.turn_limit(target)):
+                    or sum(start_places.live(c, rid).values()) >= start_places.turn_limit(target)):
                 continue
             busy_bots, busy_lanes = claimed_busy(rid, CLAIMED_WAITING_FRESH)
             scope = Claim(busy_bots=list(busy_bots), busy_lanes=['|'.join(x) for x in busy_lanes]) if remote else body
@@ -3358,7 +3358,7 @@ class Execution:
         people_only, held = self.held_starts(c, who.runner_id)
         if held:
             return held
-        count = sum(turns_here(c, who.runner_id).values())
+        count = sum(start_places.live(c, who.runner_id).values())
         if count >= start_places.turn_limit(runner) or not self.awake(awake_since, now):
             return {"attempt": None}
         row = self.candidate(c, who, body, runner, people_only=people_only, failed=failed)
@@ -3484,7 +3484,7 @@ class Execution:
             return held
         if people_only:
             selected, prepared = None, False     # chosen before the hold, perhaps not a person's
-        count = sum(turns_here(c, who.runner_id).values())
+        count = sum(start_places.live(c, who.runner_id).values())
         if count >= start_places.turn_limit(runner):
             return {"attempt": None}
         # A machine that has only just come back cannot be trusted with a 90 s lease yet.

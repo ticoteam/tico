@@ -126,19 +126,38 @@ def held(c, runner_id):
     return out
 
 
+def live(c, runner_id):
+    """{bot: turns it holds on this computer}: running turns and unexpired leases, whether starting, parked on a wait
+    (login, quota, lane, pre-start) or neither. The claim gate counts these, so a computer never leases more turns than
+    its limit. A parked turn keeps its slot; the work behind it stays queued on the server, unleased.
+
+    Cached for the read snapshot, like `held`.
+    """
+    from . import read_cache
+    values = read_cache.cache(c)
+    key = ("start_places.live", runner_id)
+    if values is not None and key in values:
+        return values[key]
+    now = H.now()
+    out = MappingProxyType({r[0]: r[1] for r in c.execute(
+        "SELECT a.bot_id,count(*) FROM attempts a WHERE a.runner_id=? AND (a.state='running' "
+        "OR (a.state='leased' AND a.lease_until>?)) GROUP BY a.bot_id", (runner_id, now))})
+    if values is not None:
+        values[key] = out
+    return out
+
+
 # Without the hint SQLite walked attempts_runner_finished (every attempt ever run) to skip the GROUP BY sort:
 # 48 ms on Tico Team's 37k attempts, 0.1 ms over the live ones.
-HELD_TOTALS_SQL = (
-    "SELECT a.runner_id,count(*) FROM attempts a INDEXED BY attempts_live_lease LEFT JOIN start_places p "
-    "ON p.attempt_id=a.id WHERE a.state IN ('leased','running') AND (a.state='running' OR (a.state='leased' "
-    "AND a.lease_until>? AND (p.start_until>? OR p.attempt_id IS NULL OR p.managed=0))) GROUP BY a.runner_id")
+LIVE_TOTALS_SQL = (
+    "SELECT a.runner_id,count(*) FROM attempts a INDEXED BY attempts_live_lease "
+    "WHERE a.state IN ('leased','running') AND (a.state='running' OR a.lease_until>?) GROUP BY a.runner_id")
 
 
-def held_totals(c):
-    """{runner_id: turns held} for every computer in one pass. Health's capacity fence used to call
-    `held` once per runner while already walking the fleet."""
-    now = H.now()
-    return {r[0]: r[1] for r in c.execute(HELD_TOTALS_SQL, (now, now))}
+def live_totals(c):
+    """{runner_id: turns held} for every computer in one pass, counted as `live` counts them. Health's capacity fence
+    used to call `live` once per runner while already walking the fleet."""
+    return {r[0]: r[1] for r in c.execute(LIVE_TOTALS_SQL, (H.now(),))}
 
 
 # A computer's "Turns at once" (runners.turns_at_once, NULL: automatic, its own capacity). A runner that cannot take a

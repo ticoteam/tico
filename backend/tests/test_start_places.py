@@ -84,20 +84,26 @@ def test_health_below_warning_counts_queued_work_without_asking_each_bot_why(api
     assert line['turn_counts']['waiting'] + line['turn_counts']['queued'] == 2
 
 
-def test_unrelated_work_and_free_turn_ignore_37_login_waiters(api):
-    """Spec 2: a different login starts immediately on an otherwise idle computer."""
+def test_parked_logins_hold_their_places_so_another_login_waits_until_one_ends(api):
+    """A parked turn keeps its lease and its place: 37 logins waiting plus 3 running fill a 40-turn computer, so a
+    different login is refused (and says it is full) until one lease ends, then it starts at once."""
+    from backend import start_places
+    from backend.views import free_turn
     computer = waiters(api)
     rid = computer['runner_id']
     assign(api, computer, 'finance')
     ready(api, computer, ['ops', 'finance'])
-    with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET capacity=40 WHERE id=?', (rid,))
     post(api, 'chat/finance', {'text': 'Independent work on another login'})
+    with api.app.state.store.read() as c:
+        assert sum(start_places.live(c, rid).values()) == 40
+        assert free_turn(c, 'ops', {'machine': {'runner_id': rid, 'label': 'Test Mac'}}) == 'Test Mac'
+    assert claim(api, computer, 'finance') is None
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET lease_until=? WHERE id='attempt-0'", (H.shift(H.now(), seconds=-1),))
+    with api.app.state.store.read() as c:
+        assert free_turn(c, 'ops', {'machine': {'runner_id': rid, 'label': 'Test Mac'}}) == ''
     attempt = claim(api, computer, 'finance')
     assert attempt is not None and attempt['bot'] == 'finance'
-    with api.app.state.store.read() as c:
-        from backend.views import free_turn
-        assert free_turn(c, 'ops', {'machine': {'runner_id': rid, 'label': 'Test Mac'}}) == ''
 
 
 def test_two_ready_waiters_claim_last_start_place_atomically(api):
@@ -466,8 +472,8 @@ def test_operations_and_computers_share_one_company_default_across_runners(api, 
     assert computer_calls == 1, computer_calls
 
 
-def test_held_totals_match_each_computers_held_counts(api):
-    """Health's capacity fence used one held() query per computer; the fleet pass must agree."""
+def test_live_totals_match_each_computers_live_counts(api):
+    """Health's capacity fence used one live() query per computer; the fleet pass must agree."""
     from backend import start_places
     from backend.tests.test_api import runner
 
@@ -476,9 +482,9 @@ def test_held_totals_match_each_computers_held_counts(api):
     assign(api, second, 'finance')
     ready(api, second, ['finance'])
     with api.app.state.store.read() as c:
-        totals = start_places.held_totals(c)
+        totals = start_places.live_totals(c)
         for rid in (first['runner_id'], second['runner_id']):
-            assert totals.get(rid, 0) == sum(start_places.held(c, rid).values())
+            assert totals.get(rid, 0) == sum(start_places.live(c, rid).values())
 
 
 def memory(api, computer, mem, at=None):

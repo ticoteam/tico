@@ -600,7 +600,7 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
         turns.setdefault(r["runner_id"], []).append(r)
     # A computer running as many turns as it takes holds the rest back on purpose: queued, not stuck.
     from . import start_places
-    held_now = start_places.held_totals(c)
+    held_now = start_places.live_totals(c)
     full = {r["id"] for r in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL")
             if held_now.get(r["id"], 0) >= start_places.turn_limit(r)}
     # A computer due an update keeps claiming for a while, then claims nothing until its running turns end and it
