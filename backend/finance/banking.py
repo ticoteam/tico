@@ -445,7 +445,10 @@ def refresh_connection_openings(ctx: Ctx, connection_id: str) -> None:
 
 def pair_card_payments(ctx: Ctx, connection_id: str) -> int:
     """At the end of a sync pass: card payments taken in before both sides could pair (_card_payment) pair now. Each
-    unposted payment on the connection's credit card programs looks for its one bank side again. How many paired."""
+    unposted payment on the connection's credit card programs looks for its one bank side again. How many paired.
+    A mirror pairs nothing: its rows wait for the provider's own entries (mirror.settle_row)."""
+    if ctx.book.mode == "mirror":
+        return 0
     paired = 0
     for money in SK.money_accounts(ctx.c, ctx.book.id):
         if str(money["connection_id"] or "") != connection_id or str(money["kind"]) != "card_program" \

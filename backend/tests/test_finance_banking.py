@@ -1288,3 +1288,22 @@ def test_card_payments_taken_in_before_they_could_pair_pair_on_a_later_pass(book
         assert entry and tuple(_row(c, "old-out")) == ("posted", entry)
         assert _codes(c, entry) == sorted([("1000", -10_550), (cards, 10_550)])
         assert _row(c, "amb-in")[1] is None
+
+
+def test_a_mirror_leaves_both_sides_of_a_card_payment_for_the_provider(books):
+    """Mirrored books: an IO autopay's bank and card sides wait for the provider's entries. The later pass pairs
+    nothing and writes no local transfer."""
+    from backend.finance.store import ledger as SL
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        c.execute("INSERT INTO fin_connections(id, provider, purpose, created_at, created_by, name) "
+                  "VALUES('conn-books','quickbooks','books',?,?,'Acme books')", (LATER, "human:owner"))
+        SL.set_book_mode(c, SL.book(c).id, "mirror", "conn-books")
+    fake.txns["pay-out"] = _txn("pay-out", "acct-chk", -105.5, "other", day="2026-10-01")
+    fake.txns["pay-in"] = _txn("pay-in", "credit-io", 105.5, "other", day="2026-10-01")
+    sync_once(books, fake)
+    sync_once(books, fake, LATER)
+    with books.read() as c:
+        assert _row(c, "pay-out")[1] is None and _row(c, "pay-in")[1] is None
+        assert c.execute("SELECT COUNT(*) FROM fin_entries WHERE source='bank'").fetchone()[0] == 0
