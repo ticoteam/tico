@@ -12,7 +12,7 @@
           - {id: a13f9e20-71cd-4b8e-a0f3-2c9d5e6b7a10, short_id: a13f9e20, title: "Spring launch: launch email", status: doing, owner: "copywriter", requester: "human:dana", note: "Draft 2 is in review. It cannot be scheduled until the final price line is in.", created: "2026-10-14T15:20:00Z", updated: "2026-10-31T11:40:00Z"}
           - {id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4, short_id: 5b8e0d11, title: "Spring launch: pricing page", status: open, owner: "human:dana", requester: "human:dana", note: "", created: "2026-10-20T10:05:00Z", updated: "2026-10-20T10:05:00Z"}
         next_offset: null
-    - match: '^task show 5b8e0d11'
+    - match: '^task show 5b8e0d11\S*'
       out:
         task:
           id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4

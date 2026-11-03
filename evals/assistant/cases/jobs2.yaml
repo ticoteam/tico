@@ -162,7 +162,7 @@
         org_groups:
           - {id: leadership, name: Leadership}
           - {id: engineering, name: Engineering}
-    - match: '^task show c2d3e4f5'
+    - match: '^task show c2d3e4f5\S*'
       out:
         task:
           id: c2d3e4f5-1000-4000-8000-000000000011
@@ -197,7 +197,7 @@
         goals:
           - {id: goal_4f2a9c1b, title: "Paid trials to 400 a month by year end", owner: "human:dana", status: at_risk, bet: "Self-serve trials", kpis: [{name: "Paid trials per month", latest: 318, target: 400, as_of: "2026-10-31"}]}
         next: null
-    - match: '^goal show goal_4f2a9c1b'
+    - match: '^goal show goal_4f2a9c1b\S*'
       out:
         goal:
           id: goal_4f2a9c1b
@@ -209,7 +209,7 @@
   must:
     - '^goal (list|show)\b'
   must_not:
-    - '^goal (save|create|update|checkin|refresh|status)(?! -h\b| --help)'
+    - '^goal (save|create|update|refresh|status|checkin)(?![-\w])(?! -h\b| --help)'
     - '^message send(?! -h\b| --help)'
   reply: |
     Names Dana's goal, "Paid trials to 400 a month by year end", with its status (at risk) and its number from the record: 318 a
@@ -295,7 +295,7 @@
           - {id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4, title: "Spring launch: pricing page", status: open, owner: "human:dana", requester: "human:dana", note: "", created: "2026-10-20T10:05:00Z", updated: "2026-10-20T10:05:00Z"}
           - {id: a13f9e20-71cd-4b8e-a0f3-2c9d5e6b7a10, title: "Spring launch: launch email", status: doing, owner: "bot:copywriter", requester: "human:dana", note: "Draft 2 is in review.", created: "2026-10-14T15:20:00Z", updated: "2026-10-31T11:40:00Z"}
         next_offset: null
-    - match: '^task show 5b8e0d11'
+    - match: '^task show 5b8e0d11\S*'
       out:
         task:
           id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4
@@ -306,12 +306,12 @@
           body: "Final annual prices and the one-line price for the launch email. The email copy quotes the price line from this page."
         events: []
         comments: []
-    - match: '^task (update|done|close) 5b8e0d11'
+    - match: '^task (update|done|close) 5b8e0d11\S*'
       out:
         ok: true
         task: {id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4, status: done}
   must:
-    - '^task (update|done|close) 5b8e0d11'
+    - '^task (update|done|close) 5b8e0d11\S*'
   must_not:
     - '^message send(?! -h\b| --help)'
     - '^task (create|bulk close)(?! -h\b| --help)'
@@ -330,7 +330,7 @@
         tasks:
           - {id: 3e90c7b2-14fa-4d6e-b5a8-7c1f0e9d3b26, title: "Q2 paid trials into the sheet", status: done, owner: "bot:analytics", requester: "human:dana", note: "Loaded Q2 paid trials. Next refresh monthly.", created: "2026-07-02T10:00:00Z", updated: "2026-07-09T17:02:00Z"}
         next_offset: null
-    - match: '^task show 3e90c7b2'
+    - match: '^task show 3e90c7b2\S*'
       out:
         task:
           id: 3e90c7b2-14fa-4d6e-b5a8-7c1f0e9d3b26
@@ -341,12 +341,12 @@
           body: "Load Q2 paid trials into the metrics sheet, tab Trials."
         events: [{at: "2026-07-09T17:02:00Z", actor: "bot:analytics", text: "Marked done."}]
         comments: []
-    - match: '^task update 3e90c7b2'
+    - match: '^task update 3e90c7b2\S*'
       out:
         ok: true
         task: {id: 3e90c7b2-14fa-4d6e-b5a8-7c1f0e9d3b26, status: doing}
   must:
-    - '^task update 3e90c7b2'
+    - '^task update 3e90c7b2\S*'
   must_not:
     - '^task (create|close|bulk close|done)(?! -h\b| --help)'
     - '^message send(?! -h\b| --help)'
@@ -375,7 +375,7 @@
         tasks:
           - {id: c2d3e4f5-1000-4000-8000-000000000011, title: "Website preview deploy failing", status: open, owner: "human:dana", requester: "bot:engineering-lead", note: "", created: "2026-10-14T09:00:00Z", updated: "2026-10-14T09:00:00Z"}
         next_offset: null
-    - match: '^task show c2d3e4f5'
+    - match: '^task show c2d3e4f5\S*'
       out:
         task:
           id: c2d3e4f5-1000-4000-8000-000000000011
@@ -386,12 +386,12 @@
           body: "The preview deploy fails on the build step. Opened by Engineering Lead on Oct 14."
         events: []
         comments: []
-    - match: '^task update c2d3e4f5'
+    - match: '^task update c2d3e4f5\S*'
       out:
         ok: true
         task: {id: c2d3e4f5-1000-4000-8000-000000000011, owner: "bot:support-bot"}
   must:
-    - '^task update c2d3e4f5 .*--owner (bot:)?support-bot'
+    - '^task update c2d3e4f5\S* .*--owner (bot:)?support-bot'
   must_not:
     - '^task (close|bulk close|create|done)(?! -h\b| --help)'
     - '^message send(?! -h\b| --help)'
@@ -409,7 +409,7 @@
         tasks:
           - {id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4, title: "Spring launch: pricing page", status: open, owner: "human:dana", requester: "human:dana", note: "", created: "2026-10-20T10:05:00Z", updated: "2026-10-20T10:05:00Z"}
         next_offset: null
-    - match: '^task show 5b8e0d11'
+    - match: '^task show 5b8e0d11\S*'
       out:
         task:
           id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4
@@ -420,12 +420,12 @@
           body: "Final annual prices and the one-line price for the launch email."
         events: []
         comments: []
-    - match: '^task comment 5b8e0d11'
+    - match: '^task comment 5b8e0d11\S*'
       out:
         ok: true
         comment: {id: 4d19a6e2-6100-4000-8000-000000000001, task_id: 5b8e0d11-aa47-4c92-8e13-f0a6b7c9d2e4, actor: "human:dana (via Assistant)"}
   must:
-    - '^task comment 5b8e0d11'
+    - '^task comment 5b8e0d11\S*'
   must_not:
     - '^message send(?! -h\b| --help)'
     - '^task (close|update|bulk close|done)(?! -h\b| --help)'
@@ -447,15 +447,15 @@
         more_messages: false
         tasks: []
         notices: []
-    - match: '^question answer 6d2b8e17'
+    - match: '^question answer 6d2b8e17\S*'
       out:
         ok: true
         answered: "yes, go ahead"
         to: "bot:botops"
   must:
-    - '^question answer 6d2b8e17'
+    - '^question answer 6d2b8e17\S*'
   must_not:
-    - '^question answer 3f0e9a52'
+    - '^question answer 3f0e9a52\S*'
     - '^message send(?! -h\b| --help)'
     - '^approval (approve|decline)(?! -h\b| --help)'
     - '^task create .*--owner botops'
