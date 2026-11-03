@@ -85,6 +85,12 @@ MODEL_CATALOG = tuple(attach_harnesses(row) for row in (
     {"id": "gpt-6.1-sol", "label": "gpt 6.1 sol", "runtime": "codex", "provider": "openai",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "medium"},
+    # Gated (Dev 693): priced, not offered. `held` rows are never listed or picked, and `deprecated` gives them the
+    # refusals every retired row gets (a bot cannot choose them, the cloud and memory pickers skip them). Product
+    # opens customer availability separately; until then this row stays held, even if Tico HQ publishes a tier for the id.
+    {"id": "gpt-6.1-terra", "label": "gpt 6.1 terra", "runtime": "codex", "provider": "openai",
+     "efforts": ("low", "medium", "high", "xhigh", "max"), "default_effort": "medium",
+     "deprecated": True, "held": True},
     {"id": "gpt-6-sol", "label": "gpt 6 sol", "runtime": "codex", "provider": "openai",
      "efforts": ("low", "medium", "high", "xhigh", "max"),
      "default_effort": "medium", "deprecated": True},
@@ -254,7 +260,7 @@ PRICES = _Priced({
     "gpt-6-sol": (2.0, 0.20, 10.0),
     "gpt-6-luna": (0.10, 0.01, 0.50),
     "gpt-6.1-sol": (2.0, 0.10, 10.0),
-    "gpt-6.1-terra": (1.25, 0.0625, 6.25),   # Tico's approved rate (Chris, 2026-10-28): OpenAI standard +25%, not OpenAI's list price; no customer model row
+    "gpt-6.1-terra": (1.25, 0.062, 6.25),    # Tico's approved rate (Chris, 2026-10-28): OpenAI standard +25%, not OpenAI's list price; cached input rounded down to 0.062 (ruling 2026-11-03)
     "gpt-5.6-sol": (4.0, 0.40, 20.0),
     "gpt-5.6-terra": (2.0, 0.20, 12.0),
     "gpt-5.6-luna": (0.20, 0.02, 1.20),
@@ -353,7 +359,7 @@ def serves(provider, row):
 def provider_models(provider, *, current=True, meeting=False):
     """The catalog models a provider serves. A bot's picks leave out the meeting models unless `meeting` asks for them."""
     return [row for row in MODEL_CATALOG
-            if serves(provider, row) and not (current and row.get("deprecated"))
+            if serves(provider, row) and not row.get("held") and not (current and row.get("deprecated"))
             and bool(row.get("meeting")) == meeting]
 
 
@@ -401,7 +407,7 @@ def complete_choice(enabled, runtime="", model="", kept=""):
         return "", ""
     if model:
         row = MODEL_BY_ID.get(model)
-        if not row or not row["provider"]:
+        if not row or not row["provider"] or row.get("held"):
             raise ProviderError("model", f"Unknown default model {model!r}", 422)
         if runtime and runtime != row["runtime"]:
             raise ProviderError("model", f"{model} runs on {row['runtime']}, not {runtime}", 422)
@@ -492,7 +498,8 @@ def meeting_choice(record, model):
     if not model:
         return ""
     row = MODEL_BY_ID.get(model)
-    if not row or not row["provider"] or row.get("deprecated") or not runtime_enabled(row["runtime"], record["enabled"], row):
+    if not row or not row["provider"] or row.get("deprecated") or row.get("held") \
+            or not runtime_enabled(row["runtime"], record["enabled"], row):
         raise ProviderError("meeting_model", "Choose one of the models this company can run for meetings", 422)
     return model
 
