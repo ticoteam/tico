@@ -107,19 +107,24 @@ def test_a_routine_whose_row_is_gone_is_still_not_recreated(environment):
 
 
 def test_a_person_edited_routine_is_untouched(environment):
+    """Once moved, a routine's on/off and its words are the automation's: a person's edit there stays through a restart."""
+    from backend import automations
     api = environment(seed=COO)
     _write_assistant_routines(api)
     _ensure(api)
     with api.app.state.store.transaction() as c:
         who = api.app.state.auth.owner_identity(c)
-        routines.update(c, who.actor, SWEEP, {"title": "My sweep", "cron": "0 7 * * 1", "enabled": False})
+        auto_id = _row(api)["automation"]
+        before = automations.flow_of(_automation(c, auto_id))
+        routines.update(c, who.actor, SWEEP, {"enabled": False})
+        automations._save(c, who.actor, auto_id, {**before, "name": "My sweep"}, before, via="routine")
     with api.app.state.store.read() as c:
-        auto = _automation(c, _row(api)["automation"])
+        auto = _automation(c, auto_id)
     api = _restart(api)
     with api.app.state.store.read() as c:
-        assert _automation(c, auto["id"]) == auto           # the same automation, unchanged by startup
+        assert _automation(c, auto_id) == auto               # the same automation, unchanged by startup
         assert routines.row(c, SWEEP)["enabled"] == 0
-    assert "My sweep" in auto["flow"] and "0 7 * * 1" in auto["flow"]
+    assert auto["name"] == "My sweep" and auto["enabled"] == 0
     assert len(_rows(api)) == 1
     api.__exit__(None, None, None)
 
