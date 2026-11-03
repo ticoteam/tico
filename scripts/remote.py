@@ -33,7 +33,7 @@ def rate_limit_wait():
 
 
 def gh(*args, capture=True, poll=False):
-    """`gh`. With `poll` (a call in a poll loop), a rate-limit failure waits for the reset, then makes the call again."""
+    """`gh`. With `poll` (a poll loop's call), a rate-limit failure waits for the reset, then retries."""
     while True:
         result = subprocess.run(['gh', *args], cwd=ROOT, capture_output=capture, text=True)
         if result.returncode == 0:
