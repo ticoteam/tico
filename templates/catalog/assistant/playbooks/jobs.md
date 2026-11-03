@@ -6,7 +6,7 @@ first 8 characters. Do not add `--on-behalf-of` except where a command requires 
 
 ## Look and find
 
-Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner`, `--requester`, `--member` and `--all`; `--where-status` belongs to `hub task bulk`. People: `hub team show`, or `hub team show --person <id>`. There is no `hub person`, and no `hub --version`.
+Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner`, `--requester`, `--member` and `--all`; `--where-status` belongs to `hub task bulk`. People: `hub team show`, or `hub team show --person <id>`.
 
 1. **"What needs me?" / "what is waiting on me?"**: `hub message list`, `hub task list`. Say the count, then the few that are real decisions, with links.
 2. **"Which really need me?"**: `hub needs-you show` (exact counts by kind and by the bot that asked), then `hub task show <id>` on the few that look like decisions. Name them; do not guess.
