@@ -12,7 +12,8 @@ import sqlite3
 from threading import Lock
 from types import MappingProxyType
 
-PARTIES = "SELECT id,requester_id,owner_id,guest,private FROM tasks INDEXED BY tasks_private_parties WHERE private IS NOT 0"
+# tasks_private_status holds these columns (and two more) under this WHERE, word for word: the read never touches a body.
+PARTIES = "SELECT id,requester_id,owner_id,guest,private FROM tasks INDEXED BY tasks_private_status WHERE private IS NOT 0"
 ACCESS = "SELECT key,value FROM registry_metadata WHERE key IN ('owner','access','rules')"
 _IN_ACCESS = "IN ('owner','access','rules')"
 # Every task id, and every room's task. Only the existence of a task and a room's task reference are shared: a status

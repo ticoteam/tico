@@ -116,7 +116,7 @@ function pageCompanyPage() {
   cpTeardown();
   const main = $('#main');
   main.classList.add('strategy-layout', 'company-layout');
-  const title = '<div class="strat-head rd-strat-head cp-head"><h1>Company page</h1>';
+  const title = '<div class="strat-head rd-strat-head cp-head"><h1>Share</h1>';
   if (!cpAllowed()) { main.innerHTML = title + '</div>' + cpEmpty('Owners and admins only'); return; }
   const head = title + `<span class="spacer"></span><a class="strat-sub" href="${OVERVIEW_COMPANY}" data-cp-view>View page</a></div>`;
   const state = CP = cpNewState();
@@ -283,7 +283,7 @@ function cpTransparency() {
     : `<a class="cp-address" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${shown}<span class="nav-icon" aria-hidden="true">open_in_new</span></a>${cpBtn('data-cp-copy', 'Copy link')}`;
   // An install with its own reader address has nothing to set here. With a page domain, the address is what Open needs first.
   const set = !s.reader_origin && s.page_domain ? cpBtn('data-cp-address', s.slug ? 'Change address' : 'Set address') : '';
-  const note = noWhere ? '<p class="cp-note" data-cp-no-address>This install has no page address (TICO_READER_ORIGIN)</p>' : privateOn ? '' : cpPrivateOff();
+  const note = noWhere ? '<p class="cp-note" data-cp-no-address>No page address yet</p>' : privateOn ? '' : cpPrivateOff();
   return cpSection('transparency', '', `<div class="cp-level">${seg}${address}${set}</div>${note}${CP.tab ? '' : cpLook(s)}`);
 }
 async function cpCopyAddress(button) {
@@ -1042,7 +1042,7 @@ function pageOverviewCompany() {
   const acts = !allowed ? '' : `<span class="cp-tab-acts" hidden><span class="cp-tab-preview" data-cp-preview hidden>Preview</span><span class="cp-tab-pick" data-cp-tab-pick></span>
     <button type="button" class="ghost cp-share-btn" data-cp-share aria-label="Share" aria-haspopup="dialog" title="Share"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M8 7.5l4-4 4 4"/><path d="M8 11H6v9.5h12V11h-2"/></svg></button>
     <a class="cp-manage" href="${CP_ROUTE}" data-cp-manage>Manage</a></span>`;
-  main.innerHTML = `<section class="overview-page cp-tab" aria-label="Company page"><div class="overview-tabs"><h1>Overview</h1>${dashTabsHTML('company')}${acts}</div>
+  main.innerHTML = `<section class="overview-page cp-tab" aria-label="Share"><div class="overview-tabs"><h1>Overview</h1>${dashTabsHTML('company')}${acts}</div>
     <div class="cp-tab-body" id="cp-tab-body">${allowed ? skelRows(4, {dot: false}) : cpEmpty('Owners and admins only')}</div></section>`;
   if (!allowed) return;
   const state = CP = {...cpNewState(), tab: true};

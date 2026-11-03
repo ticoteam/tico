@@ -23,6 +23,7 @@ import time
 
 from . import egress
 from . import hubdb as H
+from . import outbox as O
 from . import runs
 
 log = logging.getLogger(__name__)
@@ -32,8 +33,11 @@ SWEEP = 5.0                       # seconds a worker sleeps without a ring
 PER_HOST = 2                      # sends in flight to one host at once
 STALE = 120                       # seconds a `sending` row may sit before it returns to `ready`
 RETRY_AFTER = (5, 300, 1800, 7200, 18000, 36000, 36000)     # seconds after the 1st, 2nd... failed attempt
-MAX_ATTEMPTS = len(RETRY_AFTER) + 1
 JITTER = 0.10
+SCHEDULE = O.Waits(RETRY_AFTER, jitter=JITTER)
+MAX_ATTEMPTS = SCHEDULE.max_attempts
+TABLE = O.Table("webhook_sends", due="ready", flight="sending", due_at="next_attempt_at", lease="claimed_at",
+                attempts="attempts", error="last_error")
 GRACE_HOURS = 24
 NOTIFY_HOURS = 24
 KEEP_DAYS = 30
@@ -67,9 +71,7 @@ def headers_for(secrets_, send_id, timestamp, body, custom=None):
 
 def retry_delay(failed, rng=random):
     """Seconds until the next attempt after `failed` failed attempts (1 after the first), or None when none are left."""
-    if failed >= MAX_ATTEMPTS:
-        return None
-    return RETRY_AFTER[failed - 1] * rng.uniform(1 - JITTER, 1 + JITTER)
+    return SCHEDULE.after(failed, rng)
 
 
 # ----------------------------------------------------------------------------------------------------- the workers
@@ -161,8 +163,7 @@ def recover(store, now=None):
     """`sending` rows whose worker never recorded an answer (a crash, a restart) go back to `ready`."""
     now = now or H.now()
     with store.transaction() as c:
-        back = c.execute("UPDATE webhook_sends SET state='ready', claimed_at=NULL, next_attempt_at=? "
-                         "WHERE state='sending' AND claimed_at<?", (now, H.shift(now, seconds=-STALE))).rowcount
+        back = O.reclaim_stale(c, TABLE, before=H.shift(now, seconds=-STALE), now=now)
     if back:
         log.warning("%d webhook sends were in flight when their worker stopped; trying them again", back)
         ring()
@@ -200,8 +201,9 @@ def claim(store, now):
             if count >= row["rate_per_hour"]:
                 c.execute("UPDATE webhook_sends SET next_attempt_at=? WHERE id=?", (H.shift(start_, hours=1), row["id"]))
                 continue
+            if not O.claim(c, TABLE, row["id"], now):
+                continue
             c.execute("UPDATE webhooks SET window_start=?, window_count=? WHERE id=?", (start_, count + 1, row["webhook_id"]))
-            c.execute("UPDATE webhook_sends SET state='sending', claimed_at=? WHERE id=?", (now, row["id"]))
             return row["id"]
     return None
 
@@ -226,7 +228,7 @@ def deliver(store, vault, send_id, *, transport=None):
         # A secret header whose value was cleared when the address changed: never sent without it. The send waits for
         # the value (the endpoint is paused until then, so it is not claimed again).
         with store.transaction() as c:
-            c.execute("UPDATE webhook_sends SET state='ready', claimed_at=NULL WHERE id=? AND state='sending'", (send_id,))
+            O.release(c, TABLE, send_id)
         return
     # A body queued before the API v2 rename still says attempt_id: it leaves as a run, like one queued after it.
     body = runs.public_json(send["body"]).encode()
@@ -257,30 +259,24 @@ def record(store, send, timestamp, status, head, error, abort, ms):
         else:
             c.execute("UPDATE webhooks SET failing_since=? WHERE id=? AND failing_since IS NULL", (now, send["webhook_id"]))
         now_row = c.execute("SELECT state, attempts FROM webhook_sends WHERE id=?", (send["id"],)).fetchone()
-        if not now_row or now_row["state"] != "sending":
+        if not now_row or now_row["state"] != TABLE.flight:
             return                              # deleted or retried by hand while the post was out; the attempt stays logged
         attempts = now_row["attempts"] + 1
         shown = error or f"HTTP {status}"
         from . import task_trigger_rules
         task_trigger_rules.webhook_result(c, send["event_id"], status)
         if status is not None and 200 <= status < 300:
-            c.execute("UPDATE webhook_sends SET state='delivered', attempts=?, last_status=?, last_error='', "
-                      "delivered_at=?, next_attempt_at=?, claimed_at=NULL WHERE id=?", (attempts, status, now, now, send["id"]))
+            O.finish(c, TABLE, send["id"], "delivered", attempts=attempts, error="", due_at=now,
+                     extra={"last_status": status, "delivered_at": now})
         elif abort:
-            c.execute("UPDATE webhook_sends SET state='canceled', attempts=?, last_status=?, last_error=?, "
-                      "next_attempt_at=?, claimed_at=NULL WHERE id=?",
-                      (attempts, status, "The receiver asked not to be sent this message again", now, send["id"]))
+            O.finish(c, TABLE, send["id"], "canceled", attempts=attempts, error="The receiver asked not to be sent this message again",
+                     due_at=now, extra={"last_status": status})
+        elif O.settle_failure(c, TABLE, send["id"], attempts=attempts, error=shown, schedule=SCHEDULE, now=now,
+                              later=lambda at, seconds: H.shift(at, seconds=seconds), give_up_state="failed",
+                              extra={"last_status": status}):
+            exhausted(c, send, attempts, status, shown, now)
         else:
-            wait = retry_delay(attempts)
-            if wait is None:
-                c.execute("UPDATE webhook_sends SET state='failed', attempts=?, last_status=?, last_error=?, "
-                          "next_attempt_at=?, claimed_at=NULL WHERE id=?", (attempts, status, shown, now, send["id"]))
-                exhausted(c, send, attempts, status, shown, now)
-            else:
-                at = H.shift(now, seconds=wait)
-                c.execute("UPDATE webhook_sends SET state='ready', attempts=?, last_status=?, last_error=?, "
-                          "next_attempt_at=?, claimed_at=NULL WHERE id=?", (attempts, status, shown, at, send["id"]))
-                c.after_commit.append(ring)
+            c.after_commit.append(ring)
 
 
 def exhausted(c, send, attempts, status, shown, now):
