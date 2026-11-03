@@ -182,6 +182,27 @@ class MemoryTidyPassRow(TypedDict):
     cost_usd: float
 
 
+class FeedbackRow(TypedDict):
+    """One person's 👍 or 👎 on something a bot made (backend/feedback.py); the run fields are None where it had none."""
+    id: str
+    person_id: str
+    subject_type: str
+    subject_id: str
+    bot_id: str
+    conversation_id: str | None
+    attempt_id: str | None
+    model: str | None
+    harness: str | None
+    subject_revision: int | None
+    rating: str
+    reason: str
+    outcome: str
+    note_id: str | None
+    org_rule_id: str | None
+    created_at: str
+    updated_at: str
+
+
 class ThreadRankingRow(TypedDict):
     """A root thread's Important level (backend/thread_rank.py); `score` is None until a call answers."""
     thread_id: str

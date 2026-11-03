@@ -8343,6 +8343,8 @@ def create_app(settings=None):
     counsel.install(app, store, auth, mutate)      # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
     reach.install(app, store, auth, mutate)        # Rules › Internal: who reaches whom (docs/reach.md)
+    from . import feedback
+    feedback.install(app, store, auth, mutate)     # 👍/👎 on bot work (backend/feedback.py)
     profiles.install(app, store, auth, mutate, settings_admin)
     from . import release_flow
     release_flow.install(app, store, auth, mutate)

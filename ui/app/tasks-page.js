@@ -625,4 +625,5 @@ function tasksRender(state) {
   }
   tasksSelectionPaint(state);
   tasksTabsPaint(state);
+  fbSync();
 }

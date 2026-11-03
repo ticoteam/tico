@@ -497,10 +497,11 @@ function taskListRowHTML(it, ctx, depth = 0) {
   // What a row shows is drawn here; its selection, cursor and peek are painted on afterwards (tasksSelectionPaint,
   // tasksCursorPaint), so an unchanged row keeps the same signature and the poll leaves it alone.
   void selected;
-  const row = tasksSigned(`<div class="tl-row${failed ? ' failed' : ''}${note?.mine ? ' mine' : ''}" data-task-key="${esc(key)}"${card ? ` data-need-card="${esc(card)}"` : ''} role="listitem" aria-level="${depth + 1}" style="--depth:${depth}" title="${esc(taskRowTip(t))}">
+  const fb = fbTaskKey(t);             // a bot asked for it: 👍 / 👎 on hover or a long press (ui/app/feedback.js)
+  const row = tasksSigned(`<div class="tl-row${failed ? ' failed' : ''}${note?.mine ? ' mine' : ''}" data-task-key="${esc(key)}"${card ? ` data-need-card="${esc(card)}"` : ''}${fb ? ` data-fb-press="${esc(fb)}"` : ''} role="listitem" aria-level="${depth + 1}" style="--depth:${depth}" title="${esc(taskRowTip(t))}">
     ${ctx.select ? `<input type="checkbox" class="tl-check" data-select="${esc(key)}" tabindex="-1" aria-label="Select ${esc(it.title)}">` : '<span class="tl-check-pad"></span>'}
     ${kids.length ? `<button type="button" class="tl-chev${open ? ' open' : ''}" data-expand="${esc(key)}" tabindex="-1" aria-expanded="${open ? 'true' : 'false'}" aria-label="${open ? 'Hide' : 'Show'} subtasks of ${esc(it.title)}">${TL_ICON.chev}</button>` : '<span class="tl-chev-pad"></span>'}
-    <button type="button" class="tl-open" data-open-task="${esc(key)}" tabindex="-1"${kids.length ? ` aria-expanded="${open ? 'true' : 'false'}"` : ''}><span class="tl-title">${esc(it.title)}</span></button>
+    <button type="button" class="tl-open" data-open-task="${esc(key)}" tabindex="-1"${kids.length ? ` aria-expanded="${open ? 'true' : 'false'}"` : ''}><span class="tl-title">${esc(it.title)}</span>${fbMarkHTML(fb)}</button>
     ${parent?.title ? `<span class="tl-parent" title="Part of ${esc(parent.title)}"><span aria-hidden="true">↳ </span><span class="tl-parent-t">${esc(parent.title)}</span></span>` : ''}
     ${refused ? `<span class="tl-note tl-refused" role="alert" data-task-refused title="${esc(refused)}"><span class="tl-note-text">${esc(refused)}</span></span>`
       : note ? `<span class="tl-note" title="${esc(note.text)}"><span class="tl-note-ic">${TL_ICON.note}</span><span class="tl-note-text">${esc(note.text)}</span></span>` : '<span class="tl-fill"></span>'}
@@ -509,7 +510,7 @@ function taskListRowHTML(it, ctx, depth = 0) {
     ${ctx.by === 'status' ? '' : waitsOnMe && taskStatusLabel(t) === 'Waiting' ? '<span class="tl-status-pad"></span>' : taskRowStatus(t, key)}
     <span class="tl-people">${showAsker ? `<span class="tl-asker" title="Asked by ${esc(actorLabel(asker))}">${actorFace(asker, 14)}</span>` : ''}<span class="tl-face" title="${esc(actorLabel(t.owner_id))}">${actorFace(t.owner_id, 18)}</span></span>
     <time class="tl-age tnum" datetime="${esc(when || '')}" title="${esc(ageTitle)}">${esc(ageText)}</time>
-    ${failed ? `<span class="tl-failed" role="img" aria-label="Not changed: ${esc(failed)}" title="Not changed: ${esc(failed)}">!</span>` : ''}
+    ${failed ? `<span class="tl-failed" role="img" aria-label="Not changed: ${esc(failed)}" title="Not changed: ${esc(failed)}">!</span>` : ''}${fbButtonsHTML(fb, {row: true})}
   </div>`);
   return row + (open ? kids.map(k => taskListRowHTML(k, ctx, depth + 1)).join('') : '');
 }
