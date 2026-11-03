@@ -82,8 +82,7 @@ a.th-who:hover{text-decoration:underline}
 .th-sub{cursor:pointer}
 .th-deleted .th-body{font-style:italic}
 /* New since the last read: an accent edge; a bot post not addressed to you gets the lighter mark. */
-.th-new{box-shadow:inset 3px 0 0 var(--accent)}
-.th-new-quiet{box-shadow:inset 3px 0 0 var(--g4)}
+/* .th-new / .th-new-quiet mark unread messages for read tracking; no bar is drawn for now. */
 /* a sub-thread's header row: title, replies, new; quiet, one line, opens the sub-thread */
 .th-subhead{--d:1;display:flex;align-items:baseline;gap:var(--s2);min-width:0;margin:0 6px 2px calc(6px + var(--d) * 28px);padding:3px 8px;border-left:2px solid var(--line);color:var(--muted);font-size:var(--t-sm)}
 .th-subhead:hover{color:var(--ink);text-decoration:none;background:var(--surface2)}
