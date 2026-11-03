@@ -34,7 +34,7 @@ async fn apply(runner: &Runner, request: &Value) -> Result<Value, String> {
     }
     let journal = runner.state.directory.join(format!("memory-keep-{id}.attempts"));
     let mut command = tokio::process::Command::new(crate::env::python());
-    command.args(["-m", "runner.memory_tidy_keep"]).arg(&main).arg(&journal)
+    command.args(["-m", "runner_support.memory_tidy_keep"]).arg(&main).arg(&journal)
         .current_dir(crate::env::root()).env_clear().envs(env)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
         .kill_on_drop(true).process_group(0);

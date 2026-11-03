@@ -1,4 +1,4 @@
-//! `state-<id>/runner.lock`, taken with flock(2) exactly as `python -m runner` takes it with
+//! `state-<id>/runner.lock`, taken with flock(2) exactly as `python -m runner_support` takes it with
 //! `fcntl.flock(LOCK_EX | LOCK_NB)`, so the two engines can never run one registration at once.
 
 use std::fs::{File, OpenOptions};
