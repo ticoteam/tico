@@ -352,6 +352,11 @@ const words = text => text.trim().split(/\s+/).length;
       const real = Date.now; Date.now = () => real() + 5000; ASK.draw(); Date.now = real; });
     assert.equal(await page.locator('#ask-panel [data-ask-thread] [data-kept]').count(), 1, 'a redraw of the same chat leaves the thread be');
     assert.match(await working.innerText(), /^Working · 2\ds · Closing tasks$/);
+    // A new step on the same chat: the thread stays too, the line names the step.
+    state.execution = {...state.execution, parts: [...state.execution.parts, {kind: 'tool', text: 'Ran hub task list', at: ago(0)}]};
+    await page.evaluate(() => ASK.refresh());
+    assert.equal(await page.locator('#ask-panel [data-ask-thread] [data-kept]').count(), 1, 'a new step leaves the thread be');
+    assert.match(await working.innerText(), /^Working · \d+s · Reading tasks$/);
     state.execution = {...state.execution, state: 'completed', label: 'Complete', parts: []};
     state.messages.push(msg('w2', 'bot:coo', 'Closed 12 tasks.'));
     await page.evaluate(() => ASK.refresh());

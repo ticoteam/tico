@@ -132,8 +132,8 @@ async function updcLoad(chat) {
     // No words yet: what the turn is doing and for how long (ui/app/ask-rules.js), its time kept current by a tick.
     const working = !live && messages.length && !isReply(messages.at(-1)) ? askWorkingLine(execution) : '';
     if (live) rows.push(`<div data-updc-live>${v2MessageHTML({from_actor: 'bot:' + info.bot, body: live})}</div>`);
-    // The thread holds the line without its time, so a redraw of the same chat leaves the thread be.
-    else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status" data-updc-working>${esc(working && askWorkingLine({...execution, started_at: null}) || execution?.label || 'Waiting for reply…')}</p>`);
+    // The thread holds only the line's label (its time and step are set after the draw), so a redraw of the same chat leaves the thread be.
+    else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status" data-updc-working>${esc(execution?.label || (working ? 'Working' : 'Waiting for reply…'))}</p>`);
     // The tick moves only the line's time, never the thread (its cards would load again).
     if (working && !tick) tick = setInterval(() => { const el = current() && thread.querySelector('[data-updc-working]'), t = askWorkingLine(execution);
       if (el && t) el.textContent = t; }, ASK_TICK_MS);
