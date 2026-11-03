@@ -16,7 +16,7 @@ from . import (access, billing_check, blob_s3, gateway_connection, hook_relay, h
                pipeline_stats, providers, releases, replication, roadmaps, runner_versions, setup_stuck, sleep_idle, usage_limits,
                watchers)
 from .batch_work import report, storage_error
-from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
+from .getting_started import _online_runners, _wanted_runtimes, _person
 
 
 def _harness_name(runtime):
@@ -161,12 +161,22 @@ def _computers(c, runners_online, settings, limits=None):
     # runtime while the company has no default model: the runner installs only that one.
     default = providers.default_runtime(providers.load(c, settings))
     wanted = {default} - {""}
-    for r in c.execute("SELECT r.id,r.label,r.last_seen_at,r.platform,r.readiness,coalesce(nullif(h.name,''),r.owner_id) "
-                       "AS owner_id FROM runners r LEFT JOIN humans h ON h.id=r.owner_id WHERE r.revoked_at IS NULL "
-                       "ORDER BY r.label"):
+    from .cloud_machines import resting as resting_machines
+    from .model_subscriptions import RUNNER_CAPABILITIES_SQL, in_effect
+    from .read_cache import prime
+    resting = resting_machines(c)
+    found = c.execute("SELECT r.id,r.label,r.last_seen_at,r.platform,r.readiness,r.capabilities,"
+                      "coalesce(nullif(h.name,''),r.owner_id) AS owner_id FROM runners r "
+                      "LEFT JOIN humans h ON h.id=r.owner_id WHERE r.revoked_at IS NULL ORDER BY r.label").fetchall()
+    prime(c, RUNNER_CAPABILITIES_SQL, {(r["id"],): r for r in found})      # in_effect's runner read, for every computer
+    for r in found:
         document = readiness_document(r["readiness"])
         runtimes = document.get("runtimes") or {}
+        # A runtime the company's plan signs in on this computer (model_subscriptions.in_effect, what a claim uses)
+        # needs no sign-in of its own: its missing login is not a problem.
+        plan = {n for n in runtimes if in_effect(c, r["id"], n)}
         rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in since, "last_seen_at": r["last_seen_at"],
+                     "resting": r["id"] in resting and r["id"] not in since,
                      "platform": r["platform"] or "", "update": runner_versions.view(fleet.get(r["id"])),
                      "disk": document.get("disk"),
                      "owner_id": r["owner_id"], "container_exec": document.get("container_exec"),
@@ -176,22 +186,24 @@ def _computers(c, runners_online, settings, limits=None):
                      # other harnesses are not this computer's business, so they are not listed.
                      "runtimes": [{"name": n, "installed": bool(v.get("installed")),
                                    "needed": n in wanted or n in assigned.get(r["id"], ()),
-                                   "ready": bool(v.get("installed")) and v.get("authenticated") == "ready",
-                                   "rejected": v.get("authenticated") == "rejected",
+                                   "ready": bool(v.get("installed")) and (v.get("authenticated") == "ready" or n in plan),
+                                   "rejected": v.get("authenticated") == "rejected" and n not in plan,
+                                   "plan": n in plan,
                                    "rejected_at": v.get("rejected_at") or "" if v.get("authenticated") == "rejected" else "",
                                    "rejected_reason": v.get("rejected_reason") or "" if v.get("authenticated") == "rejected" else "",
                                    "credential_source": v.get("credential_source") or "",
-                                   "login_warning": login_warning(document, n) if n in run_on.get(r["id"], ()) else "",
-                                   "login_unavailable": (n in run_on.get(r["id"], ())
+                                   "login_warning": login_warning(document, n)
+                                   if n in run_on.get(r["id"], ()) and n not in plan else "",
+                                   "login_unavailable": (n in run_on.get(r["id"], ()) and n not in plan
                                                          and computer_login(document, n).get("authenticated") in SIGNED_OUT),
                                    "login_problem": _login_problem(computer_login(document, n)),
                                    "signable": bool(v.get("installed")) and v.get("authenticated") != "ready"
-                                   and n in model_login.RUNTIMES,
+                                   and n in model_login.RUNTIMES and n not in plan,
                                    # A model this computer runs that it has no sign-in for, and that no key from the
                                    # company gave it either: one its active bots run on, or the company's default while
                                    # it has none yet. A default its bots don't use is only `signable`.
                                    "sign_in": bool(v.get("installed")) and v.get("authenticated") == "missing"
-                                   and n in model_login.RUNTIMES
+                                   and n in model_login.RUNTIMES and n not in plan
                                    and n in assigned.get(r["id"], {default})}
                                   for n, v in sorted(runtimes.items())
                                   if v.get("installed") or n in wanted or n in assigned.get(r["id"], ())
@@ -504,8 +516,11 @@ def _rejected_summary(rows):
 def silent_computers(c, minutes=SILENT_MINUTES):
     """Computers that have not checked in for `minutes` while work is queued for their active bots, longest silence
     first: [{id, label, operator, last_seen, minutes, queued, dead, bots}]. `queued` can start and `dead` waits behind an
-    interrupted run nobody reviewed, as Pipeline splits them. A computer that never checked in is setup, not this."""
+    interrupted run nobody reviewed, as Pipeline splits them. A computer that never checked in is setup, not this. A
+    cloud machine stopped when idle is not silent: it starts when its work can run (cloud_machines.resting)."""
+    from .cloud_machines import resting as resting_machines
     from .execution import unfenced_sql
+    resting = resting_machines(c)
     rows = c.execute(
         f"SELECT r.id, r.label, r.owner_id, r.last_seen_at, sum(CASE WHEN NOT ({unfenced_sql()}) THEN 1 ELSE 0 END) dead, "
         "count(j.id) n, group_concat(DISTINCT a.bot) bots "
@@ -516,7 +531,7 @@ def silent_computers(c, minutes=SILENT_MINUTES):
         (H.shift(H.now(), minutes=-minutes),)).fetchall()
     return [{"id": r["id"], "label": r["label"], "owner_id": r["owner_id"], "last_seen_at": r["last_seen_at"],
              "minutes": quiet_minutes(r["last_seen_at"]), "queued": r["n"] - r["dead"], "dead": r["dead"],
-             "bots": sorted(r["bots"].split(","))} for r in rows]
+             "bots": sorted(r["bots"].split(","))} for r in rows if r["id"] not in resting]
 
 
 def quiet_minutes(last_seen):
@@ -1478,7 +1493,7 @@ def _fallbacks(c):
 def _bot_computers(computers):
     """A bot checking the team's health sees which computers are up, their release and disk, never who operates
     them or their sign-in, container and browser errors."""
-    keep = ("id", "label", "online", "last_seen_at", "platform", "disk", "turn_counts", "turn_summary")
+    keep = ("id", "label", "online", "resting", "last_seen_at", "platform", "disk", "turn_counts", "turn_summary")
     return [{**{k: x.get(k) for k in keep}, "update": {k: x["update"].get(k) for k in ("release", "state", "label")}}
             for x in computers]
 
@@ -1933,17 +1948,19 @@ def view(c, who, settings, auth, github, config):
     fixes = [_fix("Add a computer", "#/settings", "devices")] if full else []
     if not computers:
         checks.append(_check("computers", "Computers", "bad", "No computer is set up. Bots need one to run.", fixes))
-    elif not online:
+    elif not online and not any(x["resting"] for x in computers):
         checks.append(_check("computers", "Computers", "bad", "Every computer is offline.",
                              [_fix("Open Computers", "#/settings", "devices")] if full else []))
-    elif len(online) < len(computers):
-        off = [x for x in computers if not x["online"]]
+    elif off := [x for x in computers if not x["online"] and not x["resting"]]:
         checks.append(_check("computers", "Computers", "warn",
                              f"{len(online)} of {len(computers)} online. Offline: "
                              + ", ".join(x["label"] for x in off) + ".",
                              [_fix("Open Computers", "#/settings", "devices")] if full else []))
     else:
-        checks.append(_check("computers", "Computers", "ok", f"{_plural(len(online), 'computer')} online."))
+        asleep = sum(1 for x in computers if x["resting"])
+        checks.append(_check("computers", "Computers", "ok", " ".join(
+            ([f"{_plural(len(online), 'computer')} online."] if online else [])
+            + ([f"{_plural(asleep, 'cloud machine')} stopped until work comes."] if asleep else []))))
 
     from .performance import load_statuses, recent_overloads
     from .start_places import NOT_REPORTING, computer_hold, hold_rows
@@ -1954,7 +1971,7 @@ def view(c, who, settings, auth, github, config):
             checks.append(_check("turns:" + computer["id"], "Turns", "ok", computer["label"] + ": " + computer["turn_summary"],
                                  [_fix("Open Computers", "#/settings", "devices")] if full else []))
         hold = computer_hold(c, computer["id"], status=loads[computer["id"]], row=rows.get(computer["id"]))
-        if hold:
+        if hold and not (computer["resting"] and hold[0] == NOT_REPORTING):    # a stopped cloud machine reports nothing
             words = ("overloaded now (CPU or memory above 90% for five minutes)." if hold[0] == "computer busy"
                      else "not reporting: its last sample is over two minutes old." if hold[0] == NOT_REPORTING
                      else f"{hold[1]}: new starts wait until it is below 80%.")
@@ -2004,7 +2021,9 @@ def view(c, who, settings, auth, github, config):
                                      "Bots there cannot run browser checks. Update the computer, or install the browser's system libraries.",
                                      [_fix("Open Computers", "#/settings", "devices")]))
         wanted = _wanted_runtimes(providers.load(c, settings))
-        signed = _signed_in_runtime(online, wanted)
+        # Signed in by the computer's own login or by the company's plan given to it (`ready` on each runtime row).
+        signed = next((r["name"] for x in computers if x["online"] for r in x["runtimes"]
+                       if r["name"] in wanted and r["ready"]), "")
         rejected = _rejected(computers)
         if not wanted:
             checks.append(_check("models", "Models", "warn", "No AI provider is chosen yet.",

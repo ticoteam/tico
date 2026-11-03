@@ -375,6 +375,16 @@ def cloud_runners(c, but=None):
             if r["bot"] != but}
 
 
+def resting(c):
+    """Computer ids of cloud machines that are off on purpose: stopped when idle, or stopping, with no problem. Their
+    runners are offline by design and the machine starts when work comes, so Health does not call them offline or
+    silent. A machine with a problem (out of credit, stuck, never enrolled) is not resting, and neither is one
+    starting: a start that never comes up is an outage Health must still name."""
+    return {r["runner_id"] for r in c.execute(
+        "SELECT runner_id FROM cloud_machines WHERE runner_id IS NOT NULL AND mode='cloud' AND problem='' "
+        "AND state IN ('stopped','stopping')")}            # the shared machine's row is in cloud mode too
+
+
 def label_for(c, key):
     if key == SHARED:
         return "Shared cloud machine"
