@@ -68,7 +68,7 @@ def restore(path):
     return before
 
 
-# Dropped as redundant by backend/migrations/0041_drop_unused_indexes.sql.
+# Dropped as redundant by backend/migrations/0044_drop_unused_indexes.sql.
 DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "tasks_private_parties"}
 # Dropped by backend/migrations/0035_growth_rethink.py after the renames ran on them.
 RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",
