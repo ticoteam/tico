@@ -208,7 +208,7 @@ jobs:
           - {name: browser-3, part: browser, shard: '3/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
           - {name: browser-4, part: browser, shard: '4/4', workers: '2', runner: 4cpu-linux-x64, binaries: 'no'}
           - {name: python-1, part: python, shard: '1/24', workers: '4', runner: 4cpu-linux-x64}
-          - {name: python-2, part: python, shard: '2/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
+          - {name: python-2, part: python, shard: '2/24', workers: '4', runner: 4cpu-linux-x64}
           - {name: python-3, part: python, shard: '3/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
           - {name: python-4, part: python, shard: '4/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
           - {name: python-5, part: python, shard: '5/24', workers: '4', runner: 4cpu-linux-x64, binaries: 'no'}
@@ -331,7 +331,7 @@ jobs:
       # The release's own Linux binaries, where a checkout's build would be; hosted_release_check.py run checks on
       # every VM that their build ids match the candidate's sources. Setup above overlaps their build: wait for the
       # native-linux x86_64 job to finish, and fail this part if that build did not succeed. Only product, desktop
-      # and python-1 (every native test file, release_checks.py) need them; the other VMs start at once.
+      # and python-1/python-2 (the native test files, release_checks.py NATIVE_SHARDS) need them; the others start at once.
       # A candidate frozen before native-first python shards may put native tests on any python VM: all of them wait.
       - name: Does this VM need the release binaries
         id: binaries

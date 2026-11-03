@@ -330,7 +330,7 @@ def test_three_default_shards_collect_exactly_the_single_default_run(monkeypatch
     assert len(sharded) == len(single) and sorted(sharded) == sorted(single)
 
 
-def test_native_test_files_take_shard_one_and_the_rest_balance_over_the_other_shards(tmp_path, monkeypatch):
+def test_native_test_files_take_the_first_two_shards_and_the_rest_balance_over_the_other_shards(tmp_path, monkeypatch):
     for name, text in (('n1.py', 'def test(rust_binary): ...'), ('n2.py', 'env = {"TICO_SCREEN_RELAY_BIN": x}'),
                        ('a.py', 'def test(): ...'), ('b.py', 'def test(): ...'), ('c.py', 'def test(): ...')):
         (tmp_path / name).write_text(text)
@@ -339,11 +339,13 @@ def test_native_test_files_take_shard_one_and_the_rest_balance_over_the_other_sh
     listing = '\n'.join(['n1.py::t', 'n2.py::t', 'a.py::t0', 'a.py::t1', 'a.py::t2', 'b.py::t0', 'b.py::t1', 'c.py::t'])
     monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(
         run=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=listing, stderr='')))
-    shards = [release_checks.shard_files(index, 3, {}, native_first=True) for index in (1, 2, 3)]
-    assert shards == [['n1.py', 'n2.py'], ['a.py'], ['b.py', 'c.py']]
+    shards = [release_checks.shard_files(index, 4, {}, native_first=True) for index in (1, 2, 3, 4)]
+    assert shards == [['n1.py'], ['n2.py'], ['a.py'], ['b.py', 'c.py']]
     assert sorted(sum(shards, [])) == ['a.py', 'b.py', 'c.py', 'n1.py', 'n2.py']
     # Without native_first (PR checks), the same files balance over all shards as before.
-    assert sorted(sum((release_checks.shard_files(i, 3, {}) for i in (1, 2, 3)), [])) == sorted(sum(shards, []))
+    assert sorted(sum((release_checks.shard_files(i, 4, {}) for i in (1, 2, 3, 4)), [])) == sorted(sum(shards, []))
+    with pytest.raises(RuntimeError, match='more than 2 shards'):
+        release_checks.shard_files(1, 2, {}, native_first=True)
 
 
 def test_native_test_files_include_tests_that_borrow_a_native_test_modules_helpers(tmp_path, monkeypatch):
