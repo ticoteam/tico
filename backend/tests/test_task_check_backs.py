@@ -33,6 +33,12 @@ def wakes(c, tid):
                      (tid,)).fetchall()
 
 
+def handled(c, tid):
+    """The bot's turn for these notices ran and ended, so none of them is still in flight."""
+    c.execute("UPDATE jobs SET state='completed' WHERE state='queued' AND message_id IN "
+              "(SELECT message_id FROM task_check_back_wakes WHERE task_id=?)", (tid,))
+
+
 def test_creation_defaults_human_exclusion_and_assignment_scope(followups):
     bot = post(followups, "tasks", {"owner": "ops", "title": "Inspect", "body": "x"})
     assert bot["version"] == 1  # the automatic date is part of creation, not a separate edit
@@ -383,6 +389,7 @@ def test_explicit_reparking_without_progress_reaches_one_diagnostic(followups, m
         for _ in range(3):
             due(c, H.task(c, row["id"]))
             assert CB.sweep(c)["woke"] == [row["id"]]
+            handled(c, row["id"])  # the bot's turn ran and ended before the next explicit re-park
             CB.set_time(c, H.task(c, row["id"]), "5m", actor="bot:ops")
         due(c, H.task(c, row["id"]))
         assert CB.sweep(c)["woke"] == [] and routed == [row["id"]]
@@ -462,3 +469,63 @@ def test_results_returned_while_disabled_remain_audit_only_after_enable(followup
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('system_routines',?)", (json.dumps({CB.KEY: {"on": True}}),))
         assert CB.sweep(c)["woke"] == []
         assert CB.coverage(c)["results"] == 2
+
+
+def test_due_passes_while_a_notice_is_queued_leave_exactly_one_job(followups):
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        # The due time moves again while the first notice still waits (a snooze end, a deferral, a repair).
+        c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (H.shift(H.now(), seconds=-2), row["id"]))
+        assert CB.sweep(c)["woke"] == []
+        assert CB.sweep(c)["woke"] == []
+        assert c.execute("SELECT count(*) FROM task_check_back_wakes WHERE task_id=?", (row["id"],)).fetchone()[0] == 1
+        assert [w["job_state"] for w in wakes(c, row["id"])] == ["queued"]
+
+
+def test_later_due_time_wakes_again_once_the_first_notice_is_handled(followups):
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        handled(c, row["id"])
+        later = H.shift(H.now(), minutes=30)
+        c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (later, row["id"]))
+        assert CB.sweep(c, H.shift(H.now(), minutes=31))["woke"] == [row["id"]]
+        assert len(wakes(c, row["id"])) == 2
+
+
+def test_sleeping_computer_takes_no_notices_and_each_task_wakes_once_it_returns(followups):
+    from backend.tests.test_api import assign, runner
+    r = runner(followups)
+    assign(followups, r, "ops")
+    with followups.app.state.store.transaction() as c:
+        rows = [due(c, H.task_create(c, "human:ana", "Inspect sleeping result " + str(i), "x", "bot:ops", lint=False))
+                for i in range(3)]
+        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), minutes=-10), r["id"]))
+        for _ in range(3):
+            assert CB.sweep(c)["woke"] == []
+        assert all(not wakes(c, row["id"]) for row in rows)
+        assert CB.view(H.task(c, rows[0]["id"]), c)["delivery"] == "computer_unavailable"
+        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.now(), r["id"]))
+        assert sorted(CB.sweep(c)["woke"]) == sorted(row["id"] for row in rows)
+        assert CB.sweep(c)["woke"] == []
+        assert all(len(wakes(c, row["id"])) == 1 for row in rows)
+
+
+def test_idle_reachable_bot_is_woken_a_bounded_number_of_times(followups, monkeypatch):
+    from backend.tests.test_api import assign, runner
+    monkeypatch.setattr(H, "_no_diagnosis", lambda *a: True)  # no diagnostic task: the guard only blocks further wakes
+    r = runner(followups)
+    assign(followups, r, "ops")
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        woke, at = [], H.now()
+        for _ in range(24 * 6):  # a day of sweeps every ten minutes; every notice is handled without a next time
+            c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (at, r["id"]))
+            if CB.sweep(c, at)["woke"]:
+                woke.append(at)
+            handled(c, row["id"])
+            at = H.shift(at, minutes=10)
+        assert 1 <= len(woke) <= 3
+        gaps = [(H.parse_ts(b) - H.parse_ts(a)).total_seconds() for a, b in zip(woke, woke[1:])]
+        assert all(gap >= 30 * 60 for gap in gaps)

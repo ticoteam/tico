@@ -18,6 +18,8 @@ NOTE_MAX = 500
 FIRST_WAKES_PER_HOUR = max(1, int(os.environ.get("TICO_TASK_CHECK_BACKS_PER_BOT_HOUR", "12")))
 FLEET_FIRST_WAKES_PER_HOUR = max(1, int(os.environ.get("TICO_TASK_CHECK_BACKS_FLEET_HOUR", "50")))
 WAKES_PER_TASK_DAY = 12
+REACHABLE_SECONDS = 90  # a computer heard from this recently can take a start: execution.company_waiter's bar
+INFLIGHT_JOBS = ("queued", "held", "leased", "running", "uncertain")
 ACTIVE = ("open", "doing", "waiting", "review", "ready")
 RESULT = ("done", "declined")
 STATUSES = ACTIVE + RESULT
@@ -285,7 +287,7 @@ def _delivery(c, record):
     if not record or not record["message_id"]:
         return "missing"
     job = c.execute("SELECT state FROM jobs WHERE message_id=?", (record["message_id"],)).fetchone()
-    if job and job[0] in ("queued", "held", "leased", "running", "uncertain"):
+    if job and job[0] in INFLIGHT_JOBS:
         return job[0]  # a retry can be queued after an earlier attempt failed
     # Inputs are the receipt, including a check-back joined into a previously queued run.
     received = c.execute("SELECT a.state,a.created_at FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE j.message_id=? "
@@ -294,6 +296,30 @@ def _delivery(c, record):
     if received:
         return received[0]
     return job[0] if job else "missing"
+
+
+def _notice_in_flight(c, task_id, target):
+    """Whether a check-back notice for this task, to this bot, is still queued, held, leased, running or uncertain.
+    Any due time that moves while one waits (a snooze end, a deferral, a repair) must not queue a second one."""
+    records = c.execute("SELECT w.* FROM task_check_back_wakes w JOIN messages m ON m.id=w.message_id "
+                        "WHERE w.task_id=? AND m.recipient_id=?", (task_id, target)).fetchall()
+    return any(_delivery(c, record) in INFLIGHT_JOBS for record in records)
+
+
+def _computer_out(c, bot, at):
+    """Whether the bot's assigned computer cannot take a start now: silent past REACHABLE_SECONDS (asleep, offline), or
+    holding new starts for memory or a stale sample, as start_places.computer_hold reports. CPU overload is not held
+    here, and a bot with no assigned computer is not gated."""
+    from . import start_places
+    H = _H()
+    place = c.execute("SELECT r.id,r.last_seen_at FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?",
+                      (bot,)).fetchone()
+    if not place:
+        return False
+    if not place["last_seen_at"] or place["last_seen_at"] < H.shift(at, seconds=-REACHABLE_SECONDS):
+        return True
+    hold = start_places.computer_hold(c, place["id"], now=at)
+    return bool(hold) and hold[0] in (start_places.NOT_REPORTING, start_places.MEMORY_HOLD)
 
 
 def stand(c, row):
@@ -447,13 +473,16 @@ def sweep(c, at=None, failures=None, task_ids=None):
                 # Pausing is deliberate, not a failed follow-up. Keep debt due without spending retries while paused.
                 result["blocked"].append(row["id"])
                 continue
+            if _notice_in_flight(c, row["id"], target):
+                continue  # one notice per task and bot: the queued one carries this inspection until it is handled
+            if _computer_out(c, bot["id"], at):
+                # A silent or memory-held computer takes no notice; the due time waits for it instead of piling up.
+                blocked(c, row, "computer_unavailable")
+                result["blocked"].append(row["id"])
+                continue
             record = c.execute("SELECT * FROM task_check_back_wakes WHERE task_id=? AND check_back_at=?",
                                 (row["id"], row["check_back_at"])).fetchone()
             if record:
-                msg = H.message(c, record["message_id"]) if record["message_id"] else None
-                state = _delivery(c, record) if msg and msg["recipient_id"] == target else "missing"
-                if state in ("queued", "held", "leased", "running", "uncertain"):
-                    continue
                 repair(c, row, at)
                 result["repaired"].append(row["id"])
                 continue
