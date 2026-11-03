@@ -27,7 +27,7 @@ from . import task_run_models
 from .store import H, Problem
 
 MAIL_ACTIONS = {"archive": "archive", "label": "label", "leave_for_you": "leave", "draft_reply": "draft",
-                "send_reply": "send", "forward": "forward"}
+                "send_reply": "send", "forward": "forward", "unsubscribe": "unsubscribe"}
 MAX_TEXT = 8000
 MAX_ITEM = 4000
 
@@ -71,6 +71,8 @@ def run(c, auto, run_id, do, args, values, step=None):
     try:
         if do == "create_task":
             result = _create_task(c, auto, run_id, args or {}, values or {}, step=step)
+        elif do in MAIL_ACTIONS:
+            result = ACTIONS[do](c, auto, run_id, args or {}, values or {}, step=step)
         else:
             result = ACTIONS[do](c, auto, run_id, args or {}, values or {})
         c.execute("RELEASE automation_action")
@@ -87,13 +89,26 @@ def _message(values):
     return message if isinstance(message, dict) else None
 
 
-def _queue_mail(c, auto, run_id, action, message, args, result=None):
-    """`result` starts the action's result: a send the switch turned into a draft keeps `send_off` once reported."""
+def _queue_mail(c, auto, run_id, action, message, args, result=None, step=None):
+    """`result` starts the action's result: a send the switch turned into a draft keeps `send_off` once reported.
+    A step's mail actions on one message form a chain: this one comes after the one the step queued before it
+    (`after`), and is claimed only once that one settled ok (backend/automations.py `claim`). Behind one that already
+    failed or was canceled it is queued as skipped or canceled, so it never runs."""
     aid = H.new_id()
+    mailbox, msg_id = str(message.get("mailbox") or "").strip().lower(), str(message.get("id") or "")
+    prev = c.execute("SELECT id, state FROM automation_mail_actions WHERE run_id=? AND \"step\"=? AND mailbox=? "
+                     "AND msg_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                     (run_id, step, mailbox, msg_id)).fetchone() if step else None
+    after, state = (prev["id"] if prev else None), "queued"
+    if prev and prev["state"] in ("failed", "skipped", "canceled"):
+        state = "canceled" if prev["state"] == "canceled" else "skipped"
     c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,created_at,"
-              "result) VALUES(?,?,?,?,?,?,?,'queued',?,?)",
-              (aid, auto["id"], run_id, str(message.get("mailbox") or "").strip().lower(), str(message.get("id") or ""),
-               action, json.dumps(args, default=str), H.now(), json.dumps(result) if result else None))
+              "result,\"step\",\"after\") VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+              (aid, auto["id"], run_id, mailbox, msg_id, action, json.dumps(args, default=str), state, H.now(),
+               json.dumps(result) if result else None, step, after))
+    if state != "queued":
+        return {"ok": False, "detail": "skipped: an earlier action on this message failed", "mail_action": aid,
+                "queued": False}
     return {"ok": True, "detail": f"{action} queued", "mail_action": aid, "queued": True}
 
 
@@ -108,7 +123,7 @@ def _inbox(message):
 
 
 def _mail_or_slack(do):
-    def act(c, auto, run_id, args, values):
+    def act(c, auto, run_id, args, values, step=None):
         message = _message(values)
         if not message:
             return _fail(f"{do} needs a message")
@@ -118,12 +133,23 @@ def _mail_or_slack(do):
         if do == "send_reply" and not send_on(c, _inbox(message)):
             H.event(c, acts_as(c, auto) or H.KEEPER, "automation.send_off", auto["id"],
                     {"run": run_id, "mailbox": message.get("mailbox"), "msg_id": message.get("id")})
-            return {**_queue_mail(c, auto, run_id, "draft", message, args, {"send_off": True}), "detail": "send_off",
-                    "send_off": True}
+            return {**_queue_mail(c, auto, run_id, "draft", message, args, {"send_off": True}, step=step),
+                    "detail": "send_off", "send_off": True}
         if do == "forward" and args.get("webhook"):
             return _webhook(c, auto, "custom.forward.automation", args["webhook"], message)
-        return _queue_mail(c, auto, run_id, action, message, args)
+        return _queue_mail(c, auto, run_id, action, message, args, step=step)
     return act
+
+
+def _unsubscribe(c, auto, run_id, args, values, step=None):
+    """A one-click unsubscribe from the message's own link, carried out by its mailbox's computer like an archive. Mail
+    only: a Slack message has no unsubscribe link, so it is refused, and so is anything without a mailbox."""
+    message = _message(values)
+    if not message:
+        return _fail("unsubscribe needs a message")
+    if message.get("source") == "slack" or not str(message.get("mailbox") or "").strip():
+        return _fail("unsubscribe works on mail only, and this message is not mail")
+    return _queue_mail(c, auto, run_id, MAIL_ACTIONS["unsubscribe"], message, args, step=step)
 
 
 def _slack(c, auto, run_id, do, args, message):
@@ -413,7 +439,8 @@ def _call_webhook(c, auto, run_id, args, values):
 ACTIONS = {"archive": _mail_or_slack("archive"), "leave_for_you": _mail_or_slack("leave_for_you"),
            "draft_reply": _mail_or_slack("draft_reply"), "send_reply": _mail_or_slack("send_reply"),
            "forward": _mail_or_slack("forward"), "create_task": _create_task, "label": _label, "wake_bot": _wake_bot,
-           "note": _note, "post_update": _post_update, "call_webhook": _call_webhook, "assign": _on_task("assign")}
+           "note": _note, "post_update": _post_update, "call_webhook": _call_webhook, "assign": _on_task("assign"),
+           "unsubscribe": _unsubscribe}
 
 
 # ---------------------------------------------------------------------------------------------------- turns

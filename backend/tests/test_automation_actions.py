@@ -166,3 +166,51 @@ def test_an_idle_pr_find_reads_open_prs_whose_last_activity_is_old(api):
         every = A.find(c, auto(), "prs", "", 20, ("", ""))
     assert sorted(r["id"] for r in idle) == ["link_draft", "link_idle"]
     assert len(every) == 4
+
+
+def run_in_step(api, step, do, args=None, values=None):
+    """An action run inside the flow step `step`, as the engine runs a filter rule's actions."""
+    with api.app.state.store.transaction() as c:
+        return A.run(c, auto(), "run_1", do, args or {}, values or MAIL, step=step)
+
+
+def test_unsubscribe_queues_on_mail_and_is_refused_off_mail(api):
+    done = act(api, "unsubscribe", {}, MAIL)
+    assert done == {"ok": True, "detail": "unsubscribe queued", "mail_action": done["mail_action"], "queued": True}
+    assert sql(api, "SELECT action, state, args FROM automation_mail_actions") == [
+        {"action": "unsubscribe", "state": "queued", "args": "{}"}]
+    slack = act(api, "unsubscribe", {}, SLACK)
+    assert not slack["ok"] and "mail only" in slack["detail"]
+    no_mailbox = act(api, "unsubscribe", {}, {"message": {"source": "mail", "id": "m1"}})
+    assert not no_mailbox["ok"] and "mail only" in no_mailbox["detail"]
+    assert act(api, "unsubscribe") == {"ok": False, "detail": "unsubscribe needs a message"}
+    assert len(sql(api, "SELECT 1 FROM automation_mail_actions")) == 1
+
+
+def test_mail_actions_of_one_step_on_one_message_chain_in_order(api):
+    first = run_in_step(api, "gate", "unsubscribe")["mail_action"]
+    second = run_in_step(api, "gate", "archive")["mail_action"]
+    other_step = run_in_step(api, "next", "archive")["mail_action"]
+    plain = act(api, "archive", {}, MAIL)["mail_action"]
+    rows = {r["id"]: r for r in sql(api, 'SELECT id, "step", "after", state FROM automation_mail_actions')}
+    assert rows[first] == {"id": first, "step": "gate", "after": None, "state": "queued"}
+    assert rows[second] == {"id": second, "step": "gate", "after": first, "state": "queued"}
+    assert rows[other_step] == {"id": other_step, "step": "next", "after": None, "state": "queued"}
+    assert rows[plain] == {"id": plain, "step": None, "after": None, "state": "queued"}
+
+
+def test_a_chained_action_behind_a_failed_or_canceled_one_is_never_queued(api):
+    failed = run_in_step(api, "gate", "unsubscribe")["mail_action"]
+    canceled = run_in_step(api, "other", "unsubscribe")["mail_action"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE automation_mail_actions SET state='failed' WHERE id=?", (failed,))
+        c.execute("UPDATE automation_mail_actions SET state='canceled' WHERE id=?", (canceled,))
+    late = run_in_step(api, "gate", "archive")
+    late_canceled = run_in_step(api, "other", "archive")
+    assert late == {"ok": False, "detail": "skipped: an earlier action on this message failed",
+                    "mail_action": late["mail_action"], "queued": False}
+    assert not late_canceled["queued"]
+    assert sql(api, 'SELECT id, state, "after" FROM automation_mail_actions WHERE id=?', (late["mail_action"],)) == [
+        {"id": late["mail_action"], "state": "skipped", "after": failed}]
+    assert sql(api, 'SELECT state, "after" FROM automation_mail_actions WHERE id=?',
+               (late_canceled["mail_action"],)) == [{"state": "canceled", "after": canceled}]
