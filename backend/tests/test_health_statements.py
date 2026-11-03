@@ -89,16 +89,16 @@ def test_health_statements_do_not_grow_with_history(api):
     seed(api, "few", 6)
     history(api, 3)
     bulk(api)
+    health(api)                                   # first-time reads
+    _, small = health(api)
+    seed(api, "many", 34)
+    history(api, 40)
     from backend.tests.test_api import post
     for round_ in range(int(os.environ.get("QUEUED", "0"))):
         for n in range(6):
             post(api, f"chat/few-{n:02d}", {"text": f"More {round_}"})
         for n in range(34):
             post(api, f"chat/many-{n:02d}", {"text": f"More {round_}"})
-    health(api)                                   # first-time reads
-    _, small = health(api)
-    seed(api, "many", 34)
-    history(api, 40)
     _, large = health(api)
     for sql, n in collections.Counter(shape(s) for s in large).most_common(25):
         print(n, sql)
