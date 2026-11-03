@@ -10,12 +10,15 @@ const fmt = iso => iso ? new Date(iso).toLocaleString(undefined, {weekday:'short
 // A relative time that keeps moving: the node holds its instant in data-ago and agoTick rewrites the words, so a
 // page that stays open never reads "0s ago" for minutes. `agoSpan` is the markup; the full date is its hover.
 const agoSpan = iso => `<span data-ago="${esc(iso)}" title="${esc(fmt(iso))}">${esc(ago(iso))}</span>`;
-function agoTick() {
-  for (const node of document.querySelectorAll('[data-ago]')) {
+function agoTick(root = document) {
+  for (const node of root.querySelectorAll('[data-ago]')) {
     const text = ago(node.dataset.ago);
     if (node.textContent !== text) node.textContent = text;
   }
 }
+// A thread's HTML without those words, to compare two draws on: "1m ago" turning "2m ago" alone rebuilds nothing
+// (typed replies, focus kept); agoTick(thread) moves the words instead.
+const agoStill = html => html.replace(/( data-ago="[^"]*"[^>]*>)[^<]*/g, '$1');
 setInterval(() => { if (!document.hidden) agoTick(); }, 15000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) agoTick(); });
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
