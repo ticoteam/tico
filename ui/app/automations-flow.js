@@ -10,6 +10,15 @@ const AU_STEP_ICONS = {filter: 'filter_alt', decide: 'account_tree', llm: 'auto_
 const AU_ACTIONS = {archive: 'Archive', leave_for_you: 'Leave for you', draft_reply: 'Draft reply', send_reply: 'Send reply',
   create_task: 'Create task', label: 'Label', forward: 'Forward', wake_bot: 'Wake a bot', note: 'Note', post_update: 'Post update',
   call_webhook: 'Call a webhook', assign: 'Assign'};
+// A task event's automation offers the five task triggers and the four Actions the task-trigger rules run (Dev 666).
+const AU_TASK_EVENTS = ['task.created', 'task.step_changed', 'task.done', 'task.declined', 'task.closed'];
+const AU_TASK_ACTION_KEYS = ['note', 'wake_bot', 'create_task', 'call_webhook'];
+const auTaskTrigger = t => t?.type === 'event' && AU_TASK_EVENTS.includes(t.name);
+// The Actions an automation may pick. Its current Action stays listed even when the trigger would not offer it.
+function auActionChoices(current) {
+  const keys = auTaskTrigger(AU.cur?.trigger) ? AU_TASK_ACTION_KEYS : Object.keys(AU_ACTIONS);
+  return auWithCur(keys.map(k => [k, AU_ACTIONS[k]]), current, AU_ACTIONS[current] || current);
+}
 const AU_FIND = {mail: 'Mail', tasks: 'Tasks', prs: 'Pull requests', listening: 'Listening', docs: 'Docs'};
 const AU_OPS = {is: '=', is_not: '≠', '>=': '≥', '<=': '≤', contains: 'has', matches: 'matches'};
 const AU_MAX_PATHS = 10, AU_MAX_DEPTH = 3;
@@ -25,6 +34,8 @@ function auCondText(c) {
   if (!c) return '';
   const f = auField(c.field), v = c.value, min = c.min != null && c.min !== '' ? ' ≥ ' + auPct(c.min) : '';
   if (c.op === 'is' && (v === true || v === 'yes') && min) return f + min;
+  // A task event's type reads as the type's name, not its id.
+  if (c.field === 'event.data.type_id' && c.op === 'is') return 'Type is ' + (TASK_TYPES.find(t => t.id === v)?.name || v);
   if (c.op === 'contains') return `${f} has “${v ?? ''}”`;
   if (c.op === 'matches') return `${f} matches /${v ?? ''}/`;
   // An event a condition names reads as its words ("Task finished"), not its id (task.done).

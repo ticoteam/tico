@@ -72,6 +72,17 @@ def test_an_event_trigger_and_the_chain_guard(api):
         assert c.execute("SELECT count(*) FROM tasks WHERE title='Follow up'").fetchone()[0] == 1
 
 
+def test_a_task_event_filters_on_the_type_it_is_made_for(api):
+    # The Task types "Add action" makes a task.created automation whose filter names the type: only that type's tasks run it.
+    general = make(api, {"type": "event", "name": "task.created",
+                         "filters": [{"field": "event.data.type_id", "op": "is", "value": "general"}]})
+    other = make(api, {"type": "event", "name": "task.created",
+                       "filters": [{"field": "event.data.type_id", "op": "is", "value": "not-a-type"}]})
+    post(api, "tasks", {"owner": "ops", "title": "Routine check", "body": "Please."})
+    assert len(runs(api, general)["runs"]) == 1
+    assert runs(api, other)["runs"] == []
+
+
 def test_a_paused_automation_starts_nothing(api):
     aid = make(api, {"type": "task_received", "to": "bot:ops"}, enabled=False)
     post(api, "tasks", {"owner": "ops", "title": "Paused", "body": "Please."})

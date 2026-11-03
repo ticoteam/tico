@@ -179,6 +179,16 @@ function taskTypesSettingsMount() {
 function taskTypesSettingsShow(tab) {
   if (tab === 'tasks' && S.me?.cloud) void renderTaskTypes();
 }
+// Add action on a type's row: a new automation of the viewer's, off and with no steps, whose trigger is a task created
+// of this type (its filter names the type). Automations opens on it; the Action is picked and saved there.
+async function taskTypeAddAction(type) {
+  if (!type || !S.me) return;
+  try {
+    const out = await post('/v2/automations', {name: `${type.name} action`, owner: 'person:' + S.me.id, enabled: false, builtin: false,
+      trigger: {type: 'event', name: 'task.created', filters: [{field: 'event.data.type_id', op: 'is', value: type.id}]}, steps: []});
+    location.hash = auHref(out.id);
+  } catch (error) { toast(error.message, true); }
+}
 
 async function renderTaskTypes() {
   const host = $('#set-types'); if (!host) return;
@@ -189,9 +199,11 @@ async function renderTaskTypes() {
     const mover = canMove();
     host.innerHTML = TASK_TYPES.map(type => `<div class="task-type-row"><strong>${esc(type.name)}</strong>
       <div>${type.steps.map(step => `<span class="tlabel"${step.check_pool?.length ? ` title="${esc('Check pool: ' + step.check_pool.map(botSlug).join(', ') + ' · ' + (step.check_limit || 2) + ' open checks each')}"` : ''}>${esc(step.name)}${step.check_pool?.length ? ` · ${step.check_pool.length} checker${step.check_pool.length === 1 ? '' : 's'}` : ''}</span>`).join(' ')}</div>
+      <span class="spacer"></span><button class="ghost" type="button" data-add-action="${esc(type.id)}">Add action</button>
       ${mover && type.id !== 'general' ? `<button class="ghost" type="button" data-edit-type="${esc(type.id)}">Edit</button>` : ''}</div>`).join('')
       + (mover ? '<button class="primary" type="button" data-new-type>New type</button>' : '');
     host.querySelectorAll('[data-edit-type]').forEach(button => button.onclick = () => taskTypeEditor(TASK_TYPES.find(type => type.id === button.dataset.editType)));
+    host.querySelectorAll('[data-add-action]').forEach(button => button.onclick = () => taskTypeAddAction(TASK_TYPES.find(type => type.id === button.dataset.addAction)));
     const add = host.querySelector('[data-new-type]'); if (add) add.onclick = () => taskTypeEditor();
   } catch (error) { host.textContent = error.message; }
 }

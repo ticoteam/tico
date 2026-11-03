@@ -1199,6 +1199,11 @@ def on_event(c, type_, subject, data, actor, access=None):
     from . import event_catalog as CAT
     name = CAT.canonical(type_) or type_
     facts = data() if callable(data) else (data or {})
+    if name.startswith("task.") and isinstance(facts, dict) and "type_id" not in facts:
+        # A task event's type, so an automation can filter on the type it is made for. Only this payload carries it:
+        # outgoing webhooks keep their data.
+        task = H.task(c, subject) or {}
+        facts = {**facts, "type_id": task.get("type_id") or H.GENERAL_TYPE}
     payload = {"event": {"name": name, "subject": subject, "actor": actor, **({"data": facts} if facts else {})}}
     # A trigger may name an event by an alias (a converted routine's `release_published`): it hears the canonical name.
     fire(c, "event", payload, f"{name}:{subject}",

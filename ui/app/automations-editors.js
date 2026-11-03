@@ -124,7 +124,9 @@ const AU_EV_CUSTOM = '__custom';
 const auEvCustom = (t, ed) => ed?.evCustom ?? (!!t.name && !AU_EVENTS[t.name] && !AU_EVENT_MORE[t.name] && !String(t.name).startsWith('tico.builtin.'));
 function auEventField(t, ed) {
   const custom = auEvCustom(t, ed);
-  const list = [...auWithCur(Object.entries(AU_EVENTS), custom ? '' : t.name, auEventWords(t.name)), [AU_EV_CUSTOM, 'Custom…']];
+  // A task event's automation offers the five task triggers only (Dev 666); any other keeps the whole catalog.
+  const list = auTaskTrigger(t) ? AU_TASK_EVENTS.map(n => [n, AU_EVENTS[n]])
+    : [...auWithCur(Object.entries(AU_EVENTS), custom ? '' : t.name, auEventWords(t.name)), [AU_EV_CUSTOM, 'Custom…']];
   const pick = auSel('evpick', list, custom ? AU_EV_CUSTOM : t.name, `aria-label="Event"${t.name && !custom ? ` title="${esc(t.name)}"` : ''}`);
   return auFld('Event', pick + (custom ? auIn('trigger.name', t.name, 'custom.name', 'aria-label="Custom event"') : ''));
 }
@@ -150,7 +152,7 @@ function auFilterFields(s) {
       <span class="au-sp"></span>${auX('step.rules', i, 'Remove rule')}</div>
     ${auCondRows(`step.rules.${i}.when`, r.when)}${auPlus(`step.rules.${i}.when`, 'cond', 'Condition')}
     <div class="au-then"><span class="nav-icon" aria-hidden="true">arrow_forward</span>${(r.then || []).map((x, j) =>
-      `<span class="au-ir">${auSel(`step.rules.${i}.then.${j}.do`, Object.entries(AU_ACTIONS), auThenDo(x), 'aria-label="Then"')}${(r.then || []).length > 1 ? auX(`step.rules.${i}.then`, j) : ''}</span>`).join('')}
+      `<span class="au-ir">${auSel(`step.rules.${i}.then.${j}.do`, auActionChoices(auThenDo(x)), auThenDo(x), 'aria-label="Then"')}${(r.then || []).length > 1 ? auX(`step.rules.${i}.then`, j) : ''}</span>`).join('')}
       ${auPlus(`step.rules.${i}.then`, 'then', 'Action')}</div>
     <label class="au-chk"><input type="checkbox" data-b="step.rules.${i}.stop"${r.stop !== false ? ' checked' : ''}${auDis()}>Stop here</label></div>`).join('')
     + auPlus('step.rules', 'rule', 'Rule'));
@@ -225,7 +227,7 @@ function auActionFields(s) {
     post_update: () => auFld('Text', auTa('step.args.text', a.text, 4)),
     call_webhook: () => auFld('Webhook', auIn('step.args.endpoint', a.endpoint)),
   }[s.do];
-  return auFld('Action', auSel('step.do', Object.entries(AU_ACTIONS), s.do, 'data-redraw')) + (args ? args() : '');
+  return auFld('Action', auSel('step.do', auActionChoices(s.do), s.do, 'data-redraw')) + (args ? args() : '');
 }
 function auPathsFields(s, ed) {
   return auBox('Paths', (s.paths || []).map((p, i) => `<div class="au-rb${String(ed.path) === String(i) ? ' focus' : ''}" data-path-ed="${i}">
