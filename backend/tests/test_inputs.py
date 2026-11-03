@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from backend.tests.test_api import api, assign, claim, get, post, ready, runner, setup_attempt, expire
+from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner, setup_attempt, expire
 from backend.tests.test_member_bots import botops, turn, finish
 
 
@@ -309,6 +309,28 @@ def test_a_message_says_whether_it_steers_the_running_turn_and_stop_and_redirect
     with api.app.state.store.read() as c:
         assert c.execute("SELECT message_id FROM jobs WHERE id=?", (nxt["job_id"],)).fetchone()[0] == redirect["id"]
         assert H.message(c, redirect["id"])["conversation_id"] == origin["conversation_id"]
+
+
+def test_a_persons_home_message_carried_by_its_notice_is_redirected_by_that_person_only(api):
+    from backend import threads
+    r, _, active = setup_attempt(api)
+    post(api, f"attempts/{active['id']}/started", {"thread_id": "thread"}, r["token"])
+    with api.app.state.store.transaction() as c:
+        home = threads.home(c, "bot:ops", create=True)["id"]
+    response = api.post(f"/api/v2/threads/{home}/messages", json={"text": "Stop that; do the April numbers instead"},
+                        headers=headers("ana-test"))
+    assert response.status_code == 200, response.text
+    sent = response.json()
+    # The bot hears the Home message through its keeper carrier: the queued job is the carrier, not the person's message.
+    with api.app.state.store.read() as c:
+        carrier = c.execute("SELECT j.id,j.state FROM jobs j JOIN messages m ON m.id=j.message_id WHERE m.sender_id='keeper' "
+                            "AND json_extract(m.refs,'$.carries')=?", (sent["id"],)).fetchone()
+    assert carrier["state"] == "queued"
+    post(api, "bots/ops/stop", {"run_id": active["id"], "redirect": sent["id"]}, token="ben-test", expected=404)
+    stopped = post(api, "bots/ops/stop", {"run_id": active["id"], "redirect": sent["id"]})
+    assert stopped == {"run_id": active["id"], "stopping": True, "redirect": sent["id"]}
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT redirect FROM jobs WHERE id=?", (carrier["id"],)).fetchone()[0] == 1
 
 
 def test_a_requester_bot_steers_its_delegated_tasks_running_turn(api):

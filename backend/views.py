@@ -960,7 +960,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     run for a message a person sent, whichever bot it went to (a person's task answered by the bot that asked it).
     A run waiting for its ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it
     name the bot holding it."""
-    person = "m.sender_id LIKE 'human:%'"
+    person = H.person_sent_sql()
     which = (f"AND (j.bot_id=? OR {person}) " if bot and people else "AND j.bot_id=? " if bot
              else f"AND {person} " if people else "")
     job = c.execute("SELECT j.*,m.sender_id AS sender,a.state AS attempt_state,a.lease_until,a.stop_requested_at "

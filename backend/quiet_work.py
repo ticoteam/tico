@@ -88,8 +88,9 @@ def _own_job_sql(claimable=False):
     if claimable:
         from .execution import scoped_sql, unfenced_sql
         from .statuses import PARKED_SQL
+        from .store import H
         # Queued work behind the runner's task fences cannot move the blocker. Already active jobs still count.
-        eligibility = ("AND (j.state!='queued' OR m.sender_id LIKE 'human:%' OR NOT EXISTS "
+        eligibility = (f"AND (j.state!='queued' OR {H.person_sent_sql()} OR NOT EXISTS "
                        "(SELECT 1 FROM bot_config pc WHERE pc.bot=j.bot_id "
                        f"AND pc.onboarding_state IN {PARKED_SQL} "
                        "AND m.sender_id<>'bot:'||coalesce(pc.reports_to,''))) "

@@ -272,7 +272,7 @@ def _since_failure(c, bot):
 def person_waiting(c, bot):
     """Whether a person wrote to the bot since its last failed run: the job a back-off wait lets through."""
     return bool(c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? AND j.state='queued' "
-                          "AND m.sender_id LIKE 'human:%' AND m.created_at>? LIMIT 1", (bot, _since_failure(c, bot))).fetchone())
+                          f"AND {H.person_sent_sql()} AND m.created_at>? LIMIT 1", (bot, _since_failure(c, bot))).fetchone())
 
 
 def job_refusal(c, bot, message):
@@ -280,7 +280,7 @@ def job_refusal(c, bot, message):
     (execution.job_refusal)."""
     if refusal(c, bot) != "backoff":
         return None
-    fresh = str(message.get("sender_id") or "").startswith("human:") and str(message.get("created_at") or "") > _since_failure(c, bot)
+    fresh = H.person_sent(message) and str(message.get("created_at") or "") > _since_failure(c, bot)
     return None if fresh else "backoff"
 
 

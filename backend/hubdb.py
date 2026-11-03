@@ -1075,6 +1075,17 @@ def is_human(actor):
     return actor_kind(actor) == "human"
 
 
+def person_sent(message):
+    """Whether a message is a person's: one a person sent, or the keeper's carrier of one (threads._carrier writes
+    refs.carries = the message and refs.from = its sender). The row-level test is person_sent_sql."""
+    message = message or {}
+    sender = str(message.get("sender_id") or "")
+    if is_human(sender):
+        return True
+    refs = _json(message.get("refs"), {}) or {}
+    return sender == KEEPER and bool(refs.get("carries")) and is_human(str(refs.get("from") or ""))
+
+
 def _json(value, default=None):
     """A stored JSON column as a value. A row a caller already decoded holds the value itself under the column's
     name (row['refs'] is the dict), so a dict or list passes through."""
@@ -7699,6 +7710,14 @@ def unheld_sql(alias="j"):
 
 
 MESSAGE_TASK_SQL = f"coalesce({_task_ref_sql('$.task')}, {_task_ref_sql('$.task_id')}, cv.task_id)"
+
+
+def person_sent_sql(alias="m"):
+    """SQL (person_sent over a row): the message `alias` is a person's, sent by one or by the keeper carrying one. A
+    notice that carries a Home or thread message a bot hears is the person's for the claim's order, fences and
+    protections, as the message itself is."""
+    return (f"({alias}.sender_id LIKE 'human:%' OR ({alias}.sender_id='keeper' "
+            f"AND json_extract({alias}.refs,'$.carries') IS NOT NULL AND json_extract({alias}.refs,'$.from') LIKE 'human:%'))")
 # wait_detail's and answers_to's one-task reads (auto_tasks.prime_waits seeds them for many tasks)
 WAIT_ASKS_SQL = ("SELECT m.id, m.recipient_id FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
                  f"WHERE m.sender_id=? AND m.kind='ask' AND m.superseded_at IS NULL AND {MESSAGE_TASK_SQL}=? "
@@ -8105,7 +8124,7 @@ def stalled_tasks(conn, at=None, task_ids=None, queued_here=None):
     try:
         # A parked bot's queued job that is not a person's message never starts: it is not busy.
         busy = {r[0] for r in conn.execute(
-            "SELECT j.bot_id, max(j.state!='queued' OR coalesce(m.sender_id,'') LIKE 'human:%') FROM jobs j "
+            f"SELECT j.bot_id, max(j.state!='queued' OR coalesce({person_sent_sql()},0)) FROM jobs j "
             "LEFT JOIN messages m ON m.id=j.message_id WHERE j.state IN ('queued','leased','running') " +
             ("AND j.message_id NOT IN (SELECT value FROM json_each(?)) " if queued_here else "") +
             "GROUP BY j.bot_id", (json.dumps(queued_here),) if queued_here else ())
