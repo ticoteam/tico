@@ -65,6 +65,7 @@ export type Assistant = {
 
 export type AssistantAction = {
   body?: Record<string, unknown>;
+  for?: string | null;
   method?: "POST" | "PUT" | "PATCH" | "DELETE";
   path: string;
   summary: string;
@@ -7744,6 +7745,18 @@ export type ListAllAutomationRunsParams = {
 };
 export type ListAllAutomationRunsBody = never;
 export type ListAllAutomationRunsResponse = AutomationOverviewRuns;
+
+/** GET /api/v2/approvals */
+export type ListApprovalsParams = {
+  before?: string | null;
+  from?: string | null;
+  limit?: number;
+  offset?: number;
+  since?: string | null;
+  status?: string;
+};
+export type ListApprovalsBody = never;
+export type ListApprovalsResponse = unknown;
 
 /** GET /api/v2/assistant/changes */
 export type ListAssistantChangesParams = {

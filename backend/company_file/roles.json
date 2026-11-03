@@ -491,7 +491,7 @@
    "department": "core",
    "lead": false,
    "core": true,
-   "summary": "Every human's private Assistant: finds meetings, docs, files and tasks, makes tasks, hands work to the right bot and asks BotOps for new ones, always as that human and never more. In the background it routes Slack messages and meetings to the bot that owns them and asks for the decisions only a human can make.",
+   "summary": "Every human's private Assistant: does what that human asks, as them and never more, and reports what it did with the way to undo it. Finds meetings, docs, files and tasks, makes tasks, hands work to the right bot, and clears pile-ups at their source. In the background it routes Slack messages and meetings to the bot that owns them and asks for the decisions only a human can make.",
    "when": "Built in: every human gets a private Assistant that finds things and does them for them, and it routes work nobody was named for (Slack, meetings).",
    "tags": [],
    "pains": [],
