@@ -65,7 +65,7 @@ def known_ids(canned, state):
     def walk(x):
         if isinstance(x, dict):
             for k, v in x.items():
-                if k == "id" and isinstance(v, str):
+                if k in ("id", "approval", "task") and isinstance(v, str):
                     ids.add(v)
                 else:
                     walk(v)
@@ -156,7 +156,8 @@ def write_answer(words, state, mutate, argv, ids):
         if mutate and enabled is not None:
             state["automations"][tid] = enabled
         if mutate:
-            fields = {"schedule": argv_flag(argv, "--schedule")[-1]} if argv_flag(argv, "--schedule") else {}
+            fields = {f: argv_flag(argv, flag)[-1] for flag, f in (("--schedule", "schedule"), ("--trigger", "trigger"))
+                      if argv_flag(argv, flag)}
             if enabled is not None:
                 fields["enabled"] = enabled
             if fields:
@@ -167,14 +168,23 @@ def write_answer(words, state, mutate, argv, ids):
         if mutate:
             record(state, "bot", tid, {"status": status})
         return {"ok": True, "bot": {"id": tid, "status": status}}
-    if noun == "approval" and verb == "decline" and tid:
-        return {"ok": True, "approval": {"id": tid, "status": "declined"}}
+    if noun == "bot" and verb == "model" and tid and len(words) > 3 and not words[3].startswith("-"):
+        if mutate:
+            record(state, "bot", tid, {"model": words[3]})
+        return {"ok": True, "bot": {"id": tid, "model": words[3]}}
+    if noun == "approval" and verb in ("decline", "approve") and tid:
+        status = "declined" if verb == "decline" else "approved"
+        if mutate:
+            record(state, "approval", tid, {"status": status})
+        return {"ok": True, "approval": {"id": tid, "status": status}}
     if noun == "rules" and verb == "add":
         return {"ok": True, "rule": {"id": "rule_1", "status": "active"}}
     return None
 
 
-OVERRIDE_KINDS = ("task", "automation", "bot")
+OVERRIDE_KINDS = ("task", "automation", "bot", "approval")
+# Verbs that read an object. Any other successful call is a write, and goes in the log that `after` entries read.
+READ_VERBS = {"show", "list", "status", "search", "get", "recent-runs", "runs", "held", "read-back"}
 TASK_FIELD_FLAGS = {"--owner": "owner", "--status": "status", "--title": "title", "--due": "due"}
 
 
@@ -197,6 +207,46 @@ def apply_fields(obj, table):
         if key is not None:
             obj.update(table[key])
     return obj
+
+
+def after_for(entries, writes):
+    """The `after` output of the latest successful write that one entry's `when` regex names (None when none does)."""
+    for w in reversed(writes):
+        for entry in entries:
+            if re.search(entry["when"], w):
+                return entry["out"]
+    return None
+
+
+def is_list_read(words):
+    """A read the real hub answers with a list: with no canned row it gets an empty list with a note, not a bare ok."""
+    return (len(words) > 1 and words[1] in ("list", "search", "recent-runs", "runs", "held")
+            or words[:2] == ["needs-you", "show"] or words[:2] == ["conversation", "show"]
+            or (words[:2] == ["bot", "status"] and "list" in words))
+
+
+def no_data(words):
+    note = "no canned data"
+    if words[:2] == ["needs-you", "show"]:
+        return {"total": 0, "by_kind": {}, "by_bot": [], "note": note}
+    if words[:2] == ["conversation", "show"]:
+        return {"messages": [], "more_messages": False, "note": note}
+    return {"items": [], "next_offset": None, "note": note}
+
+
+def approvals_from_messages(canned):
+    """`approval list` with no canned row: the approvals the case's canned `message list` refers to, as pending rows."""
+    for r in canned:
+        if re.search(r["match"], "message list") and isinstance(r.get("out"), dict):
+            items = []
+            for m in r["out"].get("messages") or []:
+                refs = m.get("refs") or {}
+                if refs.get("approval"):
+                    items.append({"id": refs["approval"], "status": "pending", "from_actor": m.get("from_actor"),
+                                  "text": m.get("text", ""), "task": refs.get("task"), "created": m.get("created"),
+                                  "message_id": m.get("id")})
+            return {"items": items, "next_offset": None}
+    return {"items": [], "next_offset": None, "note": "no canned data"}
 
 
 def add_rows(out, rows):
@@ -269,23 +319,42 @@ def answer(argv, via, tool=None):
     ids = known_ids(canned, state)
     # A canned row that fails (exit non-zero) changes nothing in the state, and a dry run changes nothing either.
     failed = bool(row and int(row.get("exit", 0)))
-    resp = write_answer(words, state, mutate=not failed and "--dry-run" not in argv, argv=argv, ids=ids)
+    mutate = not failed and "--dry-run" not in argv
+    resp = write_answer(words, state, mutate=mutate, argv=argv, ids=ids)
+    if mutate and len(words) > 1 and words[1] not in READ_VERBS:
+        state["writes"] = (state.get("writes", []) + [canon])[-500:]
     entry = {"argv": line, "via": via, "matched": row["match"] if row else None, "files": files}
     if tool:
         entry["tool"] = tool
     created = state["created"]
     if row:
         out = row.get("out", "")
-    elif words[:2] == ["task", "list"]:
-        out = {"items": [], "next_offset": None}
+    elif words[:2] == ["approval", "list"]:
+        out = approvals_from_messages(canned)
     elif words[:2] == ["task", "show"] and len(words) > 2 and any(k.startswith(words[2]) for k in created):
         k = next(k for k in created if k.startswith(words[2]))
         out = {**created[k], "status": state["tasks"].get(k, created[k]["status"])}
+    elif is_list_read(words):
+        out = no_data(words)
+    elif words[:2] == ["bot", "model"] and len(words) == 3:
+        out = {"id": words[2], "note": "no canned data"}
     else:
         out = None
-    if out is not None and not isinstance(out, str) and words[0] in OVERRIDE_KINDS and words[1:2] in (["show"], ["list"], ["status"]):
+    # An `after` entry of the canned row returns the output of the latest successful write it names. Then the state
+    # layers below do not run on this read: `after` wins.
+    after_out = None
+    if row and row.get("after"):
+        after_out = after_for(row["after"], state.get("writes", []))
+    if after_out is not None:
+        out = after_out
+    if after_out is None and out is not None and not isinstance(out, str) and words[0] in OVERRIDE_KINDS and words[1:2] in (["show"], ["list"], ["status"]):
         out = apply_fields(out, state.get("overrides", {}).get(words[0], {}))
-    if out is not None and not isinstance(out, str):
+    bot_models = state.get("overrides", {}).get("bot", {})
+    if after_out is None and out is not None and not isinstance(out, str) and words[:2] == ["bot", "model"] and len(words) == 3:
+        key = lookup(bot_models, words[2])
+        if key is not None and "model" in bot_models[key] and isinstance(out, dict):
+            out = {**out, "model": bot_models[key]["model"]}
+    if after_out is None and out is not None and not isinstance(out, str):
         if words[:2] == ["task", "list"]:
             keep = ("--all" in words or "closed" in flag_values(words, "--where-status")
                     or "closed" in flag_values(words, "--status"))
