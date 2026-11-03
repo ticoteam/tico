@@ -54,7 +54,8 @@ fetch_source() {
 # A release image's files as a root directory: $BASE/runtime/<tag>.
 runtime() {
   local tag=$1 link=$BASE/runtime/$1
-  [ -x "$link/opt/tico/.venv/bin/python" ] && return 0
+  # Already exported (the venv's python is an absolute link into the image, so it is not tested from out here).
+  [ -f "$link/opt/tico/.venv/pyvenv.cfg" ] && [ -x "$link/usr/local/bin/tico-screen-relay" ] && return 0
   docker image inspect "$IMAGE_REPO:$tag" >/dev/null 2>&1 || docker pull -q "$IMAGE_REPO:$tag" >/dev/null
   local dir=$BASE/runtime/$tag-$(stamp) cid
   install -d -m 755 "$dir"
@@ -95,16 +96,52 @@ install_units() {
   if [ "$changed" = 1 ]; then systemctl daemon-reload; fi
 }
 
-# The demo's hosts in the router, from this checkout's `cell route`, and only when the router's file is what this core
-# writes for the companies (with or without the route), checked under the cell lock: then the companies' blocks stay
-# exactly as they are.
+# The demo's hosts in the router. The companies' blocks always stay exactly as they are:
+#   - the router's file is what this checkout's cell writes for the companies (with or without the route): this
+#     checkout's `cell route set --if-router-current` writes it (checked again under the cell lock; a no-op when the
+#     route is already there);
+#   - the file already holds the demo's block: nothing to do;
+#   - another cell core wrote it in a form this checkout does not (one without `cell route`): the demo's block is added
+#     after everything in it, and the file goes back as it was if the router refuses it.
+# A reload happens only when the file changed. Exit status 1 when the router could not be given the block.
 route() {
-  local args=(--name demo --port "${PORT[blue]}" --port "${PORT[green]}" --noindex --if-router-current) h
+  local args=(--name demo --port "${PORT[blue]}" --port "${PORT[green]}" --noindex --if-router-current) h mode answer
   for h in "${HOSTS[@]}"; do args+=(--host "$h"); done
   [ "${1:-}" = --tunnel ] || args+=(--router-only)
-  local answer
-  answer=$(cd "$TOOLS" && python3 -m setup cell route set "${args[@]}" --json) || die "cell route: $answer"
-  echo "$answer"
+  mode=$(cd "$TOOLS" && python3 -I - "$CELL" "${PORT[blue]}" "${PORT[green]}" "${HOSTS[@]}" <<'PY'
+import json, subprocess, sys
+sys.path.insert(0, ".")
+from pathlib import Path
+from setup import cell as C
+root, ports, hosts = Path(sys.argv[1]), [int(p) for p in sys.argv[2:4]], sys.argv[4:]
+c = C.Cell(root, C.System())
+record = {"name": "demo", "hosts": hosts, "ports": ports, "noindex": True}
+site = "\n".join(C.route_site(record))
+path = root / "router" / "Caddyfile"
+with c.lock("cell"):
+    now = path.read_text()
+    companies = c.live_companies()
+    if now in (C.router_config(companies), C.router_config(companies, c.routes())):
+        print("cell")
+    elif site in now:
+        print("present")
+    else:
+        C._write_atomic(root / C.ROUTES / "demo.json", json.dumps(record, indent=2, sort_keys=True) + "\n", 0o600)
+        C._write_atomic(path, now.rstrip("\n") + "\n\n" + site)
+        r = subprocess.run(["docker", "exec", C.ROUTER_CONTAINER, "caddy", "reload", "--config", "/etc/caddy/Caddyfile",
+                            "--adapter", "caddyfile"], capture_output=True, text=True)
+        if r.returncode:
+            C._write_atomic(path, now)
+            sys.exit("the router refused the demo's block: " + (r.stderr or r.stdout).strip()[-300:])
+        print("appended")
+PY
+  ) || { log "router: $mode"; return 1; }
+  if [ "$mode" = cell ]; then
+    answer=$(cd "$TOOLS" && python3 -m setup cell route set "${args[@]}" --json) || { log "cell route: $answer"; return 1; }
+    echo "$answer"
+  else
+    echo "{\"ok\": true, \"route\": \"demo\", \"router\": \"$mode\"}"
+  fi
 }
 
 healthy() {   # port, seconds
@@ -158,7 +195,10 @@ deploy() {
     systemctl stop "tico-demo@$new"
     die "$new did not answer /healthz; the running copy is unchanged"
   fi
-  route $tunnel
+  # The demo's block names both copies' ports, so the switch below needs no router change once it is there. If the
+  # router could not be given it now, the switch goes ahead anyway (never two copies running); the 5-minute timer
+  # tries again.
+  route $tunnel || log "warning: the router entry was not updated; tico-demo-route.timer tries again"
   systemctl enable -q "tico-demo@$new"
   if [ "$old" != "$new" ] && systemctl is-active -q "tico-demo@$old"; then
     sleep 3                               # the router's health check (every 2 s) has seen the new copy
