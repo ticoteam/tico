@@ -6651,6 +6651,8 @@ def create_app(settings=None):
             found = list(H.turns(c, bot, since=since_at))
             stored = H.prime_messages(c, [turn["message_id"] for turn in found])
             privacy.prime_messages(c, list(stored.values()))
+            from . import threads
+            threads.prime_members(c, who, [row["conversation_id"] for row in stored.values()])
             privacy.prime_attempts(c, [turn["id"] for turn in found])
             views.prime_attempt_details(c, [turn["id"] for turn in found])
             result = []
