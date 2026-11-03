@@ -269,8 +269,8 @@ def still_given(c, runner_id, runtime, subscription_id):
     return bool(sub) and sub["id"] == subscription_id
 
 
-RUNNER_READINESS_SQL = "SELECT readiness FROM runners WHERE id=?"
-RUNNER_CAPABILITIES_SQL = "SELECT capabilities FROM runners WHERE id=? AND revoked_at IS NULL"
+RUNNER_READINESS_SQL = "SELECT readiness FROM runners_with_state WHERE id=?"
+RUNNER_CAPABILITIES_SQL = "SELECT capabilities FROM runners_with_state WHERE id=? AND revoked_at IS NULL"
 
 
 def in_effect(c, runner_id, runtime, loads=None):
@@ -393,7 +393,7 @@ def assignments(c):
     given = [{"runner_id": r["runner_id"], "runtime": r["runtime"], "subscription_id": r["subscription_id"]}
              for r in c.execute("SELECT g.* FROM computer_subscriptions g JOIN runners r ON r.id=g.runner_id "
                                 "WHERE r.revoked_at IS NULL ORDER BY g.runner_id, g.runtime")] if _present(c) else []
-    capable = [r["id"] for r in c.execute("SELECT id,capabilities FROM runners WHERE revoked_at IS NULL "
+    capable = [r["id"] for r in c.execute("SELECT id,capabilities FROM runners_with_state WHERE revoked_at IS NULL "
                                           "ORDER BY id") if runner_takes(r)]
     return {"assignments": given, "capable": capable}
 
@@ -524,7 +524,7 @@ def _signed_in_with(c, sid):
     runs and sessions alone."""
     return [(g["runner_id"], g["runtime"]) for g in c.execute(
         "SELECT g.runner_id,g.runtime,r.capabilities FROM computer_subscriptions g "
-        "JOIN runners r ON r.id=g.runner_id WHERE g.subscription_id=? ORDER BY g.runner_id, g.runtime",
+        "JOIN runners_with_state r ON r.id=g.runner_id WHERE g.subscription_id=? ORDER BY g.runner_id, g.runtime",
         (sid,)).fetchall() if runner_takes(g)]
 
 
@@ -653,7 +653,7 @@ def give(c, settings, who, body):
     the computer's live runs on that runtime (confirmed first), starts its sessions of that runtime fresh, and re-judges
     the bots there that were Rate limited on the old sign-in. A runner too old to take one keeps signing in with its own
     login, so there it is only recorded: nothing stops, nothing is re-judged."""
-    runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (body.runner_id,)).fetchone()
+    runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (body.runner_id,)).fetchone()
     if not runner:
         raise Problem("not_found", "Computer not found", 404)
     sub = row(c, body.subscription) if body.subscription else None
@@ -740,7 +740,7 @@ def lend(c, runner_id, runtime, actor, shared, others):
     used percent, then the most recently added. Only subscription plans count (an API key bills per use, so it is never
     chosen for a computer). Returns the subscription id given, or None when no plan fits."""
     from . import login_holds
-    runner = c.execute("SELECT readiness FROM runners WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
+    runner = c.execute("SELECT readiness FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
     if not runner or c.execute("SELECT 1 FROM computer_subscriptions WHERE runner_id=? AND runtime=?",
                                (runner_id, runtime)).fetchone():
         return None
@@ -962,7 +962,7 @@ def _connect_computers(c, runtime, who=None):
         (runtime, H.now()))}
     me = H.actor_id(who.actor) if who else ""
     found = []
-    for runner in c.execute("SELECT * FROM runners WHERE revoked_at IS NULL").fetchall():
+    for runner in c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL").fetchall():
         report = readiness_document(runner["readiness"]).get("runtimes") or {}
         if (model_login.connects(runner) and model_login._online(runner)
                 and (report.get(runtime) or {}).get("installed")):
