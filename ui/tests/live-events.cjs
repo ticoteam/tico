@@ -26,6 +26,17 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage({viewport: {width: 1300, height: 820}, serviceWorkers: 'block'});
+  // Counts the live event streams each document opens, so send() knows the newest one has reached the route.
+  await page.addInitScript(() => {
+    const Native = window.EventSource;
+    window.EventSource = class extends Native {
+      constructor(url, ...rest) {
+        super(url, ...rest);
+        if (new URL(url, location.href).pathname === '/api/v2/events') window.__liveStreams = (window.__liveStreams || 0) + 1;
+      }
+    };
+  });
+  const made = new Map();   // per document: event streams that reached the route
   const errors = [], streams = [], reads = {snapshot: 0, tasks: 0, active: 0, changed: [], labels: [], needs: []};
   page.on('pageerror', e => errors.push(e.message));
   const threads = threadsFake({bot: 'ops'});
@@ -43,7 +54,11 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
       {name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
     if (p === '/api/issues') return json([]);
-    if (p === '/api/v2/events') { streams.push({url, route, document: route.request().headers().referer}); return; }        // held open until the test sends
+    if (p === '/api/v2/events') {                                                        // held open until the test sends
+      const document = route.request().headers().referer;
+      made.set(document, (made.get(document) || 0) + 1);
+      streams.push({url, route, document}); return;
+    }
     const answer = threads(p, url, route.request().method());
     if (answer !== undefined) return json(answer);
     if (p === '/api/v2/assistant') return json(assistantView('c-ops', snapshot));
@@ -72,14 +87,16 @@ const block = (seq, event, data) => `id: ${seq}\nevent: ${event}\ndata: ${JSON.s
     return json(unrouted(p));
   });
   // Navigation and thread subscriptions can leave canceled routes queued. Deliver only to the page's active stream.
+  // A reconnect can reopen the same URL: wait until the page's newest EventSource has reached the route, or the
+  // blocks go to the closed one and are lost.
   const send = async (match, ...blocks) => {
     const deadline = Date.now() + t(8000);
     const document = new URL(page.url()); document.hash = '';
     let stream;
     for (;;) {
-      const active = await page.evaluate(() => LIVE.es?.url);
+      const [active, started] = await page.evaluate(() => [LIVE.es?.url, window.__liveStreams || 0]);
       stream = streams.filter(s => s.document === document.href && s.url.href === active && match(s.url)).at(-1);
-      if (stream) break;
+      if (stream && (made.get(document.href) || 0) >= started) break;
       if (Date.now() > deadline) throw new Error('no stream: ' + streams.map(s => s.url.search).join(' | '));
       await new Promise(r => setTimeout(r, 50));
     }
