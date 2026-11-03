@@ -1086,6 +1086,42 @@ def synchronous(default):
     return "OFF" if os.environ.get("TICO_SQLITE_SYNC", "").lower() == "off" else default
 
 
+class _SyncWal:
+    """An after-commit callback that fsyncs the WAL: what synchronous=FULL does at commit, for a transaction that was
+    opened at NORMAL before it knew it would write money. Equal to every other one, so a transaction queues one."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def __eq__(self, other):
+        return isinstance(other, _SyncWal)
+
+    __hash__ = None
+
+    def __call__(self):
+        try:
+            fd = os.open(self.path + "-wal", os.O_RDONLY)
+        except FileNotFoundError:
+            return
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def durable_commit(c):
+    """Make this transaction's commit reach the disk before the request answers, from inside the transaction: SQLite
+    refuses to change synchronous once it has begun, so the WAL is fsynced once the commit is done. Nothing to do on a
+    connection already at FULL (a `durable` transaction), on one with no after-commit queue (a plain connection), or
+    when the test suite turned syncing off."""
+    hooks = getattr(c, "after_commit", None)
+    if hooks is None or synchronous("NORMAL") == "OFF" or c.execute("PRAGMA synchronous").fetchone()[0] >= 2:
+        return
+    path = next((row[2] for row in c.execute("PRAGMA database_list") if row[1] == "main"), "")
+    if path and _SyncWal(path) not in hooks:
+        hooks.append(_SyncWal(path))
+
+
 # After a checkpoint the WAL file is cut back to this size, so a migration's peak is not kept on disk.
 WAL_SIZE_LIMIT = 64 * 1024 * 1024
 

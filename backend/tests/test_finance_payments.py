@@ -1931,3 +1931,22 @@ def test_approving_a_finance_action_commits_synced(api, monkeypatch):
     monkeypatch.setattr(FA, "approval_decided", watched)
     post(api, f"approvals/{asked['approval_id']}", {"decision": "approved"}, key="approve-sync")
     assert seen == [2], seen
+
+
+def test_a_finance_action_in_a_plain_transaction_syncs_the_wal_once_after_commit(api, monkeypatch):
+    """A rule, a books disconnect or a bills address change runs a Finance action in a transaction opened at the
+    default synchronous; the action makes that commit reach the disk by fsyncing the WAL once, after the commit."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        FA.setup(c, OWNER, AT)
+    monkeypatch.setenv("TICO_SQLITE_SYNC", "normal")
+    synced = []
+    monkeypatch.setattr(H.os, "fsync", lambda fd: synced.append(fd))
+    with store.transaction() as c:
+        assert act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"}).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": "human:cara", "right": "finance.pay"}).status == "committed"
+        assert synced == []                                              # nothing before the commit
+    assert len(synced) == 1
+    with store.transaction() as c:
+        c.execute("SELECT 1")
+    assert len(synced) == 1                                              # a transaction with no Finance action: no sync
