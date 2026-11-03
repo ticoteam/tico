@@ -856,15 +856,34 @@ def thread_page_flags(s):
     s.add_argument("--limit", type=int, help="items in the page (50 by default, 100 at most)")
 
 
+def server_release(timeout=3):
+    """The release the hub server reports on its unauthenticated /healthz, or "" when it cannot say (no hub set, or it
+    does not answer within `timeout` seconds). A turn's runner strips TICO_* from the environment, so a released CLI
+    has no version of its own and asks the server it talks to."""
+    api = os.environ.get("HUB_API_URL", "")
+    if not api:
+        return ""
+    origin = api.split("/api/", 1)[0].rstrip("/")
+    try:
+        from clients import gateway
+        with gateway.branded_opener().open(origin + "/healthz", timeout=timeout) as reply:
+            return str(json.loads(reply.read().decode()).get("release") or "")
+    except Exception:
+        return ""
+
+
 class _Version(argparse.Action):
-    """`hub --version`: the Tico version this CLI reports, the one the server reports too."""
+    """`hub --version`: the Tico version this CLI was stamped with, else the release of the server it talks to."""
 
     def __init__(self, option_strings, dest=argparse.SUPPRESS, default=argparse.SUPPRESS, help=None):
         super().__init__(option_strings, dest, nargs=0, default=default, help=help)
 
     def __call__(self, parser, namespace, values, option_string=None):
         from clients.hubtools import release_version
-        print(release_version())
+        version = release_version()
+        if version == "dev":
+            version = server_release() or "unknown (this CLI build is not stamped)"
+        print(version)
         parser.exit()
 
 

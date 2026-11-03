@@ -2,7 +2,7 @@
 lacks its id, and a typo that names the closest commands that exist. Parsing only; no API is called."""
 import pytest
 
-from clients import hubcli
+from clients import gateway, hubcli
 
 
 def parse_failure(capsys, argv):
@@ -18,6 +18,54 @@ def test_version_prints_the_tico_version_and_exits_zero(monkeypatch, capsys):
         hubcli.parse(hubcli.parser(), ["--version"])
     assert done.value.code == 0
     assert capsys.readouterr().out.strip() == "1.2.3"
+
+
+class _Reply:
+    def __init__(self, body):
+        self.body = body
+
+    def read(self):
+        return self.body.encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _unstamped(monkeypatch, opened):
+    """A CLI with no TICO_VERSION (a released runner's turn) whose opener is `opened(url, timeout)`."""
+    monkeypatch.setenv("TICO_VERSION", "dev")
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+
+    class Opener:
+        def open(self, url, timeout=None):
+            return opened(url, timeout)
+    monkeypatch.setattr(gateway, "branded_opener", lambda *handlers: Opener())
+
+
+def test_version_asks_the_server_when_the_cli_is_unstamped(monkeypatch, capsys):
+    seen = []
+
+    def healthz(url, timeout):
+        seen.append((url, timeout))
+        return _Reply('{"ok": true, "release": "1.4.0"}')
+    _unstamped(monkeypatch, healthz)
+    with pytest.raises(SystemExit) as done:
+        hubcli.parse(hubcli.parser(), ["--version"])
+    assert done.value.code == 0
+    assert capsys.readouterr().out.strip() == "1.4.0"
+    assert seen == [("https://tico.acme.example/healthz", 3)]
+
+
+def test_version_says_unstamped_when_the_server_does_not_answer(monkeypatch, capsys):
+    def unreachable(url, timeout):
+        raise OSError("timed out")
+    _unstamped(monkeypatch, unreachable)
+    with pytest.raises(SystemExit):
+        hubcli.parse(hubcli.parser(), ["--version"])
+    assert capsys.readouterr().out.strip() == "unknown (this CLI build is not stamped)"
 
 
 def test_json_is_accepted_anywhere_on_the_line(capsys):
