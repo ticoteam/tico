@@ -99,6 +99,13 @@ def test_health_statements_do_not_grow_with_history(api):
             post(api, f"chat/few-{n:02d}", {"text": f"More {round_}"})
         for n in range(34):
             post(api, f"chat/many-{n:02d}", {"text": f"More {round_}"})
+    if os.environ.get("STALLED"):
+        with api.app.state.store.transaction() as c:
+            c.execute("INSERT INTO tasks(id,title,requester_id,owner_id,status,created_at,updated_at,private) "
+                      "SELECT 'st'||id,'stalled','human:ana',owner_id,'waiting',created_at,?,0 FROM tasks "
+                      "WHERE id LIKE 'bt%' AND status='open' LIMIT 100", (H.shift(H.now(), hours=-5),))
+            c.execute("INSERT INTO events(id,created_at,actor,action,target,detail) SELECT 'se'||id,?,'x','task.stall_escalated',id,'{}' "
+                      "FROM tasks WHERE id LIKE 'st%'", (H.shift(H.now(), hours=-4),))
     if os.environ.get("OFFLINE"):
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE runners SET last_seen_at=?", (H.shift(H.now(), hours=-3),))
