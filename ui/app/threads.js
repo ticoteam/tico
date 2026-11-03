@@ -110,7 +110,9 @@ async function threadsLoad() {
   if (THREADS.loading) return THREADS.loadingSort === sort ? THREADS.loading : THREADS.loading.then(() => threadsLoad());
   THREADS.loadingSort = sort;
   // The Needs you version known before the read: the list it answers is at least that new (the `needs` handler below).
+  // Held only once the read lands, so a read that fails is tried again on the next connect.
   const seen = S.v2.needsVersion || null;
+  THREADS.needsSeen = null;
   THREADS.loading = (async () => {
     try {
       const r = await get('/v2/threads?limit=50&sort=' + sort, {fresh: true});

@@ -42,7 +42,10 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       const version = reads.version || 'v1';
       return json(url.searchParams.get('version') === version ? {count: 0, version, unchanged: true} : {items: [], count: 0, version, next: null});
     }
-    if (p === '/api/v2/threads' && method === 'GET') reads.threads++;
+    if (p === '/api/v2/threads' && method === 'GET') {
+      reads.threads++;
+      if (reads.failThreads) return route.fulfill({status: 500, contentType: 'application/json', body: '{"error":"down"}'});
+    }
     const answer = threads(p, url, method);
     if (answer !== undefined) return json(answer);
     return json(unrouted(p));
@@ -81,7 +84,16 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
   for (const end = Date.now() + t(5000); reads.threads === before.threads && Date.now() < end;) await page.waitForTimeout(50);
   assert.ok(reads.threads > before.threads, 'a version the threads list was not read at reads it');
 
-  assert.deepEqual(errors, []);
+  // A read that fails leaves nothing to compare with: the next connect reads the list again.
+  reads.failThreads = true;
+  await page.evaluate(() => threadsLoad());
+  reads.failThreads = false;
+  before = {...reads};
+  await page.evaluate(() => liveEmit('needs', {version: S.v2.needsVersion, connect: true, carried: ['needs', 'threads']}));
+  for (const end = Date.now() + t(5000); reads.threads === before.threads && Date.now() < end;) await page.waitForTimeout(50);
+  assert.ok(reads.threads > before.threads, 'a connect after a failed read reads the list');
+
+  assert.deepEqual(errors.filter(e => !/500|failed/i.test(e)), []);
   await browser.close();
   console.log('threads-needs-version: ok');
 })().catch(e => { console.error(e); process.exit(1); });
