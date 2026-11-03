@@ -114,6 +114,24 @@ fn generation(key: &(String, String)) -> u64 {
     generations().lock().unwrap().get(key).copied().unwrap_or(0)
 }
 
+/// The login's generation as a read of its account or usage starts: pass it to `keep_if_current` when the read ends.
+pub(crate) fn read_started(profile: &str, runtime: &str) -> u64 {
+    generation(&(profile.to_string(), runtime.to_string()))
+}
+
+/// Run `keep` (which stores a read's account or usage windows) only if `forget` has not run for this login since the
+/// read started (`since`, from `read_started`). The check and `keep` run under the generation lock, so a sign-out is
+/// either before both or after both. `keep` must not call `forget`.
+pub(crate) fn keep_if_current(profile: &str, runtime: &str, since: u64, keep: impl FnOnce()) -> bool {
+    let gens = generations().lock().unwrap();
+    if gens.get(&(profile.to_string(), runtime.to_string())).copied().unwrap_or(0) != since {
+        return false;
+    }
+    keep();
+    drop(gens);
+    true
+}
+
 /// Keep `account` as what `profile` is signed in to for `runtime`, stamped now. A login that is now another account
 /// (email or kind) without signing out between drops the usage windows kept for the last one.
 pub fn remember(profile: &str, runtime: &str, account: Value) {
@@ -152,16 +170,12 @@ pub fn forget(profile: &str, runtime: &str) {
 /// Keep a background read's account and usage limits, unless `forget` ran for the same login after the read started
 /// (`since` is the generation it saw before starting). Check and keep run under the generation lock.
 fn keep_read(key: &(String, String), since: u64, account: Value, limits: Option<Value>) -> bool {
-    let gens = generations().lock().unwrap();
-    if gens.get(key).copied().unwrap_or(0) != since {
-        return false;
-    }
-    remember(&key.0, &key.1, account);
-    if let Some(limits) = limits {
-        crate::subscription_refresh::remember_windows(&key.0, &limits);
-    }
-    drop(gens);
-    true
+    keep_if_current(&key.0, &key.1, since, || {
+        remember(&key.0, &key.1, account);
+        if let Some(limits) = limits {
+            crate::subscription_refresh::remember_windows(&key.0, &limits);
+        }
+    })
 }
 
 pub fn account(profile: &str, runtime: &str) -> Option<Value> {
@@ -256,6 +270,20 @@ pub async fn read_app_server(runtime: &str, env: &Env) -> Option<(Value, Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The subscription refresh's account and usage read (subscription_refresh::read_codex) keeps nothing once a sign-in
+    /// or sign-out (forget) has run since it started.
+    #[test]
+    fn a_usage_read_that_started_before_a_sign_in_keeps_nothing() {
+        let since = read_started("usage-read", "codex");
+        forget("usage-read", "codex");
+        let mut kept = false;
+        assert!(!keep_if_current("usage-read", "codex", since, || kept = true));
+        assert!(!kept, "the stale read stores nothing");
+        assert!(keep_if_current("usage-read", "codex", read_started("usage-read", "codex"), || kept = true));
+        assert!(kept, "a read begun after it is kept");
+        forget("usage-read", "codex");
+    }
 
     #[test]
     fn a_read_that_started_before_a_sign_out_does_not_keep_its_account() {

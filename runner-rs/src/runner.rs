@@ -1417,7 +1417,7 @@ mod tests {
         let before = runner.inputs_now();
         let drive = async {
             for _ in 0..200 {
-                if std::fs::read_to_string(&log).map_or(false, |s| !s.is_empty()) {
+                if std::fs::read_to_string(&log).is_ok_and(|s| !s.is_empty()) {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
