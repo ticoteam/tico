@@ -152,9 +152,11 @@ def _derived_owner(r):
 
 
 def _backfill_sql(r):
-    """SQL: a message written as history (`refs.import`, `refs.replay`), which is never unread."""
+    """SQL: a message written as history (`refs.import`, `refs.replay`), or moved into a Home from a room
+    (`refs.moved_home`, backend/bot_home_merge.py): never unread."""
     refs = f"CASE WHEN json_valid({r}.refs) THEN {r}.refs END"
-    return f"(json_extract({refs},'$.import') IS NOT NULL OR json_extract({refs},'$.replay') IS NOT NULL)"
+    return (f"(json_extract({refs},'$.import') IS NOT NULL OR json_extract({refs},'$.replay') IS NOT NULL "
+            f"OR json_extract({refs},'$.moved_home') IS NOT NULL)")
 
 
 def ensure(c):

@@ -1489,9 +1489,21 @@ def create_app(settings=None):
             elif kind not in ("depth", "turn_id"):
                 raise Problem("reference", f"Unsupported reference kind: {kind}", 422)
 
+    def named_destination(c, who, body, create=True):
+        """The conversation a message lands in, named before any check reads it, so each check and the write see the same
+        one. A room that moved names its Home (backend/bot_home_merge.py). A bot's message to a person that names no room
+        lands in that person's chat Home when there is one (hubdb.chat_home): where `H.say` would put it, but otherwise
+        only after the checks had run, so a private run's words would reach a Home that others read. A message to a bot,
+        or from a person with no room named, costs no lookup here."""
+        if body.conversation_id:
+            return bot_home_merge.home_for(c, body.conversation_id, create=create) or body.conversation_id
+        if H.is_human(who.actor) or str(body.to).lower() == "assistant" or str(body.to).startswith("bot:"):
+            return None
+        to = body.to if str(body.to).startswith("human:") else auth.target(c, who, body.to)
+        return H.chat_home(c, who.actor, to, {"ask": "ask", "notice": "notice"}.get(body.kind, "chat"), create=create)
+
     def send(c, who, body):
-        # A room that moved into its bot's Home names the Home before any check reads it (backend/bot_home_merge.py).
-        body.conversation_id = bot_home_merge.home_for(c, body.conversation_id) or body.conversation_id
+        body.conversation_id = named_destination(c, who, body)
         in_assistant_room = False
         if str(body.to).lower() == "assistant":
             if who.role not in ("human", "owner") or who.via:
@@ -3229,8 +3241,13 @@ def create_app(settings=None):
             # A reply to a room that moved names its Home for every check below (backend/bot_home_merge.py); the sender's
             # attempt, a private run's, still decides what the Home allows.
             with store.read() as c:
-                body.conversation_id = (bot_home_merge.home_for(c, body.conversation_id, create=False)
-                                        or body.conversation_id)
+                body.conversation_id = named_destination(c, who, body, create=False)
+        elif not H.is_human(who.actor):
+            # A bot's message to a person that names no room goes to the person's chat Home (hubdb.chat_home). The checks
+            # must see that Home: it is made here if the bot has none open (an archived one), so a private run's words
+            # cannot reach a Home the checks never named.
+            with store.transaction() as c:
+                body.conversation_id = named_destination(c, who, body)
         reach.precheck(store, who, lambda c: reach.check(
             c, who, auth.target(c, who, body.to), "chat", conversation_id=body.conversation_id,
             task_id=(body.refs or {}).get("task") or (body.refs or {}).get("task_id"), in_reply_to=body.in_reply_to))

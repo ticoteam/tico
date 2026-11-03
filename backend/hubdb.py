@@ -3003,6 +3003,17 @@ def open_conversation(conn, actor, participants, kind="chat", subject="", task_i
     return made
 
 
+def chat_home(conn, actor, other, kind="chat", *, create=True):
+    """The Home a message with no room named goes to, when the pair is a person and a bot whose chats have moved into the
+    bot's Home (backend/bot_home_merge.py home_for_chat), else None. `kind` is the pair's kind as `_pair_conversation`
+    takes it: an ask or a notice is never a chat."""
+    if kind != "chat" or is_human(actor) == is_human(other):
+        return None
+    from . import bot_home_merge
+    person, bot = (actor, other) if is_human(actor) else (other, actor)
+    return bot_home_merge.home_for_chat(conn, person, actor_id(bot), create=create)
+
+
 def _pair_conversation(conn, actor, other, kind, subject="", allow_held=False):
     """The live conversation of this kind between these two, opened if there is none."""
     want = {actor, other}
@@ -3012,14 +3023,9 @@ def _pair_conversation(conn, actor, other, kind, subject="", allow_held=False):
         dm = threads._open_dm(conn, actor, [other])
         if dm:
             return conversation(conn, dm)
-    human_actor, human_other = is_human(actor), is_human(other)
-    if kind == "chat" and human_actor != human_other:
-        # A person's chat with a bot that names no room is the bot's Home, once its chats have moved (backend/bot_home_merge.py).
-        from . import bot_home_merge
-        person, bot = (actor, other) if human_actor else (other, actor)
-        home = bot_home_merge.home_for_chat(conn, person, actor_id(bot))
-        if home:
-            return conversation(conn, home)
+    home = chat_home(conn, actor, other, kind)
+    if home:
+        return conversation(conn, home)
     for row in _rows(conn.execute(
             "SELECT * FROM conversations WHERE kind=? AND closed_at IS NULL AND task_id IS NULL "
             "ORDER BY COALESCE(last_message_at, created_at) DESC LIMIT 200", (kind,))):
@@ -3069,10 +3075,13 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
 
     if conversation_id:
         # A person's old chat with a bot moved into the bot's Home: what still names it (an old task's room, a run
-        # that started before the move) is written there (backend/bot_home_merge.py).
-        from . import bot_home_merge
-        conversation_id = bot_home_merge.home_for(conn, conversation_id) or conversation_id
+        # that started before the move) is written there (backend/bot_home_merge.py). Only a closed room can have moved.
         conv = conversation(conn, conversation_id)
+        if conv and conv.get("closed_at"):
+            from . import bot_home_merge
+            moved = bot_home_merge.home_for(conn, conversation_id)
+            if moved:
+                conversation_id, conv = moved, conversation(conn, moved)
         if not conv:
             refuse(conn, actor, "not-found", f"no conversation {conversation_id}")
     else:
@@ -3376,9 +3385,10 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
                    expires_at=None, delivered_at=None, read_at=None, *, check_cap=False, decided=None):
     if actor == "bot:librarian":
         body = librarian_text(body)
-    if conv:
+    if conv and ("closed_at" not in conv or conv.get("closed_at")):
         # A person's old chat with a bot is the bot's Home now: whatever writes to the room (a task's notice, a reconnect
-        # card, a run's reply) writes to the Home (backend/bot_home_merge.py).
+        # card, a run's reply) writes to the Home (backend/bot_home_merge.py). Only a closed room can have moved, so an
+        # open one, the common case, costs no lookup.
         from . import bot_home_merge
         moved = bot_home_merge.home_for(conn, conv["id"])
         if moved and moved != conv["id"]:

@@ -10,7 +10,7 @@ import pytest
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import bot_home_merge, rooms, threads
-from backend.store import H
+from backend.store import H, task_message_page
 from backend.tests.test_api import api, headers  # noqa: F401  (the fixture)
 from backend.tests.test_threads_private_execution import (  # noqa: F401  (the helper and the fixture it needs)
     private_run, private_tasks_have_an_unrelated_manager)
@@ -365,3 +365,81 @@ def test_each_keyed_table_moves_in_one_statement_per_bot(api):
         updates = [s for s in recorded.statements if s.startswith(f"UPDATE {table} ")]
         assert len(updates) <= 1, (table, updates)
     assert sum(s.startswith("UPDATE thread_followups ") for s in recorded.statements) == 1
+
+
+def test_a_private_runs_message_to_its_requester_with_no_room_named_is_refused(api, ops_rooms):
+    """Finding 1 (P1): a bot's message to a person that names no room is that person's chat with the bot, which is the
+    Home once the chats have moved. A private run's words cannot go there: the destination is named before the checks,
+    and the named-room check refuses it, so nothing is written."""
+    merge(api)
+    _row, attempt = private_run(api, "ops")          # the run's requester is ben
+    refused = api.post("/api/v2/messages", json={"to": "human:ben", "text": "Implicit confidential"},
+                       headers=headers(attempt["token"]))
+    assert refused.status_code == 403, refused.text
+    with store(api).read() as c:
+        assert not c.execute("SELECT 1 FROM messages WHERE body LIKE 'Implicit confidential%'").fetchone()
+
+
+def test_an_unread_home_message_between_moved_messages_stays_unread(api):
+    """Finding 2 (P2): moved history is read for everyone, but a message already in the Home and unread for a reader stays
+    unread, even with moved messages after it; what is written after the move counts as usual."""
+    with store(api).transaction() as c:
+        home = threads.home(c, "bot:ops", create=True)["id"]
+        ana = room(c, "human:ana", "ops")
+        say(c, "human:ana", "bot:ops", "Legacy one", ana)
+        say(c, "human:ben", "bot:ops", "In the Home, before the move", home)
+        say(c, "human:ana", "bot:ops", "Legacy two", ana)
+        say(c, "human:ben", "bot:ops", "In the Home, later", home)
+    with store(api).read() as c:
+        assert unread(c, "human:cara", home) == 2
+    merge(api)
+    with store(api).read() as c:
+        assert unread(c, "human:cara", home) == 2
+    with store(api).transaction() as c:
+        say(c, "human:ben", "bot:ops", "Written after the move", home)
+    with store(api).read() as c:
+        assert unread(c, "human:cara", home) == 3
+
+
+def test_a_tasks_history_keeps_every_home_through_two_archives(api, ops_rooms):
+    """Finding 3 (P2): a task's history reads every Home its bot has had, archived ones included. Each comment written
+    through the old room after its Home was archived lands in the next Home, and all three stay in the task's history."""
+    from backend.tests.test_api import post
+    task = post(api, "tasks", {"owner": "ops", "title": "Summarize", "body": "Please summarize the current work."})
+    task_id = task["id"] if "id" in task else task["task"]["id"]
+    ana = ops_rooms["ana"]
+    with store(api).transaction() as c:
+        c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (ana, task_id))
+        notes = [say(c, "human:ana", "bot:ops", "Comment one", ana, refs={"task": task_id, "comment": True})["id"]]
+    merge(api)
+    for text in ("Comment two", "Comment three"):
+        with store(api).transaction() as c:
+            open_home = threads.home(c, "bot:ops", create=False)["id"]
+            c.execute("UPDATE conversations SET archived_at=? WHERE id=?", (H.now(), open_home))
+            notes.append(say(c, "human:ana", "bot:ops", text, ana, refs={"task": task_id, "comment": True})["id"])
+    with store(api).read() as c:
+        landed = {r[0] for r in c.execute(
+            "SELECT conversation_id FROM messages WHERE id IN (%s)" % ",".join("?" * len(notes)), notes)}
+        assert len(landed) == 3, landed                       # one Home each, the first merged one included
+        ids = [m["id"] for m in H.task_comments(c, task_id)]
+        assert [i for i in ids if i in notes] == notes, ids
+        page = task_message_page(c, H.task(c, task_id), limit=50)
+        assert [m["id"] for m in page["messages"] if m["id"] in notes] == notes, page
+
+
+def test_a_write_to_an_open_room_asks_for_no_home_lookup(api, ops_rooms):
+    """Finding 4: only a closed room can have moved, so a write to an open room looks up no Home."""
+    merge(api)
+    with store(api).transaction() as c:
+        open_room = room(c, "human:cara", "ops")
+        recorded = Recorded(c)
+        say(recorded, "human:cara", "bot:ops", "An open room, no lookup", open_room)
+    assert not [s for s in recorded.statements if "home_merges" in s], recorded.statements
+
+
+def test_a_chat_with_a_bot_the_move_never_reached_costs_one_lookup(api):
+    """Finding 4: a bot the move never reached costs one lookup to learn that, on every chat asked about it."""
+    with store(api).transaction() as c:
+        recorded = Recorded(c)
+        assert bot_home_merge.home_for_chat(recorded, "human:ben", "finance") is None
+    assert len(recorded.statements) == 1, recorded.statements

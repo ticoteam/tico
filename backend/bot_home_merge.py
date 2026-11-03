@@ -21,16 +21,18 @@ for one bot at a time):
    by the room moves with it: deliveries, sub-threads (root, parent, path), follow-ups, routings, feedback, bot files,
    credential requests, deferrals, calls; a run still going there is granted the Home too (attempt_conversations). The
    keyed tables move in one statement each for the whole bot (`_move_keyed`), not one per room.
-3. Read marks. Nobody wakes to a flood: every person's mark in the Home, and in each moved sub-thread, goes past what
-   moved in. The moved history is read history for everyone who reads the Home; an old unread reply is not carried over
-   (owner decision, Nov 3). The room's owner follows the Home as they followed the room.
+3. Read marks. Nobody wakes to a flood: the moved messages are history (`refs.moved_home`, which the unread rule never
+   counts), in the Home and in each moved sub-thread, for everyone who reads the Home; an old unread reply is not carried
+   over (owner decision, Nov 3). A reader's mark moves up to what moved in, but never past an original Home message that
+   is still unread for them, which stays unread (`_read_through`). The room's owner follows the Home as they followed the
+   room.
 4. The room is closed, its room_key becomes `<key>:home:<home id>` (as rooms.sync_shared_room archives old pairs), and
    `home_merges` records where it went (`home_merge_messages`, each message it carried), so it is auditable and can
    be undone by hand. A closed room is out of personal_room, `threads._open_dm` and every pair lookup. A write that
    still names it (an old task's room, a run that started before the move) lands in the Home (`home_for`), and so does
    a chat with the bot that opens later (`home_for_chat`: rooms.personal_room, the chat and work rooms, a bot's message
    with no room named). A task is never filed in a Home (rooms.task_conversation_id). A task's history is read from
-   where it was written and from the Home it is in now (`history_ids`), archived Homes included.
+   where it was written and from every Home its bot has had, archived ones included, the current one last (`history_ids`).
 
 Left as they are: the Assistant's rooms (it has no Home), the Strategy Bot, the Librarian's "docs" rooms (its per-person
 Q&A list reads them), Strategy rooms, task rooms, meetings, DMs (scope 'direct'), closed or archived rows, rows that are
@@ -128,13 +130,15 @@ def home_for(c, conversation_id, *, create=True):
 
 def home_for_chat(c, person, bot_ref, *, create=True):
     """The Home a person's chat with this bot goes into once the bot's chats have moved (rooms.personal_room, the chat and
-    work rooms, a bot's message with no room named). Only a covered bot is one whose rooms the move took (it has
-    home_merges rows); a bot the move never reached, and a fresh install's, keep their chats as they are. None where the
+    work rooms, a bot's message with no room named). Only a covered bot is one whose rooms the move took (it has home_merges
+    rows): a bot the move never reached, and a fresh install's, keep their chats as they are, for one lookup. None where the
     move leaves the chat as it is: the Assistant and the Strategy Bot, a bot synced from an outside app, a Home linked to
     another install, a person who may not read the Home, and a bot with no Home when `create` is False."""
     from . import threads
-    bot = H.resolve_bot(c, bot_ref) if bot_ref else None
-    if not bot or {bot["id"], bot["slug"]} & _excluded_bots() or not _covered(c, bot["id"]) or _synced(c, bot):
+    if not _covered(c, str(bot_ref or "").strip().removeprefix("bot:")):
+        return None
+    bot = H.resolve_bot(c, bot_ref)
+    if not bot or {bot["id"], bot["slug"]} & _excluded_bots() or _synced(c, bot):
         return None
     home = threads.home(c, "bot:" + bot["id"], create=create)
     if home is None:
@@ -146,19 +150,33 @@ def home_for_chat(c, person, bot_ref, *, create=True):
 
 
 def history_ids(c, conversation_id):
-    """The conversations a room's history is read from, oldest first: the room, the Home its messages moved into (their
-    home even once that Home is archived, since the messages stay there), and the Home a write to it lands in now."""
-    ids = [conversation_id]
-    row = _moved(c, conversation_id) if conversation_id else None
-    if row is not None:
-        ids += [row[0], home_for(c, conversation_id, create=False)]
-    return list(dict.fromkeys(ids))
+    """The conversations a room's history is read from, oldest first: the room, then every Home its bot has had, archived
+    ones included (an archived Home keeps the writes it took, and the one after it takes the next), and the Home a write to
+    the room lands in now, last. A room that did not move has only itself."""
+    row = _moved(c, conversation_id)
+    if row is None:
+        return [conversation_id]
+    current = home_for(c, conversation_id, create=False)
+    older = [h for h in _bot_homes(c, row[1], row[0]) if h not in (conversation_id, current)]
+    return [conversation_id] + older + ([current] if current else [])
 
 
-def _covered(c, bot_id):
-    """Whether the move took this bot's rooms: its chats are its Home's now."""
+def _bot_homes(c, bot_id, recorded):
+    """Every Home of a bot, open or archived, oldest first: those stored under the bot's id or slug, the ones a moved room
+    went into (home_merges), and the one recorded for this room."""
+    bot = H.bot(c, bot_id) or {}
+    owners = sorted({"bot:" + bot_id, "bot:" + (bot.get("slug") or bot_id)})
+    return [r[0] for r in c.execute(
+        f"SELECT id FROM conversations WHERE (audience='home' AND owner_id IN ({','.join('?' * len(owners))})) "
+        "OR id IN (SELECT home_id FROM home_merges WHERE bot_id=?) OR id=? ORDER BY created_at, id",
+        (*owners, bot_id, recorded)).fetchall()]
+
+
+def _covered(c, ref):
+    """Whether the move took the rooms of the bot this id or slug names: its chats are its Home's now. One lookup."""
     try:
-        return c.execute("SELECT 1 FROM home_merges WHERE bot_id=? LIMIT 1", (bot_id,)).fetchone() is not None
+        return c.execute("SELECT 1 FROM home_merges WHERE bot_id IN (SELECT id FROM bots WHERE id=? OR slug=?) LIMIT 1",
+                         (ref, ref)).fetchone() is not None
     except sqlite3.OperationalError:      # a database from before migration 0060
         return False
 
@@ -250,6 +268,7 @@ def _merge_bot(c, bot_id, rooms, summary):
     if not moving:
         return False
     _map_rooms(c, moving, home["id"])
+    _mark_moved(c)
     row = threads.thread_row(c, home["id"])
     for room in moving:
         _move(c, room, row, bot, summary)
@@ -314,6 +333,14 @@ def _move_keyed(c):
                   f"WHERE a.state IN ({','.join('?' * len(OPEN_ATTEMPTS))})", OPEN_ATTEMPTS)
     if _table(c, "thread_rankings"):
         c.execute("DELETE FROM thread_rankings WHERE thread_id IN (SELECT rid FROM temp.home_moves)")
+
+
+def _mark_moved(c):
+    """The messages of the bot's moved rooms, and of the sub-threads under them, are history (`refs.moved_home`): never
+    unread, for anyone, whatever a reader's mark is. One statement for the whole bot (temp.home_moves)."""
+    c.execute("UPDATE messages SET refs=json_set(CASE WHEN json_valid(refs) THEN refs ELSE '{}' END, '$.moved_home', "
+              "json('true')) WHERE conversation_id IN (SELECT rid FROM temp.home_moves) OR conversation_id IN "
+              "(SELECT s.id FROM conversations s JOIN temp.home_moves m ON s.root_id=m.rid)")
 
 
 def _move(c, room, home, bot, summary):
@@ -382,17 +409,27 @@ def _people(c):
 
 
 def _read_through(c, thread_id, seq, now):
-    """Every person's read mark in a thread goes past `seq`: what moved into it is history, not news (contract §5). A
-    person with no row gets one that is a read mark only, not a follow."""
+    """Every person's read mark in a thread goes up to `seq`, what moved in, which is history for them (its messages are
+    never unread: refs.moved_home). But never past the first message still unread for them: an original message of the
+    thread that was unread before the move stays unread, and so does everything after it. A person with no row gets one
+    that is a read mark only, not a follow."""
     from . import threads
     for actor in _people(c):
-        row = c.execute("SELECT 1 FROM thread_followers WHERE thread_id=? AND actor=?", (thread_id, actor)).fetchone()
+        v = threads.actor_viewer(c, actor)
+        floor = threads._backfill_floor(c, v) if v is not None else 0
+        row = c.execute("SELECT last_read_seq FROM thread_followers WHERE thread_id=? AND actor=?",
+                        (thread_id, actor)).fetchone()
+        mark = max(int(row[0] or 0) if row else 0, floor)
+        first = c.execute(f"SELECT MIN(m.seq) FROM messages m WHERE m.conversation_id=? AND m.seq>? "
+                          f"AND {threads.unread_message_sql()}", (thread_id, mark, actor, actor)).fetchone()[0]
+        target = seq if first is None else min(seq, int(first) - 1)
         if row is None:
             c.execute("INSERT INTO thread_followers(id,thread_id,actor,following,notify,reason,last_read_seq,created_at,"
-                      "updated_at) VALUES(?,?,?,0,'live','read',?,?,?)", (threads._new_id(), thread_id, actor, seq, now, now))
+                      "updated_at) VALUES(?,?,?,0,'live','read',?,?,?)",
+                      (threads._new_id(), thread_id, actor, target, now, now))
         else:
             c.execute("UPDATE thread_followers SET last_read_seq=MAX(last_read_seq,?), updated_at=? "
-                      "WHERE thread_id=? AND actor=?", (seq, now, thread_id, actor))
+                      "WHERE thread_id=? AND actor=?", (target, now, thread_id, actor))
 
 
 def _follow_owner(c, rid, hid, person, now):
