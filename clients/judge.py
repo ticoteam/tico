@@ -46,6 +46,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+from clients import runenv
 from clients import gateway as G
 
 URL = "https://api.typesafe.ai/v1/systemone"
@@ -784,7 +785,7 @@ def from_env(env=None):
     """Inside a turn the hub decides (the key stays on the server); a process with its own
     `TYPESAFE_API_KEY` decides directly; otherwise None, and the caller does without."""
     env = os.environ if env is None else env
-    url, token = env.get("HUB_API_URL"), env.get("HUB_TOKEN")
+    url, token = runenv.lookup(env, "HUB_API_URL"), runenv.lookup(env, "HUB_TOKEN")
     if url and token:
         from clients.tico import Client
         return through_hub(Client(url, token, timeout=HUB_WAIT))
@@ -800,7 +801,7 @@ def question_dirs(env=None, cwd=None):
     folder in the bot's own repository (a message bot's template ships `questions/mail-triage.json`), which a computer
     without this checkout's folder layout still has."""
     env = os.environ if env is None else env
-    found = [env.get("TICO_QUESTIONS_DIR"), Path(env["HUB_DIR"]) / "questions" if env.get("HUB_DIR") else None,
+    found = [env.get("TICO_QUESTIONS_DIR"), Path(runenv.require(env, "HUB_DIR")) / "questions" if runenv.lookup(env, "HUB_DIR") else None,
              Path(cwd or os.getcwd()) / "questions"]
     return [Path(d) for d in found if d]
 

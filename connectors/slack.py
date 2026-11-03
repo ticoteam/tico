@@ -55,6 +55,7 @@ import argparse, json, os, re, stat, sys, tempfile, time, unicodedata
 import urllib.error, urllib.parse, urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from clients import runenv
 
 try:
     from zoneinfo import ZoneInfo
@@ -430,7 +431,7 @@ def bot_folder(slug):
     else bot-<slug> (this repeats clients/manifest.py)."""
     if not SLUG.fullmatch(slug or ""):                  # a slug is one folder name: never a path out of PROJECTS
         raise Refused(f"{slug!r} is not a bot slug")
-    own = os.environ.get("HUB_BOT_FOLDER") or ""
+    own = runenv.get("HUB_BOT_FOLDER") or ""
     if own and SLUG.fullmatch(own) and slug.lower() == bot_from_env().lower():
         return PROJECTS / own
     for prefix in ("bot-", "emp-"):
@@ -459,7 +460,7 @@ def declared_tools(manifest):
 
 
 def bot_from_env():
-    return (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip()
+    return (runenv.get("HUB_BOT") or runenv.get("HUB_EMPLOYEE") or "").strip()
 
 
 def hub_bot():
@@ -469,7 +470,7 @@ def hub_bot():
     A run with a hub credential that the hub cannot identify is refused: nothing can say whose scope applies."""
     if "hub_bot" in _CACHE:
         return _CACHE["hub_bot"]
-    if not (os.environ.get("HUB_API_URL") and os.environ.get("HUB_TOKEN")):
+    if not (runenv.get("HUB_API_URL") and runenv.get("HUB_TOKEN")):
         return ""
     me = HUB_GET("me")
     actor = str(me.get("actor") or "").strip() if isinstance(me, dict) else ""
@@ -701,7 +702,7 @@ def check_inbox_scope(manifest, slug):
 def _default_hub_get(path):
     """One GET to the hub as this run, or None when the run has no hub credential or the hub cannot be reached.
     Tests replace `HUB_GET`."""
-    url, token = os.environ.get("HUB_API_URL"), os.environ.get("HUB_TOKEN")
+    url, token = runenv.get("HUB_API_URL"), runenv.get("HUB_TOKEN")
     if not url or not token:
         return None
     try:

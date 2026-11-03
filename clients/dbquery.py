@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
+from clients import runenv
 from clients.manifest import manifest_path, repo_dir, tools_of
 from clients.tico import APIError
 
@@ -471,8 +472,8 @@ def employee_manifest(slug, environ=None):
     import yaml
     environ = environ if environ is not None else os.environ
     candidates = []
-    if environ.get("HUB_WORKSPACE"):
-        candidates.append(manifest_path(repo_dir(environ["HUB_WORKSPACE"], slug)))
+    if runenv.lookup(environ, "HUB_WORKSPACE"):
+        candidates.append(manifest_path(repo_dir(runenv.require(environ, "HUB_WORKSPACE"), slug)))
     candidates.append(manifest_path(Path.cwd()))
     for path in candidates:
         try:

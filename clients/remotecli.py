@@ -13,6 +13,7 @@ from pathlib import Path
 
 if __package__ in (None, ""):                          # imported by a script run from anywhere
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from clients import runenv
 from clients import s3links  # noqa: E402
 from clients.tico import APIError, Client  # noqa: E402
 
@@ -95,7 +96,7 @@ def via_tool(client, args, **more):
         fields["sharing"] = fields["sharing"] == "on"
     if args.fn == "thread update" and fields.pop("keep_forever", False):
         fields["retention_days"] = None  # explicit null keeps its messages for good; omission leaves the policy alone
-    fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
+    fields["operation_id"] = runenv.get("HUB_OPERATION_ID")
     fields.update(more)
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
 
@@ -113,7 +114,7 @@ def automation(client, args):
             raise APIError("file", "--file must hold a JSON object")
         return data
 
-    run = lambda name, fields: hubtools.BY_NAME[name]["fn"](client, {**fields, "operation_id": os.environ.get("HUB_OPERATION_ID")})
+    run = lambda name, fields: hubtools.BY_NAME[name]["fn"](client, {**fields, "operation_id": runenv.get("HUB_OPERATION_ID")})
     if args.sub == "inbox":
         return run("hub_inbox_send", {"inbox": args.inbox, **({"send": args.send == "on"} if args.send else {})})
     fields = {"id": args.id} if hasattr(args, "id") else {}
@@ -150,7 +151,7 @@ def product_repo_create(client, name, *, confirm=None, stdin=None, stderr=None):
     `confirm` (`--confirm`, for a bot's turn, which has no terminal) and checked against the preview."""
     stdin = stdin or sys.stdin
     stderr = stderr or sys.stderr
-    request_id = os.environ.get("HUB_OPERATION_ID") or uuid.uuid4().hex
+    request_id = runenv.get("HUB_OPERATION_ID") or uuid.uuid4().hex
     key = request_id + ":product-repository"
     if len(key) > 200:
         raise APIError("operation_id", "HUB_OPERATION_ID is too long for a product-repository idempotency key; no repository was created", 422)
@@ -211,7 +212,7 @@ def counsel_held(args):
     """Counsel runs a shell, so its CLI is held to the tools it is offered as its MCP is (hubtools.COUNSEL_TOOLS): a web
     search or fetch, a message, and every other command outside that list are refused before anything is sent."""
     from clients import hubtools
-    if (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip() != hubtools.COUNSEL_BOT:
+    if (runenv.get("HUB_BOT") or runenv.get("HUB_EMPLOYEE") or "").strip() != hubtools.COUNSEL_BOT:
         return
     fn = getattr(args, "fn", None)
     entry = hubtools.BY_NAME.get(tool_name(fn)) if fn else None
@@ -224,7 +225,7 @@ def run(args, who=None):
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
     counsel_held(args)
     # A query may run for 20 s on the server before it is stopped, a decision's providers 25 s; leave room for that.
-    client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=45 if args.cmd in ("decision", "gateway") else 30 if args.cmd == "sql" else 120 if args.cmd == "listening" or args.fn == "market import" else 130 if args.cmd == "inbound" else 15)
+    client = Client(runenv.require(os.environ, "HUB_API_URL"), runenv.get("HUB_TOKEN", ""), timeout=45 if args.cmd in ("decision", "gateway") else 30 if args.cmd == "sql" else 120 if args.cmd == "listening" or args.fn == "market import" else 130 if args.cmd == "inbound" else 15)
     fn = args.fn
     if args.cmd == "inbound":
         return via_tool(client,args)
@@ -338,14 +339,14 @@ def run(args, who=None):
             changes["suggestions_bot"] = args.suggestions_bot
         from clients import hubtools
         return hubtools.roadmap_settings(client, {"settings": changes or None,
-                                                  "operation_id": os.environ.get("HUB_OPERATION_ID")})
+                                                  "operation_id": runenv.get("HUB_OPERATION_ID")})
     if args.cmd in ("chat", "replay"):
         return via_tool(client, args)
     if fn in ("stall-triage", "audit"):
         return via_tool(client, args)
     if fn and fn.startswith("task-manager "):
         from clients import hubtools
-        op = os.environ.get("HUB_OPERATION_ID")
+        op = runenv.get("HUB_OPERATION_ID")
         if fn == "task-manager status":
             return hubtools.task_manager_status(client, {})
         if fn == "task-manager run":
@@ -359,10 +360,10 @@ def run(args, who=None):
         if fn == "health-monitor findings":
             return hubtools.health_monitor_findings(client, {})
         return hubtools.health_monitor_report(client, {"key": args.key, "process": args.process, "cpu": args.cpu,
-                                                       "mb": args.mb, "operation_id": os.environ.get("HUB_OPERATION_ID")})
+                                                       "mb": args.mb, "operation_id": runenv.get("HUB_OPERATION_ID")})
     if fn in ("support report", "support send"):
         from clients import hubtools
-        key = os.environ.get("HUB_OPERATION_ID")
+        key = runenv.get("HUB_OPERATION_ID")
         if fn == "support send":
             return hubtools.support_send(client, {"approval": args.approval, "operation_id": key})
         text = Path(args.file).read_text(encoding="utf-8") if args.file else args.message
@@ -387,10 +388,10 @@ def run(args, who=None):
     if fn == "doc ask-status":
         from clients import docs_ask
         return docs_ask.status(client, args.conversation_id, args.message_id, args.wait,
-                               key=os.environ.get("HUB_OPERATION_ID"))
+                               key=runenv.get("HUB_OPERATION_ID"))
     if fn == "doc ask":                 # `doc fetch` never gets here: it runs locally (clients/hubcli.py)
         from clients import docs_ask
-        return docs_ask.ask(client, args.question, args.wait, key=os.environ.get("HUB_OPERATION_ID"))
+        return docs_ask.ask(client, args.question, args.wait, key=runenv.get("HUB_OPERATION_ID"))
     if args.cmd == "grokbot":
         from clients import hubtools
         body = json.loads(Path(args.file).read_text())
@@ -402,21 +403,21 @@ def run(args, who=None):
     if args.cmd == "file":
         from clients import hubtools
         fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
-        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
+        fields["operation_id"] = runenv.get("HUB_OPERATION_ID")
         if fn == "file publish":
             return hubtools.files_publish_path(client, fields)
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "page":
         from clients import hubtools
         fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
-        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
+        fields["operation_id"] = runenv.get("HUB_OPERATION_ID")
         if fn == "page publish":
             return hubtools.pages_publish_path(client, fields)
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "doc":
         from clients import hubtools
         fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn", "body_file") and v is not None}
-        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
+        fields["operation_id"] = runenv.get("HUB_OPERATION_ID")
         if fn == "doc write":
             fields["body"] = sys.stdin.read() if not args.body_file or args.body_file == "-" else Path(args.body_file).read_text(encoding="utf-8-sig")
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
@@ -430,7 +431,7 @@ def run(args, who=None):
             raise APIError("body", "--body must be JSON") from None
         return hubtools.BY_NAME["hub_assistant_propose"]["fn"](client, {
             "summary": args.summary, "path": args.path, "method": args.method, "body": body,
-            "operation_id": os.environ.get("HUB_OPERATION_ID")})
+            "operation_id": runenv.get("HUB_OPERATION_ID")})
     if args.cmd == "db":
         # Runs here, beside the credential; the hub only checks who is asking and keeps the audit.
         from clients import dbquery
@@ -439,14 +440,14 @@ def run(args, who=None):
         # A person's own shell (hubtools.SHELL_ONLY): a new key is shown to them, never to an agent's context.
         if fn == "service-key create":
             return client.post("service-keys", {"label": args.label, "scope": getattr(args, "scope", "tasks")},
-                               key=os.environ.get("HUB_OPERATION_ID"))
+                               key=runenv.get("HUB_OPERATION_ID"))
         if fn == "service-key revoke":
-            return client.post("service-keys/" + args.id + "/revoke", {}, key=os.environ.get("HUB_OPERATION_ID"))
+            return client.post("service-keys/" + args.id + "/revoke", {}, key=runenv.get("HUB_OPERATION_ID"))
         return client.get("service-keys")["keys"]
     if args.cmd == "webhook":
         from clients import hubtools
         fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
-        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
+        fields["operation_id"] = runenv.get("HUB_OPERATION_ID")
         if fn in ("webhook create", "webhook update"):
             try:
                 hubtools.webhook_options(fields)
@@ -461,7 +462,7 @@ def run(args, who=None):
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     identity = client.get("me")
     actor = identity["actor"]
-    key = os.environ.get("HUB_OPERATION_ID")
+    key = runenv.get("HUB_OPERATION_ID")
 
     def post(path, body, suffix="", delegate=False):
         # `delegate`: the person's message the Assistant cites for a task action they asked for (`--on-behalf-of`).
@@ -890,7 +891,7 @@ def botops_tools(client, args):
     """`hub api`, `hub credential ...`, `hub computer list`, `hub health check`, `hub message redact`, `hub support file`: the
     tool of the same name. A secret is read from standard input, never from the command line."""
     from clients import hubtools
-    key = os.environ.get("HUB_OPERATION_ID")
+    key = runenv.get("HUB_OPERATION_ID")
     if args.fn == "api":
         text = sys.stdin.read() if args.body == "-" else args.body
         try:
@@ -922,7 +923,7 @@ def bots(client, args):
     written from, and the instructions the person wrote for this particular bot.
     """
     from clients import catalog
-    workspace = Path(os.environ.get("HUB_WORKSPACE") or "")
+    workspace = Path(runenv.get("HUB_WORKSPACE") or "")
     if args.fn == "template list":
         try:
             # The server's cards carry the instructions onboarding filled in; a server without
@@ -972,7 +973,7 @@ def bots(client, args):
             fields["build"] = False
         if getattr(args, "no_setup", False):
             fields["setup"] = False
-        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
+        fields["operation_id"] = runenv.get("HUB_OPERATION_ID")
         return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
     if args.fn == "bot check":
         from clients.botcopy import folder_of

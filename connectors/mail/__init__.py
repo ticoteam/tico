@@ -7,6 +7,7 @@ the package (and the tests) can be exercised offline.
 import json, os, re, sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from clients import runenv
 
 try:
     from zoneinfo import ZoneInfo
@@ -72,7 +73,7 @@ def repo_dir(projects, slug):
     """The bot's folder under the projects directory: for this run's own bot the folder the runner names (HUB_BOT_FOLDER:
     a bot made with a UUID id is not in bot-<id>, and a rename keeps its folder), else bot-<slug> if it exists, else
     emp-<slug> if that does, else bot-<slug>."""
-    own = os.environ.get("HUB_BOT_FOLDER") or ""
+    own = runenv.get("HUB_BOT_FOLDER") or ""
     if own and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", own) and str(slug).lower() == hub_bot().lower():
         return Path(projects) / own
     for prefix in ("bot-", "emp-"):
@@ -107,7 +108,7 @@ def declared_tools(manifest):
 def hub_bot(env=None):
     """The bot this run is, from HUB_BOT or the older HUB_EMPLOYEE (the runner sets both)."""
     env = os.environ if env is None else env
-    return (env.get("HUB_BOT") or env.get("HUB_EMPLOYEE") or "").strip()
+    return (runenv.lookup(env, "HUB_BOT") or runenv.lookup(env, "HUB_EMPLOYEE") or "").strip()
 
 
 # ---------------------------------------------------------------- yaml

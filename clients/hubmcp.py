@@ -15,13 +15,14 @@ from pathlib import Path
 
 if __package__ in (None, ""):                          # run as a script: python clients/hubmcp.py
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from clients import runenv
 from clients import hubtools  # noqa: E402
 from clients.tico import APIError, Client  # noqa: E402
 
 
 def main(stdin=None, stdout=None):
     stdin, stdout = stdin or sys.stdin, stdout or sys.stdout
-    url, token = os.environ.get("HUB_API_URL"), os.environ.get("HUB_TOKEN", "")
+    url, token = runenv.get("HUB_API_URL"), runenv.get("HUB_TOKEN", "")
     if not url:
         print(json.dumps({"error": "HUB_API_URL is not set: the hub MCP server runs inside a bot turn"}),
               file=sys.stderr)

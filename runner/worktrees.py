@@ -18,6 +18,7 @@ from urllib.parse import quote
 import uuid
 import weakref
 
+from clients import runenv
 from clients.tico import APIError
 from clients import git_repository
 from . import git_credentials, isolation, repositories, safe_git
@@ -224,7 +225,7 @@ def _canonical_task_id(task, marker=None):
     if isinstance(recorded, str) and (recorded == task or
                                       isinstance(task, str) and len(task) >= 8 and recorded.startswith(task)):
         return recorded
-    current = os.environ.get('HUB_TASK_ID')
+    current = runenv.get('HUB_TASK_ID')
     if isinstance(current, str) and isinstance(task, str) and len(task) >= 8 and current.startswith(task):
         return current
     return task
@@ -519,10 +520,10 @@ def _record_attached_checkout(workspace, link, repo, env):
 
 
 def command(client, operation, value, task=None):
-    workspace = os.environ.get('HUB_WORKSPACE')
+    workspace = runenv.get('HUB_WORKSPACE')
     explicit_task = task is not None
-    task = task or os.environ.get('HUB_TASK_ID')
-    if not workspace or not os.environ.get('HUB_BOT') or not task:
+    task = task or runenv.get('HUB_TASK_ID')
+    if not workspace or not runenv.get('HUB_BOT') or not task:
         raise ValueError('Task worktrees need a bot run and a task; use --task when this run has no current task')
     if explicit_task:
         if re.fullmatch(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', task):

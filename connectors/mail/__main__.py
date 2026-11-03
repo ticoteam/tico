@@ -45,6 +45,7 @@ import argparse, contextvars, fnmatch, hashlib, json, mimetypes, os, shlex, sys,
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from clients import runenv
 from . import AUDIT_PATH, DB_PATH, DEFAULT_TZ, INTERNAL_DOMAIN, Failure, RULES_FILE, Refused
 from . import now_utc, parse_since, repo_dir, report, stamp, zone
 from . import access, audit as audit_log, auth, db, gmail as gm, labels as lb, rules as rl
@@ -1479,7 +1480,7 @@ def draft_files(ctx, draft):
 def draft_task(ctx):
     """The Tico task this draft belongs to: --issue (or HUB_ISSUE) when it is a Tico task id, else
     the task the runner started this turn for (HUB_TASK_ID). '' when there is none."""
-    for value in (ctx.issue, os.environ.get("HUB_TASK_ID", "")):
+    for value in (ctx.issue, runenv.get("HUB_TASK_ID", "")):
         if pl.HUB_ID.match(str(value or "").strip()):
             return str(value).strip()
     return ""
@@ -1488,7 +1489,7 @@ def draft_task(ctx):
 def _default_task_attach(task_id, name, data, key):
     """Attach one file to a Tico task through the API behind `hub task attach`; returns its file id.
     Tests replace `TASK_ATTACH`. '' when this process holds no Tico credential."""
-    url, token = os.environ.get("HUB_API_URL"), os.environ.get("HUB_TOKEN")
+    url, token = runenv.get("HUB_API_URL"), runenv.get("HUB_TOKEN")
     if not url or not token:
         return ""
     import base64, tempfile

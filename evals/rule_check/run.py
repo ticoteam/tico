@@ -24,6 +24,7 @@ import sys
 import time
 from pathlib import Path
 
+from clients import runenv
 from clients import judge as J
 
 HERE = Path(__file__).parent
@@ -84,9 +85,9 @@ def engines(levels, env=None):
     typesafe = (env.get(J.KEY_ENV) or "").strip()
     if typesafe:
         return [("low", J.direct(typesafe))]
-    if env.get("HUB_API_URL") and env.get("HUB_TOKEN"):
+    if runenv.lookup(env, "HUB_API_URL") and runenv.lookup(env, "HUB_TOKEN"):
         from clients.tico import Client
-        return [("install", J.through_hub(Client(env["HUB_API_URL"], env["HUB_TOKEN"], timeout=J.HUB_WAIT)))]
+        return [("install", J.through_hub(Client(runenv.require(env, "HUB_API_URL"), runenv.require(env, "HUB_TOKEN"), timeout=J.HUB_WAIT)))]
     return []
 
 

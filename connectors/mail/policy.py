@@ -36,6 +36,7 @@ import csv, hashlib, json, os, re, subprocess
 from datetime import datetime
 from pathlib import Path
 
+from clients import runenv
 from . import (DEFAULT_TZ, Failure, PROJECTS, REGISTRY, Refused, load_yaml, owner_handle,
                parse_since, zone)
 
@@ -448,7 +449,7 @@ SEND_INTENT = re.compile(
 
 def _default_hub_get(path):
     """One Tico GET. Tests replace `HUB_GET`. None means: no cloud credential, or the row is gone."""
-    url, token = os.environ.get("HUB_API_URL"), os.environ.get("HUB_TOKEN")
+    url, token = runenv.get("HUB_API_URL"), runenv.get("HUB_TOKEN")
     if not url or not token:
         return None
     try:
@@ -480,7 +481,7 @@ class HubFailed(Exception):
 def _default_hub_post(path, body, key=None):
     """One Tico POST, one try within RULE_CHECK_TIMEOUT, `key` its Idempotency-Key. Tests replace `HUB_POST`. None
     means no cloud credential (outside a turn); a request Tico refused or did not answer raises HubFailed."""
-    url, token = os.environ.get("HUB_API_URL"), os.environ.get("HUB_TOKEN")
+    url, token = runenv.get("HUB_API_URL"), runenv.get("HUB_TOKEN")
     if not url or not token:
         return None
     from clients.tico import APIError, Client

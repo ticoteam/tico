@@ -34,6 +34,7 @@ Exit codes: 0 ok, 1 failure (CLI missing, Aside not running, timeout), 2 policy 
 import argparse, json, os, re, subprocess, sys, time
 from datetime import datetime
 from pathlib import Path
+from clients import runenv
 
 try:
     import yaml
@@ -82,8 +83,8 @@ SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 def load_manifest(slug):
     if not SLUG.fullmatch(slug or ""):                  # a slug is one folder name: never a path out of PROJECTS
         raise Refused(f"{slug!r} is not a bot slug")
-    own = os.environ.get("HUB_BOT_FOLDER") or ""
-    if own and SLUG.fullmatch(own) and slug.lower() == (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip().lower():
+    own = runenv.get("HUB_BOT_FOLDER") or ""
+    if own and SLUG.fullmatch(own) and slug.lower() == (runenv.get("HUB_BOT") or runenv.get("HUB_EMPLOYEE") or "").strip().lower():
         folder = PROJECTS / own                         # this run's own bot: the folder the runner names (a rename keeps it)
     else:
         folder = next((PROJECTS / (prefix + slug) for prefix in ("bot-", "emp-") if (PROJECTS / (prefix + slug)).exists()),

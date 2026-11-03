@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+from clients import runenv
 from . import DEFAULT_TZ, PROJECTS, RUNTIME, Refused, Failure, zone
 from . import access, calendar as cal, compose, policy as pl, review as rv
 
@@ -95,10 +96,10 @@ def bd_confirmed(message_id, attendee, thread_id):
     """Require an actual confirmation authored by the BD bot, not a caller's assertion."""
     if not message_id:
         return False
-    if os.environ.get('HUB_API_URL'):
+    if runenv.get('HUB_API_URL'):
         from clients.tico import Client, APIError
         try:
-            message = Client(os.environ['HUB_API_URL'], os.environ.get('HUB_TOKEN', '')).get('messages/' + message_id)
+            message = Client(runenv.require(os.environ, 'HUB_API_URL'), runenv.get('HUB_TOKEN', '')).get('messages/' + message_id)
         except APIError:
             return False  # Cloud mode must never fall back to a stale local database.
         if message.get('sender_id') != 'bot:business-development':

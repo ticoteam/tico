@@ -18,6 +18,7 @@ import json, os, stat
 from datetime import datetime, timezone
 from pathlib import Path
 
+from clients import runenv
 from . import DEFAULT_KEY, Failure, oauth
 
 KEY_ENV = "GOOGLE_SA_KEY"
@@ -99,14 +100,14 @@ def supervisor_token(mailbox, scopes):
     service = next((k for k, v in SERVICE_SCOPES.items() if list(scopes or SCOPES) == v), None)
     if not path:
         return None
-    if not os.environ.get("HUB_TOKEN"):
+    if not runenv.get("HUB_TOKEN"):
         raise Failure("the runner credential socket is configured but HUB_TOKEN is missing",
                       "Start mail through the runner so it can provide a scoped credential token.")
     if not service:
         raise Failure("mail access through the runner covers one service at a time", "Ask for gmail or calendar.")
     from runner import credential_socket                # noqa: PLC0415
     try:
-        return credential_socket.request_mail(path, os.environ["HUB_TOKEN"], service, mailbox)
+        return credential_socket.request_mail(path, runenv.require(os.environ, "HUB_TOKEN"), service, mailbox)
     except OSError as e:
         raise Failure(f"could not reach the runner to ask for access to {mailbox}: {e}",
                       "The runner holds the Google key on this computer and gives a run a token; it did not answer.")

@@ -31,6 +31,7 @@ from concurrent.futures import Future
 from datetime import datetime
 from pathlib import Path
 
+from clients import runenv
 from . import credential_socket, isolation, safe_git
 from .outage import log
 
@@ -459,7 +460,7 @@ def credential(config_path, bot, socket_path=None, repository=None):
     from clients.tico import Client
     try:
         if socket_path:
-            return credential_socket.request(socket_path, os.environ.get("HUB_TOKEN", ""), timeout=15,
+            return credential_socket.request(socket_path, runenv.get("HUB_TOKEN", ""), timeout=15,
                                              repository=repository, purpose="git")
         if config_path:
             config = json.loads(Path(config_path).read_text())

@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from clients import runenv
 from clients.tico import APIError, Client
 
 
@@ -15,7 +16,7 @@ def main(argv=None):
     parser.add_argument("destination", type=Path)
     args = parser.parse_args(argv)
     try:
-        data = Client(os.environ["HUB_API_URL"], os.environ["HUB_TOKEN"]).download(args.file_id)
+        data = Client(runenv.require(os.environ, "HUB_API_URL"), runenv.require(os.environ, "HUB_TOKEN")).download(args.file_id)
         # Never use a remote display name as a local path; destination is explicit.
         fd = os.open(args.destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:

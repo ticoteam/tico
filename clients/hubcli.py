@@ -654,6 +654,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from clients import runenv
 
 if __package__ in (None, ""):                          # run as a script: python clients/hubcli.py
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -766,12 +767,12 @@ def cmd_task_dry_run(args, who):
     than JSON: `- <problem>` per problem and exit 1, or one `ok:` line.
     """
     from backend import hubdb as H
-    if not os.environ.get("HUB_API_URL"):
+    if not runenv.get("HUB_API_URL"):
         raise CliError("HUB_API_URL is not set: `hub` talks to the Tico API and runs inside a "
                        "bot turn, where the runner sets HUB_API_URL, HUB_TOKEN and HUB_BOT")
     if who:
         raise CliError("--human is unavailable with HUB_API_URL; remote identity is the token")
-    slug = (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip()
+    slug = (runenv.get("HUB_BOT") or runenv.get("HUB_EMPLOYEE") or "").strip()
     actor = H.bot_actor(slug) if slug else None
     body = body_of(args)
     owner, problems, warnings = task_problems(actor, args.owner, args.title, body, getattr(args, "type", None))
@@ -3981,7 +3982,7 @@ def run(argv, who):
             return 0
         if args.fn == "bot check-names":           # reads the bot's own files here: no hub, no credential
             from clients import bot_names
-            return bot_names.command(args.target, args.fix, os.environ.get("HUB_WORKSPACE"))
+            return bot_names.command(args.target, args.fix, runenv.get("HUB_WORKSPACE"))
         if args.fn == "doc fetch":                 # runs here, beside the bot: no hub, no credential
             from clients import doc_fetch
             try:
@@ -3990,7 +3991,7 @@ def run(argv, who):
             except doc_fetch.FetchError as e:
                 print(json.dumps({"error": e.code, "detail": e.message}, indent=2))
                 return 1
-        if not os.environ.get("HUB_API_URL"):
+        if not runenv.get("HUB_API_URL"):
             local = args.fn in READ_OUTSIDE_A_TURN and not (args.fn == "tool list" and args.bot)
             credential = runner_credential(os.environ.get("HUB_RUNNER_CONFIG")) if local else None
             if not credential:
@@ -3999,7 +4000,8 @@ def run(argv, who):
                                + (f"; outside a turn `hub {args.fn}` needs this Mac's runner credential "
                                   "(scripts/setup-runner.sh)" if local else ""))
             os.environ["HUB_API_URL"], os.environ["HUB_TOKEN"] = credential
-        if (args.fn in WORKSPACE_COMMANDS or args.fn == "bot create" and not args.record_only) and not os.environ.get("HUB_WORKSPACE"):
+            os.environ["TICO_API_URL"], os.environ["TICO_TOKEN"] = credential     # the names readers take first
+        if (args.fn in WORKSPACE_COMMANDS or args.fn == "bot create" and not args.record_only) and not runenv.get("HUB_WORKSPACE"):
             raise CliError("HUB_WORKSPACE is not set: bot repositories live in the workspace this "
                            "machine was enrolled with, which the runner gives every turn")
         from clients import remotecli

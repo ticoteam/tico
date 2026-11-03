@@ -14,6 +14,7 @@ Nothing else here: no I/O beyond checking which name exists.
 """
 from pathlib import Path
 from typing import Any
+from clients import runenv
 
 MANIFEST = "bot.yaml"
 OLD_MANIFEST = "employee.yaml"
@@ -84,4 +85,4 @@ def bot_slug_of_repo(name):
 
 def hub_bot(environ):
     """The bot a process runs as: HUB_BOT, else the older HUB_EMPLOYEE."""
-    return (environ.get("HUB_BOT") or environ.get("HUB_EMPLOYEE") or "").strip()
+    return (runenv.lookup(environ, "HUB_BOT") or runenv.lookup(environ, "HUB_EMPLOYEE") or "").strip()
