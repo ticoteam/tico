@@ -821,7 +821,7 @@ def test_a_computer_reads_the_status_only_of_tasks_it_ran_that_bots_session_for(
         state = [r[1] for r in c.execute('PRAGMA table_info(runner_states)') if r[1] != 'runner_id']
         c.execute("UPDATE runner_states SET " + ','.join(f"{n}=(SELECT {n} FROM runner_states WHERE runner_id='r1')" for n in state)
                   + " WHERE runner_id='r2'")
-        job =c.execute("SELECT job_id FROM attempts WHERE id='a1'").fetchone()[0]
+        job = c.execute("SELECT job_id FROM attempts WHERE id='a1'").fetchone()[0]
         for aid, runner, lane in (('a2', 'r1', 'task:' + tid), ('a3', 'r2', 'task:' + other)):
             c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,lane) "
                       "VALUES(?,?,'cmo',?,1,?,'completed',?,?,?)", (aid, job, runner, 'synthetic-' + aid, H.now(), H.now(), lane))
