@@ -744,8 +744,9 @@ def brief(c, onboarding, card, row):
 def _follow_filled(c, who, seat_id, bot, now):
     """Bots hired into this seat while it was open report to the bot that fills it: their seats closed at `seat:<this>`.
     One moves only while it still reports where it was placed (`placed_under`), so a line someone changed by hand stays.
-    `_set_parent` revalidates Finance's org."""
-    from .settings_admin import _set_parent
+    A move that would close a circle (this seat's manager was moved under the bot hired into it while it was open) is
+    skipped, and that bot stays where it was placed. `_set_parent` revalidates Finance's org."""
+    from .settings_admin import SettingsAdmin, _set_parent
     for seat in c.execute("SELECT filled_by FROM seats WHERE reports_to=? AND closed_at IS NOT NULL AND filled_by<>''",
                           ("seat:" + seat_id,)).fetchall():
         found = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (seat["filled_by"],)).fetchone()
@@ -754,6 +755,12 @@ def _follow_filled(c, who, seat_id, bot, now):
         placed = (json.loads(found["config"] or "{}") or {}).get("placed_under")
         if placed is None or (found["reports_to"] or "") != placed:
             continue
+        try:
+            SettingsAdmin._parent(c, seat["filled_by"], bot)     # the bot hierarchy's own check: no circle, bot exists
+        except Problem as err:
+            if err.code == "hierarchy":
+                continue
+            raise
         _set_parent(c, who.actor, seat["filled_by"], bot, now)
 
 

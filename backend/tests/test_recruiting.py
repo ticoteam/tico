@@ -589,6 +589,27 @@ def test_a_bot_moved_by_hand_under_an_open_manager_keeps_that_manager_when_the_s
     assert bot_line(api, hired) == "human:ben"
 
 
+def test_an_open_manager_moved_under_its_own_hire_does_not_circle_when_it_fills(api):
+    providers(api, "anthropic", "openai")
+    head = post(api, "seats", {"title": "Head of Marketing", "reports_to": "coo", "description": "Leads marketing."})
+    writer = post(api, "seats", {"title": "Content Marketer", "reports_to": "seat:" + head["id"],
+                                 "description": "Writes the content."})
+    hired = fill(api, writer)                                  # placed under the owner, the line it was hired on
+    # The open manager moves under the writer's bot: a legal line while that seat is open.
+    assert api.patch(f"/api/v2/seats/{head['id']}", headers=headers(),
+                     json={"reports_to": "bot:" + hired["slug"]}).status_code == 200
+    manager = fill(api, head)                                  # filling must not close a circle
+    assert bot_line(api, manager) == hired["bot"]              # the manager reports to the writer's bot, as chosen
+    assert bot_line(api, hired) == "coo"                       # the writer stays where it was placed, not under the manager
+    with api.app.state.store.read() as c:                      # walk up from the manager: no bot twice, ends at the top
+        line, seen = manager["bot"], []
+        while H.bot(c, line):
+            assert line not in seen, "the bot hierarchy has a circle"
+            seen.append(line)
+            line = c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (line,)).fetchone()[0] or ""
+        assert seen == [manager["bot"], hired["bot"], "coo"]
+
+
 def test_a_bot_or_an_unconfirmed_assistant_never_picks_and_a_refused_pick_leaves_nothing(api, monkeypatch):
     providers(api, "anthropic", "openai")
     strategy_token = strategy_bot(api)
