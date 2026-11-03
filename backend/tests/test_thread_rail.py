@@ -151,7 +151,7 @@ def test_the_rail_is_the_threads_one_is_in_by_title_and_never_a_one_to_one_dm_or
 
 def test_a_hidden_thread_leaves_no_trace_in_the_rail_browse_or_catch_up(api):
     secret = new_thread(api, title="Launch secret", members=())
-    say(api, secret["id"], "Board only", to="human:cara")
+    say(api, secret["id"], "Board only")
     everyone(api, secret["id"], True)
     hall = new_thread(api, title="Open house", audience="company")
     say(api, hall["id"], "Welcome all")
@@ -217,9 +217,9 @@ def test_catch_up_shows_twenty_messages_counts_the_rest_and_caps_its_count(api, 
 
 def test_every_list_keeps_to_its_byte_budget_and_its_cursor_still_reaches_every_row(api, monkeypatch):
     made = [new_thread(api, title=f"Thread {n}", audience="company") for n in range(4)]
-    for thread in made:
-        say(api, thread["id"], "x" * 400)
+    for thread in made:                              # ben joins first: joining reads up to now
         api.put(f"/api/v2/threads/{thread['id']}/follow", json={}, headers=headers("ben-test"))
+        say(api, thread["id"], "x" * 400)
     monkeypatch.setattr(threads, "MAX_PAGE_BYTES", 2400)
     for path, key in (("rail", "threads"), ("catch-up", "items")):
         seen, page = [], listed(api, path, "ben-test")
