@@ -220,10 +220,11 @@ function threadsSync() {
     liveThrottle('threads-side', threadsLoad, 400);
     threadViewsLive('threads', d);
   });
-  // A hold or an ask moved on the viewer's Needs you list: the rows it marks are ranked first. The Needs you version the
-  // list was last read at moved nothing (each stream connect names the current one), so it is not read again for it.
+  // A hold or an ask moved on the viewer's Needs you list: the rows it marks are ranked first. A reconnect that resumed
+  // (it replays the thread changes it missed) naming the Needs you version the list was last read at moved nothing, so
+  // the list is not read again for it; the first connect still reads it, for what changed before the stream began.
   liveOn('needs', d => {
-    if (!THREADS.on || d?.version && d.version === THREADS.needsSeen) return;
+    if (!THREADS.on || d?.resumed && d.version === THREADS.needsSeen) return;
     liveThrottle('threads-side-live', threadsLoad, 3000);
   });
   // Needs you read again (its holds are Inbox's): the count follows the list as it now stands.

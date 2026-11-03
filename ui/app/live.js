@@ -152,9 +152,11 @@ function liveEventsConnect() {
   es.addEventListener('ready', ev => {
     if (!current()) return;
     const d = liveData(ev) || {};
-    if (LIVE.after == null) LIVE.after = Number(d.seq) || 0;
+    // A stream that resumed from the last change number (`after`) replays what changed meanwhile; the first one does not.
+    const resumed = LIVE.after != null;
+    if (!resumed) LIVE.after = Number(d.seq) || 0;
     // The list as this stream counts from: a held copy of another version (missed while away) is read again.
-    if (d.needs_version) liveEmit('needs', {version: d.needs_version});
+    if (d.needs_version) liveEmit('needs', {version: d.needs_version, connect: true, resumed});
     const was = LIVE.connected;
     LIVE.connected = true;
     if (!was) liveEmit('status', {connected: true});
