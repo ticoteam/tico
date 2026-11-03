@@ -29,7 +29,7 @@ _spec.loader.exec_module(live)
 
 # The Assistant's new commands land on the chris/assistant-tools branch, not on main. A case may expect them; on main the
 # parser must still reject them. Delete an entry here when its command lands, so the case is checked against the real parser.
-NEW_COMMANDS = [("needs-you", "show"), ("origin", "show"), ("assistant", "change")]
+NEW_COMMANDS = [("needs-you", "show")]
 # Every case the Assistant suite must keep: the real Nov 3 chat split into its asks, undo, injection, decline, approval
 # without the setting, and the everyday jobs.
 REQUIRED = {"queue-clear-old-tasks", "queue-stop-release-notices", "queue-why-sent", "queue-needs-you-breakdown",
@@ -187,8 +187,6 @@ def runner_patterns(text):
     return patterns
 
 
-@pytest.mark.xfail(strict=False, reason=f"needs {RUNNER_BRANCH} merged: its approval, BotOps and reply lines are not in "
-                   "runner-rs/src/prompt.rs on this branch yet")
 def test_the_opening_lines_appear_in_the_runner_prompt():
     """Every line of the harness's opening (the chat path, with the owner and the chat id filled in) is a string the runner
     builds in runner-rs/src/prompt.rs, so the harness cannot drift from production silently."""

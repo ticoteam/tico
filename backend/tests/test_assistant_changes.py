@@ -78,7 +78,6 @@ def test_restoring_a_change_twice_changes_nothing_and_says_so(api):
     assert task_row(api, task["id"])["version"] == version
 
 
-@pytest.mark.xfail(strict=True, reason="task-bulk is not admissible for the Assistant until track B (write_allowed)")
 def test_a_bulk_close_through_the_route_is_one_change_per_task(api):
     a = post(api, "tasks", {"title": "Bulk one", "body": "x", "owner": "human:ben"}, token="ben-test")
     b = post(api, "tasks", {"title": "Bulk two", "body": "x", "owner": "human:ben"}, token="ben-test")
@@ -126,7 +125,6 @@ def test_a_declined_approval_is_listed_and_puts_it_back_to_waiting(api):
         assert H.approval(c, approval["id"]).get("decided_by_id") in (None, "")
 
 
-@pytest.mark.xfail(strict=True, reason="a direct setting is refused at the write gate (403 confirm_required) until track B")
 def test_a_setting_the_assistant_changes_through_the_route_is_listed_and_restored(api):
     r, attempt = assistant_turn(api, "ana-test", "Keep three tasks going on ops")
     said = turn_message(api, attempt)
@@ -254,7 +252,6 @@ def test_an_approval_undone_then_decided_again_cannot_be_restored_from_the_first
         assert H.approval(c, approval["id"])["decision"] == "approved"
 
 
-@pytest.mark.xfail(strict=True, reason="the restore route is not admitted for the Assistant until track B (write_allowed)")
 def test_the_restore_route_is_admitted_on_the_cited_turn(api):
     from backend import assistant
     assert assistant.write_allowed("POST", "/api/v2/assistant/changes/x/restore", body=b"{}", actor="human:ben")

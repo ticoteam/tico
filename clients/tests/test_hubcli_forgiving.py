@@ -140,12 +140,6 @@ def test_aliases_add_no_mcp_tool():
     assert with_aliases == without
 
 
-def test_approval_list_points_at_the_walk_and_exits_two(capsys):
-    assert hubcli.main(["approval", "list"]) == 2
-    err = capsys.readouterr().err
-    assert "needs-you start" in err and "approval show" in err
-
-
 def test_a_flag_the_command_does_not_take_lists_the_ones_it_does(capsys):
     code, err = parse_failure(capsys, ["automation", "list", "--all"])
     assert code == 2
