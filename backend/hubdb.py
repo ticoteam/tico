@@ -117,11 +117,38 @@ def task_news_sql(m="m"):
     return f"({m}.sender_id='{KEEPER}' AND COALESCE(json_extract({refs},'$.task'),'')<>'')"
 
 
-def delivery_counts_sql(m, recipient):
-    """SQL: a delivery of message `m` to `recipient` is a reason for a person to see it: TRUE unless the recipient is a
-    person and the message is task news. One rule for the write side (threads' primary delivery trigger) and every
-    read side (unread, the Inbox, the sidebar, digests), so old notices already delivered stop counting too."""
-    return f"NOT ({recipient} LIKE 'human:%' AND {task_news_sql(m)})"
+# A bot's posts in a task's own thread reach a person only by an @mention (`counts_for_person`).
+BOT_TASK_KINDS = ("say", "notice", "ask")
+
+
+def task_post_sql(m="m"):
+    """SQL: the messages row `m` is a bot's say, notice or ask in some task's own thread (the thread is a task's
+    conversation_id, which tasks_conversation indexes)."""
+    return (f"({m}.sender_id LIKE 'bot:%' AND {m}.kind IN ('say','notice','ask') "
+            f"AND EXISTS (SELECT 1 FROM tasks t WHERE t.conversation_id={m}.conversation_id))")
+
+
+def delivery_counts_sql(m, recipient, reason):
+    """SQL: a delivery of message `m` to `recipient`, whose reason is the SQL `reason`, is a reason for a person to see
+    it. Not when the recipient is a person and the message is task news (`task_news_sql`), nor when it is a bot's post
+    in a task's own thread (`task_post_sql`) that is not a mention (reason 'mention'). One rule for the write side
+    (threads' primary delivery trigger, `counts_for_person`) and every read side (unread, the Inbox, the sidebar,
+    digests), so deliveries already made stop counting without a migration."""
+    return (f"NOT ({recipient} LIKE 'human:%' AND ({task_news_sql(m)} "
+            f"OR ({task_post_sql(m)} AND COALESCE({reason},'')<>'mention')))")
+
+
+def counts_for_person(conn, message, reason, conversation_id):
+    """The Python side of `delivery_counts_sql`: whether a delivery of `message` to a person, for `reason`, in
+    conversation `conversation_id`, is written. False for task news, and for a bot's post in a task's thread that is not
+    a mention. Used by threads._insert_delivery."""
+    sender = str(message.get("sender_id") or "")
+    if task_news(sender, message.get("refs")):
+        return False
+    if (sender.startswith("bot:") and message.get("kind") in BOT_TASK_KINDS and reason != "mention"
+            and conn.execute("SELECT 1 FROM tasks WHERE conversation_id=? LIMIT 1", (conversation_id,)).fetchone()):
+        return False
+    return True
 
 
 REVIEW_OWNER = "coo"                        # rule 8's first review task
@@ -9506,7 +9533,7 @@ WAITING_TERMS = "d.state IN ('pending','delivered','capped','held')"
 # Paged on the delivery's own (created_at, rowid), which the waiting index holds in order: no sort.
 UNREAD_PAGE_SQL = ("SELECT d.rowid AS _seq, d.created_at AS _at, m.* FROM message_deliveries d "
                    "JOIN messages m ON m.id=d.message_id WHERE d.recipient=? AND " + WAITING_TERMS + " "
-                   "AND " + delivery_counts_sql("m", "d.recipient") + " AND m.deleted_at IS NULL "
+                   "AND " + delivery_counts_sql("m", "d.recipient", "d.reason") + " AND m.deleted_at IS NULL "
                    "AND (m.expires_at IS NULL OR m.expires_at > ?) AND d.created_at<=? "
                    "AND (d.created_at<? OR d.rowid<?) ORDER BY d.created_at DESC, d.rowid DESC LIMIT ?")
 
