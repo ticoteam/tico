@@ -24,13 +24,13 @@ shared one, so each is made once. HQ counts the shared machine as one machine ag
 One row per bot (`cloud_machines`): where it runs (`mode` cloud, or computer: any other Computer), on which cloud
 machine (`placement` shared, the default, or own), its own machine's size, Always on and Pause after, and that machine
 as HQ last described it. The shared machine is one more row, keyed SHARED, with the company's size, Always on and Pause
-after for it. A bot's placement defaults by role when its row is made (`default_placement`): `own` for a bot from a template in OWN_TEMPLATES
-(the video producer) or in the Engineering department of the team chart, `shared` for every other; a person switches
-it either way. Off a cloud company (cloud_access.state is None) there are no rows, the option is hidden and nothing here
-runs; on one, the same until HQ has listed its sizes (`offered`). On one, a bot with no computer defaults to a cloud
-machine (placement.auto_place; a setup that finished before HQ listed its sizes is placed when they come,
-Onboarding.on_cloud_offered); choosing another computer for it (Execution.assign) sets `computer`, and another bot's
-own machine is never one to choose (`check_host`).
+after for it. A bot's placement defaults by role when its row is made (`default_placement`): `own` for a bot from a
+template in OWN_TEMPLATES (the video producer) or in the Engineering department of the team chart, `shared` for every
+other; a person switches it either way. Off a cloud company (cloud_access.state is None) there are no rows, the option
+is hidden and nothing here runs; on one, the same until HQ has listed its sizes (`offered`). On one, a bot with no
+computer defaults to a cloud machine (placement.auto_place; a setup that finished before HQ listed its sizes is placed
+when they come, Onboarding.on_cloud_offered); choosing another computer for it (Execution.assign) sets `computer`, and
+another bot's own machine is never one to choose (`check_host`).
 
 A machine's runner is a normal Computer, enrolled with a one-time code minted here (the add-a-runner flow,
 `enrollments`) that HQ hands the machine and never keeps. Execution.enroll recognises the code (`cloud_machine_codes`)
