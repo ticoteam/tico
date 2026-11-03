@@ -941,6 +941,9 @@ let browser = null;
     const said = {kind: 'activity', thread_id: 't0', root_id: 't0', message_id: 'm-live-1', unread: true, actor: 'human:bea', counters: {last_seq: 9, last_unread_seq: 9}};
     sse.queue.push(said, said, {kind: 'activity', thread_id: 't1', root_id: 't1', message_id: 'm-live-2', unread: false, actor: 'bot:ops', counters: {last_seq: 9, last_unread_seq: 2}});
     await until(() => row('t0'), {list: 'threads', bold: true, n: '1'});
+    // Three messages in one batch come as one event with `unread_count`: Thread 4 counts all three.
+    sse.queue.push({kind: 'activity', thread_id: 't4', root_id: 't4', message_id: 'm-live-4', unread: true, unread_count: 3, actor: 'human:bea', counters: {last_seq: 12, last_unread_seq: 12}});
+    await until(() => row('t4'), {list: 'threads', bold: true, n: '4'});
     assert.deepEqual(await badges(), ['4', '4', '4'], 'the same count in the sidebar, on the phone tab and on Catch up');
     await until(() => row('t1'), {list: 'threads', bold: true, n: ''});
     // A message in the open thread is read there: no count on its row.

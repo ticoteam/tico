@@ -213,7 +213,9 @@ function threadsRootLearn(view) {
   if (!view?.id || view.parent_id) return null;
   const others = threadOthers(view);
   const dm = threadIsDm(view) && !threadIsGroupDm(view) && others.length === 1 ? others[0] : null;
-  return (THREADS.roots[view.id] = {dm, muted: view.me?.notify === 'muted', following: !!(view.me?.following || view.me?.member)});
+  // Another's Home is in Catch up only through a mention, an ask or a hold, which `needs` brings.
+  const theirHome = view.audience === 'home' && view.home?.actor !== myActor();
+  return (THREADS.roots[view.id] = {dm, muted: view.me?.notify === 'muted' || theirHome, following: !!(view.me?.following || view.me?.member)});
 }
 async function threadsRoot(id) {
   if (THREADS.roots[id]) return THREADS.roots[id];
@@ -226,13 +228,15 @@ async function threadsActivity(d) {
   const root = d.root_id || d.thread_id, here = S.route === threadHref(root);
   if (!root || here) { threadsSideRender(); return; }
   const fresh = d.unread === true && !(d.message_id && THREADS.counted.has(d.message_id));
+  // Several messages in one batch come as one event: `unread_count` of them are unread (1 from an older server).
+  const more = fresh ? Math.max(1, Number(d.unread_count) || 1) : 0;
   if (d.message_id) { if (THREADS.counted.size > 2000) THREADS.counted.clear(); THREADS.counted.add(d.message_id); }
   const row = threadsRow(root);
   if (row) {
     const theirs = d.unread === true || (d.actor && d.actor !== myActor());
     threadsEach(t => {
       if (t.id !== root) return;
-      const me = {...t.me, activity: theirs || !!t.me?.activity, unread: threadUnread(t) + (fresh ? 1 : 0)};
+      const me = {...t.me, activity: theirs || !!t.me?.activity, unread: threadUnread(t) + more};
       const counters = d.thread_id === root && d.counters ? {last_seq: d.counters.last_seq, last_unread_seq: d.counters.last_unread_seq} : {};
       return {...t, ...counters, activity_seq: Math.max(Number(t.activity_seq) || 0, Number(d.counters?.last_seq) || 0), me};
     });
@@ -243,7 +247,7 @@ async function threadsActivity(d) {
     if (S.route === threadHref(root)) return;
     if (!info.muted) THREADS.cu?.add(root);
     if (info.dm && info.dm in THREADS.dms) {
-      THREADS.dms = {...THREADS.dms, [info.dm]: threadsDmUnread(info.dm) + 1};
+      THREADS.dms = {...THREADS.dms, [info.dm]: threadsDmUnread(info.dm) + more};
       if (typeof renderTree === 'function') renderTree();
     }
   }
