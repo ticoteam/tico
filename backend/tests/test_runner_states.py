@@ -34,7 +34,7 @@ def _before_the_move(path, extra=()):
                   "VALUES('r2','Acme box','h1','hash-2','2026-01-01T00:00:00Z')")
         for statement in extra:
             c.execute(statement)
-        c.execute("DELETE FROM schema_migrations WHERE version='0062_runner_states'")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0062' AND version NOT LIKE 'legacy_%'")
 
 
 def test_an_existing_file_moves_every_state_value_off_runners_once(tmp_path):
