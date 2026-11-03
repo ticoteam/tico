@@ -447,10 +447,12 @@ function rrSearchPaint() {
 }
 
 // ----------------------------------------------------------------- the panel
+// True while the panel's HTML is being replaced: a box removed then may fire change (rrChange).
+let RR_DRAWING = false;
 function rrPanelDraw(note = '') {
   const side = RU.root.querySelector('.rr-side'), R = RU.reach, p = R.party;
   if (!side) return;
-  if (!p) { side.innerHTML = ''; return; }
+  if (!p) { RR_DRAWING = true; try { side.innerHTML = ''; } finally { RR_DRAWING = false; } return; }
   const may = rrMay(p), dis = may ? '' : ' disabled', eff = rrEff(p), own = rrOwn(p);
   const human = S.me?.role !== 'bot';
   const {inherited, own: mine} = rrRules(p);
@@ -468,6 +470,8 @@ function rrPanelDraw(note = '') {
   };
   const list = R.adding ? rrAddHTML(p) : E ? rrEditorHTML(p, E)
     : lines.map(row).join('') || '<p class="rr-none">None.</p>';
+  RR_DRAWING = true;
+  try {
   side.innerHTML = `<div class="rr-panel" data-party="${esc(p)}">
     <div class="rr-h"><a class="ru-x rr-back" href="${ruHref('internal')}" aria-label="Back">‹</a><h2>${esc(rrName(p))}</h2></div>
     ${R.error ? `<p class="err">${esc(R.error)}</p>` : ''}
@@ -477,6 +481,7 @@ function rrPanelDraw(note = '') {
     <section class="rr-sec" aria-label="Exceptions"><header><h3 class="ru-lbl">Exceptions</h3>${R.mayEdit.size && !R.adding && !E ? '<button class="ghost small" type="button" data-rr-add-line>+ Add exception</button>' : ''}</header>
       ${list}</section>
     <p class="ru-status" role="status">${esc(note)}</p></div>`;
+  } finally { RR_DRAWING = false; }
 }
 // + Add exception: search a team, person or bot; picking one opens the editor.
 function rrAddHTML(p) {
@@ -654,8 +659,12 @@ function rrInput(ev) {
 function rrChange(ev) {
   const cap = ev.target.closest('[data-rr-cap]');
   if (!cap) return false;
-  const v = cap.value.trim();
-  void rrPut(RU.reach.party, cap.dataset.rrCap, v === '' ? null : Number(v));
+  const v = cap.value.trim(), field = cap.dataset.rrCap;
+  // A box with an unsaved number fires change when a redraw removes it (a save finishing, another party picked).
+  // Save it for the panel it was in, and after that redraw: drawing the panel again inside it throws.
+  const party = cap.closest('.rr-panel[data-party]')?.dataset.party || RU.reach.party;
+  const save = () => { if (RU?.reach) void rrPut(party, field, v === '' ? null : Number(v)); };
+  if (RR_DRAWING) setTimeout(save, 0); else save();
   return true;
 }
 function rrKey(ev) {
