@@ -111,3 +111,60 @@ def test_long_unicode_summaries_stay_under_the_byte_cap_and_paging_reaches_every
 
 def test_an_unknown_status_is_refused(api):
     assert api.get("/api/v2/approvals?status=maybe", headers=headers("ana-test")).status_code == 422
+
+
+def history_statements(api, monkeypatch, query, token="ana-test"):
+    """GET /api/v2/approvals with `query` (after one warm-up read), and the SQL statements that request ran."""
+    import contextlib
+    store, seen = api.app.state.store, []
+    api.get("/api/v2/approvals?" + query, headers=headers(token))
+    with monkeypatch.context() as patched:
+        for name in ("read", "read_transaction"):
+            def traced(opened=getattr(store, name)):
+                @contextlib.contextmanager
+                def borrowed():
+                    with opened() as c:
+                        c.set_trace_callback(seen.append)
+                        try:
+                            yield c
+                        finally:
+                            c.set_trace_callback(None)
+                return borrowed()
+            patched.setattr(store, name, traced)
+        response = api.get("/api/v2/approvals?" + query, headers=headers(token))
+    assert response.status_code == 200, response.text
+    return response.json(), seen
+
+
+def decide_many(api, token, n, decision):
+    for _ in range(n):
+        approval = approval_for_ana(api, token=token)
+        post(api, f"approvals/{approval['id']}", {"decision": decision, "note": "Noted"}, token="ana-test")
+
+
+def test_history_reads_a_bounded_number_of_statements_however_many_decided_approvals(api, monkeypatch):
+    """The decided history is read in one windowed query: the statements a page takes do not grow with the number of
+    decided approvals in the company (30 or 120 here, the same statements for a 2-row page)."""
+    _, _, finance = setup_attempt(api, "finance")
+    decide_many(api, finance["token"], 30, "declined")
+    few_body, few = history_statements(api, monkeypatch, "status=declined&limit=2")
+    decide_many(api, finance["token"], 90, "declined")
+    many_body, many = history_statements(api, monkeypatch, "status=declined&limit=2")
+    assert few_body["total"] == 30 and many_body["total"] == 120
+    assert len(many_body["approvals"]) == len(few_body["approvals"]) == 2 and many_body["next"] == 2
+    assert len(many) <= len(few) + 2, (len(few), len(many))
+
+
+def test_the_history_join_is_served_by_an_index_not_a_scan(api, monkeypatch):
+    """The join of a person's messages to their approvals uses approvals_message (migration 0049), and neither table is
+    scanned: a scan would read every approval in the company for one person's history."""
+    _, _, finance = setup_attempt(api, "finance")
+    decide_many(api, finance["token"], 40, "approved")
+    with api.app.state.store.transaction() as c:
+        c.execute("ANALYZE")
+    _, seen = history_statements(api, monkeypatch, "status=approved")
+    [sql] = [s for s in seen if "CROSS JOIN approvals a" in s and "ORDER BY a.created_at" in s]
+    with api.app.state.store.read() as c:
+        plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql)]
+    assert any("approvals_message" in line for line in plan), plan
+    assert not [line for line in plan if line.startswith("SCAN ")], plan
