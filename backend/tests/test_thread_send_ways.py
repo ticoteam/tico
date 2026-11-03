@@ -41,6 +41,17 @@ def started(api, machine):
     return attempt
 
 
+def cara_dm(api, machine=None):
+    """Cara (a plain member; Ben is an admin) opens a DM with Ops, its run starts when `machine` is given, then she keeps
+    reading Ops but may no longer message it (Write)."""
+    set_bot_access(api, "ops", {"people": ["cara"]}, {"people": ["cara"]}, {"people": ["cara"]})
+    tid, _ = dm(api, "Hello.", token="cara-test")
+    if machine:
+        started(api, machine)
+    set_bot_access(api, "ops", {"people": ["cara"]}, {"people": ["cara"]}, {"people": ["ben"]})
+    return tid
+
+
 def test_a_dm_post_with_no_way_steers_as_before_and_queue_waits_for_the_turn(api):
     machine = setup(api)
     tid, first = dm(api, "Morning numbers?")
@@ -94,11 +105,9 @@ def test_a_homes_carrier_takes_the_way_and_a_plain_post_is_unchanged(api):
 
 def test_a_deadline_or_a_wake_takes_the_right_to_message_the_bot(api):
     setup(api)
-    tid, _ = dm(api, "Hello.", token="ben-test")
-    # Ben keeps the DM but may no longer message Ops: no wake and no deadline from him.
-    set_bot_access(api, "ops", {"people": ["ben"]}, {"people": ["ben"]}, {"people": []})
+    tid = cara_dm(api)
     for way in ({"delivery": "queue"}, {"delivery": "steer"}, {"delivery": "defer", "defer_for": "1h"}):
-        r = api.post(f"/api/v2/threads/{tid}/messages", json={"text": "Mine first.", **way}, headers=headers("ben-test"))
+        r = api.post(f"/api/v2/threads/{tid}/messages", json={"text": "Mine first.", **way}, headers=headers("cara-test"))
         assert r.status_code == 403 and "delivery" in r.text, r.text
     assert not rows(api, conversation_id=tid)
 
@@ -142,10 +151,8 @@ def test_a_legacy_refs_delivery_goes_as_it_did(api):
 
 def test_a_defer_without_the_right_does_not_ride_along_as_a_queue(api):
     machine = setup(api)
-    tid, _ = dm(api, "Hello.", token="ben-test")
-    started(api, machine)
-    set_bot_access(api, "ops", {"people": ["ben"]}, {"people": ["ben"]}, {"people": []})
-    later = say(api, tid, "When you get to it.", token="ben-test", delivery="defer")
+    tid = cara_dm(api, machine)
+    later = say(api, tid, "When you get to it.", token="cara-test", delivery="defer")
     assert later["sent_as"] == {"delivery": "defer", "until": None}
     assert job_of(api, later["id"]) is None and [r["due_at"] for r in rows(api, item=later["id"])] == [None]
 
