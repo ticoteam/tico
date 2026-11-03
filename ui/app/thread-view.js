@@ -325,7 +325,7 @@ function thvReactionsHTML(m) {
 }
 function thvMsgHTML(view, m) {
   const depth = thvDepth(view, m.depth), sub = m.thread_id && m.thread_id !== view.id;
-  // A bot's own words take 👍 / 👎 and Copy, apart from the emoji reactions (ui/app/feedback.js).
+  // A bot's own words take a row of Copy, 👍 and 👎 under them, apart from the emoji reactions (ui/app/feedback.js).
   const fb = !m.deleted && m.id && String(m.sender_id || '').startsWith('bot:') && !connectIsGuest(connectAuthor(m)) ? fbKey('message', m.id) : '';
   const fresh = thvIsNew(view, m), quiet = fresh && !thvAddressed(m);
   const cls = ['th-msg', view.focus === m.id && 'th-focus', sub && 'th-sub', m.refs?.follow_up && 'th-followup', thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted']
@@ -358,8 +358,8 @@ function thvMsgHTML(view, m) {
     st.unread ? `<span aria-hidden="true">·</span><span class="th-more-new">${st.unread} new</span>` : ''}</a>` : '';
   return `<div class="${cls}" data-mid="${esc(m.id)}" data-message="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}" style="--d:${depth}"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>
     <div class="th-av">${actorAvatar(connectAuthor(m), sub ? 20 : 28)}</div>
-    <div class="th-main">${head}${body}${m.deleted ? '' : thvFilesHTML(m) + thvReactionsHTML(m)}${fbMarkHTML(fb)}</div>
-    ${m.deleted || view.editing === m.id ? '' : `<div class="th-acts">${fb ? fbButtonsHTML(fb) + (m.body ? `<button type="button" class="th-act fb-copy" data-fb-copy="${esc(m.body)}" aria-label="Copy message" title="Copy message"><span class="nav-icon" aria-hidden="true">content_copy</span></button>` : '') : ''}<button type="button" class="th-act" data-th-ack aria-label="Acknowledge" title="Acknowledge">${THV_ACK}</button><button type="button" class="th-act" data-th-more aria-haspopup="menu" aria-expanded="false" aria-label="Message menu" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div>`}
+    <div class="th-main">${head}${body}${m.deleted ? '' : thvFilesHTML(m) + thvReactionsHTML(m) + fbRowHTML(fb, m.body)}</div>
+    ${m.deleted || view.editing === m.id ? '' : `<div class="th-acts"><button type="button" class="th-act" data-th-ack aria-label="Acknowledge" title="Acknowledge">${THV_ACK}</button><button type="button" class="th-act" data-th-more aria-haspopup="menu" aria-expanded="false" aria-label="Message menu" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div>`}
   </div>${more}`;
 }
 function thvFoldHTML(view, row) {

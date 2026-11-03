@@ -326,9 +326,9 @@ async function v2StepsOpen(state, el, root = null) {
   if (list) list.innerHTML = html;
 }
 // Copy the original message, not timestamps, action labels or rendered link shortcuts. `fb`: a bot's message's feedback
-// key, whose 👍 / 👎 join Copy (ui/app/feedback.js).
+// key, whose 👍 / 👎 follow Copy on the row under it (ui/app/feedback.js).
 function chatCopyHTML(text, fb = '') {
-  return text ? `<div class="chat-message-actions">${fbButtonsHTML(fb)}<button type="button" class="ghost chat-message-copy" data-chat-copy="${esc(text)}" aria-label="Copy message" title="Copy message"><span class="nav-icon" aria-hidden="true">content_copy</span></button></div>` : '';
+  return text ? `<div class="chat-message-actions"><button type="button" class="ghost chat-message-copy" data-chat-copy="${esc(text)}" aria-label="Copy message" title="Copy message"><span class="nav-icon" aria-hidden="true">content_copy</span></button>${fbButtonsHTML(fb)}</div>` : '';
 }
 document.addEventListener('click', async ev => {
   const button = ev.target.closest('.bubble [data-chat-copy]');
@@ -410,7 +410,7 @@ function v2MessageHTML(m) {
         // The Assistant's read-back of what it will approve is shown exactly as written, never formatted: a requesting
         // bot's fields can't hide part of what the person says yes to.
         : m.refs?.read_back ? `<div class="read-back" style="white-space:pre-line">${esc(m.body || '')}</div>`
-        : `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>`}${fbMarkHTML(fb)}${chatCopyHTML(m.body, fb)}</div>
+        : `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>`}${chatCopyHTML(m.body, fb)}</div>
     ${v2DeliveryHTML(m)}
     ${(m.refs?.warnings || []).map(w => `<div class="chat-warn" title="From the runner, not the bot">${esc(w.charAt(0).toUpperCase() + w.slice(1))}</div>`).join('')}
     ${S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}

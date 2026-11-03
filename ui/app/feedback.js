@@ -1,8 +1,8 @@
 /* ui/app/feedback.js — 👍 / 👎 on a bot's work: its messages (Assistant chat, Threads and DMs, task comments), tasks a bot
    asked for, and the approvals and questions it puts on Decide cards. 👍 is one tap (again removes it); 👎 saves at once
-   and opens a sheet for what was wrong, to tell the bot or make a rule of it (backend/feedback.py). A rated item shows a
-   small mark; a 👎 mark opens what happened to it.
-   With a pointer the controls sit in each surface's hover row; on touch a long press on the item opens them, with Copy.
+   and opens a sheet for what was wrong, to tell the bot or make a rule of it (backend/feedback.py).
+   A message's row under it holds Copy, 👍 and 👎: with a pointer it shows on hover, and the chosen thumb stays there,
+   filled; a chosen 👎 opens what happened to it. On touch a long press on the item opens them, with Copy.
    Every control stays hidden until the server answers the batched read with a list: an older server without these
    routes (404, or a fixture's empty object) never shows them.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -25,22 +25,25 @@ const fbTaskKey = t => t?.id && fbBot(t.requester_id) ? fbKey('task', t.id) : ''
 const fbNorm = s => String(s || '').trim().toLowerCase();
 
 // ---- markup each surface puts in its rows
+// The icon font's glyphs; a chosen one draws filled (feedback.css).
+const FB_ICON = {up: '<span class="nav-icon fb-i" aria-hidden="true">thumb_up</span>', down: '<span class="nav-icon fb-i" aria-hidden="true">thumb_down</span>',
+  copy: '<span class="nav-icon fb-i" aria-hidden="true">content_copy</span>'};
 // `row`: a list row's roving focus keeps its own keys, so the pair takes no Tab stop there (the task window has one).
 function fbButtonsHTML(key, {row = false, fixed = false} = {}) {
   if (!key) return '';
   const mine = fbMine(key)?.rating || '', tab = row ? ' tabindex="-1"' : '';
   return `<span class="fb-ctl" data-fb="${esc(key)}"${fixed ? ' data-fb-fixed' : ''}>`
-    + `<button type="button" class="fb-btn" data-fb-rate="up" aria-pressed="${mine === 'up'}" aria-label="Good" title="Good"${tab}>👍</button>`
-    + `<button type="button" class="fb-btn" data-fb-rate="down" aria-pressed="${mine === 'down'}" aria-label="Not good" title="Not good"${tab}>👎</button></span>`;
+    + `<button type="button" class="fb-btn" data-fb-rate="up" aria-pressed="${mine === 'up'}" aria-label="Good" title="Good"${tab}>${FB_ICON.up}</button>`
+    + `<button type="button" class="fb-btn" data-fb-rate="down" aria-pressed="${mine === 'down'}" aria-label="Not good" title="Not good"${tab}>${FB_ICON.down}</button></span>`;
 }
-function fbMarkInner(key, inert) {
-  const f = fbMine(key);
-  if (!f) return '';
-  if (f.rating === 'up' || inert) return `<span class="fb-mark-i" role="img" aria-label="${f.rating === 'up' ? 'You said good' : 'You said not good'}">${f.rating === 'up' ? '👍' : '👎'}</span>`;
-  return `<button type="button" class="fb-mark-i" data-fb-show aria-label="You said not good. Show" title="${esc(f.reason || 'Not good')}">👎</button>`;
+// A message's row under its words (Threads, task comments): Copy, 👍, 👎. The chat keeps its own Copy line (chatCopyHTML).
+const fbRowHTML = (key, text) => key ? `<div class="fb-row">${text ? `<button type="button" class="fb-btn fb-copy" data-fb-copy="${esc(text)}" aria-label="Copy message" title="Copy message">${FB_ICON.copy}</button>` : ''}${fbButtonsHTML(key)}</div>` : '';
+// A task row's rating after its title: only a glyph, inside the row's open button.
+function fbMarkInner(key) {
+  const r = fbMine(key)?.rating;
+  return r ? `<span class="fb-mark-i" role="img" aria-label="${r === 'up' ? 'You said good' : 'You said not good'}">${r === 'up' ? FB_ICON.up : FB_ICON.down}</span>` : '';
 }
-// `inert`: inside another control (a task row's open button), so the mark is only a glyph.
-const fbMarkHTML = (key, inert = false) => key ? `<span class="fb-mark" data-fb-mark="${esc(key)}"${inert ? ' data-fb-inert' : ''}>${fbMarkInner(key, inert)}</span>` : '';
+const fbMarkHTML = key => key ? `<span class="fb-mark" data-fb-mark="${esc(key)}">${fbMarkInner(key)}</span>` : '';
 
 // ---- the batched read: one request per subject type for everything drawn and not yet read
 function fbSync() {
@@ -91,7 +94,7 @@ function fbPaint() {
     for (const b of el.querySelectorAll('[data-fb-rate]')) b.setAttribute('aria-pressed', String(b.dataset.fbRate === mine));
   }
   for (const el of document.querySelectorAll('[data-fb-mark]')) {
-    const html = fbMarkInner(el.dataset.fbMark, el.hasAttribute('data-fb-inert'));
+    const html = fbMarkInner(el.dataset.fbMark);
     if (el.innerHTML !== html) el.innerHTML = html;
   }
 }
@@ -163,12 +166,14 @@ function fbDialog(cls, label) {
   });
   return d;
 }
-const fbHeadHTML = title => `<div class="fb-head"><h2 tabindex="-1">${esc(title)}</h2><button type="button" class="ghost fb-x" data-fb-close aria-label="Close" title="Close">✕</button></div>`;
+// No title: the close button alone, in the corner.
+const FB_X = '<button type="button" class="ghost fb-x" data-fb-close aria-label="Close" title="Close">✕</button>';
+const fbHeadHTML = title => title ? `<div class="fb-head"><h2 tabindex="-1">${esc(title)}</h2>${FB_X}</div>` : `<div class="fb-corner">${FB_X}</div>`;
 // `fixed`: a task or a Decide card, whose chips start with the three ways a request goes wrong.
 function fbSheet(key, f, {fixed = fbSplit(key).type !== 'message'} = {}) {
   const d = fbDialog('fb-down', 'Not good');
   const st = {key, f, chip: '', saved: String(f?.reason || '')};
-  d.innerHTML = `${fbHeadHTML('👎')}<div class="fb-chips" role="group" aria-label="Reasons"></div>
+  d.innerHTML = `${fbHeadHTML('')}<div class="fb-chips" role="group" aria-label="Reasons"></div>
     <textarea class="fb-why" rows="3" maxlength="${FB_REASON_MAX}" aria-label="What was wrong?" placeholder="What was wrong?">${esc(st.saved)}</textarea>
     <p class="fb-nudge" hidden>You've said this before.</p>
     <div class="fb-acts"><button type="button" class="ghost" data-fb-rule>Make a rule</button><button type="button" class="primary" data-fb-tell>Tell the bot</button></div>`;
@@ -279,7 +284,7 @@ function fbShow(key) {
   if (!f) return;
   const d = fbDialog('fb-show', 'Not good');
   const out = fbOutcome(f);
-  d.innerHTML = `${fbHeadHTML('👎')}<p class="fb-reason${f.reason ? '' : ' muted'}">${esc(f.reason || 'No reason')}</p>
+  d.innerHTML = `${fbHeadHTML('')}<p class="fb-reason${f.reason ? '' : ' muted'}" tabindex="-1">${esc(f.reason || 'No reason')}</p>
     ${out ? `<p class="fb-out muted">${out}</p>` : ''}
     <div class="fb-acts"><button type="button" class="ghost" data-fb-remove>Remove</button><button type="button" class="primary" data-fb-edit>Edit</button></div>`;
   d.showModal();
@@ -290,16 +295,16 @@ function fbShow(key) {
     try { await fbRemove(key, f); d.close(); }
     catch (e) { toast(e.message, true, null, {host: d}); ev.currentTarget.disabled = false; }
   };
-  $('h2', d).focus();
+  $('.fb-reason', d).focus();
 }
 // A long press: 👍, 👎 and Copy, as one row of large buttons.
 function fbMenu(key, copy, opts = {}) {
   const d = fbDialog('fb-menu', 'Message actions');
   const mine = fbMine(key)?.rating || '';
   d.innerHTML = `<div class="fb-menu-row">
-    <button type="button" data-fb-pick="up" aria-pressed="${mine === 'up'}" aria-label="Good">👍</button>
-    <button type="button" data-fb-pick="down" aria-pressed="${mine === 'down'}" aria-label="Not good">👎</button>
-    ${copy ? '<button type="button" data-fb-pick="copy" aria-label="Copy"><span class="nav-icon" aria-hidden="true">content_copy</span></button>' : ''}</div>`;
+    <button type="button" data-fb-pick="up" aria-pressed="${mine === 'up'}" aria-label="Good">${FB_ICON.up}</button>
+    <button type="button" data-fb-pick="down" aria-pressed="${mine === 'down'}" aria-label="Not good">${FB_ICON.down}</button>
+    ${copy ? `<button type="button" data-fb-pick="copy" aria-label="Copy">${FB_ICON.copy}</button>` : ''}</div>`;
   d.showModal();
   d.onclick = ev => {
     const b = ev.target.closest('[data-fb-pick]');
@@ -316,13 +321,12 @@ function fbMenu(key, copy, opts = {}) {
 const fbOpts = el => el.closest('[data-fb-fixed]') ? {fixed: true} : {};
 document.addEventListener('click', ev => {
   if (FB.quiet && Date.now() < FB.quiet) { ev.preventDefault(); ev.stopPropagation(); FB.quiet = 0; return; }   // the long press's own click
-  const rate = ev.target.closest('[data-fb-rate]'), show = ev.target.closest('[data-fb-show]'), copy = ev.target.closest('[data-fb-copy]');
-  if (!rate && !show && !copy) return;
+  const rate = ev.target.closest('[data-fb-rate]'), copy = ev.target.closest('[data-fb-copy]');
+  if (!rate && !copy) return;
   ev.preventDefault(); ev.stopPropagation();
   if (copy) { void copyText(copy.dataset.fbCopy).then(() => toast('Message copied'), () => toast('Could not copy the message', true)); return; }
-  const key = (rate || show).closest('[data-fb]')?.dataset.fb || show?.closest('[data-fb-mark]')?.dataset.fbMark;
+  const key = rate.closest('[data-fb]')?.dataset.fb;
   if (!key) return;
-  if (show) { fbShow(key); return; }
   if (rate.dataset.fbRate === 'up') void fbUp(key);
   else if (fbMine(key)?.rating === 'down') fbShow(key);
   else void fbDown(key, fbOpts(rate));

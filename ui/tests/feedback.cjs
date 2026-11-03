@@ -104,7 +104,7 @@ async function olderServer(browser) {
   const {page, errors, reads} = await chatPage(browser, {off: true});
   await page.waitForFunction(() => FB.on === false);
   await page.locator('.bubble.bot').first().hover();
-  assert.equal(await page.locator('.fb-ctl:visible, .fb-mark:visible').count(), 0, 'no thumbs on a server without feedback');
+  assert.equal(await page.locator('.fb-ctl:visible, .fb-mark:visible, .fb-row:visible').count(), 0, 'no thumbs on a server without feedback');
   assert.equal(await page.getByRole('button', {name: 'Copy message'}).first().isVisible(), true, 'Copy is as it was');
   assert.ok(!reads.includes('reasons'), 'nothing asks for reasons');
   assert.deepEqual(errors, []);
@@ -112,8 +112,9 @@ async function olderServer(browser) {
   console.log('feedback older server: ok');
 }
 
-async function chatDesktop(browser) {
-  const {page, errors, reads, writes, rows} = await chatPage(browser);
+async function chatDesktop(browser, theme = 'dark') {
+  const {page, errors, reads, writes, rows} = await chatPage(browser, {theme});
+  const t = theme === 'dark' ? '' : '-' + theme;
   await page.waitForFunction(() => document.body.classList.contains('fb-on'));
   // One read for the drawn bot messages; the person's own message is never rated.
   assert.deepEqual(reads.filter(r => r.type), [{type: 'message', ids: ['m2', 'm3']}]);
@@ -121,17 +122,29 @@ async function chatDesktop(browser) {
   const reply = page.locator('.bubble.bot').first(), up = reply.getByRole('button', {name: 'Good', exact: true}), down = reply.getByRole('button', {name: 'Not good', exact: true});
   await reply.hover();
   assert.equal(await up.isVisible(), true);
-  // The column sits beside the reply, never over its words.
-  const clear = await reply.evaluate(b => { const md = b.querySelector('.md').getBoundingClientRect(), a = b.querySelector('.chat-message-actions').getBoundingClientRect(); return a.left >= md.right - 1; });
-  assert.equal(clear, true, 'the thumbs sit outside the reply text');
-  await shot(page, 'chat-desktop-hover');
+  // One row under the reply, in order Copy, 👍, 👎; its room is kept, so hovering moves nothing.
+  const row = await reply.evaluate(b => { const md = b.querySelector('.md').getBoundingClientRect(), a = b.querySelector('.chat-message-actions');
+    return {under: a.getBoundingClientRect().top >= md.bottom - 1, labels: [...a.querySelectorAll('button')].map(x => x.getAttribute('aria-label')), h: b.offsetHeight}; });
+  assert.equal(row.under, true, 'the row sits under the reply text');
+  assert.deepEqual(row.labels, ['Copy message', 'Good', 'Not good']);
+  await page.mouse.move(0, 0);
+  assert.equal(await reply.evaluate(b => b.offsetHeight), row.h, 'no jump when the hover ends');
+  await page.waitForFunction(b => getComputedStyle(b).opacity === '0', await up.elementHandle());     // the row rests hidden, after its fade
+  await reply.hover();
+  await shot(page, 'chat-desktop-hover' + t);
   // 👍: one tap saves; again removes it. Neither redraws into an answer or toggles anything else.
   await up.click();
-  await page.waitForFunction(() => document.querySelector('[data-fb-mark="message:m2"]')?.textContent === '👍');
+  await page.waitForFunction(() => document.querySelector('[data-fb="message:m2"] [data-fb-rate="up"]')?.getAttribute('aria-pressed') === 'true');
+  await page.mouse.move(0, 0);
+  await page.waitForTimeout(300);
+  assert.equal(await up.evaluate(b => getComputedStyle(b).opacity), '1', 'the chosen thumb stays when the hover ends');
+  assert.equal(await up.locator('.fb-i').evaluate(i => getComputedStyle(i).fontVariationSettings.includes('"FILL" 1')), true, 'filled');
+  await shot(page, 'chat-desktop-rated' + t);
+  await reply.hover();
   assert.equal(await up.getAttribute('aria-pressed'), 'true');
   assert.deepEqual(posts(writes), [{subject_type: 'message', subject_id: 'm2', rating: 'up'}]);
   await up.click();
-  await page.waitForFunction(() => !document.querySelector('[data-fb-mark="message:m2"]')?.textContent);
+  await page.waitForFunction(() => !document.querySelector('[data-fb="message:m2"] [aria-pressed="true"]'));
   assert.equal(writes.at(-1).method, 'DELETE');
   assert.equal(rows.length, 0);
   // 👎: saved at once, then the sheet. Chips are the person's recent reasons; a message has no task chips.
@@ -149,7 +162,7 @@ async function chatDesktop(browser) {
   assert.equal(await sheet.locator('.fb-nudge').innerText(), "You've said this before.");
   assert.equal(await sheet.getByRole('button', {name: 'Make a rule'}).getAttribute('class'), 'primary');
   assert.equal(await sheet.getByRole('button', {name: 'Tell the bot'}).getAttribute('class'), 'ghost');
-  await shot(page, 'chat-desktop-down-sheet');
+  await shot(page, 'chat-desktop-down-sheet' + t);
   // The chip fills the box, which stays editable; a reason used once is no nudge.
   await sheet.getByRole('button', {name: 'Wrong numbers'}).click();
   assert.equal(await sheet.locator('.fb-nudge').isVisible(), false);
@@ -165,19 +178,20 @@ async function chatDesktop(browser) {
   assert.equal(await text.inputValue(), 'Keep replies to five lines or fewer.');
   await text.fill('Keep replies to five lines.');
   await rule.getByRole('switch', {name: 'All bots'}).check();
-  await shot(page, 'chat-desktop-rule');
+  await shot(page, 'chat-desktop-rule' + t);
   await rule.getByRole('button', {name: 'Save rule'}).click();
   await page.locator('.toast', {hasText: 'Rule added'}).waitFor();
   assert.deepEqual(writes.at(-1).body, {text: 'Keep replies to five lines.', all_bots: true});
   assert.equal(await page.locator('dialog.fb-sheet[open]').count(), 0);
-  // Its 👎 mark: the reason, a link to the rule, and Remove.
-  await page.locator('[data-fb-mark="message:m2"] [data-fb-show]').click();
+  // Its chosen 👎: the reason, a link to the rule, and Remove.
+  await reply.hover();
+  await down.click();
   const show = page.locator('dialog.fb-show[open]');
   await show.waitFor();
   assert.equal(await show.locator('.fb-reason').innerText(), 'Too long');
   assert.match(await show.getByRole('link', {name: 'Rule'}).getAttribute('href'), /^#\/rules\?.*rule=r-1/);
   await show.getByRole('button', {name: 'Remove'}).click();
-  await page.waitForFunction(() => !document.querySelector('dialog.fb-show[open]') && !document.querySelector('[data-fb-mark="message:m2"]')?.textContent);
+  await page.waitForFunction(() => !document.querySelector('dialog.fb-show[open]') && !document.querySelector('[data-fb="message:m2"] [aria-pressed="true"]'));
   // Tell the bot: the reason as typed goes with tell_bot; the mark then says it was sent.
   const second = page.locator('.bubble.bot').nth(1);
   await second.hover();
@@ -187,7 +201,8 @@ async function chatDesktop(browser) {
   await sheet.getByRole('button', {name: 'Tell the bot'}).click();
   await page.locator('.toast', {hasText: 'Sent to bot'}).waitFor();
   assert.deepEqual(posts(writes).at(-1), {subject_type: 'message', subject_id: 'm3', rating: 'down', reason: 'The totals are wrong', tell_bot: true});
-  await page.locator('[data-fb-mark="message:m3"] [data-fb-show]').click();
+  await second.hover();
+  await second.getByRole('button', {name: 'Not good', exact: true}).click();
   assert.equal(await show.locator('.fb-out').innerText(), 'Sent to bot');
   await page.keyboard.press('Escape');
   // A reason typed and the sheet closed with Escape is still kept with its 👎.
@@ -199,13 +214,13 @@ async function chatDesktop(browser) {
   await page.waitForFunction(() => !document.querySelector('dialog.fb-sheet[open]'));
   await new Promise(r => setTimeout(r, 300));
   assert.equal(rows.find(r => r.subject_id === 'm3').reason, 'Totals are off by a month');
-  // Light theme: the same sheet reads on paper.
-  await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
-  await second.hover();
-  await shot(page, 'chat-desktop-light');
+  // Both rated replies at rest: each keeps only its chosen thumb, filled, on its row.
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => document.activeElement?.blur());      // the resting look, not the keyboard's ring
+  await shot(page, 'chat-desktop-rest' + t);
   assert.deepEqual(errors, []);
   await page.close();
-  console.log('feedback chat desktop: ok');
+  console.log(`feedback chat desktop (${theme}): ok`);
 }
 
 // A long press through the browser's own touch input: pointer events with pointerType touch.
@@ -218,8 +233,9 @@ async function press(page, locator, {ms = 650, move = 0} = {}) {
   await cdp.send('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
   await cdp.detach();
 }
-async function chatPhone(browser) {
-  const {page, errors, writes} = await chatPage(browser, {phone: true});
+async function chatPhone(browser, theme = 'dark') {
+  const {page, errors, writes} = await chatPage(browser, {phone: true, theme});
+  const t = theme === 'dark' ? '' : '-' + theme;
   await page.waitForFunction(() => document.body.classList.contains('fb-on'));
   const reply = page.locator('.bubble.bot').first();
   // A tap shows the copy line, now with the thumbs; no menu.
@@ -227,7 +243,7 @@ async function chatPhone(browser) {
   assert.equal(await reply.evaluate(b => b.classList.contains('acts')), true);
   assert.equal(await reply.getByRole('button', {name: 'Good', exact: true}).isVisible(), true);
   assert.equal(await page.locator('dialog.fb-menu[open]').count(), 0);
-  await shot(page, 'chat-phone-tap');
+  await shot(page, 'chat-phone-tap' + t);
   await reply.tap();
   // A press that moves is a scroll: nothing opens.
   await press(page, reply, {move: 40});
@@ -239,7 +255,7 @@ async function chatPhone(browser) {
   assert.deepEqual(await menu.locator('button').evaluateAll(bs => bs.map(b => b.getAttribute('aria-label'))), ['Good', 'Not good', 'Copy']);
   const fits = await menu.evaluate(d => { const r = d.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && Math.round(r.bottom) >= innerHeight - 1; });
   assert.equal(fits, true, 'a bottom sheet across the phone');
-  await shot(page, 'chat-phone-longpress');
+  await shot(page, 'chat-phone-longpress' + t);
   await menu.getByRole('button', {name: 'Copy'}).tap();
   await page.waitForFunction(() => window.copied?.startsWith('Signups rose 18%'));
   await press(page, reply);
@@ -252,21 +268,30 @@ async function chatPhone(browser) {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no sideways scroll');
   const gutter = await sheet.locator('.fb-chips').evaluate(el => Math.round(el.getBoundingClientRect().left));
   assert.equal(gutter, 16, '16px gutter');
-  await shot(page, 'chat-phone-down-sheet');
+  await shot(page, 'chat-phone-down-sheet' + t);
   await sheet.getByRole('button', {name: 'Make a rule'}).tap();
   await page.locator('dialog.fb-rule[open]').waitFor();
   await page.evaluate(() => document.activeElement?.blur());
-  await shot(page, 'chat-phone-rule');
+  await shot(page, 'chat-phone-rule' + t);
   assert.equal(posts(writes).length, 2, 'the 👎, then its reason');
+  // At rest a phone shows only the chosen thumb, filled, where the row puts it.
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => !document.querySelector('dialog.fb-sheet[open]'));
+  const rest = await reply.evaluate(b => { const a = b.querySelector('.chat-message-actions'), v = el => getComputedStyle(el).visibility;
+    return {acts: b.classList.contains('acts'), shown: getComputedStyle(a).display !== 'none', down: v(a.querySelector('[data-fb-rate="down"]')),
+      up: v(a.querySelector('[data-fb-rate="up"]')), copy: v(a.querySelector('.chat-message-copy'))}; });
+  assert.deepEqual(rest, {acts: false, shown: true, down: 'visible', up: 'hidden', copy: 'hidden'});
+  await shot(page, 'chat-phone-rated' + t);
   assert.deepEqual(errors, []);
   await page.close();
-  console.log('feedback chat phone: ok');
+  console.log(`feedback chat phone (${theme}): ok`);
 }
 
 const APPROVAL = {id: 'ap-1', kind: 'approval', what: 'send', title: 'Approve this send', requester_id: 'bot:writer', requested_by: 'bot:writer',
   created_at: iso(), payload: {to: ['ava@customer.example'], subject: 'Your renewal', body: 'Hi Ava, your plan renews on the 14th.'}};
-async function decideCard(browser, {phone}) {
-  const {page, errors} = await open(browser, {viewport: phone ? {width: 390, height: 844} : {width: 1440, height: 900}, hash: '#/tasks'});
+async function decideCard(browser, {phone, theme = 'dark'}) {
+  const {page, errors} = await open(browser, {viewport: phone ? {width: 390, height: 844} : {width: 1440, height: 900}, hash: '#/tasks', theme});
+  const t = (phone ? 'phone' : 'desktop') + (theme === 'dark' ? '' : '-' + theme);
   const {writes} = await feedbackFake(page);
   await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [APPROVAL]})}));
   // The page loaded before the fake was in place, so it may have read feedback as off; start it over.
@@ -287,15 +312,16 @@ async function decideCard(browser, {phone}) {
   await sheet.waitFor();
   await page.waitForFunction(() => document.querySelectorAll('dialog.fb-down .fb-chip').length === 5);
   assert.deepEqual(await sheet.locator('.fb-chip').allInnerTexts(), ["Shouldn't exist", 'Badly written', 'Wrong person', 'Too long', 'Wrong numbers']);
-  await shot(page, `decide-${phone ? 'phone' : 'desktop'}-down`);
+  await shot(page, `decide-${t}-down`);
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => !document.querySelector('dialog.fb-sheet[open]'));
   assert.deepEqual(await page.evaluate(() => ({outbox: DEC_OUTBOX.size, shown: DEC.shown, open: document.querySelector('#need-card').open})),
     {outbox: 0, shown: 'approval:ap-1', open: true}, 'Escape closes the sheet, not the card');
-  await shot(page, `decide-${phone ? 'phone' : 'desktop'}`);
+  await page.evaluate(() => document.activeElement?.blur());      // the resting look, not the keyboard's ring
+  await shot(page, `decide-${t}`);
   assert.deepEqual(errors, []);
   await page.close();
-  console.log(`feedback decide ${phone ? 'phone' : 'desktop'}: ok`);
+  console.log(`feedback decide ${t}: ok`);
 }
 
 async function taskRows(browser) {
@@ -315,7 +341,7 @@ async function taskRows(browser) {
   assert.equal(await up.isVisible(), true);
   await shot(page, 'task-row-hover');
   await up.click();
-  await page.waitForFunction(() => document.querySelector('[data-task-key="tt-bot"] [data-fb-mark]')?.textContent === '👍');
+  await page.waitForFunction(() => document.querySelector('[data-task-key="tt-bot"] [data-fb-mark] [aria-label="You said good"]'));
   assert.deepEqual(posts(writes), [{subject_type: 'task', subject_id: 't-bot', rating: 'up'}]);
   assert.equal(await page.locator('#task-peek[open], #task-modal[open]').count(), 0, 'a thumb does not open the task');
   await page.mouse.move(0, 0);
@@ -344,6 +370,7 @@ async function threadMessage(browser) {
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+    if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|css))$/);
     if (ui && fs.existsSync(uiFile(ui[1]))) return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
@@ -363,11 +390,13 @@ async function threadMessage(browser) {
   await page.waitForFunction(() => document.body.classList.contains('fb-on'));
   assert.equal(await page.locator('.th-msg[data-mid="h1"] [data-fb]').count(), 0);
   await msg.hover();
-  assert.deepEqual(await msg.locator('.th-acts button').evaluateAll(bs => bs.map(b => b.getAttribute('aria-label'))),
-    ['Good', 'Not good', 'Copy message', 'Acknowledge', 'Message menu']);
+  assert.deepEqual(await msg.locator('.th-acts button').evaluateAll(bs => bs.map(b => b.getAttribute('aria-label'))), ['Acknowledge', 'Message menu'], 'the toolbar is as it was');
+  assert.deepEqual(await msg.locator('.fb-row button').evaluateAll(bs => bs.map(b => b.getAttribute('aria-label'))), ['Copy message', 'Good', 'Not good']);
+  const under = await msg.evaluate(m => m.querySelector('.fb-row').getBoundingClientRect().top >= m.querySelector('.th-react').getBoundingClientRect().bottom - 1);
+  assert.equal(under, true, 'the row sits under the words and reactions');
   await shot(page, 'thread-hover');
   await msg.getByRole('button', {name: 'Good', exact: true}).click();
-  await page.waitForFunction(() => document.querySelector('[data-fb-mark="message:b1"]')?.textContent === '👍');
+  await page.waitForFunction(() => document.querySelector('[data-fb="message:b1"] [data-fb-rate="up"]')?.getAttribute('aria-pressed') === 'true');
   assert.deepEqual(reacts, [], 'a thumb is not an emoji reaction');
   assert.match(await msg.locator('.th-react').innerText(), /^🎉\s+1$/, 'reactions stay as they were');
   assert.deepEqual(posts(writes), [{subject_type: 'message', subject_id: 'b1', rating: 'up'}]);
@@ -383,8 +412,11 @@ async function threadMessage(browser) {
   try {
     await olderServer(browser);
     await chatDesktop(browser);
+    await chatDesktop(browser, 'light');
     await chatPhone(browser);
+    await chatPhone(browser, 'light');
     await decideCard(browser, {phone: true});
+    await decideCard(browser, {phone: true, theme: 'light'});
     await decideCard(browser, {phone: false});
     await taskRows(browser);
     await threadMessage(browser);
