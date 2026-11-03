@@ -51,7 +51,9 @@ def render(kind, *, python, config, root, log, path, env_slug="", home="", user=
         exec_line = " ".join(quote(x) for x in (python, "-m", "backend.server", "--host",
                                                "127.0.0.1", "--port", port))
     elif kind in COMMANDS:
-        exec_line = " ".join(quote(x) for x in (python, "-m", "runner_support", "--config", config, COMMANDS[kind]))
+        # `-m runner`, not `-m runner_support`: a unit outlives this release, and an older target release (a downgrade)
+        # has only runner/. Here runner/__main__.py forwards it (runner/__init__.py).
+        exec_line = " ".join(quote(x) for x in (python, "-m", "runner", "--config", config, COMMANDS[kind]))
     else:
         raise ValueError(f"unknown job {kind!r}")
     lines = ["[Unit]", f"Description={DESCRIPTIONS[kind]}" + (f" ({env_slug})" if env_slug else ""),

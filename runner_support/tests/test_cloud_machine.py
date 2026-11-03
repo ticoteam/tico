@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -271,7 +272,9 @@ def test_base_gives_sudo_and_the_boot_service_only_on_the_machine_it_prepares(ma
     assert fake.named("visudo") and ["systemctl", "enable", cm.UNIT] in fake.calls
     assert [c for c in fake.calls if "runner_support.engine" in c and "prepare" in c]
     unit = (tmp_path / "units" / cm.UNIT).read_text()
-    assert "-m runner_support.cloud_machine boot" in unit and "Restart=on-failure" in unit and "WantedBy=multi-user.target" in unit
+    # `runner.cloud_machine`: a saved image may boot a checkout moved back to a release from before runner_support/.
+    assert f"ExecStart={m.python} -m runner.cloud_machine boot" in unit.splitlines()
+    assert "Restart=on-failure" in unit and "WantedBy=multi-user.target" in unit
     marker = json.loads(cm.marker_path(machine.etc).read_text())
     assert marker == {"user": "user", "root": str(m.root), "release": "0.5.7"}
 
@@ -279,3 +282,13 @@ def test_base_gives_sudo_and_the_boot_service_only_on_the_machine_it_prepares(ma
     m.config.write_text("{}")
     with pytest.raises(cm.Refused):
         cm.base(m, release="0.5.7", sudoers=tmp_path / "sudoers", unit_dir=tmp_path / "units", apt=tmp_path / "apt")
+
+
+def test_the_boot_units_command_runs_through_the_runner_forwarder():
+    # What the saved unit starts, `python -m runner.cloud_machine boot`, reaches runner_support's boot (--help: no root).
+    root = Path(__file__).resolve().parents[2]
+    old, new = (subprocess.run([sys.executable, "-m", module, "boot", "--help"], cwd=root,
+                               capture_output=True, text=True, timeout=60)
+                for module in ("runner.cloud_machine", "runner_support.cloud_machine"))
+    assert old.returncode == new.returncode == 0, old.stderr
+    assert old.stdout == new.stdout and "boot" in old.stdout

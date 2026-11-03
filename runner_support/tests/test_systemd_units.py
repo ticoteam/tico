@@ -1,5 +1,8 @@
 """The systemd user units `scripts/tico install` writes for a Linux checkout runner."""
 import os
+import plistlib
+import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -46,6 +49,42 @@ def test_a_unit_file_is_private_and_lands_where_systemd_looks(tmp_path):
     assert su.is_installed("tico-bot.service", tmp_path / "systemd" / "user")
     assert su.user_unit_dir({"XDG_CONFIG_HOME": "/x"}) == Path("/x/systemd/user")
     assert su.user_unit_dir({"TICO_SYSTEMD_USER_DIR": "/y"}) == Path("/y")
+
+
+def run_through_forwarder(argv):
+    """Runs a saved unit's command (its python swapped for this one) with --help, and the same under runner_support's
+    name: both parse it alike. `run` would exec the Rust runner, so for it the top-level help must offer `run`."""
+    assert argv[1:3] == ["-m", "runner"], argv
+    command = argv[-1]
+    args = [*argv[3:-1], "--help"] if command == "run" else [*argv[3:], "--help"]
+    old, new = (subprocess.run([sys.executable, "-m", module, *args], cwd=ROOT, capture_output=True, text=True,
+                               timeout=60) for module in ("runner", "runner_support"))
+    assert old.returncode == new.returncode == 0, old.stderr
+    assert old.stdout == new.stdout and command in old.stdout
+
+
+@pytest.mark.parametrize("kind", ["bot", "connectors", "close-calls", "importers"])
+def test_a_unit_starts_its_job_by_the_runner_name_an_older_release_also_has(kind):
+    # Units outlive this release: a computer moved back to a release from before runner_support/ must still start.
+    exec_line = next(line for line in su.render(kind, **KW).splitlines() if line.startswith("ExecStart="))
+    argv = shlex.split(exec_line.removeprefix("ExecStart="))
+    assert argv == [KW["python"], "-m", "runner", "--config", KW["config"], su.COMMANDS[kind]]
+    run_through_forwarder(argv)
+
+
+@pytest.mark.parametrize("kind", ["bot", "connectors", "close-calls", "importers"])
+def test_a_launchd_plist_starts_its_job_by_the_runner_name_an_older_release_also_has(kind):
+    # The plist scripts/tico install writes on a Mac, rendered by bash from the script's own heredoc.
+    script = (ROOT / "scripts" / "tico").read_text()
+    body = re.search(r'cat > "\$file" <<PL\n(.*?)\nPL\n', script, re.S).group(1)
+    command = {"bot": "run"}.get(kind, kind)
+    rendered = subprocess.run(["bash", "-c", f"cat <<PL\n{body}\nPL\n"], capture_output=True, check=True, timeout=30,
+                              env={"PATH": os.defpath, "PYTHON": "/py", "CONFIG": "/cfg/runner.json", "command": command,
+                                   "service": "team.tico." + kind, "HUB": str(ROOT), "HOME": "/home/ana", "USER": "ana",
+                                   "log": "/l"})
+    argv = plistlib.loads(rendered.stdout)["ProgramArguments"]
+    assert argv == ["/py", "-m", "runner", "--config", "/cfg/runner.json", command]
+    run_through_forwarder(argv)
 
 
 # -- scripts/tico on Linux, with systemctl and loginctl faked ----------------------------------------------

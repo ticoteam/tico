@@ -309,7 +309,9 @@ def unit_text(m: Machine) -> str:
         "[Service]",
         "Type=oneshot",
         f"WorkingDirectory={m.root}",
-        f"ExecStart={m.python} -m runner_support.cloud_machine boot",
+        # `runner.cloud_machine`, not `runner_support.cloud_machine`: a saved image may boot a checkout on an older
+        # release, which has only runner/. Here runner/cloud_machine.py forwards it (runner/__init__.py).
+        f"ExecStart={m.python} -m runner.cloud_machine boot",
         "Restart=on-failure",
         "RestartSec=30",
         "Environment=PYTHONUNBUFFERED=1",

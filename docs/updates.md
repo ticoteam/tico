@@ -279,7 +279,7 @@ and run `docker compose up -d`. From then on the updater moves `TICO_TAG`.
 ## The runner
 
 Every computer runs the Rust runner (`tico-runner`, from `runner-rs/`). The launchd job and the systemd unit start
-`python -m runner_support run`, which execs the binary; the Docker image runs the binary directly.
+`python -m runner run`, which execs the binary; the Docker image runs the binary directly.
 
 - **Docker:** the image ships the binary (`/usr/local/bin/tico-runner`), built from the same tree.
 - **Mac or Linux checkout:** a checkout on a release tag downloads that release's `tico-runner-<os>-<arch>.gz` from
@@ -296,9 +296,10 @@ The Python runner is gone. `"engine": "python"` in `runner.json` and `TICO_RUNNE
 still runs the side jobs (connectors, Close calls, meeting importers), the catalog set-up and the update process, from
 `runner_support/`. A small `runner/` package forwards the old `python -m runner ...` commands and imports there, so
 launchd plists, systemd units and cloud machine images written before the move, and a runner or update process of an
-earlier release still running while its checkout moves, keep working. Units written since the move name
-`runner_support`, which a release from before it does not have: a computer installed (`scripts/tico install`) or a cloud
-machine image saved on a later release, then moved back to such a release, needs `scripts/tico install` run again there.
+earlier release still running while its checkout moves, keep working. What is saved on a computer and started later
+keeps the old names on purpose: `scripts/tico install` still writes `python -m runner --config <path> <job>` into the
+launchd plists and systemd units, and a cloud machine image still boots `python -m runner.cloud_machine boot`. So a
+computer moved back to a release from before the move (hosted staff can set an older target) still starts.
 
 ## A Docker runner
 

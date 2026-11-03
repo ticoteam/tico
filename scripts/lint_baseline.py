@@ -97,16 +97,47 @@ def suppression_set(ruff_text, baseline_text):
     return ignores, set(config.get("select", []))
 
 
-def moved_since(ref):
+FORWARDER_LINES = 40
+
+
+def forwards_to(source, dest):
+    """True when `source` is now a small file that hands over to `dest`'s module (runner/engine.py importing
+    runner_support.engine), not a rewritten implementation."""
+    path = ROOT / source
+    if not path.is_file():
+        return False
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if len(text.splitlines()) > FORWARDER_LINES:
+        return False
+    module = dest.removesuffix(".py").removesuffix("/__init__").replace("/", ".")
+    package, _, name = module.rpartition(".")
+    return module in text or bool(package) and f"from {package} import {name}" in text
+
+
+def moved_since(ref, suppressed=frozenset()):
     """Old path -> new path for each file git sees as moved since `ref`, so a moved file keeps its suppressions. A move
-    that left a small file at the old path (a forwarder) shows as a copy: -B breaks the rewritten old path apart."""
+    that left a small file at the old path (a forwarder) shows as a copy: -B breaks the rewritten old path apart. A
+    copy, or anything whose old path still exists, counts only when the old path is now a forwarder to the new one with
+    no suppression of its own (`suppressed`: paths that still switch a rule off); otherwise the copy's suppressions
+    would count at both paths."""
     done = subprocess.run(["git", "diff", "--name-status", "-B", "-M", ref], cwd=ROOT, capture_output=True, text=True)
     moves = {}
     for line in done.stdout.splitlines():
         fields = line.split("\t")
-        if fields[0][:1] in ("R", "C") and len(fields) == 3:
-            moves[fields[1]] = fields[2]
+        if fields[0][:1] not in ("R", "C") or len(fields) != 3:
+            continue
+        source, dest = fields[1], fields[2]
+        if (ROOT / source).exists() and (source in suppressed or not forwards_to(source, dest)):
+            continue
+        moves[source] = dest
     return moves
+
+
+def carry_moves(old_ignores, new_ignores, ref):
+    """`old_ignores` with each moved file's suppressions transferred (not copied) to its new path."""
+    moves = moved_since(ref, {path for path, _ in new_ignores})
+    moved = {(path, code) for path, code in old_ignores if path in moves}
+    return (old_ignores - moved) | {(moves[path], code) for path, code in moved}
 
 
 def check_growth(ref):
@@ -118,8 +149,7 @@ def check_growth(ref):
     old_config = git_show(ref, "ruff.toml") or ""
     new_ignores, new_select = suppression_set(CONFIG.read_text(encoding="utf-8"), BASELINE.read_text(encoding="utf-8"))
     old_ignores, old_select = suppression_set(old_config, old_baseline)
-    moves = moved_since(ref)
-    old_ignores |= {(moves[path], code) for path, code in old_ignores if path in moves}
+    old_ignores = carry_moves(old_ignores, new_ignores, ref)
     problems = []
     for path, code in sorted(new_ignores - old_ignores):
         problems.append(f"new suppression: {code} in {path} (fix it, or get it reviewed as a baseline change)")

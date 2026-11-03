@@ -187,13 +187,15 @@ install_one() {
   chmod 0700 "$LOG_DIR"
   touch "$log"
   chmod 0600 "$log"
+  # `-m runner`, not `-m runner_support`: the plist outlives this release, and an older target release has only runner/
+  # (runner/__init__.py; runner/__main__.py forwards it here).
   cat > "$file" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>$service</string>
   <key>ProgramArguments</key><array>
-    <string>$PYTHON</string><string>-m</string><string>runner_support</string>
+    <string>$PYTHON</string><string>-m</string><string>runner</string>
     <string>--config</string><string>$CONFIG</string><string>$command</string>
   </array>
   <key>WorkingDirectory</key><string>$HUB</string>
