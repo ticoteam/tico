@@ -58,6 +58,8 @@ pub struct Runner {
     pub publish_notes: Mutex<HashMap<String, String>>,
     pub attempt_bots: Mutex<HashMap<String, String>>,
     pub runtime_rows: Mutex<Map<String, Value>>,
+    /// The last readiness probe (readiness::probe_all): what the heartbeat's rows are composed from.
+    pub probed: Mutex<readiness::Probed>,
     names: Mutex<Option<Value>>,
     /// Lane and checkout locks, live turns' lanes, the repositories this computer holds (sessions.rs).
     pub lanes: Arc<crate::sessions::Lanes>,
@@ -157,6 +159,7 @@ impl Runner {
             publish_notes: Mutex::new(HashMap::new()),
             attempt_bots: Mutex::new(HashMap::new()),
             runtime_rows: Mutex::new(Map::new()),
+            probed: Mutex::new(readiness::Probed::default()),
             names: Mutex::new(None),
             lanes: Arc::new(crate::sessions::Lanes::new(repositories)),
             worktrees,
@@ -345,6 +348,29 @@ impl Runner {
         self.config.with_profiles_of(&read)
     }
 
+    /// Probes this computer's readiness and keeps the rows (readiness::probe_all). Run by the probe loop, and by a
+    /// heartbeat pass only at start-up or when the probe's inputs changed.
+    async fn probe_now(&self, config: &Config, candidates: &[Value], computer_logins: bool) {
+        let previous = self.probed.lock().unwrap().rows.clone();
+        let (rows, inputs) = readiness::probe_all(config, &self.sign_in, &self.client, candidates, computer_logins, &previous).await;
+        let mut probed = self.probed.lock().unwrap();
+        probed.rows = rows;
+        probed.inputs = inputs;
+        probed.schedule.ran(Instant::now());
+    }
+
+    /// The probe's schedule: a probe when an event asks for one (readiness::request_probe) and every PROBE_EVERY otherwise.
+    /// It runs for the runner's life beside the heartbeat, which only reads what the probe stored.
+    async fn probe_loop(self: Arc<Self>) {
+        loop {
+            readiness::wait_due(&self.probed, readiness::wake()).await;
+            let config = self.config_now();
+            let candidates = readiness_candidates(&self.assignments_seen());
+            let computer_logins = computer_logins_for(&candidates);
+            self.probe_now(&config, &candidates, computer_logins).await;
+        }
+    }
+
     /// Readiness and the heartbeat. `full` re-reads this computer's bots from the server; without it the last
     /// answer stands and the heartbeat goes only when `forced`, changed, or HEARTBEAT_LIVE_S has passed.
     pub async fn maintain(&self, full: bool, forced: bool) -> Result<(), ApiError> {
@@ -379,9 +405,19 @@ impl Runner {
         let _ = tokio::task::spawn_blocking(move || crate::checkout_groups::gate_workspace(&workspace)).await;
         // Profiles as runner.json has them now, so a sign-in made since start is reported and checked.
         let config = self.config_now();
-        let computer_logins = crate::fallback::server_uses_computer_logins()
-            && candidates.iter().all(|entry| entry["computer_logins_v1"] == true);
-        let runtimes = readiness::runtime_report(&config, &self.sign_in, &self.client, &candidates, computer_logins).await;
+        let computer_logins = computer_logins_for(&candidates);
+        // The rows are composed from the last probe; a heartbeat only probes once, at start-up, and when the bots' runtimes,
+        // logins or key grants changed. Then the probe runs in this pass, so the payload never carries a row half built
+        // from the new inputs. Sign-in, install and credential events ask the probe loop instead.
+        let ran_before = self.probed.lock().unwrap().schedule.ran_before();
+        let changed = ran_before && self.probed.lock().unwrap().inputs != readiness::probe_inputs(&config, &candidates, computer_logins);
+        if !ran_before || changed {
+            self.probe_now(&config, &candidates, computer_logins).await;
+        }
+        let runtimes = {
+            let probed = self.probed.lock().unwrap();
+            readiness::runtime_report(&config, &self.sign_in, &candidates, computer_logins, &probed.rows)
+        };
         *self.runtime_rows.lock().unwrap() = runtimes.clone();
         let mut checks = readiness::preflight(&config, &self.sign_in, &candidates, &runtimes, computer_logins).await;
         self.perbot.decorate(&self.config, &mut checks, &candidates);
@@ -697,6 +733,11 @@ fn note_skipped_actions(skipped: u64) {
     }
 }
 
+/// Whether the computer's own logins are the ones readiness reads for these bots (computer_logins_v1).
+fn computer_logins_for(candidates: &[Value]) -> bool {
+    crate::fallback::server_uses_computer_logins() && candidates.iter().all(|entry| entry["computer_logins_v1"] == true)
+}
+
 /// The loop's own clocks (service.py `wants`, `claim_due`, `claimed`, `claim_wait`).
 struct Clock {
     /// When each event channel was last read on its interval, by its index in `events::CHANNELS`.
@@ -776,6 +817,7 @@ impl Runner {
         tokio::spawn(self.clone().push_backlog());
         tokio::spawn(self.events.clone().run(self.client.clone()));
         tokio::spawn(crate::perf::run_loop(self.clone()));
+        tokio::spawn(self.clone().probe_loop());
         tokio::spawn(crate::afterwatch::run_loop(self.clone()));
         tokio::spawn(crate::memory_tidy_keep::run_loop(self.clone()));
         tokio::spawn(crate::appdriver::run_loop(self.clone()));
@@ -899,9 +941,15 @@ impl Runner {
                         self.sign_in.refresh_now(&runtime);
                     }
                 }
+                readiness::request_probe();
             }
             let full = clock.wants(&self.events, "sync", Some(15.0)) || changed;
-            let forced = clock.wants(&self.events, "heartbeat", None) | self.sign_in.take_dirty();
+            // A sign-in, sign-out or refusal changed: the readiness probe runs again, and the heartbeat goes now.
+            let dirty = self.sign_in.take_dirty();
+            if dirty {
+                readiness::request_probe();
+            }
+            let forced = clock.wants(&self.events, "heartbeat", None) | dirty;
             if full || forced || clock.last_heartbeat.is_none_or(|t| t.elapsed().as_secs_f64() >= 15.0) {
                 let me = self.clone();
                 *maintenance = Some(tokio::spawn(async move { me.maintain(full, forced).await }));
