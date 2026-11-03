@@ -381,7 +381,7 @@ def test_old_results_cannot_starve_current_inspections(followups, monkeypatch):
         assert CB.coverage(c)["results"] == 1000
 
 
-def test_unchanged_keeper_repairs_reach_one_diagnostic(followups, monkeypatch):
+def test_explicit_reparking_without_progress_reaches_one_diagnostic(followups, monkeypatch):
     routed = []
     def escalate(c, row, count):
         routed.append(row["id"])
@@ -391,33 +391,33 @@ def test_unchanged_keeper_repairs_reach_one_diagnostic(followups, monkeypatch):
     monkeypatch.setattr(H, "_no_diagnosis", lambda *a: None)
     monkeypatch.setattr(H, "_escalate_stuck", escalate)
     with followups.app.state.store.transaction() as c:
+        row = task(c)
+        for _ in range(3):
+            due(c, H.task(c, row["id"]))
+            assert CB.sweep(c)["woke"] == [row["id"]]
+            handled(c, row["id"])  # the bot's turn ran and ended before the next explicit re-park
+            CB.set_time(c, H.task(c, row["id"]), "5m", actor="bot:ops")
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [] and routed == [row["id"]]
+        diagnostic = CB._recovery(c, H.task(c, row["id"]))
+        H.task_update(c, "bot:finance", diagnostic["id"], status="done")
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [] and routed == [row["id"]]
+        assert CB.view(H.task(c, row["id"]), c)["delivery"] == "recovery_blocked"
+        CB.set_time(c, H.task(c, row["id"]), "2h", actor="human:ana")
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]  # an explicit person's retry is meaningful intervention
+
+
+def test_bot_set_appointment_wakes_with_no_new_activity(followups):
+    with followups.app.state.store.transaction() as c:
         row = due(c, task(c))
         assert CB.sweep(c)["woke"] == [row["id"]]
         handled(c, row["id"])
-        for _ in range(3):  # nothing moves; each keeper repair records one more unchanged pass
-            CB.repair(c, H.task(c, row["id"]), H.now())
-        assert routed == []
-        CB.repair(c, H.task(c, row["id"]), H.now())
-        assert routed == [row["id"]]
-        CB.repair(c, H.task(c, row["id"]), H.now())
-        assert routed == [row["id"]]  # one diagnostic per unchanged stand, not one per repair
-
-
-def test_bot_set_appointment_wakes_with_no_new_activity_and_never_routes_a_diagnostic(followups, monkeypatch):
-    routed = []
-    monkeypatch.setattr(H, "_no_diagnosis", lambda *a: None)
-    monkeypatch.setattr(H, "_escalate_stuck", lambda c, row, count: routed.append(row["id"]))
-    with followups.app.state.store.transaction() as c:
-        row = task(c)
-        for _ in range(4):  # the bot waits on something outside Tico (CI, a deploy, a reply) and nothing in Tico moves
-            due(c, H.task(c, row["id"]))
-            assert CB.sweep(c)["woke"] == [row["id"]]
-            handled(c, row["id"])  # the bot's turn ran and ended before its next appointment
-            CB.set_time(c, H.task(c, row["id"]), "5m", "Check the CI run.", actor="bot:ops")
-        assert routed == []
+        CB.set_time(c, H.task(c, row["id"]), "45m", "Check the CI run.", actor="bot:ops")  # the bot's own appointment
         due(c, H.task(c, row["id"]))
-        assert CB.sweep(c)["woke"] == [row["id"]]
-        assert len(wakes(c, row["id"])) == 5
+        assert CB.sweep(c)["woke"] == [row["id"]]  # nothing in Tico moved, and the bot still wakes
+        assert len(wakes(c, row["id"])) == 2
 
 
 def test_result_consumer_must_record_disposition_instead_of_reparking(followups):

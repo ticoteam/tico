@@ -557,8 +557,7 @@ def sweep(c, at=None, failures=None, task_ids=None):
                 result["blocked"].append(row["id"])
                 continue
             count, _ = _repairs(c, row)
-            # A bot's own appointment always wakes it: what it waits on is usually outside Tico, so no change here is expected.
-            if not explicit(c, row) and max(count, _unchanged_wakes(c, row)) >= H.STALL_WAKES_PER_DAY and not external_wait(c, row):
+            if max(count, _unchanged_wakes(c, row)) >= H.STALL_WAKES_PER_DAY and not external_wait(c, row):
                 repair(c, row, at)
                 result["blocked"].append(row["id"])
                 continue
