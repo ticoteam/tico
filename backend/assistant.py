@@ -194,12 +194,20 @@ def _fields(body):
     return body if isinstance(body, dict) else {}
 
 
+def canonical(path):
+    """The canonical spelling of a request path (`route_renames`): an old spelling (`/runners/{id}/...`) is checked as the
+    route it answers, so no gate check is skipped by using the old name. None when the path is not one."""
+    from .route_renames import new_path
+    p = normalize_path(path)
+    return (new_path(p) or p) if p else None
+
+
 def catalogue_setting(method, path, body=None):
     """Whether this write is one setting from the catalogue, exactly as `hub settings set` makes it (backend/settings_
     catalog.py). Its class decides it in `require_direct_setting`. Two settings at once, or anything the catalogue does
     not list, is not one."""
     from . import settings_catalog
-    path = normalize_path(path)
+    path = canonical(path)
     if isinstance(body, (bytes, str)):
         try:
             body = json.loads(body or b"{}")
@@ -216,7 +224,7 @@ def require_direct_setting(c, method, path, body, trial=None, base=""):
     class is read against what is stored (a wake-rule update keeps the stored rule's action; a repository change is tried
     as the person's own click, `trial`), with the same full link (`base`, the public URL)."""
     from . import settings_catalog
-    found = settings_catalog.stored_class(c, method, normalize_path(path) or "", _fields(body), trial)
+    found = settings_catalog.stored_class(c, method, canonical(path) or "", _fields(body), trial)
     if found and found[2] != "person":
         return
     e = found[0] if found else None
@@ -256,8 +264,6 @@ NEVER = [(m, re.compile(p)) for m, p in (
     # A person's password and a reader's invite link: each carries a credential the chat would hold.
     ("POST", r"/api/v2/access/(people|humans)/[^/]+/password"), (None, r"/api/v2/audiences/[^/]+/invites(/.*)?"),
     (None, r"/api/v2/setup/company/people/[^/]+/invite"), (None, r"/api/v2/access/(humans|people)/[^/]+/invite"),
-    # The access rules say who may use the company's credentials: the owner's own sign-in.
-    (None, r"/api/v2/access/rules"),
     # A computer's adoption and removal (its enrolment is the person's own tap, and a removal ends its sign-ins).
     (None, r"/api/v2/runners/adopt"), (None, r"/api/v2/computers/[^/]+/removals(/.*)?"),
     # A token for GitHub, a webhook's signing secret and the wake-URL secret: credentials, never a chat's to set.
@@ -295,16 +301,36 @@ ASSISTANT_RULES = ("assistant_direct", "assistant_approvals")
 OUTSIDE_ACTIONS = ("call_webhook", "send_reply", "forward")
 
 
-def automation_sends_outside(store, method, path):
-    """Whether this write changes an automation that sends something outside (its stored flow holds one of
-    `OUTSIDE_ACTIONS`): only the person's own tap changes those, so a turn's change is a card (`confirm_required`)."""
-    m = re.fullmatch(r"/api/v2/automations/([^/]+)", normalize_path(path) or "")
-    if not m or method not in ("PATCH", "PUT", "DELETE", "POST"):
+def _sends(flow):
+    """Whether a flow (stored text, or the parsed JSON of a request's `flow`) holds an outside action."""
+    text = flow if isinstance(flow, str) else json.dumps(flow or "")
+    return any(action in text for action in OUTSIDE_ACTIONS)
+
+
+def automation_sends_outside(store, method, path, body=None):
+    """Whether this write makes or changes an automation that sends something outside (its flow holds one of
+    `OUTSIDE_ACTIONS`): a create whose body holds one, a change to a stored one (its stored flow, or the body's flow), a
+    run of one, and a restore of a version that holds one. Only the person's own tap does those, so a turn's change is a
+    card (`confirm_required`)."""
+    p = canonical(path) or ""
+    fields = _fields(body)
+    if p == "/api/v2/automations":
+        return method == "POST" and _sends(fields.get("flow"))
+    if method not in ("PATCH", "PUT", "DELETE", "POST"):
+        return False
+    restore = re.fullmatch(r"/api/v2/automations/([^/]+)/versions/(\d+)/restore", p)
+    if restore:
+        with store.read() as c:
+            row = c.execute("SELECT flow FROM automation_versions WHERE automation_id=? AND n=?",
+                            (restore.group(1), int(restore.group(2)))).fetchone()
+        return bool(row) and _sends(row["flow"])
+    m = re.fullmatch(r"/api/v2/automations/([^/]+)(?:/run|/delete)?", p)
+    if not m:
         return False
     with store.read() as c:
         row = c.execute("SELECT flow FROM automations WHERE id=?", (m.group(1),)).fetchone()
-    flow = str(row["flow"] or "") if row else ""
-    return any(action in flow for action in OUTSIDE_ACTIONS)
+    stored = str(row["flow"] or "") if row else ""
+    return _sends(stored) or ("flow" in fields and _sends(fields["flow"]))
 
 
 def settings_route_unmatched(method, path, body=None):
@@ -312,7 +338,7 @@ def settings_route_unmatched(method, path, body=None):
     value, two settings at once, or a key the setting does not have). Such a write is a card: the gate cannot tell
     which setting it changes, so it cannot tell whether only the person may change it."""
     from . import settings_catalog
-    p = normalize_path(path)
+    p = canonical(path)
     if not p or not settings_catalog.routed(method, p):
         return False
     return settings_catalog.matched(method, p, _json(body) if isinstance(body, (bytes, str)) else body) is None
@@ -323,21 +349,23 @@ def admits_on_turn(method, path, body=None):
     except what `NEVER` names, a body that carries a secret (a secret never goes through a chat: BotOps' rule, which
     botops_act checks the same way), and the team's rules for the Assistant itself. The approvals are not decided here:
     an approve runs only on its read-back and the person's yes (`approval_words`)."""
-    from . import botops_act
-    from .route_renames import new_path
-    path = normalize_path(path)
+    from . import botops_act, team_rules
+    path = canonical(path)
     if not path or method not in ("POST", "PUT", "PATCH", "DELETE"):
         return False
     # NEVER is written against the canonical spelling: an old route (`/runners/{id}/shared-key`) answers the same way.
-    path = new_path(path) or path
     if any(m in (None, method) and p.fullmatch(path) for m, p in NEVER):
         return False
     parsed = _json(body)
+    # The team's rules: a turn may change the ordinary ones (`{"stale_review": false}`), never the ones that grant access to
+    # credentials, tokens, the SQL page or support, nor the Assistant's own (backend/team_rules.py).
     if path == "/api/v2/access/rules" and isinstance(parsed, dict) and any(
-            parsed.get(k) is not None for k in ASSISTANT_RULES):
+            parsed.get(k) is not None for k in ASSISTANT_RULES + team_rules.CREDENTIAL_RULES):
         return False
-    if isinstance(parsed, dict) and botops_act.secret_in_request(method, path, parsed):
-        return False
+    # `secret_in_request` is the one decision for a body: on a tool route it admits a `${VAR}` placeholder that
+    # `secret_in` alone would reject, and on every other route it is `secret_in`.
+    if isinstance(parsed, dict):
+        return not botops_act.secret_in_request(method, path, parsed)
     return botops_act.secret_in(parsed) is None
 
 
@@ -656,6 +684,18 @@ def catalogue_card(method, path):
     from . import settings_catalog
     return (any(e.kind != "person" for e, _ in settings_catalog.routed(method, path))
             and valid_operation(method, path, None, "botops"))
+
+
+# Routes whose handler accepts only the person's own tap (`owner(request, tap=True)`, backend/tico_storage.py): an
+# Assistant or BotOps run of them is refused, so on a turn they are a Confirm card, never a direct run.
+TAP_ONLY_ROUTES = [(m, re.compile(p)) for m, p in (
+    ("POST", r"/api/v2/system/storage/move"),
+)]
+
+
+def needs_persons_tap(method, path):
+    path = canonical(path)
+    return any(m == method and p.fullmatch(path or "") for m, p in TAP_ONLY_ROUTES)
 
 
 def valid_operation(method, path, settings=None, proposer="assistant"):

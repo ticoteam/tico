@@ -51,12 +51,8 @@ def test_a_person_asks_their_assistant_for_a_direct_setting_and_it_changes(api):
     r, attempt = assistant_turn(api, "ana-test", "Set the release to 09:30")
     token = attempt["token"]
     assert "hub_settings_set" in {t["name"] for t in hubtools.listing(kind="assistant")}
-    # Without citing the person's words it is a card, and nothing changes yet.
-    err, card = mcp(api, "hub_settings_set", {"key": "release.times", "value": "09:30"}, token)
-    assert not err and card["needs_confirm"] is True, card
-    assert release_times(api) == before
-    # On their words, it changes at once and the reply has the new value.
-    err, done = mcp(api, "hub_settings_set", {"key": "release.times", "value": "09:30", "on_behalf_of": "turn"}, token)
+    # On the person's own turn, the message that started it is the citation: it changes at once, no header needed.
+    err, done = mcp(api, "hub_settings_set", {"key": "release.times", "value": "09:30"}, token)
     assert not err and done["value"] == ["09:30"], done
     assert release_times(api) == ["09:30"]
     with api.app.state.store.read() as c:
@@ -291,10 +287,13 @@ def test_every_setting_does_for_the_assistant_what_it_does_for_botops(api, role)
             want = parity.KNOWN_GAPS.get((e.key, role)) or parity.expected(c, e, role, person)
         got = parity.ask(api, attempt, e, objects, person, token)
         if got in ("ran", "card", "refused", "card, then refused"):
-            if got != want:
-                wrong.append(f"{e.key}: BotOps {want} for the {role} ({e.kind}, {e.who}), the Assistant {got}")
+            # On the person's own cited turn the Assistant applies a confirm-class setting at once (the person's rights are
+            # the ceiling; BotOps still cards it): the one divergence the Assistant is meant to have.
+            if got != want and not (got == "ran" and want == "card" and e.kind == "confirm"):
+                wrong.append(f"{e.key}: BotOps {want} for the {role} ({e.kind}, {e.who}), the Assistant {got}"
+                             f" [{parity.LAST.get(e.key, '')}]")
         else:
             unproven[e.key] = got
     assert not wrong, "\n".join(wrong)
     new = {k: v for k, v in unproven.items() if k not in parity.NOT_PROVEN}
-    assert not new, new
+    assert not new, {k: f"{v} [{parity.LAST.get(k, '')}]" for k, v in new.items()}

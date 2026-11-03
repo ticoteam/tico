@@ -38,6 +38,8 @@ DEFAULTS = {
 }
 # Rules an admin may change too, not only the owner (Settings > General).
 ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage", "org_rule_checks")
+# The rules that grant access to credentials, personal tokens, the SQL page or Tico support: a turn never changes them.
+CREDENTIAL_RULES = ("admin_credentials", "members_store_credentials", "member_tokens", "admin_sql", "support_access")
 # A rule whose default the server's environment sets (`TICO_STALE_REVIEW=1`, `TICO_TOPIC_FRESH=1` on Tico Team's own
 # server, `TICO_STALL_TRIAGE=0` to start a server with triage off). A saved choice wins; until someone sets the rule it is not stored, so it keeps following the environment.
 ENV_DEFAULTS = {"stale_review": "TICO_STALE_REVIEW", "topic_fresh": "TICO_TOPIC_FRESH",
