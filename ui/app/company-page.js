@@ -283,7 +283,7 @@ function cpTransparency() {
     : `<a class="cp-address" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${shown}<span class="nav-icon" aria-hidden="true">open_in_new</span></a>${cpBtn('data-cp-copy', 'Copy link')}`;
   // An install with its own reader address has nothing to set here. With a page domain, the address is what Open needs first.
   const set = !s.reader_origin && s.page_domain ? cpBtn('data-cp-address', s.slug ? 'Change address' : 'Set address') : '';
-  const note = noWhere ? `<p class="cp-note" data-cp-no-address>No page address yet${S.me?.cloud ? '' : ' (TICO_READER_ORIGIN)'}</p>` : privateOn ? '' : cpPrivateOff();
+  const note = noWhere ? '<p class="cp-note" data-cp-no-address>No page address yet</p>' : privateOn ? '' : cpPrivateOff();
   return cpSection('transparency', '', `<div class="cp-level">${seg}${address}${set}</div>${note}${CP.tab ? '' : cpLook(s)}`);
 }
 async function cpCopyAddress(button) {
