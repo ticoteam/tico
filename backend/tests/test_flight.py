@@ -377,6 +377,12 @@ def test_the_start_record_keeps_no_secret_and_flags_an_image_not_built_from_its_
     assert flight.provenance(settings, "0.3.22", image) == "match"
     (image / "backend" / "app.py").write_text("release = 1  # patched\n")
     assert flight.provenance(settings, "0.3.22", image) == "modified"
+    # The harness manifests the server reads (clients/harness_manifests.py) moved with runner-rs and still count.
+    (image / "runner-rs" / "harnesses").mkdir(parents=True)
+    (image / "runner-rs" / "harnesses" / "pi.toml").write_text("id = 'pi'\n")
+    before = code_hash.digest(image)
+    (image / "runner-rs" / "harnesses" / "pi.toml").write_text("id = 'pi'  # patched\n")
+    assert code_hash.digest(image) != before
 
 
 def test_a_long_write_names_its_route_and_code_site_in_the_file_the_log_and_the_events(store, monkeypatch, caplog):

@@ -1,4 +1,4 @@
-//! Replay tests: real provider sessions recorded at the process boundary (runner/tests/fixtures/REPLAY.md), played
+//! Replay tests: real provider sessions recorded at the process boundary (runner-rs/tests/fixtures/REPLAY.md), played
 //! back through a fake CLI that writes what the provider wrote and keeps what the runner wrote back. A replay passes
 //! when the host makes the recorded events of it and sends the recorded frames: prompts, steers, interrupts and
 //! answers to the provider's requests.
@@ -21,7 +21,7 @@ pub struct Scenario {
     pub output: Value,
 }
 
-/// Every recorded scenario of `harness`: runner/tests/fixtures/<harness>/replay/<name>/.
+/// Every recorded scenario of `harness`: runner-rs/tests/fixtures/<harness>/replay/<name>/.
 pub fn scenarios(harness: &str) -> Vec<Scenario> {
     let root = super::fixtures::dir(harness).join("replay");
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root).unwrap().map(|e| e.unwrap().path()).filter(|p| p.is_dir()).collect();
@@ -423,7 +423,7 @@ fn a_frame_matches_with_wildcards_only() {
 
 /// Recording (not part of `cargo test`): `TICO_REPLAY_RECORD=<name,...|all> cargo test record_replays -- --ignored
 /// --nocapture` runs each scenario below on the installed CLI, signed in as this computer's operator, through
-/// runner/tests/fixtures/replay_proxy.py, and writes runner/tests/fixtures/<harness>/replay/<name>/. Read the files
+/// runner-rs/tests/fixtures/replay_proxy.py, and writes runner-rs/tests/fixtures/<harness>/replay/<name>/. Read the files
 /// before committing: the recorder masks the login's tokens, paths and email addresses, nothing else.
 mod record {
     use super::*;
@@ -623,7 +623,7 @@ mod record {
     #[ignore]
     async fn record_replays() {
         let wanted = std::env::var("TICO_REPLAY_RECORD").unwrap_or_default();
-        let proxy = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../runner/tests/fixtures/replay_proxy.py");
+        let proxy = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/replay_proxy.py");
         let python = which("python3");
         for plan in plans().into_iter().filter(|p| wanted == "all" || wanted.split(',').any(|w| w == format!("{}/{}", p.harness, p.name))) {
             let real_cli = which(plan.harness);

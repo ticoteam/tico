@@ -12,7 +12,7 @@ not a shortcut.
   `secrets/_shared.env`.
 - `slack-app-manifest.yaml` - the Slack app definition the owner installs, with exactly the scopes
   `slack.py` and the server's Slack gateway use, Socket Mode on, and the events the gateway
-  subscribes to (`app_mention`, `message.im`, `message.channels`, `message.groups`). The gateway itself is `backend/slack_gateway.py`
+  subscribes to (`app_mention`, `message.im`, `message.channels`, `message.groups`, `link_shared`). The gateway itself is `backend/slack_gateway.py`
   on the API host (`docs/slack-gateway.md`); it is the one other thing that holds the token.
 - `mail/` - read and file email as ana@acme.example or legal@acme.example, and the deterministic inbox
   rules. Run it as `scripts/mail.sh`. One Google service account with domain-wide delegation,
@@ -51,7 +51,8 @@ all, and which mailbox it may act as, is the `access:` block in its own `employe
    there are no slash commands and nothing to configure by hand.
    **If the app was created before a scope existed** (the DM scopes `users:read.email`, `im:*`,
    `mpim:*` and the Messages tab; the gateway's `app_mentions:read` and `chat:write.customize`;
-   `files:read`, which lets bots open screenshots and other files people share),
+   `files:read`, which lets bots open screenshots and other files people share; `links:read` and
+   `links:write`, which preview the task links people paste),
    paste the current manifest over the old one on **App Manifest**, then reinstall - Slack shows
    a yellow "reinstall your app" banner until you do, and the missing calls fail with
    `missing_scope` until the token is replaced with the new one.

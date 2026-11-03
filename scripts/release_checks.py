@@ -192,7 +192,7 @@ def edge_networks(ranges=EDGE):
         remove()
 
 
-ISOLATION_FILE = 'runner/tests/test_isolation_docker.py'
+ISOLATION_FILE = 'runner_support/tests/test_isolation_docker.py'
 PARTS = ('product', 'python', 'browser', 'desktop')
 # The desktop app's own tests, among them its updater installing from a company feed served by this checkout's
 # publisher and download routes (app/tests/update_hub.py). Building them needs WebKitGTK's development files.
@@ -228,13 +228,13 @@ TIMINGS = ROOT / 'scripts' / 'test-timings.json'
 # Test files that run the release's own native binaries (runner-rs, relay-rs), by what their source names. The release
 # gate gives them python shards 1-2 (NATIVE_SHARDS), the only python VMs that wait for the native-linux build; the rest start at once.
 NATIVE_TEST = re.compile(r'rust_binary|TICO_RUNNER_BIN|TICO_SCREEN_RELAY_BIN|target/release|"target" / "release"|'
-                         r'engine\.current|screen_binary|from runner import engine|runner\.engine|'
-                         # scripts/tico runs the checkout's runner (install, status: runner/engine.py finds the binary).
+                         r'engine\.current|screen_binary|from runner(?:_support)? import engine|runner(?:_support)?\.engine|'
+                         # scripts/tico runs the checkout's runner (install, status: runner_support/engine.py finds the binary).
                          r'"scripts" / "tico"\)|scripts/tico"')
 NATIVE_BINARIES = ('runner-rs/target/release/tico-runner', 'relay-rs/target/release/tico-screen-relay')
 # A test module importing another test module (test_screen borrows test_screen_relay_contract's running_service).
-TEST_IMPORT = re.compile(r'from\s+((?:backend|runner|scripts)\.tests(?:\.\w+)*)\s+import\s+([\w, ]+)|'
-                         r'import\s+((?:backend|runner|scripts)\.tests(?:\.\w+)+)')
+TEST_IMPORT = re.compile(r'from\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)*)\s+import\s+([\w, ]+)|'
+                         r'import\s+((?:backend|runner_support|scripts)\.tests(?:\.\w+)+)')
 
 
 def native_test_files(names):

@@ -78,8 +78,8 @@ chmod 0700 "$PROJECTS_DIR" "$PROJECTS_DIR/secrets"
 # `python -m` puts the working directory on the module path, so the runner runs from the checkout.
 cd "$TICO_ROOT"
 # The runner is the Rust binary: download this release's (or build it with cargo) before registering.
-"$VENV/bin/python" -m runner.engine prepare
-RUNNER_BIN="$("$VENV/bin/python" -m runner.engine path)"
+"$VENV/bin/python" -m runner_support.engine prepare
+RUNNER_BIN="$("$VENV/bin/python" -m runner_support.engine path)"
 export TICO_ROOT TICO_RUNNER_PYTHON="$VENV/bin/python"
 "$RUNNER_BIN" --config "$CONFIG_FILE" enroll --url "$RUNNER_URL" \
   --code-file "$ENROLLMENT_FILE" --label "$RUNNER_LABEL" --projects "$PROJECTS_DIR" \
