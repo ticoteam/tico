@@ -1990,6 +1990,40 @@ def fleet_snapshot(c, auth, identity, task_view):
             "approvals": [row for row in items if row.get("kind") == "approval"]}
 
 
+APPROVAL_STATUSES = ("pending", "approved", "declined")
+APPROVALS_PAGE = 20
+APPROVALS_PAGE_MAX = 100
+APPROVAL_SUMMARY = 200      # one line of a row's summary at most: a page of 100 rows stays well under 64 KB
+
+
+def approval_rows(c, auth, who, task_view, status):
+    """The approvals addressed to the caller in `status`, newest first, as list rows. Pending is the Needs you set itself
+    (`needs_items`, the read its count takes), so the list and that count never disagree. Every row passes the checks
+    GET /api/v2/approvals/{aid} makes: the caller may open the message and the payload may be shown to them."""
+    if status == "pending":
+        ids = [x["id"] for x in needs_items(c, auth, who, task_view, count_only=True) if x.get("kind") == "approval"]
+    else:
+        ids = [r["id"] for r in c.execute("SELECT id FROM approvals WHERE decision=?", (status,))]
+    rows = []
+    for aid in ids:
+        row = H.approval(c, aid)
+        msg = H.message(c, row["message_id"]) if row and row.get("message_id") else None
+        if not row or not msg or msg["recipient_id"] != who.actor:
+            continue
+        try:
+            privacy.require_payload(c, who, row)
+            privacy.require_message(c, who, msg)
+        except Problem:
+            continue
+        task_id = row.get("task_id")
+        task = H.task(c, task_id) if task_id and _readable_task_ids(c, auth.task_sql(c, who), [task_id]) else None
+        rows.append({"id": row["id"], "status": row["decision"] or "pending", "from_actor": row["requested_by_id"],
+                     "summary": approval_title(row["kind"], row["payload"], (task or {}).get("title"))[:APPROVAL_SUMMARY],
+                     "message_id": row["message_id"], "task_id": task_id, "created": row["created_at"],
+                     "link": f"/api/v2/approvals/{row['id']}"})
+    return sorted(rows, key=lambda r: (r["created"], r["id"]), reverse=True)
+
+
 def install_views(app, store, auth, mutate, task_view):
     def visible_turns(c, who, bot=None, limit=200):
         auth.domain(who)
@@ -2753,6 +2787,28 @@ def install_views(app, store, auth, mutate, task_view):
         with store.read() as c:
             return {"actor": who.actor, "since": since,
                     "bots": recent_bots(c, auth, who, since, limit, needs_items(c, auth, who, task_view))}
+
+    @app.get("/api/v2/approvals")
+    def approval_list(request: Request, status: str = "pending", limit: int = APPROVALS_PAGE, offset: int = 0,
+                      from_actor: str | None = Query(None, alias="from"), before: str | None = None,
+                      since: str | None = None):
+        """The approvals addressed to you, newest first: `status` pending (the set Needs you counts), approved or declined;
+        `from` the actor that asked; `before` and `since` a date (YYYY-MM-DD). `next` is the offset of the page after."""
+        who = request.state.identity
+        human_only(who)
+        if status not in APPROVAL_STATUSES:
+            raise Problem("validation", "status is pending, approved or declined", 422)
+        limit, offset = max(1, min(int(limit), APPROVALS_PAGE_MAX)), max(0, int(offset))
+        with store.read_transaction() as c:
+            rows = approval_rows(c, auth, who, task_view, status)
+            if from_actor:
+                rows = [r for r in rows if r["from_actor"] == from_actor]
+            if before:
+                rows = [r for r in rows if r["created"] < before]
+            if since:
+                rows = [r for r in rows if r["created"] >= since]
+            return {"actor": who.actor, "status": status, "total": len(rows), "approvals": rows[offset:offset + limit],
+                    "next": offset + limit if offset + limit < len(rows) else None}
 
     @app.get("/api/v2/needs-you")
     def needs(request: Request, count: bool = False, ids: str | None = None, version: str | None = None,
