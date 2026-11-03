@@ -13,6 +13,8 @@ hubdb._set_status and hubdb.approval_request); this sweep catches the rest:
    (hubdb._report_stuck). None are asked any more, so this closes the ones open when that shipped, once.
 5. A Confirm card asked of someone for another person (backend/settings_asks.py) that nobody tapped within a day
    expires: its request is declined and the asker told.
+6. A release's undecided publish approval at or below the newest release the hub knows shipped is withdrawn
+   (backend/release_flow.py superseded_by_shipped). Approvals asked since then are withdrawn as each release publishes.
 """
 
 from . import hubdb as H
@@ -37,6 +39,8 @@ def sweep(conn, at=None):
             elif H.approval_withdraw(conn, row["id"], f"No decision in {H.APPROVAL_STALE_DAYS} days. "
                                                        "Ask again if it is still needed."):
                 stale.append(row["id"])
+    from . import release_flow
+    superseded = release_flow.superseded_by_shipped(conn)
     # Every open ask to a person on a task, with that task's status; few are open at once, so each one's ancestors are
     # walked here rather than in SQL.
     rows = H._rows(conn.execute(
@@ -59,4 +63,5 @@ def sweep(conn, at=None):
             H._recount(conn, r["sender_id"])
             asks.append(r["id"])
     from . import settings_asks
-    return {"stale": stale, "ended": ended, "asks": asks, "cards": settings_asks.sweep(conn, at)}
+    return {"stale": stale, "ended": ended, "superseded": superseded, "asks": asks,
+            "cards": settings_asks.sweep(conn, at)}

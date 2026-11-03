@@ -6,8 +6,8 @@
 'use strict';
 
 const THREADS_ROUTE = '#/threads', THREAD_ROUTE = '#/thread/', INBOX_ROUTE = '#/threads?view=inbox';
-// About ten rows, then All: the sidebar is a way in, the Threads page is the list.
-const THREADS_SIDE_MAX = 10;
+// Five chats under Inbox: the sidebar is a way in; its header opens Inbox, the Threads page is the list.
+const THREADS_SIDE_MAX = 5;
 // `on`: null until the server answered GET /v2/threads once; false when it has no threads (an older server).
 // `botDms`: {bot actor: unread} for the viewer's DMs with one bot, which the Team list shows on that bot (sidebar.js).
 const THREADS = {on: null, attention: [], threads: [], dms: [], botDms: {}, loading: null, wired: false};
@@ -131,6 +131,19 @@ async function threadsLoad() {
   const loading = THREADS.loading;
   return loading.then(() => sort !== threadsSort() ? threadsLoad() : undefined);
 }
+// The sidebar's chats: what waits on the viewer first, then the most important of the rest (threads and DMs as one
+// list, as the Threads page's Important view ranks them, noise left out), whichever order the list was read in. A DM
+// with one bot is left to its bot's row in Team.
+function threadsSideRows() {
+  const rows = inboxRows().slice(0, THREADS_SIDE_MAX);
+  const seen = new Set(inboxRows().map(t => t.id));
+  for (const t of threadsOrder([...THREADS.threads, ...THREADS.dms.filter(t => !threadIsBotDm(t))], seen, 'important')) {
+    if (rows.length >= THREADS_SIDE_MAX) break;
+    if (seen.has(t.id) || t.parent_id || threadImportance(t) <= 1) continue;
+    seen.add(t.id); rows.push(t);
+  }
+  return rows;
+}
 function threadsSideRender() {
   const on = THREADS.on === true;
   const sec = $('#nav-inbox-section'); if (sec) sec.hidden = !on;
@@ -139,15 +152,12 @@ function threadsSideRender() {
   if (tab) tab.hidden = !on;
   if (search) search.hidden = on;
   if (!on) return;
-  const rows = inboxRows(), n = inboxCount(), shown = rows.slice(0, THREADS_SIDE_MAX), holds = inboxHolds().length;
-  const link = (href, label) => `<li><a class="th-row th-all${S.route === href ? ' cur' : ''}" href="${href}"><span class="th-row-title">${label}</span></a></li>`;
+  const n = inboxCount(), holds = inboxHolds().length;
   const list = $('#th-list');
-  // Every row waits on the viewer, so none carries the Needs attention dot.
-  if (list) patchLiveHTML(list, shown.map(t => threadRowHTML(t)).join('')
-    + (n > shown.length || inboxMore() ? link(INBOX_ROUTE, `All ${inboxCountText(n)}`) : '')
-    // Held messages are reviewed on Inbox's page, each from its row there.
-    + (holds ? link(INBOX_ROUTE, `${holds} held message${holds === 1 ? '' : 's'}`) : !n ? '<li class="th-done muted">All caught up</li>' : '')
-    + link(THREADS_ROUTE, 'Threads'));
+  // No Needs attention dot: the rows that wait on the viewer come first, and the header's count says how many.
+  // Held messages are reviewed on Inbox's page, each from its row there; the header is the way to the rest.
+  if (list) patchLiveHTML(list, threadsSideRows().map(t => threadRowHTML(t)).join('')
+    + (holds ? `<li><a class="th-row th-all" href="${INBOX_ROUTE}"><span class="th-row-title">${holds} held message${holds === 1 ? '' : 's'}</span></a></li>` : ''));
   // The header and the phone tab carry the same count: what is left to burn down.
   for (const badge of [$('#inbox-count'), $('#mobile-threads .nav-badge')]) {
     if (badge) { badge.hidden = !n; badge.textContent = inboxCountText(n); }

@@ -223,7 +223,7 @@ def test_every_row_reads_when_then_with_one_department_from_the_chart_and_search
     with store.transaction() as c:
         row = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()
         roster = {**(json.loads(row[0]) if row else {}), "org_groups": {
-            "engineering": {"name": "Engineering"}, "marketing": {"name": "Marketing"},
+            "engineering": {"name": "Engineering"}, "marketing": {"name": "Marketing"}, "finance": {"name": "Finance"},
             "web": {"name": "Web", "parent": "engineering"}}}
         c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO UPDATE SET "
                   "value=excluded.value", (json.dumps(roster),))
@@ -232,7 +232,8 @@ def test_every_row_reads_when_then_with_one_department_from_the_chart_and_search
     assert "Web" not in data["departments"], "only fixed departments, never arbitrary subgroups"
     for job in data["jobs"]:
         assert job["when"] and job["then"], job["key"]
-        assert job["department"]["name"] == "Engineering" and job["department"]["in_chart"], job["key"]
+        books = job["key"].startswith("bookkeeper_")
+        assert job["department"]["name"] == ("Finance" if books else "Engineering") and job["department"]["in_chart"], job["key"]
     jobs = {j["key"]: j for j in data["jobs"]}
     assert jobs["stale_review"]["when"] == ["every hour"]
     assert jobs["stale_review"]["then"][0] == "check stale tickets"

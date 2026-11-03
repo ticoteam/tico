@@ -73,7 +73,7 @@ def migrate_legacy(source, destination, runtime, projects, *, queue_backlog=Fals
         store.seed(entries=entries)
     with store.transaction() as c:
         # Legacy provider sessions are local history, never cloud execution credentials. The bot's machine path,
-        # its host and any token are no longer stored on bots at all (migration 0041).
+        # its host and any token are no longer stored on bots at all (migration 0043).
         c.execute("DELETE FROM rate_limits")
         H.event(c, H.KEEPER, "legacy.execution_fenced", "database",
                 {"source_sha256": source_report["sha256"]})

@@ -44,7 +44,7 @@ def seed(c, bots="INSERT"):
             if slug == "coo":
                 coo = f"bot:{have[0]}"
             continue
-        # a release before migration 0042 has bots.runtime (its value moves into the bot's config); later ones do not
+        # a release before migration 0043 has bots.runtime (its value moves into the bot's config); later ones do not
         runtime = ["runtime"] if "runtime" in {row[1] for row in c.execute("PRAGMA table_info(bots)")} else []
         names = _cols(c, "bots", *(["id"] if keyed else []), "slug", "display_name", *runtime, "state", created)
         # a bot's id is its slug (hubdb.new_bot_id for product bots), and actors are `bot:<id>`, so `bot:coo` resolves

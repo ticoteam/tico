@@ -967,7 +967,7 @@ class Onboarding:
         restored = bool(row and row["state"] == "archived")
         if restored:
             # The restore keeps the bot's own model and settings; only the name and description are renewed. The model
-            # is in the bot's config (bot_config.config): bots has no model column since migration 0042.
+            # is in the bot's config (bot_config.config): bots has no model column since migration 0043.
             kept = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
             kept_model = (H._json(kept[0], {}) or {}).get("model") if kept else ""
             self.admin.create_bot(c, who, M.BotDefinitionCreate(

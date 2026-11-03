@@ -57,6 +57,7 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     await page.locator('.rr-panel[data-party="bot:engineering-lead"] [data-rr-add-rule]').click({timeout: t(15000)});
     const modal = page.locator('#ru-add');
     await modal.locator('textarea[name=text]').fill('Ask before a production deploy');
+    await modal.locator('[data-ru-adv]').click();
     assert.match(await modal.locator(`[data-scope="who"] .ru-chip`).innerText(), /engineering.lead/i);
     await modal.locator('[data-scope="with"] [data-seg="groups"]').click();
     await modal.locator('[data-scope="with"] .ru-addsel').selectOption({label: 'Engineering'});
@@ -100,21 +101,20 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     await ok(page, 'POST', `/v2/rules/${named.id}/retire`, {version: named.version});
     await go(page, '#/rules');
 
-    // Where: a thread the viewer can read is in the picker, and the rule keeps it.
-    const thread = await ok(page, 'POST', '/v2/conversations', {kind: 'chat', participants: ['bot:engineering-lead'], subject: 'Deploy talk'});
+    // Add rule from a bot's panel: no Where (rules cover every internal and external action).
     await go(page, LEAD);
     await page.locator('.rr-panel[data-party="bot:engineering-lead"] [data-rr-add-rule]').click({timeout: t(15000)});
     const threaded = page.locator('#ru-add');
     await threaded.locator('textarea[name=text]').fill('Post deploy notes in the thread');
-    await threaded.locator('input[name=where_kind][value=thread]').check();
-    await threaded.locator('select[name=where_thread]').selectOption(thread.id);
+    await threaded.locator('[data-ru-adv]').click();
+    assert.equal(await threaded.locator('input[name=where_kind]').count(), 0);
     // If broken in Add rule: Ask first with a reviewer.
     await threaded.locator('[data-ru-seg="if_broken"] [data-v="escalate"]').click();
     await threaded.locator('select[name=reviewer]').selectOption('dana');
     await threaded.locator('button[type=submit]').click();
     await page.waitForFunction(id => { const r = new URLSearchParams(location.hash.split('?')[1]).get('rule'); return r && r !== id; }, ruleId, {timeout: t(10000)});
     const threadRule = await ok(page, 'GET', '/v2/rules/' + await hashParam(page, 'rule'));
-    assert.deepEqual(threadRule.where, ['thread:' + thread.id]);
+    assert.deepEqual(threadRule.where, []);
     assert.equal(threadRule.if_broken, 'escalate');
     assert.equal(threadRule.reviewer.id, 'dana');
     // Outside editions travels with the rule: shown in its Who, and still set after a save that doesn't touch Who.

@@ -238,6 +238,8 @@ def run(args, who=None):
         return via_tool(client, args, **({"operation_id": args.operation_id} if getattr(args, "operation_id", None) else {}))
     if args.cmd == "settings":
         return via_tool(client, args)
+    if args.cmd == "feedback":
+        return via_tool(client, args)
     if args.cmd == "call":
         return via_tool(client, args)
     if args.cmd in ("card", "pin"):
@@ -420,7 +422,7 @@ def run(args, who=None):
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "assistant":
         from clients import hubtools
-        if args.sub in ("read", "send", "learn", "learned"):
+        if args.sub in ("read", "send", "learn", "learned", "withdraw", "proposals"):
             return via_tool(client, args)
         try:
             body = json.loads(args.body or "{}")

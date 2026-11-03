@@ -2617,6 +2617,11 @@ class DocsAsk(Contract):
     new_conversation: bool = False        # close the docs conversation and start a fresh one (no context)
 
 
+class AssistantWithdraw(Contract):
+    """A bot takes back a Confirm card it proposed; the reason (optional) goes to the person in one line."""
+    reason: str = Field(default="", max_length=1000)
+
+
 class AssistantAction(Contract):
     """What the Assistant proposes: one operation on this API, run as the person only when they
     confirm it (backend/assistant.py)."""

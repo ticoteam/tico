@@ -93,6 +93,9 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # checks below.
     if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/plan", path):
         return True
+    # Taking back a card the Assistant itself proposed (backend/assistant.py action_withdraw): it only ever stops one.
+    if re.fullmatch(r"/api/v2/assistant/actions/[^/]+/withdraw", path):
+        return True
     # Asking someone who can (backend/settings_asks.py) changes nothing either: it puts a card in front of a person who
     # may, and the route itself requires the person's cited words.
     if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/ask", path):
@@ -856,6 +859,12 @@ def batch_steps(body):
     return out
 
 
+def teammate(who):
+    """Whether the caller may take a waiting Confirm card back: any signed-in person or bot of the company. Confirming
+    stays the card owner's own click (`/confirm`); withdrawing only stops it."""
+    return who.role in ("owner", "human", "bot")
+
+
 def covers(row, method, path):
     """Whether a confirmed proposal covers this request: its own operation, or one step of a bulk card."""
     if row["path"] == BATCH_PATH:
@@ -1172,6 +1181,10 @@ SEARCH = re.compile(r"^(search( for)?|find|look ?up|look for)\b\s*(.*)$")
 HELP = re.compile(r"^(help\b[:,\s]*|how (do|can|should|would|does|to)\b|how'?s? (it|tico)\b|explain\b|what is a\b|what are\b|"
                   r"what does .* mean|where do i\b|can i\b.*\?|what'?s the difference)")
 BOT_TODAY = re.compile(r"\b(today|this morning|last 24|yesterday|lately|so far)\b|\bwhat (did|has|have|is|was)\b.*\b(do|done|doing|up to|work)")
+# A problem to look into ("I see stuck tasks, what is going on?") needs the company's own state, not a docs excerpt or a
+# canned list: the model takes it.
+TROUBLE = re.compile(r"\b(stuck|broken|broke|failing|failed|wrong|not working|doesn'?t work|isn'?t working|going on|"
+                     r"why|fix|fixed|problem|issue|error)\b")
 ACTION_WORDS = re.compile(r"\b(create|make|add|assign|ask|tell|send|approve|decline|reject|archive|delete|remove|"
                           r"build|set up|schedule|publish|post|change|update|rename|close|cancel|remind|clear|dismiss|answer)\b")
 
@@ -1189,6 +1202,8 @@ def route(text, bots=()):
         return None, None
     if GREETING.fullmatch(t):
         return "greeting", None
+    if TROUBLE.search(t):
+        return "trouble", None
     # "for <team>," can be any word, a verb too ("for create, ..."), so the action check still applies.
     if (TASK_TYPE_INVENTORY.fullmatch(t) or TASK_TYPE_INVENTORY_ARE.fullmatch(t)) and not ACTION_WORDS.search(t):
         return "task_types", None
@@ -1489,6 +1504,7 @@ def help_answer(question):
         return None, []
     scored.sort(key=lambda s: -s[0])
     _, file, heading, anchor, body = scored[0]
+    body = re.sub(r"```.*?(```|$)", "", body, flags=re.S)     # a code block reads as noise once flattened into a line
     clean = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", body)
     clean = re.sub(r"`", "", clean)
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", clean) if p.strip() and not p.strip().startswith("|")]
@@ -1530,7 +1546,9 @@ async def decide(api, text):
         if response.status_code != 200:
             return None
         answer = (response.json().get("answers") or {}).get("intent") or {}
-        if answer.get("choice") in ("waiting", "search", "navigate", "help") and float(answer.get("confidence") or 0) >= 0.75:
+        # "help" is not taken from the model: a docs excerpt picked by keywords answered "what is going on with my
+        # tasks?" with an unrelated section. Only the how-to wording (route's HELP) gets one; the model takes the rest.
+        if answer.get("choice") in ("waiting", "search", "navigate") and float(answer.get("confidence") or 0) >= 0.75:
             return answer["choice"]
     except (httpx.HTTPError, ValueError, TypeError):
         return None
@@ -1540,6 +1558,8 @@ async def decide(api, text):
 async def fast_answer(api, who, bots, text):
     """(intent, reply text, links), or (None, None, []) when the model should answer."""
     intent, arg = route(text, bots)
+    if intent == "trouble":
+        return None, None, []
     if intent is None:
         intent = await decide(api, text)
         arg = text if intent else None
@@ -1921,6 +1941,61 @@ def install(app, store, auth, mutate, onboarding):
             settings_asks.settled(c, row, "canceled")
             return {"action": action_view(load(c, who, aid), c)}
         return mutate(request, body, work)
+
+    @app.post("/api/v2/assistant/actions/{aid}/withdraw")
+    def action_withdraw(request: Request, aid: str, body: M.AssistantWithdraw):
+        """Any signed-in teammate (a person or a bot) takes back a card that is still waiting: it never runs, and the
+        card owner's chat says who withdrew it, with the reason if given. Confirming stays the owner's own click."""
+        who = request.state.identity
+        if not teammate(who):
+            raise Problem("forbidden", "Only people and bots of the company can withdraw a proposal", 403)
+
+        def work(c):
+            row = c.execute("SELECT * FROM assistant_actions WHERE id=?", (aid,)).fetchone()
+            if not row:
+                raise Problem("not_found", "No such proposal", 404)
+            if row["status"] != "pending":
+                raise Problem("state", "This proposal is already " + row["status"], 409)
+            reason = " ".join(str(body.reason or "").split())[:300]
+            who_name = (settings_asks._name(c, who.actor) if who.actor.startswith("human:")
+                        else (H.resolve_bot(c, who.actor.removeprefix("bot:")) or {}).get("display_name")
+                        or who.actor.removeprefix("bot:"))
+            c.execute("UPDATE assistant_actions SET status='withdrawn', decided_at=? WHERE id=?", (H.now(), aid))
+            H.event(c, who.actor, "assistant.action.withdrawn", aid,
+                    {"summary": row["summary"][:200], "reason": reason, "owner": row["owner"]})
+            settings_asks.settled(c, row, "withdrawn")
+            room = H.conversation(c, row["conversation_id"]) if row["conversation_id"] else None
+            if room and not room.get("closed_at"):
+                # Said by the proposing bot (the Assistant in its own room), to the card's owner.
+                by = row["proposer"] or "assistant"
+                said = who_name + " withdrew that card, so nothing will run." + (" " + reason if reason else "")
+                H._write_message(c, "bot:" + (room_bot(settings, room) if by == "assistant" else by), row["owner"],
+                                 said, room, "say", {"assistant": True, "action_result": aid}, None, None,
+                                 delivered_at=H.now())
+            return {"action": action_view(dict(c.execute("SELECT * FROM assistant_actions WHERE id=?", (aid,))
+                                                .fetchone()), c)}
+        return mutate(request, body, work)
+
+    @app.get("/api/v2/assistant/proposals")
+    def proposals(request: Request, proposer: str = "", owner: str = ""):
+        """The Confirm cards still waiting, newest first, so a teammate can find one to withdraw: summary and what it
+        does, with its id, owner and proposer. Filter by `proposer` (botops, assistant) and/or `owner` (a person's id)."""
+        who = request.state.identity
+        if not teammate(who):
+            raise Problem("forbidden", "Only people and bots of the company can list proposals", 403)
+        # A card the Assistant made in someone's private Assistant chat is listed to that person only: its words came
+        # from a private conversation. Cards bots propose (BotOps) are team work, listed to every teammate.
+        sql, args = "SELECT * FROM assistant_actions WHERE status='pending' AND (owner=? OR coalesce(proposer,'assistant')!='assistant')", [who.actor]
+        if proposer:
+            sql += " AND proposer=?"
+            args.append(proposer)
+        if owner:
+            sql += " AND owner=?"
+            args.append(owner)
+        with store.read() as c:
+            rows = c.execute(sql + " ORDER BY created_at DESC LIMIT 100", args).fetchall()
+            return {"actions": [{"id": r["id"], "owner": r["owner"], "proposer": r["proposer"], "summary": r["summary"],
+                                 "description": r["description"], "created_at": r["created_at"]} for r in rows]}
 
     @app.post("/api/v2/assistant/actions/{aid}/confirm")
     async def action_confirm(request: Request, aid: str):

@@ -1047,6 +1047,17 @@ def _bot_name(c, bot):
     return (row["display_name"] or row["slug"]) if row else bot
 
 
+def _bot_names(c, bots):
+    """_bot_name for many bots, {bot: name}, in one read per 500 bots."""
+    ids = sorted(set(bots))
+    found = {}
+    for start in range(0, len(ids), 500):
+        part = ids[start:start + 500]
+        found.update((row["id"], row["display_name"] or row["slug"]) for row in c.execute(
+            f"SELECT id,display_name,slug FROM bots WHERE id IN ({','.join('?' * len(part))})", part))
+    return {bot: found.get(bot, bot) for bot in bots}
+
+
 def _tokens_words(n):
     return f"{n / 1e9:.1f}B" if n >= 1e9 else f"{n / 1e6:.0f}M" if n >= 1e6 else f"{n:,}"
 
@@ -1623,6 +1634,12 @@ def _prime_claims(c):
         return
     slugs = [row[0] for row in c.execute("SELECT id FROM bots")]
     prime_bot_rows(c, slugs)
+    # Each computer's row, which the claim's runner and login checks read once per computer with queued work.
+    from .execution import RUNNER_SQL
+    from .read_cache import prime
+    runners = {row["id"]: row for row in c.execute("SELECT * FROM runners")}
+    prime(c, RUNNER_SQL, {(rid,): row for rid, row in runners.items()})
+    prime(c, "SELECT readiness,capabilities FROM runners WHERE id=?", {(rid,): row for rid, row in runners.items()})
     keys = [GATEWAY_WAIT + slug for slug in slugs]
     found = {}
     for part in H.chunks(keys):
@@ -1833,13 +1850,15 @@ def view(c, who, settings, auth, github, config):
     if full:
         from .worktrees import current_error, supported
         if supported(c):
-            usage, errors = {}, []
+            usage, failing = {}, []
             for row in c.execute("SELECT t.owner_id,l.state,l.detail FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND l.state<>'removed'"):
                 detail = json.loads(row['detail'] or '{}')
                 bot = H.actor_id(row['owner_id'])
                 usage[bot] = usage.get(bot, 0) + detail.get('size_mb', 0)
                 if error := current_error(row['state'], detail):
-                    errors.append(_bot_name(c, bot) + ': ' + error)
+                    failing.append((bot, error))
+            names = _bot_names(c, [bot for bot, _ in failing])      # one read for the bots named, not one a worktree
+            errors = [names[bot] + ': ' + error for bot, error in failing]
             if usage:
                 checks.append(_check('worktrees', 'Task worktrees', 'warn' if errors else 'ok',
                                      '; '.join(errors[:3]) if errors else '; '.join(f'{_bot_name(c, bot)}: {size:g} MB' for bot, size in sorted(usage.items())),
@@ -1929,13 +1948,14 @@ def view(c, who, settings, auth, github, config):
         checks.append(_check("computers", "Computers", "ok", f"{_plural(len(online), 'computer')} online."))
 
     from .performance import load_statuses, recent_overloads
-    from .start_places import NOT_REPORTING, computer_hold
+    from .start_places import NOT_REPORTING, computer_hold, hold_rows
     loads = load_statuses(c, [computer["id"] for computer in computers])     # one read for every computer
+    rows = hold_rows(c, [computer["id"] for computer in computers])          # and their runner rows, once
     for computer in computers:
         if full or kind == "bot":
             checks.append(_check("turns:" + computer["id"], "Turns", "ok", computer["label"] + ": " + computer["turn_summary"],
                                  [_fix("Open Computers", "#/settings", "devices")] if full else []))
-        hold = computer_hold(c, computer["id"], status=loads[computer["id"]])
+        hold = computer_hold(c, computer["id"], status=loads[computer["id"]], row=rows.get(computer["id"]))
         if hold:
             words = ("overloaded now (CPU or memory above 90% for five minutes)." if hold[0] == "computer busy"
                      else "not reporting: its last sample is over two minutes old." if hold[0] == NOT_REPORTING

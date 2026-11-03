@@ -146,6 +146,8 @@ tag
 target
 task_alt
 text_fields
+thumb_down
+thumb_up
 today
 tour
 travel_explore
