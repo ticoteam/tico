@@ -653,11 +653,9 @@ function thvComposerButtons(view) {
 // the person's kept way (sendWayPick); Set as goal enters goal mode (chat-goal.js) for one goal and is never kept.
 // Someone who may not message the bot (Write) defers with no deadline, as on a task they are not on.
 const thvDirects = view => botByRef(view.composer?.slug)?.my_access?.write !== false;
-function thvWayMode(view) {
-  const C = view.composer;
-  if (chatGoalThreadMode(C)) return 'goal';
-  return thvDirects(view) ? SEND_WAY : 'defer:never';
-}
+// The way a message goes (never goal: a goal is not a message), and what Send shows (goal in goal mode).
+const thvSendMode = view => thvDirects(view) ? SEND_WAY : 'defer:never';
+const thvWayMode = view => chatGoalThreadMode(view.composer) ? 'goal' : thvSendMode(view);
 const thvGoalOffered = view => !!view.composer?.goalMode || !!view.goals?.goalSupported && !goalPinned(view.goals.goal);
 function thvWaysMenu(view, open) {
   const C = view.composer, menu = C?.el.querySelector('.p-ways'), caret = C?.el.querySelector('.p-way');
@@ -884,11 +882,13 @@ async function thvComposerSend(view) {
     if (slash === true) return;
     if (slash !== 'plain' && runCommand(text, C.el.querySelector('.p-cmd'), C.slug)) { sessionAcknowledge(box); thvComposerClear(view); return; }
   }
+  // In a bot's Home or DM every message names the kept way (thread posts take delivery, backend/thread_api.py); in
+  // goal mode with a file attached it goes as a message, that way too.
+  const way = C.ways ? deliveryBody(thvSendMode(view)) : null;
   const files = C.files.splice(0), lib = C.lib.splice(0);
   box.value = ''; box.style.height = ''; thvChips(view);
   THV_DRAFTS.delete(thvDraftKey(view));
-  // In a bot's Home or DM every message names the way Send shows (thread posts take delivery, backend/thread_api.py).
-  await thvSend(view, {text, files, lib, way: C.ways ? deliveryBody(thvWayMode(view)) : null});
+  await thvSend(view, {text, files, lib, way});
 }
 // One message out: a "Checking…" row while the rules check runs, then the message, or a held row the author can
 // edit, discard or (when the server allows) send anyway.

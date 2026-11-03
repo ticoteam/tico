@@ -38,7 +38,7 @@ async function open(browser, {width = 390, theme = 'dark', tab = 'home', support
     } catch {}
   }, [theme, BOT, goalMode, recent]);
   const api = {errors: [], sent: [], goalPosts: [], goalReads: [], dmMade: [], goals: {}, page, dm: dmMade, execution,
-               stops: [], commands: [], tasks: [], patches: [], snapshots: [], prefs: {...prefs}, slowRead: false};
+               stops: [], commands: [], tasks: [], patches: [], snapshots: [], prefs: {...prefs}, slowRead: false, uploads: []};
   page.on('pageerror', e => api.errors.push(e.message));
   const fake = threadsFake({bot: BOT, home, sent: api.sent});
   const now = () => new Date().toISOString();
@@ -63,6 +63,12 @@ async function open(browser, {width = 390, theme = 'dark', tab = 'home', support
     if (p === '/api/v2/tasks' && method === 'POST') { api.tasks.push(req.postDataJSON()); return json({task: {id: 'task-1', title: req.postDataJSON().title}}); }
     if (method === 'PATCH' && p.startsWith('/api/v2/threads/')) { api.patches.push({p, ...req.postDataJSON()}); api.dm = false; return json({id: p.split('/')[4], archived_at: now()}); }
     if (p === '/api/issues') return json([]);
+    // A message with files: the form's fields, as text.
+    const upload = p.match(/^\/api\/v2\/uploads\/threads\/([^/]+)\/messages$/);
+    if (upload && method === 'POST') {
+      api.uploads.push(req.postData() || '');
+      return json({message: {id: 'up-' + api.uploads.length, seq: 2000 + api.uploads.length, depth: 0, thread_id: upload[1], sender_id: 'human:ana', body: '', created_at: now()}});
+    }
     // The kept way to send (compose.send_way); a slow read answers with what the server held when it came in.
     const pref = p.match(/^\/api\/v2\/preferences\/([^/]+)$/);
     if (pref && method === 'POST') { api.prefs[pref[1]] = req.postDataJSON().value; return json({key: pref[1], value: api.prefs[pref[1]]}); }
@@ -206,6 +212,18 @@ async function goalMode(browser) {
   assert.equal(api.goalPosts.length, 3);
   await page.waitForFunction(() => !SEND_WAY_TIMER);
   assert.deepEqual(api.prefs, {'compose.send_way': 'queue'}, 'goal is never kept');
+  // In goal mode a file goes as a message, the kept way: never a delivery of "goal".
+  await pick(page, 'goal');
+  await page.locator('#bot-thread .p-file').setInputFiles({name: 'brief.txt', mimeType: 'text/plain', buffer: Buffer.from('Pricing brief')});
+  await box.fill('The brief');
+  assert.equal(await shows(page), 'queue:', 'with a file attached Send is a message again');
+  await send.click();
+  await page.waitForFunction(() => !document.querySelector('#bot-thread .th-pending'));
+  assert.equal(api.uploads.length, 1);
+  const field = name => (api.uploads[0].match(new RegExp(`name="${name}"\\r\\n\\r\\n([^\\r]*)`)) || [])[1];
+  assert.equal(field('delivery'), 'queue');
+  assert.equal(field('text'), 'The brief');
+  assert.equal(api.goalPosts.length, 3);
   assert.deepEqual(api.errors, []);
   await page.close();
 }

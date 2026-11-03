@@ -100,7 +100,12 @@ def _delivery_words(body):
         raise Problem("delivery", wrong, 422)
     if body.delivery and getattr(body, "kind", "say") != "say":
         raise Problem("delivery", "delivery goes with a plain message (kind say)", 422)
-    if any(k in (getattr(body, "refs", None) or {}) for k in ("delivery", "defer_for")):
+    refs = getattr(body, "refs", None) or {}
+    # The way's marks are the route's own (threads.WAY_KEYS): a client never writes them. A refs.delivery a client
+    # sends with no `delivery` goes as it always did; beside a named way it would contradict it.
+    if any(k in refs for k in threads.WAY_KEYS):
+        raise Problem("delivery", "Name the way with delivery and defer_for", 422)
+    if body.delivery and any(k in refs for k in ("delivery", "defer_for", "quiet")):
         raise Problem("delivery", "Name the way with delivery and defer_for, not in refs", 422)
     if body.delivery and getattr(body, "parent_message_id", None):
         raise Problem("delivery", "delivery goes with a message in a bot's Home or DM, not in a sub-thread", 422)
@@ -151,12 +156,13 @@ def _delivery_refs(c, auth, who, body, thread_id=None, members=None):
             raise Problem("delivery", "Only someone who may message this bot can give it a deadline: send it with "
                           "defer and no defer_for", 403)
         defer_for = None
-    if way == "defer" and thread_id and delivery.running_in_session(c, H.actor_id(bot), [thread_id]):
+    # Riding along wakes nothing new, but it is a queue's place in the turn: only for someone who may queue.
+    if way == "defer" and directs and thread_id and delivery.running_in_session(c, H.actor_id(bot), [thread_id]):
         way = "queue"
     if way == "queue":
-        return way, {"delivery": "queue"}
+        return way, {"send_way": "queue", "delivery": "queue"}      # refs.delivery: execution.inputs keeps it out
     if way == "defer":
-        return way, {"delivery": "defer", "quiet": True, **({"defer_for": defer_for} if defer_for else {})}
+        return way, {"send_way": "defer", "quiet": True, **({"send_defer_for": defer_for} if defer_for else {})}
     return way, {}
 
 
@@ -535,7 +541,12 @@ def install(app, store, auth, mutate, rule_check):
             if not body.body:
                 return threads.dm(c, v, body.members, title=body.title)
             # The open DM with these people gets the message, or a new one is made with it: a held message makes none.
-            way, marks = _delivery_refs(c, auth, who, body, members=body.members) if body.delivery else (None, {})
+            way, marks = (None, {})
+            if body.delivery:
+                # The open DM with these people, when there is one: a defer while the bot runs there rides along.
+                actor = v.actor
+                existing = threads._open_dm(c, actor, threads._dm_members_for(c, actor, body.members))
+                way, marks = _delivery_refs(c, auth, who, body, thread_id=existing, members=body.members)
             posted = threads.post(c, v, None, body.body, refs=marks or None, checked=rc, start=start, reach=True)
             if "id" not in posted:          # held: no DM is made, its first message is the hold
                 return posted

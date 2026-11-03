@@ -1209,7 +1209,7 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
                 # Quiet (no job): the session's next turn takes it, or its deadline starts one (backend/delivery.py).
                 from . import delivery
                 delivery.defer(c, primary, "message", message["id"], conversation_id=thread["id"],
-                               defer_for=refs.get("defer_for"))
+                               defer_for=refs.get("send_defer_for"))
                 c.execute("UPDATE message_deliveries SET mode='defer', updated_at=? WHERE message_id=? AND recipient=?",
                           (_now(), message["id"], primary))
     for actor, reason in wanted.items():
@@ -1258,10 +1258,15 @@ def _deliver_person(c, thread, root, message, person, reason, replay, warnings):
     return {"recipient": person, "mode": "queue", "reason": reason}
 
 
+# The marks the thread routes write for a post's named `delivery` (backend/thread_api.py): route-only, refused from a
+# client, so a client's own refs.delivery goes as it always did.
+WAY_KEYS = ("send_way", "send_defer_for")
+
+
 def named_way(refs):
-    """The way a person's post named for the bots it reaches (refs.delivery, which the thread routes write from
+    """The way a person's post named for the bots it reaches (refs.send_way, which the thread routes write from
     `delivery`): 'queue' or 'defer', else None, the thread's own rule (into a running turn, as always)."""
-    way = refs.get("delivery") if isinstance(refs, dict) else None
+    way = refs.get("send_way") if isinstance(refs, dict) else None
     return way if way in ("queue", "defer") else None
 
 
@@ -1272,9 +1277,9 @@ def _deliver_bot(c, thread, root, message, bot, reason, replay=False, way=None):
         _follow(c, thread["id"], bot, "mentioned", (message.get("seq") or 1) - 1)
     if replay or not _reachable(c, bot):
         return None
-    # The wake rule judges the message as written, without the marks its named way added (quiet, delivery).
+    # The wake rule judges the message as written, without the marks its named way added (quiet, delivery, send_*).
     judged = message if way is None else {**message, "refs": {k: v for k, v in (message.get("refs") or {}).items()
-                                                              if k not in ("quiet", "delivery", "defer_for")}}
+                                                              if k not in ("quiet", "delivery", *WAY_KEYS)}}
     mode, rule = wake_mode(c, thread, judged, bot, reason)
     if mode is None:
         return None
@@ -1295,7 +1300,7 @@ def _deliver_bot(c, thread, root, message, bot, reason, replay=False, way=None):
             # The carrier waits, quiet: the bot's next turn here takes it, or its deadline starts its run.
             from . import delivery
             delivery.defer(c, bot, "message", carrier, conversation_id=thread["id"],
-                           defer_for=(message.get("refs") or {}).get("defer_for"))
+                           defer_for=(message.get("refs") or {}).get("send_defer_for"))
             c.execute("UPDATE message_deliveries SET mode='defer', updated_at=? WHERE id=?", (_now(), did))
             mode = "defer"
     elif mode == "defer":

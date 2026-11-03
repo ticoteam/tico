@@ -4,6 +4,7 @@ turn; defer starts no run until its deadline; a deadline takes the right to mess
 
 import pytest
 
+from backend import delivery, task_privacy
 from backend.store import H
 from backend.tests.test_api import api, claim, headers, post  # noqa: F401  (the fixture and its helpers)
 from backend.tests.test_delivery import fired, job_of, rows, setup, tick
@@ -48,7 +49,7 @@ def test_a_dm_post_with_no_way_steers_as_before_and_queue_waits_for_the_turn(api
     plain = say(api, tid, "Skip the charts.")
     queued = say(api, tid, "And the refunds.", delivery="queue")
     steered = say(api, tid, "Use the new copy.", delivery="steer")
-    assert "sent_as" not in plain and plain["refs"].get("delivery") is None
+    assert "sent_as" not in plain and plain["refs"].get("delivery") is None and "send_way" not in plain["refs"]
     assert queued["sent_as"] == {"delivery": "queue", "until": None}
     assert steered["sent_as"] == {"delivery": "steer", "until": None} and steered["refs"].get("delivery") is None
     taken = [m["id"] for m in post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"]]
@@ -106,7 +107,9 @@ def test_a_deadline_or_a_wake_takes_the_right_to_message_the_bot(api):
     {"text": "x", "delivery": "steer", "defer_for": "4h"},
     {"text": "x", "delivery": "defer", "defer_for": "0m"},
     {"text": "x", "delivery": "later"},
-    {"text": "x", "refs": {"delivery": "defer"}},
+    {"text": "x", "refs": {"send_way": "defer"}},
+    {"text": "x", "refs": {"send_defer_for": "1h"}},
+    {"text": "x", "delivery": "queue", "refs": {"delivery": "queue"}},
 ])
 def test_a_thread_delivery_that_cannot_apply_is_refused(api, body):
     setup(api)
@@ -121,3 +124,64 @@ def test_a_way_goes_only_where_a_bot_is_across(api):
     r = api.post("/api/v2/threads/dm", json={"members": ["human:ben"], "body": "x", "delivery": "defer"},
                  headers=headers())
     assert r.status_code == 422, r.text
+
+
+def test_a_legacy_refs_delivery_goes_as_it_did(api):
+    """A client's own refs.delivery, with no `delivery`, is kept and read as before: the thread routes' marks are
+    their own (send_way), so it neither defers nor is refused."""
+    machine = setup(api)
+    tid, _ = dm(api, "Morning numbers?")
+    attempt = started(api, machine)
+    legacy = say(api, tid, "After this turn.", refs={"delivery": "queue"})
+    assert "sent_as" not in legacy and legacy["refs"]["delivery"] == "queue" and "send_way" not in legacy["refs"]
+    taken = [m["id"] for m in post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"]]
+    assert legacy["id"] not in taken and job_of(api, legacy["id"])[1] == "queued"
+    deferred = say(api, tid, "Some day.", refs={"delivery": "defer", "defer_for": "1h"})
+    assert "sent_as" not in deferred and job_of(api, deferred["id"]) and not rows(api, item=deferred["id"])
+
+
+def test_a_defer_without_the_right_does_not_ride_along_as_a_queue(api):
+    machine = setup(api)
+    tid, _ = dm(api, "Hello.", token="ben-test")
+    started(api, machine)
+    set_bot_access(api, "ops", {"people": ["ben"]}, {"people": ["ben"]}, {"people": []})
+    later = say(api, tid, "When you get to it.", token="ben-test", delivery="defer")
+    assert later["sent_as"] == {"delivery": "defer", "until": None}
+    assert job_of(api, later["id"]) is None and [r["due_at"] for r in rows(api, item=later["id"])] == [None]
+
+
+def test_a_dm_made_again_rides_along_while_the_bot_runs_there(api):
+    machine = setup(api)
+    tid, _ = dm(api, "Morning numbers?")
+    started(api, machine)
+    again, message = dm(api, "And the refunds.", delivery="defer")
+    assert again == tid and message["sent_as"] == {"delivery": "queue", "until": None}
+    assert job_of(api, message["id"]) and not rows(api, item=message["id"])
+
+
+def test_a_deferred_carrier_is_checked_again_when_it_is_carried_or_fired(api, monkeypatch):
+    """A Home post the bot may not read (a private task it is not on) makes no carrier and nothing deferred; one it
+    could read when written but not any more is never written into a turn, nor starts one at its deadline."""
+    setup(api)
+    tid = home(api)
+    task = post(api, "tasks", {"title": "Secret plan", "body": "Do", "owner": "human:ana", "private": True})
+    hidden = say(api, tid, "About the secret plan.", refs={"task": task["id"]}, delivery="defer", defer_for="30m")
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM message_deliveries WHERE message_id=? AND carrier_id IS NOT NULL",
+                             (hidden["id"],)).fetchone()
+    assert hidden["sent_as"] == {"delivery": "defer", "until": None} and not rows(api, conversation_id=tid)
+
+    soon = say(api, tid, "Billing first.", delivery="defer", defer_for="30m")
+    later = say(api, tid, "Then the docs.", delivery="defer", defer_for="never")
+    carriers = [carrier_of(api, m["id"])[0] for m in (soon, later)]
+    assert len(rows(api, conversation_id=tid)) == 2
+    real = task_privacy.message_readable
+    gone = {soon["id"], later["id"]}
+    monkeypatch.setattr(task_privacy, "message_readable", lambda c, a, m, current=False: (
+        (m or {}).get("id") not in gone and real(c, a, m, current)))
+    tick(api, 31)
+    assert fired(api) == [] and all(job_of(api, cid) is None for cid in carriers)
+    with api.app.state.store.transaction() as c:
+        _, lines, left = delivery.carried(c, "ops", "attempt-x", [tid])
+    assert lines == [] and left == 0
+    assert {r["how"] for r in rows(api, conversation_id=tid)} == {"moot"}

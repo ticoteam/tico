@@ -270,8 +270,9 @@ defer only). The answer's `sent_as` (`delivery`, `until`) says how it went. The 
 
 A person's post in a bot's Home or a DM with a bot takes them too, as optional fields: `POST /api/v2/threads/<id>/messages`,
 `POST /api/v2/threads/dm` (with its first `body`) and `POST /api/v2/uploads/threads/<id>/messages` (form fields). A
-post that names no way goes as it always did. A way on a reply, in a thread with no bot across, or in `refs` is refused
-(422); Steer, Queue or a deadline from someone who may not message the bot is refused (403).
+post that names no way goes as it always did, `refs` and all. A way on a reply or in a thread with no bot across is
+refused (422); Steer, Queue or a deadline from someone who may not message the bot is refused (403), and their Defer
+waits for the bot's next turn even while it runs there.
 
 ## Leave work for the next run
 
