@@ -365,9 +365,9 @@ def test_only_the_owners_strategy_bot_turn_saves_on_a_yes(api):
     from backend.tests.test_assistant import assistant_turn
     r, attempt = assistant_turn(api, "ben-test", "Set a goal for Ops")
     read_back(api, attempt, NEW_GOAL, expected=403)
-    # Another person's Assistant still proposes a goal on a card, as before.
+    # Another person's Assistant may not make a goal: the route's own owner check refuses it as that person.
     refused = asked(api, "goals", {"title": "x", "owner": "ops"}, attempt["token"], "turn", expected=403)["error"]
-    assert refused["code"] == "confirm_required"
+    assert refused["code"] == "forbidden"
 
 
 def test_repeated_changes_are_refused_before_posting_a_draft(api):

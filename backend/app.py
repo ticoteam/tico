@@ -850,8 +850,15 @@ def create_app(settings=None):
                                                         "read-back, citing it (`--on-behalf-of turn`)")
                     # Every write the turn makes is admitted on its cited words, except what the Assistant may not do as the
                     # person (`admits_on_turn`); an approve is admitted only on its read-back and the person's yes (`approves`).
+                    # A settings route's write that is not exactly one catalogue setting, and a change to an automation that
+                    # sends outside, are cards whatever the rest of the turn may do (backend/assistant.py).
+                    on_turn = request.state.identity.via == "assistant" and not approves
+                    unmatched = on_turn and assistant_mod.settings_route_unmatched(request.method, request.url.path, raw)
+                    outside = on_turn and await asyncio.to_thread(
+                        assistant_mod.automation_sends_outside, store, request.method, request.url.path)
                     admitted = (request.state.identity.via == "assistant" and assistant_direct()
-                                and (approves or assistant_mod.admits_on_turn(request.method, request.url.path, raw)))
+                                and (approves or (not unmatched and not outside
+                                                  and assistant_mod.admits_on_turn(request.method, request.url.path, raw))))
                     if not goal_yes and not goal_no and not admitted:
                         raise Problem("confirm_required", assistant_confirm_hint(), 403)
                     def cited():

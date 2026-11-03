@@ -230,15 +230,32 @@ def require_direct_setting(c, method, path, body, trial=None, base=""):
 # person's own tap in Tico or Settings. Every other write the turn makes is admitted (`admits_on_turn`), and the route's
 # own checks, run as the person, decide the rest. (method, route); a method of None is any method.
 NEVER = [(m, re.compile(p)) for m, p in (
-    # A personal token, a service key, a stored credential's value and its grants are issued, shown or revoked by the
-    # person in Settings or Credentials, never through a chat.
+    # A personal token, a service key, a stored credential (its value, its grants, its import and its deletion) is issued,
+    # shown or revoked by the person in Settings or Credentials, never through a chat. Every route that writes a
+    # credential or a grant is here, by its canonical path (`admits_on_turn` renames the old spellings first), and
+    # tests/test_assistant_acts_as_you.py walks app.routes so a new one cannot slip past.
     ("POST", r"/api/v2/me/tokens(/[^/]+/revoke)?"),
     ("POST", r"/api/v2/service-keys(/[^/]+/revoke)?"),
-    ("POST", r"/api/v2/credentials/[^/]+/(reveal|grants(/[^/]+(/revoke)?)?)"),
-    # A computer's or an agent's sign-in: its enrollment and pairing codes are the person's own tap.
+    (None, r"/api/v2/credentials(/.*)?"), (None, r"/api/v2/credential-set"),
+    (None, r"/api/v2/credential-imports(/.*)?"), (None, r"/api/v2/runner-credential-(migration|imports)(/.*)?"),
+    (None, r"/api/v2/credential-requests/[^/]+/save"),
+    (None, r"/api/v2/bots/[^/]+/agent-credential(/revoke)?"),
+    (None, r"/api/v2/github/app/replace-lost-key"),
+    (None, r"/api/v2/federation/keys(/.*)?"), (None, r"/api/v2/triggers/[^/]+/signing"),
+    # A computer's sign-in and its keys: its logins, logouts, shared key and keys (`model_login`, `computer_keys`), and a
+    # model subscription's connect. Its enrollment and pairing codes are the person's own tap too.
+    (None, r"/api/v2/computers/[^/]+/(shared-key|logins(/.*)?|logouts(/.*)?|keys(/.*)?)"),
+    (None, r"/api/v2/runner-logins/[^/]+/(report|subscription)"), (None, r"/api/v2/model-subscriptions(/.*)?"),
+    (None, r"/api/v2/computer-subscriptions"), (None, r"/api/v2/runner-model-subscription-refresh"),
     ("POST", r"/api/v2/enrollments"), ("POST", r"/api/v2/runners/enroll"), ("POST", r"/api/v2/agents/pairings(/.*)?"),
+    (None, r"/api/v2/agents/pairings(/.*)?"),
+    # A message the person wrote is theirs: a turn never edits, deletes or redacts it, so a "No" cannot become a "yes"
+    # after the read-back (`instruction` and `approval_words` also refuse a message that was edited).
+    ("PATCH", r"/api/v2/messages/[^/]+"), ("DELETE", r"/api/v2/messages/[^/]+"),
+    ("POST", r"/api/v2/messages/[^/]+/redact"),
     # A person's password and a reader's invite link: each carries a credential the chat would hold.
     ("POST", r"/api/v2/access/(people|humans)/[^/]+/password"), ("POST", r"/api/v2/audiences/[^/]+/invites"),
+    (None, r"/api/v2/setup/company/people/[^/]+/invite"),
     # Single sign-on, the directory and its SCIM token, and the OAuth sign-in of an agent.
     (None, r"/api/v2/directory(/.*)?"), (None, r"/api/v2/oauth(/.*)?"),
     # Handing the company to another owner.
@@ -246,10 +263,10 @@ NEVER = [(m, re.compile(p)) for m, p in (
     # The Assistant's own switches: whether it decides approvals (the person's own sign-in only) and whether it is on.
     (None, r"/api/v2/assistant/settings"), ("POST", r"/api/v2/assistant/turn-on"),
     # The company's AI provider keys and config (a credential): the owner's own sign-in, never a chat.
-    ("PUT", r"/api/v2/providers"),
+    (None, r"/api/v2/providers(/.*)?"),
     # A raw SQL query over the database is not a chat action: the Assistant reads through its own tools, privacy-checked
     # per run, and a query is never made for it from a turn.
-    ("POST", r"/api/v2/sql"),
+    (None, r"/api/v2/sql"),
     # A Tico support report or ticket goes outside the company: the person's own tap.
     (None, r"/api/v2/support/(tickets(/.*)?|feedback)"),
     # Deleting a person, the company's server connection or its storage.
@@ -260,15 +277,46 @@ NEVER = [(m, re.compile(p)) for m, p in (
 ASSISTANT_RULES = ("assistant_direct", "assistant_approvals")
 
 
+# The automation actions that send something outside the company (backend/automation_actions.py): a webhook, a reply
+# sent to mail, a forward. An automation that holds one is never turned on or changed by a turn on the person's words.
+OUTSIDE_ACTIONS = ("call_webhook", "send_reply", "forward")
+
+
+def automation_sends_outside(store, method, path):
+    """Whether this write changes an automation that sends something outside (its stored flow holds one of
+    `OUTSIDE_ACTIONS`): only the person's own tap changes those, so a turn's change is a card (`confirm_required`)."""
+    m = re.fullmatch(r"/api/v2/automations/([^/]+)", normalize_path(path) or "")
+    if not m or method not in ("PATCH", "PUT", "DELETE", "POST"):
+        return False
+    with store.read() as c:
+        row = c.execute("SELECT flow FROM automations WHERE id=?", (m.group(1),)).fetchone()
+    flow = str(row["flow"] or "") if row else ""
+    return any(action in flow for action in OUTSIDE_ACTIONS)
+
+
+def settings_route_unmatched(method, path, body=None):
+    """Whether this write goes to a settings catalogue route but is not exactly one catalogue setting (a list or a bare
+    value, two settings at once, or a key the setting does not have). Such a write is a card: the gate cannot tell
+    which setting it changes, so it cannot tell whether only the person may change it."""
+    from . import settings_catalog
+    p = normalize_path(path)
+    if not p or not settings_catalog.routed(method, p):
+        return False
+    return settings_catalog.matched(method, p, _json(body) if isinstance(body, (bytes, str)) else body) is None
+
+
 def admits_on_turn(method, path, body=None):
     """Whether a person's own Assistant turn may make this write as them, on their cited words. Every write is admitted
     except what `NEVER` names, a body that carries a secret (a secret never goes through a chat: BotOps' rule, which
     botops_act checks the same way), and the team's rules for the Assistant itself. The approvals are not decided here:
     an approve runs only on its read-back and the person's yes (`approval_words`)."""
     from . import botops_act
+    from .route_renames import new_path
     path = normalize_path(path)
     if not path or method not in ("POST", "PUT", "PATCH", "DELETE"):
         return False
+    # NEVER is written against the canonical spelling: an old route (`/runners/{id}/shared-key`) answers the same way.
+    path = new_path(path) or path
     if any(m in (None, method) and p.fullmatch(path) for m, p in NEVER):
         return False
     parsed = _json(body)
@@ -439,6 +487,14 @@ def approval_id(path):
     return m.group(1) if m else None
 
 
+def edited(c, msg):
+    """Whether a message was changed after it was posted: an edit (`edited_at`, a revision above zero) or any revision
+    row in `message_revisions`. The person's words are what they posted, so an edited message lends nothing."""
+    if msg.get("edited_at") or int(msg.get("revision") or 0) > 0:
+        return True
+    return bool(c.execute("SELECT 1 FROM message_revisions WHERE message_id=? LIMIT 1", (msg["id"],)).fetchone())
+
+
 def approval_words(c, who, cited, assistant_bot, approval):
     """What an approval the Assistant decides for the person is recorded with: their words and the read-back they
     answered. The cited message must be a plain yes, the last thing anyone else said in the room before it (since the
@@ -450,6 +506,9 @@ def approval_words(c, who, cited, assistant_bot, approval):
         raise Problem("own_request", "You asked for this approval yourself, so it stays the person's click: propose it "
                       "on a card (`hub assistant propose`)", 403)
     msg = H.message(c, cited) or {}
+    if msg and edited(c, msg):
+        raise Problem("approve_not_asked", "That message was edited after it was posted, so it is no yes: post the "
+                      "read-back again and ask the person", 403)
     words = str(msg.get("body") or "").strip()
     room, at = msg.get("conversation_id"), str(msg.get("created_at") or "")
     back = None
@@ -485,6 +544,8 @@ def instruction(c, who, ref):
                         (who.attempt_id,)).fetchone()
         message_id = row["message_id"] if row else ""
     msg = H.message(c, message_id) if message_id else None
+    if msg and edited(c, msg):
+        refuse("That message was edited after it was posted, so it does not say what they asked")
     room = H.conversation(c, msg["conversation_id"]) if msg else None
     refs = (msg or {}).get("refs") or {}
     # Only the person's own Assistant room: the owner's earlier Strategy Bot chat (`rooms.STRATEGY_ROOM`) is history.

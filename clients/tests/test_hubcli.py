@@ -1205,3 +1205,28 @@ def test_connection_list_reaches_the_connections_route_with_its_paging(monkeypat
     remotecli.run(hubcli.parser().parse_args(["connections", "list", "--limit", "5", "--cursor", "c2"]))
     from unittest.mock import call
     assert call("connections", limit=5, cursor="c2") in client.get.call_args_list
+
+
+def test_the_background_card_names_its_person_on_the_wire(monkeypatch):
+    """`hub assistant propose --for human:<id>` reaches the server as the body's `for`: remotecli.run used to drop it."""
+    from clients import hubcli, remotecli
+    client = mock.Mock()
+    client.post.return_value = {"action": {"id": "a1"}}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["assistant", "propose", "--summary", "Archive the Ops bot",
+                                              "--path", "/api/v2/bots/ops/archive", "--body", '{"expected_revision": 1}',
+                                              "--for", "human:ana"]))
+    path, body = client.post.call_args.args[0], client.post.call_args.args[1]
+    assert path == "assistant/actions"
+    assert body["for"] == "human:ana" and body["path"] == "/api/v2/bots/ops/archive" and body["method"] == "POST"
+
+
+def test_a_propose_without_for_sends_no_recipient(monkeypatch):
+    from clients import hubcli, remotecli
+    client = mock.Mock()
+    client.post.return_value = {"action": {"id": "a1"}}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["assistant", "propose", "--summary", "Archive", "--path", "/api/v2/bots/ops/archive"]))
+    assert "for" not in client.post.call_args.args[1]

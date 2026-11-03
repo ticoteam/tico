@@ -7526,7 +7526,9 @@ AUDIENCE = {
                                    "hub_meeting_pending", "hub_meeting_approve", "hub_meeting_dismiss", "hub_meeting_restore")},
     **{name: REQUESTER for name in CALL_TOOLS},     # a person's act; BotOps acts as the person it works for
     # The Assistant only.
-    "hub_assistant_propose": ("assistant",), "hub_approval_read_back": ("assistant",),
+    # The Assistant bot's own background run (a routine, kind `bot`) proposes a card for its person too; the server admits
+    # only the Assistant bot, and only with `for` naming an active person (backend/app.py propose).
+    "hub_assistant_propose": ("assistant", "bot"), "hub_approval_read_back": ("assistant",),
     # Any teammate may withdraw a waiting card or find one (backend/assistant.py teammate); confirming stays the owner's.
     "hub_assistant_withdraw": KINDS, "hub_assistant_proposals": KINDS,
     # A bot's add is a suggestion; the Assistant's is an org rule the person asked for in their own chat, citing their words.
@@ -7592,8 +7594,19 @@ COUNSEL_TOOLS = frozenset({"hub_rules_list", "hub_rules_get", "hub_rules_add", "
                            "hub_task_close"})
 
 
+# The tools whose route the Assistant's own turn may never make (backend/assistant.py `NEVER`): a credential, a key, a
+# sign-in, a support report, SQL, a message's redaction. The server refuses them on a turn whatever is offered; they are
+# not offered to the Assistant either, so the live Assistant is shown what its gate admits and nothing else.
+ASSISTANT_HIDDEN = frozenset({
+    "hub_credential_grant", "hub_credential_revoke", "hub_credential_delete", "hub_credential_set", "hub_credential_import",
+    "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_call_token", "hub_peer_key", "hub_peer_rotate_key",
+    "hub_sql", "hub_support_file", "hub_support_report", "hub_support_send", "hub_trigger_sign", "hub_message_redact",
+})
+
+
 def offered_to(tool_):
-    """The kinds a tool is offered to."""
+    """The kinds a tool is offered to. The Assistant's turn is offered every tool except the ones in ASSISTANT_HIDDEN:
+    its gate admits all the rest on the person's cited words, and the route checks the person's own rights."""
     name = tool_["name"]
     if name in AUDIENCE:
         kinds = tuple(AUDIENCE[name])
@@ -7601,6 +7614,10 @@ def offered_to(tool_):
         kinds = NOT_ASSISTANT
     else:
         kinds = KINDS
+    if name in ASSISTANT_HIDDEN:
+        kinds = tuple(k for k in kinds if k != "assistant")
+    elif "assistant" not in kinds:
+        kinds = (*kinds, "assistant")
     return (*kinds, COUNSEL) if name in COUNSEL_TOOLS else kinds
 
 
