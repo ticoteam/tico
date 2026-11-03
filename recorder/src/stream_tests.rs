@@ -422,6 +422,7 @@ fn a_full_stream_queue_drops_streamed_audio_and_never_recorded_audio() {
         move || {
             let (mut sink, consumer) = AudioSink::channel();
             let health = sink.health.clone();
+            let capacity = sink.queued_capacity();
             thread::spawn(move || {
                 // Speech-like bursts with pauses, so chunks are cut as in a real recording.
                 let samples: Vec<f32> = (0..total)
@@ -445,6 +446,13 @@ fn a_full_stream_queue_drops_streamed_audio_and_never_recorded_audio() {
                     sink.push_interleaved(part, 1);
                     thread::sleep(Duration::from_millis(20));
                 }
+                // The final partial chunk is saved on Finish; first wait until the
+                // engine has consumed the complete synthetic input.
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while sink.queued_capacity() != capacity {
+                    assert!(Instant::now() < deadline, "Synthetic audio did not drain");
+                    thread::sleep(Duration::from_millis(2));
+                }
                 fed.store(true, Ordering::Release);
                 thread::sleep(Duration::from_secs(5));
             });
@@ -464,7 +472,6 @@ fn a_full_stream_queue_drops_streamed_audio_and_never_recorded_audio() {
     )
     .unwrap();
     wait_for("the audio", || done.load(Ordering::Acquire));
-    thread::sleep(Duration::from_millis(200));
     handle.finish().unwrap();
     let chunks = store.get(&record.id).unwrap().chunks;
     let saved: u64 = chunks.iter().map(|chunk| chunk.signal.duration_ms).sum();
