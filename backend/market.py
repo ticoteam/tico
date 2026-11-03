@@ -1793,7 +1793,9 @@ def install(app, store, auth, mutate):
                               "until midnight UTC", 429)
             try:
                 from .updates import writer_for
-                writer = writer_for(c, store.settings, store=store, vault=getattr(app.state, "vault", None))
+                # The demo calls no model: with no writer the librarian answers from the rows, as the demo always has.
+                writer = None if store.settings.demo else writer_for(
+                    c, store.settings, store=store, vault=getattr(app.state, "vault", None))
                 result, call = ask(c, body.question, use_model=not store.settings.rehearsal, writer=writer)
             except Exception as exc:
                 raise Problem("market_ask", f"The market model call failed: {exc}", 503, True) from exc
