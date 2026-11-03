@@ -1928,7 +1928,7 @@ class BotTaskChoice(Contract):
     harness: ID | None = None
     model: ID | None = None
     effort: ID | None = None
-    compact_at: Literal[150_000, 250_000, 400_000, 600_000, 1_000_000] | None = None
+    compact_at: Literal[100_000, 150_000, 250_000, 400_000, 600_000, 1_000_000] | None = None
 
 
 class BotTaskModel(Contract):
@@ -1938,7 +1938,7 @@ class BotTaskModel(Contract):
 
 
 class BotCompactAt(Contract):
-    compact_at: Literal[150_000, 250_000, 400_000, 600_000, 1_000_000]
+    compact_at: Literal[100_000, 150_000, 250_000, 400_000, 600_000, 1_000_000]
     expected_revision: int = Field(ge=1)
 
 

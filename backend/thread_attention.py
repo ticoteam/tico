@@ -103,15 +103,18 @@ def _unread_dms(c, viewer, me):
     takes that message's sender and time: a later message they cannot read sets neither."""
     from . import threads
     out = []
-    for cv in c.execute(
-            "SELECT cv.id, cv.subject, f.last_read_seq FROM thread_followers f JOIN conversations cv ON cv.id=f.thread_id "
-            "WHERE f.actor=? AND f.following=1 AND f.notify<>'muted' "
-            "AND (cv.audience='personal' OR (cv.audience='participants' AND cv.parent_id IS NULL)) "
-            "AND cv.closed_at IS NULL AND cv.archived_at IS NULL AND cv.last_unread_seq>f.last_read_seq "
-            "ORDER BY cv.last_unread_seq DESC", (me,)).fetchall():
-        if not threads.readable(c, viewer, cv["id"]):
+    found = c.execute(
+        "SELECT cv.id, cv.subject, f.last_read_seq FROM thread_followers f JOIN conversations cv ON cv.id=f.thread_id "
+        "WHERE f.actor=? AND f.following=1 AND f.notify<>'muted' "
+        "AND (cv.audience='personal' OR (cv.audience='participants' AND cv.parent_id IS NULL)) "
+        "AND cv.closed_at IS NULL AND cv.archived_at IS NULL AND cv.last_unread_seq>f.last_read_seq "
+        "ORDER BY cv.last_unread_seq DESC", (me,)).fetchall()
+    # Each DM's row and members are read together (threads.read_threads), not once per DM.
+    rows, members = threads.read_threads(c, viewer, [cv["id"] for cv in found])
+    for cv in found:
+        if not threads.readable(c, viewer, rows[cv["id"]]):
             continue
-        others = [a for a in threads._dm_members(c, threads.thread_row(c, cv["id"])) if a != me]
+        others = [a for a in threads._dm_members(c, rows[cv["id"]], rows=members[cv["id"]]) if a != me]
         if len(others) == 1 and others[0].startswith("bot:"):
             continue                                    # its bot's row in Team counts it (threads.bot_dm_unread)
         for m in c.execute(

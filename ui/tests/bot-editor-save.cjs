@@ -73,6 +73,7 @@ const {unrouted} = require('./support/routes.cjs');
           Object.assign(helper, {display_name: body.display_name, description: body.description});
           return json({name: 'helper', display_name: helper.display_name, revision: ++helper.revision});
         }
+        if (what === 'compact-at') helper.compact_at = body.compact_at;
         if (what === 'compact-at' || what === 'keep-tasks-going' || what === 'turns-at-once') {
           return json({bot: 'helper', revision: ++helper.revision});
         }
@@ -226,7 +227,9 @@ const {unrouted} = require('./support/routes.cjs');
     // of them save together.
     await open();
     await pick('model', 'codex', 'gpt-6-luna');
-    await editor.locator('[data-bot-compact]').selectOption('400000');
+    assert.deepEqual(await editor.locator('[data-bot-compact] option').allInnerTexts(), ['100k', '150k', '250k', '400k', '600k', '1M'],
+      'the Compact at choices, 100k first; the default stays 250k');
+    await editor.locator('[data-bot-compact]').selectOption('100000');
     await editor.locator('[data-bot-keep-tasks]').fill('3');
     await editor.locator('[data-bot-keep-tasks]').dispatchEvent('change');
     await editor.locator('[data-bot-turns-at-once]').fill('5');
@@ -240,7 +243,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.deepEqual(calls.map(c => [c.what, c.body.expected_revision]),
       [['definition', 13], ['compact-at', 14], ['keep-tasks-going', 15], ['turns-at-once', 16], ['transitions', 17]],
       'Save bot saves every held change, chaining the revision');
-    assert.equal(calls[1].body.compact_at, 400000);
+    assert.equal(calls[1].body.compact_at, 100000);
     assert.equal(calls[2].body.keep_tasks_going, 3);
     assert.deepEqual(calls[3].body, {turns_at_once: 5, expected_revision: 16});
     await page.waitForFunction(() => /Checkpointing 0 of 1/.test(document.querySelector('#transition-dialog')?.innerText || ''));
@@ -248,6 +251,7 @@ const {unrouted} = require('./support/routes.cjs');
 
     // Archive bot asks first and names who gets the work; Cancel archives nothing and leaves the editor open.
     await open();
+    assert.equal(await editor.locator('[data-bot-compact]').inputValue(), '100000', 'reloads with 100k selected');
     await editor.locator('[data-bot-remove]').click();
     const ask = page.locator('dialog.settings-confirm');
     await ask.waitFor();

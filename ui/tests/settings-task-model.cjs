@@ -140,7 +140,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await pickers.locator('[data-choice-effort]').isVisible(), false, 'Task effort stands in for the Effort picker');
     const effortPick = row.locator('[data-task-effort]'), contextPick = row.locator('[data-task-context]');
     assert.equal(await effortPick.inputValue(), 'high');
-    assert.deepEqual(await contextPick.locator('option').allInnerTexts(), ['Same as bot', '150k', '250k', '400k', '600k', '1M'], 'the Compact at choices');
+    assert.deepEqual(await contextPick.locator('option').allInnerTexts(), ['Same as bot', '100k', '150k', '250k', '400k', '600k', '1M'], 'the Compact at choices');
     // Same as bot for the model keeps the task effort: tasks still differ, so the mark stays on.
     calls = [];
     await pickers.locator('[data-choice-harness]').selectOption('');

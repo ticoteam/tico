@@ -519,3 +519,11 @@ def test_an_old_task_model_record_runs_on_its_model_as_before(api):
     _, turn = task_turn(api, machine)
     assert (turn["config"]["model"], turn["config"]["reasoning_effort"]) == ("claude-haiku-5-5", "low")
     assert "compact_at" not in turn["config"]
+
+
+def test_a_task_context_length_of_100k_saves_and_reads_back(api):
+    ops_on_sonnet(api)
+    saved = set_task_model(api, {"effort": "high", "compact_at": 100000})
+    assert saved["task_model"] == {"harness": "", "model": "", "reasoning_effort": "high", "runtime": "",
+                                   "compact_at": 100000}
+    assert get(api, "bots/ops")["task_model"]["compact_at"] == 100000
