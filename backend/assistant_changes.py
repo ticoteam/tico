@@ -17,10 +17,11 @@ import json
 
 from fastapi import Request
 
+from . import automations
 from . import hubdb as H
 from . import models as M
 from . import org_rules
-from . import automations
+from . import views
 from .store import Problem
 
 LIST_DAYS = 30
@@ -30,7 +31,7 @@ PAGE_MAX = 100
 WORDS = 200
 TASK_ACTIONS = ("task.create", "task.update", "task.close")
 RESTORE_ACTION = "assistant.change.restore"
-SKEW_SECONDS = 5          # a task change's status row is written just before its event: the window that pairs them
+TASK_FIELD_KEY = {"status": "status", "owner": "owner_id"}     # a task_events field -> the tasks column it sets
 
 
 def install(app, store, auth, mutate, settings):
@@ -43,7 +44,7 @@ def install(app, store, auth, mutate, settings):
             raise Problem("identity", "This frontend endpoint requires a person", 403)
         days, limit = max(1, min(int(days), LIST_DAYS_MAX)), max(1, min(int(limit), PAGE_MAX))
         with store.read_transaction() as c:
-            return listing(c, who, days, limit, before, settings)
+            return listing(c, auth, who, days, limit, before, settings)
 
     @app.post("/api/v2/assistant/changes/{cid}/restore")
     def assistant_restore(request: Request, cid: str, body: M.Empty):
@@ -57,31 +58,34 @@ def install(app, store, auth, mutate, settings):
         return mutate(request, body, work)
 
 
-def listing(c, who, days, limit, before, settings):
-    """One page of the caller's Assistant changes, newest first. `next` is the `<at>|<id>` of the last row shown, and
-    `before` takes it back: each source is read from that time on, so a page never skips a row."""
+def listing(c, auth, who, days, limit, before, settings):
+    """One page of the caller's Assistant changes, newest first. `next` is the `<at>|<id>` of the last row shown; `before`
+    takes it back. The cursor is applied in each source's SQL, so every source yields its next `limit + 1` rows after it:
+    a page never skips a row, and `next` is null only when nothing is left."""
     since = H.shift(H.now(), days=-days)
-    top, cut = (before.partition("|")[0], before.partition("|")[2]) if before else (H.now(), "")
+    if before:
+        at, _, cid = before.partition("|")
+        cut, cut_args = "(created_at < ? OR (created_at = ? AND id < ?))", (at, at, cid)
+    else:
+        cut, cut_args = "created_at <= ?", (H.now(),)
     fetch = limit + 1
     sources = (
-        ("SELECT * FROM events WHERE actor=? AND created_at>=? AND created_at<=? AND action IN (?,?,?,?) "
-         "AND json_extract(detail,'$.via')='assistant' ORDER BY created_at DESC, id DESC LIMIT ?",
-         (who.actor, since, top, *TASK_ACTIONS, "approval.decide", fetch), "event"),
-        ("SELECT * FROM audit_log WHERE actor=? AND created_at>=? AND created_at<=? AND via='assistant' "
-         "ORDER BY created_at DESC, id DESC LIMIT ?", (who.actor, since, top, fetch), "audit"),
-        ("SELECT * FROM messages WHERE sender_id=? AND created_at>=? AND created_at<=? "
-         "AND refs LIKE '%assistant%' AND json_extract(refs,'$.via')='assistant' "
-         "ORDER BY created_at DESC, id DESC LIMIT ?", (who.actor, since, top, fetch), "message"),
-        ("SELECT * FROM settings_changes WHERE actor=? AND created_at>=? AND created_at<=? AND via='assistant' "
-         "ORDER BY created_at DESC, id DESC LIMIT ?", (who.actor, since, top, fetch), "setting"),
+        ("event", "SELECT * FROM events WHERE actor=? AND created_at>=? AND " + cut + " AND action IN (?,?,?,?) "
+                  "AND json_extract(detail,'$.via')='assistant' ORDER BY created_at DESC, id DESC LIMIT ?",
+         (who.actor, since, *cut_args, *TASK_ACTIONS, "approval.decide", fetch)),
+        ("audit", "SELECT * FROM audit_log WHERE actor=? AND created_at>=? AND " + cut + " AND via='assistant' "
+                  "ORDER BY created_at DESC, id DESC LIMIT ?", (who.actor, since, *cut_args, fetch)),
+        ("message", "SELECT * FROM messages WHERE sender_id=? AND created_at>=? AND " + cut + " "
+                    "AND refs LIKE '%assistant%' AND json_extract(refs,'$.via')='assistant' "
+                    "ORDER BY created_at DESC, id DESC LIMIT ?", (who.actor, since, *cut_args, fetch)),
+        ("setting", "SELECT * FROM settings_changes WHERE actor=? AND created_at>=? AND " + cut + " AND via='assistant' "
+                    "ORDER BY created_at DESC, id DESC LIMIT ?", (who.actor, since, *cut_args, fetch)),
     )
     rows = []
-    for sql, args, kind in sources:
+    for kind, sql, args in sources:
         rows += [(kind, dict(row)) for row in c.execute(sql, args)]
     rows.sort(key=lambda x: (x[1]["created_at"], x[1]["id"]), reverse=True)
-    if cut:
-        rows = [x for x in rows if (x[1]["created_at"], x[1]["id"]) < (top, cut)]
-    shown = [describe(c, who, kind, row, settings) for kind, row in rows[:limit]]
+    shown = [describe(c, auth, who, kind, row, settings) for kind, row in rows[:limit]]
     last = shown[-1] if len(rows) > limit and shown else None
     return {"actor": who.actor, "days": days, "changes": shown,
             "next": f"{last['at']}|{last['id']}" if last else None}
@@ -91,7 +95,7 @@ def has_column(c, table, column):
     return any(r[1] == column for r in c.execute(f"PRAGMA table_info({table})"))
 
 
-def describe(c, who, kind, row, settings):
+def describe(c, auth, who, kind, row, settings):
     """One change in the list: its id (the restore key), when, what, the words it acted on, its object, and undo."""
     cid = row["id"]
     if kind == "event":
@@ -99,21 +103,21 @@ def describe(c, who, kind, row, settings):
         target = row["target"] or ""
         obj = target if ":" in target else (f"task:{target}" if row["action"].startswith("task.") else
                                             f"approval:{target}" if row["action"].startswith("approval.") else target)
-        what = event_line(c, row, detail, obj)
+        what = event_line(c, auth, who, row, detail, obj)
         words = cited_words(c, detail.get("delegation"))
-        undo, why = undoable(c, who, kind, row, detail, settings)
+        undo, why = undoable(c, auth, who, kind, row, detail, settings)
     elif kind == "audit":
         obj = row["object"]
         before = json.loads(row["before"]) if row["before"] else None
         after = json.loads(row["after"]) if row["after"] else None
         what = audit_line(obj, before, after)
         words = ""
-        undo, why = undoable(c, who, kind, row, {"before": before, "after": after}, settings)
+        undo, why = undoable(c, auth, who, kind, row, {"before": before, "after": after}, settings)
     elif kind == "setting":
         obj = f"setting:{row['bot']}:{row['field']}"
         what = setting_line(c, row)
         words = ""
-        undo, why = undoable(c, who, kind, row, {}, settings)
+        undo, why = undoable(c, auth, who, kind, row, {}, settings)
     else:
         obj = f"message:{cid}"
         what = "Answered a question" if row["kind"] == "answer" else "Sent a message"
@@ -132,20 +136,23 @@ def setting_line(c, row):
     return f"Changed {bot}'s {row['field'].replace('_', ' ')}"
 
 
-def event_line(c, row, detail, obj):
-    """A plain line for an event the Assistant wrote: the task's title, the status it set, the approval's decision."""
+def event_line(c, auth, who, row, detail, obj):
+    """A plain line for an event the Assistant wrote: the task's title, the status it set, the approval's decision. A task
+    the person can no longer see is named without its title."""
     action = row["action"]
     if action == "approval.decide":
         ask = H.approval(c, row["target"]) or {}
         return f"{'Approved' if detail.get('decision') == 'approved' else 'Declined'} a {ask.get('kind', 'request')} request"
-    task = H.task(c, row["target"]) if obj.startswith("task:") else None
-    title = (task or {}).get("title") or "a task"
+    if obj.startswith("task:") and can_see(c, auth, who, row["target"]):
+        label = f"'{(H.task(c, row['target']) or {}).get('title') or 'a task'}'"
+    else:
+        label = "a task you can no longer see"
     if action == "task.create":
-        return f"Filed the task '{title}'"
+        return f"Filed {label}"
     if action == "task.close":
-        return f"Closed '{title}'"
+        return f"Closed {label}"
     status = detail.get("status")
-    return f"Set '{title}' to {status}" if status else f"Changed '{title}'"
+    return f"Set {label} to {status}" if status else f"Changed {label}"
 
 
 def audit_line(obj, before, after):
@@ -176,36 +183,62 @@ def cited_words(c, delegation):
     return (message or {}).get("body") or ""
 
 
+def can_see(c, auth, who, task_id):
+    """The task is one the person may read now (the list and the undo both ask this, not what it was)."""
+    return bool(task_id) and bool(views._readable_task_ids(c, auth.task_sql(c, who), [task_id]))
+
+
 def task_field_rows(c, who, row, detail):
-    """The task_events rows a change wrote just before its event: (field, old, new) for each one, the same actor, via."""
-    at = row["created_at"]
-    start = H.shift(at, seconds=-SKEW_SECONDS)
+    """The task_events rows (status, owner) that this event wrote, by the person's Assistant. A row belongs to the first
+    task event at or after it: it is later than the task's previous event and no later than this one. So a note-only
+    update right after a close reads none of the close's rows. A status row must carry the value the event set; an owner
+    row is the event's when it is the only owner change in its window."""
     if not has_column(c, "task_events", "via"):
         return []
-    return [dict(r) for r in c.execute(
-        "SELECT * FROM task_events WHERE task_id=? AND actor=? AND via='assistant' AND created_at>=? AND created_at<=? "
-        "AND field IN ('status','owner') ORDER BY created_at DESC", (row["target"], who.actor, start, at))]
+    at, task = row["created_at"], row["target"]
+    previous = c.execute("SELECT MAX(created_at) FROM events WHERE target=? AND action IN (?,?,?) AND created_at<?",
+                         (task, *TASK_ACTIONS, at)).fetchone()[0] or ""
+    rows = [dict(r) for r in c.execute(
+        "SELECT * FROM task_events WHERE task_id=? AND actor=? AND via='assistant' AND field IN ('status','owner') "
+        "AND created_at<=? AND created_at>? ORDER BY created_at DESC", (task, who.actor, at, previous))]
+    want = "closed" if row["action"] == "task.close" else detail.get("status")
+    out = [r for r in rows if r["field"] == "status" and want is not None and r["new"] == want][:1]
+    out += [r for r in rows if r["field"] == "owner"][:1]
+    return out
 
 
-def undoable(c, who, kind, row, detail, settings):
+def approval_undoable(c, auth, who, row):
+    """An approval decision is taken back only while it is the approval's current decision: the latest one recorded."""
+    ask = H.approval(c, row["target"])
+    if not ask or ask.get("decided_by_id") != who.actor or ask.get("decided_via") != "assistant":
+        return False, "the decision is no longer your Assistant's"
+    if ask.get("consumed_at"):
+        return False, "it already ran"
+    latest = c.execute("SELECT id FROM events WHERE action='approval.decide' AND target=? "
+                       "ORDER BY created_at DESC, id DESC LIMIT 1", (row["target"],)).fetchone()
+    if latest and latest["id"] != row["id"]:
+        return False, "it changed again since"
+    return True, ""
+
+
+def undoable(c, auth, who, kind, row, detail, settings):
     """(undoable, why_not): whether the change can be taken back as it stands, and the reason when it cannot."""
     if kind == "event":
         action = row["action"]
         if action == "approval.decide":
-            ask = H.approval(c, row["target"])
-            if not ask or ask.get("decided_by_id") != who.actor or ask.get("decided_via") != "assistant":
-                return False, "the decision is no longer your Assistant's"
-            if ask.get("consumed_at"):
-                return False, "it already ran"
-            return True, ""
+            return approval_undoable(c, auth, who, row)
         if action == "task.create":
             return False, "close the task on its page if it is not wanted"
+        if not can_see(c, auth, who, row["target"]):
+            return False, "a task you can no longer see"
         rows = task_field_rows(c, who, row, detail)
         if not rows:
             return False, "only its note changed"
         task = H.task(c, row["target"]) or {}
         for field_row in rows:
-            if (task.get(field_row["field"]) or None) != (field_row["new"] or None):
+            if field_row["field"] == "owner" and not field_row["old"]:
+                return False, "it had no owner before"
+            if (task.get(TASK_FIELD_KEY[field_row["field"]]) or None) != (field_row["new"] or None):
                 return False, "it changed again since"
         return True, ""
     if kind == "setting":
@@ -225,6 +258,9 @@ def undoable(c, who, kind, row, detail, settings):
             current = c.execute("SELECT flow FROM automations WHERE id=?", (obj.split(":", 1)[1],)).fetchone()
             if not current or json.loads(current["flow"]) != after:
                 return False, "it changed again since"
+            now_flow = json.loads(current["flow"])
+            if not (automations.may_change(c, who, now_flow) and automations.may_change(c, who, before)):
+                return False, "you no longer manage this automation"
             return True, ""
         return False, "change it on its page"
     return False, "a message sent stays sent"
@@ -244,26 +280,26 @@ def restore(c, auth, who, cid, settings):
         "before": json.loads(row["before"]) if row["before"] else None,
         "after": json.loads(row["after"]) if row["after"] else None}
     if kind == "setting":
-        undo, why = undoable(c, who, kind, row, {}, settings)
+        undo, why = undoable(c, auth, who, kind, row, {}, settings)
         if not undo:
             raise Problem("not_undoable", why, 409)
         config = settings._config(c, row["bot"])
         settings.undo(c, who, row["id"], M.SettingsUndo(expected_revision=config["revision"]))
         obj = f"setting:{row['bot']}:{row['field']}"
     elif kind == "event" and row["action"] in ("approval.decide",):
-        undo, why = undoable(c, who, kind, row, detail, settings)
+        undo, why = undoable(c, auth, who, kind, row, detail, settings)
         if not undo:
             raise Problem("not_undoable", why, 409)
         H.approval_undo(c, who.actor, row["target"])
         obj = f"approval:{row['target']}"
     elif kind == "event":
-        undo, why = undoable(c, who, kind, row, detail, settings)
+        undo, why = undoable(c, auth, who, kind, row, detail, settings)
         if not undo:
             raise Problem("not_undoable", why, 409)
         restore_task(c, who, row, detail)
         obj = f"task:{row['target']}"
     else:
-        undo, why = undoable(c, who, kind, row, detail, settings)
+        undo, why = undoable(c, auth, who, kind, row, detail, settings)
         if not undo:
             raise Problem("not_undoable", why, 409)
         obj = row["object"]
@@ -306,8 +342,12 @@ def restore_task(c, who, row, detail):
 
 
 def restore_automation(c, who, aid, before):
-    """Save the automation's earlier flow as a new version, the way a restore of an old version does."""
+    """Save the automation's earlier flow as a new version, the way a restore of an old version does. The person must
+    manage it now (its current flow) and may write the flow they restore."""
     current = c.execute("SELECT flow FROM automations WHERE id=?", (aid,)).fetchone()
-    if not current or not automations.may_change(c, who, before):
+    if not current:
+        raise Problem("not_found", "that automation no longer exists", 404)
+    now_flow = json.loads(current["flow"])
+    if not (automations.may_change(c, who, now_flow) and automations.may_change(c, who, before)):
         raise Problem("forbidden", "you may not change this automation", 403)
-    automations._save(c, who.actor, aid, before, json.loads(current["flow"]), new_version=True)
+    automations._save(c, who.actor, aid, before, now_flow, new_version=True)

@@ -59,3 +59,31 @@ def test_a_private_task_of_another_person_is_not_readable_through_origin(api):
     assert get(api, "origins/" + private["id"], "ben-test")["id"] == private["id"]
     r = api.get("/api/v2/origins/" + private["id"], headers=headers("cara-test"))
     assert r.status_code == 404
+
+
+def test_a_message_between_two_others_gives_an_outsider_a_404_with_no_text(api):
+    with api.app.state.store.transaction() as c:
+        msg = H.say(c, "human:ben", "human:ana", "Ana, the payroll number is private", kind="say")
+    r = api.get("/api/v2/origins/" + msg["id"], headers=headers("cara-test"))
+    assert r.status_code == 404
+    assert "payroll" not in r.text
+    assert get(api, "origins/" + msg["id"], "ben-test")["kind"] == "message"
+
+
+def test_a_subtask_names_its_parent_and_the_stop_that_closes_the_parent(api):
+    with api.app.state.store.transaction() as c:
+        parent = H.task_create(c, "human:ana", "Parent work", "x", "human:ana")
+        child = H.task_create(c, "human:ana", "Child work", "x", "human:ana", parent_id=parent["id"])
+    origin = get(api, "origins/" + child["id"])
+    assert origin["cause"] == {"type": "parent_task", "id": parent["id"], "title": "Parent work"}
+    assert origin["stop"][0]["command"] == f"hub task close {parent['id']}"
+    assert origin["siblings"]["made"] == 1
+
+
+def test_a_parent_the_person_cannot_read_is_not_named(api):
+    with api.app.state.store.transaction() as c:
+        parent = H.task_create(c, "human:ana", "Ana private parent", "x", "human:ana", private=True)
+        child = H.task_create(c, "human:ana", "Ben's child", "x", "human:ben", parent_id=parent["id"])
+    origin = get(api, "origins/" + child["id"], "ben-test")
+    assert origin["cause"] == {"type": "parent_task", "id": None, "title": "a task you can no longer see"}
+    assert "Ana private parent" not in api.get("/api/v2/origins/" + child["id"], headers=headers("ben-test")).text

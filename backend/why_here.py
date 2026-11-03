@@ -13,8 +13,7 @@ import shlex
 from fastapi import Request
 
 from . import hubdb as H
-from . import task_privacy as privacy
-from . import views
+from . import task_relations, threads, views
 from .store import Problem
 
 WINDOW_DAYS = 7
@@ -33,14 +32,16 @@ def install(app, store, auth):
 
 def show(c, auth, who, ref):
     kind, item = resolve(c, auth, who, ref)
+    def see(task_id):
+        return bool(views._readable_task_ids(c, auth.task_sql(c, who), [task_id]))
     if kind == "task":
-        made_by, created, cause = item["requester_id"], item["created_at"], task_cause(c, item)
+        made_by, created, cause = item["requester_id"], item["created_at"], task_cause(c, item, see)
         title, siblings, stops = item["title"] or "", *siblings_and_stops(c, item, cause)
         task_id = item["id"]
     elif kind == "message":
         made_by, created, title, task_id = item["sender_id"], item["created_at"], (item["body"] or "")[:80], None
         row = H.task(c, H.message_task_id(item)) if H.message_task_id(item) else None
-        cause = task_cause(c, row) if row else {"type": "message", "conversation_id": item["conversation_id"]}
+        cause = task_cause(c, row, see) if row else {"type": "message", "conversation_id": item["conversation_id"]}
         siblings, stops = {"days": WINDOW_DAYS, "made": 0, "open": 0}, stops_for(c, cause, None)
     else:
         made_by, created, title, task_id = item["requested_by_id"], item["created_at"], item["kind"], item.get("task_id")
@@ -60,7 +61,7 @@ def resolve(c, auth, who, ref):
             if views._readable_task_ids(c, visible, [rows[0]["id"]]):
                 return "task", rows[0]
     message = H.message(c, ref)
-    if message and privacy.message_readable(c, privacy.actor(who), message):
+    if message and threads.message_readable(c, threads.viewer(auth, who), message):
         return "message", message
     approval = H.approval(c, ref)
     if approval and (who.actor in (approval.get("requested_by_id"), approval.get("decision_owner"))
@@ -89,9 +90,10 @@ def notice_refs(c, task):
     return {}
 
 
-def task_cause(c, task):
+def task_cause(c, task, see):
     """What made the task: an automation's run (its routine's marker, or the notice that opened it), an org rule, the
-    parent task it was filed under, or a bot's own filing."""
+    parent task it was filed under, or a bot's own filing. `see(task_id)` says whether the caller may read a task; a parent
+    the caller cannot read is named without its title or id."""
     refs = notice_refs(c, task)
     occurrence = (task.get("occurrence") or "").split(":", 1)[0]
     automation = occurrence or refs.get("automation")
@@ -102,9 +104,11 @@ def task_cause(c, task):
         rule = c.execute("SELECT text, version FROM org_rules WHERE id=?", (refs["rule"],)).fetchone()
         return {"type": "rule", "id": refs["rule"], "text": (rule["text"] if rule else "")[:200],
                 "version": rule["version"] if rule else 1}
-    if task.get("parent_id"):
-        parent = H.task(c, task["parent_id"]) or {}
-        return {"type": "parent_task", "id": task["parent_id"], "title": (parent.get("title") or "")[:80]}
+    parent = task_relations.parent_of(c, task["id"])
+    if parent:
+        if not see(parent):
+            return {"type": "parent_task", "id": None, "title": "a task you can no longer see"}
+        return {"type": "parent_task", "id": parent, "title": ((H.task(c, parent) or {}).get("title") or "")[:80]}
     if H.is_bot(task.get("requester_id")):
         return {"type": "bot", "bot": task["requester_id"]}
     return {"type": "person", "person": task.get("requester_id")}
@@ -132,8 +136,10 @@ def siblings_and_stops(c, task, cause):
             if isinstance(refs, dict) and refs.get(key) == cause["id"] and refs.get("task"):
                 made.add(refs["task"])
     elif cause["type"] == "parent_task":
-        made = {r["id"] for r in c.execute("SELECT id FROM tasks WHERE parent_id=? AND created_at>=?",
-                                           (cause["id"], since))}
+        kids = task_relations.child_ids(c, cause["id"]) if cause.get("id") else []
+        made = {r["id"] for part in H.chunks(kids)
+                for r in c.execute(f"SELECT id FROM tasks WHERE id IN ({','.join('?' * len(part))}) AND created_at>=?",
+                                   (*part, since))}
     else:
         made = {r["id"] for r in c.execute("SELECT id FROM tasks WHERE requester_id=? AND title=? AND created_at>=?",
                                            (task["requester_id"], task["title"], since))}
