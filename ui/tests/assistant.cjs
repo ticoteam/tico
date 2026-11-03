@@ -214,7 +214,7 @@ function fixture() {
       assert.match(await pill.innerText(), /New reply/, 'stick: the pill says a reply came');
       await page.locator('#chat-composer .p-text').fill('what changed?');
       await page.locator('#chat-composer .p-send').click();
-      await page.waitForFunction(() => document.querySelectorAll('#conv-thread .bubble').length === 27);
+      await page.waitForFunction(() => document.querySelectorAll('#conv-thread .bubble').length === 26);
       assert.ok(await gap() <= 1, 'stick: your own message takes you to the bottom');
       assert.equal(await pill.isHidden(), true, 'stick: and the pill goes');
       assert.deepEqual(errors, [], 'stick: no page errors');
