@@ -318,9 +318,12 @@ def test_three_default_shards_collect_exactly_the_single_default_run(monkeypatch
     import sys
     from concurrent.futures import ThreadPoolExecutor
 
+    # No junit report from collection: a stray python-N-of-M.xml would sit beside the release step's real reports.
+    env = {**os.environ, 'PYTEST_ADDOPTS': release_checks.split_junit(os.environ.get('PYTEST_ADDOPTS', ''))[0]}
+
     def collect(*files):
         result = subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q', '-n', '0', *files],
-                                cwd=release_checks.ROOT, env=dict(os.environ), capture_output=True, text=True)
+                                cwd=release_checks.ROOT, env=env, capture_output=True, text=True)
         assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
         return result.stdout
     listing = collect()   # the single job's collection, the same command shard_files runs for the default suite
@@ -431,3 +434,18 @@ def test_batches_write_their_own_junit_report_when_the_release_step_names_one(tm
     monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(run=collect))
     release_checks.collected_counts(env, ())
     assert seen == ['--durations=25 -o junit_family=xunit1'] and '--junitxml' in env['PYTEST_ADDOPTS']
+
+
+def test_the_junit_report_option_is_found_in_every_form_pytest_accepts():
+    split = release_checks.split_junit
+    assert split('--durations=25 -o junit_family=xunit1 --junitxml=/r/a.xml') == (
+        '--durations=25 -o junit_family=xunit1', '/r/a.xml')   # CI's plain form: the rest is unchanged
+    assert split('--junitxml="/tmp/report dir/r.xml" -q') == ('-q', '/tmp/report dir/r.xml')
+    assert split('--junitxml /tmp/r.xml -q') == ('-q', '/tmp/r.xml')
+    assert split('--junit-xml=/tmp/r.xml') == ('', '/tmp/r.xml')
+    assert split('--durations=25') == ('--durations=25', None) and split('') == ('', None)
+    # The batch reports come out the same for the quoted and the separate forms.
+    assert release_checks.batch_commands([['a.py']], '4', (), {'PYTEST_ADDOPTS': '"--junitxml=/tmp/report dir/r.xml"'})[0][-2:] == [
+        '--junitxml=/tmp/report dir/r-b01.xml', 'a.py']
+    assert release_checks.batch_commands([['a.py']], '4', (), {'PYTEST_ADDOPTS': '--junitxml /tmp/r.xml'})[0][-2:] == [
+        '--junitxml=/tmp/r-b01.xml', 'a.py']

@@ -44,6 +44,7 @@ import os
 from pathlib import Path
 import socket
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -272,9 +273,22 @@ def native_test_files(names):
 NATIVE_SHARDS = 2
 
 
+def split_junit(addopts):
+    """(PYTEST_ADDOPTS without its junit report option, the report path it names or None). The words are split the way
+    pytest splits PYTEST_ADDOPTS (shlex), so `--junitxml=PATH`, `--junitxml PATH`, quoted paths and `--junit-xml` all work."""
+    words, kept, report = iter(shlex.split(addopts)), [], None
+    for word in words:
+        name, equals, value = word.partition('=')
+        if name in ('--junitxml', '--junit-xml'):
+            report = value if equals else next(words, None)
+        else:
+            kept.append(word)
+    return shlex.join(kept), report
+
+
 def collected_counts(env, selection):
     """{test file: its number of collected tests} for pytest's `selection` (by default the release Python step's)."""
-    env = {**env, 'PYTEST_ADDOPTS': re.sub(r'\s*--junitxml=\S+', '', env.get('PYTEST_ADDOPTS', ''))}   # no report from collection
+    env = {**env, 'PYTEST_ADDOPTS': split_junit(env.get('PYTEST_ADDOPTS', ''))[0]}   # no report from collection
     result = subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q', '-n', '0', *selection],
                             cwd=ROOT, env=env, capture_output=True, text=True)
     if result.returncode:
@@ -482,13 +496,14 @@ INTERRUPTED = 2
 def batch_commands(groups, workers, selection, env):
     """One pytest command per batch of files: `workers` xdist workers and the run's `selection` options. A junit report
     that PYTEST_ADDOPTS names (the release step's --junitxml=DIR/NAME.xml) becomes DIR/NAME-bNN.xml for batch NN, so no
-    batch overwrites another's report. The timings reader takes every report under the directory."""
-    report = re.search(r'--junitxml=(\S+)', env.get('PYTEST_ADDOPTS', ''))
+    batch overwrites another's report. The timings reader takes every report under the directory. PYTEST_ADDOPTS is read
+    before the command line and the last --junitxml wins, so the batch's own option overrides the base one."""
+    report = split_junit(env.get('PYTEST_ADDOPTS', ''))[1]
     commands = []
     for number, group in enumerate(groups, 1):
         junit = []
         if report:
-            path = Path(report.group(1))
+            path = Path(report)
             junit = [f'--junitxml={path.with_name(f"{path.stem}-b{number:02d}.xml")}']
         commands.append([sys.executable, '-m', 'pytest', '-q', '-n', workers, *selection, '--api-database-snapshots',
                          *junit, *group])
