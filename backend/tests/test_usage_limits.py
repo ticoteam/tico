@@ -142,14 +142,14 @@ def test_a_group_or_team_limit_holds_every_bot_it_covers_and_an_hourly_limit_set
     assert pools["groups"]["eng"]["day_spent"] == 5 and pools["groups"]["eng"]["blocked"] == "daily"
     put(api, "usage/pools/groups/eng", {"daily_usd": None})                       # nothing left removes it
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM usage_pools WHERE scope='group:eng'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM budget_nodes WHERE team_id='eng'").fetchone()[0] == 0
     put(api, "usage/pools/company", {"weekly_usd": 4})
     assert claim(api, r) is None                                                  # the whole team's week is spent too
     assert paused(api)["focus"] == "Paused: the team is over its weekly limit"
     put(api, "usage/pools/company", {"weekly_usd": 400})
     assert claim(api, r) is not None
     with api.app.state.store.transaction() as c:                                  # an hour limit set before the half hour
-        c.execute("INSERT INTO usage_limits(bot, hourly_usd) VALUES('ops', 1)")
+        usage_limits.save_own(c, "ops", {**usage_limits.own(c, "ops"), "hourly_usd": 1}, None)
     with api.app.state.store.read() as c:
         started = c.execute("SELECT min(started_at) FROM turns WHERE bot='ops'").fetchone()[0]
         at = datetime.fromisoformat(started[:19]).replace(tzinfo=usage_limits.timezone.utc)

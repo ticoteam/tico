@@ -46,12 +46,7 @@ SCHEMA = (
 def ensure(c):
     for statement in SCHEMA:
         c.execute(statement)
-    # CONTRACT §1 30-minute limits (wave 2 adds the same columns; both are idempotent).
     from .hubdb import add_column
-    from . import usage_limits
-    usage_limits.ensure(c)
-    add_column(c, "usage_limits", "per_30m_usd", "REAL")
-    add_column(c, "usage_pools", "per_30m_usd", "REAL")
     # What became of each object (`outcome` converted | kept | failed, `why`), and when the owner was told of it.
     for column in ("outcome", "why", "title", "migrated_at", "told"):
         add_column(c, "redesign_migrated", column, "TEXT")
@@ -404,24 +399,39 @@ def _limit(oid, title, hourly, where):
             "flags": flags, "_do": ("limit", {**where, "per_30m_usd": amount})}
 
 
+def _hourly(c):
+    """{caps key: hourly USD} for every hourly limit: a bot's, a pool's and the company default's. A database an older
+    release wrote (read by `waiting` before any migration) still keeps them in usage_limits, usage_pools and the
+    default's registry entry."""
+    from . import usage_limits
+    if _table(c, "budget_nodes"):
+        return {key: caps["hourly_usd"] for key, caps in usage_limits.nodes(c).items() if caps.get("hourly_usd")}
+    out = {}
+    for table, column, kind in (("usage_limits", "bot", "bot"), ("usage_pools", "scope", "pool")):
+        if _table(c, table) and "hourly_usd" in _columns(c, table):
+            for row in c.execute(f"SELECT {column}, hourly_usd FROM {table} WHERE hourly_usd > 0"):
+                out[(kind, row[0])] = row[1]
+    hourly = usage_limits._amount(_json(_meta(c, usage_limits.KEY), {}).get("hourly_usd"))
+    if hourly:
+        out[usage_limits.DEFAULT] = hourly
+    return out
+
+
 def _limits(c, done):
     from . import usage_limits
     out = []
-    if _table(c, "usage_limits") and "hourly_usd" in _columns(c, "usage_limits"):
-        for row in c.execute("SELECT bot, hourly_usd FROM usage_limits WHERE hourly_usd IS NOT NULL ORDER BY bot"):
-            if ("spend_limit", "limit:" + row["bot"]) not in done and row["hourly_usd"] > 0:
-                out.append(_limit("limit:" + row["bot"], f"{row['bot']} hourly limit", row["hourly_usd"],
-                                  {"table": "usage_limits", "key": row["bot"]}))
-    if _table(c, "usage_pools"):
-        for row in c.execute("SELECT scope, hourly_usd FROM usage_pools WHERE hourly_usd IS NOT NULL ORDER BY scope"):
-            oid = "limit:pool:" + row["scope"]
-            if ("spend_limit", oid) not in done and row["hourly_usd"] > 0:
-                out.append(_limit(oid, f"{row['scope']} hourly limit", row["hourly_usd"],
-                                  {"table": "usage_pools", "key": row["scope"]}))
-    stored = _json(_meta(c, usage_limits.KEY), {})
-    hourly = usage_limits._amount(stored.get("hourly_usd"))
-    if hourly and ("spend_limit", "limit:company-default") not in done:
-        out.append(_limit("limit:company-default", "Company default hourly limit", hourly, {"table": "registry"}))
+    found = _hourly(c)
+    for key in sorted((k for k in found if k[0] == "bot"), key=lambda k: k[1]):
+        if ("spend_limit", "limit:" + key[1]) not in done:
+            out.append(_limit("limit:" + key[1], f"{key[1]} hourly limit", found[key],
+                              {"table": "usage_limits", "key": key[1]}))
+    for key in sorted((k for k in found if k[0] == "pool"), key=lambda k: k[1]):
+        oid = "limit:pool:" + key[1]
+        if ("spend_limit", oid) not in done:
+            out.append(_limit(oid, f"{key[1]} hourly limit", found[key], {"table": "usage_pools", "key": key[1]}))
+    if usage_limits.DEFAULT in found and ("spend_limit", "limit:company-default") not in done:
+        out.append(_limit("limit:company-default", "Company default hourly limit", found[usage_limits.DEFAULT],
+                          {"table": "registry"}))
     return out
 
 
@@ -529,14 +539,11 @@ def _convert_one(c, who, mid, obj, group_done):
         _mark(c, "bot", obj["id"], mid, None)
         return None
     if kind == "limit":
-        if args["table"] == "registry":
-            stored = _json(_meta(c, usage_limits.KEY), {})
-            stored.update(per_30m_usd=args["per_30m_usd"], hourly_usd=None)
-            _set_meta(c, usage_limits.KEY, json.dumps(stored, sort_keys=True))
-        else:
-            column = "bot" if args["table"] == "usage_limits" else "scope"
-            c.execute(f"UPDATE {args['table']} SET per_30m_usd=?, hourly_usd=NULL WHERE {column}=?",
-                      (args["per_30m_usd"], args["key"]))
+        # A plan names where the limit lived before budget nodes (usage_limits, usage_pools, registry): the same caps.
+        key = (usage_limits.DEFAULT if args["table"] == "registry" else
+               ("bot" if args["table"] == "usage_limits" else "pool", args["key"]))
+        caps = {**(usage_limits.nodes(c).get(key) or {}), "per_30m_usd": args["per_30m_usd"], "hourly_usd": None}
+        usage_limits.save_caps(c, key, caps, who.actor)
         _mark(c, "spend_limit", obj["id"], mid, None)
         return None
     if kind == "budget_team":
@@ -1314,7 +1321,7 @@ def pending(c):
     rules), inboxes, hourly spend limits, turn budgets below the guard, and the Strategy
     bot's rename. Nothing once the cutover started or finished; read-only mirrors of jobs Tico
     keeps running count for nothing."""
-    from . import strategy_bot, tico_notices, turn_budgets as TB, usage_limits
+    from . import strategy_bot, tico_notices, turn_budgets as TB
     if not _table(c, "registry_metadata") or state(c):
         return {}
     done = ({(r[0], r[1]) for r in c.execute("SELECT kind, id FROM redesign_migrated")}
@@ -1335,11 +1342,7 @@ def pending(c):
     bots = ({r[0]: r[1] for r in c.execute("SELECT id, state FROM bots")} if _table(c, "bots") else {})
     add("inbox", sum(bool(p.get("inbox_bot")) and not p.get("hidden") and bots.get(p["inbox_bot"]) not in (None, "archived")
                      for p in people if isinstance(p, dict)))
-    for table, key in (("usage_limits", "bot"), ("usage_pools", "scope")):
-        if _table(c, table) and "hourly_usd" in _columns(c, table):
-            add("spend_limit", c.execute(f"SELECT count(*) FROM {table} WHERE hourly_usd > 0").fetchone()[0])
-    if usage_limits._amount(_json(_meta(c, usage_limits.KEY), {}).get("hourly_usd")):
-        add("spend_limit", 1)
+    add("spend_limit", len(_hourly(c)))
 
     def low(values):
         return any(isinstance(values.get(k), int) and 0 < values[k] < GUARD[k] for k in GUARD)

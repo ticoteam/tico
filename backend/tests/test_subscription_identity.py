@@ -72,4 +72,4 @@ def test_usage_groups_immutable_connections_and_rename_preserves_filter(api):
     assert selected['rows'][0]['name'] == 'North plan · North'
     assert get(api, 'usage?group=subscription', 'cara-test')['rows'] == []
     with api.app.state.store.read() as c:
-        assert {r[0] for r in c.execute('SELECT profile FROM turn_usage_segments')} == {'engineering'}
+        assert {r[0] for r in c.execute("SELECT profile FROM usage_facts WHERE source='estimate'")} == {'engineering'}

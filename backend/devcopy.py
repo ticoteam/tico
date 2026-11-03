@@ -150,8 +150,11 @@ KEEP = frozenset((
     "system_runs", "tags", "task_assets",
     "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
     "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
-    "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
-    "usage_limits", "usage_pools", "task_caps", "reach_settings", "reach_lines",
+    "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
+    "usage_facts", "usage_meter_reads", "budget_nodes", "task_caps", "reach_settings", "reach_lines",
+    # A copy of a database from before migrations 0053/0054 still holds these: kept, so the dev server's first start
+    # moves them into usage_facts and budget_nodes (the copy is pruned before it is migrated).
+    "turn_usage_segments", "usage_limits", "usage_pools",
     "feedbacks",       # 👍/👎 on bot work (backend/feedback.py)
     # Shared records (backend/records): locations, items and projects
     "items", "locations", "projects", "record_aliases",

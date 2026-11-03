@@ -76,10 +76,12 @@ DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "tasks_priva
                    "idempotency_by_created"}
 # Dropped by backend/migrations/0052_drop_queue_bot_message.sql: backend/enqueue.py queues the job in Python now.
 DROPPED_TRIGGERS = {"queue_bot_message"}
-# Dropped by backend/migrations/0035_growth_rethink.py after the renames ran on them, and the operation-binding tables
-# backend/migrations/0050_idempotency_one_table.py moves into `idempotency`.
+# Dropped after the renames ran on them: by backend/migrations/0035_growth_rethink.py, the operation-binding tables
+# 0050_idempotency_one_table.py moves into `idempotency`, 0053_usage_facts.py (its rows are usage facts) and
+# 0054_budget_nodes.py (its rows are budget nodes).
 RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",
-           "gtm_versions", "gtm_drafts", "invite_sends", "github_product_repo_operations", "github_review_operations"}
+           "gtm_versions", "gtm_drafts", "invite_sends", "github_product_repo_operations", "github_review_operations",
+           "turn_usage_segments", "usage_limits", "usage_pools"}
 
 
 @pytest.fixture(scope="module")
