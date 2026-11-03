@@ -1,4 +1,4 @@
-//! Keep the secrets a turn was granted out of what the runner writes down (`runner/redact.py`).
+//! Keep the secrets a turn was granted out of what the runner writes down (`runner_support/redact.py`).
 //!
 //! One redactor per turn holds its granted values and the common ways each turns up (URL-encoded, base64
 //! with and without padding, the password half of `user:password`) and replaces them with `••••`, longest
@@ -455,7 +455,7 @@ pub fn git_failure(stderr: &str, secrets: &[String], limit: usize) -> String {
     }
 }
 
-/// git with the clean environment `runner/safe_git.py` uses: no global or system config.
+/// git with the clean environment `runner_support/safe_git.py` uses: no global or system config.
 pub fn git(root: &Path, args: &[&str]) -> Option<Vec<u8>> {
     let mut argv: Vec<String> = vec!["git".into()];
     argv.extend(crate::safegit::args(root));
@@ -572,7 +572,7 @@ mod tests {
         let secrets = ["granted-file-secret-fixture", "Zm9vYmFyYmF6cXV4", "a:b c+d/e=fghij"];
         let sample = "x granted-file-secret-fixture y Z3JhbnRlZC1maWxlLXNlY3JldC1maXh0dXJl z a%3Ab%20c%2Bd%2Fe%3Dfghij w b c+d/e=fghij";
         let r = Redactor::new(&secrets.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-        let script = "import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom runner.redact import Redactor\nprint(Redactor(json.loads(sys.argv[2])).scrub_text(sys.argv[3]))";
+        let script = "import sys,json\nsys.path.insert(0,sys.argv[1])\nfrom runner_support.redact import Redactor\nprint(Redactor(json.loads(sys.argv[2])).scrub_text(sys.argv[3]))";
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let out = Command::new("python3")
             .args(["-c", script])

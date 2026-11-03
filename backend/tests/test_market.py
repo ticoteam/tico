@@ -181,38 +181,37 @@ def test_market_import_resolves_cites_skips_and_dry_runs(api, tmp_path):
 
 
 def test_a_market_ask_is_audited_and_capped_per_person_per_day(api, tmp_path, monkeypatch):
-    """The ask spends the server's Gemini key: one `market.ask` event per model call, never the question, and a
+    """The ask spends the enabled server provider's key: one `market.ask` event per model call, never the question, and a
     clear 429 once the person's daily cap is used. With no key the pulled excerpts are still the answer."""
     _seed(api, tmp_path)
     store = api.app.state.store
     sent = []
 
-    def complete(question, excerpts):
+    def complete(question, excerpts, writer):
         sent.append(question)
         return "Northwind sells pricing software."
 
     monkeypatch.setattr(M, "complete", complete)
+    def writer(system, user):
+        return {"answer": "stub"}
+    writer.model = "stub-model"
+    monkeypatch.setattr("backend.updates.writer_for", lambda *a, **kw: writer)
     store.settings.decisions_daily_calls_owner = 1
     out = post(api, "market/ask", {"question": "What does Northwind sell?"})
     assert out["answer"] == "Northwind sells pricing software."
     with store.read() as c:
         rows = [json.loads(r["detail"]) for r in c.execute(
             "SELECT detail FROM events WHERE action='market.ask' AND actor='human:ana'")]
-    assert len(rows) == 1 and rows[0]["model"] == M.ASK_MODEL and "Northwind" not in json.dumps(rows[0])
+    assert len(rows) == 1 and rows[0]["model"] == "stub-model" and "Northwind" not in json.dumps(rows[0])
     over = api.post("/api/v2/market/ask", json={"question": "What does Northwind sell?"}, headers=headers())
     assert over.status_code == 429 and over.json()["error"]["code"] == "budget" and len(sent) == 1
 
-    from clients import docs_qa
-
-    def no_key(question, excerpts):
-        raise docs_qa.NoKey("no key")
-
-    monkeypatch.setattr(M, "complete", no_key)
+    monkeypatch.setattr("backend.updates.writer_for", lambda *a, **kw: None)
     store.settings.decisions_daily_calls_owner = 5
     out = post(api, "market/ask", {"question": "What does Northwind sell?"})
     assert out["answer"].startswith("Pulled from the market graph.")
     with store.read() as c:
-        assert c.execute("SELECT count(*) FROM events WHERE action='market.ask'").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM events WHERE action='market.ask'").fetchone()[0] == 2
 
 
 def test_graph_reads_share_market_permissions_and_hide_inactive_entities(api):
