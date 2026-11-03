@@ -7,7 +7,8 @@ A run is a list of threads. A thread is where one item is in the flow: the outpu
 the forks it took (`trail`) and the next step in that list. Paths never rejoin and a `paths` step ends its list, so
 that cursor is the whole position. A run starts with one thread; a `find` replaces it with one per item.
 
-A thread stops when its list ends, a filter rule says stop, a fork has no path or a step fails. A turn over the spend
+A thread stops when its list ends, a filter rule ends it (`next` end, or `to` a destination), a fork has no
+path or a step fails. A turn over the spend
 cap is recorded as `spend_cap` and the thread goes on without it; a decision with Decide off is `skipped` likewise. It waits for two things: the answer of an `llm` turn that has steps after it, or of a `bot_turn` a later step reads
 (`{{brief.text}}`, or a `post_update` with no text of its own; `answer` fills it, a bot turn's under its step id) and,
 with `batch` times, the next batch time once the leading filters ran (`advance` picks it up when the time comes).
@@ -169,24 +170,49 @@ def _step(flow, state, thread, services):
         thread["state"] = FAILED
 
 
+def _chain(services, chain, values, step, key, first):
+    """Run one chain of actions in order, each as an effect keyed `<key>.<m>` where m counts from `first` across the
+    step. A refused action ends the chain (what follows it may depend on it); the list keeps it as the last entry."""
+    done = []
+    for action, source in chain:
+        result = _act(services, action["do"], action.get("args") or {}, values, step, f"{key}.{first + len(done)}")
+        done.append({**result, **source})
+        if not result.get("ok"):
+            break
+    return done
+
+
 def _filter(flow, state, thread, step, services):
+    """The rules in order. A rule that holds runs its actions and, with `to`, its destination's chain. What it does
+    after that is its `next` (F.rule_next): `end` ends the thread, `rule` moves on to the rules after it, `step` goes on
+    to the next step. A refused action fails the thread and the step's record says which."""
     values = values_of(state, thread)
+    destinations = {d["id"]: d for d in flow.get("destinations") or []}
+    key, actions, fired, failed, ended = len(state["steps"]), [], [], False, False
     for n, rule in enumerate(step.get("rules") or []):
         if not F.all_hold(rule.get("when") or [], values, rule.get("match", "all")):
             continue
-        done, key = [], len(state["steps"])
-        for m, action in enumerate(rule.get("then") or []):
-            done.append(_act(services, action["do"], action.get("args") or {}, values, step, f"{key}.{m}"))
-            if not done[-1].get("ok"):
-                break   # a refused action stops the rule: what follows it may depend on it
-        failed = [d for d in done if not d.get("ok")]
-        _record(state, thread, step, "failed" if failed else "ok", {"rule": n, "actions": done})
-        if failed:
-            thread["state"] = FAILED
-        elif rule.get("stop"):
-            thread["state"] = DONE
-        return
-    _record(state, thread, step, "ok", {"rule": None, "actions": []})
+        fired.append(n)
+        chain = [(action, {"from": "rule", "rule": n}) for action in rule.get("then") or []]
+        if rule.get("to") is not None:
+            if rule["to"] not in destinations:   # check() refuses a flow that names none; a run never reaches this
+                raise ValueError(f"no destination named {rule['to']}")
+            dest = destinations[rule["to"]]
+            chain += [(action, {"from": "destination", "destination": dest["id"]}) for action in dest.get("then") or []]
+        actions += _chain(services, chain, values, step, key, len(actions))
+        if any(not action.get("ok") for action in actions):
+            failed = True
+            break
+        after = F.rule_next(rule)
+        if after != "rule":
+            ended = after == "end"
+            break
+    _record(state, thread, step, "failed" if failed else "ok",
+            {"rule": fired[0] if fired else None, "rules": fired, "actions": actions})
+    if failed:
+        thread["state"] = FAILED
+    elif ended:
+        thread["state"] = DONE
 
 
 # A notice's text reaches a bot as words to act on: what arrived (mail, a webhook) goes in as quoted data, as in a

@@ -96,9 +96,9 @@ def computer(api, tmp_path, monkeypatch):
     return box
 
 
-def automate(api, *steps):
+def automate(api, *steps, **extra):
     return post(api, "automations", {"name": "Invoices", "owner": "person:ana",
-                                     "trigger": {"type": "message", "inbox": BOX}, "steps": list(steps)})["id"]
+                                     "trigger": {"type": "message", "inbox": BOX}, "steps": list(steps), **extra})["id"]
 
 
 def last_run(api, aid):
@@ -406,3 +406,22 @@ def test_no_computer_claims_or_reports_for_a_mailbox_not_published_yet(api, comp
     post(api, "automations/mail-actions/ma_1/result", {"ok": True, "detail": "sent"}, computer.token, expected=403)
     computer.sync()                                          # published: now it is this computer's
     assert len(claim(api, computer.token)["actions"]) == 1
+
+
+def test_two_rules_that_fired_and_a_destinations_mail_action_settle_into_one_record(api, computer):
+    gate = {"id": "gate", "type": "filter", "rules": [
+        {"when": [], "then": [{"do": "label", "args": {"tag": "billing"}}], "next": "rule"},
+        {"when": [], "then": [], "to": "legal"}]}
+    aid = automate(api, gate, destinations=[{"id": "legal", "name": "Legal", "then": [{"do": "leave_for_you"}]}])
+    computer.sync()
+    assert last_run(api, aid)["steps"][0]["status"] == "waiting"
+    assert computer.worker.mail_action_tick() == 2          # both queued, claimed in order, one tick
+    labels = {computer.gmail.name_of(lid) for lid in computer.gmail.store["m1"]["labelIds"]}
+    assert {"hub/billing", "hub/needs-owner"} <= labels and "INBOX" not in labels
+    run = last_run(api, aid)
+    assert run["status"] == "ok" and run["steps"][0]["status"] == "ok"
+    out = run["steps"][0]["outputs"]
+    assert out["rules"] == [0, 1]
+    assert [(a["detail"], a["from"]) for a in out["actions"]] == [
+        ("labelled hub/billing", "rule"), ("left for you", "destination")]
+    assert computer.worker.mail_action_tick() == 0          # nothing left, nothing done twice
