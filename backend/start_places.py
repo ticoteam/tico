@@ -128,8 +128,8 @@ def held(c, runner_id):
 
 def live(c, runner_id):
     """{bot: turns it holds on this computer}: running turns and unexpired leases, whether starting, parked on a wait
-    (login, quota, lane, pre-start) or neither. The claim gate counts these, so a computer never leases more turns than
-    its limit. A parked turn keeps its slot; the work behind it stays queued on the server, unleased.
+    (login, quota, lane, pre-start) or neither. The claim gate counts these against `live_limit`, so a computer's claimed work
+    stays bounded; work past that stays queued on the server, unleased.
 
     Cached for the read snapshot, like `held`.
     """
@@ -178,6 +178,17 @@ def turn_limit(runner):
     if TURNS_AT_ONCE in frozenset(H._json(runner["capabilities"], []) or []):
         return setting
     return min(setting, reported)
+
+
+# Claims stop once a computer holds this many times its turn limit in claimed work, waiting turns included. A parked
+# turn has no harness process and takes no start place, so a login or quota wait does not hold the computer's other
+# work; the bound only stops the server from leasing without limit.
+LIVE_CAP_FACTOR = 2
+
+
+def live_limit(runner):
+    """The most claimed turns (running, starting and parked) this computer may hold: LIVE_CAP_FACTOR x turn_limit."""
+    return LIVE_CAP_FACTOR * turn_limit(runner)
 
 
 def bot_limit(config):

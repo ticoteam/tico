@@ -833,14 +833,16 @@ def own_sign_in(c, bot, settings=None):
 
 
 def free_turn(c, bot, location, human=False):
-    """The computer whose running work and short starts occupy all its places, or ''."""
+    """The computer where no turn can start now, or '': its start places are all taken by running and starting turns
+    (start_places.held), or it already holds as many claimed turns as it may lease (start_places.live_limit)."""
     machine = location.get("machine") or {}
     row = c.execute("SELECT * FROM runners WHERE id=?", (machine.get("runner_id"),)).fetchone()
     if not row:
         return ""
-    from .start_places import live, turn_limit
-    held = sum(live(c, machine["runner_id"]).values())
-    return (machine.get("label") or "its computer") if held >= turn_limit(row) else ""
+    from .start_places import held, live, live_limit, turn_limit
+    rid = machine["runner_id"]
+    full = sum(held(c, rid).values()) >= turn_limit(row) or sum(live(c, rid).values()) >= live_limit(row)
+    return (machine.get("label") or "its computer") if full else ""
 
 
 def cloud_machine_wait(c, bot):

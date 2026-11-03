@@ -138,11 +138,11 @@ def test_another_owners_task_notice_never_starts_their_task_or_uses_our_cap(api)
 
 def test_automatic_backfill_uses_free_places_while_waiters_still_fence_their_lanes(api):
     from backend.tests.test_api import claim
-    machine = task_bot(api, lanes=True, capacity=3, others=('finance',))
+    machine = task_bot(api, lanes=True, capacity=2, others=('finance',))
     tasks = deck(api, 4)
     first = claim(api, machine)
     post(api, f"attempts/{first['id']}/start-place", {'waiting': 'shared login'}, machine['token'])
-    # The waiting worker keeps its task lane and its place, so the other two places take the other tasks.
+    # The waiting worker keeps its task lane, but other tasks may use every actual place.
     second, third = claim(api, machine), claim(api, machine)
     assert [a['task']['id'] for a in (first, second, third)] == [t['id'] for t in reversed(tasks[1:])]
     assert claim(api, machine) is None

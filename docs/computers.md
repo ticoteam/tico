@@ -60,9 +60,10 @@ For example, **3 running · 2 starting · 7 waiting for quota (oldest 2 h) · 5 
 The counts describe the computer's total load, including work belonging to other people. Wait reasons never name
 bots, tasks, people or accounts. The bot list still follows each viewer's access.
 
-On an upgraded runner, a turn holds its place from its claim until it ends. Running, starting and waiting turns all count
-against the computer's turn limit, and the server never leases more turns than that limit. A login, quota or other
-pre-start wait keeps its place, so further work stays queued on the server, unleased, until a place frees. Waiting for
+On an upgraded runner, a turn holds its place from its claim until it ends. A computer runs up to its turn limit, and
+holds at most twice that in claimed work, waiting turns included; the rest stays queued on the server, unleased, until
+a claim ends. A login, quota or other pre-start wait is parked: the turn keeps its claim but takes no start place, so
+other work can start beside it. Waiting for
 a lane or login releases only the start reservation; continuing requires a fresh atomic reservation. Two turns cannot
 take the last start reservation together. Codex's shared ChatGPT login does not normally queue turns
 ([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).

@@ -84,9 +84,9 @@ def test_health_below_warning_counts_queued_work_without_asking_each_bot_why(api
     assert line['turn_counts']['waiting'] + line['turn_counts']['queued'] == 2
 
 
-def test_parked_logins_hold_their_places_so_another_login_waits_until_one_ends(api):
-    """A parked turn keeps its lease and its place: 37 logins waiting plus 3 running fill a 40-turn computer, so a
-    different login is refused (and says it is full) until one lease ends, then it starts at once."""
+def test_parked_logins_take_no_start_place_so_another_login_starts_and_claims_go_on(api):
+    """37 logins parked on a shared login and 3 running on a 40-turn computer: the parked ones take no start place, so
+    another login starts at once (free_turn stays ''), and its claim goes through below twice the limit (80)."""
     from backend import start_places
     from backend.views import free_turn
     computer = waiters(api)
@@ -98,11 +98,7 @@ def test_parked_logins_hold_their_places_so_another_login_waits_until_one_ends(a
     post(api, 'chat/finance', {'text': 'Independent work on another login'})
     with api.app.state.store.read() as c:
         assert sum(start_places.live(c, rid).values()) == 40
-        assert free_turn(c, 'ops', {'machine': {'runner_id': rid, 'label': 'Test Mac'}}) == 'Test Mac'
-    assert claim(api, computer, 'finance') is None
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET lease_until=? WHERE id='attempt-0'", (H.shift(H.now(), seconds=-1),))
-    with api.app.state.store.read() as c:
+        assert sum(start_places.held(c, rid).values()) == 3
         assert free_turn(c, 'ops', {'machine': {'runner_id': rid, 'label': 'Test Mac'}}) == ''
     attempt = claim(api, computer, 'finance')
     assert attempt is not None and attempt['bot'] == 'finance'
