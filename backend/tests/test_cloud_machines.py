@@ -33,6 +33,7 @@ class FakeHQ:
 
     def __init__(self):
         self.calls, self.fail, self.machines, self.n = [], {}, {}, 0
+        self.clock = None               # a test's fake clock (an ISO time): start and stop then stamp as HQ does
 
     def _check(self, action):
         failing = self.fail.get(action)
@@ -68,13 +69,15 @@ class FakeHQ:
         self.calls.append(("start", machine_id, size))
         self._check("start")
         machine = self.machines[machine_id]
-        return self._machine(machine_id, state="starting", size=size or machine["size"],
-                             starts_month=machine["starts_month"] + 1)
+        changes = {"state": "starting", "size": size or machine["size"], "starts_month": machine["starts_month"] + 1}
+        if self.clock:
+            changes["started_at"] = self.clock()
+        return self._machine(machine_id, **changes)
 
     def stop(self, machine_id):
         self.calls.append(("stop", machine_id))
         self._check("stop")
-        return self._machine(machine_id, state="stopped", stopped_at=H.now())
+        return self._machine(machine_id, state="stopped", stopped_at=self.clock() if self.clock else H.now())
 
     def heartbeat(self, machine_id):
         self.calls.append(("heartbeat", machine_id))
@@ -288,6 +291,23 @@ def test_decide_holds_the_idle_stop_while_its_runner_is_updating():
     assert CM.decide(on, facts(updating=True), 2000, 300) == ("heartbeat", None)
 
 
+def test_idle_for_waits_longer_only_after_a_stop_shorter_than_break_even():
+    """A machine whose last stop was shorter than its idle time stays on SHORT_GAP_FACTOR times longer. A longer stop, a
+    stale one (stopped after it started) or a missing or unreadable time leaves the idle time as it is."""
+    stopped = "2026-11-03T10:00:00.000000Z"
+
+    def started(seconds):
+        return H.shift(stopped, seconds=seconds)
+    assert CM.idle_for({"stopped_at": stopped, "started_at": started(60)}, 300) == 300 * CM.SHORT_GAP_FACTOR
+    assert CM.idle_for({"stopped_at": stopped, "started_at": started(299)}, 300) == 300 * CM.SHORT_GAP_FACTOR
+    assert CM.idle_for({"stopped_at": stopped, "started_at": started(300)}, 300) == 300
+    assert CM.idle_for({"stopped_at": stopped, "started_at": started(3600)}, 300) == 300
+    assert CM.idle_for({"stopped_at": started(60), "started_at": stopped}, 300) == 300
+    assert CM.idle_for({"stopped_at": None, "started_at": started(60)}, 300) == 300
+    assert CM.idle_for({"stopped_at": stopped}, 300) == 300
+    assert CM.idle_for({"stopped_at": stopped, "started_at": "not a time"}, 300) == 300
+
+
 # ----------------------------------------------------------------------------- the manager, against a fake HQ
 def test_off_cloud_nothing_changes(api):  # noqa: F811
     store, fake = api.app.state.store, FakeHQ()
@@ -356,6 +376,36 @@ def test_heartbeat_then_idle_stop_at_break_even_then_wake_with_a_resize(cloud):
     cloud.hq.calls.clear()
     cloud.tick(10)
     assert cloud.hq.actions() == []                              # running now: no second start
+
+
+def test_a_machine_woken_soon_after_its_break_even_stop_stays_on_longer(cloud):
+    cloud.hq.clock = lambda: stamp(cloud)                       # HQ stamps started_at and stopped_at by the fake clock
+    enrolled(cloud)
+    cloud.hq.calls.clear()
+    cloud.manager.synced = None
+    cloud.tick()
+    with cloud.store.transaction() as c:                        # the queued chat is not why it stays on
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
+    cloud.at[0] = cloud.row()["active_at"] + 299
+    cloud.tick()
+    cloud.tick(1)
+    assert cloud.hq.actions()[-1] == "stop" and cloud.row()["state"] == "stopped"   # its first stop: at break-even
+    stopped = cloud.at[0]
+    # Woken 60 s after that stop, which cost more than staying on would have: this time it stays on four times longer.
+    work(cloud, text="Another thing")
+    cloud.at[0] = stopped + 60
+    cloud.hq.calls.clear()
+    assert cloud.tick() == ["start"]
+    woke = cloud.at[0]
+    cloud.hq.calls.clear()
+    cloud.at[0] = woke + 300                                    # the break-even from before: not this time
+    cloud.tick()
+    assert "stop" not in cloud.hq.actions()
+    cloud.at[0] = woke + 1199
+    cloud.tick()
+    assert "stop" not in cloud.hq.actions()
+    cloud.tick(1)
+    assert cloud.hq.actions()[-1] == "stop" and cloud.row()["state"] == "stopped"
 
 
 def test_work_its_machine_never_takes_does_not_start_it_again_but_new_work_does(cloud):

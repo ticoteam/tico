@@ -57,6 +57,7 @@ machine; a shared machine's facts are its member bots' together:
              later of its start, its last activity and its want (a job queued for it, a watcher due: work its runner
              has not taken yet), it is stopped, unless Always on: the shared one only once every member is idle. A
              watcher running often keeps it on by itself, and so does a runner still updating (`runner_updating`).
+             A machine whose last stop was shorter than `idle_stop_s` waits SHORT_GAP_FACTOR times that (`idle_for`).
              With no active bot left on it, it stops, once no turn is out and no update under way: every stop but out
              of credit's waits for both.
     guard    a machine woken for one want that saw no activity is not woken again for that same want: a job its
@@ -126,6 +127,7 @@ TICK = 10                       # seconds between looks
 SYNC = 60                       # seconds between HQ lists
 HEARTBEAT = 60
 IDLE_FALLBACK = 600             # a size HQ has not listed stops soonest: stopping early never makes a bill large
+SHORT_GAP_FACTOR = 4            # woken again sooner than break-even after a stop: stays on this many times longer
 BACKOFF, BACKOFF_MAX = 15, 900
 STOPPING_RETRY = 5              # boat answers 409 sandbox_stopping to a resume right after a stop
 FROZEN_RETRY = 600              # a 402 is asked again this late, or as soon as HQ says the company is open
@@ -413,6 +415,15 @@ def idle_after(c, size, known=None):
         if found["name"] == size:
             return found["idle_stop_s"]
     return IDLE_FALLBACK
+
+
+def idle_for(current, idle_s):
+    """The idle time before machine row `current` stops: `idle_s`, or SHORT_GAP_FACTOR times it when its last stop
+    was shorter than `idle_s` (that stop cost more than staying on would have). Unreadable times leave `idle_s`."""
+    stopped, started = epoch(current.get("stopped_at")), epoch(current.get("started_at"))
+    if stopped is None or started is None or not 0 <= started - stopped < idle_s:
+        return idle_s
+    return idle_s * SHORT_GAP_FACTOR
 
 
 # ----------------------------------------------------------------------------- enrollment
@@ -769,7 +780,8 @@ def reserve(c, settings, key, action, machine_id):
     if not current or current["machine_id"] != machine_id:
         return None
     found = facts(c, settings, current, at)
-    if decide(current, found, at, idle_after(c, current["machine_size"] or current["size"]))[0] != action:
+    idle_s = idle_for(current, idle_after(c, current["machine_size"] or current["size"]))
+    if decide(current, found, at, idle_s)[0] != action:
         return None
     if current["runner_id"] and c.execute("SELECT 1 FROM attempts WHERE runner_id=? AND state IN ('leased','running') "
                                           "LIMIT 1", (current["runner_id"],)).fetchone():
@@ -955,7 +967,7 @@ class Manager:
             if not current:
                 return None
             found = facts(c, self.settings, current, at)
-            idle_s = idle_after(c, current["machine_size"] or current["size"])
+            idle_s = idle_for(current, idle_after(c, current["machine_size"] or current["size"]))
         action, problem = decide(current, found, at, idle_s)
         if problem is not None and problem != current["problem"] and not action:
             with self.store.transaction() as c:
