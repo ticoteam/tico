@@ -47,11 +47,14 @@ SUMMARIES = {f"{bot}:{key}": quiet for bot, key, _title, _cron, _text, quiet in 
 
 
 def seed(b):
-    """Sweep stuck tasks is set up as BotOps' fleet maintainer sets it up at boot (routines.ensure_task_sweep). Then
-    each enabled schedule with no run in the window plays its occurrences in order."""
+    """Sweep stuck tasks is set up as BotOps' fleet maintainer sets it up at boot (routines.ensure_task_sweep), and the
+    Assistant's daily sweep as the boot backfill sets it up (onboarding.ensure_builtin_routines). Both are made at the
+    window's start: a boot takes the real clock, which is after the window, so a sweep made at boot would never be played
+    in it. Then each enabled schedule with no run in the window plays its occurrences in order."""
     start = b.now - WINDOW
     b.clock.at = start
     b.write(lambda c: routines.ensure_task_sweep(c, at=start))
+    b.write(lambda c: b.app.state.onboarding.ensure_builtin_routines(c))
     b.write(_keep_monday_note_off)
     contact = {}
     b.write(lambda c: contact.update(saved=_contact_before(c, start)))
