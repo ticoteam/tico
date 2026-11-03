@@ -909,9 +909,13 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         }
     }
     if state == "signed_in" {
-        // The new account's email and plan are read afresh, not the old one's, after a switch or a plain sign-in alike;
-        // a read of the old account still running is then not kept (accounts::keep_if_current).
-        crate::accounts::forget(&profile.as_ref().map(|p| p.name.clone()).unwrap_or_default(), &s.runtime);
+        // The new account's email, plan, usage windows and fallback hold are read afresh, not the old one's, after a
+        // switch or a plain sign-in alike; a read of the old account still running is then not kept
+        // (accounts::keep_if_current). With the account forgotten, remember() can no longer see the change of account,
+        // so the windows it would have dropped are dropped here.
+        let name = profile.as_ref().map(|p| p.name.clone()).unwrap_or_default();
+        crate::accounts::forget(&name, &s.runtime);
+        crate::profiles::forget_windows(&name, &s.runtime);
     }
     // A captured Connect ends once the server has taken it (`Logins::flush`).
     if !captured {

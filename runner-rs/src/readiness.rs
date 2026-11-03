@@ -205,6 +205,8 @@ async fn sign_in_state(
                 Err(e) => Err(e),
             },
             "json" => {
+                // A sign-in or sign-out while this runs (accounts::forget) makes its account stale: it is then not kept.
+                let since = crate::accounts::read_started(&account_key, runtime);
                 let ran = run_env(&argv, timeout, env).await;
                 match &ran {
                     Err(true) => Err(true),
@@ -213,7 +215,9 @@ async fn sign_in_state(
                         Some(s) if s[&status.field] == true => {
                             if caps.account == "status-json" {
                                 match crate::accounts::from_status_json(&s) {
-                                    Some(account) => crate::accounts::remember(&account_key, runtime, account),
+                                    Some(account) => {
+                                        crate::accounts::keep_if_current(&account_key, runtime, since, || crate::accounts::remember(&account_key, runtime, account));
+                                    }
                                     None => crate::accounts::forget(&account_key, runtime),
                                 }
                             }

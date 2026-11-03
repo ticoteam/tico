@@ -554,6 +554,8 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                         "command" | "json" => {
                             if let (Some(exe), false) = (exe, budget.is_zero()) {
                                 let env = profile.environment(runtime, &clean);
+                                // A sign-in or sign-out while this runs (accounts::forget) makes its account stale: not kept.
+                                let since = crate::accounts::read_started(&name, runtime);
                                 // As the bot user, like readiness and turns: the CLI may write in the profile's home.
                                 let mut cmd = crate::isolation::command(exe);
                                 cmd.args(&status.args).env_clear().envs(&env).stdin(std::process::Stdio::null()).kill_on_drop(true);
@@ -565,7 +567,9 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                                         serde_json::from_slice::<Value>(&out.stdout).ok().filter(|v| v.is_object()).map_or(Value::Null, |v| {
                                             if crate::harness_tools::caps(runtime, "").account == "status-json" {
                                                 match crate::accounts::from_status_json(&v) {
-                                                    Some(account) => crate::accounts::remember(&name, runtime, account),
+                                                    Some(account) => {
+                                                        crate::accounts::keep_if_current(&name, runtime, since, || crate::accounts::remember(&name, runtime, account));
+                                                    }
                                                     None => crate::accounts::forget(&name, runtime),
                                                 }
                                             }
