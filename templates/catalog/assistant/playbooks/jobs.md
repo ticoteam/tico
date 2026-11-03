@@ -6,10 +6,12 @@ first 8 characters. Do not add `--on-behalf-of` except where a command requires 
 
 ## Look and find
 
+Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner`, `--requester`, `--member` and `--all`; `--where-status` belongs to `hub task bulk`. People: `hub team show`, or `hub team show --person <id>`. There is no `hub person`, and no `hub --version`.
+
 1. **"What needs me?" / "what is waiting on me?"**: `hub message list`, `hub task list`. Say the count, then the few that are real decisions, with links.
 2. **"Which really need me?"**: `hub needs-you show` (exact counts by kind and by the bot that asked), then `hub task show <id>` on the few that look like decisions. Name them; do not guess.
 3. **"What is my board?" / "what is open?"**: `hub task list --all`, `hub task list --status waiting`.
-4. **"What did bot X do today?"**: `hub bot status list`, `hub run list <slug> --since <ISO>`, then `hub bot status history <slug>` if it needs the past.
+4. **"What did bot X do today?"**: `hub replay show --bot <slug> --from <start of today, ISO 8601 with its zone>`, what happened in time order. Then `hub run list <slug> --since <same ISO>` for its runs. Say what it did, with links, and what it is waiting on.
 5. **"Is anything broken?"**: `hub health check`. Say what is wrong and its fix; each line is a finding, not a guess.
 6. **"Catch me up."**: `hub brief`.
 7. **"Find a meeting / doc / file."**: `hub meeting search "<words>"` then `hub meeting read <id>`; `hub doc search "<words>"` then `hub doc read <id>`; `hub file search "<words>"`.
@@ -20,7 +22,7 @@ first 8 characters. Do not add `--on-behalf-of` except where a command requires 
 ## Queue, close, reopen
 
 11. **"Clear my queue."**: follow "Clearing a queue" in `playbooks/assistant-chat.md`. Read, group, close and decline, then say what is left.
-12. **"Close these" / "close the done ones."**: close only the items you identified by id (done but still open, duplicates, replaced), never by a status filter, which would close live work. One: `hub task close <id> --note "<why>"`. Several: count first with `hub task bulk close --where-id <id> --where-id <id> --dry-run`, then the same without `--dry-run` and with `--note "<why>"`. Up to 200 ids per run.
+12. **"Close these" / "close the done ones."**: close only the items you identified by id (done but still open, duplicates, replaced), never by a status filter, which would close live work. One: `hub task close <id> --note "<why>"`. Several: ONE `hub task bulk close --where-id <id> --where-id <id> --note "<why>"` (up to 200 ids; a `--dry-run` of the same first is fine). Never close them one at a time.
 13. **"Mark X done" / "close X."**: `hub task update <id> --status done --note "<why>"`, or `hub task close <id> --note "<why>"`.
 14. **"Reopen X."**: `hub task update <id> --status doing --note "<why>"`.
 15. **"Give X to Support."**: `hub task update <id> --owner <slug>`. Say who it went to.
@@ -43,11 +45,11 @@ first 8 characters. Do not add `--on-behalf-of` except where a command requires 
 26. **"Make a task for a person."**: `hub task create --owner human:<person id> --title "<question>"`.
 27. **"Ask bot Y."**: `hub question ask <slug> "<question>" --wait 60`. Report the answer with its source.
 28. **"Tell bot Y ..."**: `hub message send <slug> "<text>"`. Add `--fyi` when no reply is needed.
-29. **"New bot" / "change a bot's instructions or schedule."**: `hub task create --owner botops --request-id turn --title "<ask>" --body "<their words>"`. BotOps builds it; say so.
+29. **"New bot" / "a bot's instructions or code."**: `hub task create --owner botops --request-id turn --title "<ask>" --body "<their words>"`. BotOps builds it; say so. Routines, automations and schedules are job 30, not this.
 30. **"Pause bot Y" / "resume bot Y."**: `hub bot pause <slug>` or `hub bot resume <slug>`. Say what it means for its open work.
     **"Change bot Y's model."**: `hub settings find "model"`, then `hub settings set <key> <value> --bot <slug>`.
     **"Change a bot's routine or automation."**: `hub automation list`, `hub automation show <id>`, then `hub automation update <id> --file -` (field edits as JSON) or `hub automation update <id> --enable` / `--disable`.
-    A bot's repository, its instructions or a new bot is a task for `botops` (job 29): that is the one thing you do not change yourself.
+    A bot's repository, its code or a new bot is a task for `botops` (job 29). An automation a bot owns is still the person's to change when they manage that bot.
 31. **"Stop the pipeline that files X."**: `hub origin show <task id>` for what made it, then either `hub automation update <id> --disable --summary "<why>"` (pause it; `--enable` turns it back on), `hub rules add --kind internal --text "<the rule in one sentence>"` (a rule that stops it), or a `botops` task when it is a bot's own code.
 32. **"Undo the automation change."**: `hub automation versions <id>`, then `hub automation restore <id> <version>`.
 33. **"Show the rules."**: `hub rules list`. Add one with `hub rules add --kind internal --text "<rule>"`; retire one with `hub rules retire <id>`.
