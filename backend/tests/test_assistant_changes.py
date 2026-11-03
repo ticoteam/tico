@@ -194,6 +194,20 @@ def test_a_close_restores_the_exact_status_it_closed_from(api):
     assert (row["status"], row["closed_at"], row["closed_by_id"]) == ("doing", None, None)
 
 
+def test_undoing_an_assistant_reopen_leaves_the_task_closed_again(api):
+    task = post(api, "tasks", {"title": "Reopen then undo", "body": "x", "owner": "human:ben"}, token="ben-test")
+    post(api, f"tasks/{task['id']}", {"version": task["version"], "close": True}, token="ben-test")
+    r, attempt = assistant_turn(api, "ben-test", "Reopen the task")
+    asked(api, f"tasks/{task['id']}", {"version": task_row(api, task["id"])["version"], "status": "doing"},
+          attempt["token"], turn_message(api, attempt))
+    assert task_row(api, task["id"])["status"] == "doing"
+    [change] = changes_for(api, f"task:{task['id']}")
+    assert change["undoable"] is True
+    restore(api, change["id"])
+    row = task_row(api, task["id"])
+    assert row["status"] == "closed" and row["closed_at"] is not None
+
+
 def test_a_manager_who_is_not_the_owner_undoes_their_own_assistant_setting(api):
     """A co-owner of the bot made the setting through their Assistant; the list says so and restore does it."""
     post(api, "bots/ops/co-owners", {"add": ["cara"]})

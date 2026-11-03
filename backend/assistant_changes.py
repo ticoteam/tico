@@ -335,7 +335,10 @@ def find(c, who, cid):
 def restore_task(c, who, row, detail):
     """Put back each status and owner the change set, to the value the task had before it."""
     for field_row in task_field_rows(c, who, row, detail):
-        if field_row["field"] == "status":
+        if field_row["field"] == "status" and field_row["old"] == "closed":
+            # task_update refuses a closed status: only task_close closes, so an undone reopen closes the task again.
+            H.task_close(c, who.actor, row["target"], note="Restored by the Assistant's undo")
+        elif field_row["field"] == "status":
             H.task_update(c, who.actor, row["target"], status=field_row["old"] or "open")
         elif field_row["field"] == "owner" and field_row["old"]:
             H.task_update(c, who.actor, row["target"], owner=field_row["old"])
