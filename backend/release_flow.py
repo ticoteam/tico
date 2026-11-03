@@ -31,6 +31,7 @@ import json
 import re
 from datetime import datetime, timedelta
 
+from .batch_work import isolated
 from .store import H, Problem
 
 KEY = "release-schedule"
@@ -322,11 +323,15 @@ def _docs_task(c, writer, tag, tickets, url):
 def published(c, target, url="", release_repo=""):
     """A release was published (`target` is `owner/repo@vX.Y.Z`): each ticket it carries gets a quiet note and its QA
     owner's wake, the Technical Writer gets ONE docs task for the release, and every routine on `release_published`
-    gets its task. Called once per release, from the first time the milestone is recorded. A prerelease (a tag
-    with a suffix) and a repository other than the server's release repository do nothing. Returns the carried
-    ticket ids."""
+    gets its task. Called once per release, from the first time the milestone is recorded. Undecided release
+    approvals at or below it in its channel are withdrawn (supersede). A prerelease (a tag with a suffix) and a
+    repository other than the server's release repository do nothing more. Returns the carried ticket ids."""
     repo, _, tag = target.partition("@")
-    if "-" in tag or release_repo and repo.lower() != str(release_repo).lower():
+    # Asks for this release or an older one in its channel are stale now, in any connected repository.
+    supersede(c, repo, tag)
+    if release_repo and repo.lower() != str(release_repo).lower():
+        return []
+    if "-" in tag:
         return []
     cfg = load(c)
     writer, tickets = technical_writer(c, cfg), carried(c, repo)
@@ -347,6 +352,93 @@ def published(c, target, url="", release_repo=""):
     H.hook(c, "release.published", target, lambda: {"release": tag, "url": url, "tickets": [t["id"] for t in tickets]},
            H.KEEPER, revision=0)
     return [t["id"] for t in tickets]
+
+
+# ----------------------------------------------------------------------------- superseded approvals
+# A release's publish approval (H.is_release_approval) is for one version. Once a newer one ships, asking again about
+# an older one is noise in someone's Needs you, so it is withdrawn, never approved.
+VERSION = re.compile(r"^v?(\d+(?:\.\d+){1,3})(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$")
+RELEASE_PAGE = re.compile(r"^https://github\.com/([\w.-]+/[\w.-]+)/releases/tag/([^/?#]+)")
+
+
+def version_key(text):
+    """(channel, key) for `1.2.3`, `v1.2.3` or `1.2.3-rc.1`, or None when it does not parse. Versions compare only
+    within a channel ("stable" or "prerelease"), by semver's order: a prerelease sorts below its release, numbered
+    identifiers below words. Build metadata is ignored."""
+    match = VERSION.match(str(text or "").strip())
+    if not match:
+        return None
+    core = [int(part) for part in match.group(1).split(".")]
+    core = tuple(core + [0] * (4 - len(core)))
+    if not match.group(2):
+        return "stable", core
+    ids = tuple((0, int(x)) if x.isdigit() else (1, x) for x in match.group(2).split("."))
+    return "prerelease", (core, ids)
+
+
+def _open_releases(c):
+    """The undecided publish approvals that point at a GitHub release page and read as a version, as
+    {id, repo, channel, key, version}. The version is the payload's, or else the page's tag: older asks carry only
+    the url. Any other approval (a post, a roadmap page) is none of this module's business."""
+    out = []
+    for row in H._rows(c.execute("SELECT id, kind, payload FROM approvals WHERE decision IS NULL AND kind='publish'")):
+        payload = H._json(row.get("payload"), {}) or {}
+        page = RELEASE_PAGE.match(str(payload.get("url") or ""))
+        if not page:
+            continue
+        version = str(payload.get("version") or page.group(2))
+        parsed = version_key(version)
+        if parsed:
+            out.append({"id": row["id"], "repo": page.group(1).lower(), "channel": parsed[0], "key": parsed[1],
+                        "version": version})
+    return out
+
+
+def _withdraw(c, asks, tag):
+    """Withdraws each of `asks`, all at or below release `tag`, with the note "v<tag> already shipped.". The bot is
+    told quietly (H.approval_withdraw). Returns the withdrawn ids."""
+    note = "v" + tag.lstrip("v") + " already shipped."
+    out = []
+    for ask in asks:
+        with isolated(c, "release_supersede", ask["id"]):
+            if H.approval_withdraw(c, ask["id"], note):
+                out.append(ask["id"])
+    return out
+
+
+def supersede(c, repo, tag):
+    """A release `tag` in `repo` just published: its undecided approvals at or below it in the same channel are
+    withdrawn. Returns the withdrawn approval ids."""
+    parsed = version_key(tag)
+    if not parsed:
+        return []
+    channel, key = parsed
+    stale = [a for a in _open_releases(c) if a["repo"] == str(repo).lower() and a["channel"] == channel
+             and a["key"] <= key]
+    return _withdraw(c, stale, tag)
+
+
+def superseded_by_shipped(c):
+    """The hourly sweep's pass for approvals that predate supersede: an undecided release approval at or below the
+    newest release the hub knows shipped (milestones, per repository and channel) is withdrawn. Returns the ids."""
+    asks = _open_releases(c)
+    if not asks or not H._has_table(c, "milestones"):
+        return []
+    newest = {}                                 # (repo, channel) -> (tag, key) of the newest release shipped
+    for row in H._rows(c.execute("SELECT target FROM milestones WHERE kind='release_published'")):
+        repo, _, tag = str(row["target"]).partition("@")
+        parsed = version_key(tag)
+        if parsed is None:
+            continue
+        seen = newest.get((repo.lower(), parsed[0]))
+        if seen is None or parsed[1] > seen[1]:
+            newest[(repo.lower(), parsed[0])] = (tag, parsed[1])
+    out = []
+    for ask in asks:
+        top = newest.get((ask["repo"], ask["channel"]))
+        if top and ask["key"] <= top[1]:
+            out += _withdraw(c, [ask], top[0])
+    return out
 
 
 # ----------------------------------------------------------------------------- the API

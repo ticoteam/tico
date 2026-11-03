@@ -120,7 +120,7 @@ function makePill(cfg) {
   el.className = 'ask pill-' + P.mode;
   el.innerHTML = `<div class="p-hint muted" hidden></div>
     <div class="p-pill">
-      ${P.mode === 'chat' && P.slug ? `<button class="p-bot" type="button" aria-label="Switch bot" aria-haspopup="menu" aria-expanded="false" aria-controls="org-fan" title="Switch bot">${avatar(P.slug, 30)}</button>` : ''}
+      ${P.mode === 'chat' && P.slug ? pillBotHTML(P.slug) : ''}
       <textarea class="p-text" rows="1" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="${esc(cfg.label || 'Message this bot')}" placeholder="${esc(cfg.placeholder || 'Type a message…')}"></textarea>
       ${goals ? '<button class="p-goal p-icon" type="button" title="Goal" aria-label="Goal" aria-pressed="false" hidden><span class="nav-icon" aria-hidden="true">target</span></button>' : ''}
       ${attach ? `<button class="p-attach p-icon" type="button" title="Attach files" aria-label="Attach files">${ICON_CLIP}</button>
@@ -174,7 +174,7 @@ function makePill(cfg) {
   box.addEventListener('pointerdown', () => { breaks = 0; });
   if (attach) q('.p-attach').onclick = () => q('.p-file').click();
   if (goals) { q('.p-goal').onclick = () => chatGoalButton(); slashAttach(P); }
-  if (q('.p-bot')) q('.p-bot').onclick = ev => { ev.preventDefault(); $('#org-fan').hidden ? orgFanOpen({chat: P.slug, anchor: q('.p-bot')}) : orgFanClose(); };
+  if (q('.p-bot')) pillBotWire(q('.p-bot'), P.slug);
   if (attach) q('.p-file').onchange = ev => { P.files.push(...ev.target.files); pillChips(P); chatDraftSave(P); ev.target.value = ''; };
   box.addEventListener('paste', ev => {
     const clipboard = ev.clipboardData;
@@ -250,6 +250,13 @@ function makePill(cfg) {
   return P;
 }
 const pq = (P, sel) => P.el?.querySelector(sel);
+// The bot being talked to, left of the bar on a phone (ui/styles/chat.css): a tap opens the switcher over the bar
+// (ui/app/org-fan.js), which keeps this button's aria-expanded in step. Used by this pill and a bot's Home and DM
+// composer (ui/app/thread-view.js).
+const pillBotHTML = slug => `<button class="p-bot" type="button" aria-label="Switch bot" aria-haspopup="menu" aria-expanded="false" aria-controls="org-fan" title="Switch bot">${avatar(slug, 30)}</button>`;
+function pillBotWire(btn, slug) {
+  btn.onclick = ev => { ev.preventDefault(); $('#org-fan').hidden ? orgFanOpen({chat: slug, anchor: btn}) : orgFanClose(); };
+}
 // An empty box only dims Send: text that arrived without an input event (autofill, dictation, a tool) must still
 // send on a click, and pillSend puts the cursor back in an empty box.
 function pillButtons(P) {
@@ -318,12 +325,14 @@ document.addEventListener('pointerdown', ev => {
     if (box && !pq(P, '.p-ways').hidden && !box.contains(ev.target)) pillWayMenu(P, false);
   }
 });
-// Ask the bot's running turn to stop; the button stays pressed until the run ends.
+// Ask the bot's running turn to stop; the button stays pressed until the run ends. `P` is this pill or a composer that
+// redraws its own buttons (P.buttons: a bot's Home or DM, ui/app/thread-view.js).
 async function pillStop(P) {
   if (!P.running || P.stopping) return;
-  P.stopping = true; pillButtons(P);
+  const redraw = () => P.buttons ? P.buttons() : pillButtons(P);
+  P.stopping = true; redraw();
   try { await post(`/v2/bots/${encodeURIComponent(P.slug)}/stop`, P.running.run_id ? {run_id: P.running.run_id} : {}); }
-  catch (e) { P.stopping = false; pillButtons(P); toast(`Not stopped: ${e.message}`, true); }
+  catch (e) { P.stopping = false; redraw(); toast(`Not stopped: ${e.message}`, true); }
 }
 // "when i paste an image into a box, can we show a clickable preview of it?"
 // An image waiting to be sent shows as a small thumbnail; a tap opens it full size.

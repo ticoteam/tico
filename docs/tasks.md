@@ -1383,7 +1383,9 @@ question. It records the same structured answer as a card pick. Unmatched or amb
 saved as a note, leaving the options and any person wait open. Repeating the same structured
 answer does not record another decision. Settling a question does not approve or execute a
 separate publish, send, spend or hire action.
-Needs you excludes closed, canceled, archived and declined tasks, even with an open question.
+Needs you excludes closed, canceled, archived and declined tasks, even with an open question. The one exception is a
+declined task its requester asked for: it is on that requester's Needs you for a day after its last change
+(`DECLINED_NEEDS_HOURS` in backend/hubdb.py), then only on the board.
 The version's metadata points to its ask message. These routes use the usual Idempotency-Key contract:
 
 - `POST /api/v2/tasks/{id}/files` accepts the existing `name` plus `text` or `content_base64`, and

@@ -5945,6 +5945,27 @@ def assistant_propose(api, args):
                                           "path": args["path"], "body": args.get("body") or {}}, key=_key(args))
 
 
+@tool("hub_assistant_withdraw", "Take back a Confirm card that still waits for the person (its id from "
+      "hub_assistant_proposals): it is marked withdrawn and never runs, and the card owner's chat says who withdrew it, "
+      "with the reason if you give one. Any teammate may withdraw; only the card's owner can confirm it.",
+      {"id": _s("The proposal's id"),
+       "reason": _s("Why, in one short sentence (optional; the person reads it in their chat)")},
+      required=("id",), writes=True)
+def assistant_withdraw(api, args):
+    return api.post(f"assistant/actions/{args['id']}/withdraw", {"reason": args.get("reason") or ""}, key=_key(args))
+
+
+@tool("hub_assistant_proposals", "The Confirm cards still waiting for their owner: id, owner, proposer, summary and what "
+      "confirming does. Filter by proposer (botops, assistant) and/or owner (a person's id). Use it to find a card's id "
+      "to withdraw it.",
+      {"proposer": _s("botops or assistant (optional)"), "owner": _s("The card owner's id, e.g. human:ana (optional)")})
+def assistant_proposals(api, args):
+    query = {k: args[k] for k in ("proposer", "owner") if args.get(k)}
+    return api.get("assistant/proposals", **query)
+
+
+
+
 @tool("hub_assistant_learn", "In a person's own chat: save one thing they taught you about how they like things ranked "
       "and summarised (\"launches matter more than hiring news\"), as one short line in their words, then tell them "
       "what you saved. It is theirs alone and shows on What it has learned, "
@@ -7401,6 +7422,7 @@ ASSISTANT_WRITES = {"hub_goal_read_back", "hub_goal_save", "hub_goal_create", "h
                     "hub_task_close", "hub_task_link", "hub_approval_decline", "hub_approval_approve", "hub_approval_read_back",
                     "hub_question_answer",
                     "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn",
+                    "hub_assistant_withdraw",
                     "hub_settings_set", "hub_rules_read", "hub_rules_ask"}
 AUDIENCE = {
     # Task caps (CONTRACT §1): people read and set them; a bot's own change is a proposal a person decides.
@@ -7440,6 +7462,8 @@ AUDIENCE = {
     **{name: REQUESTER for name in CALL_TOOLS},     # a person's act; BotOps acts as the person it works for
     # The Assistant only.
     "hub_assistant_propose": ("assistant",), "hub_approval_read_back": ("assistant",),
+    # Any teammate may withdraw a waiting card or find one (backend/assistant.py teammate); confirming stays the owner's.
+    "hub_assistant_withdraw": KINDS, "hub_assistant_proposals": KINDS,
     # A bot's add is a suggestion; the Assistant's is an org rule the person asked for in their own chat, citing their words.
     "hub_rules_add": KINDS,
     # A bot checks its own drafts and appeals its own holds; a person's writes are never checked.

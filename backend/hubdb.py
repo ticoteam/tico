@@ -9800,6 +9800,11 @@ def loose_asks_to(conn, actor):
         "AND (m.expires_at IS NULL OR m.expires_at>?) ORDER BY m.created_at", (actor, now()))))
 
 
+# How long a declined task stays on its requester's Needs you (the UI's taskNeedsViewer in ui/app/tasks.js holds the same
+# number: change both together).
+DECLINED_NEEDS_HOURS = 24
+
+
 def needs_you(conn, who):
     """The "Needs you" list: my open tasks, unanswered asks to me, bot tasks waiting on me,
     approvals, declined-to-me.
@@ -9840,7 +9845,10 @@ def needs_you(conn, who):
     # A declined task on a steps-only type (the Product roadmap) stays on its Declined step, where the board and
     # the public roadmap show it: closing it off the list would take it off both, so it is not on the list.
     by_step = {r["id"] for r in conn.execute("SELECT id FROM task_types WHERE steps_only=1")}
-    declined = tasks(conn, requester=actor, status="declined", tickets=False, snoozed="hide", limit=None)
+    # A declined one leaves its requester's list DECLINED_NEEDS_HOURS after its last change: it stays on the board
+    # and in the task's own read, but a notice from weeks ago is nothing the requester still has to act on.
+    declined = tasks(conn, requester=actor, status="declined", tickets=False, snoozed="hide", limit=None,
+                     updated_since=shift(now(), hours=-DECLINED_NEEDS_HOURS))
     # The rows just read are this snapshot's task rows: a card's task, its ancestors and what they block are primed
     # from them (prime_tasks), not read again by id. Copies, so nothing the caller adds to a row reaches the cache.
     prime_task_rows(conn, [*owned, *asked, *waited, *declined])

@@ -16,6 +16,7 @@ MAX_OPEN = 5            # asks one person may have waiting at once
 # What the asker is told, by how the card ended.
 TOLD = {"done": "{name} confirmed it: {what} is done.",
         "canceled": "{name} said no to {what}: nothing changed.",
+        "withdrawn": "{what} was withdrawn: nothing changed.",
         "failed": "{name} confirmed {what}, but it did not go through: {error}",
         "expired": "{name} didn't answer about {what} within a day, so the card expired: nothing changed.",
         "interrupted": "{name} confirmed {what}, but it was cut off before it finished, so it may or may not have "

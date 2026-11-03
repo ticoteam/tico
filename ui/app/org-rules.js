@@ -1269,10 +1269,15 @@ async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
     document.body.appendChild(dlg);
   }
   const sources = await ruAll('/v2/rule-sources').catch(() => []);
+  // Opened for one party (a bot's page, a Reach panel), the rule is for that party: just the text, the rest behind More.
+  const quick = !!who && Object.values(who).some(v => Array.isArray(v) ? v.length : v);
   dlg.innerHTML =`<form class="ru-form" method="dialog">
       <div class="ru-side-h"><h2>Add rule</h2><span class="spacer"></span><button class="ghost tmodal-x" type="button" data-ru-close aria-label="Close">✕</button></div>
-      ${ruSegHTML('kind', [['internal', 'Internal'], ['external', 'External']], kind)}
+      ${quick ? '' : ruSegHTML('kind', [['internal', 'Internal'], ['external', 'External']], kind)}
       <label class="ru-fl"><span class="ru-lbl">Rule</span><textarea name="text" rows="2" maxlength="1000" required></textarea></label>
+      ${quick ? '<button type="button" class="ru-adv-t" data-ru-adv aria-expanded="false">More ›</button>' : ''}
+      <div class="ru-adv"${quick ? ' hidden' : ''}>
+      ${quick ? ruSegHTML('kind', [['internal', 'Internal'], ['external', 'External']], kind) : ''}
       <div class="ru-fl"><span class="ru-lbl">Followed by</span><div data-scope="who"></div></div>
       <div class="ru-fl" data-for="internal"><span class="ru-lbl">With <span class="ru-opt">(optional)</span></span><div data-scope="with"></div></div>
       <div class="ru-fl" data-for="external"><span class="ru-lbl">From</span>
@@ -1280,10 +1285,13 @@ async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
         <div class="ru-newsrc" hidden><input name="source_name" maxlength="200" placeholder="Name" aria-label="Name">
           <select name="source_kind" aria-label="Kind">${RU_KINDS.map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></div></div>
       <div class="ru-fl"><span class="ru-lbl">If broken</span>${ruBrokenHTML('block', '', false)}</div>
+      </div>
       <p class="ru-status" role="status"></p>
       <div class="ru-foot"><span class="spacer"></span><button class="ghost" type="button" data-ru-close>Cancel</button><button class="primary" type="submit">Save</button></div>
     </form>`;
   const form = dlg.querySelector('form'), status = form.querySelector('.ru-status');
+  const adv = form.querySelector('[data-ru-adv]');
+  if (adv) adv.onclick = () => { adv.hidden = true; form.querySelector('.ru-adv').hidden = false; };
   const whoEd = ruScopeEditor(form.querySelector('[data-scope="who"]'), who || {}, {flags: true});
   const withEd = ruScopeEditor(form.querySelector('[data-scope="with"]'), {}, {flags: false});
   const show = k => form.querySelectorAll('[data-for]').forEach(el => { el.hidden = el.dataset.for !== k; });
