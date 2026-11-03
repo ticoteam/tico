@@ -726,9 +726,7 @@ mod tests {
         let (f, began) = (flags(true), Instant::now());
         let err = drive_turn(&runner, &host, &mut rx, &f, "th-3").await.err().expect("not completed");
         assert_eq!(err.text, "Computer lost or heartbeat stopped (execution lease expired)");
-        // The salvage window is at least SALVAGE; its upper bound was a wall-clock limit that failed under box load.
-        assert!(began.elapsed() >= SALVAGE, "{:?}", began.elapsed());
-        eprintln!("short-read lost-lease elapsed: {:?}", began.elapsed());
+        assert!(began.elapsed() >= SALVAGE && began.elapsed() < SALVAGE + Duration::from_secs(3), "{:?}", began.elapsed());
         drop(tx);
         std::fs::remove_dir_all(dir).ok();
     }
