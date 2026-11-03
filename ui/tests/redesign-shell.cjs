@@ -186,7 +186,7 @@ const noSideScroll = page => page.evaluate(() => document.documentElement.scroll
         await page.evaluate(h => { location.hash = h; }, old);
         assert.ok(await hashSoon(page, '#/settings/system'), `${tag}: ${old} lands on System`);
       }
-      assert.equal(await page.locator('[data-settings-tab="system"][aria-selected="true"], [data-settings-tab="system"].cur, [data-settings-tab="system"][aria-current]').count(), 1, tag + ': System is the tab shown');
+      assert.equal(await page.locator('[data-settings-tab="automation"][aria-selected="true"], [data-settings-tab="automation"].cur, [data-settings-tab="automation"][aria-current]').count(), 1, tag + ': System is the tab shown');
       assert.equal(await page.locator('#settings-system #set-rules-card, #settings-system [data-bot-routines]').count(), 0, tag + ': no wake rules or bot routines');
       await shot(page, 'desktop-settings-system');
       assert.deepEqual(errors, [], tag + ': no page errors');

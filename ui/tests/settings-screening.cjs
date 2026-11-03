@@ -57,7 +57,7 @@ async function open(browser, role, viewport) {
   });
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('#settings-tabs').waitFor();
-  const tab = page.locator('[data-settings-tab="system"]');
+  const tab = page.locator('[data-settings-tab="automation"]');
   if (!await tab.isVisible()) await page.locator('#settings-more summary').click();
   await tab.click();
   return {page, errors, writes};

@@ -15,9 +15,12 @@ ALIASES = {"tags", "types", "providers", "models", "team", "assistant", "privacy
 
 
 def settings_tabs():
-    tabs = set(re.findall(r'data-settings-tab="([a-z]+)"', (ROOT / "ui/app/settings.js").read_text()))
-    assert {"devices", "bots", "health"} <= tabs
-    return tabs | ALIASES
+    source = (ROOT / "ui/app/settings.js").read_text()
+    groups = set(re.findall(r"key: '([a-z-]+)'", source))
+    places = source.split("const SETTINGS_PLACES = {", 1)[1].split("};", 1)[0]
+    aliases = set(re.findall(r"(?:^|[,\n])\s*(?:'([a-z-]+)'|([a-z-]+)):", places))
+    assert {"computers", "bots", "health"} <= groups
+    return groups | {a or b for a, b in aliases} | ALIASES | {"devices"}
 
 
 def ui_links():

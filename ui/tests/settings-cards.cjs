@@ -46,6 +46,8 @@ async function open(browser, {role = 'owner', hash = '#/settings', phone = false
     if (p === '/api/v2/status') return json({bots: [{bot: 'ops-test-id', state: 'idle'}]});
     // What the tabs the links open read first, empty.
     if (p === '/api/v2/listening/destinations') return json({destinations: [], categories: [], receivers: []});
+    if (p === '/api/v2/access') return json({people: [], allowed: [], allowed_domains: [], rules: {}, member_bot_limit: 3});
+    if (p === '/api/v2/operations') return json({machines: [], services: [], issues: [], history: {changes: [], transitions: []}});
     if (p === '/api/v2/billing') return json({state: 'no_gateway'});
     if (p === '/api/v2/ceo-bot') return json(null, 404);
     if (p.endsWith('/watch') || p === '/api/v2/events') return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -90,12 +92,12 @@ async function open(browser, {role = 'owner', hash = '#/settings', phone = false
       assert.ok(seen >= (role === 'owner' ? 25 : 12), `${role}: ${seen} cards checked`);
       // A card redrawn by its module gets its line and link back.
       await page.locator('#settings-tabs [data-settings-tab="models"]').click();
-      await page.evaluate(() => { const card = document.querySelector('#settings-models'); card.querySelector('.settings-card-line').remove(); card.querySelector('[data-settings-ask]').remove(); });
-      await page.locator('#settings-models > .settings-card-line').waitFor();
-      await page.locator('#settings-models > header > [data-settings-ask]').waitFor();
+      await page.evaluate(() => { const card = document.querySelector('#settings-defaults'); card.querySelector('.settings-card-line').remove(); card.querySelector('[data-settings-ask]').remove(); });
+      await page.locator('#settings-defaults > .settings-card-line').waitFor();
+      await page.locator('#settings-defaults > header > [data-settings-ask]').waitFor();
       // Ask BotOps: the chat opens with the draft in the box, and nothing is sent.
       const before = writes.length;
-      await page.locator('#settings-models > header > [data-settings-ask]').click();
+      await page.locator('#settings-defaults > header > [data-settings-ask]').click();
       await page.waitForFunction(() => location.hash === '#/bot/botops-test-id/chat');
       const box = page.locator('.p-text').first();
       await page.waitForFunction(() => /company models/.test(document.querySelector('.p-text')?.value || ''));

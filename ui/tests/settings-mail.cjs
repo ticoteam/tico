@@ -117,7 +117,7 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       const {page, errors, state} = await open(browser);
       const pane = page.locator('#settings-mail');
       await pane.locator('[data-pm-address="as_1"]').waitFor();
-      assert.equal(await page.locator('[data-settings-tab="mail"]').getAttribute('aria-selected'), 'true', 'Mail is a Settings tab');
+      assert.equal(await page.locator('[data-settings-tab="connections"]').getAttribute('aria-selected'), 'true', 'Mail is a Settings tab');
       assert.equal(await rowText(pane.locator('[data-pm-address="as_1"]')), 'Delaware Shared 8 The Green, Suite 4000, Dover DE 19901 Yes Active');
       const waiting = pane.locator('[data-pm-address="as_2"]');
       assert.equal(await rowText(waiting), 'Texas Private — No Waiting for Form 1583', 'no address before Form 1583');
