@@ -97,9 +97,9 @@ def computer(api, tmp_path, monkeypatch):
     return box
 
 
-def automate(api, *steps):
+def automate(api, *steps, **extra):
     return post(api, "automations", {"name": "Invoices", "owner": "person:ana",
-                                     "trigger": {"type": "message", "inbox": BOX}, "steps": list(steps)})["id"]
+                                     "trigger": {"type": "message", "inbox": BOX}, "steps": list(steps), **extra})["id"]
 
 
 def last_run(api, aid):
@@ -570,3 +570,21 @@ def test_a_chain_longer_than_the_recursion_limit_settles_and_the_mailbox_still_c
                   "created_at,attempts) VALUES('free','auto_y',NULL,?,'m1','archive','{}','queued',"
                   "'2026-10-28T01:00:00.000000Z',0)", (BOX,))
     assert [a["id"] for a in claim(api, computer.token)["actions"]] == ["free"]
+
+def test_two_rules_that_fired_and_a_destinations_mail_action_settle_into_one_record(api, computer):
+    gate = {"id": "gate", "type": "filter", "rules": [
+        {"when": [], "then": [{"do": "label", "args": {"tag": "billing"}}], "next": "rule"},
+        {"when": [], "then": [], "to": "legal"}]}
+    aid = automate(api, gate, destinations=[{"id": "legal", "name": "Legal", "then": [{"do": "leave_for_you"}]}])
+    computer.sync()
+    assert last_run(api, aid)["steps"][0]["status"] == "waiting"
+    assert computer.worker.mail_action_tick() == 2          # both queued, claimed in order, one tick
+    labels = {computer.gmail.name_of(lid) for lid in computer.gmail.store["m1"]["labelIds"]}
+    assert {"hub/billing", "hub/needs-owner"} <= labels and "INBOX" not in labels
+    run = last_run(api, aid)
+    assert run["status"] == "ok" and run["steps"][0]["status"] == "ok"
+    out = run["steps"][0]["outputs"]
+    assert out["rules"] == [0, 1]
+    assert [(a["detail"], a["from"]) for a in out["actions"]] == [
+        ("labelled hub/billing", "rule"), ("left for you", "destination")]
+    assert computer.worker.mail_action_tick() == 0          # nothing left, nothing done twice
