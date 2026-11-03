@@ -156,6 +156,37 @@ def test_a_failed_worker_gives_the_plain_failure_and_removes_its_copy(tmp_path, 
     assert list(temp_root.iterdir()) == []
 
 
+def test_a_crashed_worker_logs_its_last_stderr_line_capped_and_shows_the_plain_failure(tmp_path, temp_root,
+                                                                                        monkeypatch, caplog):
+    noisy = "boom " + "x" * 400
+    monkeypatch.setattr(docs_import_run, "WORKER", fake_worker(
+        tmp_path, f"import sys\nprint('earlier', file=sys.stderr)\nprint({noisy!r}, file=sys.stderr)\nsys.exit(3)\n"))
+    with caplog.at_level("WARNING", logger="tico.docs_import"), pytest.raises(ValueError) as caught:
+        docs_import_run.to_markdown("a.md", b"# A\n", max_chars=BIG)
+    assert str(caught.value) == docs_import_run.FAILED_MESSAGE
+    assert noisy not in str(caught.value)
+    logged = [r.getMessage() for r in caplog.records if r.name == "tico.docs_import"]
+    assert len(logged) == 1
+    assert noisy[:docs_import_run.CRASH_LINE_LIMIT] in logged[0]
+    assert noisy[:docs_import_run.CRASH_LINE_LIMIT + 1] not in logged[0]
+    assert "earlier" not in logged[0]
+    assert list(temp_root.iterdir()) == []
+
+
+def test_an_unmeasurable_resident_size_counts_as_zero_and_does_not_raise(monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise FileNotFoundError("/bin/ps")
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+    assert docs_import_run._resident_kb(12345) == 0
+
+    def slow(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="ps", timeout=1)
+
+    monkeypatch.setattr(subprocess, "run", slow)
+    assert docs_import_run._resident_kb(12345) == 0
+
+
 def test_a_cancelled_conversion_stops_the_worker_and_writes_nothing(tmp_path, temp_root, monkeypatch):
     monkeypatch.setattr(docs_import_run, "WORKER", fake_worker(tmp_path, "import time\ntime.sleep(60)\n"))
     cancel = threading.Event()
