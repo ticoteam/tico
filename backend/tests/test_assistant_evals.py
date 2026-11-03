@@ -8,13 +8,16 @@ unknown word or flag, which is how the real CLI rejects a command that does not 
 """
 import contextlib
 import io
+import json
+import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from clients import hubcli
+from clients import hubcli, hubtools
 
 EVALS = Path(__file__).resolve().parents[2] / "evals" / "assistant"
 sys.path.insert(0, str(EVALS))
@@ -133,3 +136,30 @@ def test_expected_hub_commands_parse_with_the_real_cli(cases, parser):
                     continue
                 assert parses(parser, words), f"{case['id']} ({key}): `hub {' '.join(words)}` is not a command"
     assert checked >= 40, f"only {checked} commands were checked; the heuristic has stopped reading the cases"
+
+
+def test_the_mcp_surface_lists_the_real_tools_and_logs_a_call_as_a_canon_line(tmp_path):
+    """The fake hub MCP server (the surface production gives the Assistant) answers tools/list with the real listing for
+    the Assistant, and a tools/call logs the canonical line the CLI would log, so the must regexes read both surfaces alike."""
+    server = tmp_path / "fake_mcp.py"
+    server.write_text(live.FAKE_MCP)
+    canned, log, state = tmp_path / "canned.json", tmp_path / "hub.log", tmp_path / "state.json"
+    canned.write_text("[]")
+    env = {**os.environ, "EVAL_REPO": str(EVALS.parents[1]), "EVAL_LOG": str(log), "EVAL_CANNED": str(canned),
+           "EVAL_STATE": str(state), "EVAL_MCP_KIND": "assistant"}
+    requests = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+         "params": {"name": "hub_task_close", "arguments": {"id": "x", "note": "y"}}},
+    ]
+    proc = subprocess.run([sys.executable, str(server)], input="".join(json.dumps(r) + "\n" for r in requests),
+                          capture_output=True, text=True, env=env, timeout=120, check=False)
+    replies = {r["id"]: r for r in map(json.loads, proc.stdout.splitlines())}
+    assert set(replies) == {1, 2, 3}, proc.stderr
+    real = [t["name"] for t in hubtools.listing(local=True, kind="assistant")]
+    assert [t["name"] for t in replies[2]["result"]["tools"]] == real
+    assert not replies[3]["result"]["isError"], replies[3]
+    logged = [json.loads(l) for l in log.read_text().splitlines()]
+    assert logged[-1]["via"] == "mcp" and logged[-1]["tool"] == "hub_task_close", logged
+    assert re.search(r"^task close\b", logged[-1]["argv"]), logged[-1]

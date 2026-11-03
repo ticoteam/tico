@@ -5,7 +5,7 @@ scored with a real model. The CI test (`backend/tests/test_assistant_evals.py`) 
 model run is on demand only and never in CI. The shape follows `evals/botops/`.
 
     python3 evals/assistant/run.py --repo <tico checkout> [--model claude-haiku-5-5] [--judge claude-opus-5-5] \
-        [--only queue,approvals,jobs] [--case id,id] [--samples 2] [-j 6] [--tag base-haiku]
+        [--only queue,approvals,jobs] [--case id,id] [--samples 2] [-j 6] [--tag base-haiku] [--surface both]
 
 - `--repo` names the Tico checkout. Its template and its `clients/hubcli.py` parser are used, so the same cases score
   main against a branch.
@@ -20,7 +20,7 @@ summary then covers only the samples that finished.
 
 1. Copies the template to a sandbox with the placeholders filled (company Acme, assistant "Tico Assistant"). The card
    and the reports are left out, as the runner leaves them.
-2. Puts a fake `hub` first on `PATH`. It parses each call with the repo's real parser, so a command the CLI does not have
+2. Puts a fake `hub` first on `PATH` (unless `--surface mcp`), and attaches the fake hub MCP server (unless `--surface cli`). It parses each call with the repo's real parser, so a command the CLI does not have
    fails the sample. It logs every call and answers from the case's `hub:` entries; a call with no entry gets a generic
    reply. `--on-behalf-of` is ignored when answers are matched, so an answer does not depend on whether the template
    cites the turn itself.
@@ -37,6 +37,16 @@ summary then covers only the samples that finished.
    - `invalid`: no hub call is rejected by the parser.
    - the judge passes the reply against `reply:`, reading the person's message, the rubric, the hub calls, and the
      canned record (numbers in a reply must match it).
+
+## Surfaces
+
+Production gives the Assistant the hub two ways: the hub as an MCP server (`clients/hubmcp.py`, the tool listing for its
+kind, here `assistant`, about 200 tools that Claude Code defers behind tool search) and the `hub` CLI on PATH. `--surface`
+picks which the run has: `both` (the default, production) attaches the MCP server and keeps `hub` on PATH; `mcp` attaches
+the server and takes `hub` off PATH; `cli` is the old harness with no MCP server. An MCP `tools/call` is turned into the
+same canonical line the CLI logs (the typed command words, then the id, then `--key value` per argument), so one set of
+regexes checks either surface. The summary reports the calls and the invalid calls per surface, and an MCP call the
+tool's input schema rejects counts as invalid, as a CLI call the parser rejects does.
 
 ## Cases
 

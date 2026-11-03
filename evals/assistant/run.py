@@ -2,7 +2,7 @@
 """Score the Assistant template against scripted chats from one person, with a real model. On demand only: never in CI.
 
     python3 evals/assistant/run.py --repo <tico checkout> [--model claude-haiku-5-5] [--judge claude-opus-5-5]
-        [--only queue,approvals] [--case id,id] [--samples 2] [-j 6] [--tag base-haiku]
+        [--only queue,approvals] [--case id,id] [--samples 2] [-j 6] [--tag base-haiku] [--surface both]
 
 The template (templates/catalog/assistant) and the hub parser (clients/hubcli.py) come from --repo, so the same cases
 score main against a branch. Each case is one message from the owner, Dana, as the runner sends an Assistant DM turn
@@ -11,6 +11,11 @@ Each sample runs in a fresh sandbox copy of the template with placeholders fille
 validates argv with the repo's real parser (a command that parser rejects counts as a failure), logs every call and
 answers from the case's canned outputs. `--on-behalf-of` is ignored when canned outputs are matched, so a canned
 answer does not depend on whether the template cites the turn itself.
+
+Surfaces (--surface): production gives the Assistant the hub as an MCP server (clients/hubmcp.py, the real tool listing
+for its kind) and the `hub` CLI on PATH. `both` (the default) does both; `mcp` takes the CLI away; `cli` is the old
+harness with no MCP server. Each MCP tool call is logged as the same canonical CLI line the fake hub logs, so the must
+regexes read either surface alike. An MCP call whose arguments the tool's inputSchema rejects counts as invalid.
 
 Checks, per sample:
   must:      regexes; each must match some logged hub call (or the reply, written "reply:<regex>")
@@ -22,6 +27,7 @@ Results: out/<tag>/<case>.s<n>.json per sample, and out/<tag>/summary.md with pa
 """
 import argparse
 import concurrent.futures as cf
+from collections import Counter
 import json
 import os
 import re
@@ -39,57 +45,17 @@ OWNER = "human:dana"
 FILL = {"{{app_name}}": "Tico", "{{assistant_name}}": "Tico Assistant", "{{company_name}}": "Acme",
         "{{mailbox}}": "ops@acme.example"}
 
-FAKE_HUB = r'''#!/usr/bin/env python3
-import json, os, re, sys, io, contextlib
-sys.path.insert(0, os.environ["EVAL_REPO"] + "/clients")
-argv = sys.argv[1:]
-line = " ".join(argv)
-canon = re.sub(r" --on-behalf-of \S+", "", line)
-words = canon.split()
-log = open(os.environ["EVAL_LOG"], "a")
-err, out = io.StringIO(), io.StringIO()
-code = 0
-try:
-    import hubcli
-    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
-        hubcli.parser().parse_args(argv)
-except SystemExit as e:
-    code = e.code or 0
-    if code == 0:  # --help
-        log.write(json.dumps({"argv": line, "help": True}) + "\n")
-        print(out.getvalue())
-        sys.exit(0)
-except Exception:  # parser import trouble: do not block the run
-    pass
-if code:
-    log.write(json.dumps({"argv": line, "invalid": err.getvalue().strip()[-300:]}) + "\n")
-    sys.stderr.write(err.getvalue())
-    sys.exit(2)
-files = {}
-for i, a in enumerate(argv[:-1]):
-    if a.endswith("-file") or a == "--file":
-        try:
-            files[argv[i + 1]] = open(argv[i + 1]).read()[:1500]
-        except Exception:
-            pass
+FAKE_CORE = r'''import json, os, re
 
-# State: what the writes in this run changed, so later reads show it (the real hub does the same).
-state_path = os.environ["EVAL_STATE"]
-try:
-    state = json.load(open(state_path))
-except Exception:
-    state = {}
-state.setdefault("tasks", {})        # task id -> status
-state.setdefault("automations", {})  # automation id -> enabled
 WRITE_VERBS = {"update", "delete", "archive", "restore", "label", "withdraw", "answer", "approve", "decline", "done",
                "close", "cancel", "set", "remove", "add", "bulk"}
 
 
-def flag_values(name):
+def flag_values(words, name):
     return [words[i + 1] for i, w in enumerate(words[:-1]) if w == name]
 
 
-def write_answer(mutate):
+def write_answer(words, state, mutate):
     """The answer the real hub gives a write: the changed object. Records the change in the state when `mutate`."""
     noun, verb = words[0], (words[1] if len(words) > 1 else "")
     tid = words[2] if len(words) > 2 and not words[2].startswith("-") else None
@@ -98,13 +64,13 @@ def write_answer(mutate):
             state["tasks"][tid] = "closed"
         return {"ok": True, "task": {"id": tid, "status": "closed"}}
     if noun == "task" and verb == "update" and tid:
-        status = (flag_values("--status") or [None])[-1]
+        status = (flag_values(words, "--status") or [None])[-1]
         if mutate and status:
             state["tasks"][tid] = status
         return {"ok": True, "task": {"id": tid, **({"status": status} if status else {})}}
     if noun == "task" and verb == "bulk" and len(words) > 2:
         action = words[2]
-        ids = flag_values("--where-id")
+        ids = flag_values(words, "--where-id")
         dry = "--dry-run" in words
         n = len(ids) if ids else 3
         new_status = "closed" if action == "close" else (words[3] if action == "status" and len(words) > 3 else None)
@@ -141,34 +107,220 @@ def apply_state(obj, table, field, drop=None):
     return obj
 
 
-canned = json.load(open(os.environ["EVAL_CANNED"]))
-row = next((r for r in canned if re.search(r["match"], canon)), None)
-# A canned row that fails (exit non-zero) changes nothing in the state.
-resp = write_answer(mutate=not (row and int(row.get("exit", 0))))
-log.write(json.dumps({"argv": line, "matched": row["match"] if row else None, "files": files}) + "\n")
-if row:
-    out = row.get("out", "")
-    if words[:2] == ["task", "list"] and not isinstance(out, str):
-        keep = "--all" in words or "closed" in flag_values("--where-status") or "closed" in flag_values("--status")
-        out = apply_state(out, state["tasks"], "status", None if keep else "closed")
-    if words[:2] == ["automation", "show"] and not isinstance(out, str):
-        out = apply_state(out, state["automations"], "enabled")
-    print(out if isinstance(out, str) else json.dumps(out, indent=1))
-elif resp is not None:
-    print(json.dumps(resp))
-else:
-    verb = words[1] if len(words) > 1 else ""
-    if verb in ("list", "search", "recent-runs", "runs", "held"):
-        print(json.dumps({"items": [], "next_offset": None}))
-    elif verb in ("create", "comment", "ask", "send"):
-        print(json.dumps({"ok": True, "id": "t_" + str(abs(hash(canon)) % 100000)}))
+def answer(argv, via, tool=None):
+    """One call's answer, the same for the CLI (`hub`) and the MCP server: the canned row that matches it, else the write
+    reply or a generic one. Logs the call with `via` ("cli" or "mcp") and returns (text to print, exit code)."""
+    line = " ".join(argv)
+    canon = re.sub(r" --on-behalf-of \S+", "", line)
+    words = canon.split()
+    files = {}
+    for i, a in enumerate(argv[:-1]):
+        if a.endswith("-file") or a == "--file":
+            try:
+                files[argv[i + 1]] = open(argv[i + 1]).read()[:1500]
+            except Exception:
+                pass
+    # State: what the writes in this run changed, so later reads show it (the real hub does the same).
+    state_path = os.environ["EVAL_STATE"]
+    try:
+        state = json.load(open(state_path))
+    except Exception:
+        state = {}
+    state.setdefault("tasks", {})        # task id -> status
+    state.setdefault("automations", {})  # automation id -> enabled
+    canned = json.load(open(os.environ["EVAL_CANNED"]))
+    row = next((r for r in canned if re.search(r["match"], canon)), None)
+    # A canned row that fails (exit non-zero) changes nothing in the state.
+    resp = write_answer(words, state, mutate=not (row and int(row.get("exit", 0))))
+    entry = {"argv": line, "via": via, "matched": row["match"] if row else None, "files": files}
+    if tool:
+        entry["tool"] = tool
+    with open(os.environ["EVAL_LOG"], "a") as log:
+        log.write(json.dumps(entry) + "\n")
+    if row:
+        out = row.get("out", "")
+        if words[:2] == ["task", "list"] and not isinstance(out, str):
+            keep = ("--all" in words or "closed" in flag_values(words, "--where-status")
+                    or "closed" in flag_values(words, "--status"))
+            out = apply_state(out, state["tasks"], "status", None if keep else "closed")
+        if words[:2] == ["automation", "show"] and not isinstance(out, str):
+            out = apply_state(out, state["automations"], "enabled")
+        text = out if isinstance(out, str) else json.dumps(out, indent=1)
+    elif resp is not None:
+        text = json.dumps(resp)
     else:
-        reply = {"ok": True}
-        if verb in WRITE_VERBS and len(words) > 2 and not words[2].startswith("-"):
-            reply["id"] = words[2]
-        print(json.dumps(reply))
-json.dump(state, open(state_path, "w"))
-sys.exit(int(row.get("exit", 0)) if row else 0)
+        verb = words[1] if len(words) > 1 else ""
+        if verb in ("list", "search", "recent-runs", "runs", "held"):
+            text = json.dumps({"items": [], "next_offset": None})
+        elif verb in ("create", "comment", "ask", "send"):
+            text = json.dumps({"ok": True, "id": "t_" + str(abs(hash(canon)) % 100000)})
+        else:
+            reply = {"ok": True}
+            if verb in WRITE_VERBS and len(words) > 2 and not words[2].startswith("-"):
+                reply["id"] = words[2]
+            text = json.dumps(reply)
+    json.dump(state, open(state_path, "w"))
+    return text, (int(row.get("exit", 0)) if row else 0)
+'''
+
+FAKE_HUB = "#!/usr/bin/env python3\n" + FAKE_CORE + r'''
+
+# The `hub` CLI on PATH: the repo's real parser validates argv, then the shared answer runs.
+import contextlib, io, sys
+sys.path.insert(0, os.environ["EVAL_REPO"] + "/clients")
+argv = sys.argv[1:]
+line = " ".join(argv)
+err, out = io.StringIO(), io.StringIO()
+code = 0
+try:
+    import hubcli
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+        hubcli.parser().parse_args(argv)
+except SystemExit as e:
+    code = e.code or 0
+    if code == 0:  # --help
+        with open(os.environ["EVAL_LOG"], "a") as log:
+            log.write(json.dumps({"argv": line, "via": "cli", "help": True}) + "\n")
+        print(out.getvalue())
+        sys.exit(0)
+except Exception:  # parser import trouble: do not block the run
+    pass
+if code:
+    with open(os.environ["EVAL_LOG"], "a") as log:
+        log.write(json.dumps({"argv": line, "via": "cli", "invalid": err.getvalue().strip()[-300:]}) + "\n")
+    sys.stderr.write(err.getvalue())
+    sys.exit(2)
+text, code = answer(argv, "cli")
+print(text)
+sys.exit(code)
+'''
+
+FAKE_MCP = "#!/usr/bin/env python3\n" + FAKE_CORE + r'''
+
+# The hub as an MCP server on stdio, as clients/hubmcp.py serves it to a Claude run: `tools/list` is the real listing for
+# the caller's kind, and `tools/call` turns the call into the canonical CLI line and answers it with the same `answer`.
+import argparse, sys
+sys.path.insert(0, os.environ["EVAL_REPO"])
+sys.path.insert(0, os.environ["EVAL_REPO"] + "/clients")
+from clients import hubtools              # the real tool table: listing, argument checks
+from clients.remotecli import tool_name   # the command -> tool derivation production uses
+import hubcli
+
+LISTING = hubtools.listing(local=True, kind=os.environ.get("EVAL_MCP_KIND", "assistant"))
+OFFERED = {t["name"]: t for t in LISTING}
+
+
+def command_map():
+    """Tool name -> (command words, positional argument names), from the CLI parser's own commands. A command's tool is
+    `tool_name(fn)` (clients/remotecli.py). Its words are the subcommand path as typed, not fn: `automation show` runs
+    `automation get`, and the CLI logs the typed words, so the MCP line must read the same."""
+    found = {}
+
+    def walk(parser, path):
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                for name, sub in action.choices.items():
+                    walk(sub, path + [name])
+        fn = parser._defaults.get("fn")
+        if fn:
+            positional = [a.dest for a in parser._actions if not a.option_strings
+                          and not isinstance(a, (argparse._HelpAction, argparse._SubParsersAction))]
+            found.setdefault(tool_name(fn), (path, positional))
+    walk(hubcli.parser(), [])
+    return found
+
+
+COMMANDS = command_map()
+
+
+def scalar(value):
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    return str(value)
+
+
+def argv_for(name, args):
+    """The canonical CLI words of a tool call: the command words, the positional arguments (ids) first, then `--key value`
+    for each other argument in the order sent. Underscores become hyphens; a list repeats its flag; true is a bare flag;
+    false and null are left out. A tool with no command gets its name with hub_ dropped and _ as spaces."""
+    words, positional = COMMANDS.get(name) or (name[len("hub_"):].replace("_", " ").split(), [])
+    argv, used = list(words), set()
+    for dest in positional:
+        if args.get(dest) is not None:
+            argv.append(scalar(args[dest]))
+            used.add(dest)
+    for key, value in args.items():
+        if key in used or value is None or value is False:
+            continue
+        flag = "--" + key.replace("_", "-")
+        if value is True:
+            argv.append(flag)
+        elif isinstance(value, list):
+            for item in value:
+                argv += [flag, scalar(item)]
+        else:
+            argv += [flag, scalar(value)]
+    return argv
+
+
+def tool_result(text, is_error):
+    return {"content": [{"type": "text", "text": text}], "isError": is_error}
+
+
+def call(name, args):
+    """One tools/call: an argument the tool's inputSchema rejects is logged as invalid and answered as a tool error."""
+    argv = argv_for(name, args)
+    problem = hubtools.argument_error(args, OFFERED[name]["inputSchema"])
+    if problem:
+        with open(os.environ["EVAL_LOG"], "a") as log:
+            log.write(json.dumps({"argv": " ".join(argv), "via": "mcp", "tool": name, "invalid": problem}) + "\n")
+        return tool_result(json.dumps({"error": "validation", "detail": problem}), True)
+    try:
+        text, code = answer(argv, "mcp", tool=name)
+    except Exception as exc:  # a broken canned row: report it to the model, do not end the run
+        return tool_result(json.dumps({"error": "fake hub", "detail": str(exc)[:300]}), True)
+    return tool_result(text, bool(code))
+
+
+def handle(message):
+    if not isinstance(message, dict):
+        return {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request"}}
+    rid, method, params = message.get("id"), message.get("method"), message.get("params") or {}
+    if rid is None:  # a notification, or a reply to us (we send no requests)
+        return None
+    if method == "initialize":
+        asked = params.get("protocolVersion")
+        version = asked if asked in hubtools.PROTOCOL_VERSIONS else hubtools.PROTOCOL_VERSIONS[0]
+        result = {"protocolVersion": version, "capabilities": {"tools": {}}, "serverInfo": {"name": "hub", "version": "eval"}}
+    elif method == "ping":
+        result = {}
+    elif method == "tools/list":
+        result = {"tools": LISTING}
+    elif method == "tools/call":
+        name, args = params.get("name"), params.get("arguments", {})
+        if not isinstance(name, str) or not isinstance(args, dict):
+            return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": "name must be a string, arguments an object"}}
+        if name not in OFFERED:
+            return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32602, "message": f"Unknown tool: {name}"}}
+        result = call(name, args)
+    else:
+        return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"Method not found: {method}"}}
+    return {"jsonrpc": "2.0", "id": rid, "result": result}
+
+
+for raw in sys.stdin:
+    raw = raw.strip()
+    if not raw:
+        continue
+    try:
+        response = handle(json.loads(raw))
+    except ValueError:
+        response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}
+    if response is not None:
+        sys.stdout.write(json.dumps(response, default=str) + "\n")
+        sys.stdout.flush()
 '''
 
 
@@ -247,10 +399,16 @@ def run_sample(case, sample, args, outdir):
     subprocess.run(g + ["init", "-q"], check=True)
     subprocess.run(g + ["add", "-A"], check=True)
     subprocess.run(g + ["-c", "user.name=Bot", "-c", "user.email=bot@example.invalid", "commit", "-qm", "seed"], check=True)
-    bindir = work / "bin"
-    bindir.mkdir(parents=True)
-    (bindir / "hub").write_text(FAKE_HUB)
-    (bindir / "hub").chmod(0o755)
+    tools = work / "tools"
+    tools.mkdir(parents=True)
+    (tools / "fake_mcp.py").write_text(FAKE_MCP)
+    path = os.environ["PATH"]
+    if args.surface != "mcp":  # the hub CLI is on PATH unless the surface is MCP only
+        bindir = work / "bin"
+        bindir.mkdir(parents=True)
+        (bindir / "hub").write_text(FAKE_HUB)
+        (bindir / "hub").chmod(0o755)
+        path = f"{bindir}:{path}"
     (work / "canned.json").write_text(json.dumps(case.get("hub") or []))
     logf = work / "hub.log"
     logf.write_text("")
@@ -258,10 +416,14 @@ def run_sample(case, sample, args, outdir):
     mail = work / "hubdir/scripts/mail.sh"
     mail.write_text("#!/bin/sh\necho '[]'\n")
     mail.chmod(0o755)
-    env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "EVAL_REPO": args.repo, "EVAL_LOG": str(logf),
+    env = {**os.environ, "PATH": path, "EVAL_REPO": args.repo, "EVAL_LOG": str(logf),
            "EVAL_CANNED": str(work / "canned.json"), "EVAL_STATE": str(work / "state.json"), "HUB_DIR": str(work / "hubdir"), "TICO_BOT": "coo"}
+    # The hub MCP server, as runner-rs/src/hosts/claude.rs gives it: the same state and canned files as the CLI.
+    servers = {} if args.surface == "cli" else {"hub": {"command": sys.executable, "args": [str(tools / "fake_mcp.py")], "env": {
+        "EVAL_REPO": args.repo, "EVAL_LOG": str(logf), "EVAL_CANNED": str(work / "canned.json"),
+        "EVAL_STATE": str(work / "state.json"), "EVAL_MCP_KIND": os.environ.get("EVAL_MCP_KIND", "assistant")}}}
     cmd = ["claude", "-p", turn_text(case), "--model", args.model, "--effort", effort, "--setting-sources", "project",
-           "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--no-session-persistence",
+           "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": servers}), "--no-session-persistence",
            "--permission-mode", "bypassPermissions", "--output-format", "json", "--max-turns", str(args.max_turns)]
     t0 = time.time()
     try:
@@ -272,7 +434,9 @@ def run_sample(case, sample, args, outdir):
     reply = str(data.get("result") or "")
     calls = [json.loads(l) for l in logf.read_text().splitlines() if l.strip()]
     # A `--help` lookup is not a call that changes anything: it is left out of the checks and the judge's list.
-    lines = [c["argv"] for c in calls if not c.get("help")]
+    shown = [c for c in calls if not c.get("help")]
+    lines = [c["argv"] for c in shown]
+    surfaces = [c.get("via", "cli") for c in shown]
     attached = {k: v for c in calls for k, v in (c.get("files") or {}).items()}
     fails = []
     for rx in case.get("must") or []:
@@ -291,13 +455,15 @@ def run_sample(case, sample, args, outdir):
                 fails.append(f"forbidden call {hit[0][:120]}")
     bad = [c for c in calls if c.get("invalid")]
     for c in bad:
-        fails.append(f"invalid command: hub {c['argv'][:100]}")
+        fails.append(f"invalid {c.get('via', 'cli')} call: hub {c['argv'][:100]}")
     verdict = judge(case, reply, lines, attached, args)
     if not verdict.get("pass"):
         fails.append(f"judge: {verdict.get('why', '')[:300]}")
     res = {"id": case["id"], "sample": sample, "model": args.model, "effort": effort, "pass": not fails, "fails": fails,
            "score": verdict.get("score"), "why": verdict.get("why", ""), "reply": reply, "calls": lines,
-           "invalid": len(bad), "turns": data.get("num_turns"), "cost_usd": data.get("total_cost_usd"),
+           "surface": args.surface, "surfaces": surfaces,
+           "invalid": len(bad), "invalid_by_surface": dict(Counter(c.get("via", "cli") for c in bad)),
+           "turns": data.get("num_turns"), "cost_usd": data.get("total_cost_usd"),
            "secs": round(time.time() - t0)}
     (outdir / f"{tag}.json").write_text(json.dumps(res, indent=1))
     return res
@@ -359,14 +525,20 @@ def load_cases(only="", case_ids=""):
     return cases
 
 
-def summarise(outdir, tag, model, judge, samples):
+def summarise(outdir, tag, model, judge, samples, surface="both"):
     rows = [json.loads(f.read_text()) for f in sorted(outdir.glob("*.s*.json"))]
+    calls = Counter(s for r in rows for s in r.get("surfaces", []))
+    bad = Counter()
+    for r in rows:
+        bad.update(r.get("invalid_by_surface") or {})
     by_case = {}
     for r in rows:
         by_case.setdefault(r["id"], []).append(r)
     passed = sum(r["pass"] for r in rows)
     md = [f"# {tag}: {passed}/{len(rows)} sample runs pass ({passed / max(len(rows), 1):.0%}), model {model}, "
-          f"judge {judge}", "",
+          f"judge {judge}",
+          f"Surface {surface}: {calls['mcp']} MCP calls ({bad['mcp']} invalid), {calls['cli']} CLI calls "
+          f"({bad['cli']} invalid).", "",
           f"{len(by_case)} cases x up to {samples} samples. Score is the judge's 1-5 mean.", "",
           "| case | pass | score | turns | $ | first failure |", "|---|---|---|---|---|---|"]
     for cid in sorted(by_case):
@@ -379,7 +551,7 @@ def summarise(outdir, tag, model, judge, samples):
         md.append(f"| {cid} | {ok}/{len(rs)} | {score:.1f} | {turns:.0f} | {cost:.3f} | "
                   f"{first[:160].replace('|', '/')} |")
     (outdir / "summary.md").write_text("\n".join(md) + "\n")
-    return md[0]
+    return md[0] + "\n" + md[1]
 
 
 def main():
@@ -391,6 +563,8 @@ def main():
     ap.add_argument("--only", default="", help="comma list of case files (queue, approvals, jobs) or id prefixes")
     ap.add_argument("--case", default="", help="comma list of exact case ids")
     ap.add_argument("--samples", type=int, default=1, help="runs per case")
+    ap.add_argument("--surface", choices=["cli", "mcp", "both"], default="both",
+                    help="how the Assistant reaches the hub: both is production (MCP server and the hub CLI)")
     ap.add_argument("--tag", default="run")
     ap.add_argument("-j", type=int, default=6)
     ap.add_argument("--max-turns", type=int, default=30)
@@ -414,7 +588,7 @@ def main():
             r = fut.result()
             print(("PASS " if r["pass"] else "FAIL ") + f"{cid} s{s}" +
                   ("" if r["pass"] else "  " + " | ".join(r["fails"])[:400]), flush=True)
-    print(summarise(outdir, args.tag, args.model, args.judge, args.samples), flush=True)
+    print(summarise(outdir, args.tag, args.model, args.judge, args.samples, args.surface), flush=True)
 
 
 if __name__ == "__main__":
