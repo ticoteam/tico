@@ -1030,11 +1030,17 @@ def test_a_builder_template_a_copy_of_one_or_a_numbered_builder_gets_its_own_mac
         assert CM.default_placement(c, "ops") == "own"
         _config(c, "ops", {"template": "video-producer"})
         assert CM.default_placement(c, "ops") == "own"
-        # A copy is one step from its original: a copy of a Builder is heavy whatever it is called.
+        # A copy of a Builder is heavy whatever it is called.
         _config(c, "coo", {"template": "builder"})
         _config(c, "ops", {"copied_from": {"bot": "coo", "sha": "0" * 40}})
         assert CM.default_placement(c, "ops") == "own"
         _config(c, "coo", {"template": "pr-reviewer"})
+        assert CM.default_placement(c, "ops") == "shared"
+        # A copy of a copy follows the line back to the Builder it started from; a loop of copies ends.
+        _config(c, "finance", {"template": "builder"})
+        _config(c, "coo", {"copied_from": {"bot": "finance", "sha": "0" * 40}})
+        assert CM.default_placement(c, "ops") == "own"
+        _config(c, "coo", {"copied_from": {"bot": "ops", "sha": "0" * 40}})
         assert CM.default_placement(c, "ops") == "shared"
         for name, want in (("Builder 2", "own"), ("builder (Claude)", "own"), ("BUILDER", "own"),
                            ("Builder 2 Ops", "shared"), ("Rebuilder", "shared")):

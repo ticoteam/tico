@@ -121,6 +121,7 @@ MODES = ("cloud", "computer")
 PLACEMENTS = ("shared", "own")
 SHARED = "_shared"              # the shared machine's row and HQ key: no bot id has an underscore
 OWN_TEMPLATES = ("video-producer", "builder")     # heavy work (renders, encodes, builds) whatever department the bot is in
+COPY_HOPS = 20                                     # how far back through copies of copies a template is looked for
 OWN_NAME = re.compile(r"builder(?: \(.*| \d+)?")  # a Builder by name: "Builder", "Builder 2", "Builder (Claude)"
 SIZES = ("small", "default", "large", "xlarge")       # the names before HQ has listed its own
 STATES = ("starting", "running", "stopping", "stopped", "deleted", "failed")
@@ -324,16 +325,17 @@ def _config_of(c, bot):
 
 def default_placement(c, bot):
     """Where a bot's cloud machine is when nobody has chosen: its own for a template in OWN_TEMPLATES (the video producer,
-    the Builder), for a copy of one of those (one step back to its original), or for a bot named as a Builder ("Builder",
-    "Builder 2", "Builder (...)"); the shared one for every other bot, the rest of Engineering included (leads, reviewers
-    and QA run short turns). Read once, when its row is made: renaming it later moves no machine."""
-    config = _config_of(c, bot)
-    if config.get("template") in OWN_TEMPLATES:
-        return "own"
-    source = config.get("copied_from")
-    original = source.get("bot") if isinstance(source, dict) else ""
-    if original and _config_of(c, original).get("template") in OWN_TEMPLATES:
-        return "own"
+    the Builder), for a copy of one of those (back through `copied_from`, a copy of a copy included), or for a bot
+    named as a Builder ("Builder", "Builder 2", "Builder (...)"); the shared one for every other bot, the rest of
+    Engineering included (leads, reviewers and QA run short turns). Read once, when its row is made: renaming it later moves no machine."""
+    seen, at = set(), bot
+    while at and at not in seen and len(seen) < COPY_HOPS:     # the bot, then the bot it was copied from, and so on
+        seen.add(at)
+        config = _config_of(c, at)
+        if config.get("template") in OWN_TEMPLATES:
+            return "own"
+        source = config.get("copied_from")
+        at = source.get("bot") if isinstance(source, dict) else None
     named = c.execute("SELECT display_name FROM bots WHERE id=?", (bot,)).fetchone()
     name = ((named["display_name"] if named else "") or "").strip().lower()
     return "own" if OWN_NAME.fullmatch(name) else "shared"

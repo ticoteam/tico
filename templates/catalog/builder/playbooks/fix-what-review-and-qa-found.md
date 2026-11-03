@@ -40,5 +40,6 @@ Run the checks at the new head and record the head commit. A check that did not 
 
     hub task update <id> --step "<step>" --note "<head sha>: fixed <list>; declined <list with one line each>; checks run <list>"
 
-When QA passes, the ticket moves on to Pending Release. Merge then, under `skills/check-the-merge-rules-at-the-head/SKILL.md`,
-and never before.
+When QA passes (or, for a change nobody will see, once its review fixes are done) the merge is next: merge then, under
+`skills/check-the-merge-rules-at-the-head/SKILL.md`, with the checks green at the head, and never before. The merge moves
+the ticket to Pending Release.
