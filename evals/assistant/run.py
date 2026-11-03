@@ -43,6 +43,10 @@ import yaml
 
 HERE = Path(__file__).resolve().parent
 TEMPLATE = "assistant"
+JUDGE_TRIES = 3          # a judge reply with no JSON object is retried: 1 try + 2 retries
+JUDGE_BACKOFF = 5        # seconds; the wait before retry n is JUDGE_BACKOFF * n
+# A run that produced no turns and says why: a rate limit, a usage limit, an overloaded or failed API call.
+API_ERROR = re.compile(r"rate.?limit|\b429\b|usage limit|overloaded|api error|quota|capacity", re.I)
 CONVERSATION = "dana-coo"  # the id of the owner's Assistant chat, as the opening names it
 OWNER = "human:dana"
 FILL = {"{{app_name}}": "Tico", "{{assistant_name}}": "Tico Assistant", "{{company_name}}": "Acme",
@@ -737,12 +741,26 @@ def run_sample(case, sample, args, outdir):
            "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": servers}), "--no-session-persistence",
            "--permission-mode", "bypassPermissions", "--output-format", "json", "--max-turns", str(args.max_turns)]
     t0 = time.time()
+    p, start_failed = None, False
     try:
         p = subprocess.run(cmd, cwd=work / "repo", env=env, capture_output=True, text=True, timeout=args.timeout, check=False)
         data = json.loads(p.stdout or "{}")
-    except (subprocess.TimeoutExpired, OSError, ValueError) as e:  # timeout, no claude binary, or bad json
+    except OSError as e:  # no claude binary: the model run never started
+        start_failed = True
         data = {"result": f"(harness error: {e})", "is_error": True}
+    except (subprocess.TimeoutExpired, ValueError) as e:  # timeout, or stdout that is not JSON (a usage-limit text, say)
+        data = {"result": f"(harness error: {e})", "is_error": True}
+    raw = f"{p.stdout or ''} {p.stderr or ''}" if p is not None else ""
     reply = str(data.get("result") or "")
+    turns = data.get("num_turns")
+    if not turns and (start_failed or API_ERROR.search(f"{json.dumps(data)} {raw}")):
+        # The model never ran a turn because of the API or a rate limit: an error to rerun, not a failed check.
+        res = {"id": case["id"], "sample": sample, "model": args.model, "effort": effort, "judge": args.judge,
+               "pass": False, "fails": [], "error": "model", "why": reply[:300], "score": None, "reply": reply,
+               "calls": [], "surface": args.surface, "surfaces": [], "invalid": 0, "invalid_by_surface": {},
+               "turns": turns, "cost_usd": data.get("total_cost_usd"), "secs": round(time.time() - t0)}
+        (outdir / f"{tag}.json").write_text(json.dumps(res, indent=1))
+        return res
     calls = [json.loads(l) for l in logf.read_text().splitlines() if l.strip()]
     # A `--help` lookup is not a call that changes anything: it is left out of the checks and the judge's list.
     shown = [c for c in calls if not c.get("help")]
@@ -778,9 +796,18 @@ def run_sample(case, sample, args, outdir):
         for c in bad:
             fails.append(f"invalid {c.get('via', 'cli')} call: hub {c['argv'][:100]}")
     verdict = judge(case, reply, judged, attached, args)
+    if verdict.get("error") == "judge":
+        res = {"id": case["id"], "sample": sample, "model": args.model, "effort": effort, "judge": args.judge,
+               "pass": False, "fails": fails, "error": "judge", "why": verdict.get("why", ""), "score": None,
+               "reply": reply, "calls": lines, "surface": args.surface, "surfaces": surfaces, "invalid": len(bad),
+               "invalid_by_surface": dict(Counter(c.get("via", "cli") for c in bad)), "turns": turns,
+               "cost_usd": data.get("total_cost_usd"), "secs": round(time.time() - t0)}
+        (outdir / f"{tag}.json").write_text(json.dumps(res, indent=1))
+        return res
     if not verdict.get("pass"):
         fails.append(f"judge: {verdict.get('why', '')[:300]}")
-    res = {"id": case["id"], "sample": sample, "model": args.model, "effort": effort, "pass": not fails, "fails": fails,
+    res = {"id": case["id"], "sample": sample, "model": args.model, "effort": effort, "judge": args.judge,
+           "pass": not fails, "fails": fails,
            "score": verdict.get("score"), "why": verdict.get("why", ""), "reply": reply, "calls": lines,
            "surface": args.surface, "surfaces": surfaces,
            "invalid": len(bad), "invalid_by_surface": dict(Counter(c.get("via", "cli") for c in bad)),
@@ -825,12 +852,25 @@ Answer with only a JSON object: {{"pass": true|false, "score": 1-5, "why": "<one
            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--no-session-persistence",
            "--output-format", "json", "--max-turns", "1", "--disallowedTools",
            "Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task"]
-    try:
-        p = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True, timeout=300, check=False)
-        text = json.loads(p.stdout)["result"]
-        return json.loads(re.search(r"\{.*\}", text, re.S).group(0))
-    except (subprocess.TimeoutExpired, OSError, ValueError, KeyError, AttributeError) as e:
-        return {"pass": False, "score": 0, "why": f"judge error: {e}"}
+    why = ""
+    for attempt in range(JUDGE_TRIES):
+        if attempt:
+            time.sleep(JUDGE_BACKOFF * attempt)
+        try:
+            p = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True, timeout=300, check=False)
+            text = str(json.loads(p.stdout)["result"])
+            match = re.search(r"\{.*\}", text, re.S)
+            if match is None:
+                raise ValueError("the judge's reply had no JSON object")
+            verdict = json.loads(match.group(0))
+            if not isinstance(verdict, dict):
+                raise ValueError("the judge's JSON was not an object")
+            return verdict
+        except (subprocess.TimeoutExpired, OSError, ValueError, KeyError, TypeError) as e:
+            why = str(e)
+    # No verdict after every try: the sample is an error to rerun, not a failed check.
+    return {"error": "judge", "pass": False, "score": None,
+            "why": f"no verdict after {JUDGE_TRIES} tries: {why}"}
 
 
 def load_cases(only="", case_ids=""):
@@ -849,8 +889,20 @@ def load_cases(only="", case_ids=""):
     return cases
 
 
+def errored_samples(outdir):
+    """(case id, sample) of every sample whose run errored (the model or the judge), for --rerun-errors."""
+    found = set()
+    for f in outdir.glob("*.s*.json"):
+        r = json.loads(f.read_text())
+        if r.get("error"):
+            found.add((r["id"], int(r["sample"])))
+    return found
+
+
 def summarise(outdir, tag, model, judge, samples, surface="both"):
     rows = [json.loads(f.read_text()) for f in sorted(outdir.glob("*.s*.json"))]
+    errored = [r for r in rows if r.get("error")]
+    scored = [r for r in rows if not r.get("error")]
     calls = Counter(s for r in rows for s in r.get("surfaces", []))
     bad = Counter()
     for r in rows:
@@ -858,25 +910,34 @@ def summarise(outdir, tag, model, judge, samples, surface="both"):
     by_case = {}
     for r in rows:
         by_case.setdefault(r["id"], []).append(r)
-    passed = sum(r["pass"] for r in rows)
-    md = [f"# {tag}: {passed}/{len(rows)} sample runs pass ({passed / max(len(rows), 1):.0%}), model {model}, "
-          f"judge {judge}",
+    passed = sum(r["pass"] for r in scored)
+    md = [f"# {tag}: {passed}/{len(scored)} pass ({passed / max(len(scored), 1):.0%}), {len(errored)} errored, "
+          f"model {model}, judge {judge}",
           f"Surface {surface}: {calls['mcp']} MCP calls ({bad['mcp']} invalid), {calls['cli']} CLI calls "
           f"({bad['cli']} invalid).",
-          f"invalid calls per sample: {sum(r.get('invalid', 0) for r in rows) / max(len(rows), 1):.1f}", "",
-          f"{len(by_case)} cases x up to {samples} samples. Score is the judge's 1-5 mean.", "",
-          "| case | pass | score | turns | $ | first failure |", "|---|---|---|---|---|---|"]
+          f"invalid calls per sample: {sum(r.get('invalid', 0) for r in rows) / max(len(rows), 1):.1f}"]
+    if errored:
+        kinds = Counter(r["error"] for r in errored)
+        where = ", ".join(f"{r['id']} s{r['sample']}" for r in sorted(errored, key=lambda r: (r["id"], r["sample"])))
+        md.append(f"{len(errored)} samples errored: " + ", ".join(f"{k} {n}" for k, n in sorted(kinds.items()))
+                  + f" ({where}). Left out of the pass rate; rerun with --rerun-errors {tag}.")
+    md += ["", f"{len(by_case)} cases x up to {samples} samples. Score is the judge's 1-5 mean.", "",
+           "| case | pass | score | turns | $ | first failure |", "|---|---|---|---|---|---|"]
     for cid in sorted(by_case):
         rs = by_case[cid]
-        ok = sum(r["pass"] for r in rs)
-        score = statistics.mean(r["score"] or 0 for r in rs)
-        turns = statistics.mean(r["turns"] or 0 for r in rs)
+        ok_rs = [r for r in rs if not r.get("error")]
+        if not ok_rs:
+            md.append(f"| {cid} | errored {len(rs)} | - | - | - | {rs[0]['error']} error |")
+            continue
+        ok = sum(r["pass"] for r in ok_rs)
+        score = statistics.mean(r["score"] or 0 for r in ok_rs)
+        turns = statistics.mean(r["turns"] or 0 for r in ok_rs)
         cost = sum(r["cost_usd"] or 0 for r in rs)
-        first = next((r["fails"][0] for r in rs if r["fails"]), "")
-        md.append(f"| {cid} | {ok}/{len(rs)} | {score:.1f} | {turns:.0f} | {cost:.3f} | "
+        first = next((r["fails"][0] for r in ok_rs if r["fails"]), "")
+        md.append(f"| {cid} | {ok}/{len(ok_rs)} | {score:.1f} | {turns:.0f} | {cost:.3f} | "
                   f"{first[:160].replace('|', '/')} |")
     (outdir / "summary.md").write_text("\n".join(md) + "\n")
-    return md[0] + "\n" + md[1] + "\n" + md[2]
+    return "\n".join(md[:md.index("")])
 
 
 def main():
@@ -891,6 +952,8 @@ def main():
     ap.add_argument("--surface", choices=["cli", "mcp", "both"], default="both",
                     help="how the Assistant reaches the hub: both is production (MCP server and the hub CLI)")
     ap.add_argument("--tag", default="run")
+    ap.add_argument("--rerun-errors", default="", metavar="TAG",
+                    help="rerun only the errored samples of an earlier TAG, into that folder, and rewrite its summary")
     ap.add_argument("-j", type=int, default=6)
     ap.add_argument("--max-turns", type=int, default=30)
     ap.add_argument("--timeout", type=int, default=900)
@@ -898,19 +961,36 @@ def main():
     args.repo = str(Path(args.repo).resolve())
     if not (Path(args.repo) / "templates/catalog" / TEMPLATE / "AGENT.md").exists():
         raise SystemExit(f"no {TEMPLATE} template under {args.repo}")
-    cases = load_cases(args.only, args.case)
-    if not cases:
-        raise SystemExit("no cases match")
-    outdir = HERE / "out" / args.tag
-    outdir.mkdir(parents=True, exist_ok=True)
-    for old in outdir.glob("*.s*.json"):
-        old.unlink()
-    jobs = [(c, s) for c in cases for s in range(1, args.samples + 1)]
+    if args.rerun_errors:
+        args.tag = args.rerun_errors
+        outdir = HERE / "out" / args.tag
+        wanted = errored_samples(outdir)
+        if not wanted:
+            raise SystemExit(f"no errored samples under {outdir}")
+        ids = {cid for cid, _ in wanted}
+        cases = [c for c in load_cases("", "") if c["id"] in ids]
+        jobs = [(c, s) for c in cases for s in sorted(n for cid, n in wanted if cid == c["id"])]
+        stored = json.loads(next(outdir.glob("*.s*.json")).read_text())
+        args.model, args.judge = stored.get("model", args.model), stored.get("judge", args.judge)
+        args.samples = max(n for _, n in wanted)
+        print(f"rerunning {len(jobs)} errored samples of {args.tag}", flush=True)
+    else:
+        cases = load_cases(args.only, args.case)
+        if not cases:
+            raise SystemExit("no cases match")
+        outdir = HERE / "out" / args.tag
+        outdir.mkdir(parents=True, exist_ok=True)
+        for old in outdir.glob("*.s*.json"):
+            old.unlink()
+        jobs = [(c, s) for c in cases for s in range(1, args.samples + 1)]
     with cf.ThreadPoolExecutor(args.j) as ex:
         futures = {ex.submit(run_sample, c, s, args, outdir): (c["id"], s) for c, s in jobs}
         for fut in cf.as_completed(futures):
             cid, s = futures[fut]
             r = fut.result()
+            if r.get("error"):
+                print(f"ERR  {cid} s{s}  {r['error']} error: {r.get('why', '')[:200]}", flush=True)
+                continue
             print(("PASS " if r["pass"] else "FAIL ") + f"{cid} s{s}" +
                   ("" if r["pass"] else "  " + " | ".join(r["fails"])[:400]), flush=True)
     print(summarise(outdir, args.tag, args.model, args.judge, args.samples, args.surface), flush=True)
