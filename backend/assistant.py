@@ -1172,6 +1172,10 @@ SEARCH = re.compile(r"^(search( for)?|find|look ?up|look for)\b\s*(.*)$")
 HELP = re.compile(r"^(help\b[:,\s]*|how (do|can|should|would|does|to)\b|how'?s? (it|tico)\b|explain\b|what is a\b|what are\b|"
                   r"what does .* mean|where do i\b|can i\b.*\?|what'?s the difference)")
 BOT_TODAY = re.compile(r"\b(today|this morning|last 24|yesterday|lately|so far)\b|\bwhat (did|has|have|is|was)\b.*\b(do|done|doing|up to|work)")
+# A problem to look into ("I see stuck tasks, what is going on?") needs the company's own state, not a docs excerpt or a
+# canned list: the model takes it.
+TROUBLE = re.compile(r"\b(stuck|broken|broke|failing|failed|wrong|not working|doesn'?t work|isn'?t working|going on|"
+                     r"why|fix|fixed|problem|issue|error)\b")
 ACTION_WORDS = re.compile(r"\b(create|make|add|assign|ask|tell|send|approve|decline|reject|archive|delete|remove|"
                           r"build|set up|schedule|publish|post|change|update|rename|close|cancel|remind|clear|dismiss|answer)\b")
 
@@ -1189,6 +1193,8 @@ def route(text, bots=()):
         return None, None
     if GREETING.fullmatch(t):
         return "greeting", None
+    if TROUBLE.search(t):
+        return "trouble", None
     # "for <team>," can be any word, a verb too ("for create, ..."), so the action check still applies.
     if (TASK_TYPE_INVENTORY.fullmatch(t) or TASK_TYPE_INVENTORY_ARE.fullmatch(t)) and not ACTION_WORDS.search(t):
         return "task_types", None
@@ -1489,6 +1495,7 @@ def help_answer(question):
         return None, []
     scored.sort(key=lambda s: -s[0])
     _, file, heading, anchor, body = scored[0]
+    body = re.sub(r"```.*?(```|$)", "", body, flags=re.S)     # a code block reads as noise once flattened into a line
     clean = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", body)
     clean = re.sub(r"`", "", clean)
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", clean) if p.strip() and not p.strip().startswith("|")]
@@ -1530,7 +1537,9 @@ async def decide(api, text):
         if response.status_code != 200:
             return None
         answer = (response.json().get("answers") or {}).get("intent") or {}
-        if answer.get("choice") in ("waiting", "search", "navigate", "help") and float(answer.get("confidence") or 0) >= 0.75:
+        # "help" is not taken from the model: a docs excerpt picked by keywords answered "what is going on with my
+        # tasks?" with an unrelated section. Only the how-to wording (route's HELP) gets one; the model takes the rest.
+        if answer.get("choice") in ("waiting", "search", "navigate") and float(answer.get("confidence") or 0) >= 0.75:
             return answer["choice"]
     except (httpx.HTTPError, ValueError, TypeError):
         return None
@@ -1540,6 +1549,8 @@ async def decide(api, text):
 async def fast_answer(api, who, bots, text):
     """(intent, reply text, links), or (None, None, []) when the model should answer."""
     intent, arg = route(text, bots)
+    if intent == "trouble":
+        return None, None, []
     if intent is None:
         intent = await decide(api, text)
         arg = text if intent else None

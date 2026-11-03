@@ -885,3 +885,42 @@ def test_how_to_questions_get_the_docs_and_a_greeting_with_work_goes_to_the_mode
 ])
 def test_task_types_question_that_also_asks_for_a_change_goes_to_the_model(text):
     assert assistant.route(text) == (None, None)
+
+
+@pytest.mark.parametrize("text", [
+    "I see a ton of stuck tasks. What is going on and how can I fix?",
+    "how do I fix the stuck tasks?",
+    "why is nothing moving",
+])
+def test_a_problem_to_look_into_goes_to_the_model_not_a_docs_excerpt(api, monkeypatch, text):
+    """Nov 2: "I see a ton of stuck tasks. What is going on and how can I fix?" got an instant "From [Work that is
+    waiting]" excerpt. A problem needs the company's own state, so the model takes it, whatever the intent check says."""
+    async def says_help(*args, **kwargs):
+        return "help"
+    monkeypatch.setattr(assistant, "decide", says_help)
+    result = post(api, "assistant/messages", {"text": text})
+    assert result["fast"] is False and result["reply"] is None
+
+
+def test_a_model_picked_help_intent_is_not_answered_from_the_docs(api, monkeypatch):
+    real_get, real_call, asked = assistant.Internal.get, assistant.Internal.call, []
+
+    async def get(self, path, /, **params):
+        return {"configured": True} if path == "decisions" else await real_get(self, path, **params)
+
+    async def call(self, method, path, **kwargs):
+        if path != "decisions":
+            return await real_call(self, method, path, **kwargs)
+        asked.append(path)
+        return type("Response", (), {"status_code": 200, "json": lambda _r: {
+            "answers": {"intent": {"choice": "help", "confidence": 0.95}}}})()
+    monkeypatch.setattr(assistant.Internal, "get", get)
+    monkeypatch.setattr(assistant.Internal, "call", call)
+    result = post(api, "assistant/messages", {"text": "tasks seem slow to start these days"})
+    assert asked, "the intent check ran"
+    assert result["fast"] is False and result["reply"] is None
+
+
+def test_a_docs_excerpt_leaves_code_blocks_out():
+    text, _ = assistant.help_answer("how do I set a task to waiting on a blocker")
+    assert text and "```" not in text and "hub task relate --kind" not in text
