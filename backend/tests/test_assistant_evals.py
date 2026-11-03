@@ -6,6 +6,7 @@ A command is read from the start of a must or must_not regex: `^task (bulk close
 `task close`. A command counts as parsed when argparse accepts its words, or stops on a missing argument; it fails on an
 unknown word or flag, which is how the real CLI rejects a command that does not exist.
 """
+import argparse
 import contextlib
 import importlib.util
 import io
@@ -198,3 +199,35 @@ def test_the_opening_lines_appear_in_the_runner_prompt():
         if not any(re.fullmatch(p, norm) for p in patterns):
             missing.append(norm[:120])
     assert not missing, f"not in prompt.rs: {missing}"
+
+
+REPO = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize("surface", ["both", "mcp", "cli"])
+def test_a_sample_runs_its_claude_command_on_every_surface(tmp_path, monkeypatch, surface):
+    """run_sample builds the claude command, the MCP config and the PATH for each surface. A stand-in `claude` on PATH
+    records the argv it gets, so the real code path runs with no model; a crash there (a missing import) fails CI."""
+    bin_dir = tmp_path / "fakebin"
+    bin_dir.mkdir()
+    record = tmp_path / "argv.json"
+    claude = bin_dir / "claude"
+    claude.write_text("#!/usr/bin/env python3\n"
+                      "import json, os, sys\n"
+                      "open(os.environ['FAKE_CLAUDE_OUT'], 'w').write(json.dumps(sys.argv[1:]))\n"
+                      "print(json.dumps({'result': 'done', 'num_turns': 1, 'total_cost_usd': 0}))\n")
+    claude.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_CLAUDE_OUT", str(record))
+    args = argparse.Namespace(repo=str(REPO), model="claude-haiku-5-5", judge="claude-opus-5-5", effort="",
+                              surface=surface, max_turns=3, timeout=120)
+    case = {"id": "smoke-close", "group": "smoke", "prompt": "close x", "must": ["^task close"]}
+    (tmp_path / "out").mkdir()
+    res = live.run_sample(case, 1, args, tmp_path / "out")
+    assert res["surface"] == surface and res["id"] == "smoke-close"
+    argv = json.loads(record.read_text())
+    servers = json.loads(argv[argv.index("--mcp-config") + 1])["mcpServers"]
+    if surface == "cli":
+        assert servers == {}
+    else:
+        assert servers["hub"]["command"] and servers["hub"]["args"][0].endswith("fake_mcp.py"), servers
