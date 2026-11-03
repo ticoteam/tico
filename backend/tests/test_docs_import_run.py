@@ -173,6 +173,29 @@ def test_a_crashed_worker_logs_its_last_stderr_line_capped_and_shows_the_plain_f
     assert list(temp_root.iterdir()) == []
 
 
+def test_a_crash_after_a_large_stderr_logs_only_the_tail(tmp_path, temp_root, monkeypatch, caplog):
+    monkeypatch.setattr(docs_import_run, "WORKER", fake_worker(
+        tmp_path, "import sys\nsys.stderr.write('x' * 200000)\nsys.stderr.write('\\nthe last line\\n')\nsys.exit(3)\n"))
+    with caplog.at_level("WARNING", logger="tico.docs_import"), pytest.raises(ValueError) as caught:
+        docs_import_run.to_markdown("a.md", b"# A\n", max_chars=BIG)
+    assert str(caught.value) == docs_import_run.FAILED_MESSAGE
+    logged = [r.getMessage() for r in caplog.records if r.name == "tico.docs_import"]
+    assert len(logged) == 1 and logged[0].endswith("the last line")
+    assert list(temp_root.iterdir()) == []
+
+
+def test_a_failed_memory_probe_is_logged_once(monkeypatch, caplog):
+    def unavailable(*args, **kwargs):
+        raise FileNotFoundError("/bin/ps")
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+    monkeypatch.setattr(docs_import_run, "_probe_warned", False)
+    with caplog.at_level("WARNING", logger="tico.docs_import"):
+        assert docs_import_run._resident_kb(1) == 0
+        assert docs_import_run._resident_kb(1) == 0
+    assert len([r for r in caplog.records if r.name == "tico.docs_import"]) == 1
+
+
 def test_an_unmeasurable_resident_size_counts_as_zero_and_does_not_raise(monkeypatch):
     def unavailable(*args, **kwargs):
         raise FileNotFoundError("/bin/ps")

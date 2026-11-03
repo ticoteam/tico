@@ -86,14 +86,22 @@ def _watch(child, cancel):
             raise ValueError(MEMORY_MESSAGE)
 
 
+_probe_warned = False
+
+
 def _resident_kb(pid):
     # An unmeasurable size counts as zero: the time limit still bounds the worker, and a failed probe
-    # is not a memory refusal.
+    # is not a memory refusal. The first failure is logged once, so a missing `ps` shows in the logs.
+    global _probe_warned
     try:
         usage = subprocess.run(["/bin/ps", "-o", "rss=", "-p", str(pid)], check=False, stdout=subprocess.PIPE,
                                stderr=subprocess.DEVNULL, timeout=1)
         return int(usage.stdout)
-    except (OSError, subprocess.SubprocessError, ValueError):
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        if not _probe_warned:
+            _probe_warned = True
+            log.warning("document import could not read the worker's memory size (%s); the time limit still applies",
+                        type(exc).__name__)
         return 0
 
 
@@ -118,7 +126,10 @@ def _outcome(path, stderr_path):
 def _log_crash(stderr_path):
     """Log the last line of a worker's stderr when it ended without a result. The person sees only the plain failure."""
     try:
-        tail = stderr_path.read_bytes()[-4096:].decode("utf-8", "replace")
+        with stderr_path.open("rb") as handle:
+            handle.seek(0, 2)
+            handle.seek(max(0, handle.tell() - 4096))  # read only the tail: the file may be large
+            tail = handle.read().decode("utf-8", "replace")
         lines = [line for line in tail.splitlines() if line.strip()]
     except OSError:
         lines = []
