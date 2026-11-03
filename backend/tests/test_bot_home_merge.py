@@ -514,9 +514,10 @@ def test_a_task_comment_on_a_moved_room_is_edited_and_deleted_by_its_author(api,
         assert new not in listed and old in listed
 
 
-def test_a_question_on_a_moved_task_stays_open_before_and_after_the_move(api, ops_rooms):
-    """A task's open questions are read from its history too: one asked before its room moved, and one asked after, through
-    the redirect. Each is listed for its own task only, and the batch read agrees with the single one for every reader."""
+def test_a_question_on_a_moved_task_is_read_across_the_move_and_replaced_by_a_newer_one(api, ops_rooms):
+    """A task's open questions are read from its history too: one asked before its room moved is replaced by a newer one to
+    the same person (the newer one goes through the redirect), and a question to another person stays open. Each is listed
+    for its own task only, and the batch read agrees with the single one for every reader."""
     questions = [{"id": "q1", "header": "Pick", "question": "Which one?", "options": [], "multi": False, "other": True}]
     first = post(api, "tasks", {"owner": "ops", "title": "First", "body": "Pick for the first."})["id"]
     second = post(api, "tasks", {"owner": "ops", "title": "Second", "body": "Pick for the second."})["id"]
@@ -534,14 +535,16 @@ def test_a_question_on_a_moved_task_stays_open_before_and_after_the_move(api, op
         assert H.message(c, after)["conversation_id"] == ops_rooms["home"]
     with store(api).read() as c:
         row_first, row_second = H.task(c, first), H.task(c, second)
-        assert {a["id"] for a in H.open_task_asks(c, row_first)} == {before, after}
+        # The newer question to the same person replaces the one asked before the move (supersede_asks reads the history).
+        assert H.message(c, before)["superseded_at"] and H.message(c, after)["superseded_at"] is None
+        assert {a["id"] for a in H.open_task_asks(c, row_first)} == {after}
         assert [a["id"] for a in H.open_task_asks(c, row_second)] == [other]
         for actor in ("human:ana", "human:ben"):
             batch = H.open_tasks_asks(c, [row_first, row_second], actor=actor)
             for row in (row_first, row_second):
                 assert [a["id"] for a in batch[row["id"]]] == \
                     [a["id"] for a in H.open_task_asks(c, row, actor=actor)], (actor, row["id"])
-        assert {a["id"] for a in H.open_tasks_asks(c, [row_first], actor="human:ana")[first]} == {before, after}
+        assert {a["id"] for a in H.open_tasks_asks(c, [row_first], actor="human:ana")[first]} == {after}
 
 
 QUESTIONS = [{"id": "q1", "header": "Pick", "question": "Which one?", "options": [], "multi": False, "other": True}]
@@ -571,9 +574,9 @@ def test_a_question_asked_before_its_task_room_moved_still_lists_the_task_in_nee
 
 
 def test_a_question_asked_before_the_move_is_superseded_by_a_replacement_and_by_the_task_end(api, ops_rooms):
-    """supersede_asks reads a task's history as its queue does: a question asked before the task's room moved is replaced by a
-    newer one to the same person (`keep`), and finishing the task (no filter) supersedes the question still open for it. A
-    question to another person, or on another task, is left alone."""
+    """supersede_asks reads a task's history as its queue does. A question asked before the task's room moved is replaced
+    when a newer one goes to the same person on that task, and finishing the task (no filter) supersedes the question still
+    open for it, moved or not. A question to another person is left alone."""
     first = post(api, "tasks", {"owner": "ops", "title": "First", "body": "Pick for the first."})["id"]
     second = post(api, "tasks", {"owner": "ops", "title": "Second", "body": "Pick for the second."})["id"]
     with store(api).transaction() as c:
@@ -588,10 +591,11 @@ def test_a_question_asked_before_the_move_is_superseded_by_a_replacement_and_by_
         newer = say(c, "bot:ops", "human:ana", "Which one for the first, again?", ops_rooms["ana"], kind="ask",
                     refs={"task": first, "questions": QUESTIONS})["id"]
         assert H.message(c, newer)["conversation_id"] == ops_rooms["home"]
-        assert H.supersede_asks(c, first, from_actor="bot:ops", to_actor="human:ana", keep=newer) == [old]
     with store(api).transaction() as c:
-        assert H.supersede_asks(c, first, to_actor="human:ben") == []
+        # The write's replacement found the question asked before the move (it is in the task's history) and superseded it.
+        assert H.message(c, old)["superseded_at"] is not None
+        assert H.supersede_asks(c, second, to_actor="human:ana") == []
+        assert H.supersede_asks(c, second) == [left]
         assert H.supersede_asks(c, first) == [newer]
     with store(api).read() as c:
-        assert H.message(c, old)["superseded_at"] and H.message(c, newer)["superseded_at"]
-        assert H.message(c, left)["superseded_at"] is None
+        assert H.message(c, left)["superseded_at"] and H.message(c, newer)["superseded_at"]
