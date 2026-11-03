@@ -110,7 +110,7 @@ and as you (what you may see, nothing more), with no run and no model:
 | Search / find / look up *x* (add *tasks, docs, meetings, files, humans, bots* to narrow) | tasks, docs, meetings, bots' files, humans, bots |
 | Open / go to / where is *x* | the same search, with the best link first (or a page: Settings, Tasks…) |
 | What did *bot* do today | the bot's updates and the tasks it touched in the last 24 hours |
-| Help: how do I … | `docs/*.md`: a short excerpt and a link |
+| Help: how do I … | `docs/*.md`: a short excerpt and a link. A problem (stuck, broken, why, fix, error) goes to the model instead, not to an excerpt |
 
 The intent router is keywords and sentence shape first. When the team has a [decisions](../questions/README.md)
 provider, an unclear short message is classified by a `choice` question (`assistant-intent@1`); otherwise it goes to the

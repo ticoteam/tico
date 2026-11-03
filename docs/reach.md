@@ -99,7 +99,9 @@ Details of the API as built:
 - Header: the party's name.
 - Can reach anyone / Only who's listed. Up to [N] chats a day. Up to [N] tasks a day.
 - **Rules**, with `+ Add rule`. Company rules and the team's rules first, collapsed and always on; then the party's own
-  internal rules (Who names it). Tapping a rule opens it.
+  internal rules (Who names it). Tapping a rule opens it. For one party (on a bot's page, in the Reach panel or on the graph),
+  **+ Add rule** shows only the rule text; **Kind**, **Followed by**, **With** and **If broken** sit behind **More ›**. The
+  Rules page's **+ Add rule** is unchanged.
 - **Exceptions**, with `+ Add exception`. Rows read `To X` or `From X`, the count (`0 a day`, `1 a day`) and the rule.
   Adding searches teams, people and bots; the editor sets the direction, `Up to N a day` and the rule.
 - Each line is drawn on the chart with a chip: `N a day · rule…`.

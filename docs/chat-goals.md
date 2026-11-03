@@ -9,6 +9,10 @@ Older computers and other harnesses report `supported: false`. Goals belong to t
 thread, including a branch; the Assistant is outside this first version. A bot can also
 work each of its tasks as a goal (`task_goal: on`, see [Sessions](sessions.md#task-goals)).
 
+In a bot's chat, the composer has a **Goal** target button. Turn on **Goal mode** and Send makes the text the goal instead of
+a message. Goal mode stays on for that bot in that browser. A chat whose computer does not support goals says Goal mode is
+not available. The bar above the thread shows the goal and its status, with **Edit**, **Pause** or **Resume**, and **Clear**.
+
 Use `/goal <objective>` to set a goal, or `/goal edit <objective>`, `/goal pause`,
 `/goal resume` and `/goal clear`. An objective is 1–4,000 characters. Pause retains its text;
 resume starts it again. Anyone who can message in the thread may change its goal, except in a
