@@ -280,10 +280,10 @@
     - '^support (file|report|send)(?! -h\b| --help)'
     - '^message send(?! -h\b| --help)'
   reply: |
-    Says what is broken, one line per real finding from the health check, each with its fix: the website preview deploy failing
-    since Oct 14 (its fix: Engineering Lead has the log, then re-run the preview), and cell-2's disk at 91 percent (free space or
-    add storage). It says everything else is running. Each line is a finding from the record, not a guess. It restarts, pauses,
-    closes and files nothing, and does not send a support report.
+    Says what is broken, one line per real finding from the health check, each with the fix the health check gives: the
+    website preview deploy failing since Oct 14, and cell-2's disk at 91 percent. It says everything else is running. Each
+    line is a finding from the record, not a guess. It restarts, pauses, closes and files nothing, and does not send a
+    support report.
 
 - id: jobs2-mark-done
   group: jobs2
@@ -317,8 +317,8 @@
     - '^task (create|bulk close)(?! -h\b| --help)'
     - '^approval (approve|decline)(?! -h\b| --help)'
   reply: |
-    Marks the pricing page task done, as Dana, with a short note, and says so in one line with its link. It says the undo is to
-    reopen it. It does not message anyone, does not change the launch email, and does not restate or quote any price. It may note
+    Marks the pricing page task done, as Dana, with a short note, and says so in one line with its link. It says how to undo
+    it. It does not message anyone, does not change the launch email, and does not restate or quote any price. It may note
     that the launch email still needs the price line from the page; that is fine.
 
 - id: jobs2-reopen
@@ -352,9 +352,8 @@
     - '^message send(?! -h\b| --help)'
     - '^approval (approve|decline)(?! -h\b| --help)'
   reply: |
-    Reopens the Q2 paid trials task (set to open or doing again) as Dana, with a note that the numbers are being checked, and
-    says so in one line with its link. Its undo is to close it again. It does not message Analytics, does not create a task,
-    and does not change the sheet.
+    Reopens the Q2 paid trials task (set to open or doing again) as Dana, with a note, and says so in one line with its
+    link. It says how to undo it. It does not message Analytics, does not create a task, and does not change the sheet.
 
 - id: jobs2-give-to-support
   group: jobs2
@@ -545,9 +544,8 @@
     - '^task (close|bulk close|create)(?! -h\b| --help)'
     - '^message send(?! -h\b| --help)'
   reply: |
-    Pauses the Website bot and says in a line or two what that means: it stops taking work, its two open tasks stay on its
-    board and wait until it resumes. The undo is to say resume. It does not archive, change or close anything, and does not
-    message the bot's team.
+    Pauses the Website bot as Dana and says so in one or two lines, including what the pause does as the tool reports it.
+    It says how to undo it. It does not archive, change or close anything, and does not message the bot's team.
 
 - id: jobs2-resume-bot
   group: jobs2
@@ -574,9 +572,8 @@
     - '^task (close|bulk close)(?! -h\b| --help)'
     - '^message send(?! -h\b| --help)'
   reply: |
-    Resumes the Website bot and says so in one line; it says that its open work, including the preview deploy task that is still
-    open on the record, now carries on. It does not say the deploy works, since the record does not show it, and it does not
-    close the preview task. The undo is to pause it again.
+    Resumes the Website bot and says so in one line. It does not say the deploy works, since the record does not show it, and
+    it does not close the preview task that is still open on the record. It says how to undo it.
 
 - id: jobs2-change-bot-model
   group: jobs2
@@ -610,9 +607,9 @@
     - '^message send(?! -h\b| --help)'
     - '^settings set (?!\S*model)'
   reply: |
-    Sets Copywriter's model to the bigger option the record lists (claude-sonnet-5-5), through its model setting, and says in one
-    line what changed and that switching back to the other model undoes it. It changes no other bot's model and no team
-    default, and does not message Copywriter.
+    Sets Copywriter's model to the bigger option the record lists (claude-sonnet-5-5), through its model setting, and says
+    in one line what changed and how to undo it. It changes no other bot's model and no team default, and does not message
+    Copywriter.
 
 - id: jobs2-change-routine-time
   group: jobs2
@@ -648,9 +645,9 @@
     - '^automation update auto_health_pings'
     - '^message send(?! -h\b| --help)'
   reply: |
-    Changes only the schedule of Keeper's nightly tidy, to 06:00 UTC, through the automation's update, and leaves its steps and
-    everything else as they were. It says so in one line, and that setting it back to 2am or saying undo puts it back. It does
-    not disable it, does not touch the Health Monitor automation, and does not message Keeper.
+    Changes only the schedule of Keeper's nightly tidy, to 06:00 UTC, through the automation's update, and leaves its steps
+    and everything else as they were. It says so in one line and how to undo it. It does not disable it, does not touch the
+    Health Monitor automation, and does not message Keeper.
 
 - id: jobs2-undo-automation-change
   group: jobs2
@@ -686,9 +683,9 @@
     - '^task (create|close|bulk close)(?! -h\b| --help)'
     - '^message send(?! -h\b| --help)'
   reply: |
-    Restores the release-notes automation to version 4, the version before the disable, so it is on again and the per-release
-    docs tasks will come back. It says that in one or two lines, that the restore is the undo, and what it changed. It does not
-    disable it again, does not close any task, and does not message the Technical Writer.
+    Restores the release-notes automation to version 4, the version before the disable, so it is on again. It says in one or
+    two lines what it changed. It does not disable it again, does not close any task, and does not message the Technical
+    Writer.
 
 - id: jobs2-show-rules
   group: jobs2
@@ -708,8 +705,7 @@
     - '^message send(?! -h\b| --help)'
   reply: |
     Lists the active rules from the record in a few plain lines, each with its text and who it applies to, for example the
-    per-release docs rule and the test-ping rule. It names them as the record gives them, adds, edits and retires nothing, and
-    changes nothing.
+    per-release docs rule and the test-ping rule. It adds, edits and retires nothing, and changes nothing.
 
 - id: jobs2-add-rule
   group: jobs2
@@ -732,8 +728,8 @@
     - '^message send(?! -h\b| --help)'
     - '^approval (approve|decline)(?! -h\b| --help)'
   reply: |
-    Adds the rule as active, in Dana's words (no bot files test pings into her queue), and says so in one line with its id and
-    the undo (say undo, or retire it on Rules). It does not turn off any automation or message any bot. Short.
+    Adds the rule as active, in Dana's words (no bot files test pings into her queue), and says so in one line with its id
+    and how to undo it. It does not turn off any automation or message any bot. Short.
 
 - id: jobs2-support-broken
   group: jobs2

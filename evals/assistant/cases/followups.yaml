@@ -38,8 +38,8 @@
     - '^message send(?! -h\b| --help)'
   reply: |
     Approves exactly the two items in the read-back, as Dana: the pull request 214 merge and the $500 spend to Lumen Ads, one
-    command each, with no new read-back. It says in a line or two what was approved, and that the undo is in Settings, General,
-    until it has run. It does not approve the Harbor Co send, which was not in the list, and does not message anyone.
+    command each, with no new read-back. It says in a line or two what was approved. It does not approve the Harbor Co send,
+    which was not in the list, and does not message anyone.
 
 - id: followups-undo-after-close
   group: followups
