@@ -549,6 +549,9 @@ impl Exits {
         if *budget >= cap {
             return Err(error(StatusCode::TOO_MANY_REQUESTS, "exit_over_cap"));
         }
+        // Every slot's counts into the day's totals first, so the row limit sees each key counted so far (a tunnel open
+        // across midnight holds yesterday's key in its slot): once per admit, never per frame.
+        self.flush_all();
         if self.tunnels.len() >= TUNNELS
             || self.usage.len() + self.tunnels.len() >= USAGE_ROWS
             || self.tunnels.values().filter(|t| t.exit == g.exit).count() >= TUNNELS_PER_EXIT
@@ -1402,6 +1405,19 @@ mod tests {
             ),
             (11, 1, "www.acme.example", "ops")
         );
+    }
+
+    #[test]
+    fn an_admit_sees_the_keys_open_tunnels_counted_on_earlier_days() {
+        let mut exits = exits();
+        let _opens = exits.connect_link("laptop");
+        exits.set_policy("laptop", policy(1, &["ops"], 10_000)).unwrap();
+        exits.admit(&grant("a", "ops", 1, 0)).unwrap();
+        exits.spend("a", 5).unwrap();
+        exits.day = Some("2026-11-02".into());
+        exits.admit(&grant("b", "ops", 1, 0)).unwrap();
+        // Tunnel a is still open; its bytes from the day before are in the totals the row limit counts.
+        assert_eq!(exits.usage.values().copied().collect::<Vec<_>>(), vec![(5, 0)]);
     }
 
     #[test]
