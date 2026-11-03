@@ -41,17 +41,20 @@ function settingsTierName(id) {
   const t = settingsTierParse(id);
   return t ? `${SETTINGS_DATA.gateway.tiers[t.tier].name}${t.version === 'auto' ? ' (auto)' : ' ' + t.version}` : '';
 }
-// "Claude Sonnet 5.5 · $2.50 / $12.50 per 1M" for a pick, from the catalog's version rows (an old id from the model row).
+// "Claude Sonnet 5.5 · 1M · $2.50 / $12.50 per 1M" for a pick, from the catalog's version rows (an old id from the model row).
 function settingsTierLine(id) {
   const t = settingsTierParse(id), tier = t && SETTINGS_DATA.gateway.tiers[t.tier];
   const now = tier && tier.versions.find(v => v.version === (t.version === 'auto' ? tier.current : t.version));
-  if (now) return `${now.model} · $${now.price.input.toFixed(2)} / $${now.price.output.toFixed(2)} per 1M`;
+  if (now) return [now.model, modelContextWords(now.context), `$${now.price.input.toFixed(2)} / $${now.price.output.toFixed(2)} per 1M`]
+    .filter(Boolean).join(' · ');
   return settingsModel(id)?.description?.replace(/ underneath$/, '') || '';
 }
 // In the model list a Tico model says what runs underneath it: "Tico Mid 1.0 (Claude Sonnet 5.5 underneath)".
+// The same list says the window the model takes: "grok 4.6 · 500K" (modelContextWords, ui/app/format.js).
 const settingsModelPickName = id => {
-  const row = settingsModel(id);
-  return /^tico-/.test(id) && row?.description ? `${settingsModelName(id)} (${row.description})` : settingsModelName(id);
+  const row = settingsModel(id), context = modelContextWords(row?.context_tokens);
+  const name = /^tico-/.test(id) && row?.description ? `${settingsModelName(id)} (${row.description})` : settingsModelName(id);
+  return context ? `${name} · ${context}` : name;
 };
 // A bot with no model of its own follows the team default; say which one it resolves to.
 function settingsDefaultLabel(e) {
@@ -282,12 +285,11 @@ function settingsModelEfforts(id) {
   const t = settingsTierParse(id), row = (t && settingsModel(`${t.tier}-${SETTINGS_DATA.gateway.tiers[t.tier]?.current}`)) || settingsModel(id);
   return row?.efforts?.length ? [...row.efforts] : t ? ['low', 'high', 'max'] : [];
 }
-// What the bot's tasks run on, in a few words: "Claude Haiku 5.5 · high · 600k", "the bot's model · 600k".
+// What the bot's tasks run on, in a few words: "Claude Haiku 5.5 · high · 1M", "the bot's model · high". The end is the
+// model's window, never the task's compaction length (that is the Tasks mark's own "Tasks · 600k").
 function settingsTaskWords(task) {
-  const context = settingsContextName(task?.compact_at);
-  const model = task?.model ? settingsChoiceLabel(task.harness || task.runtime, task.model, task.reasoning_effort || task.effort)
+  return task?.model ? settingsChoiceLabel(task.harness || task.runtime, task.model, task.reasoning_effort || task.effort)
     : ["the bot's model", settingsEffortName(task?.reasoning_effort)].filter(Boolean).join(' · ');
-  return [model, context].filter(Boolean).join(' · ');
 }
 // The /task-model body for one change, carrying the other parts as they are: `choice` a task model ({harness, model,
 // effort}, null for Same as bot), `effort` a task effort ('' for Same as bot), `compact_at` a task context length (null

@@ -127,7 +127,7 @@ const {unrouted} = require('./support/routes.cjs');
       models, ['tico']).map(row => row.label), catalog.models),
       ['General · Low 1.0', 'General · Medium 1.0', 'General · High 1.0', 'Mid 1.0 (old lineup)']);
     assert.equal(tic.find(o => o.value === 'tico-general-medium-1.0').title, 'Claude Sonnet 5.5 underneath');
-    assert.equal(await page.evaluate(() => settingsModelPickName('tico-general-medium-1.0')), 'General · Medium 1.0 (Claude Sonnet 5.5 underneath)',
+    assert.equal(await page.evaluate(() => settingsModelPickName('tico-general-medium-1.0')), 'General · Medium 1.0 (Claude Sonnet 5.5 underneath) · 1M',
       "a bot's model list says what runs underneath");
     assert.equal(await page.evaluate(() => modelWords('tico-power-1.0')), 'Power 1.0 (old lineup)');
     // A URL-only save keeps the saved key: no key in the body.

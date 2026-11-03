@@ -88,7 +88,7 @@ const shotsDir = process.env.TICO_SHOTS || '';
     assert.equal(await model.locator('[data-tier-level][aria-checked=true]').innerText(), 'Medium');
     assert.equal(await model.locator('[data-tier-fast]').isChecked(), false);
     assert.equal(await model.locator('[data-tier-version] option:checked').innerText(), '1.0 (current)');
-    assert.equal(await model.locator('[data-tier-line]').innerText(), 'Claude Sonnet 5.5 · $2.50 / $12.50 per 1M');
+    assert.equal(await model.locator('[data-tier-line]').innerText(), 'Claude Sonnet 5.5 · 1M · $2.50 / $12.50 per 1M', 'the rendered Gateway line names the window');
     // The model and effort label ends in the context window the catalog gives (format.js modelContextWords).
     const labels = await page.evaluate(() => ['claude-opus-5-5', 'gpt-6.1-sol', 'gemini-3.8-flash', 'grok-4.6', 'deepseek-v4.1-flash',
       'tico-sales-medium-1.0', 'tico-sales-high-fast-1.0'].map(id => settingsChoiceLabel('', id, 'high')));
@@ -98,7 +98,7 @@ const shotsDir = process.env.TICO_SHOTS || '';
     assert.match(labels[3], / · high · 500K$/, 'Grok 4.6 says 500K');
     assert.doesNotMatch(labels[4], /\d[KM]$/, 'a model with no source figure shows none');
     assert.match(labels[5], / · 1M$/, 'a Gateway tier shows the window of the model it runs on');
-    assert.doesNotMatch(labels[6], /\d[KM]$/, 'a fast tier with no source figure shows none');
+    assert.match(labels[6], / · 1M$/, 'Opus 5.5 in Fast mode takes the 1M window of the model it runs on');
     assert.equal(await pick(), 'pi::tico-sales-medium-1.0::high');
     assert.deepEqual(await model.locator('[data-tier-version] option').allInnerTexts(), ['1.0 (current)', 'Auto (always latest)']);
     assert.equal(await model.locator('[data-tier-department] option').count() >= 8, true, 'every department is offered');
@@ -109,7 +109,8 @@ const shotsDir = process.env.TICO_SHOTS || '';
     assert.equal(await pick(), 'pi::tico-sales-high-1.0::high');
     await model.locator('[data-tier-fast]').check();
     assert.equal(await pick(), 'pi::tico-sales-high-fast-1.0::high');
-    assert.match(await model.locator('[data-tier-line]').innerText(), /Claude Opus 5\.5 \(fast mode\) · \$10\.00 \/ \$50\.00 per 1M/);
+    assert.match(await model.locator('[data-tier-line]').innerText(), /^Claude Opus 5\.5 \(fast mode\) · 1M · \$10\.00 \/ \$50\.00 per 1M$/,
+      'Opus 5.5 in Fast mode takes the 1M window of the model it runs on');
     await model.locator('[data-tier-version]').selectOption('auto');
     assert.equal(await pick(), 'pi::tico-sales-high-fast::high', 'Auto is the id without a version');
     await model.locator('[data-tier-level=low]').click();
@@ -153,6 +154,8 @@ const shotsDir = process.env.TICO_SHOTS || '';
     await edit('writer');
     assert.equal(await model.locator('[data-tier-version] option:checked').innerText(), 'Auto (always latest)');
     assert.equal(await model.locator('[data-tier-fast]').isChecked(), true);
+    assert.equal(await model.locator('[data-tier-line]').innerText(), 'DeepSeek V4.1 Flash · $0.45 / $1.80 per 1M',
+      'a fast tier with no source figure shows no window');
 
     // 3. The same pick under Fallback and Task model; the harness list still offers the others.
     await page.evaluate(() => { location.hash = '#/settings'; });
@@ -163,6 +166,8 @@ const shotsDir = process.env.TICO_SHOTS || '';
     await task.locator('[data-choice-harness]').selectOption('tico');
     assert.equal(await task.locator('[data-tier-department] option:checked').innerText(), 'Sales (from group)');
     assert.equal(await task.evaluate(box => box.picker.value()), 'pi::tico-sales-medium-1.0::high');
+    assert.equal(await task.locator('[data-tier-line]').innerText(), 'Claude Sonnet 5.5 · 1M · $2.50 / $12.50 per 1M',
+      'the task model picker shows the same Gateway line');
 
     // 4. Settings > Gateway: a status line, the picks in use, the services; one heading level; the key stays in Computers.
     await page.evaluate(() => settingsShow('gateway'));

@@ -44,10 +44,11 @@ def test_a_row_lists_its_context_window_only_where_a_source_gives_one():
     assert rows["gpt-6-luna"]["context_tokens"] == rows["gpt-6-astra"]["context_tokens"] == 1_050_000
     assert rows["gemini-3.8-flash"]["context_tokens"] == 1_048_576 and rows["grok-4.6"]["context_tokens"] == 500_000
     assert "context_tokens" not in rows["mercury-3"] and "context_tokens" not in rows["deepseek-v4.1-flash"]
-    # A Gateway tier takes the window of the model it runs on; no fast tier has a source for one.
+    # A Gateway tier takes the window of the model it runs on: Opus 5.5 in Fast mode has Opus's 1M; low Fast (DeepSeek) has no source.
     assert rows["tico-general-medium-1.0"]["context_tokens"] == rows["tico-general-low-1.0"]["context_tokens"] == 1_000_000
     assert T.row_for("tico-general-high-1.0")["context_tokens"] == 1_000_000
-    assert "context_tokens" not in rows["tico-general-high-fast-1.0"]
+    assert rows["tico-general-medium-fast-1.0"]["context_tokens"] == rows["tico-general-high-fast-1.0"]["context_tokens"] == 1_000_000
+    assert "context_tokens" not in rows["tico-general-low-fast-1.0"]
     assert T.meeting_rows()[0]["context_tokens"] == 1_000_000
 
 

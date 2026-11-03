@@ -55,8 +55,8 @@ ROWS = {
 # the only fast route at or above Medium's quality. Cached input is 10% of input for both (HQ prices DeepSeek cache reads at a tenth).
 FAST_ROWS = {
     "low": {"model": "DeepSeek V4.1 Flash", "price": (0.45, 0.045, 1.80), "long": None, "inputs": ("text",)},
-    "medium": {"model": "Claude Opus 5.5 (fast mode)", "price": (10.0, 1.0, 50.0), "long": None, "inputs": CLAUDE_INPUTS},
-    "high": {"model": "Claude Opus 5.5 (fast mode)", "price": (10.0, 1.0, 50.0), "long": None, "inputs": CLAUDE_INPUTS},
+    "medium": {"model": "Claude Opus 5.5 (fast mode)", "context": 1_000_000, "price": (10.0, 1.0, 50.0), "long": None, "inputs": CLAUDE_INPUTS},
+    "high": {"model": "Claude Opus 5.5 (fast mode)", "context": 1_000_000, "price": (10.0, 1.0, 50.0), "long": None, "inputs": CLAUDE_INPUTS},
 }
 
 # The meeting tier (HQ's `tico-meeting`, pinned `tico-meeting-1.0`): a chat tier with no department, level or fast. It is
