@@ -1087,7 +1087,7 @@ def test_a_replay_hides_a_private_task_the_filter_kept_with_its_bot(gate):
     own = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": H.now()[:10]}, headers=headers("ben-test"))
     assert own.status_code == 200, own.text
     with api.app.state.store.read() as c:
-        rows = H._rows(c.execute("SELECT person,kind,ref FROM ask_ingest_items"))
+        rows = (H._rows(c.execute("SELECT person,kind,ref,created_at FROM ask_ingest_items")), H._rows(c.execute("SELECT id,owner_id,requester_id,created_at,private FROM tasks WHERE title LIKE ?", ("%margin%",))), H.now())
     assert [i for i in own.json()["items"] if i["title"] == "" and i["ref"] is None], (own.json(), rows)
     assert "margin" not in own.text and r.json()["task"]["id"] not in own.text
 
