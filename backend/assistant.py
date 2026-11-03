@@ -91,6 +91,10 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # Taking back a card the Assistant itself proposed (backend/assistant.py action_withdraw): it only ever stops one.
     if re.fullmatch(r"/api/v2/assistant/actions/[^/]+/withdraw", path):
         return True
+    # Undoing one of the person's own Assistant changes (backend/assistant_changes.py): the route takes a person only, and
+    # `restore` checks each change against that person's own rights, so the undo runs on the person's cited turn.
+    if re.fullmatch(r"/api/v2/assistant/changes/[^/]+/restore", path):
+        return True
     # Asking someone who can (backend/settings_asks.py) changes nothing either: it puts a card in front of a person who
     # may, and the route itself requires the person's cited words.
     if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/ask", path):

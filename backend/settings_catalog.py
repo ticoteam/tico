@@ -456,11 +456,14 @@ def matched(method, path, body):
     for e, target in routed(method, path):
         if not isinstance(body, dict):
             continue
+        # `expected_revision` is a guard the route checks against the bot's revision, not a second setting: it is ignored
+        # here unless the entry itself names it.
+        own = body if "expected_revision" in e.extra else {k: v for k, v in body.items() if k != "expected_revision"}
         if e.field:
-            rest = _without(body, e.field)
+            rest = _without(own, e.field)
             if rest is None or rest != e.extra:
                 continue
-        elif any(body.get(k) != v for k, v in e.extra.items()):
+        elif any(own.get(k) != v for k, v in e.extra.items()):
             continue
         if e.key == "bot.repositories":
             # Classed by what the change does to stored state, which this body alone does not show (`stored_class`):
