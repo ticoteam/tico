@@ -291,21 +291,28 @@ async function until(fn, what) {
       await page.close();
     }
 
-    // ---- a phone: a list, then the party's panel full width
+    // ---- a phone: the map (scrolling inside its pane), a list while searching, the party's panel under the map
     {
       const {page, errors, writes} = await openReach(browser, {viewport: PHONE});
-      assert.equal(await page.locator('.rr-map').isVisible(), false);
+      assert.equal(await page.locator('.rr-map').isVisible(), true);
       assert.equal(await page.locator('.rr-side').isVisible(), false);
-      assert.equal(await page.locator('.rr-pick').isVisible(), true);
-      assert.equal(await page.locator('.rr-pick [data-rr-party]').first().innerText().then(t => t.split('\n')[0]), 'Everyone');
-      await noSideways(page, 'phone list');
-      await shot(page, 'phone-list');
+      assert.equal(await page.locator('.rr-pick').isVisible(), false);
+      await noSideways(page, 'phone map');
+      await shot(page, 'phone-map');
+      // A tap on the map picks a party, as on a computer.
+      await page.locator('.rr-cv [data-rr-party="bot:builder"]').tap();
+      await until(async () => await page.locator('.rr-side').isVisible(), 'panel shown from the map');
+      assert.equal(await page.locator('.rr-map').isVisible(), true);
+      await panel(page).locator('.rr-back').tap();
+      await until(async () => !(await page.locator('.rr-side').isVisible()), 'map alone again');
       await page.locator('.ru-acts .rr-q').fill('build');
+      assert.equal(await page.locator('.rr-map').isVisible(), false);
       assert.deepEqual(await page.locator('.rr-pick [data-rr-party]').evaluateAll(b => b.map(x => x.dataset.rrParty)), ['bot:builder']);
       assert.equal(await page.locator('.ru-acts .rr-results').isVisible(), false);
       await page.locator('.rr-pick [data-rr-party="bot:builder"]').tap();
       await until(async () => await page.locator('.rr-side').isVisible(), 'panel shown');
       assert.equal(await page.locator('.rr-pick').isVisible(), false);
+      assert.equal(await page.locator('.rr-map').isVisible(), true);
       assert.equal(await panel(page).locator('h2').innerText(), 'Builder');
       const box = await panel(page).boundingBox();
       assert.ok(box.width >= PHONE.width - 2, `full width (${box.width})`);
@@ -319,10 +326,10 @@ async function until(fn, what) {
       await panel(page).locator('.rr-ed [data-rr-save]').tap();
       await until(async () => lastWrite(writes, 'POST'), 'added on a phone');
       assert.deepEqual(lastWrite(writes, 'POST').body, {sender: 'bot:builder', receiver: 'human:cara', per_day: 0, rule: null});
-      // Back to the list.
+      // Back to the map.
       await panel(page).locator('.rr-back').tap();
-      await until(async () => await page.locator('.rr-pick').isVisible(), 'list again');
-      assert.equal(await page.locator('.rr-side').isVisible(), false);
+      await until(async () => !(await page.locator('.rr-side').isVisible()), 'map again');
+      assert.equal(await page.locator('.rr-map').isVisible(), true);
       assert.deepEqual(errors, []);
       await page.close();
     }
