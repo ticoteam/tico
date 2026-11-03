@@ -2274,12 +2274,18 @@ class Store:
                 message_links.refresh_dirty(c)
                 c.commit()
                 # Work that must see the committed rows (a delivery worker's doorbell) runs once the write is durable.
-                for after in c.after_commit:
+                # A barrier (hubdb.durable_commit's WAL sync) runs first and its error is the request's: the write is
+                # not answered as done until it is on disk.
+                hooks = sorted(c.after_commit, key=lambda after: not getattr(after, "barrier", False))
+                c.after_commit.clear()
+                for after in hooks:
+                    if getattr(after, "barrier", False):
+                        after()
+                        continue
                     try:
                         after()
                     except Exception:
                         logging.getLogger(__name__).exception("after-commit callback failed")
-                c.after_commit.clear()
             except BaseException:
                 c.rollback()
                 c.after_commit.clear()

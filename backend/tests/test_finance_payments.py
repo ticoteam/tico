@@ -1950,3 +1950,22 @@ def test_a_finance_action_in_a_plain_transaction_syncs_the_wal_once_after_commit
     with store.transaction() as c:
         c.execute("SELECT 1")
     assert len(synced) == 1                                              # a transaction with no Finance action: no sync
+
+
+def test_a_finance_action_whose_wal_sync_fails_is_not_answered_as_done(api, monkeypatch):
+    """The WAL sync is a barrier: when it fails the transaction's caller gets the error, not a success it cannot
+    keep. The commit itself stands, so a retry with the same key replays the stored result."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        FA.setup(c, OWNER, AT)
+    monkeypatch.setenv("TICO_SQLITE_SYNC", "normal")
+
+    def broken(fd):
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(H.os, "fsync", broken)
+    with pytest.raises(OSError):
+        with store.transaction() as c:
+            act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
+    with store.transaction() as c:
+        assert c.after_commit == []                                      # nothing left queued for the next transaction

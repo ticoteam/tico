@@ -1088,7 +1088,11 @@ def synchronous(default):
 
 class _SyncWal:
     """An after-commit callback that fsyncs the WAL: what synchronous=FULL does at commit, for a transaction that was
-    opened at NORMAL before it knew it would write money. Equal to every other one, so a transaction queues one."""
+    opened at NORMAL before it knew it would write money. Equal to every other one, so a transaction queues one. A
+    `barrier`: Store.transaction runs it first and lets its error through, so a write that did not reach the disk is
+    never answered as done (the caller retries with its idempotency key and gets the stored result)."""
+
+    barrier = True
 
     def __init__(self, path):
         self.path = path
