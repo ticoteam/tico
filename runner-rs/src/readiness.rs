@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -320,12 +321,27 @@ fn logins(config: &Config, assignments: &[Value], computer_logins: bool, runtime
 /// One probe result per runtime and login: (runtime, profile name, "" for the computer's own login).
 pub type Rows = BTreeMap<(String, String), Map<String, Value>>;
 
-/// What a probe reads besides the sign-in state: the runtimes the bots use, the logins used on each, and each runtime's
-/// bot-key sign-in, which is read from the bots' grants. A change in any of them asks for a probe (runner.rs).
+/// What a probe reads besides the sign-in state: the runtimes the bots use, the logins used on each with the folder and
+/// sharing its environment is built from, each runtime's bot-key sign-in (read from the bots' grants), the config
+/// entries that pick the logins (`profiles`, `default_profile`, `bot_profiles`), and the server's word on a data problem
+/// (fallback.rs). A change in any of them asks for a probe (runner.rs).
 pub fn probe_inputs(config: &Config, assignments: &[Value], computer_logins: bool) -> String {
-    let mut parts = vec![format!("computer_logins={computer_logins}")];
+    let mut parts = vec![
+        format!("computer_logins={computer_logins}"),
+        format!("server_takes_data_problem={}", crate::fallback::server_takes_data_problem()),
+    ];
+    for key in ["profiles", "default_profile", "bot_profiles"] {
+        parts.push(format!("{key}={}", config.data.get(key).map(|v| v.to_string()).unwrap_or_default()));
+    }
     for runtime in crate::harness_tools::runtimes() {
-        let names: Vec<String> = logins(config, assignments, computer_logins, &runtime).into_keys().collect();
+        let used = logins(config, assignments, computer_logins, &runtime);
+        let names: Vec<String> = used
+            .iter()
+            .map(|(name, profile)| match profile {
+                Some(p) => format!("{name:?}@{}:share={}", p.directory.display(), p.share_operator),
+                None => format!("{name:?}"),
+            })
+            .collect();
         parts.push(format!(
             "{runtime} assigned={} logins={names:?} bot_key={:?}",
             crate::signin::assigned(assignments, &runtime),
@@ -403,16 +419,26 @@ pub fn wake() -> &'static Notify {
     WAKE.get_or_init(Notify::new)
 }
 
+/// Every request so far (`requests`, for the tests that a finished action asked for a probe).
+static REQUESTS: AtomicUsize = AtomicUsize::new(0);
+
 /// An event that changes what a probe reads (an install or update finished, a sign-in or sign-out, a credential changed)
-/// asks for a probe now rather than at the next scheduled one. Several events before it runs make one probe.
+/// asks for a probe now rather than at the next scheduled one. A request made while a probe runs keeps its notice, so
+/// the next wait ends at once and one more probe runs after it. Several before a wait make one probe.
 pub fn request_probe() {
+    REQUESTS.fetch_add(1, Ordering::SeqCst);
     wake().notify_one();
 }
 
+#[cfg(test)]
+pub fn requests() -> usize {
+    REQUESTS.load(Ordering::SeqCst)
+}
+
 /// Waits until a probe is due: an event has asked for one (`wake`), or the timer has run out. Events before the probe
-/// runs are one probe, since `wake` keeps one pending notice. It returns without probing; the caller probes and records
-/// it with `Schedule::ran`.
-pub async fn wait_due(probed: &std::sync::Mutex<Probed>, wake: &Notify) {
+/// runs are one probe, since `wake` keeps one pending notice. It returns without probing, and whether an event asked
+/// (the caller probes and records it with `Schedule::ran`).
+pub async fn wait_due(probed: &std::sync::Mutex<Probed>, wake: &Notify) -> bool {
     loop {
         // Before the first probe the wait is a full window; a start-up probe may land in it, and the next wait then runs
         // to the timer from that probe.
@@ -424,9 +450,10 @@ pub async fn wait_due(probed: &std::sync::Mutex<Probed>, wake: &Notify) {
         let mut probed = probed.lock().unwrap();
         if woken {
             probed.schedule.request();
+            return true;
         }
         if probed.schedule.due(Instant::now()) {
-            return;
+            return false;
         }
     }
 }
@@ -450,6 +477,14 @@ pub fn runtime_report(config: &Config, sign: &SignIn, assignments: &[Value], com
         }
         for (name, status) in targets.iter_mut() {
             let profile = used.get(name).cloned().flatten();
+            // The account is read live (accounts.rs), not the copy the probe stored: a background read that finished
+            // after the probe shows on this heartbeat, not on the next probe.
+            let account = crate::accounts::account(name, runtime);
+            let fields = status.as_object_mut().unwrap();
+            match account {
+                Some(account) => fields.insert("account".into(), account),
+                None => fields.remove("account"),
+            };
             // A profile whose turns use the computer's own login on this runtime (`share_operator`): the server holds
             // that login once, not once per name (backend/login_holds.py canonical). Only to a server that keeps
             // login holds, since an older one refuses a field it does not know.
@@ -1094,15 +1129,15 @@ mod tests {
 }
 
 #[cfg(test)]
-mod probe_tests {
+pub(crate) mod probe_tests {
     use super::*;
 
     /// PATH is process-wide, so the tests that put fake runtimes on it run one at a time.
-    static PATH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(crate) static PATH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Fake runtime executables first on PATH, each reporting `version`: each run appends its arguments to one log, so
     /// spawns can be counted. Returns the log and the PATH to put back.
-    fn fake_runtimes(root: &Path, version: &str) -> (PathBuf, String) {
+    pub(crate) fn fake_runtimes(root: &Path, version: &str) -> (PathBuf, String) {
         let bin = root.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let log = root.join("spawns.log");
@@ -1205,6 +1240,53 @@ mod probe_tests {
         assert!(tokio::time::timeout(Duration::from_millis(100), wait_due(&probed, &wake)).await.is_err(), "no event and no timer: no probe");
         wake.notify_one();
         tokio::time::timeout(Duration::from_secs(2), wait_due(&probed, &wake)).await.expect("the next event makes one more probe");
+    }
+
+    /// The probe reads each login's folder and sharing, and the config entries that pick it: a change in either changes
+    /// the inputs, so a probe runs (runner.rs maintain).
+    #[test]
+    fn the_probe_inputs_change_with_a_profiles_folder_or_how_it_is_shared() {
+        let assignments = json!([{"profile": "acme", "bot": "sales", "config": {"runtime": "claude"}}]);
+        let inputs = |dir: &str, share: bool| {
+            let data = json!({"profiles": {"acme": {"dir": dir, "share_operator": share}}, "default_profile": "acme"}).as_object().unwrap().clone();
+            probe_inputs(&Config { path: PathBuf::new(), data }, assignments.as_array().unwrap(), false)
+        };
+        let before = inputs("/p/acme", false);
+        assert_eq!(before, inputs("/p/acme", false), "the same config reads the same inputs");
+        assert_ne!(before, inputs("/p/moved", false), "a moved folder");
+        assert_ne!(before, inputs("/p/acme", true), "a login that now shares the operator's");
+    }
+
+    /// A request made while a probe runs keeps its notice, so the next wait ends at once and one more probe runs (finding 2).
+    #[tokio::test]
+    async fn a_request_during_a_probe_ends_the_next_wait_at_once() {
+        let probed = std::sync::Mutex::new(Probed::default());
+        probed.lock().unwrap().schedule.ran(Instant::now());
+        let wake = Notify::new();
+        wake.notify_one();
+        let asked = tokio::time::timeout(Duration::from_millis(500), wait_due(&probed, &wake))
+            .await
+            .expect("the request ends the wait, not the ten-minute timer");
+        assert!(asked, "the wait says an event asked");
+    }
+
+    /// The probe keeps the account it read, but the row shows the account read last, so a background read that finished
+    /// after the probe is on the next heartbeat (finding 5).
+    #[test]
+    fn a_composed_row_shows_the_account_read_last_not_the_one_the_probe_stored() {
+        let config = Config { path: PathBuf::new(), data: json!({"profiles": {"live-acct": {"dir": "/p/live-acct"}}}).as_object().unwrap().clone() };
+        let assignments = json!([{"profile": "live-acct", "bot": "live-bot", "config": {"runtime": "claude"}}]);
+        let root = std::env::temp_dir().join(format!("tico-probe-account-{}", uuid::Uuid::new_v4().simple()));
+        let sign = SignIn::new(&root.join("projects"));
+        let mut rows = Rows::new();
+        let stored = json!({"installed": true, "authenticated": "ready", "detail": "Signed in", "version": "2.1.300"});
+        rows.insert(("claude".into(), "live-acct".into()), stored.as_object().unwrap().clone());
+        let shown = |rows: &Rows| runtime_report(&config, &sign, assignments.as_array().unwrap(), false, rows)["claude"]["profiles"]["live-acct"]["account"].clone();
+        crate::accounts::remember("live-acct", "claude", json!({"email": "first@example.com"}));
+        assert_eq!(shown(&rows)["email"], "first@example.com");
+        crate::accounts::remember("live-acct", "claude", json!({"email": "second@example.com"}));
+        assert_eq!(shown(&rows)["email"], "second@example.com", "the next heartbeat shows the read that finished after the probe");
+        crate::accounts::forget("live-acct", "claude");
     }
 
     fn median<T: PartialOrd + Copy>(mut values: Vec<T>) -> T {

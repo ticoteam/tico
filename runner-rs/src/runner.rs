@@ -60,6 +60,8 @@ pub struct Runner {
     pub runtime_rows: Mutex<Map<String, Value>>,
     /// The last readiness probe (readiness::probe_all): what the heartbeat's rows are composed from.
     pub probed: Mutex<readiness::Probed>,
+    /// Held across a whole probe (probe_now), so probes run one at a time and the rows stored are from the newest reads.
+    pub probe_gate: tokio::sync::Mutex<()>,
     names: Mutex<Option<Value>>,
     /// Lane and checkout locks, live turns' lanes, the repositories this computer holds (sessions.rs).
     pub lanes: Arc<crate::sessions::Lanes>,
@@ -160,6 +162,7 @@ impl Runner {
             attempt_bots: Mutex::new(HashMap::new()),
             runtime_rows: Mutex::new(Map::new()),
             probed: Mutex::new(readiness::Probed::default()),
+            probe_gate: tokio::sync::Mutex::new(()),
             names: Mutex::new(None),
             lanes: Arc::new(crate::sessions::Lanes::new(repositories)),
             worktrees,
@@ -349,25 +352,38 @@ impl Runner {
     }
 
     /// Probes this computer's readiness and keeps the rows (readiness::probe_all). Run by the probe loop, and by a
-    /// heartbeat pass only at start-up or when the probe's inputs changed.
-    async fn probe_now(&self, config: &Config, candidates: &[Value], computer_logins: bool) {
+    /// heartbeat pass only at start-up or when the probe's inputs changed. One probe runs at a time (`probe_gate`), and
+    /// the config and assignments are read inside the gate: a probe that waited for an earlier one stores only what it
+    /// read after that one, so an older read cannot store last. Returns whether the rows changed.
+    async fn probe_now(&self) -> bool {
+        let _gate = self.probe_gate.lock().await;
+        let config = self.config_now();
+        let candidates = readiness_candidates(&self.assignments_seen());
+        let computer_logins = computer_logins_for(&candidates);
         let previous = self.probed.lock().unwrap().rows.clone();
-        let (rows, inputs) = readiness::probe_all(config, &self.sign_in, &self.client, candidates, computer_logins, &previous).await;
+        let (rows, inputs) = readiness::probe_all(&config, &self.sign_in, &self.client, &candidates, computer_logins, &previous).await;
+        let changed = rows != previous;
         let mut probed = self.probed.lock().unwrap();
         probed.rows = rows;
         probed.inputs = inputs;
         probed.schedule.ran(Instant::now());
+        changed
+    }
+
+    /// A probe a wait ended on. When an event asked for it and it changed a row, a heartbeat is asked for at once: the
+    /// heartbeat that event forced was composed from the row it made stale, so that row is corrected now, not a pass later.
+    async fn probe_on(&self, by_event: bool) {
+        if self.probe_now().await && by_event {
+            self.events.ask(&["heartbeat"]);
+        }
     }
 
     /// The probe's schedule: a probe when an event asks for one (readiness::request_probe) and every PROBE_EVERY otherwise.
     /// It runs for the runner's life beside the heartbeat, which only reads what the probe stored.
     async fn probe_loop(self: Arc<Self>) {
         loop {
-            readiness::wait_due(&self.probed, readiness::wake()).await;
-            let config = self.config_now();
-            let candidates = readiness_candidates(&self.assignments_seen());
-            let computer_logins = computer_logins_for(&candidates);
-            self.probe_now(&config, &candidates, computer_logins).await;
+            let by_event = readiness::wait_due(&self.probed, readiness::wake()).await;
+            self.probe_on(by_event).await;
         }
     }
 
@@ -412,7 +428,7 @@ impl Runner {
         let ran_before = self.probed.lock().unwrap().schedule.ran_before();
         let changed = ran_before && self.probed.lock().unwrap().inputs != readiness::probe_inputs(&config, &candidates, computer_logins);
         if !ran_before || changed {
-            self.probe_now(&config, &candidates, computer_logins).await;
+            self.probe_now().await;
         }
         let runtimes = {
             let probed = self.probed.lock().unwrap();
@@ -944,11 +960,9 @@ impl Runner {
                 readiness::request_probe();
             }
             let full = clock.wants(&self.events, "sync", Some(15.0)) || changed;
-            // A sign-in, sign-out or refusal changed: the readiness probe runs again, and the heartbeat goes now.
+            // A sign-in, sign-out or refusal changed: the heartbeat goes now. No probe is asked for here: a sign-in or
+            // sign-out asks once its action has finished (login.rs Session::finish), so the probe reads the result.
             let dirty = self.sign_in.take_dirty();
-            if dirty {
-                readiness::request_probe();
-            }
             let forced = clock.wants(&self.events, "heartbeat", None) | dirty;
             if full || forced || clock.last_heartbeat.is_none_or(|t| t.elapsed().as_secs_f64() >= 15.0) {
                 let me = self.clone();
@@ -1308,5 +1322,50 @@ mod tests {
         bytes.sort_unstable();
         eprintln!("assignment read per tick, 20 bots ({json_bytes} JSON bytes): bytes requested median {} (min {}, max {})", bytes[25], bytes[0], bytes[49]);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A runner whose probes find only the fake runtimes on PATH (the caller holds readiness::probe_tests::PATH_LOCK).
+    fn probe_runner(root: &std::path::Path) -> Runner {
+        let data = json!({"projects_dir": root.join("projects").display().to_string()}).as_object().unwrap().clone();
+        let config = Config { path: std::path::PathBuf::new(), data };
+        let client = Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+        Runner::new(config, client, State::open(&root.join("state")).unwrap())
+    }
+
+    /// Probes run one at a time: a probe waits at the gate while another holds it, and starts and stores nothing until
+    /// it is let through (finding 2).
+    #[tokio::test]
+    async fn a_probe_waits_at_the_gate_until_the_one_before_it_is_done() {
+        let _guard = crate::readiness::probe_tests::PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("tico-runner-gate-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        let (log, path) = crate::readiness::probe_tests::fake_runtimes(&root, "2.1.303");
+        let runner = probe_runner(&root);
+        let held = runner.probe_gate.lock().await;
+        assert!(tokio::time::timeout(Duration::from_millis(100), runner.probe_now()).await.is_err(), "a probe waits while another holds the gate");
+        assert!(!runner.probed.lock().unwrap().schedule.ran_before(), "and stores nothing meanwhile");
+        assert!(std::fs::read_to_string(&log).unwrap_or_default().is_empty(), "and starts no process meanwhile");
+        drop(held);
+        runner.probe_now().await;
+        assert!(runner.probed.lock().unwrap().schedule.ran_before());
+        std::env::set_var("PATH", path);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// An event's probe that changes a row asks for a heartbeat at once; a timer's probe asks for none (finding 4).
+    #[tokio::test]
+    async fn an_event_probe_that_changes_a_row_asks_for_a_heartbeat_at_once() {
+        let _guard = crate::readiness::probe_tests::PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("tico-runner-heartbeat-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        let (_log, path) = crate::readiness::probe_tests::fake_runtimes(&root, "2.1.304");
+        let runner = probe_runner(&root);
+        runner.probe_on(false).await;
+        assert!(!runner.events.take("heartbeat"), "a timer's probe asks for nothing");
+        runner.probed.lock().unwrap().rows.clear();
+        runner.probe_on(true).await;
+        assert!(runner.events.take("heartbeat"), "an event's probe that changed the rows asks for a heartbeat");
+        std::env::set_var("PATH", path);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -321,6 +321,9 @@ impl Session {
                 }
             }
         }
+        // Every finish is after its action (a sign-in, a sign-out's logout, a switch, a removal, or a failure that undid
+        // its marks), so the probe reads the result of that action, whatever the verdict.
+        crate::readiness::request_probe();
     }
 }
 
@@ -3339,5 +3342,23 @@ esac
         assert_eq!(url, "https://claude.ai/oauth/authorize?code=true");
         assert!(prompt);
         assert!(!lines.iter().any(|l| l.contains("secretcode")));
+    }
+
+    /// A finished login asks for a probe, whatever its verdict, once its action has run (finding 1): a sign-out's logout
+    /// and a named profile's removal are read again after they finish, not before.
+    #[tokio::test]
+    async fn a_finished_login_asks_for_a_probe_whatever_the_verdict() {
+        let root = std::env::temp_dir().join(format!("tico-finish-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        let data = json!({"projects_dir": root.join("projects").display().to_string()}).as_object().unwrap().clone();
+        let config = Config { path: std::path::PathBuf::new(), data };
+        let client = crate::client::Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
+        let runner = Runner::new(config, client, crate::state::State::open(&root.join("state")).unwrap());
+        for (state, message) in [("signed_out", "Signed out"), ("failed", "The logout did not finish")] {
+            let before = crate::readiness::requests();
+            session("sign_out").finish(state, message, &runner, "");
+            assert!(crate::readiness::requests() > before, "{state} asks for a probe");
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
