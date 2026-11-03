@@ -107,6 +107,9 @@ def test_health_statements_do_not_grow_with_history(api):
     for sql, n in collections.Counter(shape(s) for s in large).most_common(25):
         print(n, sql)
     print("statements", len(small), len(large))
+    for sql in large:
+        if "registry_metadata" in sql:
+            print("META", sql[:140])
     cost = collections.defaultdict(float)
     for sql, secs in timed(api):
         cost[shape(sql)] += secs
