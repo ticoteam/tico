@@ -24,6 +24,11 @@ def take(api, machine):
     return post(api, 'jobs/claim', {}, token=machine['token'])['attempt']
 
 
+def take_with_places(api, machine):
+    """A claim from a runner that negotiates start places: the claim bound is twice the computer's turn limit."""
+    return post(api, 'jobs/claim', {'start_places': True}, token=machine['token'])['attempt']
+
+
 def finish(api, machine, attempt, task):
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': attempt['lane']}, machine['token'])
     post(api, 'tasks/' + task['id'], {'step': 'Done', 'version': get(api, 'tasks/' + task['id'])['task']['version']}, attempt['token'])
@@ -117,11 +122,11 @@ def test_review_children_are_independent_and_uncapped_but_computer_capacity_stil
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled'")
     set_cap(api, 1)
-    attempts = [take(api, machine) for _ in range(20)]
+    attempts = [take_with_places(api, machine) for _ in range(20)]
     assert all(attempts), 'the optional task cap never holds review children'
     assert len({a['lane'] for a in attempts}) == 20
     assert {a['task']['id'] for a in attempts} <= {t['id'] for t in children}
-    assert take(api, machine) is None, 'reviews still share the computer claim bound (twice its capacity)'
+    assert take_with_places(api, machine) is None, 'reviews still share the computer claim bound (twice its capacity)'
 
 
 def test_another_owners_task_notice_never_starts_their_task_or_uses_our_cap(api):
