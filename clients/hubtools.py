@@ -7690,6 +7690,8 @@ ASSISTANT_TOOLS = frozenset({
     "hub_settings_set", "hub_settings_show", "hub_strategy_show", "hub_task_ask", "hub_task_close",
     "hub_task_comment", "hub_task_create", "hub_task_list", "hub_task_question", "hub_task_show",
     "hub_task_update", "hub_team_show",
+    "hub_automation_restore", "hub_automation_versions", "hub_bot_model", "hub_bot_pause", "hub_bot_resume",
+    "hub_rules_retire", "hub_task_bulk",
 })
 
 
