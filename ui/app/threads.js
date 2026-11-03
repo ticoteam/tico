@@ -199,7 +199,7 @@ function threadsActivity(d) {
   threadsSideRender();
 }
 // What changes the counts only the server knows (Catch up, unread): the rail is read again, once per burst.
-const THREADS_RECOUNT = new Set(['activity', 'read', 'created', 'members', 'audience', 'archived', 'unarchived', 'pinned', 'thread.pinned']);
+const THREADS_RECOUNT = new Set(['activity', 'read', 'created', 'members', 'audience', 'archived', 'unarchived', 'pinned']);
 const threadsRecount = () => liveThrottle('threads-rail', threadsLoad, 4000);
 // Every route: the first load, the current row marked, and the stream wired once.
 function threadsSync() {
@@ -212,10 +212,11 @@ function threadsSync() {
     if (d.kind === 'activity') threadsActivity(d);
     else if (d.kind === 'read' && d.read) threadsMarkedRead(d.thread_id, Number(d.read.last_read_seq) || 0);
     else if (d.thread && !d.thread.parent_id) threadsPut(d.thread);
-    // A pin with no view: the viewer's own pin moves the row; anyone else's is the server's to say.
-    else if ((d.kind === 'pinned' || d.kind === 'thread.pinned') && d.thread_id && d.actor === myActor()) {
+    // A pin (the viewer's own, or a manager's for everyone): `pinned` is this viewer's state, so the row moves at once;
+    // a thread not on the rail yet comes with the recount below.
+    else if (d.kind === 'pinned' && d.thread_id) {
       const t = [...THREADS.pinned, ...THREADS.threads].find(x => x.id === d.thread_id);
-      if (t) threadsPut({...t, me: {...t.me, pinned: !!d.pinned}});
+      if (t) threadsPut({...t, pinned_for_everyone: d.pinned_for_everyone ?? t.pinned_for_everyone, me: {...t.me, pinned: !!d.pinned}});
     }
     // A message another company's Tico has not taken (`unsent`) or a paused root is a Needs you row with no `needs`
     // event of its own, so that list is read whole, as if one had come.

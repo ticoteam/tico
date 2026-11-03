@@ -564,6 +564,11 @@ function threadViewsLive(topic, d) {
     if (topic === 'reset') { liveSoon('thv:' + view.key, () => thvRefresh(view), 150); continue; }
     if (topic === 'threads') {
       if (d.thread_id === view.id && d.thread) { view.thread = {...view.thread, ...d.thread}; thvDraw(view); }
+      // A pin from another tab, or a manager's for everyone: the header's pin follows (`pinned` is this viewer's state).
+      else if (d.thread_id === view.id && d.kind === 'pinned' && view.thread?.me) {
+        view.thread = {...view.thread, pinned_for_everyone: d.pinned_for_everyone ?? view.thread.pinned_for_everyone, me: {...view.thread.me, pinned: !!d.pinned}};
+        thvDraw(view);
+      }
       if (d.thread_id === view.id && String(d.kind || '').startsWith('call.')) liveSoon('call:' + view.key, () => callLoad(view), 200);
       // Who may read changed, or a sub-thread opened under a message on screen: read again.
       if (d.thread_id === view.id && d.kind === 'members') liveSoon('thv-members:' + view.key, () => thvMembersLoad(view), 300);
