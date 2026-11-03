@@ -254,8 +254,19 @@ async function messageMenu(page, text, item) {
       });
       await step(page, 'thread rail', phone, name, async () => {
         await shell(page, '#/threads', '#thread-rail')();
-        await page.locator('#thread-rail .tr-title', {hasText: 'Launch plan'}).first().waitFor({timeout: WAIT});
+        await page.locator('#thread-rail [data-tr-new]').first().waitFor({timeout: WAIT});
+        await sleep(600);
         await snap(page, 'thread-rail', phone);
+      });
+      // Omar reads the company thread without being in it, so it is in Browse threads rather than on his rail.
+      await step(page, 'Browse threads', phone, name, async () => {
+        const open = page.locator('#thread-rail [data-tr-browse]:not([hidden])');
+        if (!await open.count()) return;     // a server without the rail has no Browse
+        await open.click();
+        await page.locator(`#thread-browse li[data-thread="${S.plan.id}"]`).waitFor({timeout: WAIT});
+        await snap(page, 'browse-threads', phone);
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(() => !document.querySelector('#thread-browse')?.open, null, {timeout: WAIT});
       });
       await step(page, 'Catch up', phone, name, async () => {
         const open = page.locator('#thread-rail [data-tr-catch]:not([hidden])');

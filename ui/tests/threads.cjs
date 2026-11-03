@@ -757,7 +757,11 @@ let browser = null;
     await page.locator('#thread-new[open] #nt-name').waitFor();
     assert.ok(await sideways(page) <= 390);
     await themed(page, 'new-thread', true);
+    // Esc closes the suggestions first, then the dialog.
     await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#thread-new[open]').count(), 1);
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('#thread-new')?.open);
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.getByText('And churn was low.').waitFor();
     // On a phone the tree reads the same, indented less, with no sideways scroll.

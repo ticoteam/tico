@@ -38,7 +38,11 @@ function threadAudienceHTML(t = null, {titled = false} = {}) {
 }
 function threadDialog(id, label) {
   let dlg = document.getElementById(id);
-  if (!dlg) { dlg = document.createElement('dialog'); dlg.id = id; dlg.className = 'tmodal tmodal-shell dash-dialog thd-dialog'; document.body.append(dlg); }
+  if (!dlg) {
+    dlg = document.createElement('dialog'); dlg.id = id; dlg.className = 'tmodal tmodal-shell dash-dialog thd-dialog'; document.body.append(dlg);
+    // A route change (a link, the phone's Back) leaves the page the dialog was for.
+    addEventListener('hashchange', () => { if (dlg.open) dlg.close(); });
+  }
   dlg.setAttribute('aria-label', label);
   return dlg;
 }

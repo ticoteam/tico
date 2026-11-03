@@ -200,7 +200,7 @@ async function restrictPerson(hub) {
     // and tapping it opens the root with the reply inline under its message. Opening the sub-thread adds no row for it.
     const late = await api(hub, 'omar', 'POST', `/v2/threads/${plan.id}/messages`, {text: 'A late risk from Omar', kind: 'say', parent_message_id: kickoff.id});
     const pair = await api(hub, 'dana', 'POST', '/v2/threads/dm', {members: ['human:priya']});
-    const trio = await api(hub, 'dana', 'POST', '/v2/threads/dm', {members: ['human:priya', 'human:omar']});
+    const trio = await api(hub, 'dana', 'POST', '/v2/threads/dm', {members: ['human:priya', 'human:omar'], title: 'Launch trio'});
     await api(hub, 'priya', 'POST', `/v2/threads/${(pair.thread || pair).id}/messages`, {text: 'Got a minute?', kind: 'say'});
     const phone = await pageAs(browser, hub, 'dana', {phone: true});
     await phone.goto(hub.url + '/#/threads');
@@ -219,10 +219,10 @@ async function restrictPerson(hub) {
     await planRow.waitFor({timeout: t(15000)});
     assert.equal(await phone.locator(`#thread-rail a[data-thread="${risks.thread_id}"]`).count(), 0, 'opening a sub-thread adds no row');
 
-    // The same phone: a DM reads as who it is with: a group chat on the rail, a 1:1 DM in its own header, and on the
-    // Unread threads card.
+    // The same phone: a group chat is on the rail by its name; a 1:1 DM is not, and reads as who it is with in its own
+    // header and on the Unread threads card.
     const group = await phone.locator(`#thread-rail a.tr-row[data-thread="${(trio.thread || trio).id}"] .tr-title`).innerText({timeout: t(15000)});
-    assert.ok(group.includes('Priya') && group.includes('Omar'), 'a group DM names everyone: ' + group);
+    assert.equal(group.trim(), 'Launch trio', 'a group chat is on the rail by its name');
     assert.equal(await phone.locator(`#thread-rail a[data-thread="${(pair.thread || pair).id}"]`).count(), 0, 'a 1:1 DM is on its teammate, not the rail');
     await phone.goto(hub.url + '/#/thread/' + (pair.thread || pair).id);
     await phone.locator('.thv-title', {hasText: 'Priya'}).waitFor({timeout: t(15000)});
