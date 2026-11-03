@@ -1577,7 +1577,7 @@ def migrate(conn, adopt_legacy=False):
     conn.execute(TASKS_DUE_INDEX)                  # the scheduler's due-date reminder pass
     conn.execute(TASKS_RESUME_INDEX)               # ...and its quiet tasks whose deferred time came (quiet_work.due)
     # A task's history and the Tasks page's stats read history_events through the indexes its migration made
-    # (backend/migrations/0061_history_events.py).
+    # (backend/migrations/0063_history_events.py).
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_occurrences'").fetchone():
         conn.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,created_at DESC)")
@@ -7641,7 +7641,7 @@ def _task_changed(conn, task_id, actor, field, old, new, revision):
 
 
 # ----------------------------------------------------------------------------- history
-# What happened to each thing, one row per change, in `history_events` (backend/migrations/0061_history_events.py):
+# What happened to each thing, one row per change, in `history_events` (backend/migrations/0063_history_events.py):
 # a task's, a goal's, the company profile's, the strategy's and the market graph's. `kind` is the field that changed
 # (or what happened), `old`/`new` its values, `data` a JSON object of the type's own extras. A task's rows read the
 # way its old `task_events` rows did through TASK_EVENT_COLUMNS, so its history keeps its shape in every answer.

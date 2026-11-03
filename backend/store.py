@@ -1554,7 +1554,7 @@ class Store:
                     # The market graph (backend/market.py). hubdb's MARKET_SCHEMA step created the
                     # tables on connect; this marker is the cloud contract. Running that script
                     # again here would bring back market_events, which a migration file has since
-                    # moved into history_events (backend/migrations/0061_history_events.py). The
+                    # moved into history_events (backend/migrations/0063_history_events.py). The
                     # curator is added once a roster exists, so a first import can still load employees.yaml.
                     c.execute("INSERT INTO cloud_migrations VALUES(32,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=33").fetchone():

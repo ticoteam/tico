@@ -22,7 +22,7 @@ from .store import H, P, Problem, Store, encode, repo_url
 CORE_HISTORY = ("conversations", "messages", "tasks", "task_events", "turns", "meetings",
                 "meeting_versions", "meeting_deliveries")
 # A legacy source's task_events rows are the new database's task rows in history_events
-# (backend/migrations/0061_history_events.py); the report keeps the source's name for them.
+# (backend/migrations/0063_history_events.py); the report keeps the source's name for them.
 HISTORY_COUNTS = {"task_events": "SELECT count(*) FROM history_events WHERE subject_type='task'"}
 
 
