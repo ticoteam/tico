@@ -20,7 +20,10 @@ FLEET_FIRST_WAKES_PER_HOUR = max(1, int(os.environ.get("TICO_TASK_CHECK_BACKS_FL
 WAKES_PER_TASK_DAY = 12
 REACHABLE_SECONDS = 90  # a computer heard from this recently can take a start: execution.company_waiter's bar
 INFLIGHT_JOBS = ("queued", "held", "leased", "running", "uncertain")
-ACTIVE = ("open", "doing", "waiting", "review", "ready")
+# Live receipts only, for the dedupe: a notice's job not yet handled, or a run still going that took its input.
+LIVE_JOBS = INFLIGHT_JOBS + ("input",)
+LIVE_RUNS = ("leased", "running", "input", "uncertain")
+ACTIVE =("open", "doing", "waiting", "review", "ready")
 RESULT = ("done", "declined")
 STATUSES = ACTIVE + RESULT
 PREDICATE = ("(status IN ('open','doing','waiting','review','ready') OR "
@@ -298,22 +301,49 @@ def _delivery(c, record):
     return job[0] if job else "missing"
 
 
+# One set-based probe of the live receipts: a job not yet handled, or a live run that took the notice as input. Keyed
+# by the ledger's (task_id, check_back_at) primary key, the message's primary key, jobs' unique message_id and
+# attempt_inputs' message_id key, so completed history is never read.
+IN_FLIGHT_SQL = ("SELECT 1 FROM task_check_back_wakes w JOIN messages m ON m.id=w.message_id "
+                 "WHERE w.task_id=? AND m.recipient_id=? AND (EXISTS (SELECT 1 FROM jobs j WHERE j.message_id=w.message_id "
+                 f"AND j.state IN ({','.join('?' * len(LIVE_JOBS))})) OR EXISTS (SELECT 1 FROM attempt_inputs i "
+                 "JOIN attempts a ON a.id=i.attempt_id WHERE i.message_id=w.message_id "
+                 f"AND a.state IN ({','.join('?' * len(LIVE_RUNS))}))) LIMIT 1")
+
+
 def _notice_in_flight(c, task_id, target):
-    """Whether a check-back notice for this task, to this bot, is still queued, held, leased, running or uncertain.
-    Any due time that moves while one waits (a snooze end, a deferral, a repair) must not queue a second one."""
-    records = c.execute("SELECT w.* FROM task_check_back_wakes w JOIN messages m ON m.id=w.message_id "
-                        "WHERE w.task_id=? AND m.recipient_id=?", (task_id, target)).fetchall()
-    return any(_delivery(c, record) in INFLIGHT_JOBS for record in records)
+    """Whether a check-back notice for this task, to this bot, is still queued, held, leased, running or uncertain, or
+    a run still going took it. Any due time that moves while one waits (a snooze end, a deferral, a repair) must not
+    queue a second one."""
+    return c.execute(IN_FLIGHT_SQL, (task_id, target, *LIVE_JOBS, *LIVE_RUNS)).fetchone() is not None
+
+
+def _cancel_moved(c, row, target):
+    """Cancel this task's queued notices to this bot that no longer match the task (`stale`): its due time moved while
+    one waited. A claim cancels those, but only on a computer that wakes, and a stopped cloud machine is not started for
+    an obsolete notice (cloud_machines.bot_want). Left queued, it would hold the dedupe and nothing would be sent. A
+    notice a run already took is live, and stays."""
+    from .execution import suppress_notice
+    H = _H()
+    queued = c.execute("SELECT j.id,j.bot_id,j.attempt_id,j.message_id FROM task_check_back_wakes w "
+                       "JOIN messages m ON m.id=w.message_id JOIN jobs j ON j.message_id=m.id "
+                       "WHERE w.task_id=? AND m.recipient_id=? AND j.state='queued' "
+                       "AND NOT EXISTS (SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id "
+                       "AND r.decision='resume')", (row["id"], target)).fetchall()
+    for job in queued:
+        if stale(c, H.message(c, job["message_id"]), job["bot_id"]):
+            suppress_notice(c, job, row["id"], "Check-back moved before its notice was delivered")
 
 
 def _computer_out(c, bot, at):
     """Whether the bot's assigned computer should take no new notice now.
 
     A cloud machine sleeps when idle and is started by queued work for its bot (cloud_machines.bot_want), so its silence
-    never gates: the notice queues and wakes it. Only its memory hold gates, and only while it is running and reporting.
-    Any other computer is out while silent past REACHABLE_SECONDS (asleep, offline), or holding new starts for memory or
-    a stale sample (start_places.computer_hold). CPU overload is not held here, and a bot with no assigned computer is
-    not gated."""
+    never gates: the notice queues and wakes it. Only its memory gates, and only while it is running and reporting.
+    Any other computer is out while silent past REACHABLE_SECONDS (asleep, offline), or while it holds new starts for a
+    stale sample (start_places.computer_hold). Memory is read on its own (start_places.memory_held): at 90%+ the computer
+    is also overloaded, and computer_hold then reports only "computer busy". CPU overload alone is not held here, and a
+    bot with no assigned computer is not gated."""
     from . import cloud_machines, start_places
     H = _H()
     place = c.execute("SELECT r.id,r.last_seen_at FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?",
@@ -325,12 +355,11 @@ def _computer_out(c, bot, at):
     if machine is not None:
         if machine["state"] != "running" or not reporting:
             return False  # a stopped or starting machine takes the notice in its queue, and its want starts it
-        hold = start_places.computer_hold(c, place["id"])  # reads the real clock, as every other caller does
-        return bool(hold) and hold[0] == start_places.MEMORY_HOLD
+        return start_places.memory_held(c, place["id"])  # reads the real clock, as every other caller does
     if not reporting:
         return True
     hold = start_places.computer_hold(c, place["id"])
-    return bool(hold) and hold[0] in (start_places.NOT_REPORTING, start_places.MEMORY_HOLD)
+    return (bool(hold) and hold[0] == start_places.NOT_REPORTING) or start_places.memory_held(c, place["id"])
 
 
 def stand(c, row):
@@ -484,6 +513,7 @@ def sweep(c, at=None, failures=None, task_ids=None):
                 # Pausing is deliberate, not a failed follow-up. Keep debt due without spending retries while paused.
                 result["blocked"].append(row["id"])
                 continue
+            _cancel_moved(c, row, target)  # before the dedupe: a moved notice must not hold it and strand the follow-up
             if _notice_in_flight(c, row["id"], target):
                 continue  # one notice per task and bot: the queued one carries this inspection until it is handled
             if _computer_out(c, bot["id"], at):

@@ -70,7 +70,7 @@ def computer_hold(c, runner_id, now=None, status=None, row=None):
       the state its newest sample set (performance.ingest), so the queue does not flap.
     A person's own message skips this at each caller, as it skips the overload hold. `row` is the computer's runner
     row from hold_rows when the caller has it: the same columns, read once for all its computers."""
-    from .performance import MEM_HOLD_AT, MEM_HOLD_CLEAR, load_status
+    from .performance import load_status
 
     def runner():
         nonlocal row
@@ -99,9 +99,30 @@ def computer_hold(c, runner_id, now=None, status=None, row=None):
     if mem is None:
         return None
     held = runner()
-    if mem >= MEM_HOLD_AT or (mem >= MEM_HOLD_CLEAR and held and held['memory_hold']):
+    if memory_holds(mem, held and held['memory_hold']):
         return MEMORY_HOLD, f'{MEMORY_HOLD} {round(mem)}%'
     return None
+
+
+def memory_holds(mem, was_held):
+    """Whether a memory reading (percent) holds new starts: at MEM_HOLD_AT or more, or between the two bars while the
+    computer is already held (`runners.memory_hold`, set by performance.ingest in reading order)."""
+    from .performance import MEM_HOLD_AT, MEM_HOLD_CLEAR
+    return mem >= MEM_HOLD_AT or (mem >= MEM_HOLD_CLEAR and bool(was_held))
+
+
+def memory_held(c, runner_id, now=None):
+    """Whether this computer's memory alone holds new starts, whatever else computer_hold reports. Sustained memory over
+    90% also marks the computer overloaded, and computer_hold then names only the generic "computer busy": a caller that
+    gates on memory asks here. Computers that are off, revoked, silent or never sampled are not memory-held."""
+    from .performance import load_status
+    found = c.execute("SELECT memory_hold,performance,revoked_at FROM runners WHERE id=?", (runner_id,)).fetchone()
+    if not found or found['revoked_at'] is not None or found['performance'] != 'on':
+        return False
+    latest = load_status(c, runner_id, now)['latest_sample']
+    if latest is None or latest['stale'] or latest['mem_pct'] is None:
+        return False
+    return memory_holds(latest['mem_pct'], found['memory_hold'])
 
 
 def held(c, runner_id):

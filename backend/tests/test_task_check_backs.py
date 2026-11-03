@@ -568,3 +568,85 @@ def test_a_stopped_cloud_machine_is_started_by_one_followup_and_gets_no_more(clo
                            (row["id"],)).fetchone()[0]
         assert queued == 1
         assert len(wakes(c, row["id"])) == 1
+
+
+def test_moved_due_time_replaces_the_stale_notice_on_a_stopped_cloud_machine(cloud):  # noqa: F811
+    """The due time moves while the one notice waits on a stopped cloud machine. That notice is now obsolete, and
+    cloud_machines.bot_want starts no machine for an obsolete notice, so left queued it would hold the dedupe and the
+    follow-up would never be sent. The sweep cancels it, queues the current one, and that one starts the machine."""
+    from backend import cloud_machines as CM
+    from backend.tests.test_cloud_machines import enrolled
+    store = cloud.store
+    with store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('system_routines',?)", (json.dumps({CB.KEY: {"on": True}}),))
+    enrolled(cloud)
+    cloud.hq.calls.clear()
+    cloud.manager.synced = None
+    cloud.tick()
+    with store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
+    cloud.at[0] = cloud.row()["active_at"] + 299
+    cloud.tick()
+    cloud.tick(1)
+    assert cloud.row()["state"] == "stopped"
+    with store.transaction() as c:
+        runner_id = CM.row(c, "ops")["runner_id"]
+        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.shift(H.now(), minutes=-10), runner_id))  # asleep
+        row = due(c, H.task_create(c, "human:ana", "Inspect the moved cloud result", "x", "bot:ops", lint=False))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        [first] = wakes(c, row["id"])
+        c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (H.shift(H.now(), seconds=-2), row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        by_id = {w["id"]: w for w in wakes(c, row["id"])}
+        assert len(by_id) == 2 and by_id[first["id"]]["job_state"] == "canceled"
+        [current] = [w for mid, w in by_id.items() if mid != first["id"]]
+        job = c.execute("SELECT id,state FROM jobs WHERE message_id=?", (current["id"],)).fetchone()
+        assert job["state"] == "queued"
+        assert CM.bot_want(c, store.settings, "ops", runner_id, cloud.at[0])[1] == "job:" + job["id"]
+    cloud.hq.calls.clear()
+    assert "start" in cloud.tick()
+    with store.transaction() as c:
+        assert CB.sweep(c)["woke"] == []
+        assert len(wakes(c, row["id"])) == 2
+
+
+def test_a_notice_a_live_run_took_still_holds_the_dedupe_when_the_due_time_moves(followups):
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        [wake] = wakes(c, row["id"])
+        c.execute("UPDATE jobs SET state='running' WHERE message_id=?", (wake["id"],))
+        c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (H.shift(H.now(), seconds=-2), row["id"]))
+        assert CB.sweep(c)["woke"] == []
+        assert c.execute("SELECT state FROM jobs WHERE message_id=?", (wake["id"],)).fetchone()[0] == "running"
+
+
+@pytest.mark.parametrize("cpu,mem,gated", [(10, .95, True), (95, .2, False)])
+def test_memory_hold_gates_a_followup_even_when_the_computer_is_also_overloaded(followups, cpu, mem, gated):
+    """Six one-minute samples over 90% make the computer overloaded, and start_places.computer_hold then names only the
+    generic "computer busy". Memory at 95% still holds the follow-up. CPU alone does not: that is the overload's own rule."""
+    import time
+    from backend.performance import load_status
+    from backend.tests.test_api import assign, ready, runner
+    from backend.tests.test_runner_load import point
+    r = runner(followups)
+    assign(followups, r, "ops")
+    ready(followups, r, ["ops"])
+    now = int(time.time()) // 60 * 60
+    post(followups, "runners/performance",
+         {"samples": [point(now - 300 + i * 60, cpu=cpu, mem=mem) for i in range(6)]}, r["token"])
+    with followups.app.state.store.transaction() as c:
+        assert load_status(c, r["runner_id"])["overloaded"]  # the premise: the generic reason is the one that wins
+        c.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (H.now(), r["runner_id"]))
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == ([] if gated else [row["id"]])
+        if gated:
+            assert CB.view(H.task(c, row["id"]), c)["delivery"] == "computer_unavailable"
+            assert not wakes(c, row["id"])
+
+
+def test_live_receipt_probe_searches_indexes_and_never_scans_history(followups):
+    with followups.app.state.store.transaction() as c:
+        plan = [r["detail"] for r in c.execute("EXPLAIN QUERY PLAN " + CB.IN_FLIGHT_SQL,
+                                                ("task", "bot:ops", *CB.LIVE_JOBS, *CB.LIVE_RUNS))]
+    assert plan and not any("SCAN" in detail.split() for detail in plan), plan
