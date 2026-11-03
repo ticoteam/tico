@@ -116,8 +116,8 @@ def test_a_person_edited_routine_is_untouched(environment):
         who = api.app.state.auth.owner_identity(c)
         auto_id = _row(api)["automation"]
         before = automations.flow_of(_automation(c, auto_id))
-        routines.update(c, who.actor, SWEEP, {"enabled": False})
         automations._save(c, who.actor, auto_id, {**before, "name": "My sweep"}, before, via="routine")
+        routines.update(c, who.actor, SWEEP, {"enabled": False})     # after the rename, so it does not undo it
     with api.app.state.store.read() as c:
         auto = _automation(c, auto_id)
     api = _restart(api)
