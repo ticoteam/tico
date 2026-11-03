@@ -102,6 +102,11 @@ const modelChoiceWords = (model, effort, harness, ownHarness) => {
   const via = harness && ownHarness && harness !== ownHarness ? ` in ${harnessWords(harness)}` : '';
   return name + via + (effort ? ` · ${effort}` : '');
 };
+// "1M", "1.05M" or "500K": a model's context window in tokens (`context_tokens` on a MODEL_CATALOG row); '' when unknown.
+const modelContextWords = tokens => {
+  if (!(tokens > 0)) return '';
+  return tokens >= 1000000 ? `${+(tokens / 1000000).toFixed(2)}M` : `${Math.round(tokens / 1000)}K`;
+};
 
 // Shared with the bot page's state pill: lifecycle pause takes precedence over a running turn.
 function botPausedBadge(slug, link = false) {

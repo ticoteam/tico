@@ -344,7 +344,8 @@ const taskRunPick = run => ({model: run?.model || '', harness: run?.harness || '
 function taskRunWords(run, rows) {
   if (!run?.model) return "The bot's task model";
   const row = (rows || []).find(m => m.id === run.model);
-  return [row?.label || run.model, (row?.harnesses || []).length > 1 ? harnessWords(run.harness) : '', run.reasoning_effort].filter(Boolean).join(' · ');
+  return [row?.label || run.model, (row?.harnesses || []).length > 1 ? harnessWords(run.harness) : '', run.reasoning_effort,
+    modelContextWords(row?.context_tokens)].filter(Boolean).join(' · ');
 }
 // Only whoever the server says may set the task's model gets the form (`can_set_run_model`, the answer POST
 // /v2/tasks/{id}/model gives); anyone else reads what it runs on.

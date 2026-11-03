@@ -34,6 +34,23 @@ def test_ids_resolve_to_a_tier_a_version_and_a_price():
     assert providers.MODEL_BY_ID["tico-sales-medium"]["tier"]["auto"] is True
 
 
+def test_a_row_lists_its_context_window_only_where_a_source_gives_one():
+    rows = {row["id"]: row for row in providers.MODEL_CATALOG}
+    # Anthropic's models overview (1M tokens); OpenAI's model pages (1,050,000); Google's Gemini 3.8 Flash page
+    # (1,048,576 input tokens); docs.x.ai (500k). OpenRouter states no window for Mercury 3, so its row has none.
+    assert rows["claude-opus-5-5"]["context_tokens"] == rows["claude-haiku-5-5"]["context_tokens"] == 1_000_000
+    assert rows["claude-opus-5"]["context_tokens"] == 1_000_000
+    assert rows["gpt-6.1-sol"]["context_tokens"] == rows["gpt-6-sol"]["context_tokens"] == 1_050_000
+    assert rows["gpt-6-luna"]["context_tokens"] == rows["gpt-6-astra"]["context_tokens"] == 1_050_000
+    assert rows["gemini-3.8-flash"]["context_tokens"] == 1_048_576 and rows["grok-4.6"]["context_tokens"] == 500_000
+    assert "context_tokens" not in rows["mercury-3"] and "context_tokens" not in rows["deepseek-v4.1-flash"]
+    # A Gateway tier takes the window of the model it runs on; no fast tier has a source for one.
+    assert rows["tico-general-medium-1.0"]["context_tokens"] == rows["tico-general-low-1.0"]["context_tokens"] == 1_000_000
+    assert T.row_for("tico-general-high-1.0")["context_tokens"] == 1_000_000
+    assert "context_tokens" not in rows["tico-general-high-fast-1.0"]
+    assert T.meeting_rows()[0]["context_tokens"] == 1_000_000
+
+
 def test_the_old_lineup_still_resolves_at_its_old_price_and_is_never_offered():
     for old, level in (("tico-cheap-1.0", "low"), ("tico-cheap-1.1", "low"), ("tico-mid-1.0", "medium"), ("tico-power-1.0", "high")):
         found = T.resolve(old)

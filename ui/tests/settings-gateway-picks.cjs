@@ -89,6 +89,16 @@ const shotsDir = process.env.TICO_SHOTS || '';
     assert.equal(await model.locator('[data-tier-fast]').isChecked(), false);
     assert.equal(await model.locator('[data-tier-version] option:checked').innerText(), '1.0 (current)');
     assert.equal(await model.locator('[data-tier-line]').innerText(), 'Claude Sonnet 5.5 · $2.50 / $12.50 per 1M');
+    // The model and effort label ends in the context window the catalog gives (format.js modelContextWords).
+    const labels = await page.evaluate(() => ['claude-opus-5-5', 'gpt-6.1-sol', 'gemini-3.8-flash', 'grok-4.6', 'deepseek-v4.1-flash',
+      'tico-sales-medium-1.0', 'tico-sales-high-fast-1.0'].map(id => settingsChoiceLabel('', id, 'high')));
+    assert.match(labels[0], / · high · 1M$/, 'Opus 5.5 says its 1M window');
+    assert.match(labels[1], / · high · 1\.05M$/, 'GPT-6.1 Sol says 1.05M');
+    assert.match(labels[2], / · high · 1\.05M$/, 'Gemini 3.8 Flash says 1.05M');
+    assert.match(labels[3], / · high · 500K$/, 'Grok 4.6 says 500K');
+    assert.doesNotMatch(labels[4], /\d[KM]$/, 'a model with no source figure shows none');
+    assert.match(labels[5], / · 1M$/, 'a Gateway tier shows the window of the model it runs on');
+    assert.doesNotMatch(labels[6], /\d[KM]$/, 'a fast tier with no source figure shows none');
     assert.equal(await pick(), 'pi::tico-sales-medium-1.0::high');
     assert.deepEqual(await model.locator('[data-tier-version] option').allInnerTexts(), ['1.0 (current)', 'Auto (always latest)']);
     assert.equal(await model.locator('[data-tier-department] option').count() >= 8, true, 'every department is offered');
