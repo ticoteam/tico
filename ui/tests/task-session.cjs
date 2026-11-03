@@ -405,8 +405,17 @@ async function deliveryChoice(viewport, shot, theme = 'light') {
     assert.deepEqual((await ways()).filter(w => !w.startsWith('defer')), []);
     await page.keyboard.press('Escape');
     assert.deepEqual(await send('Deferred'), {text: 'Deferred', public: false, delivery: 'defer', defer_for: 'never'});
+    // A kept deadline is not theirs to give either (the server 403s it), nor a server default with one: Defer with none.
+    await page.evaluate(() => sendWayPick('defer:4h'));
+    choices = {...choices, default_for: '24h'};
+    await reread(page);
+    assert.deepEqual(await looks(), {shows: 'defer:never', label: 'Send, defer', badge: ''});
+    await caret.click();
+    assert.deepEqual(await ways(), ['defer:never'], 'no deadlines to pick');
+    await page.keyboard.press('Escape');
+    assert.deepEqual(await send('No deadline'), {text: 'No deadline', public: false, delivery: 'defer', defer_for: 'never'});
     await page.waitForFunction(() => !SEND_WAY_TIMER);
-    assert.equal(prefs['compose.send_way'], 'steer', 'the kept way stays what the person picked');
+    assert.equal(prefs['compose.send_way'], 'defer:4h', 'the kept way stays what the person picked');
 
     // A task with no bot keeps the plain arrow and no caret, and its comment carries no delivery.
     to = {bot: null, wakes: false, mention: []}; choices = null;
@@ -427,6 +436,7 @@ async function botChatWays(viewport) {
     const ctx = await browser.newContext({viewport, serviceWorkers: 'block'});
     const page = await ctx.newPage();
     const errors = [], chats = [], goals = [], prefs = {};
+    let slowRead = false;
     page.on('pageerror', e => errors.push(e.message));
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
@@ -443,7 +453,11 @@ async function botChatWays(viewport) {
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       const pref = p.match(/^\/api\/v2\/preferences\/([^/]+)$/);
       if (pref && req.method() === 'POST') { prefs[pref[1]] = JSON.parse(req.postData() || '{}').value; return json({key: pref[1], value: prefs[pref[1]]}); }
-      if (pref) return json({key: pref[1], value: prefs[pref[1]] ?? null});
+      if (pref) {
+        const value = prefs[pref[1]] ?? null;                  // what the server held when the read came in
+        if (slowRead) await new Promise(done => setTimeout(done, 1500));
+        return json({key: pref[1], value});
+      }
       if (p === '/api/v2/chat/lead' && req.method() === 'POST') {
         const body = JSON.parse(req.postData() || '{}'); chats.push(body);
         return json({message: {id: 'm' + chats.length, conversation_id: 'r-lead', sender_id: 'human:ana', kind: 'say', body: body.text, created_at: at(0)}});
@@ -516,6 +530,13 @@ async function botChatWays(viewport) {
     await page.keyboard.press('Escape');
     assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('p-way')), true);
 
+    // A read of the kept way that answers after a pick (its write already done) does not undo the pick.
+    prefs['compose.send_way'] = 'steer'; slowRead = true;
+    await page.evaluate(async () => { const read = sendWaySync(); sendWayPick('queue'); await read; });
+    slowRead = false;
+    assert.equal(prefs['compose.send_way'], 'queue', "the pick's write went out before the read answered");
+    assert.equal(await shows(), 'queue:', 'a late read loses to the pick');
+    await page.waitForFunction(() => !SEND_WAY_TIMER);
     // A reload reads the kept way back; goal mode does not come back.
     await mount(true);
     await page.waitForFunction(() => document.querySelector('#bot-chat-pill .p-send')?.dataset.shows === 'queue:');

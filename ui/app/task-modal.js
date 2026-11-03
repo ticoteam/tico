@@ -715,11 +715,15 @@ const taskDeferDefault = state => {
   const f = state.data?.comment_delivery?.default_for;
   return DELIVERY_FOR.includes(f) ? f : '24h';
 };
+// Whether this reader may wake the task's bot. A deadline wakes it as a steer would, so a reader who may not defers
+// with none (the server refuses any other defer_for with a 403).
+const taskDeliveryWakes = state => taskDeliveryWays(state).some(w => w === 'steer' || w === 'queue');
 // The way the next comment goes: Set as goal when picked for it, else the kept way, or the nearest one this reader may
-// use (Steer becomes Queue; without either, Defer).
+// use (Steer becomes Queue; without either, Defer with no deadline).
 function taskDeliveryMode(state) {
   const ways = taskDeliveryWays(state);
   if (state.goalOnce && ways.includes('goal')) return 'goal';
+  if (!taskDeliveryWakes(state)) return 'defer:never';
   const kept = SEND_WAY, way = deliveryWay(kept);
   if (ways.includes(way)) return kept;
   if (way === 'steer' && ways.includes('queue')) return 'queue';
@@ -752,7 +756,7 @@ function taskDeliveryMenu(state, open) {
   if (open && !taskDeliverySplit(state)) return;
   const ways = taskDeliveryWays(state), mode = open ? taskDeliveryMode(state) : '';
   menu.innerHTML = open ? deliveryMenuHTML({steer: ways.includes('steer'), queue: ways.includes('queue'), goal: ways.includes('goal'),
-    current: mode, deferFor: deliveryWay(mode) === 'defer' ? deliveryFor(mode) : taskDeferDefault(state)}) : '';
+    deadlines: taskDeliveryWakes(state), current: mode, deferFor: deliveryWay(mode) === 'defer' ? deliveryFor(mode) : taskDeferDefault(state)}) : '';
   menu.hidden = !open;
   caret.setAttribute('aria-expanded', String(open));
   TASK_MENU_CLOSE = open ? () => taskDeliveryMenu(state, false) : null;

@@ -83,15 +83,15 @@ const deliveryBody = mode => {
   return way === 'defer' ? {delivery: way, defer_for: deliveryFor(mode) || 'never'} : {delivery: way};
 };
 // The menu: Steer now, Queue, Defer with its durations, then Set as goal apart. `current` is checked; `deferFor` is
-// the duration the Defer row itself picks.
-function deliveryMenuHTML({steer = true, queue = true, goal = false, current = 'queue', deferFor = '24h'}) {
+// the duration the Defer row itself picks. Without `deadlines` (a reader who may not wake the bot) Defer has none.
+function deliveryMenuHTML({steer = true, queue = true, goal = false, deadlines = true, current = 'queue', deferFor = '24h'}) {
   const row = (val, label, on) => `<button type="button" role="menuitemradio" aria-checked="${on}" data-deliver="${esc(val)}"><span class="p-way-i">${SEND_WAY_ICONS[deliveryWay(val)] || ''}</span><span>${esc(label)}</span>${
     on ? '<span class="tick" aria-hidden="true">✓</span>' : ''}</button>`;
   const way = deliveryWay(current), f = way === 'defer' ? deliveryFor(current) : '';
   const chips = DELIVERY_FOR.map(d => `<button type="button" role="menuitemradio" aria-checked="${f === d}" aria-label="Defer ${esc(deliveryForWord(d))}" data-deliver="defer:${d}">${esc(deliveryForWord(d))}</button>`).join('');
   return (steer ? row('steer', 'Steer now', way === 'steer') : '') + (queue ? row('queue', 'Queue', way === 'queue') : '')
-    + row('defer:' + (f || deferFor), 'Defer', way === 'defer')
-    + `<div class="p-for" role="group" aria-label="Defer for">${chips}</div>`
+    + row('defer:' + (deadlines ? f || deferFor : 'never'), 'Defer', way === 'defer')
+    + (deadlines ? `<div class="p-for" role="group" aria-label="Defer for">${chips}</div>` : '')
     + (goal ? `<div class="sep" role="separator"></div>${row('goal', 'Set as goal', way === 'goal')}` : '');
 }
 // Arrows move through the menu's buttons; the menu's own handlers do the rest.
@@ -111,7 +111,7 @@ function deliveryMenuKeys(menu, ev) {
 const SEND_WAY_PREF = 'compose.send_way';
 const sendWayOk = mode => mode === 'steer' || mode === 'queue'
   || typeof mode === 'string' && /^defer:[^:]+$/.test(mode) && DELIVERY_FOR.includes(deliveryFor(mode));
-let SEND_WAY = 'steer', SEND_WAY_TIMER = null;
+let SEND_WAY = 'steer', SEND_WAY_TIMER = null, SEND_WAY_PICKS = 0;     // picks made on this page, so a late read loses
 const SEND_WAY_PAINT = new Set();          // repaint hooks of the composers on screen that show the way
 SEND_WAY_PAINT.add(() => { for (const P of PILLS) if (P.ways) pillLabel(P); });
 const svgIcon = body => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
@@ -146,7 +146,7 @@ function sendWayPaint(btn, mode) {
 function sendWayPick(mode) {
   if (!sendWayOk(mode)) return;
   const changed = mode !== SEND_WAY;
-  SEND_WAY = mode;
+  SEND_WAY = mode; SEND_WAY_PICKS++;
   if (changed) for (const paint of SEND_WAY_PAINT) paint();
   if (typeof S === 'undefined' || !S.me?.cloud) return;
   clearTimeout(SEND_WAY_TIMER);
@@ -155,11 +155,12 @@ function sendWayPick(mode) {
     void post('/v2/preferences/' + SEND_WAY_PREF, {value: SEND_WAY}).catch(() => {});
   }, 600);
 }
-// The kept way, read once the page knows who is signed in. A pick still waiting to be written wins.
+// The kept way, read once the page knows who is signed in. A pick made while the read was out wins, written or not.
 async function sendWaySync() {
   if (typeof S === 'undefined' || !S.me?.cloud) return;
+  const picks = SEND_WAY_PICKS;
   const v = (await v2Get('/v2/preferences/' + SEND_WAY_PREF))?.value;
-  if (!sendWayOk(v) || SEND_WAY_TIMER || v === SEND_WAY) return;
+  if (!sendWayOk(v) || SEND_WAY_PICKS !== picks || v === SEND_WAY) return;
   SEND_WAY = v;
   for (const paint of SEND_WAY_PAINT) paint();
 }
