@@ -163,6 +163,7 @@ def test_people_who_hold_roles_are_kept_to_invite_and_the_seats_under_them_wait_
     saved = rows(api, "SELECT value FROM registry_metadata WHERE key='onboarding.company_file'")[0]["value"]
     assert '"person":"ana"' in saved and '"person":"ben"' in saved
     invited_from_setup(api, finance[0]["id"])
+    an_older_releases_roster_add_retries_after_the_upgrade(api)
     # A coworker who holds no role still joins in Tico, not by import.
     loose = C.from_yaml(text)
     loose["people"].append({"id": "cara", "name": "Cara", "role": "Designer", "dept": None, "owner": False, "isNew": True})
@@ -262,6 +263,59 @@ def invited_from_setup(api, finance):
         assert ana["id"] not in [p["id"] for p in api.get("/api/people", headers=signed_in()).json()["people"]]
     finally:
         api.app.state.auth.proxy = None
+
+
+def an_older_releases_roster_add_retries_after_the_upgrade(api):
+    """An older release's onboarding route stored its roster add as an answer under the request's key before it bound
+    the invite, so a refusal (or a crash) between the two left an answer with no binding and nothing sent. Migration
+    0049 removes it: the retry after the upgrade sends once and answers, and its repeat sends nothing more."""
+    import sqlite3
+    from contextlib import closing
+
+    from backend.store import digest
+
+    url, key, body = "/api/v2/onboarding/company/people/ben/invite", "legacy-ben", {"email": "ben@acme.example"}
+    refused = api.post(url, json=body, headers={**signed_in(), "Idempotency-Key": key})   # no sign-in mail here
+    assert refused.status_code == 422 and refused.json()["error"]["code"] == "invite_unavailable"
+    ben, = [p for p in api.get("/api/people", headers=signed_in()).json()["people"] if p["email"] == body["email"]]
+    settings = api.app.state.store.settings
+    with closing(sqlite3.connect(settings.db_path)) as c, c:
+        assert not c.execute("SELECT 1 FROM idempotency WHERE key=?", (key,)).fetchone()
+        # The older layout: the answers alone in `idempotency`, the invite bindings in invite_sends.
+        c.execute("CREATE TABLE idempotency_legacy(actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL, "
+                  "request_hash TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL, "
+                  "PRIMARY KEY(actor,operation,key))")
+        c.execute("INSERT INTO idempotency_legacy SELECT actor,operation,key,request_hash,response,created_at "
+                  "FROM idempotency WHERE binding IS NULL")
+        c.execute("CREATE TABLE invite_sends(actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL, "
+                  "request_hash TEXT NOT NULL, person TEXT NOT NULL, state TEXT NOT NULL, error_code TEXT, "
+                  "error_detail TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(actor,operation,key))")
+        c.execute("INSERT INTO invite_sends SELECT actor,operation,key,request_hash,subject,"
+                  "CASE state WHEN 'pending' THEN 'sending' WHEN 'completed' THEN 'sent' ELSE state END,"
+                  "error_code,error_detail,created_at,coalesce(updated_at,created_at) FROM idempotency "
+                  "WHERE binding='invites'")
+        actor = c.execute("SELECT actor FROM invite_sends LIMIT 1").fetchone()[0]
+        c.execute("INSERT INTO idempotency_legacy VALUES(?,?,?,?,?,?)",
+                  (actor, url, key, digest(encode(body)), encode({"id": ben["id"]}), H.now()))
+        c.execute("DROP TABLE idempotency")
+        c.execute("ALTER TABLE idempotency_legacy RENAME TO idempotency")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0049' AND version NOT LIKE 'legacy_%'")
+
+    class Issuer:
+        name, calls = "oidc", []
+
+        def invite(self, email):
+            self.calls.append(email)
+            return 202, {"status": "sent"}
+    with TestClient(create_app(settings), follow_redirects=False) as upgraded:
+        upgraded.app.state.auth.proxy = Issuer()
+        for _ in range(2):
+            again = upgraded.post(url, json=body, headers={**signed_in(), "Idempotency-Key": key})
+            assert again.status_code == 200, again.text
+            assert Issuer.calls == ["ben@acme.example"]
+        with upgraded.app.state.store.read() as c:
+            row = c.execute("SELECT binding,subject,state FROM idempotency WHERE key=?", (key,)).fetchone()
+        assert tuple(row) == ("invites", ben["id"], "completed")
 
 
 def test_import_lays_out_the_chart_once_across_retry_and_runner_enrollment(environment):

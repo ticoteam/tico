@@ -12,7 +12,8 @@ One request sends at most one email (`once`). The browser repeats a write whose 
 Idempotency-Key, so the request is bound in `idempotency` (binding 'invites', subject the person's id) before the issuer
 is asked: a repeat of a sent request answers from it, an overlapping copy or one whose outcome nobody recorded is
 refused without sending, and a refusal replays as itself. A new click is a new key and sends again. A route that binds
-a request does not also `mutate` under the same key: one row per key. A route asks `replay` before it
+a request does not also `mutate` under the same key: one row per key. The access route keeps the time it recorded on
+the binding (`response` {"invited_at"}), so a repeat answers its own request's time. A route asks `replay` before it
 writes the roster, so a repeat never adds the person again, even one removed since (people_remove keeps the binding
 without the address).
 
@@ -64,14 +65,25 @@ def record(c, actor, pid):
     return at
 
 
-def record_send(store, who, pid, first):
-    """The time the invite to `pid` is recorded at. The call that sent it (`first`, from `once`) records it; a repeat
-    of the request keeps the time already recorded and writes nothing. A send whose record was lost is recorded now."""
+def record_send(store, who, request, pid):
+    """The time this request's invite to `pid` is recorded at, kept on the request's own binding (`response`
+    {"invited_at"}) in the same transaction as the record: a repeat answers its own time, never another request's. A
+    sent binding with no time is a send whose record was lost, so it is recorded now."""
+    key, operation = request_key(request), request.url.path
+
     def work(c):
-        recorded = sent(c).get(pid)
-        if first or not recorded:
-            return record(c, who.actor, pid)
-        return recorded["at"]
+        row = c.execute("SELECT response FROM idempotency WHERE binding=? AND actor=? AND operation=? AND key=?",
+                        (BINDING, who.actor, operation, key)).fetchone()
+        try:
+            recorded = json.loads(row["response"]).get("invited_at") if row and row["response"] else None
+        except (ValueError, AttributeError):
+            recorded = None
+        if recorded:
+            return recorded
+        at = record(c, who.actor, pid)
+        c.execute("UPDATE idempotency SET response=?,updated_at=? WHERE binding=? AND actor=? AND operation=? AND key=?",
+                  (encode({"invited_at": at}), at, BINDING, who.actor, operation, key))
+        return at
     return store.write(who, work)
 
 
@@ -142,6 +154,10 @@ def _once(store, who, request, body, person, work, unknown=None):
                 raise Problem(*unknown(name), 422)
             raise Problem("invite_unknown", f"This invite to {name} is still being sent, or Tico couldn't tell whether it "
                                             f"went. Check the People page or ask {name} before inviting again.", 422)
+        # An answer left under this key with no binding is an older release's roster add that committed before its
+        # invite was bound (migration 0049 removes those): nothing was sent for it, so the binding takes its place.
+        c.execute("DELETE FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
+                  (who.actor, operation, key))
         now = H.now()
         c.execute("INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at,updated_at,binding,"
                   "subject,state) VALUES(?,?,?,?,NULL,?,?,?,?,'pending')",

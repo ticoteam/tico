@@ -509,7 +509,8 @@ Already constrained by a CHECK in the base schema (values unchanged on this bran
   48 hours. An operation binding (`binding` set: `invites`, `github_product_repo`, `github_review`) is never swept: it is
   pending while its outcome is unknown (a repeat is refused with no second external call), then completed or refused.
   Invites map `sending` to pending, `sent` to completed and `refused` to refused; a product repository's `rejected` is
-  refused; a review with no response yet is pending.
+  refused; a review with no response yet is pending. An access invite's binding keeps the time it recorded as
+  `response` {"invited_at"}, so a repeat of that request answers its own time.
 - `task_links.review_state` and others with a CHECK in the base schema.
 
 Without a CHECK (not constrained here; values are whatever the code writes):

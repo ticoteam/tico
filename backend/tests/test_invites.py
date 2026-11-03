@@ -169,3 +169,30 @@ def test_a_person_removed_while_the_issuer_is_asked_keeps_no_refusal_that_names_
         row = c.execute("SELECT state,error_detail FROM idempotency WHERE binding='invites' AND key=?",
                         (headers["idempotency-key"],)).fetchone()
     assert row["state"] == "refused" and row["error_detail"] == invites.REMOVED
+
+
+def test_each_invite_request_answers_its_own_recorded_time_on_a_repeat(signin, monkeypatch):  # noqa: F811
+    """The time an invite request recorded is kept on its own binding: a repeat of a request whose record was lost
+    records it then, though an earlier request recorded an invite to the same person, and a repeat of the earlier
+    request answers its own time, not the later one's."""
+    from backend import invites
+    signin.fake.invites = [(202, {"status": "sent"}), (202, {"status": "sent"})]
+    first = owner(signin)
+    url = "/api/v2/access/people/cara/invite"
+    k1 = signin.api.post(url, json={}, headers=first)
+    assert k1.status_code == 200, k1.text
+    second = {**first, "idempotency-key": "invite-" + uuid.uuid4().hex}
+    record = invites.record
+    monkeypatch.setattr(invites, "record", lambda *a: (_ for _ in ()).throw(RuntimeError("lost before recorded")))
+    with pytest.raises(RuntimeError):
+        signin.api.post(url, json={}, headers=second)
+    monkeypatch.setattr(invites, "record", record)
+    k2 = signin.api.post(url, json={}, headers=second)
+    assert k2.status_code == 200, k2.text
+    assert len(signin.fake.invite_calls) == 2, "the repeat sends nothing more"
+    assert k2.json()["invited_at"] != k1.json()["invited_at"], "the lost record is made now, not read from K1's"
+    assert invites_sent(signin)["cara"]["at"] == k2.json()["invited_at"]
+    assert signin.api.post(url, json={}, headers=second).json()["invited_at"] == k2.json()["invited_at"]
+    again = signin.api.post(url, json={}, headers=first)
+    assert again.status_code == 200 and again.json()["invited_at"] == k1.json()["invited_at"]
+    assert len(signin.fake.invite_calls) == 2 and invites_sent(signin)["cara"]["at"] == k2.json()["invited_at"]

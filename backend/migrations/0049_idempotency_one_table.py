@@ -12,7 +12,9 @@ that are never swept: `github_product_repo_operations` (backend/github_app.py), 
   copied into a binding on retry) becomes its binding, so the create is still never repeated.
 
 Where a binding and an answer share a key (the invite routes once stored both under one key), the binding wins: it
-carries the send's state, and the answer was a replay of the record the binding already makes.
+carries the send's state, and the answer was a replay of the record the binding already makes. An access invite's
+binding keeps that answer's recorded time as `response` {"invited_at"}. An invite route's answer with no binding (an
+onboarding roster add committed before its invite was bound; nothing was sent) is removed, so its retry binds and sends.
 
 The old answer table is renamed aside (legacy ALTER TABLE rules, so no other schema object is reparsed or rewritten), the
 rows are copied in one pass each, and the old tables go with their indexes and triggers. The `idempotency_messages`
@@ -25,6 +27,9 @@ from backend import hubdb as H
 
 PRODUCT_PATH = "/api/v2/github/product-repos"
 REVIEW_PATH = "/api/v2/github/reviews"
+# The invite routes (backend/app.py), as LIKE patterns.
+ACCESS_INVITE = "/api/v2/access/people/%/invite"
+ONBOARDING_INVITE = "/api/v2/onboarding/company/people/%/invite"
 
 # The table store.py's SCHEMA creates: the same columns, keys and CHECKs (test_migrations compares the two). The state
 # CHECK is inline, not a status_values list: that module scans its CHECK tables at every start, and this one is big.
@@ -73,11 +78,29 @@ def up(conn):
                      "target_org||'/'||target_name,CASE state WHEN 'rejected' THEN 'refused' ELSE state END,"
                      "error_code,error_detail,error_status FROM github_product_repo_operations")
     if "invite_sends" in names:
+        # An access invite's answer under the same key was the time the send was recorded (a JSON string): the binding
+        # keeps it as {"invited_at"}, so a repeat answers that time (invites.record_send). Nothing else is kept.
+        if answers:
+            invited_at = ("CASE WHEN s.operation LIKE ? AND json_valid(a.response) THEN CASE json_type(a.response) "
+                          "WHEN 'text' THEN json_object('invited_at',json_extract(a.response,'$')) "
+                          "WHEN 'object' THEN CASE WHEN json_type(a.response,'$.invited_at')='text' "
+                          "THEN json_object('invited_at',json_extract(a.response,'$.invited_at')) END END END")
+            source = ("invite_sends s LEFT JOIN idempotency_old a "
+                      "ON a.actor=s.actor AND a.operation=s.operation AND a.key=s.key")
+            params = (ACCESS_INVITE,)
+        else:
+            invited_at, source, params = "NULL", "invite_sends s", ()
         conn.execute("INSERT OR REPLACE INTO idempotency(actor,operation,key,request_hash,response,created_at,"
                      "updated_at,binding,subject,state,error_code,error_detail) "
-                     "SELECT actor,operation,key,request_hash,NULL,created_at,updated_at,'invites',person,"
-                     "CASE state WHEN 'sending' THEN 'pending' WHEN 'sent' THEN 'completed' ELSE 'refused' END,"
-                     "error_code,error_detail FROM invite_sends")
+                     f"SELECT s.actor,s.operation,s.key,s.request_hash,{invited_at},s.created_at,s.updated_at,"
+                     "'invites',s.person,"
+                     "CASE s.state WHEN 'sending' THEN 'pending' WHEN 'sent' THEN 'completed' ELSE 'refused' END,"
+                     f"s.error_code,s.error_detail FROM {source}", params)
+    # An invite route's answer with no binding is a roster add an older onboarding route committed before it bound the
+    # invite (a crash between the two, or a refusal before the issuer was asked). Nothing was sent for it: the binding
+    # is always written before the issuer is asked. Kept, it would stand in the way of the binding a retry writes.
+    conn.execute("DELETE FROM idempotency WHERE binding IS NULL AND (operation LIKE ? OR operation LIKE ?)",
+                 (ACCESS_INVITE, ONBOARDING_INVITE))
     if "github_review_operations" in names:
         # This table has no created_at: its rows are stamped when the migration runs, which only orders them.
         conn.execute("INSERT OR REPLACE INTO idempotency(actor,operation,key,request_hash,response,created_at,"
@@ -92,6 +115,8 @@ def up(conn):
     for index in INDEXES:
         conn.execute(index)
     if "idempotency_messages" in names:
-        # An answer that is now a binding is not indexed (its quotes are never rewritten): drop its entries.
+        # An answer that is now a binding is not indexed (its quotes are never rewritten), nor one that went: drop
+        # their entries. No answer is left on an invite route.
         conn.execute("DELETE FROM idempotency_messages WHERE (actor,operation,key) IN "
-                     "(SELECT actor,operation,key FROM idempotency WHERE binding IS NOT NULL)")
+                     "(SELECT actor,operation,key FROM idempotency WHERE binding IS NOT NULL) "
+                     "OR operation LIKE ? OR operation LIKE ?", (ACCESS_INVITE, ONBOARDING_INVITE))

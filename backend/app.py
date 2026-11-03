@@ -2052,8 +2052,8 @@ def create_app(settings=None):
             person = P.person(pid, views.roster(c))
         if not person or person.get("hidden"):
             raise Problem("not_found", "Person not found", 404)
-        sent = invites.once(store, auth, settings, who, request, body, person)
-        at = invites.record_send(store, who, pid, sent)     # a repeat keeps the time the first send recorded
+        invites.once(store, auth, settings, who, request, body, person)
+        at = invites.record_send(store, who, request, pid)  # a repeat answers the time its own send recorded
         return {"person": pid, "invited_at": at}
 
     @app.post("/api/v2/access/people/{pid}/password")

@@ -527,6 +527,7 @@ LEGACY_TABLES = (
     "response TEXT, PRIMARY KEY(actor,key))",
 )
 PRODUCT, REVIEWS = "/api/v2/github/product-repos", "/api/v2/github/reviews"
+ONBOARDING = "/api/v2/onboarding/company/people/{}/invite"
 TS = "2026-10-01T00:00:00.000000Z"
 
 
@@ -543,16 +544,21 @@ def test_a_populated_legacy_database_moves_each_row_and_keeps_its_behaviour(tmp_
             (PRODUCT, "receipt", "h2", '{"repository": "Acme/tico-receipt", "html_url": "x"}', TS),
             (invite.format("cara"), "collide", "h3", '{"id": "m1", "sender_id": "human:ana"}', TS),   # and a send
             ("/api/v2/messages", "ans-2", "h9", '{"id": "m2", "sender_id": "human:ana"}', TS),
+            # An older onboarding route's roster add, committed before its invite was bound: nothing was sent.
+            (ONBOARDING.format("gus"), "left-over", "h10", '{"id": "m3", "sender_id": "human:ana"}', TS),
+            (invite.format("hal"), "timed", "h11", '"2026-10-01T00:00:01.000000Z"', TS),   # the recorded time
         ])
         # What the answer triggers had indexed (the test's DROP took the triggers): each answer that quotes a message.
         c.executemany("INSERT INTO idempotency_messages VALUES(?, 'human:ana', ?, ?)", [
-            ("m1", invite.format("cara"), "collide"), ("m2", "/api/v2/messages", "ans-2")])
+            ("m1", invite.format("cara"), "collide"), ("m2", "/api/v2/messages", "ans-2"),
+            ("m3", ONBOARDING.format("gus"), "left-over")])
         c.executemany("INSERT INTO invite_sends VALUES('human:ana',?,?,?,?,?,?,?,?,?)", [
             (invite.format("cara"), "collide", "h3", "cara", "sent", None, None, TS, TS),
             (invite.format("dan"), "sending", "h4", "dan", "sending", None, None, TS, TS),
             (invite.format("eve"), "refused", "h5", "eve", "refused", "too_many", "Too many invites", TS, TS),
             # Fay was removed: people_remove scrubbed her binding (no hash, the refusal text that named her replaced).
             (invite.format("fay"), "scrubbed", "", "fay", "refused", "invite_failed", invites.REMOVED, TS, TS),
+            (invite.format("hal"), "timed", "h11", "hal", "sent", None, None, TS, TS),
         ])
         c.executemany("INSERT INTO github_product_repo_operations VALUES('human:ana',?,?,?,?,?,?,?,?,?,?,?,?)", [
             (PRODUCT, "prod-pending", "h6", "Acme", "tico-new", "pending", None, None, None, None, TS, TS),
@@ -570,7 +576,7 @@ def test_a_populated_legacy_database_moves_each_row_and_keeps_its_behaviour(tmp_
     with sqlite3.connect(path) as c:
         c.row_factory = sqlite3.Row
         rows = {(r["operation"], r["key"]): dict(r) for r in c.execute("SELECT rowid, * FROM idempotency")}
-        assert len(rows) == 12, sorted(rows)
+        assert len(rows) == 13, sorted(rows)
         answer = rows[("/api/v2/tasks/t1/files", "ans-1")]
         assert (answer["binding"], answer["state"], answer["response"]) == (None, "completed", '{"ok": true}')
         assert answer["rowid"] == before["ans-1"], "a stored answer keeps its rowid"
@@ -581,6 +587,10 @@ def test_a_populated_legacy_database_moves_each_row_and_keeps_its_behaviour(tmp_
         assert rows[(invite.format("dan"), "sending")]["state"] == "pending"
         eve = rows[(invite.format("eve"), "refused")]
         assert (eve["state"], eve["error_code"], eve["error_detail"]) == ("refused", "too_many", "Too many invites")
+        assert (ONBOARDING.format("gus"), "left-over") not in rows, "an invite route's answer with no binding goes"
+        hal = rows[(invite.format("hal"), "timed")]
+        assert (hal["binding"], hal["state"], json.loads(hal["response"])) == \
+            ("invites", "completed", {"invited_at": "2026-10-01T00:00:01.000000Z"}), "the binding keeps the time"
         fay = rows[(invite.format("fay"), "scrubbed")]
         assert (fay["subject"], fay["state"], fay["request_hash"], fay["error_detail"]) == \
             ("fay", "refused", "", invites.REMOVED), "a scrubbed binding stays scrubbed"
