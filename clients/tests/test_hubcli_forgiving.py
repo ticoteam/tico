@@ -150,3 +150,27 @@ def test_a_flag_the_command_does_not_take_lists_the_ones_it_does(capsys):
     code, err = parse_failure(capsys, ["automation", "list", "--all"])
     assert code == 2
     assert "It takes: --cursor, --limit, --owner" in err
+
+
+def test_bot_show_takes_a_slug_and_is_the_bot_detail_read():
+    args = hubcli.parse(hubcli.parser(), ["bot", "show", "ops-bot"])
+    assert (args.fn, args.slug) == ("bot show", "ops-bot")
+
+
+def test_bot_show_reads_the_bot_detail_through_its_tool(monkeypatch):
+    from clients import remotecli
+    calls = []
+
+    class Api:
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False      # a person's own rights: no BotOps lookup
+
+        def get(self, path, **query):
+            calls.append(("GET", path))
+            return {"slug": "ops-bot", "name": "Ops"}
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    monkeypatch.setenv("HUB_TOKEN", "t")
+    result = remotecli.run(hubcli.parse(hubcli.parser(), ["bot", "show", "ops-bot"]))
+    assert calls == [("GET", "bots/ops-bot")]
+    assert result == {"slug": "ops-bot", "name": "Ops"}

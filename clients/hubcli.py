@@ -3391,6 +3391,9 @@ def parser():
     sub.add_parser("template", help="the bot templates this company can pick from").add_subparsers(dest="sub").add_parser(
         "list", help="the bot templates this company can pick from").set_defaults(fn="template list")
     bot = sub.add_parser("bot", aliases=["bots"], help="build a bot from a template (BotOps), change it, place it, its status").add_subparsers(dest="sub")
+    s = bot.add_parser("show", help="one bot: its profile, and for one you may read also its status, machine, queue and goals")
+    s.add_argument("slug")
+    s.set_defaults(fn="bot show")
     s = bot.add_parser("create", help="build a bot from a template in the workspace and register it; --record-only only registers")
     s.add_argument("slug", nargs="?", help="leave out: Tico picks one from --name, else the template's name")
     s.add_argument("--template", help="a template from `hub template list`")
