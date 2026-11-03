@@ -243,10 +243,37 @@ async function until(fn, what) {
       await panel(page).locator('[data-rr-cap="chats_per_day"]').fill('');
       await panel(page).locator('[data-rr-cap="chats_per_day"]').press('Tab');
       await until(async () => lastWrite(writes, 'PUT').body.chats_per_day === null, 'cap cleared');
+      await until(async () => (await panel(page).locator('.ru-status').innerText()) === 'Saved', 'cleared cap read back');
       const tasks = panel(page).locator('[data-rr-cap="tasks_per_day"]');
       await tasks.fill('-1'); await tasks.press('Tab');
       assert.match(await panel(page).locator('.ru-status').innerText(), /whole number/);
       assert.equal(lastWrite(writes, 'PUT').body.tasks_per_day, undefined);
+      // A redraw while a cap is still being typed in (a reload landing, another party picked) removes the focused input, so
+      // Chrome sends its change from inside the redraw. A bad count is refused (shown once that redraw is done, and only on
+      // its own party's panel); a good one is saved for the party it was typed for, not the one now shown.
+      const putCount = () => writes.filter(w => w.method === 'PUT').length;
+      const go = async (hash, name) => {
+        await page.evaluate(h => { location.hash = h; }, hash);
+        await until(async () => (await panel(page).locator('h2').innerText()) === name, name + ' by address');
+      };
+      const puts = putCount();
+      await panel(page).locator('[data-rr-cap="tasks_per_day"]').fill('-1');
+      await page.evaluate(() => rrReload('Saved'));   // a reload lands while the input is focused
+      assert.match(await panel(page).locator('.ru-status').innerText(), /whole number/);
+      await panel(page).locator('[data-rr-cap="tasks_per_day"]').fill('-1');
+      await go('#/rules?party=group%3Asales', 'Sales');
+      assert.equal(await panel(page).locator('.ru-status').innerText(), '');
+      await go('#/rules?party=bot%3Abuilder', 'Builder');
+      await panel(page).locator('[data-rr-cap="tasks_per_day"]').fill('7');
+      await go('#/rules?party=group%3Asales', 'Sales');
+      await until(async () => putCount() > puts, 'typed cap saved');
+      assert.equal(putCount(), puts + 1);
+      assert.deepEqual(lastWrite(writes, 'PUT'), {method: 'PUT', path: '/api/v2/reach/settings/bot%3Abuilder', body: {tasks_per_day: 7}});
+      await until(async () => (await panel(page).locator('.ru-status').innerText()) === 'Saved', 'typed cap read back');
+      assert.equal(await panel(page).locator('[data-rr-cap="tasks_per_day"]').inputValue(), '');
+      await go('#/rules?party=bot%3Abuilder', 'Builder');
+      assert.equal(await panel(page).locator('[data-rr-cap="tasks_per_day"]').inputValue(), '7');
+      assert.deepEqual(errors, []);
 
       // The header search marks matches on the map; Enter selects the first. A team's tab and Everyone are parties too.
       await page.locator('.ru-acts .rr-q').fill('sales');

@@ -447,10 +447,19 @@ function rrSearchPaint() {
 }
 
 // ----------------------------------------------------------------- the panel
+// Replacing markup that holds a cap being typed in removes the focused input, and Chrome sends its change (rrChange)
+// from inside the innerHTML set. A panel draw there would replace the panel the outer set is removing, which throws
+// ("Perhaps it was moved in a 'blur' event handler?"), so it waits until the outer set is done.
+let rrSetting = 0;
+function rrSetHTML(el, html) {
+  rrSetting++;
+  try { el.innerHTML = html; } finally { rrSetting--; }
+}
 function rrPanelDraw(note = '') {
-  const side = RU.root.querySelector('.rr-side'), R = RU.reach, p = R.party;
+  if (rrSetting) { queueMicrotask(() => rrPanelDraw(note)); return; }
+  const side = RU?.root.querySelector('.rr-side'), R = RU?.reach, p = R?.party;
   if (!side) return;
-  if (!p) { side.innerHTML = ''; return; }
+  if (!p) { rrSetHTML(side, ''); return; }
   const may = rrMay(p), dis = may ? '' : ' disabled', eff = rrEff(p), own = rrOwn(p);
   const human = S.me?.role !== 'bot';
   const {inherited, own: mine} = rrRules(p);
@@ -468,7 +477,7 @@ function rrPanelDraw(note = '') {
   };
   const list = R.adding ? rrAddHTML(p) : E ? rrEditorHTML(p, E)
     : lines.map(row).join('') || '<p class="rr-none">None.</p>';
-  side.innerHTML = `<div class="rr-panel" data-party="${esc(p)}">
+  rrSetHTML(side, `<div class="rr-panel" data-party="${esc(p)}">
     <div class="rr-h"><a class="ru-x rr-back" href="${ruHref('internal')}" aria-label="Back">‹</a><h2>${esc(rrName(p))}</h2></div>
     ${R.error ? `<p class="err">${esc(R.error)}</p>` : ''}
     <div class="rr-set">${ruSegHTML('rr-mode', RR_MODES, eff.mode, !may)}${cap('chats_per_day', 'chats a day')}${cap('tasks_per_day', 'tasks a day')}</div>
@@ -476,7 +485,7 @@ function rrPanelDraw(note = '') {
       ${groups}${mine.map(r => rule(r)).join('')}${groups || mine.length ? '' : '<p class="rr-none">None.</p>'}</section>
     <section class="rr-sec" aria-label="Exceptions"><header><h3 class="ru-lbl">Exceptions</h3>${R.mayEdit.size && !R.adding && !E ? '<button class="ghost small" type="button" data-rr-add-line>+ Add exception</button>' : ''}</header>
       ${list}</section>
-    <p class="ru-status" role="status">${esc(note)}</p></div>`;
+    <p class="ru-status" role="status">${esc(note)}</p></div>`);
 }
 // + Add exception: search a team, person or bot; picking one opens the editor.
 function rrAddHTML(p) {
@@ -509,12 +518,12 @@ function ruDrawInternal(filters, list) {
   const chart = rrChartHtml();
   if (!rr || R.chart !== chart) {
     R.chart = chart;
-    list.innerHTML = `<div class="rr">
+    rrSetHTML(list, `<div class="rr">
       <div class="rr-map"><div class="rr-pane"><div class="rr-sz"><div class="rdo-cv rr-cv">
         <div class="rr-every"><button type="button" class="rr-all" data-rr-party="*">Everyone</button></div>${chart}
         <svg class="rr-lines" aria-hidden="true"></svg><div class="rr-chips"></div></div></div></div></div>
       <div class="rr-pick" role="listbox" aria-label="People, bots and teams"></div>
-      <aside class="rr-side" aria-label="Reach"></aside></div>`;
+      <aside class="rr-side" aria-label="Reach"></aside></div>`);
     rr = list.querySelector(':scope > .rr');
     rr.querySelectorAll('.rr-cv [data-rdo-ref]').forEach(n => { n.dataset.rrParty = rrOfRef(n.dataset.rdoRef); });
     const pane = rr.querySelector('.rr-pane');
@@ -554,7 +563,8 @@ const rrStatus = text => { const el = RU.root.querySelector('.rr-panel .ru-statu
 // One setting of the selected party: a mode, or a cap (empty clears it, so it is taken from above).
 async function rrPut(p, field, value) {
   if (field !== 'mode' && value != null && !(Number.isInteger(value) && value >= 0 && value <= RR_MAX)) {
-    rrPanelDraw(`A whole number from 0 to ${RR_MAX}.`); return;
+    if (p === RU.reach.party) rrPanelDraw(`A whole number from 0 to ${RR_MAX}.`);
+    return;
   }
   rrStatus('Saving…');
   try { await put('/v2/reach/settings/' + encodeURIComponent(p), {[field]: value}); }
@@ -651,11 +661,12 @@ function rrInput(ev) {
   if (R.edit && t.closest('[data-rr-ed]')) { if (t.name === 'per_day') R.edit.per_day = t.value; if (t.name === 'rule') R.edit.rule = t.value; return true; }
   return false;
 }
+// The party is the panel's: a redraw for another party (picked, or by address) sends the typed cap's change mid-redraw.
 function rrChange(ev) {
   const cap = ev.target.closest('[data-rr-cap]');
   if (!cap) return false;
-  const v = cap.value.trim();
-  void rrPut(RU.reach.party, cap.dataset.rrCap, v === '' ? null : Number(v));
+  const v = cap.value.trim(), p = cap.closest('.rr-panel')?.dataset.party || RU.reach.party;
+  void rrPut(p, cap.dataset.rrCap, v === '' ? null : Number(v));
   return true;
 }
 function rrKey(ev) {
