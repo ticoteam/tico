@@ -450,6 +450,7 @@ export type BotDetail = {
 export type BotDreamView = {
   dream: {
   closed_at: string | null;
+  doing: string | null;
   questions: {
   message_id: string;
   mine: boolean;
