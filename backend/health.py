@@ -162,7 +162,7 @@ def _computers(c, runners_online, settings, limits=None):
     default = providers.default_runtime(providers.load(c, settings))
     wanted = {default} - {""}
     from .cloud_machines import resting as resting_machines
-    from .model_subscriptions import RUNNER_CAPABILITIES_SQL, in_effect
+    from .model_subscriptions import KINDS, RUNNER_CAPABILITIES_SQL, in_effect
     from .read_cache import prime
     resting = resting_machines(c)
     found = c.execute("SELECT r.id,r.label,r.last_seen_at,r.platform,r.readiness,r.capabilities,"
@@ -174,7 +174,7 @@ def _computers(c, runners_online, settings, limits=None):
         runtimes = document.get("runtimes") or {}
         # A runtime the company's plan signs in on this computer (model_subscriptions.in_effect, what a claim uses)
         # needs no sign-in of its own: its missing login is not a problem.
-        plan = {n for n in runtimes if in_effect(c, r["id"], n)}
+        plan = {n: KINDS[sub["kind"]]["billing"] for n in runtimes if (sub := in_effect(c, r["id"], n))}
         rows.append({"id": r["id"], "label": r["label"], "online": r["id"] in since, "last_seen_at": r["last_seen_at"],
                      "resting": r["id"] in resting and r["id"] not in since,
                      "platform": r["platform"] or "", "update": runner_versions.view(fleet.get(r["id"])),
@@ -188,7 +188,7 @@ def _computers(c, runners_online, settings, limits=None):
                                    "needed": n in wanted or n in assigned.get(r["id"], ()),
                                    "ready": bool(v.get("installed")) and (v.get("authenticated") == "ready" or n in plan),
                                    "rejected": v.get("authenticated") == "rejected" and n not in plan,
-                                   "plan": n in plan,
+                                   "plan": plan.get(n, ""),            # "subscription" or "api": the company's
                                    "rejected_at": v.get("rejected_at") or "" if v.get("authenticated") == "rejected" else "",
                                    "rejected_reason": v.get("rejected_reason") or "" if v.get("authenticated") == "rejected" else "",
                                    "credential_source": v.get("credential_source") or "",

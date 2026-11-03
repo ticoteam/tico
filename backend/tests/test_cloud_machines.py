@@ -1829,7 +1829,12 @@ def test_a_plan_on_the_computer_is_not_a_missing_sign_in_on_health(cloud):
     shared_row = next(x for x in cloud.api.get("/api/v2/health", headers=headers("ana-test")).json()["computers"]
                       if x["id"] == shared["runner_id"])
     claude = next(r for r in shared_row["runtimes"] if r["name"] == "claude")
-    assert claude["plan"] and claude["ready"] and not claude["signable"]
+    assert claude["plan"] == "subscription" and claude["ready"] and not claude["signable"]
+    from backend import getting_started
+    with cloud.store.read() as c:
+        online = getting_started._online_runners(c)
+        assert getting_started._signed_in_runtime(online, {"claude"}, c) == "claude"
+        assert getting_started._login_target(online, {"claude"}, c) is None
     add(cloud.api, "codex_login", codex_file(), name="ChatGPT")
     with cloud.store.transaction() as c:
         sid = c.execute("SELECT id FROM model_subscriptions WHERE kind='codex_login'").fetchone()[0]

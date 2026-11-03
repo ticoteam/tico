@@ -89,7 +89,7 @@ function hlCredentialFix(source) {
 function hlComputerHtml(machine) {
   const models = machine.runtimes.map(row => {
     const state = row.rejected ? `sign-in rejected${row.rejected_at ? ' ' + esc(ago(row.rejected_at)) : ''}${row.rejected_reason ? ' (' + esc(row.rejected_reason) + ')' : ''}. ${hlCredentialFix(row.credential_source)}`
-      : row.plan ? 'company plan' : row.ready ? 'signed in' : row.installed ? 'not signed in' : 'not installed';
+      : row.plan ? (row.plan === 'api' ? 'company API key' : 'company plan') : row.ready ? 'signed in' : row.installed ? 'not signed in' : 'not installed';
     const login = row.signable
       ? ` <button class="ghost" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(row.name)}" data-machine="${esc(machine.label)}">Sign in</button>` : '';
     // Red only when the team or an assigned bot needs it; the server sends only relevant harnesses.
