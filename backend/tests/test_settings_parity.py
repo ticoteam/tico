@@ -243,6 +243,9 @@ def ask(api, attempt, e, objects, person, token):
         _saved_subscription(api, objects)
     # The bot's revision as it is now: an earlier entry may have changed it, and a stale one is a 409, not the setting.
     objects["bot-revision"] = get(api, "bots/finance", token)["revision"]
+    if "{computer}" in e.route or e.route == "computer-subscriptions":
+        # A computer an earlier entry revoked (computer.revoke) is not found by the next one: each gets its own.
+        objects["computers"] = runner(api)["runner_id"]
     target = _target(e, objects, person)
     planned = act(api, attempt, "POST", f"settings/catalog/{e.key}/plan", {"value": _sample(e, objects), **target})
     if planned.status_code == 200 and "run" in planned.json():

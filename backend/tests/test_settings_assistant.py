@@ -282,7 +282,8 @@ def test_every_setting_does_for_the_assistant_what_it_does_for_botops(api, role)
     objects = parity._objects(api, runner(api))
     r, attempt = assistant_turn(api, token, "Change my settings")
     wrong, unproven = [], {}
-    for e in ENTRIES:
+    # bot.archive goes last: it archives the bot the other entries act on.
+    for e in sorted(ENTRIES, key=lambda e: e.key == "bot.archive"):
         with api.app.state.store.read() as c:
             want = parity.KNOWN_GAPS.get((e.key, role)) or parity.expected(c, e, role, person)
         got = parity.ask(api, attempt, e, objects, person, token)
