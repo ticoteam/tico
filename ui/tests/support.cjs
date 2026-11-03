@@ -253,7 +253,7 @@ const DESK = /request|ticket|submitted|get back to you|Delivered|business day|Op
     // and the writer's name when it changes. A closed one never stops the person writing: the next message goes to the
     // one still open.
     // Within an hour after midnight the newest replies would straddle two days: then the whole seed sits in yesterday.
-    const sinceMidnight = (Date.now() - new Date().setHours(0, 0, 0, 0)) / 60000, shift = sinceMidnight < 61 ? sinceMidnight + 1 : 0;
+    const sinceMidnight = (Date.now() - new Date().setHours(0, 0, 0, 0)) / 60000, shift = sinceMidnight < 61 ? sinceMidnight + 120 : 0;
     const atDay = m => at(m + shift);
     v = await visit({viewport: {width: 1280, height: 800}, seed: [
       {id: 'sup_2', created_at: atDay(60), status: 'answered', message: 'Bots stopped', sent: {},
