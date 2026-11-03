@@ -75,7 +75,7 @@ async function scenario(browser, mode, edit, editedBefore = false) {
         if (hold) await hold;
         const message = {id: 'm' + posts.length, sender_id: 'human:ana', body: text, created_at: new Date().toISOString()};
         delivered.push(message);
-        return json({message, fast: true});
+        return json({message});
       }
       return json(unrouted(p));
     })().catch(error => { serverErrors.push(error.message); if (!response.headersSent) response.writeHead(500); response.end(); });

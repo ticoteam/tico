@@ -127,7 +127,46 @@ def test_an_existing_database_loses_the_redundant_task_indexes_once(tmp_path):
     with sqlite3.connect(path) as c:
         indexes = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
         assert not {"tasks_owner_status", "tasks_requester_status", "tasks_private"} & indexes
-        assert {"tasks_owner_status_cover", "tasks_requester_status_cover", "tasks_private_parties"} <= indexes
+        assert {"tasks_owner_status_cover", "tasks_requester_status_cover", "tasks_private_status"} <= indexes
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
+def test_an_existing_database_loses_the_two_duplicate_indexes_once(tmp_path):
+    """Migration 0042 drops invariants_lease (a prefix of attempts_live_lease) and invariants_open_approvals (a copy of
+    approvals_open_created); the indexes that serve the same reads stay, and booting again changes nothing."""
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("CREATE INDEX invariants_lease ON attempts(lease_until) WHERE state IN ('leased','running')")
+        c.execute("CREATE INDEX invariants_open_approvals ON approvals(created_at) WHERE decision IS NULL")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0042' AND version NOT LIKE 'legacy_%'")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        indexes = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        assert not {"invariants_lease", "invariants_open_approvals"} & indexes
+        assert {"attempts_live_lease", "approvals_open_created"} <= indexes
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
+def test_an_existing_database_loses_the_private_parties_index_and_the_parties_read_stays_covered(tmp_path):
+    """Migration 0042 drops tasks_private_parties, a prefix of tasks_private_status under the same WHERE. The private
+    tasks' parties read (row_clock.PARTIES) names tasks_private_status and reads the index alone; booting again changes
+    nothing."""
+    from backend import row_clock
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("CREATE INDEX tasks_private_parties ON tasks(id, requester_id, owner_id, guest, private) "
+                  "WHERE private IS NOT 0")
+        c.execute("DELETE FROM schema_migrations WHERE version>='0042' AND version NOT LIKE 'legacy_%'")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        indexes = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        plan = " ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + row_clock.PARTIES))
+    assert "tasks_private_parties" not in indexes and "tasks_private_status" in indexes
+    assert "COVERING INDEX tasks_private_status" in plan, plan
     first = snapshot(path)
     boot(path)
     assert snapshot(path) == first

@@ -179,11 +179,12 @@ def test_the_price_decision_leads_needs_you_with_a_short_reason(ana):
 
 
 def test_the_assistant_answers_whats_waiting_with_the_open_decisions(ana):
-    answers = [message["body"] for message in ana.get("/api/v2/assistant").json()["messages"]
-               if message["sender_id"] == "bot:coo"]
-    waiting = [text for text in answers if "waiting on you" in text]
-    assert waiting and all(name in waiting[0] for name in (
-        "Raise Home Pro from $449 to $479 for December?", "Sign the FCC filing for Home Pro 2", "Choose the Larkford bid price"))
+    """The seeded Assistant thread answers "What needs me today?" with the scripted reply (every message is a bot turn,
+    so the demo script stands in for the model): the December price and the held refund are named."""
+    messages = ana.get("/api/v2/assistant").json()["messages"]
+    asked = [m for m in messages if m["sender_id"] == "human:ana" and m["body"] == "What needs me today?"]
+    answers = [m["body"] for m in messages if m["sender_id"] == "bot:coo" and "waiting on you" in m["body"]]
+    assert asked and answers and "Home Pro's December price" in answers[0] and "refund" in answers[0]
 
 
 def test_home_has_a_bot_page_settings_has_a_team_icon_and_granola_syncs(ana):

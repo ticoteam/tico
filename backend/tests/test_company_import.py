@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from backend import company_file as C
 from backend import market_spend as MS
+from backend import people_remove, views
 from backend.app import create_app
 from backend.auth import Identity
 from backend.company_file import starter
@@ -218,6 +219,20 @@ def invited_from_setup(api, finance):
             invites.record = record
         assert keyed("k-2").status_code == 200 and len(Issuer.calls) == 2
         assert invite("nobody", "x@acme.example").status_code == 404
+        # Removed since: the seats her invite moved under her are not her history, so Remove is offered, and they go
+        # back to the owner removing her.
+        assert api.post("/api/v2/people/%s" % ana["id"], json={"left": True}, headers=signed_in()).status_code == 200
+        with api.app.state.store.read() as c:
+            gone = next(p for p in views.roster(c)["people"] if p["id"] == ana["id"])
+            assert people_remove.removable(c, gone) and people_remove.history(c, ana["id"]) == ""
+            under = [r[0] for r in c.execute("SELECT id FROM seats WHERE reports_to=?", ("human:" + ana["id"],))]
+        assert under
+        assert api.delete("/api/v2/people/%s" % ana["id"], headers=signed_in()).status_code == 200
+        with api.app.state.store.read() as c:
+            assert not c.execute("SELECT 1 FROM seats WHERE reports_to=?", ("human:" + ana["id"],)).fetchone()
+            assert all(c.execute("SELECT reports_to FROM seats WHERE id=?", (s,)).fetchone()[0].startswith("human:")
+                       for s in under)
+        assert ana["id"] not in [p["id"] for p in api.get("/api/people", headers=signed_in()).json()["people"]]
     finally:
         api.app.state.auth.proxy = None
 

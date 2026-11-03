@@ -54,6 +54,7 @@ import time
 import uuid
 
 from . import people as P
+from . import read_cache
 from .store import H, Problem
 
 AUDIENCES = ("company", "team", "members", "task", "home", "personal", "participants", "meeting")
@@ -603,12 +604,16 @@ def _task_readable(c, v, task_id):
     return bool(row) and H.task_private_readable(c, v.actor, row)
 
 
+def _member_sql(names):
+    return "SELECT 1 FROM thread_members WHERE thread_id=? AND actor IN (%s) LIMIT 1" % ",".join("?" * len(names))
+
+
 def _is_member(c, v, thread_id):
     if v._members is not None and thread_id in v._members:
         return v._members[thread_id]
     names = v.member_names(c)
-    return c.execute("SELECT 1 FROM thread_members WHERE thread_id=? AND actor IN (%s) LIMIT 1"
-                     % ",".join("?" * len(names)), (thread_id, *names)).fetchone() is not None
+    # prime_members seeds these rows for a page's threads, so each check that follows reads none of them again.
+    return read_cache.one(c, _member_sql(names), (thread_id, *names)) is not None
 
 
 def _bot_grant(c, v, row):
@@ -3662,6 +3667,23 @@ def _prefetch_members(c, v, ids):
             "SELECT DISTINCT thread_id FROM thread_members WHERE thread_id IN (%s) AND actor IN (%s)"
             % (",".join("?" * len(part)), ",".join("?" * len(names))), (*part, *names)))
     return {thread_id: thread_id in found for thread_id in ids}
+
+
+def prime_members(c, who, conversation_ids):
+    """Seed `_is_member` for the rooms these conversations sit in (each one's root), in one query a chunk, for the
+    checks that follow in this snapshot. A check builds its own Viewer (`conversation`), so the page's rows cannot
+    share `_prefetch_members`' dict; the seeded rows are the same rows `_is_member` reads."""
+    if read_cache.cache(c) is None:
+        return
+    v = viewer(None, who)
+    ids = list(dict.fromkeys(i for i in conversation_ids if i))
+    roots = set()
+    for part in H.chunks(ids):
+        for r in c.execute("SELECT id,root_id FROM conversations WHERE id IN (%s)" % ",".join("?" * len(part)), part):
+            roots.add(r["root_id"] or r["id"])
+    names = v.member_names(c)
+    member = _prefetch_members(c, v, sorted(roots))
+    read_cache.prime(c, _member_sql(names), {(tid, *names): (1,) if yes else None for tid, yes in member.items()})
 
 
 def _followers_of(c, v, ids):
