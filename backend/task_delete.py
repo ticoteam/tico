@@ -441,7 +441,8 @@ def restore_tasks(c, ids, actor=None):
         c.execute("RELEASE trash_restore")
         return {"restored": [], "conflict": str(error)}
     c.execute("RELEASE trash_restore")
-    # The messages were read long ago: putting them back must not wake a bot on them again.
+    # The messages were read long ago: putting them back must not wake a bot on them again. The insert above does not
+    # call backend/enqueue.py, so it makes no job for them; the snapshot's own jobs come back below, as they were.
     _delete(c, "jobs", "message_id", messages)
     for e, snap in snapshots:
         for table, found in snap["rows"].items():

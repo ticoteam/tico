@@ -2,7 +2,7 @@
 (token saving, Dev 149).
 
 A plain message one bot sends another, a direct message or a task comment, starts no run. H.say writes it to
-its room quietly (`refs.quiet`, so store.QUEUE_TRIGGER queues no job) and marks it `refs.can_wait`; `hold` then
+its room quietly (`refs.quiet`, so enqueue queues no job) and marks it `refs.can_wait`; `hold` then
 leaves a quiet note linked to it, which the recipient's next run carries whatever starts it (execution.claim),
 in the order sent, and that run marks the message read. Only a message from a private thread waits for a run of its own
 there (threads.note_fits_run), which the recipient's next run starts. Nothing is dropped: a note whose carrying run fails
