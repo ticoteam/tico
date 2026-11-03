@@ -52,7 +52,7 @@ function finCaps() {
   return {...caps, who, viewing, may: right => !viewing && caps.may(right)};
 }
 // Tax workpapers are filed whole, so only a viewer who sees everything reads them (backend/finance/tax.py).
-const finTabShown = (tab, caps, acc) => !!caps?.any && (tab === 'balance' ? caps.balance : tab === 'sources' ? caps.sources : tab === 'tax' ? caps.all
+const finTabShown = (tab, caps, acc) => !!caps?.any && FIN_TABS.some(([id]) => id === tab) && (tab === 'balance' ? caps.balance : tab === 'sources' ? caps.sources : tab === 'tax' ? caps.all
   : tab === 'payables' ? caps.payables : tab === 'receivables' ? caps.receivables : tab === 'access' ? !caps.viewing && (!!acc?.can_view_as || caps.rights.has('finance.admin') || (acc?.teammates || []).length > 1) : true);
 // ?view_as=… on every read while the owner views as someone.
 const finAs = (sep = '&') => FIN_VIEW_AS && finCaps()?.viewing ? `${sep}view_as=${encodeURIComponent(FIN_VIEW_AS)}` : '';
@@ -231,10 +231,18 @@ function finDialog(title, body, saveLabel, onSave) {
   dlg.querySelectorAll('[data-close]').forEach(b => { b.onclick = () => dlg.close(); });
   dlg.onclose = () => dlg.remove();
   const form = dlg.querySelector('form'), err = dlg.querySelector('[data-error]'), save = dlg.querySelector('[type=submit]');
+  // While a save runs the button says so (a Mercury connect tests the token and maps accounts, which takes seconds).
+  // A save that relabels the button (Preview → Import, Send, Done) keeps its label: only the busy text is put back.
+  let idle = '';
+  const busy = on => {
+    save.disabled = on; save.setAttribute('aria-busy', on ? 'true' : 'false');
+    if (on) { idle = save.textContent; save.textContent = `${idle}…`; }
+    else if (save.textContent === `${idle}…`) save.textContent = idle;
+  };
   form.onsubmit = async ev => {
-    ev.preventDefault(); err.hidden = true; save.disabled = true;
-    try { if (await onSave(form) === false) save.disabled = false; else dlg.close(); }
-    catch (e) { err.textContent = e.message; err.hidden = false; save.disabled = false; }
+    ev.preventDefault(); err.hidden = true; busy(true);
+    try { if (await onSave(form) === false) busy(false); else dlg.close(); }
+    catch (e) { err.textContent = e.message; err.hidden = false; busy(false); }
   };
   dlg.showModal();
   form.querySelector('input:not([type=hidden]),select')?.focus();

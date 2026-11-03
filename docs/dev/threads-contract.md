@@ -5,8 +5,8 @@ track builds against this page. Owner: `threads/core`. A change here is announce
 ("contract:"), and additive changes are preferred over renames.
 
 Terms in UI and docs: **Thread, Home, DM, Sub-thread, Call**. Internally the table stays `conversations` and a
-thread id **is** a conversation id. `bots.thread_id` and `turns.thread_id` are provider sessions: never read or
-reuse them as thread ids.
+thread id **is** a conversation id. `turns.thread_id` (like `bot_sessions`) is a provider session: never read or
+reuse it as a thread id.
 
 ## 0. Files core owns
 
@@ -14,7 +14,7 @@ Don't edit these except where your brief says so; ask core in your report.
 
 | File | What core owns |
 |---|---|
-| `backend/threads.py` (new) | everything: schema `ensure`, C1-C5, `post`, `create`, read state, edit/delete, migration |
+| `backend/threads.py` (new) | everything: C1-C5, `post`, `create`, read state, edit/delete, migration |
 | `backend/hubdb.py` | the conversation and message write paths: `open_conversation`, `say`, `_write_message`, `answer`, `notice`, `mark_delivered`, `mark_read`, `task_comment*`, `inbox*`, `undelivered`, the conversation/message columns in `migrate` |
 | `backend/auth.py` | `Auth.conversation`, `Auth.run_conversation`, `Auth.tico_principal`, `_own_ask_to_a_person` (~lines 940-1060) |
 | `backend/events.py` | `_Viewer`, `_messages`, `_readable_before_deletion`, the `messages`/`threads` entries of `TRIGGERS`, the one `threads` hook line in `read()` |
@@ -25,9 +25,11 @@ Don't edit these except where your brief says so; ask core in your report.
 
 ## 1. Schema
 
-All columns are added with `H.add_column` on every start (`threads.ensure(c)`, called from `hubdb.migrate` and from
-the cloud store's unversioned boot list), the pattern the latest releases use. The one-time data migration (§7) is
-recorded under `registry_metadata` key `threads-migration` and runs inside one transaction.
+The columns, tables, triggers and indexes below are migration `backend/migrations/0047_native_threads_schema.py`, which
+also makes the search index and the tables of the thread helpers, the Slack bridge, Tico Meet calls and federation. It
+runs once; a change to any of that SQL is a new migration. The five message indexes are built by `threads.migrate` after
+its backfill. The one-time data migration (§7) is recorded under `registry_metadata` key `threads-migration` and runs
+in chunks that each commit with their progress.
 
 ### 1.1 `conversations` (a thread)
 
@@ -480,10 +482,12 @@ threads.unread(c, viewer, thread_id) -> {"unread": n, "activity": bool}
 ```
 - Join: read up to now. Deletes and backfill (imports, migration, replays) are never unread. Losing access: the
   follower row is dropped on the next read. A task's own thread is read up to now by its maker when the task is made
-  (`threads.task_opened`), and a requester who did not make it gets its first notice as a silent delivery (mode `none`).
+  (`threads.task_opened`). Task news (a keeper message with `refs.task`, `hubdb.task_news`) is the task's own history:
+  it is written to the task's conversation and no person gets a delivery for it, so the requester who did not make the
+  task hears nothing in the thread (no unread, Inbox row, digest or push). Bots still get it as a delivery.
 - Unread count for a viewer = messages in the thread with `seq > last_read_seq` that are human-authored or
-  addressed to that viewer (a delivery row for them), excluding their own. Other bot posts are **activity** (a
-  dot, never a count).
+  addressed to that viewer (a delivery row for them, except task news, which no person has a delivery for), excluding
+  their own. Other bot posts are **activity** (a dot, never a count).
 
 Retention: a root may set `conversations.retention_days` (1 to `RETENTION_MAX_DAYS`; null keeps messages for good;
 never on a task or meeting thread). `backend/thread_retention.py` deletes what is past it in the root and its sub-threads,
@@ -579,7 +583,7 @@ narrows `runs`. They do not narrow `threads`: the sidebar stays live while a thr
 `_threads` in `backend/events.py`):
 ```json
 {"seq": 900, "thread_id": "...", "root_id": "...",
- "kind": "created|renamed|archived|unarchived|audience|members|read|sub_thread|counters|activity|reactions",
+ "kind": "created|renamed|archived|unarchived|audience|members|read|sub_thread|counters|activity|reactions|ranked",
  "thread": {<thread view>},                      // created|renamed|archived|unarchived|audience|members|sub_thread
  "read": {"last_read_seq": 4411},                // kind=read, only to that reader
  "counters": {"last_seq": 4411, "last_unread_seq": 4400},   // kind=counters|activity
@@ -625,7 +629,7 @@ with no display name.
 
 | Route | Service function |
 |---|---|
-| `GET /api/v2/threads?cursor=&limit=` | `threads.sidebar(c, viewer, cursor=None, limit=50)` → `{"attention": [...], "threads": [...], "dms": [...], "next_cursor"}`, ranked before it is paged: roots with an open Needs attention item for the viewer (`thread_attention.items`: mention, ask, DM, held post) or capped wakes the viewer can manage, then unread, then recent, newest first in each. A task's thread (audience `task`) is a candidate only while it has unread for the viewer (a person's message past their mark, or a delivery to them): parties and posters are no reason, and the filter is part of the same indexed query, so the page and its `next_cursor` agree with the rows. `attention`: the first group's rows on this page, capped ones with `"capped": n, "capped_since"`. Each root row sums its live subtree for this viewer: `me.unread`, `me.activity`, `last_message_at`, and `activity_seq` (the newest `seq` under it). `cursor` is opaque |
+| `GET /api/v2/threads?cursor=&limit=&sort=` | `threads.sidebar(c, viewer, cursor=None, limit=50, sort=None)` → `{"attention": [...], "threads": [...], "dms": [...], "bot_dms": {...}, "next_cursor"}`, ranked before it is paged: roots with an open Needs attention item for the viewer (`thread_attention.items`: mention, ask, an unread DM with another person in it, held post) or capped wakes the viewer can manage, then unread, then recent, newest first in each. `sort=recent` puts everything after Needs attention newest first; `sort=important` (the app's default) orders it by each root's `importance` (1-10, backend/thread_rank.py: a Decide pass ranks roots with new messages, at most once an hour each; never ranked = 5), highest first, then newest, and leaves out noise: level 1, and a task's thread whose task is finished or that no person owns or asked for. Every row carries `importance` (0 = noise by rule). A task's thread (audience `task`) is a candidate only while it has unread for the viewer (a person's message past their mark, or a delivery to them): parties and posters are no reason, and the filter is part of the same indexed query, so the page and its `next_cursor` agree with the rows. `attention`: the first group's rows on this page, capped ones with `"capped": n, "capped_since"`; the app shows it as Inbox. `bot_dms` (first page only): `{bot actor: unread}` for the viewer's DMs with one bot and no one else (`threads.bot_dm_unread`), which are not Needs attention: the Team list shows each count on its bot, whose page holds the DM. Each root row sums its live subtree for this viewer: `me.unread`, `me.activity`, `last_message_at`, and `activity_seq` (the newest `seq` under it). `cursor` is opaque |
 | `GET /api/v2/threads/{id}` | `threads.get(c, viewer, thread_id)` → thread view + `"breadcrumb": [{"id","title"}]` |
 | `GET /api/v2/threads/{id}/timeline?cursor=&limit=` | `threads.timeline(c, viewer, thread_id, cursor=None, limit=50, max_bytes=...)` → `{"thread", "breadcrumb", "messages": [...], "next_cursor"}`; `next_cursor` and `limit` count the thread's own messages; each is followed by its sub-thread's rows in tree order (§5). Each message carries `depth` (its thread's depth in the tree: 0 in a root, 1 in a sub-thread), and a parent carries `"sub_thread": {"id", "title", "count", "last_seq", "last_read_seq", "unread", "more"}` (`count` and `unread` only of messages the viewer reads; `more` is how many are collapsed) |
 | `POST /api/v2/threads/{id}/read {seq}` | `threads.mark_read` |

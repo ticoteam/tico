@@ -475,8 +475,7 @@ async function renderSettingsAssistantApprovals() {
   let v, list;
   try { [v, list] = await Promise.all([get('/v2/assistant/settings'), get('/v2/assistant/decisions')]); }
   catch (e) { host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
-  // The page can be redrawn while the reads are on their way. The newer render draws its own host, so this one stops here.
-  if (!host.isConnected) return;
+  if (!host.isConnected) return;   // Settings redrew while this loaded; the new page draws its own
   const name = esc(assistantName());
   const rows = (list.decisions || []).map(d => {
     const words = d.decided_for?.words ? `“${esc(d.decided_for.words)}”` : '';
@@ -508,16 +507,18 @@ async function renderSettingsPrivacy() {
   const host = $('#set-privacy');
   if (!host) return;
   let v;
-  try { v = await get('/v2/system/usage-count'); } catch (e) { host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  try { v = await get('/v2/system/usage-count'); } catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  if (!host.isConnected) return; // Settings redrew while this was loading; the new card draws itself
   const forced = v.off_by && v.off_by !== 'setting';
   host.innerHTML = `<label class="privacy-row"><input type="checkbox" id="privacy-count"${v.enabled ? ' checked' : ''}${forced ? ' disabled' : ''}> Help count active installs</label>
     <p class="settings-cell-note">${forced ? (v.off_by === 'demo' ? 'Always off in the demo. ' : `Turned off by ${esc(v.off_by)}. `) : ''}A random ID, the version and three yes/no activity flags. <a href="${esc(v.doc)}" target="_blank" rel="noopener noreferrer">What is sent</a></p>
     <p class="settings-cell-note">${v.install_id ? `Install ID: <code>${esc(v.install_id)}</code> <button class="ghost" type="button" id="privacy-reset">Reset install ID</button>` : 'No install ID yet: one is made the first time the count is sent.'}</p>`;
-  $('#privacy-count').onchange = async ev => {
+  host.querySelector('#privacy-count').onchange = async ev => {
     try { await put('/v2/system/usage-count', {enabled: ev.target.checked}); toast('Saved'); void renderSettingsPrivacy(); }
     catch (e) { ev.target.checked = !ev.target.checked; settingsFieldError(ev.target, e.message); }
   };
-  if ($('#privacy-reset')) $('#privacy-reset').onclick = async ev => {
+  const reset = host.querySelector('#privacy-reset');
+  if (reset) reset.onclick = async ev => {
     const button = ev.currentTarget;
     if (!await settingsConfirm({title: 'Reset install ID?', ok: 'Reset install ID',
       text: 'Tico makes a new random ID. The old one is gone for good, so earlier counts can no longer be linked to this install.'})) return;

@@ -56,6 +56,7 @@ GROUPS = [(CHECKS, "Checks that suggest"), (LEARNING, "Learning"), (REMINDERS, "
           (HOUSEKEEPING, "Housekeeping"), (CHAT, "Chat")]
 GROUP_WORDS = dict(GROUPS)
 DEPARTMENT = "Engineering"  # a built-in's tag until departments are edited (a label only: it changes no permission)
+FINANCE = "Finance"         # the Bookkeeper's checks
 
 # Which route answered a Decide call, from the answering provider (judge.py's order: Gateway, own key, company AI).
 ROUTE_WORDS = {"gateway": "Gateway", "own_key": "Company key", "team_llm": "Company AI"}
@@ -183,6 +184,7 @@ ACTIONS = {
     "sync_meetings": ("bring in meeting notes from each person's Granola", ("meetings", "granola", "notes")),
     "sync_docs": ("refresh linked documents from their sources", ("documents", "docs")),
     "start_fresh": ("start a fresh session, like Clear", ("chat", "fresh", "clear", "session")),
+    "rank_threads": ("rank each thread with new messages from 1 to 10", ("threads", "rank", "important", "decide")),
     "triage_quiet": ("have Decide read its last messages: set the wait it names, close it if finished, or let one wake through",
                      ("decide", "stalled", "tasks", "wait", "close", "wake")),
 }
@@ -215,15 +217,15 @@ JOBS = [
     Job("bookkeeper_check", "Books check",
         "Reads the Bookkeeper's Finance work queue in plain code and opens one task for the Bookkeeper only when it has "
         "something new. Nothing new is a quiet run: no task, no model call.",
-        CHECKS, "Hourly", 3600, control=True, then=("check_books", "wake_bookkeeper")),
+        CHECKS, "Hourly", 3600, control=True, then=("check_books", "wake_bookkeeper"), department=FINANCE),
     Job("bookkeeper_watch", "Books watch",
         "Reads runway, unusual spend, duplicate charges and price increases in plain code, and opens one Watch task for "
         "the Bookkeeper only when a check finds something new. Nothing new is a quiet run: no task, no model call.",
-        CHECKS, "Daily", 86400, then=("check_watch", "wake_watch")),
+        CHECKS, "Daily", 86400, then=("check_watch", "wake_watch"), department=FINANCE),
     Job("bookkeeper_rules_digest", "Rules digest",
         "Once a week, lists the posting rules made that week and opens the Bookkeeper's digest task for them. No new "
         "rules is a quiet run.",
-        CHECKS, "Weekly", 7 * 86400, then=("check_rules_digest", "wake_rules_digest")),
+        CHECKS, "Weekly", 7 * 86400, then=("check_rules_digest", "wake_rules_digest"), department=FINANCE),
     Job("engineering_exceptions", "Engineering exceptions",
         "Lists each engineering board's exceptions in plain code and wakes its manager (Manager profile) with them only "
         "when the list has an entry the last one did not. Tickets that move on their own are not listed.",
@@ -234,6 +236,8 @@ JOBS = [
     Job("learnings", "Nightly learnings",
         "Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember.",
         LEARNING, "Nightly at 03:00", ai=True, control=True, labels=("learnings-route",), then=("read_activity", "send_learnings")),
+    Job("task_check_backs", "Task check-backs", "Follows up unfinished bot work and verifies its handoffs.",
+        REMINDERS, "Every 10 seconds", 10, control=True, then=("remind_due",)),
     Job("due_reminders", "Due reminders", "Tells a bot when one of its tasks reaches its due time.",
         REMINDERS, "Every 10 seconds", 10, then=("remind_due",)),
     Job("ask_deadlines", "Ask go-ahead",
@@ -327,6 +331,9 @@ JOBS = [
     Job("topic_fresh", "Start fresh when the topic changes",
         "In a direct chat, a message on a new topic starts a fresh session, like Clear.",
         CHAT, "When it happens", records=False, when="topic_changed", then=("start_fresh",)),
+    Job("thread_rank", "Thread ranking",
+        "Ranks threads with new messages from 1 to 10 for the Important view in Threads, each at most once an hour.",
+        CHAT, "Every 5 minutes", 300, ai=True, labels=("thread-rank",), then=("rank_threads",)),
 ]
 BY_KEY = {job.key: job for job in JOBS}
 
@@ -354,6 +361,8 @@ class Control:
 
 
 CONTROLS = {
+    "task_check_backs": Control(on=False),  # staged rollout; dates are stored while legacy recovery stays enabled
+
     "stale_review": Control(rule="stale_review", presets=AI_PRESETS, preset=HOURLY, at="09:00"),
     "still_wanted": Control(presets=EVERY_PRESET, preset=DAILY, at="09:00"),
     "kpi_asks": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),

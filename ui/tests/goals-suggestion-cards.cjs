@@ -83,6 +83,8 @@ const measure = (name, over) => ({name, definition: '', source_note: '', unit: '
       return json(unrouted(p));
     });
     await page.goto('http://tico-ui.test/#/goals');
+    assert.match(await page.locator('#goal-needs-line').innerText(), /^\d+ suggestions\s*·\s*Review$/, 'one quiet line');
+    await page.locator('#goal-needs-line [data-needs-review]').click();
     await page.locator('#goal-needs .kpi-prop').first().waitFor();
     const card = id => page.locator(`#goal-needs [data-proposal="${id}"]`);
     const buttons = id => card(id).locator('.kpi-prop-do button').allInnerTexts();

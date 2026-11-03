@@ -354,6 +354,67 @@ def unnote(api, args):
     return api.post(f"notes/{args['id']}/cancel", {}, key=_key(args))["note"]
 
 
+FEEDBACK_SUBJECT = _s("What was rated", enum=["message", "task", "approval"])
+
+
+@tool("hub_feedback_give", "Rate a message, task or approval a bot made, 👍 (up) or 👎 (down), with an optional reason. "
+      "Rating again replaces your earlier one. tell_bot (a 👎 only) leaves the bot a note for its next run in that "
+      "conversation. People only.",
+      {"subject_type": FEEDBACK_SUBJECT, "subject_id": _s("Its id"), "rating": _s("up or down", enum=["up", "down"]),
+       "reason": _s("Why, in a few words (at most 1000 characters)"), "tell_bot": {"type": "boolean", "default": False}},
+      required=("subject_type", "subject_id", "rating"), writes=True)
+def feedback_give(api, args):
+    body = {k: args[k] for k in ("subject_type", "subject_id", "rating", "reason", "tell_bot") if args.get(k) is not None}
+    return api.post("feedback", body, key=_key(args))
+
+
+@tool("hub_feedback_remove", "Remove your feedback; a note it left that no run carried yet is taken back.",
+      {"id": _s("The feedback id")}, required=("id",), writes=True)
+def feedback_remove(api, args):
+    return api.call("DELETE", "feedback/" + quote(args["id"], safe=""), None, key=_key(args))
+
+
+@tool("hub_feedback_markers", "Your own feedback on these subjects (at most 200 ids) and everyone's up/down counts, "
+      "for the ones you may read.",
+      {"subject_type": FEEDBACK_SUBJECT, "subject_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 200,
+                                                          "description": "Their ids"}},
+      required=("subject_type", "subject_ids"))
+def feedback_markers(api, args):
+    ids = args["subject_ids"]
+    return api.get("feedback", subject_type=args["subject_type"],
+                   subject_ids=ids if isinstance(ids, str) else ",".join(ids))
+
+
+@tool("hub_feedback_list", "Feedback newest first, a page at a time, on what you may read. next_cursor reads the next page.",
+      {"bot_id": _s("Only feedback on this bot's work (`bot:<slug>`)"), "rating": _s("up or down", enum=["up", "down"]),
+       "since": _s("An ISO time, or 24h / 7d"), "cursor": _s("next_cursor of the page before"),
+       "limit": {"type": "integer", "minimum": 1, "maximum": 100}})
+def feedback_list(api, args):
+    return api.get("feedback/list", **{k: args.get(k) for k in ("bot_id", "rating", "since", "cursor", "limit")})
+
+
+@tool("hub_feedback_reasons", "Your five latest distinct feedback reasons, each with how often you used it.", {})
+def feedback_reasons(api, args):
+    return api.get("feedback/recent-reasons")
+
+
+@tool("hub_feedback_rule_draft", "A one-sentence org rule drafted from your 👎's reason and the rated work. Stores "
+      "nothing; drafted is false when no model drafted it and the reason came back as it is.",
+      {"id": _s("Your feedback id")}, required=("id",))
+def feedback_rule_draft(api, args):
+    return api.post("feedback/" + quote(args["id"], safe="") + "/rule-draft", {})
+
+
+@tool("hub_feedback_rule", "Make your 👎 an internal org rule for the bot, or every bot: active when you manage that "
+      "Who, otherwise a suggestion.",
+      {"id": _s("Your feedback id"), "text": _s("The rule, one sentence"),
+       "all_bots": {"type": "boolean", "default": False, "description": "Every bot, not only the one rated"}},
+      required=("id", "text"), writes=True)
+def feedback_rule(api, args):
+    body = {"text": args["text"], **({"all_bots": True} if args.get("all_bots") else {})}
+    return api.post("feedback/" + quote(args["id"], safe="") + "/rule", body, key=_key(args))
+
+
 @tool("hub_question_ask", "Ask one or more bots a question and wait for their answers. Returns one entry "
       "per bot: `answer`, `unknown`, `timeout`, `warning` (delivered to a bot over its spend limit; not waited for) or `error`, "
       "each with the ask's `message_id` once it was delivered. "
@@ -596,6 +657,8 @@ def tag_update(api, args):
                         "it creates the task, then requests a publication", enum=["public", "private"]),
        "public_title": _s("People only (a bot is refused): public title; the internal title is never published"),
        "public_summary": _s("People only (a bot is refused): public summary; the internal body is never published"),
+       "check_back_at": _s("When to inspect progress: ISO timestamp or duration such as 45m; defaults automatically"),
+       "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
        "due": _s("ISO-8601 date-time with timezone"),
        "private": {"type": "boolean", "description": "Only requester and assignee may read; bot defaults also apply"},
        "from_private": {"type": "boolean", "default": False,
@@ -651,7 +714,7 @@ def task_create(api, args):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
     for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model",
                   "check_role", "visibility", "public_title", "public_summary", "from_private", "model", "effort",
-                  "harness"):
+                  "harness", "check_back_at", "check_back_note"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
     for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
@@ -725,6 +788,15 @@ def task_show_many(api, args):
       "For a person, the task's requester, or BotOps's sweep.", {"id": TASK_ID}, required=("id",))
 def task_run(api, args):
     return api.post(f"tasks/{args['id']}/run-now", {}, key=_key(args))
+
+
+@tool("hub_task_check_back", "Set when to follow up unfinished bot-owned or bot-requested work. "
+      "Use a time conservatively longer than the expected work. Inspect the actual result or handoff when woken; "
+      "repair missing assignments before waiting again. Human-only tasks are excluded. A human snooze takes precedence.",
+      {"id": TASK_ID, "at": _s("ISO date-time with timezone or duration such as 45m or 2h"),
+       "note": _s("The result or handoff to inspect, at most 500 characters")}, required=("id", "at"), writes=True)
+def task_check_back(api, args):
+    return api.post(f"tasks/{args['id']}/check-back", {"at": args["at"], "note": args.get("note")}, key=_key(args))
 
 
 @tool("hub_task_snooze", "Set a task aside until a date: it leaves the board, task lists and Needs you, and nothing "
@@ -966,6 +1038,8 @@ BRIEF_OLD = {"type": "boolean", "description": "Older name for brief"}
        "note": _s("What changed, or the result"),
        "brief": BRIEF, "quiet": BRIEF_OLD,
        "owner": _s("Hand the task to this bot or person"),
+       "check_back_at": _s("When to inspect progress: ISO timestamp or duration such as 45m; defaults automatically"),
+       "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
        "due": _s("ISO-8601 date-time with timezone"),
        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
        "waiting_on": _s("With status waiting: the person you need (their id). The note is your ask to them: one or two "
@@ -994,7 +1068,7 @@ def task_update(api, args):
     if args.get("labels") is not None:
         body["labels"] = args["labels"]
     for field in ("title", "type", "step", "step_rank", "number", "visibility", "public_title", "public_summary", "approval_id", "size",
-                  "verdict", "verdict_head"):
+                  "verdict", "verdict_head", "check_back_at", "check_back_note"):
         if args.get(field) is not None:
             body[field] = args[field]
     if args.get("private") is not None:
@@ -1698,8 +1772,8 @@ def kpi_log(api, args):
       "from the Strategy Bot at level 2 or 3, a red or "
       "stalled goal's recovery (recovery: payload evidence, options [{label, actions}], pick; actions create, "
       "reorder or settle), or, from any bot at any level, a change to the strategy draft (strategy_draft: payload "
-      "summary, vision, sections {serve, sell, know, how, not, extra: {key: {title, body}}}, bets [{id?, statement, why, "
-      "rules_out, wrong_if, cites, status}], each optional; a bet with an id changes only the fields sent, one "
+      "summary, vision, sections {serve, sell, proof, now, know, how, not, extra: {key: {title, body}}}, bets [{id?, "
+      "statement, why, rules_out, wrong_if, cites, status}], each optional; a bet with an id changes only the fields sent, one "
       "without is new; source bet_tripped when a tripped bet prompted it; confirmed, the owner's draft and bets "
       "change, nothing is published), or a change to the brand draft (brand_draft: payload "
       "{sections: {name: value or null}}; confirmed by an admin, merged into the draft, never published). "
@@ -1766,6 +1840,9 @@ def _draft_revision(api, args):
     return draft["revision"]
 
 
+# The fixed sections, in the page's order (backend/strategy.py FIXED_KEYS); any other key is an extra section.
+STRATEGY_SECTIONS = ("serve", "sell", "proof", "now", "know", "how", "not")
+
 BET_PROPS = {
     "why": _s("The reasoning, one or two sentences"),
     "rules_out": _s("What the bet refuses; an active bet needs one"),
@@ -1791,8 +1868,9 @@ def _bet_body(args):
     return body
 
 
-@tool("hub_strategy_show", "The team's published strategy: summary, vision, the five sections, the bets with their "
-      "wrong-ifs, each bet's goals and colour, and the team's website. The owner also gets the draft.", {})
+@tool("hub_strategy_show", "The team's published strategy: summary, vision, the seven sections, the bets with their "
+      "wrong-ifs, each bet's goals and colour, the team's website, and proof_since (when How we know they want it "
+      "last changed). The owner also gets the draft.", {})
 def strategy_show(api, args):
     return _as_person(api).get("strategy")
 
@@ -1806,7 +1884,7 @@ def strategy_summary(api, args):
 @tool("hub_strategy_draft", "Owner only: change the strategy draft, only the fields sent (\"\" clears one). A bot "
       "proposes instead: hub_proposal_create, kind strategy_draft.",
       {"summary": _s("At most 400 characters: what every bot reads"), "vision": _s("One or two sentences"),
-       "sections": {"type": "object", "description": "{serve, sell, know, how, not, extra: {key: {title, body}}}, any of them"},
+       "sections": {"type": "object", "description": "{serve, sell, proof, now, know, how, not, extra: {key: {title, body}}}, any of them"},
        "section": {"type": "array", "items": {"type": "string"}, "description": "KEY=TEXT, instead of sections"},
        "revision": {"type": "integer", "description": "The draft's revision you read; default the current one"}},
       writes=True)
@@ -1814,7 +1892,7 @@ def strategy_draft(api, args):
     sections = dict(args.get("sections") or {})
     for item in args.get("section") or []:
         key, _, text = str(item).partition("=")
-        if key.strip() in ("serve", "sell", "know", "how", "not"):
+        if key.strip() in STRATEGY_SECTIONS:
             sections[key.strip()] = text
         else:
             sections.setdefault("extra", {})[key.strip()] = {"title": key.strip().replace("-", " ").capitalize(),
@@ -2723,14 +2801,19 @@ OLD_SERVER_MEDIA = ("This Tico server takes video and audio files up to 25 MB. A
 
 # ----------------------------------------------------------------------------- cards and pins (docs/overview.md)
 CARD_TEMPLATES = ("tasks_by_status", "done_per_week", "needs_you", "spend", "kpi", "automation_runs", "latest_pages",
-                  "needs_attention", "unread_threads", "my_tasks", "updates")
-PLACE = _s("Where: dashboard, team:<group id>, bot:<slug> (a sidebar), task:<id>, or person:me (My dashboard, the "
-           "person's own landing page)")
+                  "needs_attention", "unread_threads", "my_tasks", "updates", "growth_number", "growth_funnel",
+                  "growth_channels", "growth_retention", "growth_board")
+PLACE = _s("Where: dashboard, growth (the Growth page), team:<group id>, bot:<slug> (a sidebar), task:<id>, or person:me "
+           "(My dashboard, the person's own landing page)")
 CARD_SETTINGS = {"team": _s("A group id; empty for the whole company"),
                  "weeks": {"type": "integer", "description": "Done per week: weeks shown, 4 to 26"},
                  "count": {"type": "integer", "description": "Latest pages, Unread threads, My tasks, Updates: how many, "
-                           "1 to 10"},
-                 "kpi": _s("KPI: the KPI id")}
+                           "1 to 10; Growth channels 1 to 20; Growth board 1 to 5 per lane"},
+                 "kpi": _s("KPI: the KPI id"),
+                 "metric": _s("Growth number: new_customers, spend, bot_cost, cac, revenue_month, margin_pct, ltv, "
+                              "ltv_cac, payback_months, kept_d30, kept_d90 or kept_d180"),
+                 "channel": _s("Growth number: a channel slug; empty for all channels"),
+                 "months": {"type": "integer", "description": "Growth retention: cohort months shown, 3 to 12"}}
 SIZE = _s("small, medium or large", enum=["small", "medium", "large"])
 
 
@@ -2746,7 +2829,8 @@ def card_list(api, args):
 
 
 @tool("hub_card_add", "Add one of Tico's built-in cards, pinned at a place you may arrange. A bot pins to its own "
-      "sidebar or its task; the Dashboard and team pages are a person's (BotOps: the person who asked).",
+      "sidebar or its task; the Dashboard and team pages are a person's (BotOps: the person who asked). Growth cards go "
+      "on the Growth page only, which the owner, admins and bots arrange.",
       {"template": _s("The card", enum=list(CARD_TEMPLATES)), "title": _s("Its heading; empty uses the card's name"),
        "place": PLACE, "size": SIZE, **CARD_SETTINGS}, required=("template",), writes=True)
 def card_add(api, args):
@@ -4138,6 +4222,22 @@ def settings_set(api, args):
     shown = settings_show(api, {"key": args["key"], **_setting_query(args)})
     return {"key": args["key"], "name": planned["setting"]["name"], "where": planned["setting"]["where"],
             "value": shown["value"] if "value" in shown else planned["value"]}
+
+
+@tool("hub_settings_ask", "Ask someone who can: for a setting the person may not change (`hub_settings_set` "
+      "refused it, naming who may), on their yes to \"Shall I ask an admin?\". One person who may (`to`, else an "
+      "admin, or the owner for the owner's settings) gets the setting's Confirm card in their BotOps chat and a "
+      "request on their list; only their tap changes it, with their rights. The person is told in the chat they asked "
+      "from when it is confirmed or declined. The Assistant cites the person's words (`on_behalf_of`). Refused when "
+      "they may change it themselves, or for a person-only one.",
+      {"key": _s("The setting's key"), "value": {"description": "The new value, as for `hub_settings_set`"},
+       **SETTING_TARGET, "to": _s("The person's id to ask; leave out for an admin who may (the owner for the owner's)"),
+       "note": _s("A line for them from the asker, shown on the request"), "on_behalf_of": ASKED},
+      required=("key", "value"), writes=True)
+def settings_ask(api, args):
+    who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
+    body = {"value": args["value"], **_setting_query(args), **{k: args[k] for k in ("to", "note") if args.get(k)}}
+    return who.post("settings/catalog/" + quote(args["key"], safe="") + "/ask", body, key=_key(args))
 
 
 @tool("hub_bot_place", "Put a bot on a computer, as the person who asked you: the one named (label or id), or the best one that "
@@ -5919,6 +6019,27 @@ def assistant_propose(api, args):
                                           "path": args["path"], "body": args.get("body") or {}}, key=_key(args))
 
 
+@tool("hub_assistant_withdraw", "Take back a Confirm card that still waits for the person (its id from "
+      "hub_assistant_proposals): it is marked withdrawn and never runs, and the card owner's chat says who withdrew it, "
+      "with the reason if you give one. Any teammate may withdraw; only the card's owner can confirm it.",
+      {"id": _s("The proposal's id"),
+       "reason": _s("Why, in one short sentence (optional; the person reads it in their chat)")},
+      required=("id",), writes=True)
+def assistant_withdraw(api, args):
+    return api.post(f"assistant/actions/{args['id']}/withdraw", {"reason": args.get("reason") or ""}, key=_key(args))
+
+
+@tool("hub_assistant_proposals", "The Confirm cards still waiting for their owner: id, owner, proposer, summary and what "
+      "confirming does. Filter by proposer (botops, assistant) and/or owner (a person's id). Use it to find a card's id "
+      "to withdraw it.",
+      {"proposer": _s("botops or assistant (optional)"), "owner": _s("The card owner's id, e.g. human:ana (optional)")})
+def assistant_proposals(api, args):
+    query = {k: args[k] for k in ("proposer", "owner") if args.get(k)}
+    return api.get("assistant/proposals", **query)
+
+
+
+
 @tool("hub_assistant_learn", "In a person's own chat: save one thing they taught you about how they like things ranked "
       "and summarised (\"launches matter more than hiring news\"), as one short line in their words, then tell them "
       "what you saved. It is theirs alone and shows on What it has learned, "
@@ -7375,6 +7496,7 @@ ASSISTANT_WRITES = {"hub_goal_read_back", "hub_goal_save", "hub_goal_create", "h
                     "hub_task_close", "hub_task_link", "hub_approval_decline", "hub_approval_approve", "hub_approval_read_back",
                     "hub_question_answer",
                     "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn",
+                    "hub_assistant_withdraw",
                     "hub_settings_set", "hub_rules_read", "hub_rules_ask"}
 AUDIENCE = {
     # Task caps (CONTRACT §1): people read and set them; a bot's own change is a proposal a person decides.
@@ -7414,6 +7536,8 @@ AUDIENCE = {
     **{name: REQUESTER for name in CALL_TOOLS},     # a person's act; BotOps acts as the person it works for
     # The Assistant only.
     "hub_assistant_propose": ("assistant",), "hub_approval_read_back": ("assistant",),
+    # Any teammate may withdraw a waiting card or find one (backend/assistant.py teammate); confirming stays the owner's.
+    "hub_assistant_withdraw": KINDS, "hub_assistant_proposals": KINDS,
     # A bot's add is a suggestion; the Assistant's is an org rule the person asked for in their own chat, citing their words.
     "hub_rules_add": KINDS,
     # A bot checks its own drafts and appeals its own holds; a person's writes are never checked.
@@ -7430,6 +7554,9 @@ AUDIENCE = {
     "hub_changelog_list": HUMANS_AND_ASSISTANT, "hub_changelog_mark_read": HUMANS_AND_ASSISTANT,
     "hub_proposal_decide": HUMANS_AND_ASSISTANT,
     "hub_bot_mail": PEOPLE,                         # backend/mail_settings.py: a person only
+    # Feedback is a person's own (backend/feedback.py refuses a bot); a rule draft spends on a model, so no bot asks.
+    **{name: PEOPLE for name in ("hub_feedback_give", "hub_feedback_remove", "hub_feedback_rule_draft",
+                                 "hub_feedback_rule")},
     **{f"hub_needs_you_{step}": PEOPLE for step in ("start", "next", "respond", "commit", "abandon")},
     "hub_tool_report": ("agent",),
     "hub_update_create": BOTS,                      # only a bot posts an update

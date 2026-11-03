@@ -190,9 +190,10 @@ def test_archive_restore_preserves_kpi_history_and_marks_it_on_goals(api):
 
 def add_strategy_bot(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created_at) "
-                  "VALUES('goal-manager','goal-manager','Goal Manager','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('goal-manager','{}',NULL,'ana')")
+        c.execute("INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
+                  "VALUES('goal-manager','goal-manager','Goal Manager','','active',?)", (H.now(),))
+        c.execute("INSERT INTO bot_config(bot,config,team,owner_id) VALUES('goal-manager',?,NULL,'ana')",
+                  ('{"runtime":"fake","host":"keeper"}',))
 
 
 def owners_chat(api):
@@ -360,3 +361,11 @@ def test_archived_kpis_do_not_change_remaining_measure_or_owner_fallback(api):
     post(api, f"kpis/{removed['id']}/restore", {})
     assert goal_of(api, goal["id"])["status_source"] == "person"
     assert goal_of(api, goal["id"])["status"] == "yellow"
+
+
+def test_a_target_with_no_kind_has_no_label():
+    # A kpi_target proposal's payload may name only a target; its card (GET /proposals) must not fail on it.
+    kpi = {"unit": "%"}
+    assert K.target_label(kpi, {"target": 65, "deadline": "2026-12-31"}) == ""
+    assert K.target_label(kpi, {}) == "" and K.target_label(kpi, None) == ""
+    assert K.target_label(kpi, {"kind": "improve", "target": 65, "deadline": "2026-12-31"}).startswith("→ 65")

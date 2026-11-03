@@ -1794,11 +1794,12 @@ def finance_run_hold(c, bot, job_id):
 
 
 def finance_run_ended(c, job_id, turn_id):
-    """Settle the job's run hold at the run's priced Gateway cost, or release it when nothing was Gateway-billed."""
+    """Settle the job's run hold at the run's priced Gateway cost, or release it when nothing was Gateway-billed. Stamped
+    with the hub's clock, as the claim's hold is (its own `at`), not the wall clock."""
     from .finance import actions as finance
     c.execute("SAVEPOINT finance_settle")
     try:
-        finance.run_ended(c, job_id, turn_id)
+        finance.run_ended(c, job_id, turn_id, H.now())
     except (*FINANCE_FAULTS, finance.FinanceError) as exc:
         c.execute("ROLLBACK TO finance_settle")
         c.execute("RELEASE finance_settle")
@@ -2097,9 +2098,13 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
     task_id = work_task_id(message, conversation)
     task = H.task(c, task_id) if task_id else None
     refs = message.get("refs") or {}
-    if task and task['owner_id'] == 'bot:' + job['bot_id'] and auto_tasks.put_back_held(c, task) and not refs.get('run_now'):
+    from . import task_check_backs
+    if task_check_backs.stale(c, message, job["bot_id"]):
+        return "obsolete_check_back"
+    check_back = message["sender_id"] == H.KEEPER and refs.get("wake") == "check_back"
+    if task and task['owner_id'] == 'bot:' + job['bot_id'] and auto_tasks.put_back_held(c, task) and not refs.get('run_now') and not check_back:
         return 'task_wait'
-    if task and task['owner_id'] == 'bot:' + job['bot_id'] and message['sender_id'] == H.KEEPER and not refs.get("run_now"):
+    if task and task['owner_id'] == 'bot:' + job['bot_id'] and message['sender_id'] == H.KEEPER and not refs.get("run_now") and not check_back:
         # A subtask's result (hubdb._deliver_subtask_result) is what the task waits for: its other open subtasks
         # do not hold it back, though a snooze, a person, an approval or a worktree still does.
         if why := auto_tasks.refusal(c, task, followed, woken=True, result=bool(refs.get("subtask")), message=message, suspect=suspect):
@@ -2145,11 +2150,19 @@ def obsolete_notices_sql():
             "AND m.sender_id=? AND (m.kind='say' AND json_extract(m.refs,'$.review_gate') IS NOT NULL "
             "AND EXISTS (SELECT 1 FROM task_events e WHERE e.task_id=t.id AND e.created_at>m.created_at AND e.field='step') "
             "OR m.kind='notice' "
-            "AND ((t.status IN ('done','closed','declined') "
-            "AND coalesce(json_extract(m.refs,'$.caused_by'),'') NOT LIKE 'human:%') "
+            "AND ((json_extract(m.refs,'$.wake')='check_back' AND ("
+            "t.check_back_at IS NOT json_extract(m.refs,'$.check_back_at') OR "
+            "coalesce(json_extract((SELECT value FROM registry_metadata WHERE key='system_routines'),'$.task_check_backs.on'),0)=0 OR "
+            "(t.snoozed_until>?3 AND t.snoozed_by_id LIKE 'human:%') OR t.status='closed' OR "
+            "(t.status IN ('done','declined') AND (t.requester_id NOT LIKE 'bot:%' OR t.requester_id=t.owner_id)) OR "
+            "m.recipient_id<>CASE WHEN t.status IN ('done','declined') THEN t.requester_id "
+            "WHEN t.owner_id LIKE 'bot:%' THEN t.owner_id ELSE t.requester_id END)) OR "
+            "(t.status IN ('done','closed','declined') "
+            "AND coalesce(json_extract(m.refs,'$.caused_by'),'') NOT LIKE 'human:%' "
+            "AND coalesce(json_extract(m.refs,'$.wake'),'')<>'check_back') "
             "OR (m.body LIKE 'New task from %' AND m.recipient_id=t.owner_id "
             "AND json_extract(m.refs,'$.filed_in') IS NOT NULL "
-            "AND (t.status='waiting' OR t.snoozed_until>?) "
+            "AND (t.status='waiting' OR t.snoozed_until>?3) "
             "AND NOT EXISTS (SELECT 1 FROM attempts fa WHERE fa.id=json_extract(m.refs,'$.filed_in') "
             "AND fa.state IN ('leased','running'))) "
             "OR ((json_extract(m.refs,'$.wake') IN ('status_check','stalled','step_status') "
@@ -5160,7 +5173,9 @@ class Execution:
                 H.mark_delivered(c, H.KEEPER, extra["message_id"])
                 H.event(c, H.KEEPER, "job.coalesce", extra["id"], {"attempt_id": aid, "job_id": row["job_id"]})
         if body.outcome == "completed":
-            # Each next-run task this run carried and left: back to the next run, unless it was worked or deferred.
+            from . import task_check_backs
+            task_check_backs.finished_turn(c, aid, row["bot_id"], work_task_id(msg, conv))
+            # Check obligations before settle clears unworked carried_by receipts.
             quiet_work.settle(c, aid, row["bot_id"], row["started_at"] or row["created_at"])
         # A push from the task's worktrees is the run acting too, though only its runner saw it.
         run_triggers.pushed(c, aid, row["runner_id"], body.pushes)

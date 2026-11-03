@@ -125,13 +125,13 @@ async function restrictPerson(hub) {
       null, {timeout: t(15000)});
     await bot.context().close();
 
-    // Omar, desktop: the company thread is in his sidebar; the members-only one is not, and its text is not on the page.
+    // Omar, desktop: the company thread is in his Threads list; the members-only one is not, and its text is not on the page.
     // Opened by direct URL, the members-only thread is "Not found", and the bot he may only see has no Home tab.
     const omar = await pageAs(browser, hub, 'omar');
-    await omar.goto(hub.url + '/#/tasks');
-    await omar.locator('#th-list .th-row-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
-    assert.equal(await omar.locator('#th-list .th-row-title', {hasText: 'Pricing war room'}).count(), 0,
-      'a members-only thread Omar is not in is not in his sidebar');
+    await omar.goto(hub.url + '/#/threads');
+    await omar.locator('.threads-page .th-row-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
+    assert.equal(await omar.locator('.threads-page .th-row-title', {hasText: 'Pricing war room'}).count(), 0,
+      'a members-only thread Omar is not in is not in his Threads list');
     await omar.goto(hub.url + '/#/thread/' + secret.id);
     await omar.getByText('Not found').waitFor({timeout: t(15000)});
     assert.ok(!(await omar.content()).includes(SECRET), 'the members-only text is not on Omar\'s page');
@@ -170,14 +170,14 @@ async function restrictPerson(hub) {
     assert.equal(await manager.locator('#person-dm').count(), 1, 'her manager may write to her');
     await manager.context().close();
 
-    // Priya, phone: the company thread is on the Threads tab (the sidebar is in the closed drawer); tapping it opens the
-    // thread with its composer, and the page does not scroll sideways.
+    // Priya, phone: the Inbox tab in the bottom bar opens Inbox, and its Important tab lists the company thread; tapping
+    // it opens the thread with its composer, and the page does not scroll sideways.
     const priya = await pageAs(browser, hub, 'priya', {phone: true});
     await priya.goto(hub.url + '/#/tasks');
-    // On a phone the list is one tap away, the Threads tab in the bottom bar (ui/tests/threads.cjs does the same): the
-    // sidebar on this page sits off screen.
     await priya.locator('#mobile-threads:not([hidden])').waitFor({timeout: t(15000)});
     await priya.locator('#mobile-threads').click();
+    await priya.waitForFunction(() => location.hash === '#/threads?view=inbox', null, {timeout: t(15000)});
+    await priya.locator('.threads-page [data-th-sort="important"]').click();
     await priya.waitForFunction(() => location.hash === '#/threads', null, {timeout: t(15000)});
     await priya.locator('.threads-page .th-row-title', {hasText: 'Launch plan'}).first().waitFor({timeout: t(15000)});
     assert.equal(await priya.locator('.threads-page .th-row-title', {hasText: 'Pricing war room'}).count(), 0);
@@ -243,12 +243,10 @@ async function restrictPerson(hub) {
     await talk.locator('#bot-thread .thv-composer .p-text').waitFor({timeout: t(15000)});
     assert.equal(await dmCount(), dmsBefore, 'opening the DM tab made no DM');
     await talk.locator('#bot-thread .thv-composer .p-text').fill('First words to the bot.');
-    const rowsBefore = await talk.locator('#dm-list [data-thread]').count();
     const started = talk.waitForResponse(r => new URL(r.url()).pathname === '/api/v2/threads/dm' && r.request().method() === 'POST', {timeout: t(15000)});
     await talk.locator('#bot-thread .thv-composer .p-send').click();
     await started;
     assert.equal(await dmCount(), dmsBefore + 1, 'the first message made the DM');
-    await talk.waitForFunction(n => document.querySelectorAll('#dm-list [data-thread]').length === n, rowsBefore + 1, {timeout: t(15000)});
     await talk.context().close();
 
     const groups = await api(hub, 'dana', 'GET', '/v2/groups');
@@ -257,9 +255,9 @@ async function restrictPerson(hub) {
       const tag = isPhone ? 'phone' : 'desktop';
       const page = await pageAs(browser, hub, 'dana', {phone: isPhone});
 
-      // Calls are not set up on this hub: the owner sees so on load, with no Start call to find out from.
+      // Calls are not set up on this hub: no Start call, and no note about it.
       await page.goto(hub.url + '/#/thread/' + plan.id);
-      await page.locator('.thv-call-note', {hasText: 'Set up calls'}).waitFor({timeout: t(15000)});
+      await page.locator('.thv-aud').waitFor({timeout: t(15000)});
       assert.equal(await page.locator('[data-call]').count(), 0, `${tag}: no Start call without calls`);
 
       // The audience shows in the thread's header on either screen.

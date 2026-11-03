@@ -23,7 +23,6 @@ def ask(api, text, token, place="updates"):
 
 def claim(api, r, bot, text, token, place="updates"):
     sent = ask(api, text, token, place)
-    assert sent["fast"] is False, "a question from Updates is always a turn"
     attempt = post(api, "jobs/claim", {"bot": bot}, token=r["token"])["attempt"]
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t-" + attempt["id"]}, token=r["token"])
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Done", "last_seq": 0},

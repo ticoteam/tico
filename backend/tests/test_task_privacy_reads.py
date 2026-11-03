@@ -157,7 +157,7 @@ def test_live_events_stop_when_private_owner_loses_access(api):
     assert "Second packet note" not in after and row["id"] not in after and "Sensitive" not in after
 
 
-def test_context_search_and_cached_fleet_do_not_disclose_revoked_sources(api):
+def test_context_search_and_fleet_do_not_disclose_revoked_sources(api):
     row = task(api, requester="human:cara", owner="human:ben")
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO linked_docs(id,title,url,kind,description,added_by,created_at,updated_at) "
@@ -165,10 +165,10 @@ def test_context_search_and_cached_fleet_do_not_disclose_revoked_sources(api):
                   ("private-reference", "Sensitive packet reference", "https://example.test/#/task/" + row["id"],
                    "Sensitive packet", H.now(), H.now()))
         who = Identity("human:ben", "human", email="ben@acme.example")
-        before = views.fleet_snapshot_cached(c, api.app.state.auth, who, lambda row, **k: row)
+        before = views.fleet_snapshot(c, api.app.state.auth, who, lambda row, **k: row)
         assert row["id"] in {t["id"] for t in before["tasks"]}
         c.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (row["id"],))
-        after = views.fleet_snapshot_cached(c, api.app.state.auth, who, lambda row, **k: row)
+        after = views.fleet_snapshot(c, api.app.state.auth, who, lambda row, **k: row)
         assert row["id"] not in {t["id"] for t in after["tasks"]}
     result = get(api, "context/search?q=Sensitive&source=docs", "ben-test")
     assert "private-reference" not in json.dumps(result)

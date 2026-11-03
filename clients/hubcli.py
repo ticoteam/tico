@@ -55,6 +55,14 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            run reads it (with --defer, a run starts by then if none came)
     hub note list [--to me|X] [--from me|X] [--since 24h|ISO] [--waiting]   notes, newest first
     hub note delete <id>                   take back a note no run has carried yet
+    hub feedback give message|task|approval <id> up|down [--reason R] [--tell-bot]   a person's 👍/👎 on a bot's work;
+                                           again replaces it; --tell-bot (👎) leaves the bot a note
+    hub feedback remove <id>               take back your feedback (and its note, if no run carried it)
+    hub feedback markers message|task|approval <id> [<id>...]   your feedback on these and everyone's up/down counts
+    hub feedback list [--bot B] [--rating up|down] [--since 7d] [--cursor C] [--limit N]   newest first
+    hub feedback reasons                   your five latest distinct reasons
+    hub feedback rule-draft <id>           a one-sentence rule drafted from your 👎; stores nothing
+    hub feedback rule <id> "<text>" [--all-bots]   your 👎 as an org rule: active if you manage the bot, else suggested
     hub task create --owner <bot|human> --title "..." [--body "..."|--body-file f] [--due D] [--parent ID]
                     [--goal ID] [--model M [--effort E] [--harness H]] [--dry-run] the checks a create would fail,
                     nothing written
@@ -139,13 +147,16 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub page list [--bot X] [--task ID] [--archived]   pages you may read, newest first
     hub page show <id>                     one page's status: updated, by, version, cadence, stale or replaced
     hub page archive <id> [--restore]      hide a page from lists and search, or bring it back
-    hub card list [--place P]              what is pinned at dashboard, team:<group>, bot:<slug>, task:<id> or
-                                           person:me (My dashboard)
+    hub card list [--place P]              what is pinned at dashboard, growth, team:<group>, bot:<slug>, task:<id>
+                                           or person:me (My dashboard)
     hub card add <template> [--place P] [--team G] [--weeks N] [--count N] [--kpi ID] [--title T] [--size S]
+                                           [--metric M] [--channel C] [--months N]
                                            tasks_by_status, done_per_week, needs_you, spend, kpi, automation_runs,
                                            latest_pages, needs_attention, unread_threads, my_tasks, updates; a bot
-                                           pins to its own sidebar or task
-    hub card update <id> [--title T] [--team G] [--weeks N] [--count N] [--kpi ID]
+                                           pins to its own sidebar or task. The Growth page's cards (growth_number,
+                                           growth_funnel, growth_channels, growth_retention, growth_board) go on
+                                           --place growth only; --metric and --channel are for growth_number
+    hub card update <id> [--title T] [--team G] [--weeks N] [--count N] [--kpi ID] [--metric M] [--channel C] [--months N]
     hub card remove <id>
     hub connections list [--cursor C] [--limit N]
                                            every connection you may see: status, scope, who reads it, its bots
@@ -193,6 +204,11 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            in a person's own chat: save what they taught you, in their own
                                            layer (--company: the Strategy Bot, about the company, owner's chat only)
     hub assistant learned                  what a person's chat bot has learned (What it has learned)
+    hub assistant proposals [--proposer botops] [--owner human:ana]
+                                           the Confirm cards still waiting for their owner, with their ids
+    hub assistant withdraw <id> [--reason "..."]
+                                           take back a Confirm card that waits: it never runs, and the owner's chat
+                                           says who withdrew it (only the owner confirms)
     hub replay show [--from ISO] [--to ISO] [--bot B|--person P|--team T]
                                            what happened in a window (default the last 24 hours), as you may see it
     hub goal list [--owner me|X] [--all]   what you are for: your goals in order, the chain above
@@ -415,6 +431,10 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            change it as yourself (BotOps, the Assistant: as the person who asked; a
                                            confirm one is their Confirm card, a person-only one says why and links the
                                            card; the Assistant cites their words for a direct one)
+    hub settings ask <key> <value> [--to P] [--note "..."] [--bot B|...] [--on-behalf-of turn]
+                                           one you may not change: on your yes, its Confirm card and a request go to
+                                           one person who may (an admin, or the owner for the owner's); you're told
+                                           when they confirm or say no
     hub release now [--note "..."]         ask the Release Manager to release what is at Pending Release now
     hub release schedule [--on|--off] [--time HH:MM ...] [--manager BOT] [--writer BOT]
                                            show or change the daily release (company time; an owner or admin)
@@ -1137,6 +1157,39 @@ def parser():
     s.add_argument("id")
     s.set_defaults(fn="note delete")
 
+    feedback = sub.add_parser("feedback", help="a person's 👍/👎 on a bot's work: give, list, make a rule").add_subparsers(dest="sub")
+    subjects = ("message", "task", "approval")
+    s = feedback.add_parser("give", help="rate a message, task or approval a bot made; again replaces it")
+    s.add_argument("subject_type", choices=subjects)
+    s.add_argument("subject_id")
+    s.add_argument("rating", choices=("up", "down"))
+    s.add_argument("--reason")
+    s.add_argument("--tell-bot", dest="tell_bot", action="store_true", help="a 👎 only: a note for the bot's next run")
+    s.set_defaults(fn="feedback give")
+    s = feedback.add_parser("remove", help="take back your feedback, and its note if no run carried it")
+    s.add_argument("id")
+    s.set_defaults(fn="feedback remove")
+    s = feedback.add_parser("markers", help="your feedback on these subjects and everyone's up/down counts")
+    s.add_argument("subject_type", choices=subjects)
+    s.add_argument("subject_ids", nargs="+")
+    s.set_defaults(fn="feedback markers")
+    s = feedback.add_parser("list", help="feedback newest first, a page at a time")
+    s.add_argument("--bot", dest="bot_id")
+    s.add_argument("--rating", choices=("up", "down"))
+    s.add_argument("--since", help="an ISO time, or 24h / 7d")
+    s.add_argument("--cursor")
+    s.add_argument("--limit", type=int)
+    s.set_defaults(fn="feedback list")
+    feedback.add_parser("reasons", help="your five latest distinct reasons").set_defaults(fn="feedback reasons")
+    s = feedback.add_parser("rule-draft", help="a one-sentence rule drafted from your 👎; stores nothing")
+    s.add_argument("id")
+    s.set_defaults(fn="feedback rule-draft")
+    s = feedback.add_parser("rule", help="your 👎 as an org rule: active if you manage the bot, else suggested")
+    s.add_argument("id")
+    s.add_argument("text")
+    s.add_argument("--all-bots", dest="all_bots", action="store_true")
+    s.set_defaults(fn="feedback rule")
+
     files = sub.add_parser("file", help="what you publish for people: reports, documents, imported objects").add_subparsers(dest="sub")
     s = files.add_parser("archive", help="archive a File with your rights")
     s.add_argument("id")
@@ -1228,6 +1281,9 @@ def parser():
         s.add_argument("--weeks", type=int)
         s.add_argument("--count", type=int)
         s.add_argument("--kpi")
+        s.add_argument("--metric")
+        s.add_argument("--channel")
+        s.add_argument("--months", type=int)
         if name == "add":
             s.add_argument("--place")
             s.add_argument("--size", choices=["small", "medium", "large"])
@@ -1320,6 +1376,14 @@ def parser():
     s.set_defaults(fn="assistant learn")
     assistant.add_parser("learned", help="what your chat bot has learned: your layer, and the company's for the owner") \
         .set_defaults(fn="assistant learned")
+    s = assistant.add_parser("withdraw", help="take back a Confirm card that waits: it never runs (any teammate)")
+    s.add_argument("id", help="the card's proposal id (hub assistant proposals)")
+    s.add_argument("--reason", default="", help="why, in one short sentence: the person reads it in their chat")
+    s.set_defaults(fn="assistant withdraw")
+    s = assistant.add_parser("proposals", help="the Confirm cards still waiting for their owner (find one to withdraw)")
+    s.add_argument("--proposer", choices=["botops", "assistant"], default=None, help="only the cards one proposed")
+    s.add_argument("--owner", default=None, help="only one person's cards, e.g. human:ana")
+    s.set_defaults(fn="assistant proposals")
     # Tags keep the existing task --label key contract.
     tag = sub.add_parser("tag", help="tags and checklist templates").add_subparsers(dest="sub")
     s = tag.add_parser("list")
@@ -1394,6 +1458,8 @@ def parser():
     s.add_argument("--body", default="")
     s.add_argument("--body-file", dest="body_file")
     s.add_argument("--due")
+    s.add_argument("--check-back-at", help="ISO timestamp or duration such as 45m")
+    s.add_argument("--check-back-note", help="what result to inspect")
     s.add_argument("--parent", help="file it as a subtask of this task")
     s.add_argument("--label", action="append", help="a label (repeat, or comma-separate); a project is a label")
     s.add_argument("--change-path", dest="change_paths", action="append", help="changed path for automatic QA classification")
@@ -1723,6 +1789,13 @@ def parser():
     s.add_argument("--clear", action="store_true",
                    help="clear the task's own model: its runs use the bot's task model again")
     s.set_defaults(fn="task model")
+    s = task.add_parser("check-back", help="schedule the next follow-up on bot work")
+    s.add_argument("id")
+    timing = s.add_mutually_exclusive_group(required=True)
+    timing.add_argument("--at", help="ISO date-time with timezone")
+    timing.add_argument("--in", dest="in_duration", help="duration such as 45m or 2h")
+    s.add_argument("--for", dest="check_back_note", help="the result or handoff to inspect")
+    s.set_defaults(fn="task check-back")
     s = task.add_parser("snooze", help="set a task aside until a date: off the lists, Needs you and stall wakes "
                         "until then, when its owner bot is woken once")
     s.add_argument("id")
@@ -2099,8 +2172,9 @@ def parser():
     s.set_defaults(fn="rules withdraw")
     strategy = sub.add_parser("strategy", help="the team's strategy: its bets, its sections, the versions").add_subparsers(dest="sub")
     s = strategy.add_parser("show", help="the published strategy, its bets and their goals; the owner also gets the draft")
-    s.add_argument("--section", choices=["serve", "sell", "know", "how", "not"],
-                   help="only this section of the published strategy, as text (how: How we sell)")
+    s.add_argument("--section", choices=["serve", "sell", "proof", "now", "know", "how", "not"],
+                   help="only this section of the published strategy, as text (proof: How we know they want it; "
+                        "now: Why now; how: How we sell)")
     s.add_argument("--json", action="store_true", help="print the API response as JSON")
     s.set_defaults(fn="strategy show")
     s = strategy.add_parser("summary", help="the text every run's context carries")
@@ -2109,7 +2183,7 @@ def parser():
     s.add_argument("--summary")
     s.add_argument("--vision")
     s.add_argument("--section", action="append", default=[], metavar="KEY=TEXT",
-                   help="serve, sell, know, how, not, or an extra section's key; KEY= clears it; repeatable")
+                   help="serve, sell, proof, now, know, how, not, or an extra section's key; KEY= clears it; repeatable")
     s.add_argument("--revision", type=int, help="the draft's revision you read; default the current one")
     s.set_defaults(fn="strategy draft")
     s = strategy.add_parser("publish", help="owner only: the draft becomes the next version")
@@ -2771,12 +2845,16 @@ def parser():
     s.add_argument("words")
     s.set_defaults(fn="settings find")
     for leaf, text in (("show", "one setting: its value, who may change it and its card"),
-                       ("set", "change one setting as yourself, or BotOps or the Assistant as the person who asked")):
+                       ("set", "change one setting as yourself, or BotOps or the Assistant as the person who asked"),
+                       ("ask", "a setting you may not change: ask one person who may, with its Confirm card")):
         s = catalogue.add_parser(leaf, help=text)
         s.add_argument("key", help="the key `hub settings find` gives, e.g. team.rules.admin_sql")
-        if leaf == "set":
+        if leaf in ("set", "ask"):
             s.add_argument("value", help="on/off, a number, text, a comma-separated list or JSON")
             s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
+        if leaf == "ask":
+            s.add_argument("--to", help="the person's id to ask; default an admin who may (the owner for the owner's)")
+            s.add_argument("--note", help="a line for them from you, shown on the request")
         target = s.add_mutually_exclusive_group()
         target.add_argument("--bot", help="the bot, for a setting set per bot")
         target.add_argument("--computer", help="the computer, for a setting set per computer")

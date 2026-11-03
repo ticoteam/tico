@@ -33,7 +33,7 @@ const launch = () => process.env.TICO_UI_ENGINE === 'webkit' ? webkit.launch({he
         sends.push(text);
         const message = {id: 'm' + sends.length, sender_id: 'human:ana', body: text, created_at: new Date().toISOString()};
         thread.push(message);
-        return json({message, fast: true});
+        return json({message});
       }
       return json(unrouted(p));
     });

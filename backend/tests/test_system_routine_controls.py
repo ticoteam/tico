@@ -30,7 +30,7 @@ def test_admin_sees_a_switch_and_a_schedule_on_the_six_and_housekeeping_has_none
     jobs = rows(api, "ben-test")
     timed = {k for k, j in jobs.items() if j["presets"]}
     assert timed == SIX | {"task-rule-close-after-done"}
-    assert {k for k, j in jobs.items() if j["switch"]} == SIX | {"topic_fresh", "stall_triage", "task-rule-close-after-done"}
+    assert {k for k, j in jobs.items() if j["switch"]} == SIX | {"topic_fresh", "stall_triage", "task-rule-close-after-done", "task_check_backs"}
     for key in SIX - {"health_scan"}:
         assert jobs[key]["can_change"] is True, key
     for key, job in jobs.items():
@@ -223,7 +223,7 @@ def test_every_row_reads_when_then_with_one_department_from_the_chart_and_search
     with store.transaction() as c:
         row = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()
         roster = {**(json.loads(row[0]) if row else {}), "org_groups": {
-            "engineering": {"name": "Engineering"}, "marketing": {"name": "Marketing"},
+            "engineering": {"name": "Engineering"}, "marketing": {"name": "Marketing"}, "finance": {"name": "Finance"},
             "web": {"name": "Web", "parent": "engineering"}}}
         c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO UPDATE SET "
                   "value=excluded.value", (json.dumps(roster),))
@@ -232,7 +232,8 @@ def test_every_row_reads_when_then_with_one_department_from_the_chart_and_search
     assert "Web" not in data["departments"], "only fixed departments, never arbitrary subgroups"
     for job in data["jobs"]:
         assert job["when"] and job["then"], job["key"]
-        assert job["department"]["name"] == "Engineering" and job["department"]["in_chart"], job["key"]
+        books = job["key"].startswith("bookkeeper_")
+        assert job["department"]["name"] == ("Finance" if books else "Engineering") and job["department"]["in_chart"], job["key"]
     jobs = {j["key"]: j for j in data["jobs"]}
     assert jobs["stale_review"]["when"] == ["every hour"]
     assert jobs["stale_review"]["then"][0] == "check stale tickets"

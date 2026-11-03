@@ -13,7 +13,7 @@
 #signed-out{position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:3200;display:flex;align-items:center;gap:12px;max-width:calc(100vw - 32px);padding:8px 8px 8px 14px;background:var(--ink);color:var(--bg);border-radius:8px;font-size:var(--t-base);box-shadow:0 6px 20px rgba(0,0,0,.2)}
 #signed-out[hidden]{display:none}
 #signed-out>*{white-space:nowrap}
-/* Tico support has access (ui/support.js): over the top of every page while the session lasts. */
+/* The Tico team has access (ui/support.js): over the top of every page while the session lasts. */
 #support-access-banner{position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:3100;display:flex;align-items:center;gap:10px;max-width:calc(100vw - 32px);padding:6px 8px 6px 14px;background:var(--wait-bg);color:var(--ink);border:1px solid var(--wait);border-radius:8px;font-size:var(--t-sm);box-shadow:0 6px 20px rgba(0,0,0,.12)}
 #support-access-banner[hidden],#support-access-banner [hidden]{display:none}
 #usage-notice{position:fixed;left:16px;bottom:16px;z-index:3000;display:flex;align-items:center;gap:12px;max-width:min(560px,calc(100vw - 32px));padding:10px 14px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;font-size:var(--t-sm);box-shadow:0 6px 20px rgba(0,0,0,.12)}
@@ -116,7 +116,7 @@ html:not(.icons-ready) :is(.nav-icon,.mobile-nav-icon,.ob-ms,.agent-mark,.person
 :where(.p-menu,.people-menu,.mg-menu){transform-origin:top right}
 :where(dialog[open])::backdrop{animation:tico-fade var(--dur) var(--ease)}
 :where(.nav-link,.tree a.node,.inbox-list a,.tl-row,.mail-row,.meet-row,.kpi-line,.need-row,.req>summary,.settings-table tbody tr,
-  .search-results li,.market-list a,.slash-row,.p-menu button,#docs-menu button,.mg-menu button,.people-menu button,.section-toggle,
+  .search-results li,.market-list a,.slash-row,.p-menu button,#docs-menu button,.mg-menu button,.people-menu button,.section-toggle,.section-head,
   button.ghost,button.primary){transition:background-color var(--dur-fast) var(--ease),border-color var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
 /* A page change cross-fades the window, opacity only (ui/app/router.js routeChanged). The whole window, not #main
    alone: a named #main reports as a layout shift when the fade ends. The fade's layer takes no pointer; Chrome still

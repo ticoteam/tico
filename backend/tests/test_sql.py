@@ -17,7 +17,7 @@ from backend.tests.test_api import api, as_member, assign, claim, headers, post,
 SECRET_TABLES = ("credentials", "credential_keys", "credential_grants", "idempotency", "runners",
                  "enrollments", "session_epochs", "bot_session_epochs", "settings_changes", "backup_verified_blobs",
                  "sqlite_temp_master", "sqlite_sequence", "_litestream_seq")
-SECRET_COLUMNS = (("attempts", "token_hash"), ("bots", "token_hash"), ("service_jobs", "token_hash"))
+SECRET_COLUMNS = (("attempts", "token_hash"), ("service_jobs", "token_hash"))
 REJECTED = ("PRAGMA table_info(messages)", "DELETE FROM messages", "ATTACH ':memory:' AS other",
             "CREATE TEMP VIEW v AS SELECT 1", "SELECT 1; DELETE FROM messages")
 
@@ -239,7 +239,7 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "idempotency_messages.ready", "inbox-only-runners", "librarian_wording35", "librarian_wording36",
         "message_links.ready", "onboarding", "owner", "people", "redesign_cutover", "release-history",
         "repositories-access-migrated", "roadmap_ready_to_ship_step", "roadmaps_copies_cleared_by_field",
-        "roadmaps_explicit_public_text", "strategy-bot", "task_session_default",
+        "roadmaps_explicit_public_text", "stale_review_repair", "strategy-bot", "task_session_default",
         "threads-migration", "threads-neutral-titles", "usage-count"]
 
 

@@ -114,6 +114,44 @@ def test_usage_by_bot_is_sorted_by_spend_with_totals_and_subscription_kept_apart
     assert sum(r["share"] for r in got["rows"]) == pytest.approx(1, abs=1e-3) and cpo["share"] > 0.99
 
 
+def test_usage_by_task_names_each_task_and_bots_narrows_to_those_bots(api):
+    """Strategy › Budget's breakdown: a run's task by its title (a private one only as one), a run with no task apart;
+    `bots` keeps the bots asked for, among those this person may see."""
+    seed(api)
+    hidden = post(api, "tasks", {"owner": "cpo", "title": "Board deck", "body": "Do it.", "private": True})["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE turns SET task_id=? WHERE id='t5'", (hidden,))
+    got = usage(api, group="task")
+    assert [(r["name"], r["value"], r["runs"]) for r in got["rows"]] == [
+        ("A private task", "A private task", 1), ("Chats and other runs", None, 3), ("Digest", "Digest", 1)]
+    assert "Board deck" not in json.dumps(got)
+    only = usage(api, group="task", bots="ops")
+    assert [r["name"] for r in only["rows"]] == ["Chats and other runs", "Digest"] and only["totals"]["runs"] == 3
+    assert [r["bot"] for r in usage(api, bots="ops, cpo")["rows"]] == ["cpo", "ops"]
+    assert [r["value"] for r in usage(api, group="model", bots="cpo")["rows"]] == ["claude-opus-5", "mystery-model"]
+    assert usage(api, bots="nobody")["rows"] == []
+    as_member(api, "ben@acme.example")
+    assert [r["bot"] for r in usage(api, "ben-test", bots="ops,cpo")["rows"]] == ["cpo"]     # not a way past who may see
+
+
+def test_a_task_the_reader_cannot_open_is_not_named_and_bots_takes_a_renamed_slug(api, monkeypatch):
+    """A run of a bot this person may see can be on a task since moved to a bot whose activity they may not read: the
+    breakdown counts it without its title. `bots` takes a bot's slug as it reads now, not only its first one."""
+    seed(api)
+    moved = post(api, "tasks", {"owner": "ops", "title": "Payroll fix", "body": "Do it."})["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE turns SET task_id=? WHERE bot='cpo'", (moved,))
+    as_member(api, "ben@acme.example")
+    auth = api.app.state.auth
+    monkeypatch.setattr(type(auth), "unreadable_bots", lambda self, c, who: {"ops"} if who.role == "human" else set())
+    got = usage(api, "ben-test", group="task")
+    assert "Payroll fix" not in json.dumps(got) and [r["name"] for r in got["rows"]] == ["A task you can't open"]
+    assert [r["name"] for r in usage(api, group="task", bots="cpo")["rows"]] == ["Payroll fix"]     # the owner reads it
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET slug='ops-renamed' WHERE id='ops'")
+    assert [r["bot"] for r in usage(api, bots="ops-renamed")["rows"]] == ["ops"]
+
+
 def test_usage_does_not_treat_unreported_zero_as_a_priced_run(api):
     with api.app.state.store.transaction() as c:
         c.executemany("INSERT INTO turns(id,bot,started_at,finished_at,input_tokens,cached_tokens,output_tokens,"

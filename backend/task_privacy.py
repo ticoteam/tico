@@ -927,7 +927,7 @@ def create_texts(body):
     # A role's name is checked as sent and as stored (task_roles.role_name): the store lower-cases and trims it.
     roles = [name for raw in (body.roles or {}) for name in (str(raw), role_name(raw) or "")]
     return [*body.acceptance_criteria, *body.labels, *body.change_paths, *body.links, body.public_title or "",
-            body.public_summary or "", body.step or "", body.type or "", *((blocker.repo, blocker.endpoint) if blocker else ()),
+            body.public_summary or "", body.check_back_note or "", body.step or "", body.type or "", *((blocker.repo, blocker.endpoint) if blocker else ()),
             *roles]
 
 

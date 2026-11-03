@@ -1,6 +1,8 @@
 // Small line icons, drawn on a 16px grid in the current text colour.
 (() => {
   const paths = {
+    screen: '<rect x="1.5" y="2" width="13" height="9" rx="1.5"/><path d="M8 11v3M5 14h6M5.5 6.5 8 4l2.5 2.5M8 4v5"/>',
+    link: '<path d="m6.5 9.5 3-3M5.5 5l1.2-1.2a3 3 0 0 1 4.3 4.3L9.8 9.3M6.2 6.7 5 7.9a3 3 0 0 0 4.3 4.3l1.2-1.2"/>',
     back: '<path d="M10 3.5 5.5 8l4.5 4.5"/>',
     down: '<path d="m4.5 6.5 3.5 3.5 3.5-3.5"/>',
     up: '<path d="m4.5 10 3.5-3.5 3.5 3.5"/>',

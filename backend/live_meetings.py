@@ -254,6 +254,7 @@ def _view(c, auth, who, rid):
         access.append({"actor": r["actor"], "name": (person or {}).get("name") or H.actor_id(r["actor"])})
     return {
         "id": row["id"], "title": row["title"], "state": row["state"], "owner_actor": row["owner_actor"],
+        "link": auth.settings.public_url + "/#/meetings/live/" + row["id"],
         "visibility": row["visibility"], "access": access, "client": row["client"],
         "seq": row["seq"], "event_id": row["next_event_id"], "window_ms": row["window_ms"],
         "cooldown_ms": row["cooldown_ms"], "reply_cap": row["reply_cap"], "threshold": row["threshold"],
@@ -1255,6 +1256,14 @@ def install_live_meetings(app, store, auth, write):
                     _require_read(c, auth, who, (H._json(cached["response"], {}) or {}).get("id"))
         return write(request, body, work, check=check)
 
+    from .meeting_screen import install as install_screen
+    install_screen(app, store, auth, _require_read, _connector)
+    @app.get("/api/v2/recorder/browser")
+    def recorder_browser(request: Request):
+        human_only(request.state.identity)
+        auth.domain(request.state.identity)
+        return {"url": auth.settings.public_url}
+
     @app.post("/api/v2/live-meetings")
     def connect(request: Request, body: Connect):
         who = request.state.identity
@@ -1378,7 +1387,12 @@ def install_live_meetings(app, store, auth, write):
                 _event(c, rid, "meeting.access", {"visibility": visibility, "added": added, "removed": removed,
                                                    "changed_by": who.actor})
             return _view(c, auth, who, rid)
-        return mutate(request, body, work)
+        if body.visibility is not None:
+            app.state.meeting_frames.stop(rid)
+        result = mutate(request, body, work)
+        if body.visibility is not None:
+            app.state.meeting_frames.stop(rid)
+        return result
 
     @app.post("/api/v2/live-meetings/{rid}/chunks")
     def chunks(request: Request, rid: str, body: ChunkBatch):
@@ -1526,6 +1540,8 @@ def install_live_meetings(app, store, auth, write):
                 _end_open_turns(c, rid)
             return _view(c, auth, who, rid)
         result = mutate(request, body, work)
+        if body.action != "resume":
+            app.state.meeting_frames.stop(rid)
         if body.action == "end":
             _run_windows(app, rid, final=True)
             with store.read() as c:

@@ -51,7 +51,7 @@ instance uses that user's credential for this instance only. The connector ident
 only bots they can see and contact under the existing org-chart Write permission, and only the
 connector can do so in a private meeting.
 
-Every write, including `DELETE` bot removal, uses the normal Tico `Idempotency-Key` header (1–200 characters). Repeating the same
+Except the ephemeral screen relay below, every write, including `DELETE` bot removal, uses the normal Tico `Idempotency-Key` header (1–200 characters). Repeating the same
 operation, key, and body returns the saved response; reusing a key for different content returns
 HTTP 409 with `error.code = "idempotency_conflict"`. Errors use
 `{"error":{"code":"...","detail":"...","retryable":false,...}}`; endpoint-specific cursor
@@ -84,7 +84,7 @@ event is committed with the state change it describes. Reconnect from the last f
 replay without gaps or duplicate effects.
 
 The connect and detail routes return a meeting view with these top-level fields: `id`, `title`,
-`state`, `owner_actor`, `client`, `seq`, `event_id`, `window_ms`, `cooldown_ms`, `reply_cap`, `threshold`,
+`state`, `owner_actor`, `link`, `client`, `seq`, `event_id`, `window_ms`, `cooldown_ms`, `reply_cap`, `threshold`,
 `meeting_model` (the meeting's own choice as stored: `""` for the bot's own model, null to follow the company's),
 `meeting_model_effective` (what replies are set to run on now: the meeting's own choice, else the company's meeting
 model; `""` is the bot's own; not specific to a computer, see `meeting.model` for a fallback), `created_at`,
@@ -292,3 +292,37 @@ unreviewed action items to the server API.
 This contract is the PR #92 Recorder handoff for review; it does not claim that Recorder has
 integrated these behaviors or that PR #92 has shipped. Any implementation-specific shape change must
 be reviewed with Engineering Lead before Recorder ships against it.
+
+
+## Live screen and meeting links
+
+Meeting views include `link`, an absolute browser URL under the server's public origin:
+`/#/meetings/live/{id}`. This works after sign-in and for ended meetings. A private link grants
+no access; add the intended people explicitly. `/#/meetings?live={id}` redirects to this route.
+`GET /api/v2/recorder/browser` returns `{url: public_url}` for a signed-in human so Recorder can
+link filed meetings/tasks without sending people to an API-only runner hostname.
+
+The macOS Recorder can share a selected window/display as JPEG frames, at most 5 fps and
+1920 pixels per edge. This is intended for documents and slides. It sends no audio or camera
+video and gives bots no image access. Images live only in process memory (one latest frame
+per meeting, at most 32 meetings and 2 per owner) and are excluded from SQLite, idempotency receipts and SSE.
+A new server process has no active screen shares. Deployments must use one backend process
+or route each meeting's screen requests to the same process.
+
+| Route suffix under `/api/v2/live-meetings/{id}/screen` | Access and behavior |
+| --- | --- |
+| `GET` (the base path) | Owner of a live meeting; returns capability/limits before opening the picker. |
+| `GET /status` | People with current meeting access; returns `{generation}` for a live share, or 410. Small enough to check independently of media downloads. |
+| `POST /start` | Owner of a live meeting; `Idempotency-Key` is an ephemeral request ID, returns `{generation}`. Same ID during that share returns that generation; a new ID replaces it. Optional `expected_audience` must match the capability receipt, otherwise 409. Team joins do not change the team audience receipt. |
+| `POST /frame?generation=...&seq=...` | Owner; raw `image/jpeg`, at most 1,000,000 bytes, with strictly increasing sequence. Returns 204. Validates JPEG marker dimensions before retaining bytes. |
+| `POST /alive?generation=...` | Owner heartbeat, returns 204. Send every 2 seconds when no new frame is published. |
+| `POST /stop?generation=...` | Owner; stops only that generation, returns 204. A delayed old stop cannot affect a newer share. |
+| `GET /frame?after=...&wait=12` | People with current meeting access only; attached bots are denied. Returns JPEG with `X-Screen-Version`, or 204 after a bounded wait. Rechecks access on every wake-up. |
+
+Frames and heartbeats bypass durable mutation receipts; requests never carry credentials in
+URLs. Every successful media response has `Cache-Control: no-store` and `nosniff`. A share expires
+after ten seconds without a frame or heartbeat. Stop, pause, disconnect, end, or a visibility
+change clears it. A missing/stopped share returns 410; an obsolete generation or sequence
+returns 409; an oversized image returns 413. The viewer clears/revokes its image on stop, errors,
+access loss, hiding the page or navigation. Frame fetching is separate from transcript refresh. Authorization and contended memory locks run on workers, never the ASGI event loop. A separate status request revokes the displayed image while a slow image download is pending.
+Screen lifecycle is ephemeral; it is not replayable from SSE.

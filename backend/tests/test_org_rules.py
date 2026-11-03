@@ -103,6 +103,22 @@ def test_with_matches_any_of_several_recipients(api):
     assert r not in matched(api, "human:cara", ["bot:doc-updater"])
 
 
+def test_a_peer_rule_from_add_rule_keeps_its_mention_with_and_ask_first_reviewer(api):
+    """Add rule sends Who, With, If broken and (under Ask first) a reviewer in one write; the text keeps its @mention as
+    written, for the Rules page to show as a chip. With a person, it reaches a bot only when that person is a recipient."""
+    org(api)
+    made = rule(api, {"kind": "internal", "text": "Ask @cara before you assign her a task.", "who": {"all_bots": True},
+                      "with": {"people": ["cara"]}, "if_broken": "escalate", "reviewer": "ben"})
+    assert made["text"] == "Ask @cara before you assign her a task."
+    assert made["if_broken"] == "escalate" and made["reviewer"]["id"] == "ben"
+    assert made["who"]["all_bots"] and [p["id"] for p in made["with"]["people"]] == ["cara"]
+    assert made["id"] in matched(api, "bot:ops", ["human:cara"])
+    assert made["id"] not in matched(api, "bot:ops", ["human:ben"])
+    # Stop is the default when If broken is left as the dialog opens it.
+    plain = rule(api, {"kind": "internal", "text": "Cite a source.", "who": {"all_bots": True}, "if_broken": "block"})
+    assert plain["if_broken"] == "block" and plain["reviewer"] is None
+
+
 def test_everyone_by_a_plain_member_is_refused(api):
     org(api)
     rule(api, {"kind": "internal", "text": "Everyone reads the handbook.", "who": {"everyone": True}},

@@ -238,6 +238,8 @@ def run(args, who=None):
         return via_tool(client, args, **({"operation_id": args.operation_id} if getattr(args, "operation_id", None) else {}))
     if args.cmd == "settings":
         return via_tool(client, args)
+    if args.cmd == "feedback":
+        return via_tool(client, args)
     if args.cmd == "call":
         return via_tool(client, args)
     if args.cmd in ("card", "pin"):
@@ -420,7 +422,7 @@ def run(args, who=None):
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "assistant":
         from clients import hubtools
-        if args.sub in ("read", "send", "learn", "learned"):
+        if args.sub in ("read", "send", "learn", "learned", "withdraw", "proposals"):
             return via_tool(client, args)
         try:
             body = json.loads(args.body or "{}")
@@ -568,6 +570,9 @@ def run(args, who=None):
             body = Path(args.body_file).read_text() if args.body_file else args.body
             payload = {"owner": target(args.owner), "title": args.title, "body": body,
                        "due": args.due, "goal_id": getattr(args, "goal", None) or None}
+            for field in ("check_back_at", "check_back_note"):
+                if getattr(args, field, None) is not None:
+                    payload[field] = getattr(args, field)
             if args.parent:
                 payload["relations"] = [{"task": args.parent, "kind": "parent"}]
             if getattr(args, "private", None) is not None:
@@ -604,6 +609,8 @@ def run(args, who=None):
                 from clients import hubtools
                 return hubtools.BY_NAME["hub_task_show_many"]["fn"](client, {"ids": ids})
             return client.get("tasks/" + ids[0])
+        if sub == "check-back":
+            return post(f"tasks/{args.id}/check-back", {"at": args.at or args.in_duration, "note": args.check_back_note})
         if sub == "run":
             return post(f"tasks/{args.id}/run-now", {})
         if sub in ("later", "defer"):           # `defer` is the older name

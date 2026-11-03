@@ -141,9 +141,13 @@ def target(c, vault, settings=None):
     """(key, base URL, `_fingerprint`) for a call to the Gateway, all from one read of the saved connection; key '' when
     none is set. Every send takes its key and address from here, never from `key` and `url` one by one: outside a
     transaction each read sees the newest save, so a save in between (a new address with Clear, or with a newly typed
-    key) would pair the key it took away with an address it was never kept for."""
+    key) would pair the key it took away with an address it was never kept for. A demo's key is the sample's and goes
+    nowhere: here it is '' as if none were set, so every send that takes it (search, fetch, images, judges, the postal
+    reader, Billing) acts as it does without a key and sends nothing."""
     record = _row(c)
-    if env_key(settings):
+    if _demo(settings):
+        secret = ""
+    elif env_key(settings):
         secret = env_key(settings)
     else:
         secret = vault.cipher.unseal(c, CONTEXT, record["key"]) if record.get("key") else ""
@@ -335,8 +339,15 @@ def record_check(c, result, fingerprint, now, settings=None):
     return True
 
 
+def _demo(settings):
+    """A demo never asks the Gateway: no key check, no automatic key. Its key and last answer are the sample's."""
+    return bool(getattr(settings, "demo", False))
+
+
 def check_now(store, vault, settings=None, opener=None):
     """Ask the Gateway about the key now (outside any transaction: it is a network call) and keep the answer."""
+    if _demo(settings):
+        return None
     with store.read() as c:
         secret, base, fingerprint = target(c, vault, settings)
     if not secret:
@@ -350,6 +361,8 @@ def check_now(store, vault, settings=None, opener=None):
 def check_soon(store, vault, settings=None, opener=None):
     """`check_now` on a background thread, unless this key was asked about less than CHECK_EVERY seconds ago. For the
     checks nobody pressed a button for: the page opening and the hourly sweep. Returns the thread, or None."""
+    if _demo(settings):
+        return None
     with store.read() as c:
         record = _row(c)
         fingerprint = _fingerprint(c, settings) or ("invite:" + _invite_mark(invite(settings)) if invite(settings) else
@@ -367,6 +380,8 @@ def check_soon(store, vault, settings=None, opener=None):
 
 def check_later(store, vault, settings=None, opener=None):
     """`check_now` on a background thread: the sweep and page loads never wait on the Gateway."""
+    if _demo(settings):
+        return None
     def run():
         try:
             check_now(store, vault, settings, opener)
@@ -602,7 +617,7 @@ def _due(record, settings, now, linked=False):
 def auto_tick(store, vault, settings=None, opener=None, now=None):
     """Enroll or rotate this install's own key when it is due (`_due`); a network call, so outside any transaction.
     Returns what it did ("enrolled", "rotated", "stopped", a refusal code) or None when nothing was due."""
-    if not getattr(vault, "configured", False) or not _auto_lock.acquire(blocking=False):
+    if _demo(settings) or not getattr(vault, "configured", False) or not _auto_lock.acquire(blocking=False):
         return None
     try:
         return _auto_tick(store, vault, settings, opener, now or datetime.datetime.now(datetime.timezone.utc))

@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, cast
 
+from ..core.feeds import GONE
 from .ledger import new_id
 
 TABLES = frozenset({"fin_connections", "fin_money_accounts", "fin_feed_txns", "fin_statements", "fin_reconciliations",
@@ -164,6 +165,16 @@ def feed_counts(c: sqlite3.Connection) -> dict[str, dict[str, int]]:
 
 
 # ------------------------------------------------------------------------------------------------ feed rows
+def known_txns(c: sqlite3.Connection, connection_id: str, provider_ids: Sequence[str]) -> int:
+    """How many of these provider transactions the connection already took in (a backfill page's end check)."""
+    ids = sorted(set(provider_ids))
+    if not ids:
+        return 0
+    return int(c.execute(f"SELECT count(DISTINCT f.provider_id) FROM fin_feed_txns f JOIN fin_money_accounts m ON "
+                         f"m.id=f.money_account_id WHERE m.connection_id=? AND f.provider_id IN ({_marks(ids)})",
+                         (connection_id, *ids)).fetchone()[0])
+
+
 def feed_row(c: sqlite3.Connection, money_account_id: str, provider_id: str) -> Any:
     return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND provider_id=?",
                      (money_account_id, provider_id)).fetchone()
@@ -184,7 +195,8 @@ def feed_by_request(c: sqlite3.Connection, request_id: str) -> Any:
 def feed_page(c: sqlite3.Connection, *, before: tuple[str, str] | None, most: int, money_account_ids: Sequence[str],
               status: str = "", start: str = "", end: str = "", q: str = "", card_ids: Sequence[str] | None = None,
               entry_ids: Sequence[str] | None = None) -> list[Any]:
-    """Feed rows newest first, keyset-paged on (txn_date, id), on these money accounts (or cards, or entries)."""
+    """Feed rows newest first, keyset-paged on (txn_date, id), on these money accounts (or cards, or entries). Rows the
+    bank failed, canceled or returned show only as status "failed"; "ignored" is a person's ignore."""
     where: list[str] = ["1=1"]
     args: list[object] = []
     scopes: list[str] = []
@@ -200,11 +212,18 @@ def feed_page(c: sqlite3.Connection, *, before: tuple[str, str] | None, most: in
     if not scopes:
         return []
     where.append("(" + " OR ".join(scopes) + ")")
+    gone = f"(status='ignored' AND provider_status IN ({_marks(GONE)}))"
     if status == "pending":
         where.append("pending=1")
-    elif status:
-        where.append("status=?")
-        args.append(status)
+    elif status == "failed":
+        where.append(gone)
+        args += list(GONE)
+    else:
+        if status:
+            where.append("status=?")
+            args.append(status)
+        where.append(f"NOT {gone}")
+        args += list(GONE)
     if start:
         where.append("txn_date>=?")
         args.append(start)
@@ -241,6 +260,13 @@ def transfer_candidates(c: sqlite3.Connection, money_account_ids: Sequence[str],
                      "amount=? AND txn_date BETWEEN ? AND ? AND status IN ('new','posted') AND pending=0 AND "
                      "reconciliation_id IS NULL ORDER BY txn_date, id", [*money_account_ids, amount, start, end]
                      ).fetchall()
+
+
+def waiting_credits(c: sqlite3.Connection, money_account_id: str) -> list[Any]:
+    """Settled, unposted money-in rows on this money account with no card or request: a card payment's side, maybe."""
+    return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND status='new' AND entry_id IS NULL AND "
+                     "pending=0 AND amount>0 AND card_id IS NULL AND (request_id IS NULL OR request_id='') AND "
+                     "reconciliation_id IS NULL ORDER BY txn_date, id", (money_account_id,)).fetchall()
 
 
 def rows_of_entry(c: sqlite3.Connection, entry_id: str) -> list[Any]:

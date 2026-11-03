@@ -92,14 +92,15 @@ export type AssistantReadBack = {
 };
 
 export type AssistantSent = {
-  fast: boolean;
-  intent?: string | null;
   message: Message;
-  reply?: Record<string, unknown> | null;
 };
 
 export type AssistantSettings = {
   decides_approvals: boolean;
+};
+
+export type AssistantWithdraw = {
+  reason?: string;
 };
 
 export type Audience = {
@@ -446,6 +447,23 @@ export type BotDetail = {
   turns_at_once?: number | null;
 };
 
+export type BotDreamView = {
+  dream: {
+  closed_at: string | null;
+  doing: string | null;
+  questions: {
+  message_id: string;
+  mine: boolean;
+  text: string;
+} | null;
+  started_at: string;
+  state: "starting" | "dreaming" | "asking" | "done" | "stopped";
+  status: string;
+  summary: string | null;
+  task: string;
+} | null;
+};
+
 export type BotFile = {
   action?: string | null;
   actor?: string | null;
@@ -741,7 +759,7 @@ export type Card = {
   name?: string;
   settings: Record<string, unknown>;
   team_name?: string;
-  template: "tasks_by_status" | "done_per_week" | "needs_you" | "spend" | "kpi" | "automation_runs" | "latest_pages" | "needs_attention" | "unread_threads" | "my_tasks" | "updates";
+  template: "tasks_by_status" | "done_per_week" | "needs_you" | "spend" | "kpi" | "automation_runs" | "latest_pages" | "needs_attention" | "unread_threads" | "my_tasks" | "updates" | "growth_number" | "growth_funnel" | "growth_channels" | "growth_retention" | "growth_board";
   title?: string;
 };
 
@@ -1261,6 +1279,72 @@ export type ExternalHit = {
 
 export type ExtraRepos = {
   repositories: Array<string>;
+};
+
+export type Feedback = {
+  bot_id: string;
+  created_at: string;
+  id: string;
+  note_id: string | null;
+  note_status: "waiting" | "carried" | "settled" | "canceled" | null;
+  org_rule_id: string | null;
+  outcome: "none" | "told_bot" | "rule";
+  person_id: string;
+  rating: "up" | "down";
+  reason: string;
+  rule_status: "suggested" | "active" | "retired" | null;
+  subject_id: string;
+  subject_type: "message" | "task" | "approval";
+  updated_at: string;
+};
+
+export type FeedbackGive = {
+  rating: "up" | "down";
+  reason?: string;
+  subject_id: string;
+  subject_type: "message" | "task" | "approval";
+  tell_bot?: boolean;
+};
+
+export type FeedbackMarkers = {
+  counts: Array<{
+  down: number;
+  subject_id: string;
+  up: number;
+}>;
+  items: Array<Feedback>;
+};
+
+export type FeedbackPage = {
+  items: Array<Feedback>;
+  next_cursor: string | null;
+};
+
+export type FeedbackReasons = {
+  reasons: Array<{
+  count: number;
+  text: string;
+}>;
+};
+
+export type FeedbackRemoved = {
+  id: string;
+  ok: boolean;
+};
+
+export type FeedbackRule = {
+  all_bots?: boolean;
+  text: string;
+};
+
+export type FeedbackRuleDraft = {
+  drafted: boolean;
+  text: string;
+};
+
+export type FeedbackRuleMade = {
+  feedback: Feedback;
+  rule: Record<string, unknown>;
 };
 
 export type FileActivity = {
@@ -3439,7 +3523,9 @@ export type Place = {
   audience?: Record<string, unknown>;
   can_edit: boolean;
   group?: string;
-  kind: "dashboard" | "team" | "bot" | "task" | "person";
+  kind: "dashboard" | "growth" | "team" | "bot" | "task" | "person";
+  month?: string;
+  months?: Array<string>;
   name?: string;
   pins: Array<{
   card?: Card;
@@ -4053,6 +4139,10 @@ export type SeatDetail = {
   description_by?: "chart" | "person";
   id: string;
   kind: "seat";
+  reports_now?: {
+  name: string;
+  until: string;
+};
   reports_to: string;
   stage: "recruiting";
   team?: string;
@@ -4526,6 +4616,16 @@ export type TakeRecommendation = {
 export type Task = {
   acceptance_criteria?: Array<string>;
   body?: string;
+  check_back?: {
+  at: string;
+  by: string | null;
+  delivery: string;
+  due: boolean;
+  enabled: boolean;
+  note: string;
+} | null;
+  check_back_at?: string | null;
+  check_back_note?: string | null;
   cover?: {
   height: number | null;
   url: string;
@@ -4680,6 +4780,11 @@ export type TaskCaps = {
   proposals: Array<TaskCapProposal>;
 };
 
+export type TaskCheckBack = {
+  at: string;
+  note?: string | null;
+};
+
 export type TaskComment = {
   approval_id?: string | null;
   ask?: ReviewAsk | null;
@@ -4700,6 +4805,8 @@ export type TaskCreate = {
   blocker?: TaskBlocker | null;
   body: string;
   change_paths?: Array<string>;
+  check_back_at?: string | null;
+  check_back_note?: string | null;
   check_model?: string | null;
   check_role?: "review" | "check" | null;
   defer_for?: string | null;
@@ -4949,6 +5056,8 @@ export type TaskTypeUpdate = {
 export type TaskUpdate = {
   approval_id?: string | null;
   body?: string | null;
+  check_back_at?: string | null;
+  check_back_note?: string | null;
   close?: boolean;
   due?: string | null;
   goal_id?: string | null;
@@ -5293,7 +5402,7 @@ export type Usage = {
   dimension_labels?: Record<string, unknown>;
   dimensions?: Record<string, unknown>;
   from: string;
-  group?: "bot" | "day" | "routine" | "harness" | "model" | "effort" | "subscription";
+  group?: "bot" | "day" | "routine" | "task" | "harness" | "model" | "effort" | "subscription";
   name?: string;
   prices_as_of: string;
   routines?: Array<Record<string, unknown>>;
@@ -6437,6 +6546,14 @@ export type DraftEditionParams = {
 export type DraftEditionBody = DraftNow;
 export type DraftEditionResponse = unknown;
 
+/** POST /api/v2/feedback/{feedback_id}/rule-draft */
+export type DraftFeedbackRuleParams = {
+  "Idempotency-Key": string;
+  feedback_id: string;
+};
+export type DraftFeedbackRuleBody = never;
+export type DraftFeedbackRuleResponse = FeedbackRuleDraft;
+
 /** POST /api/v2/seats/draft */
 export type DraftSeatParams = {
   "Idempotency-Key": string;
@@ -6635,6 +6752,13 @@ export type GetBotBudgetParams = {
 export type GetBotBudgetBody = never;
 export type GetBotBudgetResponse = BotBudgetState;
 
+/** GET /api/v2/bots/{bot}/dream */
+export type GetBotDreamParams = {
+  bot: string;
+};
+export type GetBotDreamBody = never;
+export type GetBotDreamResponse = BotDreamView;
+
 /** GET /api/v2/bots/{bot}/instructions */
 export type GetBotInstructionsParams = {
   bot: string;
@@ -6696,6 +6820,7 @@ export type GetCallResponse = Call;
 
 /** GET /api/v2/cards/choices */
 export type GetCardChoicesParams = {
+  place?: string;
   team?: string;
 };
 export type GetCardChoicesBody = never;
@@ -7195,6 +7320,7 @@ export type GetPersonAssistantResponse = PersonAssistant;
 
 /** GET /api/v2/places/{place} */
 export type GetPlaceParams = {
+  month?: string | null;
   place: string;
 };
 export type GetPlaceBody = never;
@@ -7447,6 +7573,13 @@ export type GetWebhookWakeUrlParams = Record<string, never>;
 export type GetWebhookWakeUrlBody = never;
 export type GetWebhookWakeUrlResponse = WebhookWakeUrl;
 
+/** POST /api/v2/feedback */
+export type GiveFeedbackParams = {
+  "Idempotency-Key": string;
+};
+export type GiveFeedbackBody = FeedbackGive;
+export type GiveFeedbackResponse = Feedback;
+
 /** POST /api/v2/goals/{gid}/status/auto */
 export type HandBackGoalStatusParams = {
   "Idempotency-Key": string;
@@ -7568,6 +7701,14 @@ export type ListAssistantDecisionsParams = {
 };
 export type ListAssistantDecisionsBody = never;
 export type ListAssistantDecisionsResponse = unknown;
+
+/** GET /api/v2/assistant/proposals */
+export type ListAssistantProposalsParams = {
+  owner?: string;
+  proposer?: string;
+};
+export type ListAssistantProposalsBody = never;
+export type ListAssistantProposalsResponse = unknown;
 
 /** GET /api/v2/audiences/{audience_id}/sources */
 export type ListAudienceSourcesParams = {
@@ -7777,6 +7918,25 @@ export type ListEventTypesParams = {
 export type ListEventTypesBody = never;
 export type ListEventTypesResponse = EventTypeList;
 
+/** GET /api/v2/feedback/list */
+export type ListFeedbackParams = {
+  bot_id?: string | null;
+  cursor?: string | null;
+  limit?: number;
+  rating?: string | null;
+  since?: string | null;
+};
+export type ListFeedbackBody = never;
+export type ListFeedbackResponse = FeedbackPage;
+
+/** GET /api/v2/feedback */
+export type ListFeedbackMarkersParams = {
+  subject_ids?: string;
+  subject_type: string;
+};
+export type ListFeedbackMarkersBody = never;
+export type ListFeedbackMarkersResponse = FeedbackMarkers;
+
 /** GET /api/v2/files/{fid}/activity */
 export type ListFileActivityParams = {
   fid: string;
@@ -7960,7 +8120,7 @@ export type ListFinanceTransactionsParams = {
   q?: string | null;
   source?: "all" | "feed" | "entry";
   start?: string | null;
-  status?: "new" | "matched" | "posted" | "ignored" | "pending" | null;
+  status?: "new" | "matched" | "posted" | "ignored" | "pending" | "failed" | null;
   teammates?: Array<string> | null;
   teams?: Array<string> | null;
   unattributed?: boolean;
@@ -8266,6 +8426,11 @@ export type ListRecentBotsParams = {
 export type ListRecentBotsBody = never;
 export type ListRecentBotsResponse = Recent;
 
+/** GET /api/v2/feedback/recent-reasons */
+export type ListRecentFeedbackReasonsParams = Record<string, never>;
+export type ListRecentFeedbackReasonsBody = never;
+export type ListRecentFeedbackReasonsResponse = FeedbackReasons;
+
 /** GET /api/v2/repositories */
 export type ListRepositoriesParams = Record<string, never>;
 export type ListRepositoriesBody = never;
@@ -8461,6 +8626,7 @@ export type ListThreadMembersResponse = ThreadMembers;
 export type ListThreadsParams = {
   cursor?: string | null;
   limit?: number | null;
+  sort?: string | null;
   with?: string | null;
 };
 export type ListThreadsBody = never;
@@ -8510,6 +8676,14 @@ export type ListWebhooksParams = {
 };
 export type ListWebhooksBody = never;
 export type ListWebhooksResponse = WebhookList;
+
+/** POST /api/v2/feedback/{feedback_id}/rule */
+export type MakeFeedbackRuleParams = {
+  "Idempotency-Key": string;
+  feedback_id: string;
+};
+export type MakeFeedbackRuleBody = FeedbackRule;
+export type MakeFeedbackRuleResponse = FeedbackRuleMade;
 
 /** POST /api/v2/strategy-bot/decisions */
 export type MakeStrategyBotDecisionParams = {
@@ -8916,6 +9090,14 @@ export type RemoveCompanyLogoParams = {
 };
 export type RemoveCompanyLogoBody = never;
 export type RemoveCompanyLogoResponse = unknown;
+
+/** DELETE /api/v2/feedback/{feedback_id} */
+export type RemoveFeedbackParams = {
+  "Idempotency-Key": string;
+  feedback_id: string;
+};
+export type RemoveFeedbackBody = never;
+export type RemoveFeedbackResponse = FeedbackRemoved;
 
 /** DELETE /api/v2/model-subscriptions/{sid} */
 export type RemoveModelSubscriptionParams = {
@@ -9710,6 +9892,14 @@ export type SetTaskCapParams = Record<string, never>;
 export type SetTaskCapBody = TaskCap;
 export type SetTaskCapResponse = TaskCapWrite;
 
+/** POST /api/v2/tasks/{tid}/check-back */
+export type SetTaskCheckBackParams = {
+  "Idempotency-Key": string;
+  tid: string;
+};
+export type SetTaskCheckBackBody = TaskCheckBack;
+export type SetTaskCheckBackResponse = TaskResult;
+
 /** POST /api/v2/tasks/{tid}/model */
 export type SetTaskModelParams = {
   "Idempotency-Key": string;
@@ -9793,6 +9983,14 @@ export type SnoozeTaskParams = {
 };
 export type SnoozeTaskBody = TaskSnooze;
 export type SnoozeTaskResponse = TaskResult;
+
+/** POST /api/v2/bots/{bot}/dream */
+export type StartBotDreamParams = {
+  "Idempotency-Key": string;
+  bot: string;
+};
+export type StartBotDreamBody = Empty;
+export type StartBotDreamResponse = BotDreamView;
 
 /** POST /api/v2/threads/{thread_id}/calls */
 export type StartCallParams = {
@@ -10258,6 +10456,14 @@ export type WaitInboundMessagesParams = {
 };
 export type WaitInboundMessagesBody = Wait;
 export type WaitInboundMessagesResponse = InboundMessages;
+
+/** POST /api/v2/assistant/actions/{aid}/withdraw */
+export type WithdrawAssistantActionParams = {
+  "Idempotency-Key": string;
+  aid: string;
+};
+export type WithdrawAssistantActionBody = AssistantWithdraw;
+export type WithdrawAssistantActionResponse = AssistantActionResult;
 
 /** POST /api/v2/rule-holds/{hold_id}/withdraw */
 export type WithdrawRuleHoldParams = {

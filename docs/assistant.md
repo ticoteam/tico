@@ -2,11 +2,11 @@
 
 Every human has one private DM with the team's assistant (the `coo` bot; you may have renamed it): a personal
 bot that knows how Tico is laid out and does things in it on your behalf. **Ask Tico** opens it from any page: on a
-computer it is the sidebar's bottom row, above your account, with Search's icon (⌘K) at its end; it (or ⌘J / Ctrl+J)
+computer it is the sidebar's bottom row, above your account, with Search's icon (⌘K) and the Tico team's **?** at its end; it (or ⌘J / Ctrl+J)
 opens a small panel straight above that row, over the sidebar, and nothing floats over the page. On a phone the Liquid Dot in the
 middle of the tab bar opens it as a sheet. The panel names the page it sees, and a message sent from it carries that
 page, so "this" and "here" mean what you are looking at. The panel is called **Tico Assistant** (or the name your team
-gave the assistant); its header has the dot, the name, the page it sees and **Loop in Support**. The DM is also a
+gave the assistant); its header has the dot, the name and the page it sees. The DM is also a
 page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's Home, with a
 few things to ask while it is empty. The **Assistant** tab, first on your own page (`#/person/<you>`), opens the same
 page. Attach files or
@@ -20,18 +20,9 @@ header: opening flies it up from the row (or tab) to its place beside the name, 
 panel is open a close mark holds the dot's place. Bots' questions
 and Confirm cards sit in the thread by when they were asked, among the messages, so nothing waits out of sight.
 
-**Loop in Support**, a link at the top right of the panel, brings Tico support into the DM. It rides on your support
-requests ([Support](support.md)): while one of your open requests is in the DM, its chip **Tico Support ×** sits at
-the top, a line in the thread says "You added Tico Support. They can now see chats.", support's messages flow in by
-time as blue-gray bubbles under a headset (yours on the right), a reply seen there is read, and the box writes to
-support instead of the Assistant; the link hides while support is in. Looping support in shares the DM, as the line says: the DM's last 20 turns
-(yours and the Assistant's, one line each, up to 4000 characters) go to the request at once, with keys and tokens cut
-out by the same rules support reports use (`backend/redaction.py`), and the thread doesn't draw that message again.
-With no open request, it sends a new request holding them, with no form; a request taken out earlier comes
-back and gets them instead. The chip's **×** takes it out: "Tico Support can no longer see chats."
-Nothing more from this DM goes to support; the request itself stays open in Support, only this DM stops showing it
-(remembered on this browser). Support itself (every request, diagnostics, a new request) opens from any link to
-`#/support`, such as the Assistant's "Loop in Tico support" reply.
+The Ask panel is only the Assistant. Talking to the people at Tico is a separate chat: the **?** beside Search (on a
+phone, beside Search in the More drawer), or any link to `#/support`, such as the Assistant's "Message the Tico team"
+reply, opens it ([Support](support.md)). Nothing from the DM goes to the Tico team.
 
 A **peek** is a few words beside the closed dot, just past the sidebar level with the Ask row (above the tab bar on a phone), Tico saying something waits on you:
 "Got a quick question for you", "3 questions are waiting on you", "Need your OK on something". Six words at most,
@@ -106,25 +97,14 @@ the template, puts it on the computer BotOps runs on and activates it, and every
 (`POST /api/v2/assistant/turn-on`). With no computer enrolled yet it is left planned and the button says so; enroll one
 and press it again. Once on, it cannot be archived again. Anyone else is told to ask the owner.
 
-## Two speeds
+## Every message is a turn
 
-Bot runs take 30 seconds or more, so lookups never wait for one. The server answers these itself, from Tico's own data
-and as you (what you may see, nothing more), with no run and no model:
+Each message you send your Assistant is a turn of the assistant bot on the team's computer, shown as "thinking" until it
+answers. Nothing is answered by keyword or from a fixed reply: "what is waiting on me", a search, "open X", what a bot
+did today and how to do something all reach the model, which reads the question and answers it from Tico's own data,
+as you (what you may see, nothing more), with links. A turn takes 30 seconds or more; a greeting is a turn too.
 
-| You ask | It answers from |
-|---|---|
-| A simple greeting (`hi`, `hello`, `hey`, or a time-of-day greeting) | A short greeting when it is the first thing said in the DM; no provider or runner turn (later, it goes to the model) |
-| What task types this workspace uses | The authenticated `GET /api/v2/task-types` response; if it cannot be read, it says so rather than showing an empty or guessed list |
-| What needs me | Needs you |
-| Search / find / look up *x* (add *tasks, docs, meetings, files, humans, bots* to narrow) | tasks, docs, meetings, bots' files, humans, bots |
-| Open / go to / where is *x* | the same search, with the best link first (or a page: Settings, Tasks…) |
-| What did *bot* do today | the bot's updates and the tasks it touched in the last 24 hours |
-| Help: how do I … | `docs/*.md`: a short excerpt and a link |
-
-The intent router is keywords and sentence shape first. When the team has a [decisions](../questions/README.md)
-provider, an unclear short message is classified by a `choice` question (`assistant-intent@1`); otherwise it goes to the
-model; the text of such a message is sent to the team's configured decisions provider to be classified. Anything that asks for something to be done always goes to the model. Everything else is a run of the
-assistant bot on the team's computer, shown as "thinking" until it answers.
+Org rules are checked before a message is written, as for any chat: a held message is not written and nothing is answered.
 
 ## It acts as you, never more
 
@@ -238,6 +218,11 @@ records `assistant.action.confirmed` and the operation's own events via assistan
 task's `version` is given the one the task has (a change in between is still a `409`), and `{"status": "closed"}`
 is taken as the close it means (`close: true`), so such a card runs, including one stored before this rule.
 
+Any teammate, person or bot, can withdraw a Confirm card that still waits (`hub assistant withdraw <id>`, `POST
+/api/v2/assistant/actions/{aid}/withdraw`, or `hub_assistant_withdraw`; `hub assistant proposals` lists the waiting cards
+with their ids). The card is marked withdrawn and never runs, and the owner's DM says who withdrew it, with the reason if
+one was given. Only the card's owner can confirm it, and the owner can still Cancel it.
+
 **Many at once is one card.** Clearing your Needs you (closing twenty stale tasks, declining eleven old publish batches,
 answering a bot) is one bulk card, never one each: `POST /api/v2/assistant/actions` with path `/api/v2/assistant/batch`
 and body `{"actions": [{"method": "POST", "path": "/api/v2/tasks/<id>", "body": {...}}, ...]}`, 1 to 100 task changes,
@@ -301,8 +286,8 @@ own session, not a personal token.
 
 | Request | Answer |
 |---|---|
-| `GET /api/v2/assistant` | `{"available", "state", "bot", "name", "can_turn_on", "room_id", "messages": [...], "has_more", "next_before", "execution", "actions": {id: action}, "pending": [...]}`. Creates your DM the first time. `execution` is the assistant's current run (null when idle): show a thinking state while it is set and poll again. A message whose `refs.action` names an id in `actions` is a Confirm / Cancel card; `refs.fast` marks a server answer; `refs.links` lists what it linked. |
-| `POST /api/v2/assistant/messages` `{"text", "place"}` | `{"message", "reply", "fast", "intent"}`. `fast: true` carries the answer as `reply`; otherwise the bot is working. `"place": "updates"` (the Updates DM) always takes a turn, handed the recent updates you may read. `409 assistant_off` when it is off. |
+| `GET /api/v2/assistant` | `{"available", "state", "bot", "name", "can_turn_on", "room_id", "messages": [...], "has_more", "next_before", "execution", "actions": {id: action}, "pending": [...]}`. Creates your DM the first time. `execution` is the assistant's current run (null when idle): show a thinking state while it is set and poll again. A message whose `refs.action` names an id in `actions` is a Confirm / Cancel card; `refs.links` lists what it linked. |
+| `POST /api/v2/assistant/messages` `{"text", "place"}` | `{"message"}` (with `held` or `rule_warning` when the org rule check has something to say). The bot is working on it: poll `GET /api/v2/assistant`. `"place": "updates"` (the Updates DM) always takes a turn, handed the recent updates you may read. `409 assistant_off` when it is off. |
 | `POST /api/v2/assistant/turn-on` | Owner only. `{"bot", "state", "restored", "placed"}`. |
 | `POST /api/v2/assistant/actions` `{"summary", "method", "path", "body"}` | A proposal `{"action": {...}}` (what the assistant's tool calls). |
 | `GET /api/v2/assistant/actions/{id}` | `{"action": {"status": "pending"\|"running"\|"done"\|"failed"\|"canceled"\|"expired", "result": {...}}}` |

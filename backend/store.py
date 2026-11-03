@@ -384,13 +384,13 @@ CREATE INDEX IF NOT EXISTS slack_digests_reader ON slack_digests(reader, created
 CREATE TABLE IF NOT EXISTS slack_threads(
  channel TEXT NOT NULL, thread_ts TEXT NOT NULL, bot TEXT NOT NULL,
  conversation_id TEXT NOT NULL REFERENCES conversations(id), created_at TEXT NOT NULL,
- last_routed_at TEXT, PRIMARY KEY(channel, thread_ts, bot));
+ last_routed_at TEXT, recipient_actor TEXT, PRIMARY KEY(channel, thread_ts, bot));
 CREATE INDEX IF NOT EXISTS slack_threads_conversation ON slack_threads(conversation_id);
 CREATE TABLE IF NOT EXISTS slack_posts(
  message_id TEXT PRIMARY KEY REFERENCES messages(id), channel TEXT NOT NULL,
  thread_ts TEXT NOT NULL, bot TEXT NOT NULL, text TEXT NOT NULL,
  state TEXT NOT NULL DEFAULT 'ready', attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT,
- slack_ts TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+ slack_ts TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, recipient_actor TEXT);
 CREATE INDEX IF NOT EXISTS slack_posts_state ON slack_posts(state, next_attempt_at);
 CREATE INDEX IF NOT EXISTS slack_task_completion_notices ON messages(
  json_extract(refs,'$.task'), json_extract(refs,'$.task_completion.status'), created_at)
@@ -1147,14 +1147,12 @@ class Store:
             from . import system_routines as _system_routines
             c.executescript(_system_routines.SCHEMA)
             _system_routines.ensure(c)
-            from . import thread_followups as _thread_followups
-            _thread_followups.ensure(c)
-            from . import thread_digest as _thread_digest
-            _thread_digest.ensure(c)
             from . import task_rules as _task_rules
             c.executescript(_task_rules.SCHEMA)
             from . import teammate_access as _teammate_access
             _teammate_access.ensure(c)              # people's and groups' See/Read/Write (docs/permissions.md)
+            from . import federation_schema as _federation_schema
+            _federation_schema.seed(c)              # the relay's one state row; a devcopy empties it
             from . import rules as _rules
             c.executescript(_rules.SCHEMA)
             _rules.ensure_schema(c)
@@ -1188,7 +1186,6 @@ class Store:
             c.executescript(_support.SCHEMA)
             from . import inbound as _inbound
             c.executescript(_inbound.SCHEMA)
-            _inbound.ensure(c)
             from . import bills_address as _bills_address
             c.executescript(_bills_address.SCHEMA)
             from . import support_access as _support_access
@@ -1229,8 +1226,6 @@ class Store:
             c.executescript(_invariants.SCHEMA)
             from . import slack_channels as _slack_channels
             c.executescript(_slack_channels.SCHEMA)
-            from . import slack_threads as _slack_threads
-            _slack_threads.ensure(c)
             from . import flight as _flight
             c.executescript(_flight.SCHEMA)
             for column, kind in (("sql_ms", "REAL"), ("wait_ms", "REAL"), ("queries", "INTEGER")):
@@ -1245,9 +1240,6 @@ class Store:
             # Destinations saved in Settings > Listening (backend/listening.py).
             from . import listening as _listening
             _listening.ensure(c)
-            # Tico Meet calls and their people (backend/calls.py): a call belongs to a thread.
-            from . import calls as _calls
-            _calls.ensure(c)
             # Each credential's newest use per (actor, bot) (credentials.last_used): credentials.record_use keeps it.
             H.backfill_credential_uses(c)
             c.execute("BEGIN IMMEDIATE")
@@ -1293,8 +1285,6 @@ class Store:
                 # column arrives. It gives no rights: those come from `member_stored` (backend/credentials.py `owned`).
                 # The person a Slack DM mapping was opened for, and the person a queued copy is for. A DM with no verified
                 # inbound message yet has none: its copies fail closed. A backfill reads each DM's verified history once.
-                H.add_column(c, "slack_threads", "recipient_actor", "TEXT")
-                H.add_column(c, "slack_posts", "recipient_actor", "TEXT")
                 for (channel,) in c.execute("SELECT DISTINCT channel FROM slack_threads WHERE channel LIKE 'D%' "
                                             "AND recipient_actor IS NULL").fetchall():
                     actors = {r[0] for r in c.execute(
@@ -1385,14 +1375,15 @@ class Store:
                         if name not in columns:
                             c.execute(f"ALTER TABLE bot_config ADD COLUMN {name} {declaration}")
                     for row in c.execute(
-                            "SELECT bc.bot,bc.config,b.model,b.effort FROM bot_config bc "
+                            "SELECT bc.bot,bc.config,b.effort FROM bot_config bc "
                             "JOIN bots b ON b.slug=bc.bot").fetchall():
                         config = json.loads(row["config"] or "{}")
                         # A model decision moves the previously seeded Grok
                         # workers from medium to high. Do this once for an existing cloud DB;
                         # subsequent choices remain backend-managed and are never reconciled
-                        # from the bootstrap YAML.
-                        if ((config.get("model") or row["model"]) == "grok-4.6"
+                        # from the bootstrap YAML. (The model is read from config: migration 0043 copied
+                        # the old bots.model into it where config had none.)
+                        if (config.get("model") == "grok-4.6"
                                 and (config.get("reasoning_effort") or row["effort"]) == "medium"):
                             config["reasoning_effort"] = "high"
                             c.execute("UPDATE bots SET effort='high' WHERE slug=?", (row["bot"],))
@@ -1493,10 +1484,9 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=16").fetchone():
                     from .harnesses import backfill_config
                     for row in c.execute(
-                            "SELECT bc.bot,bc.config,b.runtime FROM bot_config bc "
+                            "SELECT bc.bot,bc.config FROM bot_config bc "
                             "JOIN bots b ON b.slug=bc.bot").fetchall():
-                        config, changed = backfill_config(json.loads(row["config"] or "{}"),
-                                                          slug=row["bot"], runtime=row["runtime"])
+                        config, changed = backfill_config(json.loads(row["config"] or "{}"), slug=row["bot"])
                         if changed:
                             c.execute("UPDATE bot_config SET config=? WHERE bot=?",
                                       (encode(config), row["bot"]))
@@ -2046,10 +2036,8 @@ class Store:
                                     "bot_file_versions(poster_blob_id) WHERE poster_blob_id IS NOT NULL"),
                                    ("bot_file_versions_thumb",
                                     "bot_file_versions(thumb_blob_id) WHERE thumb_blob_id IS NOT NULL"),
-                                   # privacy_index names these two with INDEXED BY. hubdb.migrate also makes them,
-                                   # but runs before cloud migration 57 adds tasks.private on an upgraded database.
-                                   ("tasks_private_parties",
-                                    "tasks(id, requester_id, owner_id, guest, private) WHERE private IS NOT 0"),
+                                   # row_clock and task_privacy name this with INDEXED BY. hubdb.migrate also makes
+                                   # it, but runs before cloud migration 57 adds tasks.private on an upgraded database.
                                    ("tasks_private_status",
                                     "tasks(id, requester_id, owner_id, guest, private, status, waiting_on) WHERE private IS NOT 0"),
                                    # The task list's and status rows' covering indexes (hubdb.migrate), for the same reason.
@@ -2119,6 +2107,10 @@ class Store:
                 # Every bot gets a profile by its name, once; a bot that has one is left alone (backend/profiles.py).
                 from . import profiles as Profiles
                 Profiles.migrate(c)
+                # Stale ticket review's converted automation (a no-op) is undone, once, and its team rule set from it
+                # (backend/redesign_migration.py repair_stale_review). Idempotent by its marker.
+                from . import redesign_migration as Redesign
+                Redesign.repair_stale_review(c)
                 from . import releases as Releases
                 Releases.record_start(c, H.now())
                 from .credentials import FILE_MIGRATION, HUB_MIGRATION
@@ -2157,9 +2149,6 @@ class Store:
             # What each message's and run's readability depends on (backend/read_deps.py); settled beside the server.
             from . import read_deps
             read_deps.ensure(c)
-            # Federation between installs (backend/federation_schema.py): its own tables, kept beside the threads.
-            from . import federation_schema
-            federation_schema.ensure(c)
             # Every start, in short batches of their own: rows written since the last pass, including any an
             # older server wrote after a rollback, get their task links (backend/message_links.py).
             message_links.backfill(c)
@@ -2274,14 +2263,21 @@ class Store:
                 c.provenance_start = provenance_clock.current(c)
                 yield c
                 message_links.refresh_dirty(c)
+                H.owed_sync(c)
                 c.commit()
                 # Work that must see the committed rows (a delivery worker's doorbell) runs once the write is durable.
-                for after in c.after_commit:
+                # A barrier (hubdb.durable_commit's WAL sync) runs first and its error is the request's: the write is
+                # not answered as done until it is on disk.
+                hooks = sorted(c.after_commit, key=lambda after: not getattr(after, "barrier", False))
+                c.after_commit.clear()
+                for after in hooks:
+                    if getattr(after, "barrier", False):
+                        after()
+                        continue
                     try:
                         after()
                     except Exception:
                         logging.getLogger(__name__).exception("after-commit callback failed")
-                c.after_commit.clear()
             except BaseException:
                 c.rollback()
                 c.after_commit.clear()
@@ -2354,13 +2350,14 @@ class Store:
             "SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
             (self._principal(identity), operation, key)).fetchone() is not None
 
-    def mutate(self, identity, operation, key, body, fn, check=None):
+    def mutate(self, identity, operation, key, body, fn, check=None, durable=False):
         if not key or len(key) > 200:
             raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
         hashed = digest(encode(body))
         principal = self._principal(identity)
         refusal = logged = None
-        with self.transaction() as c:
+        # Only a money write asks for the durable commit; every other keyed write keeps the plain call.
+        with (self.transaction(durable=True) if durable else self.transaction()) as c:
             # Authenticate leases again under the same write lock as the mutation.
             from .auth import validate_identity
             validate_identity(c, identity)

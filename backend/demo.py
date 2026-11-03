@@ -16,6 +16,7 @@ minute with no domain, DNS, sign-in or model account. It cannot be mistaken for 
 import argparse
 import asyncio
 import contextlib
+import contextvars
 import errno
 import ipaddress
 import logging
@@ -40,7 +41,7 @@ log = logging.getLogger("tico.demo")
 DEFAULT_PORT = 8765
 OWNER_EMAIL = "ana@acme.example"
 BANNER = "Demo — sample data"
-EXPLAIN = ("This is a demo with sample data: bots do not run here and nothing leaves this computer. "
+EXPLAIN = ("This is a demo with sample data: bots do not run here and nothing is sent. "
            "On a real install, this starts the bot on a connected computer.")
 BOT_REPLY = ("This is a demo, so I do not run here. On a real install this message would reach me on a "
              "connected computer and I would answer it there.")
@@ -193,15 +194,49 @@ def avatar(pid):
     return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": "private, max-age=3600"})
 
 
+class _Discarded(Exception):
+    """Ends a public demo GET's write transaction so it rolls back."""
+
+
+# Set for a public demo's GET or HEAD: a read may still open a write (a DM page makes the DM it shows), and on a demo
+# every visitor shares that write would change the company for everyone, so it rolls back instead.
+PUBLIC_READ = contextvars.ContextVar("demo_public_read", default=False)
+
+
+def discard_read_writes(store):
+    """Make `store.transaction()` roll back, never commit, while PUBLIC_READ is set. The caller still sees its own
+    writes inside the transaction, so the page it asked for is drawn; nothing stays."""
+    real = store.transaction
+
+    @contextlib.contextmanager
+    def transaction(durable=False):
+        if not PUBLIC_READ.get():
+            with real(durable) as c:
+                yield c
+            return
+        try:
+            with real(durable) as c:
+                yield c
+                c.after_commit.clear()
+                raise _Discarded
+        except _Discarded:
+            pass
+
+    store.transaction = transaction
+
+
 def install(app, auth, settings):
     """The demo's front gate, outermost so nothing else answers first."""
+    if settings.demo_public:
+        discard_read_writes(app.state.store)
 
     # "Ask the librarian" answers from the graph alone: no model is called.
     from . import market
     market.complete = lambda question, excerpts: ""
 
-    # The seeded Granola account holds no token and nothing leaves this computer: a sync answers "recent".
-    async def granola_recent(who, interval=0):
+    # The seeded Granola account holds no token and nothing leaves this computer: a sync answers "recent" (Sync now
+    # takes the same answer, as the route passes `now` too).
+    async def granola_recent(who, interval=0, now=False):
         return {"state": "recent", "last_synced_at": app.state.granola.status(who)["last_synced_at"]}
     app.state.granola.trigger = granola_recent
 
@@ -219,7 +254,7 @@ def install(app, auth, settings):
         photo = AVATAR.match(path)
         if photo and request.method == "GET":
             return avatar(photo.group(1))
-        if request.method == "GET" and path in ("/", "/index.html"):
+        if request.method in ("GET", "HEAD") and path in ("/", "/index.html"):
             # Nobody types a secret to try a demo: the first page visit is the sign-in.
             if not auth.local_session(request.cookies):
                 token = auth.local_token()
@@ -228,8 +263,8 @@ def install(app, auth, settings):
             if RUNS.match(path):
                 return problem(409, "demo", EXPLAIN)
             if settings.demo_public and not PUBLIC_WRITES.match(path):
-                return problem(403, "demo", "This public demo is read-only. Run your own with "
-                               "`docker run --rm -p 127.0.0.1:8765:8765 ghcr.io/ticoteam/tico demo`.")
+                return problem(403, "demo", "This public demo is read-only.")
+        PUBLIC_READ.set(settings.demo_public and request.method in ("GET", "HEAD"))
         return await call_next(request)
 
 

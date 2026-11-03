@@ -286,6 +286,9 @@ STABLE = [
      "keeps it and changes only what is named, and a null `model` clears it so the bot's task model runs the task "
      "again. Whoever may change the bot's model may change this; a bot never does. Its `readiness` says whether the bot's "
      "computer can run it now", "TaskRunModelResult"),
+    ("/api/v2/tasks/{tid}/check-back", "post", "Tasks", "setTaskCheckBack",
+     "Set a future follow-up appointment on bot work. Accepts an offset timestamp or duration such as 45m; "
+     "human snoozes take precedence and human-only work is excluded", "TaskResult"),
     ("/api/v2/tasks/{tid}/snooze", "post", "Tasks", "snoozeTask",
      "Set a task aside until `until` (an ISO-8601 date or date-time): off lists and Needs you, and quiet, until "
      "then, when its owner bot is woken once. Its requester, owner, anyone on it by role, or a mover", "TaskResult"),
@@ -430,9 +433,8 @@ STABLE = [
      "and what waits for their OK",
      "Assistant"),
     ("/api/v2/assistant/messages", "post", "Assistant", "sendAssistantMessage",
-     "Say something to the Assistant. A lookup is answered at once (fast: true, with the reply); anything else "
-     "is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. `place: updates` (the Updates "
-     "chat) always takes a turn, handed the recent updates the caller may read", "AssistantSent"),
+     "Say something to the Assistant. It is a turn of the assistant bot, shown as `execution` on GET /api/v2/assistant. "
+     "`place: updates` (the Updates chat) is handed the recent updates the caller may read", "AssistantSent"),
     ("/api/v2/assistant/turn-on", "post", "Assistant", "turnOnAssistant",
      "Owner only: restore the archived assistant, or add it from the catalog, and activate it", None),
     ("/api/v2/assistant/actions", "post", "Assistant", "proposeAssistantAction",
@@ -444,6 +446,11 @@ STABLE = [
      "AssistantActionResult"),
     ("/api/v2/assistant/actions/{aid}/cancel", "post", "Assistant", "cancelAssistantAction",
      "Drop a proposal; it never runs", "AssistantActionResult"),
+    ("/api/v2/assistant/actions/{aid}/withdraw", "post", "Assistant", "withdrawAssistantAction",
+     "Any teammate (a person or a bot) withdraws a waiting card: it never runs, and the owner's chat says who withdrew it. "
+     "Only the owner confirms it; the owner cancels it instead", "AssistantActionResult"),
+    ("/api/v2/assistant/proposals", "get", "Assistant", "listAssistantProposals",
+     "The Confirm cards still waiting for their owner, to find one to withdraw: filter by proposer and/or owner", None),
     ("/api/v2/assistant/settings", "get", "Assistant", "getAssistantSettings",
      "Your Assistant settings: whether it decides approvals for you, and whether the team allows it", None),
     ("/api/v2/assistant/settings", "post", "Assistant", "setAssistantSettings",
@@ -587,8 +594,8 @@ STABLE = [
     ("/api/v2/bots/{bot}/kpis", "get", "KPIs", "listBotKpis",
      "A bot's five automatic KPIs, computed from Tico's own data (Read on the bot)", "BotKpis"),
     ("/api/v2/usage", "get", "Usage", "getUsage",
-     "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, harness, model, effort or subscription, "
-     "filterable by those run dimensions and department (__unknown__ selects missing values). The owner and bot administrators see every bot; anyone else sees the bots they run "
+     "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, task (the top 25), harness, model, effort or subscription, "
+     "filterable by those run dimensions, department (__unknown__ selects missing values) and bots (slugs, comma separated). The owner and bot administrators see every bot; anyone else sees the bots they run "
      "or own. ?bot=<bot id or slug> is that bot's daily series and top routines instead", "Usage"),
     ("/api/v2/usage/limits", "get", "Usage", "getUsageLimits",
      "The team default limit and each bot's hourly, daily, weekly and monthly limits with this period's spend, for the bots "
@@ -758,7 +765,13 @@ SCHEMAS = {
     "TaskTypeList": obj({"types": items(ref("TaskType"))}),
     "TaskTypeResult": obj({"type": ref("TaskType")}),
     "Task": obj({"private": "b", "id": "s", "title": "s", "body": "s", "requester_id": "s", "owner_id": "s", "status": "s", "created_at": "s",
-                 "updated_at": "s", "due_at": "n", "version": "i", "lane": "s", "labels": items({"type": "string"}),
+                 "updated_at": "s", "due_at": "n", "check_back_at": {"type": ["string", "null"]},
+                 "check_back_note": {"type": ["string", "null"]}, "check_back": {"oneOf": [
+                     obj({"at": "s", "note": "s", "by": {"type": ["string", "null"]}, "due": "b"},
+                         enabled={"type": "boolean", "description": "Whether follow-up delivery is enabled for this install"},
+                         delivery={"type": "string", "description": "Due delivery state from the existing queue, or pending, disabled, bot_unavailable"}),
+                     {"type": "null"}]},
+                 "version": "i", "lane": "s", "labels": items({"type": "string"}),
                  "acceptance_criteria": items({"type": "string"}),
                  "occurrence": {"type": ["string", "null"], "description": "A due-date routine's occurrence, \"<automation_id>:<due_on>\", on the task it opened: the due is its deadline, not a wake date."}},
                 required=["id", "title", "requester_id", "owner_id", "status", "created_at", "updated_at", "due_at", "version", "lane", "labels", "holds"],
@@ -811,7 +824,8 @@ SCHEMAS = {
     "SeatDetail": obj({"id": "s", "kind": {"enum": ["seat"]}, "stage": {"enum": ["recruiting"]}, "title": "s",
                        "description": "s", "reports_to": "s", "team": "s", "created_at": "s",
                        "description_by": {"enum": ["chart", "person"]},
-                       "can_edit": "b"},
+                       "can_edit": "b",
+                       "reports_now": obj({"name": "s", "until": "s"}, required=["name", "until"])},
                       required=["id", "kind", "stage", "title", "description", "reports_to", "can_edit"]),
     "SeatDrafted": obj({"description": "s", "source": {"enum": ["catalog", "model", "none"]}},
                        required=["description", "source"]),
@@ -1152,8 +1166,7 @@ SCHEMAS = {
     "LibrarianSetup": obj({"available": "b",
                            "docs": obj({"show": "b", "empty": "b", "skipped": "b", "task": {"type": ["object", "null"]}}),
                            "market": ref("LibrarianMarketSetup")}),
-    "AssistantSent": obj({"message": ref("Message"), "reply": {"type": ["object", "null"]}, "fast": "b", "intent": "n"},
-                         required=["message", "fast"]),
+    "AssistantSent": obj({"message": ref("Message")}, required=["message"]),
     "AssistantActionResult": obj({"action": {"type": "object", "description": "id, summary, method, path, body, status "
                                             "(pending, running, done, failed, canceled, expired), result"}, "message_id": "s",
                                   "shown_once": {"type": "object", "description": "Confirm only, on a card that makes a "
@@ -1313,9 +1326,10 @@ SCHEMAS = {
                          "low_estimate_runs": {"type": "integer", "description": "Priced runs whose estimate may be low: the model "
                                                "charges more for long prompts and the runner did not report every request's tokens"}}),
     "Usage": obj({"from": "s", "to": "s", "prices_as_of": {"type": "string", "description": "The date the price table was read"},
-                  "group": {"enum": ["bot", "day", "routine", "harness", "model", "effort", "subscription"]}, "department": "n", "totals": ref("UsageFigures"),
+                  "group": {"enum": ["bot", "day", "routine", "task", "harness", "model", "effort", "subscription"]}, "department": "n", "totals": ref("UsageFigures"),
                   "rows": items({"type": "object", "description": "By bot: bot, name, department; by day: day; by routine: "
-                                                 "routine (null for runs that came from none), title, bot, name. Every row has the "
+                                                 "routine (null for runs that came from none), title, bot, name; by task: value and name (its title, "
+                                                 "'A private task', or null and 'Chats and other runs' for runs with none). Every row has the "
                                                  "usage figures and `share`, its part of the total (estimate plus API-equivalent)",
                                                  "additionalProperties": True}),
                   "dimensions": {"type": "object", "description": "Available dimension filters, scoped to visible runs"},
@@ -2329,9 +2343,9 @@ PROBLEM = {"type": "object", "required": ["error"], "properties": {"error": {
 TAGS['Cards and pins'] = ("Tico's built-in cards and where pages and cards are pinned: the Dashboard, team pages, bot "
                           "sidebars and tasks (docs/overview.md). A card shows each reader only what they may see.")
 STABLE.extend([
-    ('/api/v2/places/{place}', 'get', 'Cards and pins', 'getPlace', 'A place\'s pins in order (dashboard, team:<group>, '
-     'bot:<id>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable pages are '
-     'left out', 'Place'),
+    ('/api/v2/places/{place}', 'get', 'Cards and pins', 'getPlace', 'A place\'s pins in order (dashboard, growth, '
+     'team:<group>, bot:<id>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable '
+     'pages are left out. growth takes `month` (YYYY-MM) and answers `month` and `months`, the picker\'s choices', 'Place'),
     ('/api/v2/places/{place}', 'put', 'Cards and pins', 'savePlace', 'Save a Dashboard, team page or My dashboard (its '
      'default cards become pins); a team page\'s audience sets its group\'s Read', 'Place'),
     ('/api/v2/places/{place}/order', 'post', 'Cards and pins', 'orderPlace', 'Put every pin at a place in this order', 'Place'),
@@ -2343,7 +2357,7 @@ STABLE.extend([
      '`ids` reads up to 50', 'CardList'),
     ('/api/v2/cards', 'post', 'Cards and pins', 'addCard', 'A built-in card, pinned at `place` in the same write', None),
     ('/api/v2/cards/choices', 'get', 'Cards and pins', 'getCardChoices', 'Card templates and their settings, the teams, '
-     'and the KPIs and pages the caller may pick', None),
+     'the KPIs and pages the caller may pick, the Growth page\'s metrics and channels; `place=growth` adds its templates', None),
     ('/api/v2/cards/{cid}', 'patch', 'Cards and pins', 'updateCard', 'Change a card\'s heading or settings', None),
     ('/api/v2/cards/{cid}', 'delete', 'Cards and pins', 'removeCard', 'Remove a card and every pin of it', None),
 ])
@@ -2386,12 +2400,17 @@ SCHEMAS['RulesByTeammate'] = obj({
 })
 SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done_per_week', 'needs_you', 'spend', 'kpi',
                                                         'automation_runs', 'latest_pages', 'needs_attention',
-                                                        'unread_threads', 'my_tasks', 'updates']},
+                                                        'unread_threads', 'my_tasks', 'updates', 'growth_number',
+                                                        'growth_funnel', 'growth_channels', 'growth_retention',
+                                                        'growth_board']},
                        'title': 's', 'heading': 's', 'name': 's', 'team_name': 's', 'settings': 'o', 'hidden': 'b',
                        'data': {'type': ['object', 'null'], 'description': 'What the card shows the caller; null when hidden'}},
                       required=['id', 'template', 'heading', 'settings', 'hidden', 'data'])
 SCHEMAS['CardList'] = obj({'cards': items(ref('Card')), 'next': 'n'})
-SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'team', 'bot', 'task', 'person']}, 'saved': 'b', 'can_edit': 'b',
+SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'growth', 'team', 'bot', 'task', 'person']}, 'saved': 'b',
+                        'can_edit': 'b', 'month': {'type': 'string', 'description': 'growth: the month its cards read (YYYY-MM)'},
+                        'months': {'type': 'array', 'items': {'type': 'string'},
+                                   'description': 'growth: the newest 24 months with cohort rows, oldest first'},
                         'pins': items(obj({'id': 'n', 'item': 'n', 'position': 'i', 'size': {'enum': ['small', 'medium', 'large']},
                                            'card': ref('Card'),
                                            'page': obj({'file_id': 's', 'title': 's', 'bot': 's', 'updated_at': 's', 'archived': 'b'})},
@@ -2470,6 +2489,22 @@ SCHEMAS['MemoryTidyCard'] = obj({
              'created_at', 'expires_at', 'status', 'reason', 'keep_available'])
 SCHEMAS['MemoryTidyCards'] = obj({'cards': items(ref('MemoryTidyCard'))})
 SCHEMAS['MemoryTidyCardResult'] = obj({'card': ref('MemoryTidyCard')})
+
+# A bot's Dream (backend/dream.py): a cleanup task over its own memory, with up to three questions to its requester.
+STABLE.extend([
+    ('/api/v2/bots/{bot}/dream', 'get', 'Bots', 'getBotDream',
+     "The bot's open dream, or else its newest one finished in the last day; dream is null otherwise", 'BotDreamView'),
+    ('/api/v2/bots/{bot}/dream', 'post', 'Bots', 'startBotDream',
+     'Start a dream: a `dream` task for the bot, with the rights `POST /api/v2/tasks` needs. Its open dream is returned '
+     'instead of a second; 409 stateless for a bot that keeps no memory', 'BotDreamView'),
+])
+SCHEMAS['BotDreamView'] = obj({'dream': {'oneOf': [obj({
+    'task': 's', 'status': 's', 'state': {'enum': ['starting', 'dreaming', 'asking', 'done', 'stopped']},
+    'questions': {'oneOf': [obj({'message_id': 's', 'text': 's', 'mine': {
+        'type': 'boolean', 'description': 'The question is put to the caller, who answers it at POST /api/v2/messages/{mid}/answer'}}),
+        {'type': 'null'}]},
+    'summary': 'n', 'doing': {'type': ['string', 'null'], 'description': "While dreaming: the bot's one line on what it is doing now (the task note)"},
+    'closed_at': 'n', 'started_at': 's'}), {'type': 'null'}]}})
 
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "
@@ -2649,6 +2684,48 @@ SCHEMAS.update({
     "CallList": obj({"calls": items(ref("CallSummary")), "next_before": "n", "available": "b"}),
     "CallJoin": obj({"call": ref("Call"), "url": "s", "expires_in": "i", "token": "s"}),
     "CallToken": obj({"url": "s", "expires_in": "i", "token": "s"}),
+})
+
+
+# Feedback on bot work (backend/feedback.py): 👍/👎 with a reason on a message, task or approval a bot made.
+TAGS["Feedback"] = ("A person's 👍 or 👎 on a message, task or approval a bot made, with an optional reason: a 👎 can tell "
+                    "the bot (a note for its next run in that conversation) or become an org rule. Every answer leaves "
+                    "out feedback on what the caller cannot read.")
+STABLE.extend([
+    ("/api/v2/feedback", "post", "Feedback", "giveFeedback",
+     "Rate a message, task or approval a bot made; rating again replaces it. tell_bot (a 👎 only) leaves the bot a note",
+     "Feedback"),
+    ("/api/v2/feedback", "get", "Feedback", "listFeedbackMarkers",
+     "On these subjects the caller reads (subject_ids, comma-separated, at most 200): the caller's own feedback and "
+     "everyone's up/down counts",
+     "FeedbackMarkers"),
+    ("/api/v2/feedback/list", "get", "Feedback", "listFeedback",
+     "Feedback newest first, paged and byte-capped, by bot, rating and since, on subjects the caller reads", "FeedbackPage"),
+    ("/api/v2/feedback/recent-reasons", "get", "Feedback", "listRecentFeedbackReasons",
+     "The caller's five latest distinct reasons, each with how often they used it", "FeedbackReasons"),
+    ("/api/v2/feedback/{feedback_id}", "delete", "Feedback", "removeFeedback",
+     "Remove my feedback; a note it left that no run carried yet is taken back", "FeedbackRemoved"),
+    ("/api/v2/feedback/{feedback_id}/rule-draft", "post", "Feedback", "draftFeedbackRule",
+     "A one-sentence rule drafted from my 👎; stores nothing. With no model the reason comes back, drafted false",
+     "FeedbackRuleDraft"),
+    ("/api/v2/feedback/{feedback_id}/rule", "post", "Feedback", "makeFeedbackRule",
+     "Make my 👎 an internal org rule for the bot or all bots: active when I manage its Who, else suggested",
+     "FeedbackRuleMade"),
+])
+SCHEMAS.update({
+    "Feedback": obj({"id": "s", "person_id": "s", "subject_type": {"enum": ["message", "task", "approval"]},
+                     "subject_id": "s", "bot_id": "s", "rating": {"enum": ["up", "down"]}, "reason": "s",
+                     "outcome": {"enum": ["none", "told_bot", "rule"]}, "note_id": "n",
+                     "note_status": {"enum": ["waiting", "carried", "settled", "canceled", None]}, "org_rule_id": "n",
+                     "rule_status": {"enum": ["suggested", "active", "retired", None]}, "created_at": "s",
+                     "updated_at": "s"}),
+    "FeedbackMarkers": obj({"items": items(ref("Feedback")),
+                            "counts": items(obj({"subject_id": "s", "up": "i", "down": "i"}))}),
+    "FeedbackPage": obj({"items": items(ref("Feedback")), "next_cursor": "n"}),
+    "FeedbackReasons": obj({"reasons": items(obj({"text": "s", "count": "i"}))}),
+    "FeedbackRemoved": obj({"ok": "b", "id": "s"}),
+    "FeedbackRuleDraft": obj({"text": "s", "drafted": "b"}),
+    "FeedbackRuleMade": obj({"feedback": ref("Feedback"), "rule": "o"}),
 })
 
 

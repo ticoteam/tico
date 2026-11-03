@@ -34,7 +34,7 @@ def test_all_good(environment, monkeypatch):
     with_backup(monkeypatch, {"mode": "remote", "last_replicated_at": H.now(), "target_kind": "s3"})
     body, checks = health_of(api)
     assert {k: v["status"] for k, v in checks.items() if k != "signin"} == {
-        "version": "ok", "computers": "ok", "models": "ok", "waiting": "ok", "queue": "ok",
+        "version": "ok", "computers": "ok", "models": "ok", "waiting": "ok", "queue": "ok", "task_check_backs": "ok",
         "github": "info", "backups": "ok", "failed": "ok", "stalled_runs": "ok", "turns:" + body["computers"][0]["id"]: "ok"}
     assert body["computers"][0]["online"] and body["computers"][0]["runtimes"][0]["ready"]
 
@@ -214,7 +214,7 @@ def test_others_see_counts_not_details(environment):
     heartbeat(api, runner, seconds_ago=600)
     body, checks = health_of(api, as_person(api, "quinn"))
     assert body["audience"] == "human" and body["computers"] == [] and body["waiting"] == []
-    assert set(checks) == {"computers", "waiting", "queue", "failed", "stalled_runs"}
+    assert set(checks) == {"computers", "waiting", "queue", "failed", "stalled_runs", "task_check_backs"}
     assert all(not row["fixes"] for row in checks.values())
     assert "helper" not in checks["waiting"]["summary"]
 
@@ -231,9 +231,9 @@ def test_a_bot_reads_computers_and_failed_runs_without_admin_detail(environment)
     body, checks = health_of(api, signed_in("qa-bot"))
     assert body["audience"] == "bot" and "storage" not in body
     assert body["computers"][0]["online"] and set(body["computers"][0]) == {
-        "id", "label", "online", "last_seen_at", "platform", "disk", "update", "turn_counts", "turn_summary"}
+        "id", "label", "online", "resting", "last_seen_at", "platform", "disk", "update", "turn_counts", "turn_summary"}
     assert body["failures"] == [] and set(checks) == {
-        "computers", "waiting", "queue", "failed", "stalled_runs", "turns:" + body["computers"][0]["id"]}
+        "computers", "waiting", "queue", "failed", "stalled_runs", "task_check_backs", "turns:" + body["computers"][0]["id"]}
     assert api.get("/api/v2/health/issues", headers=signed_in("qa-bot")).status_code == 200
 
 
@@ -335,7 +335,7 @@ def test_a_bot_its_computer_cannot_start_is_stuck_with_the_reason_and_one_fix(en
                       "bots": {"release": {"ready": False, "runtime": "claude", "problems": ["Claude login required"]}}}), runner))
         c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('release',?,1,?,'t')",
                   (runner, H.now()))
-        c.execute("UPDATE bots SET runtime='claude' WHERE slug='release'")
+        c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('release',?,'ana')", (json.dumps({"runtime": "claude"}),))
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         conversation = H.open_conversation(c, owner, [owner, "bot:release"], kind="chat")
         H._write_message(c, owner, "bot:release", "ship it", conversation, "say", {}, None, None)
@@ -355,7 +355,7 @@ def test_a_bot_its_computer_cannot_start_is_stuck_with_the_reason_and_one_fix(en
     from backend import bot_access as A
     only_ana = A.audience({"people": ["ana"]})
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_config(bot,config,owner_id,access) VALUES('release','{}','ana',?)",
+        c.execute("UPDATE bot_config SET access=? WHERE bot='release'",
                   (A.stored({"see": only_ana, "read": only_ana, "write": only_ana}),))
     body, checks = health_of(api, as_person(api, "quinn"))
     assert body["stuck"] == [] and "release" not in json.dumps(body)
@@ -423,7 +423,6 @@ def test_an_antigravity_bot_is_not_told_to_sign_in_to_gemini_cli(environment):
             runner))
         c.execute("INSERT INTO bot_config(bot,config,owner_id) VALUES('scout',?,'ana')",
                   (json.dumps({"runtime": "gemini", "harness": "antigravity"}),))
-        c.execute("UPDATE bots SET runtime='gemini' WHERE slug='scout'")
         c.execute("INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('scout',?,1,?,'t')",
                   (runner, H.now()))
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]

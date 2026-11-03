@@ -81,10 +81,7 @@ SCHEMA = (
 def ensure(c):
     for statement in SCHEMA:
         c.execute(statement)
-    # A database made before `where:` keeps its org_rules as they are (CREATE TABLE IF NOT EXISTS), so the column is
-    # added here once.
-    if "where_terms" not in {row[1] for row in c.execute("PRAGMA table_info(org_rules)")}:
-        c.execute("ALTER TABLE org_rules ADD COLUMN where_terms TEXT NOT NULL DEFAULT '[]'")
+    # A database made before `where:` got org_rules.where_terms from migration 0047.
     D.ensure(c)
 
 

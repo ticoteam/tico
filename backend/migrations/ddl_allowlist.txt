@@ -10,7 +10,6 @@ backend/bookkeeper.py:2
 backend/bot_task_tabs.py:1
 backend/bot_tools.py:2
 backend/browser_exit.py:5
-backend/calls.py:7
 backend/cards.py:4
 backend/chat_goals_schema.py:3
 backend/check_independence.py:3
@@ -26,7 +25,6 @@ backend/directory.py:1
 backend/doc_sources.py:11
 backend/docs.py:7
 backend/events.py:5
-backend/federation_schema.py:16
 backend/file_library.py:5
 backend/files.py:10
 backend/finance/store/schema.py:141
@@ -37,10 +35,10 @@ backend/github_reviews.py:1
 backend/google_connect.py:4
 backend/health_monitor.py:2
 backend/hook_relay_schema.py:3
-backend/hubdb.py:294
+backend/hubdb.py:288
 backend/idempotency_messages.py:6
-backend/inbound.py:7
-backend/invariants.py:4
+backend/inbound.py:5
+backend/invariants.py:2
 backend/invites.py:1
 backend/learned.py:2
 backend/learnings.py:4
@@ -58,7 +56,7 @@ backend/message_links.py:10
 backend/milestone_waits.py:4
 backend/model_subscriptions.py:7
 backend/org_rule_check.py:5
-backend/org_rules.py:8
+backend/org_rules.py:7
 backend/org_turns.py:1
 backend/owner_link.py:1
 backend/pages.py:2
@@ -84,7 +82,6 @@ backend/runner_versions.py:8
 backend/screening.py:2
 backend/slack_app.py:1
 backend/slack_channels.py:1
-backend/slack_threads.py:14
 backend/sleep_idle_schema.py:1
 backend/stale_review.py:4
 backend/stall_triage.py:1
@@ -92,7 +89,7 @@ backend/start_places.py:2
 backend/status_values.py:5
 backend/step_flow.py:1
 backend/storage_schema.py:11
-backend/store.py:183
+backend/store.py:181
 backend/strategy.py:8
 backend/subscriptions_schema.py:2
 backend/support.py:2
@@ -105,11 +102,7 @@ backend/task_manager.py:2
 backend/task_relations.py:7
 backend/task_roles.py:2
 backend/task_rules.py:2
-backend/teammate_access.py:2
-backend/thread_digest.py:1
-backend/thread_followups.py:3
-backend/thread_search.py:3
-backend/threads.py:38
+backend/threads.py:5
 backend/tico_notices_schema.py:2
 backend/tico_storage.py:3
 backend/triggers_incoming_schema.py:14

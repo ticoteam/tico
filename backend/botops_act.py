@@ -627,8 +627,10 @@ def parse_body(raw):
 
 
 # BotOps' own: the run's plumbing and what BotOps says itself. Never switched to the requester by default.
+# Taking back its own Confirm card, and listing them (backend/assistant.py): BotOps' own cards, never run for a person.
 OWN = re.compile(API + r"(credential-runtime|runner-credential-.*|runner-watcher-credentials|attempts.*|jobs.*|runners/.*|"
-                 r"messages(/.*)?|chat/.*|conversations/.*|bots/" + "botops" + r"(/.*)?|files/(uploads|imports)|uploads/.*|me(/.*)?)")
+                 r"messages(/.*)?|chat/.*|conversations/.*|bots/" + "botops" + r"(/.*)?|files/(uploads|imports)|uploads/.*|me(/.*)?|"
+                 r"assistant/proposals|assistant/actions/" + _S + r"/withdraw)")
 
 
 def default_delegable(method, path, body=None, query=None):
@@ -685,6 +687,9 @@ def mail_settings_hint(bot, slug=""):
             + " > Mail sending, or with `hub bot mail " + (slug or bot) + " --send`")
 
 
+ROLE_FIX = "Your role can't change this: "     # `fix` for a person's role refused (app.py words a setting's who may)
+
+
 def fix(path, code, status, acting, names, base=""):
     """`{"fix", "link"}` for a refusal of a BotOps call, or None. `acting` is the identity the route checked;
     `names` maps actor ids to display names."""
@@ -720,5 +725,5 @@ def fix(path, code, status, acting, names, base=""):
         text = (asker + " asked for this without citing who wanted it, so BotOps had only " + asker + "'s rights: say "
                 "go ahead in your BotOps chat, or change " + where + " yourself")
     else:
-        text = "Your role can't change this: ask an owner or admin to change " + where
+        text = ROLE_FIX + "ask an owner or admin to change " + where
     return {"fix": text, "link": (base.rstrip("/") + "/" + link) if base else link}

@@ -196,8 +196,9 @@ def range_label(low, high, unit=""):
 
 
 def target_label(kpi, link):
-    """'→ 65% by Dec 31' or 'range 40–60', or '' when the link sets none."""
-    if not link or link.get("kind") == "none":
+    """'→ 65% by Dec 31' or 'range 40–60', or '' when the link sets none. A proposed target with no kind sets none,
+    as validate_target reads it (a kpi_target card's payload; its KeyError made GET /proposals a 500)."""
+    if not link or (link.get("kind") or "none") == "none":
         return ""
     unit = kpi.get("unit") or ""
     if link["kind"] == "maintain":
@@ -500,14 +501,14 @@ def create(conn, actor, owner, fields, kid=None):
     if not values.get("name"):
         raise ValueError("name the measure, in words: what is counted, per what")
     ts = H.now()
-    row = {"id": kid or H.new_id(), "goal_id": "", "name": values["name"], "unit": values.get("unit", ""), "target": None,
+    row = {"id": kid or H.new_id(), "name": values["name"], "unit": values.get("unit", ""),
            "created_at": ts, "created_by_id": actor, "slug": _unique_slug(conn, values["name"]),
            "definition": values.get("definition", ""), "direction": values.get("direction", "up"),
            "cadence": values.get("cadence", "weekly"), "owner_id": owner, "source_note": values.get("source_note", ""),
            "definition_version": 1, "updated_at": ts}
-    conn.execute("INSERT INTO kpis (id, goal_id, name, unit, target, created_at, created_by_id, slug, definition, direction, "
-                 "cadence, owner_id, source_note, definition_version, updated_at) VALUES (:id, :goal_id, :name, :unit, "
-                 ":target, :created_at, :created_by_id, :slug, :definition, :direction, :cadence, :owner_id, :source_note, "
+    conn.execute("INSERT INTO kpis (id, name, unit, created_at, created_by_id, slug, definition, direction, "
+                 "cadence, owner_id, source_note, definition_version, updated_at) VALUES (:id, :name, :unit, "
+                 ":created_at, :created_by_id, :slug, :definition, :direction, :cadence, :owner_id, :source_note, "
                  ":definition_version, :updated_at)", row)
     _version(conn, row, actor, ts)
     return kpi(conn, row["id"])

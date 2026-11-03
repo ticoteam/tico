@@ -22,7 +22,7 @@ from backend.finance.mercury import Answer
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     ACME_ADDRESS, AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store,
     sync_once)
-from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.test_api import api, get, headers, post  # noqa: F401
 
 HOURS = [f"2026-10-15T{h:02d}:30:00.000000Z" for h in range(13, 24)]
 
@@ -1882,3 +1882,99 @@ def test_a_send_time_rule_on_who_asks_cancels_a_payment_someone_else_queued(book
     with books.read() as c:
         status = c.execute("SELECT status || ':' || coalesce(last_error, '') FROM fin_payments").fetchone()[0]
         assert status.startswith("canceled:Only the owner pays"), status
+
+
+def test_a_money_action_commits_synced_and_its_connection_goes_back_at_the_default(api, monkeypatch):
+    """A finance action's commit is synchronous=FULL while the action writes (store.mutate durable), and the pooled
+    connection it used goes back at the company's default afterwards."""
+    store = api.app.state.store
+    default = {"OFF": 0, "NORMAL": 1}[H.synchronous("NORMAL")]
+    seen = []
+    real_act = FA.act
+
+    def watched(c, *args, **kwargs):
+        seen.append(c.execute("PRAGMA synchronous").fetchone()[0])     # 0 OFF, 1 NORMAL, 2 FULL
+        return real_act(c, *args, **kwargs)
+
+    monkeypatch.setattr(FA, "act", watched)
+    r = api.post("/api/v2/finance/actions", json={"kind": "recipient_add", "payload": PAYEE},
+                 headers=headers("ben-test", "money-durable-1"))
+    assert r.status_code < 500, r.text
+    assert seen == [2], seen                                             # the action ran fully synced
+    with store.read() as c:
+        assert c.execute("PRAGMA synchronous").fetchone()[0] == default
+    assert store.pool and all(p.execute("PRAGMA synchronous").fetchone()[0] == default for p in store.pool)
+
+
+def test_approving_a_finance_action_commits_synced(api, monkeypatch):
+    """Approving a pending finance action applies it in the decision's transaction, so that commit is synchronous=FULL
+    too: a power cut after the 200 cannot lose the approved payee or payment."""
+    store = api.app.state.store
+    FA.use_vault(api.app.state.vault)
+    FA.banking_stop()
+    FA.use_vault(api.app.state.vault)
+    with store.transaction() as c:
+        FA.setup(c, OWNER, AT)
+    connect(store, FakeMercury())
+    with store.transaction() as c:
+        act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
+        _rule(c, OWNER, "Payees ask", {"kind": "recipient_add"}, {"outcome": "needs_approval", "who": "owner"},
+              [{"input": {"kind": "recipient_add"}, "expect": "needs_approval"}])
+    asked = post(api, "finance/actions", {"kind": "recipient_add", "payload": PAYEE}, token="ben-test", key="payee-sync")
+    seen = []
+    real = FA.approval_decided
+
+    def watched(c, *args, **kwargs):
+        seen.append(c.execute("PRAGMA synchronous").fetchone()[0])     # 2 = FULL
+        return real(c, *args, **kwargs)
+
+    monkeypatch.setattr(FA, "approval_decided", watched)
+    post(api, f"approvals/{asked['approval_id']}", {"decision": "approved"}, key="approve-sync")
+    assert seen == [2], seen
+
+
+def test_a_finance_action_in_a_plain_transaction_syncs_the_wal_once_after_commit(api, monkeypatch):
+    """A rule, a books disconnect or a bills address change runs a Finance action in a transaction opened at the
+    default synchronous; the action makes that commit reach the disk by fsyncing the WAL once, after the commit."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        FA.setup(c, OWNER, AT)
+    monkeypatch.setenv("TICO_SQLITE_SYNC", "normal")
+    synced = []
+    monkeypatch.setattr(H.os, "fsync", lambda fd: synced.append(fd))
+    with store.transaction() as c:
+        assert act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"}).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": "human:cara", "right": "finance.pay"}).status == "committed"
+        assert synced == []                                              # nothing before the commit
+    assert len(synced) == 1
+    with store.transaction() as c:
+        c.execute("SELECT 1")
+    assert len(synced) == 1                                              # a transaction with no Finance action: no sync
+
+
+def test_a_finance_action_whose_wal_sync_fails_is_not_answered_as_done(api, monkeypatch):
+    """The WAL sync is a barrier: when it fails the transaction's caller gets the error, not a success it cannot
+    keep. The commit itself stands, so a retry with the same key replays the stored result."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        FA.setup(c, OWNER, AT)
+    monkeypatch.setenv("TICO_SQLITE_SYNC", "normal")
+
+    def broken(fd):
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(H.os, "fsync", broken)
+    with pytest.raises(OSError):
+        with store.transaction() as c:
+            act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
+    with pytest.raises(OSError):                                         # still owed: the next write waits on it too
+        with store.transaction() as c:
+            c.execute("SELECT 1")
+    synced = []
+    monkeypatch.setattr(H.os, "fsync", lambda fd: synced.append(fd))
+    with store.transaction() as c:
+        c.execute("SELECT 1")
+    assert len(synced) == 1 and not H._OWED                              # paid once the disk answers
+    with store.transaction() as c:
+        c.execute("SELECT 1")
+    assert len(synced) == 1

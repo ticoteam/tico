@@ -9,7 +9,7 @@ added after this list, is emptied and named in the output: a new table is safe u
 
 Runs stay for realism: finished attempts in the window keep their events, conversations and inputs (inputs are
 message links, no text, and decide who may see a run). Unfinished jobs and attempts go. The tokens on kept rows are
-replaced by values no token hashes to: bots, external agents, runners (also revoked) and attempts (lease ended).
+replaced by values no token hashes to: external agents, runners (also revoked) and attempts (lease ended).
 The key files that sit beside a database (backup.KEY_FILES) are never copied, so a credential row missed here still
 opens nothing. Beside the copy go a `server.env` with TICO_REHEARSAL=1 (nothing runs on a timer, nothing leaves the
 server, and runners are refused), a fresh local sign-in token, and empty registry and attachment folders.
@@ -38,7 +38,7 @@ from .hubdb import now, shift
 # Emptied, never pruned: one surviving row is one thing the copy could do.
 EMPTY = (
     # queued work
-    "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "calendar_actions",
+    "job_recovery", "service_jobs", "doc_source_jobs", "update_queue", "task_reminders", "task_check_back_wakes", "calendar_actions",
     "meeting_deliveries", "worktree_waits", "check_waits", "check_head_provenance", "idempotency",
     "idempotency_messages", "blob_media_retries", "seat_requests",   # a cloud agent request's key: a replay re-files
     "github_product_repo_operations", "github_review_operations", "invite_sends",
@@ -137,7 +137,7 @@ KEEP = frozenset((
     "kpis", "learning_cursors",
     # Threads: the search index (its triggers follow the messages kept), and the digest and follow-up ledgers, which
     # stop the copy emailing or nudging again what the source already did.
-    "thread_digests", "thread_followups", "thread_earlier_notices", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs", "learned_entries", "linked_docs", "listening_destinations",
+    "thread_digests", "thread_followups", "thread_earlier_notices", "thread_rankings", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs", "learned_entries", "linked_docs", "listening_destinations",
     "listen_items", "listen_judgments", "listen_runs", "live_meeting_chat", "live_meeting_chat_routes",
     "live_meeting_access", "live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_events", "live_meeting_humans",
     "live_meeting_turns", "live_meeting_windows", "live_meetings", "mail_agent_instructions", "mail_messages",
@@ -152,7 +152,8 @@ KEEP = frozenset((
     "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
     "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
     "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
-    "usage_limits", "usage_pools", "task_caps",
+    "usage_limits", "usage_pools", "task_caps", "reach_settings", "reach_lines",
+    "feedbacks",       # 👍/👎 on bot work (backend/feedback.py)
     # Shared records (backend/records): locations, items and projects
     "items", "locations", "projects", "record_aliases",
     # Growth and brand (backend/growth.py, backend/brand.py)
@@ -349,8 +350,6 @@ def prune(c, days, keep_automations=False):
                 for child, col, key in refs)
             delete(table, where, (cutoff,))
     # Kept rows keep no way in: a value no token hashes to (the columns are NOT NULL UNIQUE where not nullable).
-    if "bots" in present:
-        c.execute("UPDATE bots SET token_hash=NULL")
     if "agents" in present:
         c.execute("UPDATE agents SET token_hash='devcopy-revoked:'||bot, revoked_at=coalesce(revoked_at,?), "
                   "revoked_by=coalesce(revoked_by,'devcopy')", (stamp,))

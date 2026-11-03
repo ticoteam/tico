@@ -13,6 +13,7 @@ from backend.store import Store
 
 TABLES = {
     rows.TaskRow: "tasks",
+    rows.TaskCheckBackWakeRow: "task_check_back_wakes",
     rows.AttemptRow: "attempts",
     rows.RunnerRow: "runners",
     rows.ApprovalRow: "approvals",
@@ -20,6 +21,8 @@ TABLES = {
     rows.PrincipalRow: "principals",
     rows.MemoryTidyPassRow: "memory_tidy_passes",
     rows.MemoryTidyPacketRow: "memory_tidy_packets",
+    rows.ThreadRankingRow: "thread_rankings",
+    rows.FeedbackRow: "feedbacks",
 }
 
 
@@ -37,6 +40,8 @@ UNTYPED = frozenset({
     # Finance's combined build (migration 0037): prepaid postings and invoice reminders.
     "fin_invoice_reminders", "fin_prepaid_postings",
     "memory_tidy_keeps", "pending_subscription_fallbacks", "projects", "record_aliases", "subscription_connects",
+    # Reach (backend/reach.py): settings and lines.
+    "reach_lines", "reach_settings",
     # The Company page (backend/company_page).
     "audience_readers", "audience_sources", "audiences", "company_page_settings", "disclosure_revisions",
     "disclosure_rules", "edition_checks", "edition_sources", "edition_views", "editions", "page_releases", "page_stats",
