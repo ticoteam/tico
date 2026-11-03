@@ -381,6 +381,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_turn_carries_each_name_as_tico_and_as_the_hub_name_it_replaces() {
+        let dir = std::env::temp_dir().join(format!("tico-env-names-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = EnvContext { url: "http://hub.invalid", projects_dir: &dir, state_dir: &dir };
+        let mut vault = Vault::default();
+        let env = environment_with(&ctx, &serde_json::json!({"bot": "ops", "token": "turn-token", "id": "a1"}), &mut vault, None)
+            .await.unwrap();
+        for name in ["API_URL", "TOKEN", "BOT", "EMPLOYEE", "DIR", "WORKSPACE"] {
+            assert_eq!(env.get(&format!("TICO_{name}")), env.get(&format!("HUB_{name}")), "{name}");
+            assert!(env.contains_key(&format!("TICO_{name}")), "{name}");
+        }
+        assert_eq!(env["TICO_TOKEN"], "turn-token");
+        assert_eq!(env["TICO_BOT"], "ops");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn a_credential_granted_as_claude_config_dir_never_reaches_the_turn() {
         let dir = std::env::temp_dir().join(format!("tico-env-reserved-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
