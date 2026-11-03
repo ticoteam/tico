@@ -415,3 +415,139 @@ def test_catch_up_cuts_a_long_text_and_keeps_each_card_to_the_page_budget(api, m
     shown = next((it for it in page["items"] if it["thread"]["id"] == big["id"]), None)
     if shown:
         assert len(shown["messages"]) + shown["more"] == 11
+
+
+def private_ref(api):
+    """A private task of cara's that ben may not read: a person's post that names it is hidden from ben."""
+    from backend.tests.test_api import unrelated_task_managers
+    with api.app.state.store.transaction() as c:
+        unrelated_task_managers(c)
+        return H.task_create(c, "human:cara", "Private plan", "Details.", "human:cara", private=True, lint=False)["id"]
+
+
+def test_catch_up_counts_only_the_new_messages_the_reader_may_read(api):
+    secret = private_ref(api)
+
+    def hidden(thread_id, text, **kw):
+        return post_as(api, thread_id, "human:cara", text, refs={"task": secret}, **kw)
+
+    quiet = new_thread(api, title="Quiet", members=("human:ben", "human:cara"))
+    first = hidden(quiet["id"], "Private numbers")
+    hidden(quiet["id"], "@ben private numbers", to_actor="human:ben")
+    with api.app.state.store.read() as c:
+        assert H.message(c, first["id"])["restricted"] == 1
+    body, rail = listed(api, "catch-up", "ben-test"), listed(api, "rail", "ben-test")
+    assert body["items"] == [] and body["count"] == 0
+    assert rail["catch_up"] == 0 and rail["catch_up_ids"] == []
+    # 26 hidden ahead of the first one ben reads, and 20 he reads in all.
+    mixed = new_thread(api, title="Mixed", members=("human:ben", "human:cara"))
+    for n in range(26):
+        hidden(mixed["id"], f"Private {n}")
+    say(api, mixed["id"], "Visible 0")
+    for n in range(26, 30):
+        hidden(mixed["id"], f"Private {n}")
+    for n in range(1, 20):
+        say(api, mixed["id"], f"Visible {n}")
+    body = listed(api, "catch-up", "ben-test")
+    [item] = body["items"]
+    assert item["thread"]["id"] == mixed["id"] and body["count"] == 1
+    assert [m["body"] for m in item["messages"]] == [f"Visible {n}" for n in range(20)]
+    assert item["new_count"] == 20 and item["more"] == 0
+    assert "Private" not in json.dumps(body)
+    assert listed(api, "rail", "ben-test")["catch_up_ids"] == [mixed["id"]]
+
+
+def test_an_activity_event_counts_every_unread_message_it_stands_for(api):
+    thread = new_thread(api, members=("human:ben", "human:cara"))
+    after = cursor(api)
+    say(api, thread["id"], "One")
+    say(api, thread["id"], "Two")
+    post_as(api, thread["id"], "bot:ops", "Indexing finished")       # the newest is not unread for anyone
+
+    def activity(token):
+        return [(d["unread"], d["unread_count"]) for _, topic, d in read_as(api, who(api, token), after, ("threads",))
+                if d.get("kind") == "activity" and d["thread_id"] == thread["id"]]
+
+    assert activity("ben-test") == [(True, 2)]
+    assert activity("ana-test") == [(False, 0)]
+
+
+def test_held_writes_are_read_from_the_readers_own_candidates_through_an_index(api):
+    from backend import org_rule_check
+    from backend.tests.test_thread_attention import hold
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='finance'")
+    for _ in range(30):
+        hold(api, reviewer="human:ana", author="human:cara", operation="threads")      # not ben's
+    mine = hold(api, reviewer="human:ben", author="human:cara", operation="threads")
+    for_him = hold(api, reviewer="human:ana", author="bot:finance", operation="threads")
+    seen = []
+    with api.app.state.store.read() as c:
+        c.set_trace_callback(seen.append)
+        try:
+            found = org_rule_check.held_for(c, who(api, "ben-test"), ("threads",))
+        finally:
+            c.set_trace_callback(None)
+        assert sorted(h["id"] for h in found) == sorted([mine, for_him])
+        assert len(org_rule_check.held_for(c, who(api, "ben-test"), ("threads",), limit=1)) == 1
+        [sql] = [s for s in seen if "FROM org_rule_holds" in s]
+        plan = [r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql)]
+    assert not any(p.startswith("SCAN org_rule_holds") for p in plan), plan
+    assert any("org_rule_holds_reviewer" in p for p in plan) and any("org_rule_holds_author" in p for p in plan), plan
+
+
+def test_catch_up_counts_each_open_mention_once(api):
+    asked = new_thread(api, title="Asked")
+    for n in range(30):
+        post_as(api, asked["id"], "human:ana", f"@ben question {n}", to_actor="human:ben")
+    [item] = listed(api, "catch-up", "ben-test")["items"]
+    assert item["new_count"] == 30 and len(item["messages"]) == 20 and item["more"] == 10
+
+
+def test_catch_up_sends_a_message_with_huge_refs_clipped_to_fit_the_page(api, monkeypatch):
+    heavy = new_thread(api, title="Heavy")
+    posted = say(api, heavy["id"], "Short")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps({"note": "r" * 30000}), posted["id"]))
+    monkeypatch.setattr(threads, "MAX_PAGE_BYTES", 20000)
+    body = listed(api, "catch-up", "ben-test")
+    card = next(it for it in body["items"] if it["thread"]["id"] == heavy["id"])
+    assert card["messages"][0]["clipped"] is True and card["messages"][0]["refs"] == {}
+    assert len(json.dumps(body)) < 20000
+
+
+def test_catch_up_scans_its_allowance_once_over_all_its_pages_and_muted_roots_take_none(api, monkeypatch):
+    monkeypatch.setattr(thread_rail, "CATCH_UP_SCAN", 3)
+    monkeypatch.setattr(thread_rail, "CATCH_UP_BATCH", 2)
+    made = []
+    for n in range(6):
+        thread = new_thread(api, title=f"Root {n}")
+        if n in (2, 3):
+            api.put(f"/api/v2/threads/{thread['id']}/follow", json={"notify": "muted"}, headers=headers("ben-test"))
+        else:
+            made.append(thread["id"])
+        say(api, thread["id"], "News")
+    rail = listed(api, "rail", "ben-test")
+    assert rail["catch_up"] == 3 and set(rail["catch_up_ids"]) <= set(made)
+    seen, page = [], listed(api, "catch-up", "ben-test", limit=1)
+    assert page["count"] == 3
+    while True:
+        seen += [it["thread"]["id"] for it in page["items"]]
+        if not page["next_cursor"]:
+            break
+        page = listed(api, "catch-up", "ben-test", limit=1, cursor=page["next_cursor"])
+    assert seen == rail["catch_up_ids"]
+
+
+def test_the_rail_reads_open_roots_in_title_order_through_its_index(api):
+    new_thread(api, title="Alpha")
+    seen = []
+    with api.app.state.store.read() as c:
+        c.set_trace_callback(seen.append)
+        try:
+            thread_rail.rail(c, threads.viewer(api.app.state.auth, who(api, "ben-test")))
+        finally:
+            c.set_trace_callback(None)
+        [sql, *_] = [s for s in seen if "ORDER BY t_blank" in s]
+        plan = [r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql)]
+    assert "conversations_open_title" in plan[0], plan

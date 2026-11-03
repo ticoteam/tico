@@ -93,6 +93,7 @@ HOLD_LIST_MAX = 50
 # One hold's text as its readers get it: past this many characters it is cut (`text_cut`); Send anyway sends it whole.
 HOLD_TEXT_CHARS = 20_000
 HOLD_LIST_BYTES = 100_000     # one page of hold summaries stops here too (a page always holds at least one)
+BOTS_BELOW = 500             # bots read as the authors whose holds one person may be shown (`held_for`)
 TEAM_RULE = "org_rule_checks"
 UNCHECKED_SHARE, UNCHECKED_MIN = 0.2, 10    # a day's unchecked share at or over this, of at least this many checks
 ACTIONS = ("rules.blocked", "rules.escalated", "rules.warned", "rules.unchecked")
@@ -1062,13 +1063,34 @@ def _reader_sql(who):
     return None, (), False
 
 
-def held_for(c, who, operations):
+def _bots_below(c, person):
+    """The bots that may report up to `person` first (report_managers.person_above), as actors, at most BOTS_BELOW: the
+    authors whose holds can be held for them. More than that is fine; `represented` settles each hold."""
+    found, frontier, seen = [], [person], {person}
+    while frontier and len(found) < BOTS_BELOW:
+        rows = c.execute("SELECT bot FROM bot_config WHERE reports_to IN (SELECT value FROM json_each(?)) OR "
+                         "(COALESCE(reports_to,'')='' AND json_valid(config) AND "
+                         "json_extract(config,'$.reports_to') IN (SELECT value FROM json_each(?)))",
+                         (json.dumps(frontier), json.dumps(frontier))).fetchall()
+        frontier = [r[0] for r in rows if r[0] not in seen]
+        seen.update(frontier)
+        found += frontier
+    return [f"bot:{b}" for b in found[:BOTS_BELOW]]
+
+
+def held_for(c, who, operations, limit=None):
     """The held writes of these operations that this person reads as their reviewer, as their author, or as the person
-    it is held for, oldest first, each with its `role`. The owner's and Admins' fallback is not listed: a hold with no reviewer is for
-    their review page, not a person's list."""
+    it is held for, oldest first, each with its `role`, at most `limit`. The owner's and Admins' fallback is not listed:
+    a hold with no reviewer is for their review page, not a person's list. Only their own candidates are read: their
+    own holds and their bots' (the author index) and the ones they review (org_rule_holds_reviewer)."""
     marks = ",".join("?" * len(operations))
-    rows = c.execute(f"SELECT id, author, reviewer, created_at FROM org_rule_holds WHERE state='held' AND operation IN "
-                     f"({marks}) ORDER BY created_at, id", tuple(operations)).fetchall()
+    authors = [who.actor, *(_bots_below(c, who.actor) if H.is_human(who.actor) else [])]
+    most = -1 if limit is None else max(0, int(limit))
+    pick = f"SELECT id, author, reviewer, created_at FROM org_rule_holds WHERE state='held' AND operation IN ({marks}) "
+    rows = c.execute(f"SELECT * FROM ({pick}AND author IN (SELECT value FROM json_each(?)) ORDER BY created_at, id "
+                     f"LIMIT ?) UNION SELECT * FROM ({pick}AND reviewer=? ORDER BY created_at, id LIMIT ?) "
+                     "ORDER BY created_at, id LIMIT ?",
+                     (*operations, json.dumps(authors), most, *operations, who.actor, most, most)).fetchall()
     out = []
     for row in rows:
         role = _reader(who, dict(row), c)
