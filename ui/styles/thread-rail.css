@@ -69,7 +69,15 @@
 
 /* Catch up: one card at a time over the dimmed page, the next ones stacked behind it */
 .cu-dialog{box-sizing:border-box;width:100%;max-width:652px;max-height:calc(100dvh - 72px);margin:56px auto 0;padding:0 16px;border:0;background:none;color:var(--ink);overflow:visible}
-.cu-dialog::backdrop{background:rgba(0,0,0,.6)}
+.cu-dialog::backdrop{background:rgba(0,0,0,.5)}   /* the app's modal backdrop (.tmodal) */
+/* Desktop: one panel, the header row on top and the stacked card below, so nothing behind shows through beside the
+   header. The phone keeps the full screen (below). */
+@media (min-width:761px){
+  /* The panel is the page's ground and the card sits on it, as on a phone. */
+  .cu-dialog{max-width:620px;padding:14px 16px 16px;border:1px solid var(--line);border-radius:14px;background:var(--bg);box-shadow:0 20px 60px rgba(0,0,0,.45)}
+  .cu-dialog .cu{max-height:calc(100dvh - 72px - 32px)}
+  .cu-dialog .cu-card{box-shadow:none}
+}
 .cu{display:flex;flex-direction:column;gap:12px;max-height:calc(100dvh - 72px)}
 .cu-head{display:flex;align-items:center;gap:12px;color:var(--g7);font-size:var(--t-sm)}
 .cu-head h2{margin:0;color:var(--ink);font-size:15px;font-weight:600}
