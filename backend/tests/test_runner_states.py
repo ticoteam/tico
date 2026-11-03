@@ -18,7 +18,8 @@ SEEN = ("2026-11-01T10:00:00.000000Z", "2026-11-01T08:00:00.000000Z", "1.2.3", 6
 
 def _before_the_move(path, extra=()):
     """The file as it was before 0062: state columns on runners, no state table, view or trigger. r1 reported its state;
-    r2 never did. `extra` statements run after the columns exist, to add indexes or triggers the file had."""
+    r2 never did. `extra` statements run after the columns exist, to add indexes or triggers the file had. 0063 comes
+    after 0062, so its record goes too: a database that has applied 0063 would refuse 0062 as out of order."""
     with sqlite3.connect(path) as c:
         c.execute("DROP VIEW runners_with_state")
         c.execute("DROP TRIGGER runner_states_new_runner")
@@ -34,7 +35,7 @@ def _before_the_move(path, extra=()):
                   "VALUES('r2','Acme box','h1','hash-2','2026-01-01T00:00:00Z')")
         for statement in extra:
             c.execute(statement)
-        c.execute("DELETE FROM schema_migrations WHERE version='0062_runner_states'")
+        c.execute("DELETE FROM schema_migrations WHERE version IN ('0062_runner_states', '0063_history_events')")
 
 
 def test_an_existing_file_moves_every_state_value_off_runners_once(tmp_path):
