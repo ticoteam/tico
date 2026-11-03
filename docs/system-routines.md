@@ -38,7 +38,7 @@ The list refreshes when you open the tab and at most once a minute while it stay
 | Row | Who can change it | Available controls |
 |---|---|---|
 | Task rule | Members of its department, including humans and bots in nested teams; the owner or an admin for any department | On or off, **Edit**, and schedule presets |
-| **Stale ticket review**, **Nightly learnings**, **Still wanted?**, **KPI stale asks**, **Ask go-ahead** | Owner or admin | On or off, schedule presets, **Run now** |
+| **Stale ticket review**, **Nightly learnings**, **Auto dream**, **Still wanted?**, **KPI stale asks**, **Ask go-ahead** | Owner or admin | On or off, schedule presets, **Run now** |
 | **Health scan** | Owner only | On or off, schedule presets, **Run now** |
 | **Task Manager report** | Owner or admin | On or off, schedule presets, **Run now** |
 | **Start fresh when the topic changes**, **Stalled task check** | Owner or admin | On or off |
@@ -58,12 +58,15 @@ Choose from the presets offered on the row:
 | **Task Manager report** | Hourly on weekdays 08:00 to 18:00 (the default), Hourly, Every 4 hours, Daily at a time |
 | **Stale ticket review** | Hourly, Every 4 hours, Daily at a time |
 | **Nightly learnings** | Nightly at a time; initially 03:00 |
+| **Auto dream** | Nightly at a time; initially 02:00 |
 
 Daily times use Pacific time. Leave the time field or press Enter to save it. These rows offer no cron expressions or custom intervals.
 
-**Run now** appears only on the seven scheduled built-ins in the permissions table. Switch the job on first. It runs through the same checks and caps as its scheduled run, then shows the result on the row. A job asking Decide shows **Running…** while it works. Task rules, **Start fresh when the topic changes** and **Stalled task check** have no **Run now** button.
+**Run now** appears on each built-in with a switch in the list, except **Start fresh when the topic changes** and **Stalled task check**, which run when something happens. Switch the job on first. It runs through the same checks and caps as its scheduled run, then shows the result on the row. A job asking Decide shows **Running…** while it works. Task rules have no **Run now** button.
 
 Nightly learnings runs once per night. A failed, capped, or unconfigured night waits until the next night unless an authorized person uses **Run now**.
+
+**Auto dream** runs once a night at 02:00 Pacific time. It starts at most three dreams a night, and **Run now** counts toward that limit.
 
 ## Task rules
 
@@ -131,6 +134,7 @@ Built-ins appear in one flat list. This table gives their default schedules; sav
 | **Books watch** | Reads runway, unusual spend, duplicate charges, price increases and unused subscriptions in plain code and opens one "Watch" task for the [Bookkeeper](bookkeeper.md) only when something new is found. Not a switch: the Bookkeeper's pause stops it. | Daily |
 | **Rules digest** | Once a week, opens the Bookkeeper's "Rules digest" task for the posting rules made in the last seven days. No new rules is a quiet run. Not a switch. | Weekly |
 | **Nightly learnings** (AI) | Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember. See [Learnings](learnings.md). | Nightly at 03:00 |
+| **Auto dream** | Starts a dream for each bot whose memory changed a lot since its last dream, at most three a night. See [Learnings](learnings.md). | Nightly at 02:00 |
 | **Due reminders** | Tells a bot when one of its tasks reaches its due time. | Every 10 seconds |
 | **Ask go-ahead** | A bot's question past its deadline goes ahead on its default answer, or expires. | Hourly |
 | **Follow-ups** | Nudges a person once, in their thread, when a bot's ask to them stays unanswered for a day. Plain code: no model is called, and nothing to nudge is a quiet run. See [Thread helper](thread-helper.md). Not a switch. | Every 15 minutes |
@@ -165,4 +169,4 @@ Built-ins appear in one flat list. This table gives their default schedules; sav
 - **Failed in red.** Read the reason. A busy database clears on the next run. A repeated "Tico refused it" or "Decide did not answer" means the job is failing each time; tell your Tico admin.
 - **Uses AI with no route.** The job has not asked Decide yet, for example because nothing needed a decision.
 
-<!-- Sources checked 2026-10-24 at PR #1293 head f0fcafdf65c082a408f4524e379cc091109a2b3c: ui/app/settings-recurring.js; backend/task_rules.py; backend/system_routines.py; backend/models.py (TaskRuleUpdate). Task-rules spec v1, acceptance 11. -->
+<!-- Sources checked 2026-11-03 at main 5734eeb01: ui/app/settings-recurring.js; ui/app/settings.js; backend/system_routines.py; backend/dream_auto.py. Earlier, 2026-10-24 at PR #1293 head f0fcafdf65c082a408f4524e379cc091109a2b3c: backend/task_rules.py; backend/models.py (TaskRuleUpdate). Task-rules spec v1, acceptance 11. -->
