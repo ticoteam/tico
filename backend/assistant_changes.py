@@ -33,7 +33,7 @@ RESTORE_ACTION = "assistant.change.restore"
 SKEW_SECONDS = 5          # a task change's status row is written just before its event: the window that pairs them
 
 
-def install(app, store, auth, mutate):
+def install(app, store, auth, mutate, settings):
     @app.get("/api/v2/assistant/changes")
     def assistant_changes(request: Request, days: int = LIST_DAYS, limit: int = PAGE, before: str | None = None):
         """What your Assistant did for you, newest first: each change's `what`, the `words` it acted on, its `object`,
@@ -43,7 +43,7 @@ def install(app, store, auth, mutate):
             raise Problem("identity", "This frontend endpoint requires a person", 403)
         days, limit = max(1, min(int(days), LIST_DAYS_MAX)), max(1, min(int(limit), PAGE_MAX))
         with store.read_transaction() as c:
-            return listing(c, who, days, limit, before)
+            return listing(c, who, days, limit, before, settings)
 
     @app.post("/api/v2/assistant/changes/{cid}/restore")
     def assistant_restore(request: Request, cid: str, body: M.Empty):
@@ -53,11 +53,11 @@ def install(app, store, auth, mutate):
             raise Problem("identity", "This frontend endpoint requires a person", 403)
 
         def work(c):
-            return restore(c, auth, who, cid)
+            return restore(c, auth, who, cid, settings)
         return mutate(request, body, work)
 
 
-def listing(c, who, days, limit, before=None):
+def listing(c, who, days, limit, before, settings):
     """One page of the caller's Assistant changes, newest first. `next` is the `<at>|<id>` of the last row shown, and
     `before` takes it back: each source is read from that time on, so a page never skips a row."""
     since = H.shift(H.now(), days=-days)
@@ -70,8 +70,10 @@ def listing(c, who, days, limit, before=None):
         ("SELECT * FROM audit_log WHERE actor=? AND created_at>=? AND created_at<=? AND via='assistant' "
          "ORDER BY created_at DESC, id DESC LIMIT ?", (who.actor, since, top, fetch), "audit"),
         ("SELECT * FROM messages WHERE sender_id=? AND created_at>=? AND created_at<=? "
-         "AND refs LIKE '%\"via\": \"assistant\"%' ORDER BY created_at DESC, id DESC LIMIT ?",
-         (who.actor, since, top, fetch), "message"),
+         "AND refs LIKE '%assistant%' AND json_extract(refs,'$.via')='assistant' "
+         "ORDER BY created_at DESC, id DESC LIMIT ?", (who.actor, since, top, fetch), "message"),
+        ("SELECT * FROM settings_changes WHERE actor=? AND created_at>=? AND created_at<=? AND via='assistant' "
+         "ORDER BY created_at DESC, id DESC LIMIT ?", (who.actor, since, top, fetch), "setting"),
     )
     rows = []
     for sql, args, kind in sources:
@@ -79,7 +81,7 @@ def listing(c, who, days, limit, before=None):
     rows.sort(key=lambda x: (x[1]["created_at"], x[1]["id"]), reverse=True)
     if cut:
         rows = [x for x in rows if (x[1]["created_at"], x[1]["id"]) < (top, cut)]
-    shown = [describe(c, who, kind, row) for kind, row in rows[:limit]]
+    shown = [describe(c, who, kind, row, settings) for kind, row in rows[:limit]]
     last = shown[-1] if len(rows) > limit and shown else None
     return {"actor": who.actor, "days": days, "changes": shown,
             "next": f"{last['at']}|{last['id']}" if last else None}
@@ -89,7 +91,7 @@ def has_column(c, table, column):
     return any(r[1] == column for r in c.execute(f"PRAGMA table_info({table})"))
 
 
-def describe(c, who, kind, row):
+def describe(c, who, kind, row, settings):
     """One change in the list: its id (the restore key), when, what, the words it acted on, its object, and undo."""
     cid = row["id"]
     if kind == "event":
@@ -99,14 +101,19 @@ def describe(c, who, kind, row):
                                             f"approval:{target}" if row["action"].startswith("approval.") else target)
         what = event_line(c, row, detail, obj)
         words = cited_words(c, detail.get("delegation"))
-        undo, why = undoable(c, who, kind, row, detail)
+        undo, why = undoable(c, who, kind, row, detail, settings)
     elif kind == "audit":
         obj = row["object"]
         before = json.loads(row["before"]) if row["before"] else None
         after = json.loads(row["after"]) if row["after"] else None
         what = audit_line(obj, before, after)
         words = ""
-        undo, why = undoable(c, who, kind, row, {"before": before, "after": after})
+        undo, why = undoable(c, who, kind, row, {"before": before, "after": after}, settings)
+    elif kind == "setting":
+        obj = f"setting:{row['bot']}:{row['field']}"
+        what = setting_line(c, row)
+        words = ""
+        undo, why = undoable(c, who, kind, row, {}, settings)
     else:
         obj = f"message:{cid}"
         what = "Answered a question" if row["kind"] == "answer" else "Sent a message"
@@ -117,6 +124,12 @@ def describe(c, who, kind, row):
     if not undo:
         out["why_not"] = why
     return out
+
+
+def setting_line(c, row):
+    """A plain line for a bot setting the Assistant changed for the person: the bot, the setting and its new value."""
+    bot = (H.bot(c, row["bot"]) or {}).get("name") or row["bot"]
+    return f"Changed {bot}'s {row['field'].replace('_', ' ')}"
 
 
 def event_line(c, row, detail, obj):
@@ -150,6 +163,10 @@ def audit_line(obj, before, after):
     return f"Changed {obj}"
 
 
+def _json(text):
+    return json.loads(text) if text else None
+
+
 def cited_words(c, delegation):
     """The text of the person's message a change acted on, when the change cited one."""
     cited = delegation.get("cited") if isinstance(delegation, dict) else None
@@ -170,7 +187,7 @@ def task_field_rows(c, who, row, detail):
         "AND field IN ('status','owner') ORDER BY created_at DESC", (row["target"], who.actor, start, at))]
 
 
-def undoable(c, who, kind, row, detail):
+def undoable(c, who, kind, row, detail, settings):
     """(undoable, why_not): whether the change can be taken back as it stands, and the reason when it cannot."""
     if kind == "event":
         action = row["action"]
@@ -191,6 +208,14 @@ def undoable(c, who, kind, row, detail):
             if (task.get(field_row["field"]) or None) != (field_row["new"] or None):
                 return False, "it changed again since"
         return True, ""
+    if kind == "setting":
+        if row["undone_at"]:
+            return False, "it was undone already"
+        if who.role != "owner":
+            return False, "only the owner undoes a bot setting"
+        if settings.snapshot(c, row["bot"], row["field"]) != _json(row["after"]):
+            return False, "it changed again since"
+        return True, ""
     if kind == "audit":
         obj = row["object"]
         before, after = detail.get("before"), detail.get("after")
@@ -205,7 +230,7 @@ def undoable(c, who, kind, row, detail):
     return False, "a message sent stays sent"
 
 
-def restore(c, auth, who, cid):
+def restore(c, auth, who, cid, settings):
     """Undo one of the caller's Assistant changes. Idempotent: a second restore answers `already`."""
     row, kind = find(c, who, cid)
     if row is None:
@@ -218,20 +243,27 @@ def restore(c, auth, who, cid):
     detail = json.loads(row["detail"] or "{}") if kind == "event" else {
         "before": json.loads(row["before"]) if row["before"] else None,
         "after": json.loads(row["after"]) if row["after"] else None}
-    if kind == "event" and row["action"] in ("approval.decide",):
-        undo, why = undoable(c, who, kind, row, detail)
+    if kind == "setting":
+        undo, why = undoable(c, who, kind, row, {}, settings)
+        if not undo:
+            raise Problem("not_undoable", why, 409)
+        config = settings._config(c, row["bot"])
+        settings.undo(c, who, row["id"], M.SettingsUndo(expected_revision=config["revision"]))
+        obj = f"setting:{row['bot']}:{row['field']}"
+    elif kind == "event" and row["action"] in ("approval.decide",):
+        undo, why = undoable(c, who, kind, row, detail, settings)
         if not undo:
             raise Problem("not_undoable", why, 409)
         H.approval_undo(c, who.actor, row["target"])
         obj = f"approval:{row['target']}"
     elif kind == "event":
-        undo, why = undoable(c, who, kind, row, detail)
+        undo, why = undoable(c, who, kind, row, detail, settings)
         if not undo:
             raise Problem("not_undoable", why, 409)
         restore_task(c, who, row, detail)
         obj = f"task:{row['target']}"
     else:
-        undo, why = undoable(c, who, kind, row, detail)
+        undo, why = undoable(c, who, kind, row, detail, settings)
         if not undo:
             raise Problem("not_undoable", why, 409)
         obj = row["object"]
@@ -247,6 +279,9 @@ def restore(c, auth, who, cid):
 
 def find(c, who, cid):
     """(row, kind) of the caller's own change `cid`, or (None, None): another person's or none."""
+    row = c.execute("SELECT * FROM settings_changes WHERE id=? AND actor=? AND via='assistant'", (cid, who.actor)).fetchone()
+    if row:
+        return dict(row), "setting"
     row = c.execute("SELECT * FROM events WHERE id=? AND actor=? AND json_extract(detail,'$.via')='assistant'",
                     (cid, who.actor)).fetchone()
     if row:
@@ -254,8 +289,8 @@ def find(c, who, cid):
     row = c.execute("SELECT * FROM audit_log WHERE id=? AND actor=? AND via='assistant'", (cid, who.actor)).fetchone()
     if row:
         return dict(row), "audit"
-    row = c.execute("SELECT * FROM messages WHERE id=? AND sender_id=? AND refs LIKE '%\"via\": \"assistant\"%'",
-                    (cid, who.actor)).fetchone()
+    row = c.execute("SELECT * FROM messages WHERE id=? AND sender_id=? AND refs LIKE '%assistant%' "
+                    "AND json_extract(refs,'$.via')='assistant'", (cid, who.actor)).fetchone()
     if row:
         return dict(row), "message"
     return None, None

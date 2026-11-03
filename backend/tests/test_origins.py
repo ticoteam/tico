@@ -4,6 +4,7 @@ import shlex
 
 from backend import hubdb as H
 from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.test_automation_api import make  # noqa: F401
 
 
 def test_a_bot_filed_task_names_the_bot_and_stop_commands_parse(api):
@@ -33,3 +34,28 @@ def test_payload_is_small(api):
         task = H.task_create(c, "bot:finance", "Give finance the payroll connector", "x", "human:ana")
     r = api.get("/api/v2/origins/" + task["id"], headers=headers())
     assert r.status_code == 200 and len(r.content) < 8192
+
+
+def test_an_automation_made_task_names_the_automation_and_a_stop_that_parses(api):
+    made = make(api)
+    aid = made["automation"]["id"] if "automation" in made else made["id"]
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "bot:finance", "Morning check for Ana", "x", "human:ana")
+        c.execute("UPDATE tasks SET occurrence=? WHERE id=?", (aid + ":2026-11-03", task["id"]))
+    origin = get(api, "origins/" + task["id"])
+
+    assert origin["cause"]["type"] == "automation" and origin["cause"]["id"] == aid
+    assert origin["cause"]["name"] == "Morning check"
+    assert origin["stop"][0]["command"] == f"hub automation update {aid} --disable"
+    from clients import hubcli
+    cli = hubcli.parser()
+    for stop in origin["stop"]:
+        cli.parse_args(shlex.split(stop["command"])[1:])
+
+
+def test_a_private_task_of_another_person_is_not_readable_through_origin(api):
+    private = post(api, "tasks", {"title": "Ben's private plan", "body": "x", "owner": "human:ben", "private": True},
+                   token="ben-test")
+    assert get(api, "origins/" + private["id"], "ben-test")["id"] == private["id"]
+    r = api.get("/api/v2/origins/" + private["id"], headers=headers("cara-test"))
+    assert r.status_code == 404

@@ -162,7 +162,8 @@ Every change your Assistant makes for you is listed with the words it acted on: 
 (last 30 days by default; `GET /api/v2/assistant/changes`). Each row has an `id`, what it did, the words it acted on,
 the object it touched and whether it can still be undone (`undoable`, or `why_not`). `hub assistant change restore <id>`
 takes one back as you: a task it closed reopens with its old status, an approval it decided goes back to waiting for you
-(before the decision is spent), an automation it changed goes back to its old version, and a rule it added is retired.
+(before the decision is spent), an automation it changed goes back to its old version, a rule it added is retired,
+and a bot setting it changed goes back to its old value (the owner undoes settings; see Settings history).
 A message it sent stays sent. Restoring the same change again answers `already: true` and changes nothing. You can only
 restore your own changes (another person's is `404`).
 

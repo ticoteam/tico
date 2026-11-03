@@ -8360,7 +8360,7 @@ def create_app(settings=None):
     counsel.install(app, store, auth, mutate)      # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
     why_here.install(app, store, auth)               # GET /api/v2/origins/{ref}: why an item is on the list
-    assistant_changes.install(app, store, auth, mutate)  # the Assistant's changes, and undoing one
+    assistant_changes.install(app, store, auth, mutate, settings_admin)  # the Assistant's changes, and undoing one
     reach.install(app, store, auth, mutate)        # Rules › Internal: who reaches whom (docs/reach.md)
     from . import feedback
     feedback.install(app, store, auth, mutate)     # 👍/👎 on bot work (backend/feedback.py)
