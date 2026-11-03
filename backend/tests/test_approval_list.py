@@ -77,8 +77,36 @@ def test_a_row_has_its_fields_and_a_long_summary_is_one_line_within_the_page_bud
     [row] = body["approvals"]
     assert set(row) == {"id", "status", "from_actor", "summary", "message_id", "task_id", "created", "link"}
     assert row["id"] == approval["id"] and row["status"] == "pending"
-    assert len(row["summary"]) <= 200 and row["link"] == f"/api/v2/approvals/{approval['id']}"
+    assert len(row["summary"]) <= 200
+    assert row["task_id"] is None and row["link"].startswith("#/thread/") and row["link"].endswith("?m=" + row["message_id"])
     assert len(json.dumps(body)) < 64 * 1024
+
+
+def test_a_task_approval_links_to_the_task(api):
+    _, _, finance = setup_attempt(api, "finance")
+    task = post(api, "tasks", {"title": "Run the LinkedIn ads", "body": "Q4", "owner": "bot:finance"})
+    approval_for_ana(api, token=finance["token"], task=task["id"])
+    [row] = listed(api)["approvals"]
+    assert row["task_id"] == task["id"] and row["link"] == "#/task/" + task["id"]
+
+
+def test_long_unicode_summaries_stay_under_the_byte_cap_and_paging_reaches_every_row(api):
+    _, _, finance = setup_attempt(api, "finance")
+    made = {approval_for_ana(api, token=finance["token"],
+                             payload={"amount": n, "account": "ads", "what": ("漢字🙂ü " * 200) + str(n)})["id"]
+            for n in range(60)}
+    first = api.get("/api/v2/approvals?limit=100", headers=headers("ana-test"))
+    assert first.status_code == 200 and len(first.content) <= 64 * 1024
+    body = first.json()
+    assert "漢字" in body["approvals"][0]["summary"] and body["total"] == 60
+    assert body["next"] is not None and len(body["approvals"]) < 60
+    seen, offset = [r["id"] for r in body["approvals"]], body["next"]
+    while offset is not None:
+        page_body = listed(api, f"limit=100&offset={offset}")
+        assert len(json.dumps(page_body).encode()) <= 64 * 1024
+        seen += [r["id"] for r in page_body["approvals"]]
+        offset = page_body["next"]
+    assert len(seen) == len(set(seen)) == len(made) and set(seen) == made
 
 
 def test_an_unknown_status_is_refused(api):

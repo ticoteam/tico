@@ -7,6 +7,7 @@ import os
 import re
 from datetime import timezone
 from typing import Literal
+from urllib.parse import quote
 
 import yaml
 from fastapi import Query, Request
@@ -1993,7 +1994,8 @@ def fleet_snapshot(c, auth, identity, task_view):
 APPROVAL_STATUSES = ("pending", "approved", "declined")
 APPROVALS_PAGE = 20
 APPROVALS_PAGE_MAX = 100
-APPROVAL_SUMMARY = 200      # one line of a row's summary at most: a page of 100 rows stays well under 64 KB
+APPROVAL_SUMMARY = 200      # one line of a row's summary at most
+APPROVAL_LIST_BYTES = 64 * 1024   # a page stops here, as the other lists do (automations.page); `next` picks it up
 
 
 def approval_rows(c, auth, who, task_view, status):
@@ -2017,10 +2019,17 @@ def approval_rows(c, auth, who, task_view, status):
             continue
         task_id = row.get("task_id")
         task = H.task(c, task_id) if task_id and _readable_task_ids(c, auth.task_sql(c, who), [task_id]) else None
+        conversation = msg.get("conversation_id")
+        if task:
+            link = "#/task/" + quote(task_id, safe="")
+        elif conversation:
+            link = "#/thread/%s?m=%s" % (quote(conversation, safe=""), quote(msg["id"], safe=""))
+        else:
+            link = None
         rows.append({"id": row["id"], "status": row["decision"] or "pending", "from_actor": row["requested_by_id"],
                      "summary": approval_title(row["kind"], row["payload"], (task or {}).get("title"))[:APPROVAL_SUMMARY],
                      "message_id": row["message_id"], "task_id": task_id, "created": row["created_at"],
-                     "link": f"/api/v2/approvals/{row['id']}"})
+                     "link": link})
     return sorted(rows, key=lambda r: (r["created"], r["id"]), reverse=True)
 
 
@@ -2807,8 +2816,9 @@ def install_views(app, store, auth, mutate, task_view):
                 rows = [r for r in rows if r["created"] < before]
             if since:
                 rows = [r for r in rows if r["created"] >= since]
-            return {"actor": who.actor, "status": status, "total": len(rows), "approvals": rows[offset:offset + limit],
-                    "next": offset + limit if offset + limit < len(rows) else None}
+            from .automations import page      # local: automations imports this module
+            shown, more = page(rows[offset:], limit, offset, APPROVAL_LIST_BYTES)
+            return {"actor": who.actor, "status": status, "total": len(rows), "approvals": shown, "next": more}
 
     @app.get("/api/v2/needs-you")
     def needs(request: Request, count: bool = False, ids: str | None = None, version: str | None = None,

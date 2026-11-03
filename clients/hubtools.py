@@ -2929,8 +2929,8 @@ def _file_target(api, target, command):
 @tool("hub_approval_list", "The approvals addressed to you, newest first. `status` pending (the default: exactly the "
       "set Needs you counts), approved or declined. `from` is the actor that asked; `before` and `since` a date "
       "(YYYY-MM-DD). Pages of up to 100 rows: `limit` and `offset`; `next` is the offset of the next page, null on the "
-      "last. Each row: id, status, from_actor, summary, message_id, task_id, created, link (the approval's API path; "
-      "GET it for the full request). Only approvals you can open are listed.",
+      "last. Each row: id, status, from_actor, summary, message_id, task_id, created, link (the task it came with, "
+      "else the thread of its message; null if neither). Only approvals you can open are listed.",
       {"status": {"type": "string", "enum": ["pending", "approved", "declined"], "description": "Default pending"},
        "from": _s("Only the ones this actor asked for"),
        "before": _s("Only those asked before this date (YYYY-MM-DD)"),
