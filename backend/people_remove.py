@@ -26,7 +26,7 @@ KEEPS = "Has history; stays as left"
 SKIP_TABLES = ("humans", "idempotency", "principals")
 # A seat that reports to them is moved by `remove` to their manager (or the owner removing them), as people are: an
 # invite from setup moves the seats that waited with the owner under the person, which is not something they did.
-OWN_COLUMNS = {("invite_sends", "person"), ("human_tokens", "human"), ("seats", "reports_to")}
+OWN_COLUMNS = {("human_tokens", "human"), ("seats", "reports_to")}
 # Settings that name them and are rewritten by `remove`.
 OWN_SETTINGS = (Access.ACCESS, "people", "invites")
 
@@ -109,8 +109,9 @@ def remove(c, actor, roster, person):
     c.execute("DELETE FROM human_tokens WHERE human=?", (pid,))
     # The invite bindings stay, so a repeat of an invite request answers from them and never invites the person again
     # (invites.replay). What names them goes: the hash of the address, and any refusal text that carries it.
-    c.execute("UPDATE invite_sends SET request_hash='' WHERE person=?", (pid,))
-    c.execute("UPDATE invite_sends SET error_detail=? WHERE person=? AND state='refused'", (invites.REMOVED, pid))
+    c.execute("UPDATE idempotency SET request_hash='' WHERE binding=? AND subject=?", (invites.BINDING, pid))
+    c.execute("UPDATE idempotency SET error_detail=? WHERE binding=? AND subject=? AND state='refused'",
+              (invites.REMOVED, invites.BINDING, pid))
     c.execute("DELETE FROM humans WHERE id=?", (pid,))
     sent = invites.sent(c)
     if pid in sent:

@@ -68,12 +68,15 @@ def restore(path):
     return before
 
 
-# Dropped as redundant by backend/migrations/0042_drop_unused_indexes.sql, and kpis_goal by
-# backend/migrations/0044_drop_kpi_goal_columns.py with kpis.goal_id, the column it indexes.
-DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "tasks_private_parties", "kpis_goal"}
-# Dropped by backend/migrations/0035_growth_rethink.py after the renames ran on them.
+# Dropped as redundant by backend/migrations/0042_drop_unused_indexes.sql, kpis_goal by
+# backend/migrations/0044_drop_kpi_goal_columns.py with kpis.goal_id, the column it indexes, and idempotency_by_created
+# by backend/migrations/0050_idempotency_one_table.py (the answers' partial index replaces it).
+DROPPED_INDEXES = {"invariants_lease", "invariants_open_approvals", "tasks_private_parties", "kpis_goal",
+                   "idempotency_by_created"}
+# Dropped by backend/migrations/0035_growth_rethink.py after the renames ran on them, and the operation-binding tables
+# backend/migrations/0050_idempotency_one_table.py moves into `idempotency`.
 RETIRED = {"growth_ideas", "growth_idea_channels", "growth_segments", "growth_channel_segments", "growth_idea_segments",
-           "gtm_versions", "gtm_drafts"}
+           "gtm_versions", "gtm_drafts", "invite_sends", "github_product_repo_operations", "github_review_operations"}
 
 
 @pytest.fixture(scope="module")
