@@ -290,7 +290,8 @@ def test_every_setting_does_for_the_assistant_what_it_does_for_botops(api, role)
             # On the person's own cited turn the Assistant applies a confirm-class setting at once (the person's rights are
             # the ceiling; BotOps still cards it): the one divergence the Assistant is meant to have.
             if got != want and not (got == "ran" and want == "card" and e.kind == "confirm"):
-                wrong.append(f"{e.key}: BotOps {want} for the {role} ({e.kind}, {e.who}), the Assistant {got}")
+                wrong.append(f"{e.key}: BotOps {want} for the {role} ({e.kind}, {e.who}), the Assistant {got}"
+                             f" [{parity.LAST.get(e.key, '')}]")
         else:
             unproven[e.key] = got
     assert not wrong, "\n".join(wrong)
