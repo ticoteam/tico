@@ -142,9 +142,8 @@ def test_every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_fu
         enabled = {row["name"]: row["enabled"] for row in rows}
         assert enabled["Weekday inbox sweep"] is False
         schedules = [row for row in rows if row["enabled"] and row["trigger"]["type"] == "schedule"]
-        # The Assistant's daily sweep and the bookkeeper's monthly report are on this branch: a bootstrap bot's template
-        # routines are seeded at startup (backend/onboarding.py ensure_builtin_routines), and the report is enabled by default.
-        assert len(schedules) == 18
+        # 16 on main, and the Assistant's daily sweep is the one new enabled schedule (backend/onboarding.py).
+        assert len(schedules) == 17
         week_start = NOW - timedelta(days=7)
         for row in schedules:
             trigger = row["trigger"]
@@ -152,13 +151,11 @@ def test_every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_fu
             assert at_time(row["next_run"]) > NOW, row["name"]
             assert at_time(row["next_run"]) == next_due(trigger["cron"], NOW, trigger["tz"]), row["name"]
             due = occurrences_between(trigger, week_start, NOW - SETTLE)
+            assert due, row["name"]
             runs, _ = runs_of(api, row["id"])
             started = sorted(at_time(run["started_at"]) for run in runs if at_time(run["started_at"]) > week_start)
             # One finished run at each of its own times this week (weekdays only for a weekday schedule).
             assert [started_at.replace(microsecond=0) for started_at in started] == due, row["name"]
-            if not due:
-                # A monthly schedule (the report, on the 3rd) has no time this week, so it has no run to check.
-                continue
             assert {run["status"] for run in runs if at_time(run["started_at"]) > week_start} == {"ok"}, row["name"]
             assert row["last_run"] and at_time(row["last_run"]["started_at"]).replace(microsecond=0) == due[-1]
 
