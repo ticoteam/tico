@@ -40,6 +40,11 @@ def handled(c, tid):
               "(SELECT message_id FROM task_check_back_wakes WHERE task_id=?)", (tid,))
 
 
+def edited(c, tid):
+    """A person edits the task: a recorded change since the last notice, which a bare due-time move is not."""
+    H._task_event(c, tid, "human:ana", "body", "old body", "new body")
+
+
 def test_creation_defaults_human_exclusion_and_assignment_scope(followups):
     bot = post(followups, "tasks", {"owner": "ops", "title": "Inspect", "body": "x"})
     assert bot["version"] == 1  # the automatic date is part of creation, not a separate edit
@@ -386,12 +391,15 @@ def test_explicit_reparking_without_progress_reaches_one_diagnostic(followups, m
     monkeypatch.setattr(H, "_no_diagnosis", lambda *a: None)
     monkeypatch.setattr(H, "_escalate_stuck", escalate)
     with followups.app.state.store.transaction() as c:
-        row = task(c)
-        for _ in range(3):
-            due(c, H.task(c, row["id"]))
-            assert CB.sweep(c)["woke"] == [row["id"]]
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]  # the first inspection still goes out
+        for _ in range(3):  # re-parking with nothing new backs off instead of waking the bot again
             handled(c, row["id"])  # the bot's turn ran and ended before the next explicit re-park
             CB.set_time(c, H.task(c, row["id"]), "5m", actor="bot:ops")
+            due(c, H.task(c, row["id"]))
+            assert CB.sweep(c)["woke"] == [] and routed == []
+        handled(c, row["id"])
+        CB.set_time(c, H.task(c, row["id"]), "5m", actor="bot:ops")
         due(c, H.task(c, row["id"]))
         assert CB.sweep(c)["woke"] == [] and routed == [row["id"]]
         diagnostic = CB._recovery(c, H.task(c, row["id"]))
@@ -489,6 +497,7 @@ def test_later_due_time_wakes_again_once_the_first_notice_is_handled(followups):
         row = due(c, task(c))
         assert CB.sweep(c)["woke"] == [row["id"]]
         handled(c, row["id"])
+        edited(c, row["id"])  # the due time moves only because a person edited the task
         later = H.shift(H.now(), minutes=30)
         c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (later, row["id"]))
         assert CB.sweep(c, H.shift(H.now(), minutes=31))["woke"] == [row["id"]]
@@ -595,6 +604,7 @@ def test_moved_due_time_replaces_the_stale_notice_on_a_stopped_cloud_machine(clo
         row = due(c, H.task_create(c, "human:ana", "Inspect the moved cloud result", "x", "bot:ops", lint=False))
         assert CB.sweep(c)["woke"] == [row["id"]]
         [first] = wakes(c, row["id"])
+        edited(c, row["id"])  # the moved due time follows a person's edit, which is what makes the notice a change
         c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (H.shift(H.now(), seconds=-2), row["id"]))
         assert CB.sweep(c)["woke"] == [row["id"]]
         by_id = {w["id"]: w for w in wakes(c, row["id"])}
@@ -650,3 +660,48 @@ def test_live_receipt_probe_searches_indexes_and_never_scans_history(followups):
         plan = [r["detail"] for r in c.execute("EXPLAIN QUERY PLAN " + CB.IN_FLIGHT_SQL,
                                                 ("task", "bot:ops", *CB.LIVE_JOBS, *CB.LIVE_RUNS))]
     assert plan and not any("SCAN" in detail.split() for detail in plan), plan
+
+
+def test_repeat_wake_with_nothing_new_backs_off_and_keeps_its_note(followups):
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]  # the first inspection goes out whatever has changed
+        handled(c, row["id"])
+        CB.set_time(c, H.task(c, row["id"]), "45m", "Inspect the review.", actor="bot:ops")  # the bot's own re-park
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == []
+        after = H.task(c, row["id"])
+        assert after["check_back_at"] > H.now() and after["check_back_note"] == "Inspect the review."
+        assert len(wakes(c, row["id"])) == 1
+
+
+@pytest.mark.parametrize("change", ["message", "event"])
+def test_repeat_wake_goes_out_once_a_person_adds_a_message_or_event(followups, change):
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        handled(c, row["id"])
+        CB.set_time(c, H.task(c, row["id"]), "45m", actor="bot:ops")
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == []
+        if change == "message":
+            H.task_comment(c, "human:ana", row["id"], "The reviewer asked for a rename.", wake=False)
+        else:
+            edited(c, row["id"])
+        due(c, H.task(c, row["id"]))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        assert len(wakes(c, row["id"])) == 2
+
+
+def test_hourly_cap_counts_repeat_wakes_as_well_as_first_ones(followups, monkeypatch):
+    monkeypatch.setattr(CB, "WAKES_PER_BOT_HOUR", 1)
+    with followups.app.state.store.transaction() as c:
+        row = due(c, task(c))
+        assert CB.sweep(c)["woke"] == [row["id"]]
+        handled(c, row["id"])
+        H.task_comment(c, "human:ana", row["id"], "New evidence.", wake=False)
+        due(c, H.task(c, row["id"]))
+        checked = CB.sweep(c)
+        assert checked["woke"] == [] and checked["blocked"] == [row["id"]]
+        assert CB.view(H.task(c, row["id"]), c)["delivery"] == "hourly_wake_cap"
+        assert CB.sweep(c, H.shift(H.now(), hours=1, seconds=1))["woke"] == [row["id"]]

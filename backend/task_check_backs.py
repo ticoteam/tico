@@ -17,6 +17,7 @@ LIMIT = 50
 NOTE_MAX = 500
 FIRST_WAKES_PER_HOUR = max(1, int(os.environ.get("TICO_TASK_CHECK_BACKS_PER_BOT_HOUR", "12")))
 FLEET_FIRST_WAKES_PER_HOUR = max(1, int(os.environ.get("TICO_TASK_CHECK_BACKS_FLEET_HOUR", "50")))
+WAKES_PER_BOT_HOUR = max(1, int(os.environ.get("TICO_TASK_CHECK_BACKS_WAKES_PER_BOT_HOUR", "24")))  # first and repeat wakes
 WAKES_PER_TASK_DAY = 12
 REACHABLE_SECONDS = 90  # a computer heard from this recently can take a start: execution.company_waiter's bar
 INFLIGHT_JOBS = ("queued", "held", "leased", "running", "uncertain")
@@ -407,7 +408,17 @@ def _unchanged_wakes(c, row):
     return count
 
 
-def repair(c, row, at):
+def changed(c, row):
+    """Whether anyone but the bot moved the task since its last check-back wake; no recorded wake counts as changed."""
+    seen = c.execute("SELECT created_at,new FROM task_events WHERE task_id=? AND field='check_back_wake' "
+                     "ORDER BY created_at DESC,rowid DESC LIMIT 1", (row["id"],)).fetchone()
+    if not seen or seen["new"] != stand(c, row):
+        return True
+    return bool(c.execute("SELECT 1 FROM task_events WHERE task_id=? AND created_at>=? AND field NOT LIKE 'check_back%' "
+                          "AND actor IS NOT ? LIMIT 1", (row["id"], seen["created_at"], actor_for(row))).fetchone())
+
+
+def repair(c, row, at, note="Recovery follow-up: inspect the unresolved work and its handoff."):
     H = _H()
     count, state = _repairs(c, row)
     delay = min(30 * 2 ** min(count, 4), 480)
@@ -425,7 +436,7 @@ def repair(c, row, at):
     if recovery:
         ensure(c, recovery, at)
         until = H.task(c, recovery["id"]).get("check_back_at") or until
-    after = set_time(c, row, until, "Recovery follow-up: inspect the unresolved work and its handoff.", system=True, at=at)
+    after = set_time(c, row, until, note, system=True, at=at)
     _event(c, row["id"], H.KEEPER, "check_back_repair", None,
                   json.dumps({"stand": state, "count": count + 1, "recovery_task": recovery["id"] if recovery else None}), "")
     return after
@@ -548,7 +559,11 @@ def sweep(c, at=None, failures=None, task_ids=None):
                 repair(c, row, at)
                 result["blocked"].append(row["id"])
                 continue
-            if not c.execute("SELECT 1 FROM task_check_back_wakes WHERE task_id=? LIMIT 1", (row["id"],)).fetchone():
+            first = not c.execute("SELECT 1 FROM task_check_back_wakes WHERE task_id=? LIMIT 1", (row["id"],)).fetchone()
+            if not first and not changed(c, row):
+                repair(c, row, at, note=None)  # nothing moved: check later, keeping the expected note
+                continue
+            if first:
                 firsts = c.execute("SELECT count(*) FROM task_check_back_wakes w JOIN messages m ON m.id=w.message_id "
                                    "WHERE w.sent_at>=? AND m.recipient_id=? AND NOT EXISTS "
                                    "(SELECT 1 FROM task_check_back_wakes older WHERE older.task_id=w.task_id AND older.sent_at<w.sent_at)",
@@ -560,6 +575,12 @@ def sweep(c, at=None, failures=None, task_ids=None):
                     blocked(c, row, "hourly_first_wake_cap")
                     result["blocked"].append(row["id"])
                     continue  # retain visible due debt; a later pass owns delivery
+            hourly = c.execute("SELECT count(*) FROM task_check_back_wakes w JOIN messages m ON m.id=w.message_id "
+                               "WHERE w.sent_at>=? AND m.recipient_id=?", (H.shift(at, hours=-1), target)).fetchone()[0]
+            if hourly >= WAKES_PER_BOT_HOUR:
+                blocked(c, row, "hourly_wake_cap")
+                result["blocked"].append(row["id"])
+                continue  # retain visible due debt; a later pass owns delivery
             message = H._wake(c, row, target, context(c, row, target),
                               {"wake": "check_back", "check_back_at": row["check_back_at"], "delivery": "queue"},
                               trigger="check_back")
