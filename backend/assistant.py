@@ -33,6 +33,7 @@ from . import models as M
 from . import visuals
 from .media import upload_contract
 from . import rooms
+from . import settings_asks
 from .store import H, Problem, digest
 
 RUNNING_TTL_S = 120                # a confirm that has not settled in two minutes failed
@@ -53,7 +54,8 @@ CREATE INDEX IF NOT EXISTS assistant_actions_owner ON assistant_actions(owner, s
 def ensure_schema(c):
     c.executescript(SCHEMA)
     have = {r[1] for r in c.execute("PRAGMA table_info(assistant_actions)")}
-    for column in ("confirm_hash", "running_since", "description", "diff", "proposer"):
+    # ask: the ask a card carries to someone who may (backend/settings_asks.py), settled with the card.
+    for column in ("confirm_hash", "running_since", "description", "diff", "proposer", "ask"):
         if column not in have:
             c.execute("ALTER TABLE assistant_actions ADD COLUMN %s TEXT" % column)
     if not any(r[1] == "via" for r in c.execute("PRAGMA table_info(task_events)")):
@@ -90,6 +92,10 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # Confirm card in the person's chat (which `create_proposal` checks as any card), and the change itself meets the
     # checks below.
     if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/plan", path):
+        return True
+    # Asking someone who can (backend/settings_asks.py) changes nothing either: it puts a card in front of a person who
+    # may, and the route itself requires the person's cited words.
+    if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/ask", path):
         return True
     # The mail tool's org rule check before a send, and its report of checks Tico never answered, change nothing: a
     # person's own mail is never checked (backend/org_rule_check.py), and the send itself meets its own checks.
@@ -502,7 +508,9 @@ _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     ("POST", r"/api/v2/bots/[^/]+/budget"), ("POST", r"/api/v2/strategy-bot/(checks|level)"),
     ("POST", r"/api/v2/bots/[^/]+/cloud-machine"), ("POST", r"/api/v2/cloud-machines/shared"),
     ("POST", r"/api/v2/postal/orders"),
-    ("POST", r"/api/v2/github/product-repos"),
+    ("POST", r"/api/v2/github/product-repos"), ("POST", r"/api/v2/tasks/[^/]+/requesters"), ("POST", r"/api/v2/tasks/[^/]+/requesters/[^/]+"),
+    ("POST", r"/api/v2/tasks/[^/]+/requesters/[^/]+/delete"), ("POST", r"/api/v2/tasks/[^/]+/links"),
+    ("DELETE", r"/api/v2/tasks/[^/]+/links/[^/]+"),
     ("PUT", r"/api/v2/listening/destinations/[^/]+"), ("POST", r"/api/v2/listening/destinations/[^/]+/remove"),
     ("POST", r"/api/v2/roadmaps/settings"), ("POST", r"/api/v2/inbound/inboxes/[^/]+/release"),
     ("POST", r"/api/v2/inbound/phone-requests(/[^/]+/accept)?"),
@@ -750,6 +758,11 @@ def describe(c, method, path, body):
         (r"/api/v2/support/tickets", lambda g: "Send this to the Tico team: " + preview(body.get("message"))),
         (r"/api/v2/directory(/sync|/preview)?", lambda g: "Change the people directory sync"),
         (r"/api/v2/(slack|github/app)/disconnect", lambda g: "Disconnect " + g[0].split("/")[0].title()),
+        (r"/api/v2/tasks/([^/]+)/requesters/([^/]+)/delete", lambda g: "Remove a requester from this task"),
+        (r"/api/v2/tasks/([^/]+)/requesters/([^/]+)", lambda g: "Change a requester on this task"),
+        (r"/api/v2/tasks/([^/]+)/links", lambda g: ("Remove a link from this task" if body.get("remove") else "Add a link to this task")),
+        (r"/api/v2/tasks/([^/]+)/links/([^/]+)", lambda g: "Remove a link from this task"),
+        (r"/api/v2/tasks/([^/]+)/requesters", lambda g: "Add " + (who(body.get("actor")) if body.get("actor") else (body.get("name") or body.get("email") or "a contact")) + " as a requester on this task"),
         (r"/api/v2/files/([^/]+)", lambda g: "Delete a file for good" if method == "DELETE" else "Change a file's listing"),
         (r"/api/v2/assistant/turn-on", lambda g: "Turn the Assistant on for the team"),
         (r"/api/v2/system/usage-count/reset", lambda g: "Reset this Tico's install ID for the usage count"),
@@ -1861,7 +1874,9 @@ def install(app, store, auth, mutate, onboarding):
                          (H.shift(H.now(), seconds=-RUNNING_TTL_S),)).fetchone()
 
     def expire(c):
-        """A confirm that never settled (a restart, a dropped connection) fails after two minutes."""
+        """A confirm that never settled (a restart, a dropped connection) fails after two minutes; an asked one also
+        settles its ask (backend/settings_asks.py), its asker told it may not have finished."""
+        settings_asks.recover(c)
         c.execute("UPDATE assistant_actions SET status='failed', decided_at=?, confirm_hash=NULL, result=? "
                   "WHERE status='running' AND running_since<?",
                   (H.now(), json.dumps({"status_code": 0, "error": "It did not finish; ask again"}),
@@ -1884,6 +1899,7 @@ def install(app, store, auth, mutate, onboarding):
             c.execute("UPDATE assistant_actions SET status=?, decided_at=?, result=?, confirm_hash=NULL WHERE id=?",
                       (status, H.now(), json.dumps(result), aid))
             row = load(c, who, aid)
+            settings_asks.settled(c, row, status, result)
             room = H.conversation(c, row["conversation_id"]) if row["conversation_id"] else None
             if room and note:
                 by = row.get("proposer") or "assistant"
@@ -1902,6 +1918,7 @@ def install(app, store, auth, mutate, onboarding):
                 raise Problem("state", "This proposal is already " + row["status"], 409)
             c.execute("UPDATE assistant_actions SET status='canceled', decided_at=? WHERE id=?", (H.now(), aid))
             H.event(c, who.actor, "assistant.action.canceled", aid, {})
+            settings_asks.settled(c, row, "canceled")
             return {"action": action_view(load(c, who, aid), c)}
         return mutate(request, body, work)
 
@@ -1921,6 +1938,7 @@ def install(app, store, auth, mutate, onboarding):
                 if row["created_at"] < H.shift(H.now(), hours=-CONFIRM_TTL_H):
                     # Recorded here, raised after the transaction commits (raising inside it rolls it back).
                     c.execute("UPDATE assistant_actions SET status='expired', decided_at=? WHERE id=?", (H.now(), aid))
+                    settings_asks.settled(c, row, "expired")
                     return None
                 # Only the run that holds this secret (the in-process call below) is "confirmed".
                 c.execute("UPDATE assistant_actions SET status='running', decided_at=?, running_since=?, "

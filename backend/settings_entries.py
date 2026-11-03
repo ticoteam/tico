@@ -107,7 +107,7 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("people"), words="invite person"),
     S("people.member_bot_limit", "Member bot limit", PEOPLE + " > Team rules", "admin", "confirm", "PUT",
       "access/limits", "member_bot_limit", "int", _card("people"), "access#limits.member_bot_limit"),
-    S("people.person.role", "A person's role", PEOPLE, "admin", "confirm", "POST", "access/humans/{person}", "role",
+    S("people.person.role", "A person's role", PEOPLE, "owner", "confirm", "POST", "access/humans/{person}", "role",
       "choice:member|admin", _card("people"), words="admin member role"),
     S("people.person.sign_in", "A person may sign in", PEOPLE, "admin", "confirm", "POST", "access/humans/{person}",
       "sign_in", card=_card("people")),

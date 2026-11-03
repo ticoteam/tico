@@ -384,7 +384,7 @@ def install(app, store, auth, mutate, settings):
     @app.post("/api/v2/strategy-bot/level")
     def strategy_bot_level(request: Request, body: M.StrategyBotLevel):
         """Settings > Strategy Bot, "How much your Strategy Bot does": the owner picks Passive (1), Suggests actions (2)
-        or Acts on its own (3) on their own click; each change is kept with who and when. An admin or a member never
+        or Acts on its own (3) on their own click or their tap on a Confirm card; each change is kept with who and when. An admin or a member never
         does, nor a bot, the Strategy Bot included, nor the Assistant acting for the owner."""
         who = request.state.identity
         def work(c):
@@ -392,7 +392,7 @@ def install(app, store, auth, mutate, settings):
             if not company_editor(who, tap=True):
                 raise Problem("forbidden",
                               f"Only the owner chooses how much the {strategy_bot.name(c)} does, on their own "
-                              "click; no admin or bot changes it, the Strategy Bot included", 403)
+                              "click or Confirm-card tap; no admin or bot changes it, the Strategy Bot included", 403)
             strategy_bot.set_level(c, who.actor, body.level)
             return strategy_bot.named(c, strategy_bot.view(c))
         return mutate(request, body, work)
@@ -409,7 +409,7 @@ def install(app, store, auth, mutate, settings):
             if not company_editor(who, tap=True):
                 raise Problem("forbidden",
                               f"Only the owner turns the {strategy_bot.name(c)}'s regular checks on or off, "
-                              "on their own click", 403)
+                              "on their own click or Confirm-card tap", 403)
             strategy_bot.set_checks(c, who.actor, body.on)
             return strategy_bot.named(c, strategy_bot.view(c))
         return mutate(request, body, work)
