@@ -85,6 +85,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
   assert.ok(reads.threads > before.threads, 'a version the threads list was not read at reads it');
 
   // A read that fails leaves nothing to compare with: the next connect reads the list again.
+  await page.waitForFunction(() => !THREADS.loading, null, {timeout: t(5000)});
   reads.failThreads = true;
   await page.evaluate(() => threadsLoad());
   reads.failThreads = false;
@@ -92,6 +93,21 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
   await page.evaluate(() => liveEmit('needs', {version: S.v2.needsVersion, connect: true, carried: ['needs', 'threads']}));
   for (const end = Date.now() + t(5000); reads.threads === before.threads && Date.now() < end;) await page.waitForTimeout(50);
   assert.ok(reads.threads > before.threads, 'a connect after a failed read reads the list');
+
+  // A read 5 minutes old: a connect reads the list again, whatever it carried (a change no event names).
+  await page.evaluate(() => threadsLoad());
+  await page.waitForFunction(() => !THREADS.loading && THREADS.needsSeen, null, {timeout: t(5000)});
+  before = {...reads};
+  await page.evaluate(() => { THREADS.readAt = Date.now() - 301e3; liveEmit('needs', {version: THREADS.needsSeen, connect: true, carried: ['needs', 'threads']}); });
+  for (const end = Date.now() + t(5000); reads.threads === before.threads && Date.now() < end;) await page.waitForTimeout(50);
+  assert.ok(reads.threads > before.threads, 'a connect 5 minutes after the last read reads the list');
+  await quiet();
+  // A thread change while a read is on its way: that read vouches for nothing, so the next connect reads again.
+  await page.waitForFunction(() => !THREADS.loading, null, {timeout: t(5000)});
+  await page.evaluate(() => { void threadsLoad(); liveEmit('threads', {kind: 'ranked'}); });
+  await page.waitForFunction(() => !THREADS.loading, null, {timeout: t(5000)});
+  await quiet();
+  assert.equal(await page.evaluate(() => THREADS.needsSeen), null, 'a read a change overtook holds no version');
 
   assert.deepEqual(errors.filter(e => !/500|failed/i.test(e)), []);
   await browser.close();
