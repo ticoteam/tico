@@ -705,12 +705,17 @@ function v2ChatRender(state) {
   }
 }
 // Stop shows while this chat's message runs, or waits behind a run the bot is still in, for a person who manages the bot.
+// `x` is a conversation snapshot's execution; {run_id} is the run Stop ends (POST /v2/bots/<bot>/stop), none when the
+// message only waits behind one. A bot's Home and DM read it too (thread-view.js thvRunRead).
+function chatRunning(x, slug) {
+  const own = ['leased', 'running'].includes(x?.state);
+  const busy = own || x?.state === 'queued' && v2StatusOf(slug)?.state === 'running';
+  return busy && settingsCanManageBot(botRow(slug)) ? {run_id: own ? x.run_id : null} : null;
+}
 function chatStopSync(state) {
   const P = BOT_PILL;
   if (!P || P.slug !== state.slug) return;
-  const x = state.execution, own = ['leased', 'running'].includes(x?.state);
-  const busy = own || x?.state === 'queued' && v2StatusOf(state.slug)?.state === 'running';
-  const running = busy && settingsCanManageBot(botRow(state.slug)) ? {run_id: own ? x.run_id : null} : null;
+  const running = chatRunning(state.execution, state.slug);
   if (!running === !P.running && running?.run_id === P.running?.run_id) return;
   P.running = running; P.stopping = false;
   pillButtons(P);
