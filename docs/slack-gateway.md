@@ -218,7 +218,9 @@ Slack sends `link_shared` over the same socket; the gateway answers with `chat.u
 stores nothing. A preview is shown only when the person who pasted the link passes the same sender
 checks as a message (workspace member, not a guest, admitted, on the roster) and may read the task,
 and only for a task that is not private: nothing of a private task goes to Slack. A channel shared
-outside the workspace gets none. Everyone in the conversation then sees the preview; each one is
+outside the workspace gets none, and so does a channel whose info Slack will not give Tico (a private
+channel it is not in) and a link still in the composer, whose channel is not known yet. A DM gets one
+either way: the sender is verified there. Everyone in the conversation then sees the preview; each one is
 recorded as a `slack.unfurl` event with the task and the person.
 
 The button opens `TICO_SLACK_OPEN_URL` (`{id}` is the task id; default the task in the web app) and

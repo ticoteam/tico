@@ -696,16 +696,22 @@ class Gateway:
                 LOG.info("No preview for a link shared in %s: %s", event.get("channel"), why)
                 return "unfurl_denied"
             channel = str(event.get("channel") or "")
-            if channel and channel != "COMPOSER":
-                try:
-                    if is_external(self.slack.conversations_info(channel)):
-                        return "unfurl_external"
-                except (SlackError, SlackUnreachable):
-                    pass                            # a DM or a private channel Tico is not in: the sender is verified
+            if event.get("unfurl_id") or channel == "COMPOSER":
+                return "unfurl_composer"            # a link still in the composer: no channel yet to check it against
+            if not channel:
+                return "unfurl_unchecked"
+            try:
+                info = self.slack.conversations_info(channel) or {}
+            except (SlackError, SlackUnreachable):
+                info = {}
+            if is_external(info):
+                return "unfurl_external"
+            if not info and not channel.startswith("D"):
+                return "unfurl_unchecked"           # no info for it: no preview (a DM may get one)
             from .auth import Auth, Problem
             if self._auth is None:
                 self._auth = Auth(self.store)
-            unfurls, shown = {}, []
+            checked = {}                            # url -> the task row that passed every check, read once
             with self.store.read() as c:
                 self._auth.sync_access(c)
                 who = self._auth.identity_for_actor(c, "human:" + person["id"])
@@ -717,22 +723,21 @@ class Gateway:
                         continue                    # missing, or not the sender's to show
                     if H.task_private(c, row):
                         continue                    # nothing of a private task goes to Slack, as with replies
-                    unfurls[url] = SU.preview(c, self.settings, url, row)
-                    shown.append(row["id"])
-            if not unfurls:
+                    checked[url] = row
+                # Both forms come from the same rows, so a refused button needs no second read of the tasks.
+                buttons = {url: SU.preview(c, self.settings, url, row) for url, row in checked.items()}
+                as_text = {url: SU.preview(c, self.settings, url, row, button=False) for url, row in checked.items()}
+            if not checked:
                 return "unfurl_unreadable"
             try:
-                self.slack.unfurl(event, unfurls)
+                self.slack.unfurl(event, buttons)
             except SlackError as exc:
                 if exc.code not in SU.BLOCK_ERRORS:
                     raise
-                with self.store.read() as c:        # the open button refused: the same link, as text
-                    unfurls = {url: SU.preview(c, self.settings, url, SU.find(c, ref), button=False)
-                               for url, ref in found if url in unfurls}
-                self.slack.unfurl(event, unfurls)
+                self.slack.unfurl(event, as_text)   # the open button refused: the same links, the open link as text
             with self.store.transaction() as c:
-                for task_id in shown:
-                    H.event(c, "human:" + person["id"], "slack.unfurl", task_id, {"channel": channel})
+                for row in checked.values():
+                    H.event(c, "human:" + person["id"], "slack.unfurl", row["id"], {"channel": channel})
             return "unfurled"
         except Exception as exc:                    # a preview never takes the socket down or blocks the ack
             LOG.error("Link preview failed: %s: %s", type(exc).__name__, exc)

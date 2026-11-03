@@ -38,6 +38,11 @@ services:
       TICO_DOMAIN_ALIASES:
       TICO_PORT: ${TICO_PORT:-8765}
       TICO_PUBLIC_URL:
+      # Link previews in Slack (docs/slack-gateway.md): the server builds the manifest, and its unfurl_domains
+      # list these hosts.
+      TICO_SLACK_UNFURL_HOSTS:
+      TICO_SLACK_OPEN_LABEL:
+      TICO_SLACK_OPEN_URL:
       # Visuals in replies (backend/visuals.py): a separate site of their own; unset = pictures, video and audio only.
       TICO_VISUAL_ORIGIN:
       TICO_VISUAL_SECRET:
