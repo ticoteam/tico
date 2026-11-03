@@ -89,7 +89,7 @@ window.addEventListener('load', () => {
   void counts.then(liveWire);
   let refreshedAt = Date.now();
   const every = () => 120000;
-  const poll = () => { refreshedAt = Date.now(); return refresh(false); };
+  const poll = () => { refreshedAt = Date.now(); return refresh(false, true); };
   setInterval(() => { if (!document.hidden && Date.now() - refreshedAt >= every() - 1000) void poll(); }, 30000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - refreshedAt > every()) void poll(); });
 })();

@@ -218,8 +218,12 @@ function threadsSync() {
     liveThrottle('threads-side', threadsLoad, 400);
     threadViewsLive('threads', d);
   });
-  // A hold or an ask moved on the viewer's Needs you list: the rows it marks are ranked first.
-  liveOn('needs', () => { if (THREADS.on) liveThrottle('threads-side-live', threadsLoad, 3000); });
+  // A hold or an ask moved on the viewer's Needs you list: the rows it marks are ranked first. A version the page
+  // already holds moved nothing (each stream connect names it), so the list is not read again for it.
+  liveOn('needs', d => {
+    if (!THREADS.on || d?.version && d.version === S.v2.needsVersion) return;
+    liveThrottle('threads-side-live', threadsLoad, 3000);
+  });
   // Needs you read again (its holds are Inbox's): the count follows the list as it now stands.
   liveOn('needs-list', () => { if (THREADS.on) threadsSideRender(); });
   liveOn('reset', () => { liveSoon('threads-side', threadsLoad, 400); threadViewsLive('reset', {}); });

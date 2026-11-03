@@ -76,8 +76,12 @@ const unsigned = body => String(body || '').replace(/\n*_?— [^\s_]+@[^\s_]+ vi
 // every v2 read is optional: a hub without hub.db answers 404 and the caller falls back
 async function v2Get(path, opts) { try { return await get(path, opts); } catch { return null; } }
 
-async function v2Refresh() {
-  const [st, needs] = await Promise.all([v2Get('/v2/status'), v2NeedsRead()]);
+// The 2-minute poll (`poll`) reads Needs you only every 5 minutes while the live stream is connected: the stream mends
+// the list as it changes (v2NeedsChanged), so the read is only a precaution then. Any other refresh reads it.
+const NEEDS_LIVE_POLL_MS = 300e3;
+async function v2Refresh(opts = {}) {
+  const needsDue = !opts.poll || !liveConnected() || Date.now() - NEEDS_AT >= NEEDS_LIVE_POLL_MS - 5000;
+  const [st, needs] = await Promise.all([v2Get('/v2/status'), needsDue ? v2NeedsRead() : null]);
   S.v2.on = !!st;
   if (st) S.v2.status = Object.fromEntries((st.bots || []).map(b => [b.bot, b]));
   // when Tico is updating itself, say so at the top of the sidebar
@@ -115,7 +119,7 @@ function needsTake(needs) {
   S.v2.needs = needs.items || []; S.v2.needsVersion = needs.version || null;
   S.v2.needsCount = needs.count ?? S.v2.needs.length; S.v2.needsNext = needs.next || null; S.v2.needsBots = needs.bots || null;
 }
-let NEEDS_READ = 0, NEEDS_KEPT = 0;
+let NEEDS_READ = 0, NEEDS_KEPT = 0, NEEDS_AT = 0;
 async function v2NeedsRead() {
   const held = S.v2.needsVersion, seq = ++NEEDS_READ;
   // As many as are held, so a list that moved does not drop the pages already read.
@@ -123,7 +127,7 @@ async function v2NeedsRead() {
   const needs = await v2Get(`/v2/needs-you?limit=${limit}` + (held ? `&version=${encodeURIComponent(held)}` : ''), {fresh: true});
   if (!needs) return null;
   if (seq < NEEDS_KEPT) return needs;
-  NEEDS_KEPT = seq;
+  NEEDS_KEPT = seq; NEEDS_AT = Date.now();
   if (!needs.unchanged) needsTake(needs);
   S.v2.wentAway = needs.went_away || null;
   return needs;

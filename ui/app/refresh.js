@@ -6,10 +6,11 @@
 // Recruiting seats change only by a recruit flow here (each refreshes with force) or another person's: a poll reads
 // them every 5th time, or when the last answer is 10 minutes old.
 let SEATS_POLLS = 0, SEATS_AT = 0;
-async function refresh(force) {
+// `timed`: the 2-minute clock's own poll (boot.js), not a refresh after something the person did.
+async function refresh(force, timed = false) {
   // Every read at once: hub.db status and needs-you (docs/history/hub-v2.md) and the campus's computers (only while it
   // is open) do not wait for the roster.
-  const v2 = v2Refresh(), computers = overviewLoadComputers();
+  const v2 = v2Refresh({poll: timed}), computers = overviewLoadComputers();
   try {
     // BotOps and other sessions can change the chart. Publish a complete roster together so groups and members agree.
     // GitHub Issues are retired: /api/issues always answers [], so S.issues stays empty and is not read.
