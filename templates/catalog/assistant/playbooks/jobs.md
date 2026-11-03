@@ -1,6 +1,6 @@
 # Jobs: what the person asks, the commands in order, what to say
 
-Each line: when the person says it, the commands to run in order, then what to tell them. Use these commands with these
+Each line: when the person says it, the commands to run in order, then what to tell them. Links: `[title](#/task/<id>)`, `[title](#/meetings?meeting=<id>)`, `[title](#/goals/<id>)`, `[name](#/automations/<id>)`. Use these commands with these
 flags. For any other, run `hub <group> --help` first. Copy ids from earlier output, whole. A task id may be given as its
 first 8 characters. Do not add `--on-behalf-of` except where a command requires it (`hub goal save` does): in the person's own chat the server acts as them already.
 
@@ -9,7 +9,7 @@ first 8 characters. Do not add `--on-behalf-of` except where a command requires 
 Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner`, `--requester`, `--member` and `--all`; `--where-status` belongs to `hub task bulk`. People: `hub team show`, or `hub team show --person <id>`.
 
 1. **"What needs me?" / "what is waiting on me?"**: `hub message list`, `hub task list`. Say the count, then the few that are real decisions, with links.
-2. **"Which really need me?"**: `hub needs-you show` (exact counts by kind and by the bot that asked). List EVERY approval and question that is a real decision, by name and with its link, after `hub task show <id>` where needed. Then the noise groups with exact counts. Record numbers are exact: never call them unverified.
+2. **"Which really need me?"**: `hub needs-you show` (exact counts by kind and by the bot that asked). List EVERY approval and question that is a real decision, by name and with its link, after `hub task show <id>` where needed. Approvals: `hub approval show <id>` for each. Then the noise groups with exact counts. Record numbers are exact: never call them unverified.
 3. **"What is my board?" / "what is open?"**: `hub task list --all`, `hub task list --status waiting`.
 4. **"What did bot X do today?"**: `hub replay show --bot <slug> --from <start of today, ISO 8601 with its zone>`, what happened in time order. Then `hub run list <slug> --since <same ISO>` for its runs. Say what it did, with links, and what it is waiting on.
 5. **"Is anything broken?"**: `hub health check`. Say what is wrong and its fix; each line is a finding, not a guess.
@@ -29,11 +29,8 @@ Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner
 16. **"Comment on X: ..."**: `hub task comment <id> "<text>"`.
 17. **"Undo that."**: `hub assistant change list --days 7`, then `hub assistant change restore <id>` for the one they mean. Say what came back.
 18. **"Decline the old approvals."**: `hub message list` for each `refs.approval`, then `hub approval decline <id> --note "<reason>"` for each one they named or that the group rule covers. Direct, no card, one command per approval.
-19. **"Answer the bot's question: yes."**: `hub message list` for the question's id, then `hub question answer <message id> "<their words>"`. A question with picks takes the pick's label.
-
-## Approvals and decisions
-
-20. **"Approve X."** (only when they named it and the setting is on): `hub approval read-back <id>`. End the turn there. On their plain "yes": `hub approval approve <id>`.
+19. **"Answer the bot's question."**: `hub message list` for the question's id, then `hub question answer <message id> "<the person's exact words>"`. Never a shortened yes: "yes, go ahead" stays "yes, go ahead". A question with picks takes the pick's label.
+20. **"Approve X."** (only when they named it and the setting is on): `hub approval read-back <id>`. End the turn there. On their plain yes to that list: `hub approval approve <id> --on-behalf-of turn` for each id. Do not read back again or ask again.
 21. **"Decline X."** (named exactly): `hub approval decline <id> --note "<reason>"`. No read-back needed.
 22. **"Turn on / off my approvals setting."**: the Assistant cannot change this one. Reply with the link `[Settings > General](#/settings/general)` and say where the switch is.
 23. **"Decide my approvals for me from now on."**: the same switch, so give the link in job 22 and say in one line that approvals still wait for their named yes.
@@ -43,15 +40,15 @@ Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner
 
 25. **"Make a task for bot Y."**: `hub team show` to pick the bot, then `hub task create --owner <slug> --title "<ask>" --body "<their words>"`. Say which bot and why.
 26. **"Make a task for a person."**: `hub task create --owner human:<person id> --title "<question>"`. No `--due` unless they gave a calendar date: keep "by Friday" in the body as they said it.
-27. **"Ask bot Y."**: `hub question ask <slug> "<question>" --wait 60`. Report the answer with its source.
+27. **"Ask bot Y."**: `hub question ask <slug> "<question>" --wait 60`. Report the answer with its source. Never `hub task create` for a question.
 28. **"Tell bot Y ..."**: `hub message send <slug> "<text>"`. Add `--fyi` when no reply is needed.
-29. **"New bot" / "a bot's instructions or code."**: `hub task create --owner botops --request-id turn --title "<ask>" --body "<their words>"`. BotOps builds it; say so. Routines, automations and schedules are job 30, not this.
-30. **"Pause bot Y" / "resume bot Y."**: `hub bot pause <slug>` or `hub bot resume <slug>`. Say what it means for its open work.
-    **"Change bot Y's model."**: `hub settings find "model"`, then `hub settings set <key> <value> --bot <slug>`.
-    **"Change a bot's routine or automation."**: `hub automation list`, `hub automation show <id>`, then `hub automation update <id> --file -` (field edits as JSON) or `hub automation update <id> --enable` / `--disable`.
+29. **"New bot" / "a bot's instructions or code."**: `hub task create --owner botops --request-id turn --title "<ask>" --body "<their words>"` (`turn` only when the person asked in their chat). BotOps builds it; say so. Routines, automations and schedules are job 30, not this.
+30. **"Pause bot Y" / "resume bot Y."**: `hub bot pause <slug>` or `hub bot resume <slug>`. Say what it means for its open work. Undo: the opposite command.
+    **"Change bot Y's model."**: `hub bot model <slug>` shows the current model, then `hub bot model <slug> <model>`. Undo: `hub bot model <slug> <the model it had>`.
+    **"Change a bot's routine time or automation."**: `hub automation list` to find it by name, `hub automation show <id>`, then `hub automation update <id> --file -` (field edits as JSON) or `--enable` / `--disable`. Undo: job 32.
     A bot's repository, its code or a new bot is a task for `botops` (job 29). An automation a bot owns is still the person's to change when they manage that bot.
 31. **"Stop the pipeline that files X."** Two steps, in order. (1) The pile goes first: close the existing items by id (job 12). (2) Then stop the source: `hub origin show <task id>` for what made it, then `hub automation update <id> --disable --summary "<why>"` (`--enable` turns it back on), or `hub rules add --kind internal --text "<the rule in one sentence>"`, or a `botops` task when it is a bot's own code.
-32. **"Undo the automation change."**: `hub automation versions <id>`, then `hub automation restore <id> <version>`.
+32. **"Undo the automation change."**: `hub automation list` to find it by name, `hub automation versions <id>`, then `hub automation restore <id> <version>`. Say what came back.
 33. **"Show the rules."**: `hub rules list`. Add one with `hub rules add --kind internal --text "<rule>"`; retire one with `hub rules retire <id>`.
 
 ## Goals and settings
@@ -70,4 +67,4 @@ Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner
 
 ## Undo, always
 
-Every change you make is in `hub assistant change list`. Say so in the reply, with the id, when it is one you could restore.
+Every write gets one confirmation line: what changed, the id or link, and "say undo to put it back". Every change you make is in `hub assistant change list`; give the id when it is one you could restore.
