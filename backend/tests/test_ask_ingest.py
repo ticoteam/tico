@@ -1076,20 +1076,17 @@ def test_a_replay_shows_an_admin_only_the_titles_they_may_read(gate, monkeypatch
 
 
 def test_a_replay_hides_a_private_task_the_filter_kept_with_its_bot(gate):
-    """A private task sent back stays the bot's: the person is no party to it, so their own replay shows no title."""
+    """A private task sent back stays the bot's: the person is no party to it, so their own replay shows no title. Their
+    own task, and a question to them outside any task, they always see."""
     api, model, token = gate
-    plate(api, 15)
-    model.kind = "own_work"
-    r = api.post("/api/v2/tasks", json={"owner": "ben", "title": "Bot-only vendor margin", "body": "x", "private": True},
-                 headers=headers(token))
-    assert r.status_code == 200, r.text
-    assert r.json()["task"]["owner_id"] == "bot:ops" and r.json()["ingest"]["outcome"] == A.SENT_BACK
-    own = api.post("/api/v2/ask-ingest/replay", json={"person": "ben", "date": H.now()[:10]}, headers=headers("ben-test"))
-    assert own.status_code == 200, own.text
-    with api.app.state.store.read() as c:
-        rows = (H._rows(c.execute("SELECT person,kind,ref,created_at FROM ask_ingest_items")), H._rows(c.execute("SELECT id,owner_id,requester_id,created_at,private FROM tasks WHERE title LIKE ?", ("%margin%",))), H.now())
-    assert [i for i in own.json()["items"] if i["title"] == "" and i["ref"] is None], (own.json(), rows)
-    assert "margin" not in own.text and r.json()["task"]["id"] not in own.text
+    with api.app.state.store.transaction() as c:
+        kept = H.task_create(c, "bot:ops", "Bot-only vendor margin", "", "bot:ops", lint=False, private=True)
+        mine = H.task_create(c, "bot:ops", "Pick the launch date", "", "human:ben", lint=False, private=True)
+        assert not A._shown(c, None, "human:ben", {"kind": "task", "ref": kept["id"]})
+        assert not A._shown(c, "human:ben", "human:ben", {"kind": "task", "ref": kept["id"]})
+        assert A._shown(c, None, "human:ben", {"kind": "task", "ref": mine["id"]})
+        assert A._shown(c, None, "human:ben", {"kind": "loose", "ref": "m1"})
+        assert not A._shown(c, "human:priya", "human:ben", {"kind": "loose", "ref": "m1"})
 
 
 @pytest.mark.parametrize("actor,role,via,expected", [
