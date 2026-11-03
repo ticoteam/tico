@@ -159,12 +159,27 @@ pub fn remember_plan(profile: &str, runtime: &str, value: &Value) {
 
 /// A signed-out login: its account and the time of its last read go, so the next sign-in is read at once.
 pub fn forget(profile: &str, runtime: &str) {
+    forget_since(profile, runtime, None);
+}
+
+/// `forget` from a read that found the login signed out, only if no sign-in or sign-out ran since it started (`since`,
+/// from `read_started`): a status command begun while signed out that ends after a sign-in leaves the new account alone.
+pub(crate) fn forget_if_current(profile: &str, runtime: &str, since: u64) -> bool {
+    forget_since(profile, runtime, Some(since))
+}
+
+fn forget_since(profile: &str, runtime: &str, since: Option<u64>) -> bool {
     let key = (profile.to_string(), runtime.to_string());
-    // Held across the removal, so a background read keeping its answer (keep_read) is either before this or refused.
+    // Held across the removal, so a background read keeping its answer (keep_if_current) is either before this or refused.
     let mut gens = generations().lock().unwrap();
-    *gens.entry(key.clone()).or_insert(0) += 1;
+    let generation = gens.entry(key.clone()).or_insert(0);
+    if since.is_some_and(|since| since != *generation) {
+        return false;
+    }
+    *generation += 1;
     known().lock().unwrap().remove(&key);
     tried().lock().unwrap().remove(&key);
+    true
 }
 
 /// Keep a background read's account and usage limits, unless `forget` ran for the same login after the read started
@@ -270,6 +285,18 @@ pub async fn read_app_server(runtime: &str, env: &Env) -> Option<(Value, Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A read that found the login signed out clears it only if nothing signed in or out since the read began.
+    #[test]
+    fn a_signed_out_read_that_started_before_a_sign_in_leaves_the_new_account() {
+        let since = read_started("late-out", "claude");
+        forget("late-out", "claude");
+        remember("late-out", "claude", json!({"email": "new@example.com"}));
+        assert!(!forget_if_current("late-out", "claude", since), "the stale signed-out read clears nothing");
+        assert_eq!(account("late-out", "claude").unwrap()["email"], "new@example.com");
+        assert!(forget_if_current("late-out", "claude", read_started("late-out", "claude")), "a current one clears it");
+        assert!(account("late-out", "claude").is_none());
+    }
 
     /// The subscription refresh's account and usage read (subscription_refresh::read_codex) keeps nothing once a sign-in
     /// or sign-out (forget) has run since it started.

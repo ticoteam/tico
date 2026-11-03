@@ -218,7 +218,9 @@ async fn sign_in_state(
                                     Some(account) => {
                                         crate::accounts::keep_if_current(&account_key, runtime, since, || crate::accounts::remember(&account_key, runtime, account));
                                     }
-                                    None => crate::accounts::forget(&account_key, runtime),
+                                    None => {
+                                        crate::accounts::forget_if_current(&account_key, runtime, since);
+                                    }
                                 }
                             }
                             let method = text_of(&s[&status.method_field]);

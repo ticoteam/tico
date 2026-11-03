@@ -546,6 +546,9 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                 }
                 for runtime in crate::harness_tools::profile_runtimes() {
                     let runtime = runtime.as_str();
+                    // A sign-in or sign-out while this reads (accounts::forget) makes its answer stale: the account it read
+                    // is not kept, and a signed-out answer does not clear the new account.
+                    let since = crate::accounts::read_started(&name, runtime);
                     let status = crate::harness_tools::caps(runtime, "").sign_in_status;
                     let mut signed = Value::Null;
                     let budget = deadline.saturating_duration_since(Instant::now());
@@ -554,8 +557,6 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                         "command" | "json" => {
                             if let (Some(exe), false) = (exe, budget.is_zero()) {
                                 let env = profile.environment(runtime, &clean);
-                                // A sign-in or sign-out while this runs (accounts::forget) makes its account stale: not kept.
-                                let since = crate::accounts::read_started(&name, runtime);
                                 // As the bot user, like readiness and turns: the CLI may write in the profile's home.
                                 let mut cmd = crate::isolation::command(exe);
                                 cmd.args(&status.args).env_clear().envs(&env).stdin(std::process::Stdio::null()).kill_on_drop(true);
@@ -570,7 +571,9 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                                                     Some(account) => {
                                                         crate::accounts::keep_if_current(&name, runtime, since, || crate::accounts::remember(&name, runtime, account));
                                                     }
-                                                    None => crate::accounts::forget(&name, runtime),
+                                                    None => {
+                                                        crate::accounts::forget_if_current(&name, runtime, since);
+                                                    }
                                                 }
                                             }
                                             json!(v[&status.field] == true)
@@ -595,7 +598,7 @@ pub async fn report(config: &Map<String, Value>, rejected: &(dyn Fn(&str, &str) 
                     }
                     // A signed-out login has no account: the next sign-in, maybe as someone else, reads it afresh.
                     if signed == false {
-                        crate::accounts::forget(&name, runtime);
+                        crate::accounts::forget_if_current(&name, runtime, since);
                     }
                     runtimes.insert(runtime.into(), json!({"signed_in": signed}));
                 }

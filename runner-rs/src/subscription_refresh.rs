@@ -120,7 +120,8 @@ pub async fn read_codex(profile: &crate::profiles::Profile, canceled: &AtomicBoo
         Ok(limits)
     }
     .await;
-    crate::accounts::keep_if_current(&profile.name, "codex", since, || {
+    // A read begun before a sign-in or sign-out is someone else's usage: not kept here, and not reported either.
+    let current = crate::accounts::keep_if_current(&profile.name, "codex", since, || {
         if let Some(account) = account {
             crate::accounts::remember(&profile.name, "codex", account);
         }
@@ -133,8 +134,8 @@ pub async fn read_codex(profile: &crate::profiles::Profile, canceled: &AtomicBoo
         let _ = child.kill().await;
     }
     match result {
-        Ok(reply) => weekly(&reply, crate::util::epoch_s()),
-        Err(()) => json!({"state": "failed"}),
+        Ok(reply) if current => weekly(&reply, crate::util::epoch_s()),
+        _ => json!({"state": "failed"}),
     }
 }
 
