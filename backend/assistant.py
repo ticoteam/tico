@@ -93,6 +93,9 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # checks below.
     if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/plan", path):
         return True
+    # Taking back a card the Assistant itself proposed (backend/assistant.py action_withdraw): it only ever stops one.
+    if re.fullmatch(r"/api/v2/assistant/actions/[^/]+/withdraw", path):
+        return True
     # Asking someone who can (backend/settings_asks.py) changes nothing either: it puts a card in front of a person who
     # may, and the route itself requires the person's cited words.
     if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/ask", path):
@@ -854,6 +857,12 @@ def batch_steps(body):
                           "/api/v2/messages/<id>/answer); propose anything else on its own", 422)
         out.append({"method": method, "path": path, "body": {k: v for k, v in sent.items() if k != "on_behalf_of"}})
     return out
+
+
+def teammate(who):
+    """Whether the caller may take a waiting Confirm card back: any signed-in person or bot of the company. Confirming
+    stays the card owner's own click (`/confirm`); withdrawing only stops it."""
+    return who.role in ("owner", "human", "bot")
 
 
 def covers(row, method, path):
@@ -1932,6 +1941,59 @@ def install(app, store, auth, mutate, onboarding):
             settings_asks.settled(c, row, "canceled")
             return {"action": action_view(load(c, who, aid), c)}
         return mutate(request, body, work)
+
+    @app.post("/api/v2/assistant/actions/{aid}/withdraw")
+    def action_withdraw(request: Request, aid: str, body: M.AssistantWithdraw):
+        """Any signed-in teammate (a person or a bot) takes back a card that is still waiting: it never runs, and the
+        card owner's chat says who withdrew it, with the reason if given. Confirming stays the owner's own click."""
+        who = request.state.identity
+        if not teammate(who):
+            raise Problem("forbidden", "Only people and bots of the company can withdraw a proposal", 403)
+
+        def work(c):
+            row = c.execute("SELECT * FROM assistant_actions WHERE id=?", (aid,)).fetchone()
+            if not row:
+                raise Problem("not_found", "No such proposal", 404)
+            if row["status"] != "pending":
+                raise Problem("state", "This proposal is already " + row["status"], 409)
+            reason = " ".join(str(body.reason or "").split())[:300]
+            who_name = (settings_asks._name(c, who.actor) if who.actor.startswith("human:")
+                        else (H.resolve_bot(c, who.actor.removeprefix("bot:")) or {}).get("display_name")
+                        or who.actor.removeprefix("bot:"))
+            c.execute("UPDATE assistant_actions SET status='withdrawn', decided_at=? WHERE id=?", (H.now(), aid))
+            H.event(c, who.actor, "assistant.action.withdrawn", aid,
+                    {"summary": row["summary"][:200], "reason": reason, "owner": row["owner"]})
+            settings_asks.settled(c, row, "withdrawn")
+            room = H.conversation(c, row["conversation_id"]) if row["conversation_id"] else None
+            if room and not room.get("closed_at"):
+                # Said by the proposing bot (the Assistant in its own room), to the card's owner.
+                by = row["proposer"] or "assistant"
+                said = who_name + " withdrew that card, so nothing will run." + (" " + reason if reason else "")
+                H._write_message(c, "bot:" + (room_bot(settings, room) if by == "assistant" else by), row["owner"],
+                                 said, room, "say", {"assistant": True, "action_result": aid}, None, None,
+                                 delivered_at=H.now())
+            return {"action": action_view(dict(c.execute("SELECT * FROM assistant_actions WHERE id=?", (aid,))
+                                                .fetchone()), c)}
+        return mutate(request, body, work)
+
+    @app.get("/api/v2/assistant/proposals")
+    def proposals(request: Request, proposer: str = "", owner: str = ""):
+        """The Confirm cards still waiting, newest first, so a teammate can find one to withdraw: summary and what it
+        does, with its id, owner and proposer. Filter by `proposer` (botops, assistant) and/or `owner` (a person's id)."""
+        who = request.state.identity
+        if not teammate(who):
+            raise Problem("forbidden", "Only people and bots of the company can list proposals", 403)
+        sql, args = "SELECT * FROM assistant_actions WHERE status='pending'", []
+        if proposer:
+            sql += " AND proposer=?"
+            args.append(proposer)
+        if owner:
+            sql += " AND owner=?"
+            args.append(owner)
+        with store.read() as c:
+            rows = c.execute(sql + " ORDER BY created_at DESC LIMIT 100", args).fetchall()
+            return {"actions": [{"id": r["id"], "owner": r["owner"], "proposer": r["proposer"], "summary": r["summary"],
+                                 "description": r["description"], "created_at": r["created_at"]} for r in rows]}
 
     @app.post("/api/v2/assistant/actions/{aid}/confirm")
     async def action_confirm(request: Request, aid: str):

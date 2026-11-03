@@ -102,6 +102,10 @@ export type AssistantSettings = {
   decides_approvals: boolean;
 };
 
+export type AssistantWithdraw = {
+  reason?: string;
+};
+
 export type Audience = {
   bots: Array<string>;
   everyone: boolean;
@@ -7573,6 +7577,14 @@ export type ListAssistantDecisionsParams = {
 export type ListAssistantDecisionsBody = never;
 export type ListAssistantDecisionsResponse = unknown;
 
+/** GET /api/v2/assistant/proposals */
+export type ListAssistantProposalsParams = {
+  owner?: string;
+  proposer?: string;
+};
+export type ListAssistantProposalsBody = never;
+export type ListAssistantProposalsResponse = unknown;
+
 /** GET /api/v2/audiences/{audience_id}/sources */
 export type ListAudienceSourcesParams = {
   audience_id: string;
@@ -10263,6 +10275,14 @@ export type WaitInboundMessagesParams = {
 };
 export type WaitInboundMessagesBody = Wait;
 export type WaitInboundMessagesResponse = InboundMessages;
+
+/** POST /api/v2/assistant/actions/{aid}/withdraw */
+export type WithdrawAssistantActionParams = {
+  "Idempotency-Key": string;
+  aid: string;
+};
+export type WithdrawAssistantActionBody = AssistantWithdraw;
+export type WithdrawAssistantActionResponse = AssistantActionResult;
 
 /** POST /api/v2/rule-holds/{hold_id}/withdraw */
 export type WithdrawRuleHoldParams = {
