@@ -7,10 +7,9 @@ read it or post in it, the owner and administrators included. A message goes one
   answers it from Tico's own data (no canned answers, no keyword routing);
 * that turn acts as the person and never more: `Auth.authenticate` maps its token to the person (`assistant_principal`),
   so every hub tool it calls is checked, and audited "via assistant", exactly as if they had made
-  the call. Low-risk writes run directly (`write_allowed`); a task change, comment or link the
-  person asked for in their own words runs directly when the turn cites their message
-  (`instruction`); anything else with a side effect that matters is proposed as a pending action,
-  and only the person's own click (`confirm`) runs it, through the same routes with their own
+  the call. Low-risk writes run directly (`write_allowed`); any other write the turn makes runs as the person when the
+  turn cites the person's own message that started it (`instruction`), except what `NEVER` names; a proposal the turn
+  makes is a pending action, and only the person's own click (`confirm`) runs it, through the same routes with their own
   credential. The bot itself can never confirm.
 """
 
@@ -36,6 +35,7 @@ from .store import H, Problem, digest
 RUNNING_TTL_S = 120                # a confirm that has not settled in two minutes failed
 CONFIRM_TTL_H = 24                 # a proposal nobody confirmed for a day is not run
 MAX_PENDING = 20
+MAX_BACKGROUND_PER_DAY = 5      # cards the Assistant's own background run may put in one person's chat a day
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS assistant_actions (
@@ -135,18 +135,23 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
 
 
 # ------------------------------------------------------------------ what the person asked for in their own chat
-# A task change, comment or link, declining an approval or answering a bot's question, that the person asked their
-# Assistant for in their own Assistant chat runs without a card when the turn cites that message (`X-Tico-On-Behalf-Of`:
-# its id, or `turn` for the message that started the run). The server checks the message, not the words: the person's
-# own, typed in their own Assistant room, in the last INSTRUCTION_TTL_S. The turn is the person, so their rights stay the
-# ceiling: only an approval addressed to them, only a question asked of them. A decline is undone by asking again, so it
-# is a task action. Approving (send, spend, publish, merge) is a click on a card unless the person turned on "My
-# assistant can decide approvals for me" (`decides`, below) and the team allows it; then an approval addressed to them is
-# decided on their words too (`approval_words`). Running a task now and the rest stay a click, and so does all of it
-# when the owner's rule "Assistant acts without asking" is off.
+# A write the person's own Assistant run makes runs without a card when the turn cites the message that started it: the
+# run cites it itself (`X-Tico-On-Behalf-Of` names another message, or `turn`, the one that started the run). The server
+# checks the message, not the words: the person's own, typed in their own Assistant room, in the last INSTRUCTION_TTL_S.
+# The turn is the person, so their rights stay the ceiling: the route's own checks run as them. Only what `NEVER` names
+# stays a card or the person's own tap. A decline is undone by asking again. Approving (send, spend, publish, merge) is a
+# click on a card unless the person turned on "My assistant can decide approvals for me" (`decides`, below) and the team
+# allows it; then an approval addressed to them is decided on their words too (`approval_words`). When the owner's rule
+# "Assistant acts without asking" is off, all of it is a card again.
 INSTRUCTION_TTL_S = 30 * 60
+# The steps a bulk card (`POST /api/v2/assistant/batch`) may hold: task changes, comments, links, approval decisions and
+# answers. A card is still checked against this list, whatever a turn may do on its own.
 _INSTRUCTED = [re.compile(p) for p in (r"/api/v2/tasks/[^/]+", r"/api/v2/tasks/[^/]+/(comments|links)",
                                        r"/api/v2/messages/[^/]+/answer")]
+# An automation's change and an org rule's add or retire may sit on a bulk card too (one card holds the closes and the
+# rule stop). Each runs as the person through its own route, and must pass `admits_on_turn` like any other write.
+_CARD_OTHER = [("PATCH", re.compile(r"/api/v2/automations/[^/]+")), ("POST", re.compile(r"/api/v2/rules")),
+               ("POST", re.compile(r"/api/v2/rules/[^/]+/retire"))]
 _DECIDING = re.compile(r"/api/v2/approvals/([^/]+)")
 DECIDES_KEY = "assistant.decides_approvals"
 
@@ -189,10 +194,10 @@ def _fields(body):
     return body if isinstance(body, dict) else {}
 
 
-def instructed_setting(method, path, body=None):
-    """Whether this write is one direct setting from the catalogue, exactly as `hub settings set` makes it, so it may run
-    on the person's cited words like a task action (backend/settings_catalog.py). Two settings at once, a confirm or
-    person-only one, or anything the catalogue does not list stays a card."""
+def catalogue_setting(method, path, body=None):
+    """Whether this write is one setting from the catalogue, exactly as `hub settings set` makes it (backend/settings_
+    catalog.py). Its class decides it in `require_direct_setting`. Two settings at once, or anything the catalogue does
+    not list, is not one."""
     from . import settings_catalog
     path = normalize_path(path)
     if isinstance(body, (bytes, str)):
@@ -202,53 +207,96 @@ def instructed_setting(method, path, body=None):
             return False
     if not isinstance(body, dict):
         return False           # a list or a bare value is no catalogue entry's body: never read as an empty one
-    found = path and settings_catalog.matched(method, path, body)
-    return bool(found) and found[2] in ("direct", "stored")      # "stored": `require_direct_setting` reads the rule
+    return bool(path and settings_catalog.matched(method, path, body))
 
 
 def require_direct_setting(c, method, path, body, trial=None, base=""):
-    """403 unless the setting this cited write changes is direct once read against what is stored (a wake-rule update
-    keeps the stored rule's action; a repository change is tried as the person's own click, `trial`): the same class
-    `plan` gave it, with the same full link (`base`, the public URL)."""
+    """403 when the setting this cited write changes is one only the person may change themselves (class `person`). A
+    direct or a confirm setting runs on the person's cited words: the route's own check decides who may change it. The
+    class is read against what is stored (a wake-rule update keeps the stored rule's action; a repository change is tried
+    as the person's own click, `trial`), with the same full link (`base`, the public URL)."""
     from . import settings_catalog
     found = settings_catalog.stored_class(c, method, normalize_path(path) or "", _fields(body), trial)
-    if not found or found[2] != "direct":
-        e = found[0] if found else None
-        link = e and ((base.rstrip("/") + "/" + e.card) if base else e.card)
-        raise Problem("person_only" if found and found[2] == "person" else "confirm_required",
-                      (e.why if e and e.why else "That setting needs the person's own yes") + ": open " + link
-                      if e else "That setting needs the person's own yes", 403)
+    if found and found[2] != "person":
+        return
+    e = found[0] if found else None
+    if not e:
+        raise Problem("confirm_required", "That setting needs the person's own yes", 403)
+    link = (base.rstrip("/") + "/" + e.card) if base else e.card
+    raise Problem("person_only", (e.why or "That setting needs the person's own yes") + ": open " + link, 403)
 
 
-# An org change the person asked for in their chat (the redesign's Strategy Bot suggests them in words; the person says
-# which to make): a group made, renamed, nested, filled, led or deleted, and who a teammate reports to. It runs on their
-# cited words with exactly their rights, which the route checks as for their own click: the owner changes anything, a
-# lead moves teammates inside what it leads, anyone else is refused there. A bot asking, or the Strategy Bot on its own,
-# never borrows a person's rights: its own are refused (backend/groups.py `_may_change`).
-_ORG = [(m, re.compile(p)) for m, p in (
-    ("POST", r"/api/v2/groups"), ("PATCH", r"/api/v2/groups/[^/]+"), ("DELETE", r"/api/v2/groups/[^/]+"))]
-_REPORTS = (re.compile(r"/api/v2/(?:people|humans)/[^/]+"), re.compile(r"/api/v2/bots/[^/]+/definition"))
+# What a person's own Assistant turn never makes as them, even on their cited words: each stays a Confirm card, or the
+# person's own tap in Tico or Settings. Every other write the turn makes is admitted (`admits_on_turn`), and the route's
+# own checks, run as the person, decide the rest. (method, route); a method of None is any method.
+NEVER = [(m, re.compile(p)) for m, p in (
+    # A personal token, a service key, a stored credential's value and its grants are issued, shown or revoked by the
+    # person in Settings or Credentials, never through a chat.
+    ("POST", r"/api/v2/me/tokens(/[^/]+/revoke)?"),
+    ("POST", r"/api/v2/service-keys(/[^/]+/revoke)?"),
+    ("POST", r"/api/v2/credentials/[^/]+/(reveal|grants(/[^/]+(/revoke)?)?)"),
+    # A computer's or an agent's sign-in: its enrollment and pairing codes are the person's own tap.
+    ("POST", r"/api/v2/enrollments"), ("POST", r"/api/v2/runners/enroll"), ("POST", r"/api/v2/agents/pairings(/.*)?"),
+    # A person's password and a reader's invite link: each carries a credential the chat would hold.
+    ("POST", r"/api/v2/access/(people|humans)/[^/]+/password"), ("POST", r"/api/v2/audiences/[^/]+/invites"),
+    # Single sign-on, the directory and its SCIM token, and the OAuth sign-in of an agent.
+    (None, r"/api/v2/directory(/.*)?"), (None, r"/api/v2/oauth(/.*)?"),
+    # Handing the company to another owner.
+    (None, r"/api/v2/access/owner(/.*)?"),
+    # The Assistant's own switches: whether it decides approvals (the person's own sign-in only) and whether it is on.
+    (None, r"/api/v2/assistant/settings"), ("POST", r"/api/v2/assistant/turn-on"),
+    # A raw SQL query over the database is not a chat action: the Assistant reads through its own tools, privacy-checked
+    # per run, and a query is never made for it from a turn.
+    ("POST", r"/api/v2/sql"),
+    # A Tico support report or ticket goes outside the company: the person's own tap.
+    (None, r"/api/v2/support/(tickets(/.*)?|feedback)"),
+    # Deleting a person, the company's server connection or its storage.
+    ("DELETE", r"/api/v2/(people|humans)/[^/]+"), ("DELETE", r"/api/v2/company/server-connection"),
+    ("DELETE", r"/api/v2/system/storage"),
+)]
+# The team's rules that decide the Assistant itself (backend/team_rules.py): only the owner's own sign-in changes them.
+ASSISTANT_RULES = ("assistant_direct", "assistant_approvals")
 
 
-def instructed_org(method, path, body=None):
-    """Whether this write is an org change that may run on the person's cited words: a group write, a change of who a
-    person or a bot reports to, or an org rule the person asked for (backend/org_rules.py), and nothing else."""
+def admits_on_turn(method, path, body=None):
+    """Whether a person's own Assistant turn may make this write as them, on their cited words. Every write is admitted
+    except what `NEVER` names, a body that carries a secret (a secret never goes through a chat: BotOps' rule, which
+    botops_act checks the same way), and the team's rules for the Assistant itself. The approvals are not decided here:
+    an approve runs only on its read-back and the person's yes (`approval_words`)."""
+    from . import botops_act
     path = normalize_path(path)
-    if not path:
+    if not path or method not in ("POST", "PUT", "PATCH", "DELETE"):
         return False
-    if any(m == method and p.fullmatch(path) for m, p in _ORG):
-        return True
-    if method == "POST" and path in ("/api/v2/rules", "/api/v2/rules/read", "/api/v2/rules/ask"):
-        return True
-    fields = _fields(body)
-    return (method == "POST" and any(p.fullmatch(path) for p in _REPORTS) and "reports_to" in fields
-            and not set(fields) - {"reports_to", "expected_revision"})
+    if any(m in (None, method) and p.fullmatch(path) for m, p in NEVER):
+        return False
+    parsed = _json(body)
+    if path == "/api/v2/access/rules" and isinstance(parsed, dict) and any(
+            parsed.get(k) is not None for k in ASSISTANT_RULES):
+        return False
+    if isinstance(parsed, dict) and botops_act.secret_in_request(method, path, parsed):
+        return False
+    return botops_act.secret_in(parsed) is None
+
+
+def _json(body):
+    """A request body as JSON, whether it arrives as bytes or already parsed; a body that is not JSON is `{}`."""
+    if isinstance(body, (bytes, str)):
+        try:
+            return json.loads(body or b"{}")
+        except ValueError:
+            return {}
+    return body if body is not None else {}
 
 
 def instructed_route(method, path, body=None, decides=False):
-    """Whether this write may run on the person's cited words. `decides`: their Assistant may decide approvals."""
+    """Whether a bulk card may hold this step: a task change, comment, link or answer, or an approval decision (`decides`:
+    an approve, which the card's own click covers). A card is checked against this whatever a turn may do on its own."""
     path = normalize_path(path)
-    if method != "POST" or not path or path == "/api/v2/tasks/dry-run":
+    if not path or path == "/api/v2/tasks/dry-run":
+        return False
+    if any(m == method and p.fullmatch(path) for m, p in _CARD_OTHER):
+        return admits_on_turn(method, path, body)
+    if method != "POST":
         return False
     if _DECIDING.fullmatch(path):
         return _fields(body).get("decision") == "declined" or (decides and _fields(body).get("decision") == "approved")
@@ -449,10 +497,9 @@ def instruction(c, who, ref):
 
 
 def require_on_task(c, auth, who, path):
-    """403 unless a task change, comment or link the person asked for is on a task they are on (its owner, requester or
-    in one of its roles): an Assistant acts only as its person, never on another person's task, even when asked to. The
-    owner's Assistant acts as the owner, who may act on any task. A task they may not read is a 404,
-    as the route answers it: the refusal never says it is there."""
+    """A task change, comment or link the turn makes must be on a task the person may read: a task they may not read is
+    a 404, as the route answers it, and the refusal never says it is there. Being on the task is not a limit: the
+    person's own rights are, and the route checks them as the person. The owner's Assistant acts as the owner."""
     m = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(?:comments|links))?", normalize_path(path) or "")
     if not m or who.role == "owner":
         return
@@ -460,12 +507,6 @@ def require_on_task(c, auth, who, path):
     if not row:
         return          # the route answers for a task that is not there
     auth.task_row(c, who, row)
-    from . import task_roles
-    people = {row["owner_id"], row["requester_id"]} | {a for actors in task_roles.roles_of(c, row["id"]).values()
-                                                 for a in actors}
-    if who.actor not in people:
-        raise Problem("on_behalf_of", "That task is another person's: an Assistant acts only on the person's own "
-                      "tasks; ask them to message its owner or comment on it themselves", 403)
 
 
 # What may be proposed at all (method, normalized path). Anything else, and above all tokens, sign-in,
@@ -847,9 +888,9 @@ def batch_steps(body):
                     and sent.get("decision") in ("approved", "declined"))
         if (not isinstance(sent, dict) or not (instructed_route(method, path, sent) or (method == "POST" and deciding))
                 or any(f in sent for f in PERSON_ONLY_FIELDS)):
-            raise Problem("operation", "A bulk card holds only task changes, comments and links, approval decisions and "
-                          "answers to bots' questions (POST /api/v2/tasks/<id>, /comments, /links, /api/v2/approvals/<id>, "
-                          "/api/v2/messages/<id>/answer); propose anything else on its own", 422)
+            raise Problem("operation", "A bulk card holds only task changes, comments and links, approval decisions, "
+                          "answers to bots' questions, automation changes (PATCH /api/v2/automations/<id>) and org rules "
+                          "(POST /api/v2/rules, /api/v2/rules/<id>/retire); propose anything else on its own", 422)
         out.append({"method": method, "path": path, "body": {k: v for k, v in sent.items() if k != "on_behalf_of"}})
     return out
 
@@ -1461,7 +1502,22 @@ def install(app, store, auth, mutate, onboarding):
 
     @app.post("/api/v2/assistant/actions")
     def propose(request: Request, body: M.AssistantAction):
-        who = person(request)
+        caller = request.state.identity
+        # The Assistant's own background run (its daily sweep, a bot identity) may put a card in one person's own Assistant
+        # chat, with `for`: as that person's card, proposed by the Assistant, never approving anything.
+        background = body.for_person is not None and caller.role not in ("owner", "human")
+        if background:
+            if H.actor_id(caller.actor) != settings.assistant_bot or not H.is_human(body.for_person):
+                raise Problem("forbidden", "Only the " + settings.assistant_name + " puts a card in a person's chat, "
+                              "and only for that person", 403)
+            from dataclasses import replace
+            who = replace(caller, actor=body.for_person, role="human", email="", runner_id="", attempt_id="", agent="",
+                          via="", confirmed=False, task_actor="")
+        else:
+            who = person(request)
+            if body.for_person not in (None, who.actor):
+                raise Problem("forbidden", "Only the " + settings.assistant_name + " puts a card in someone else's chat, "
+                              "and only from its own background run", 403)
 
         def work(c):
             if normalize_path(body.path) == "/api/v2/seats/batch" and who.role != "owner":
@@ -1472,6 +1528,15 @@ def install(app, store, auth, mutate, onboarding):
                 raise Problem("operation", "That is not something the " + settings.assistant_name
                               + " can propose: it is not on the list of routes a person confirms (never tokens, "
                               "sign-in, enrollment or this assistant)", 422)
+            if background:
+                # Never an approve, on a background card: the person decides approvals in their own chat or in Tico.
+                if _DECIDING.fullmatch(normalize_path(body.path)) or approvals_in(body.path, body.body):
+                    raise Problem("forbidden", "A background card never approves: the person decides it themselves", 403)
+                sent = c.execute("SELECT count(*) FROM assistant_actions WHERE owner=? AND proposer='assistant' AND "
+                                 "created_at>=?", (who.actor, H.shift(H.now(), seconds=-86400))).fetchone()[0]
+                if sent >= MAX_BACKGROUND_PER_DAY:
+                    raise Problem("too_many", "The " + settings.assistant_name + " has put enough cards in this person's "
+                                  "chat today", 429)
             room = chat_room(c, settings, who)
             return create_proposal(c, settings, who, room, "assistant", body.summary, body.method, body.path, body.body,
                                    request.headers.get("x-tico-on-behalf-of"), routes=request.app.routes)
