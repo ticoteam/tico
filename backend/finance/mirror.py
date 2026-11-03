@@ -1065,7 +1065,7 @@ def _write_document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, ve
                                               tags=line_tags, control_id=control, keys=keys), at)
     SAP.update(c, table, local, {"entry_id": new_entry, "updated_at": at})
     if kind == "bill":
-        SP.set_bill_retained(c, local, retained)
+        PU.set_retained(ctx, SYSTEM, local, retained)
         PU.sync_orders(ctx, SYSTEM, sorted({*old_orders, *SP.bill_orders(c, local)}))
     for s in settled:
         documents.settle(ctx, kind, local, amount=int(s["amount"]), day=str(s["settled_on"]),
