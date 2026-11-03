@@ -220,7 +220,9 @@ def install(app, store, auth, mutate, rule_check):
         `sort=important` by each thread's 1-10 level, then newest, without noise; neither, unread first. With
         `with=<actor>`, only the threads that teammate is a member of, in the same shape."""
         v = threads.viewer(auth, request.state.identity)
-        with store.read() as c:
+        # One snapshot for the whole page: its reads are read_cache's (neutral rows, membership) only inside a
+        # transaction, so a plain read would take each of them again.
+        with store.read_transaction() as c:
             if with_actor:
                 return _shared(c, v, with_actor, cursor=cursor, limit=limit)
             return threads.sidebar(c, v, cursor=cursor, limit=limit, sort=sort)

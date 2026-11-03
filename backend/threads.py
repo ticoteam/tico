@@ -3423,15 +3423,20 @@ def _attention_roots(c, v):
     (`capped`): a person's post there lets them go. `new_at` says where the oldest item is, when a sub-thread holds it."""
     from . import thread_attention
     roots = {}
-    for item in thread_attention.items(c, None, v, with_capped=False):
+    items = list(thread_attention.items(c, None, v, with_capped=False))
+    capped_rows = list(capped(c, v))
+    # Each item's thread and each capped root, read together (one query a chunk), not one read per item.
+    found, _ = read_threads(c, v, [item.get("conversation_id") or item.get("thread_id") for item in items]
+                            + [row["root_id"] for row in capped_rows])
+    for item in items:
         place = item.get("conversation_id") or item.get("thread_id")
-        thread = thread_row(c, place) if place else None
+        thread = found.get(place) if place else None
         if thread is not None:
             root = thread.get("root_id") or thread["id"]
             roots.setdefault(root, {}).setdefault("new_at", None if thread["id"] == root else {
                 "thread_id": thread["id"], "message_id": item.get("message_id")})
-    for row in capped(c, v):
-        root = thread_row(c, row["root_id"])
+    for row in capped_rows:
+        root = found.get(row["root_id"])
         if root is not None and _involved(c, v, root):
             roots.setdefault(root["id"], {}).update(capped=row["count"], capped_since=row["oldest"])
     return roots
@@ -3457,11 +3462,12 @@ def bot_dm_unread(c, v):
         "AND cv.archived_at IS NULL AND COALESCE(cv.audience,'') IN ('personal','participants','')", (v.actor,))]
     # Every such DM, read or not: what is unread may be in a sub-thread, which the subtree's summary counts.
     pairs = {}
+    rows, members = read_threads(c, v, ids)
     for thread_id in ids:
-        root = thread_row(c, thread_id)
-        if root is None or audience_of(root) not in ("personal", "participants") or not thread_readable(c, v, thread_id):
+        root = rows.get(thread_id)
+        if root is None or audience_of(root) not in ("personal", "participants") or not thread_readable(c, v, root):
             continue
-        others = [a for a in _dm_members(c, root) if a != v.actor]
+        others = [a for a in _dm_members(c, root, rows=members[thread_id]) if a != v.actor]
         if len(others) == 1 and others[0].startswith("bot:"):
             pairs[thread_id] = others[0]
     out = {}
@@ -3529,6 +3535,24 @@ def prime_members(c, who, conversation_ids):
     names = v.member_names(c)
     member = _prefetch_members(c, v, sorted(roots))
     read_cache.prime(c, _member_sql(names), {(tid, *names): (1,) if yes else None for tid, yes in member.items()})
+
+
+def read_threads(c, who, ids):
+    """({conversation id: row}, {conversation id: its member actors}) for these conversations, each read in one query a
+    chunk: the rows as `thread_row` reads them, and the member rows `_dm_members` takes. A caller that checks each of
+    them (readable, _dm_members with `rows=`) reads none of them again in this snapshot; the viewer's membership is
+    seeded by prime_members, so the readable checks take no statement either. Only reads: each check still decides."""
+    ids = list(dict.fromkeys(i for i in ids if i))
+    rows, members = {}, {i: [] for i in ids}
+    for part in H.chunks(ids):
+        for r in c.execute("SELECT * FROM conversations WHERE id IN (%s)" % ",".join("?" * len(part)), part):
+            rows[r["id"]] = thread_row(c, dict(r))
+    for part in H.chunks(list(rows)):
+        for r in c.execute("SELECT thread_id, actor FROM thread_members WHERE thread_id IN (%s)"
+                           % ",".join("?" * len(part)), part):
+            members[r["thread_id"]].append(r["actor"])
+    prime_members(c, who, list(rows))
+    return rows, members
 
 
 def _followers_of(c, v, ids):
@@ -3630,6 +3654,9 @@ def _sidebar_page(c, v, cursor, limit, sort):
                + f") r) {after}ORDER BY rank, activity DESC, id DESC LIMIT :fetch")
         found = [dict(r) for r in c.execute(sql, {**args, **at})]
         v._members.update(_prefetch_members(c, v, [r["id"] for r in found]))
+        # A task's thread is read only while it has unread for the viewer, and each readable check reads its task
+        # (denial -> _task_readable -> the task and its tags): the page's tasks are read together, once.
+        H.prime_tasks(c, {r["task_id"] for r in found if r.get("task_id")})
         rows = []
         for r in found:
             if not thread_readable(c, v, r):
