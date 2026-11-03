@@ -14,7 +14,7 @@ description: "Puts several changes a human must confirm onto one Confirm card, g
 ## Steps
 
 1. Read the list from the record: `hub message list` for the approvals and questions put to them (an approval's id is its notice's `refs.approval`), and `hub task list` or `hub task list --all` for their tasks. Work from what is there, not from memory.
-2. Drop what you should not propose. Leave out anything that needs their judgement, and any approval they did not name. Say why in the reply.
+2. Drop what you should not propose. Leave out anything on the NEVER list (outside messages, spending, deletions, sign-ins, tokens), anything that needs their judgement, and any approval they did not name. Say why in the reply.
 3. Group the rest by kind and age: "11 publish approvals from before the reset", "6 questions from one bot", "20 tasks with no activity for 60 days".
 4. Build one batch of up to 100 steps, each a path and a body, for the changes that need the click (for example `{"path": "/api/v2/approvals/<id>", "body": {"decision": "approved"}}` for an approval they named, when they have not let you decide approvals):
    - `{"path": "/api/v2/tasks/<id>", "body": {"close": true}}`
