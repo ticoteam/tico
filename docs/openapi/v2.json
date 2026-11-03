@@ -723,6 +723,77 @@
         ]
       }
     },
+    "/api/v2/assistant/actions/{aid}/withdraw": {
+      "post": {
+        "summary": "Any teammate (a person or a bot) withdraws a waiting card: it never runs, and the owner's chat says who withdrew it. Only the owner confirms it; the owner cancels it instead",
+        "operationId": "withdrawAssistantAction",
+        "parameters": [
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Aid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantWithdraw"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantActionResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Assistant"
+        ]
+      }
+    },
     "/api/v2/assistant/decisions": {
       "get": {
         "summary": "The approvals your Assistant decided for you, with your words and whether each can still be undone",
@@ -833,6 +904,67 @@
             },
             "description": "1-200 characters. Reusing a key with the same body replays the first answer."
           }
+        ]
+      }
+    },
+    "/api/v2/assistant/proposals": {
+      "get": {
+        "summary": "The Confirm cards still waiting for their owner, to find one to withdraw: filter by proposer and/or owner",
+        "operationId": "listAssistantProposals",
+        "parameters": [
+          {
+            "name": "proposer",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Proposer"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Owner"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Assistant"
         ]
       }
     },
@@ -41494,6 +41626,20 @@
         ],
         "title": "AssistantSettings",
         "description": "A person's own Assistant settings (Settings > General)."
+      },
+      "AssistantWithdraw": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 1000,
+            "title": "Reason",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AssistantWithdraw",
+        "description": "A bot takes back a Confirm card it proposed; the reason (optional) goes to the person in one line."
       },
       "Audience": {
         "type": "object",

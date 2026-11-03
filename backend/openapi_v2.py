@@ -444,6 +444,11 @@ STABLE = [
      "AssistantActionResult"),
     ("/api/v2/assistant/actions/{aid}/cancel", "post", "Assistant", "cancelAssistantAction",
      "Drop a proposal; it never runs", "AssistantActionResult"),
+    ("/api/v2/assistant/actions/{aid}/withdraw", "post", "Assistant", "withdrawAssistantAction",
+     "Any teammate (a person or a bot) withdraws a waiting card: it never runs, and the owner's chat says who withdrew it. "
+     "Only the owner confirms it; the owner cancels it instead", "AssistantActionResult"),
+    ("/api/v2/assistant/proposals", "get", "Assistant", "listAssistantProposals",
+     "The Confirm cards still waiting for their owner, to find one to withdraw: filter by proposer and/or owner", None),
     ("/api/v2/assistant/settings", "get", "Assistant", "getAssistantSettings",
      "Your Assistant settings: whether it decides approvals for you, and whether the team allows it", None),
     ("/api/v2/assistant/settings", "post", "Assistant", "setAssistantSettings",
