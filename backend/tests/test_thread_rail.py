@@ -5,6 +5,7 @@ messages in tree order and pages; every list keeps to its byte budget; a group c
 Fictional people only: ana (owner), ben (bot admin) and cara."""
 
 import importlib
+import json
 import sqlite3
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and 
 from backend.tests.test_thread_events import cursor, read_as, who
 from backend import thread_rail, threads
 from backend.config import Settings
-from backend.store import Problem, Store
+from backend.store import H, Problem, Store
 
 FIXTURE = Path(__file__).parent / "fixtures" / "schema_old_main.sql"
 
@@ -135,7 +136,7 @@ def test_the_rail_is_the_threads_one_is_in_by_title_and_never_a_one_to_one_dm_or
     assert ids(rail["threads"]) == [alpha["id"], beta["id"], gamma["id"]]
     assert rail["pinned"] == [] and rail["next_cursor"] is None
     assert dm["id"] not in str(rail) and home["id"] not in str(rail) and zeta["id"] not in str(rail)
-    assert rail["dms"] == {"human:ana": 1} and isinstance(rail["catch_up"], int)
+    assert rail["dms"] == {"human:ana": 1} and rail["catch_up"] == len(rail["catch_up_ids"])
     followed = api.put(f"/api/v2/threads/{zeta['id']}/follow", json={}, headers=headers("ben-test"))
     assert followed.status_code == 200, followed.text
     seen, page = [], listed(api, "rail", "ben-test", limit=1)
@@ -144,7 +145,7 @@ def test_the_rail_is_the_threads_one_is_in_by_title_and_never_a_one_to_one_dm_or
         if not page["next_cursor"]:
             break
         page = listed(api, "rail", "ben-test", limit=1, cursor=page["next_cursor"])
-        assert page["pinned"] == [] and page["catch_up"] is None and page["dms"] == {}
+        assert page["pinned"] == [] and page["catch_up"] is None and page["catch_up_ids"] == [] and page["dms"] == {}
     assert seen == [alpha["id"], beta["id"], gamma["id"], zeta["id"]]
     assert api.get("/api/v2/threads/rail", params={"cursor": "nope"}, headers=headers("ben-test")).status_code == 422
 
@@ -189,7 +190,8 @@ def test_catch_up_puts_mentions_first_shows_new_messages_in_tree_order_and_pages
     assert [m["body"] for m in item["messages"]] == ["First topic", "Under the first", "Second topic"]
     assert [m["depth"] for m in item["messages"]] == [0, 1, 0]
     assert item["new_count"] == 3 and item["more"] == 0
-    assert listed(api, "rail", "ben-test")["catch_up"] == 2
+    rail = listed(api, "rail", "ben-test")
+    assert rail["catch_up"] == 2 and sorted(rail["catch_up_ids"]) == sorted([asked["id"], plain["id"]])
     page = listed(api, "catch-up", "ben-test", limit=1)
     assert [it["thread"]["id"] for it in page["items"]] == [asked["id"]] and page["count"] == 2
     rest = listed(api, "catch-up", "ben-test", limit=1, cursor=page["next_cursor"])
@@ -306,3 +308,106 @@ def test_the_migration_adds_pins_to_an_existing_database_once(tmp_path):
         importlib.import_module("backend.migrations.0058_thread_pins").up(conn)       # once more changes nothing
     finally:
         conn.close()
+
+
+def test_catch_up_leaves_out_bot_chatter_own_messages_and_muted_threads_and_a_task_needs_a_mention(api):
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ben", "Budget review", "Details.", "human:ben", requester_actor="human:ana",
+                             lint=False)["conversation_id"]
+    post_as(api, task, "bot:ops", "The draft is in the doc.", to_actor="human:ben")
+    chatter = new_thread(api, title="Chatter")
+    post_as(api, chatter["id"], "bot:ops", "Indexing finished")
+    own = new_thread(api, title="Mine")
+    say(api, own["id"], "My own note", token="ben-test")
+    muted = new_thread(api, title="Muted")
+    api.put(f"/api/v2/threads/{muted['id']}/follow", json={"notify": "muted"}, headers=headers("ben-test"))
+    say(api, muted["id"], "A plain update")
+
+    def items():
+        return [it["thread"]["id"] for it in listed(api, "catch-up", "ben-test")["items"]]
+
+    assert items() == []
+    post_as(api, task, "bot:ops", "@ben the total needs your check.", to_actor="human:ben")
+    post_as(api, muted["id"], "human:ana", "@ben can you look?", to_actor="human:ben")
+    assert sorted(items()) == sorted([task, muted["id"]])
+
+
+def test_an_old_unnamed_group_dm_still_opens_shows_in_the_rail_and_takes_posts(api):
+    made = group_dm(api, ["human:ben", "human:cara"], "Temp")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE conversations SET subject='' WHERE id=?", (made["id"],))     # the way old data looks
+        assert threads.dm(c, "human:ana", ["human:ben", "human:cara"])["id"] == made["id"]
+    assert made["id"] in ids(listed(api, "rail", "ben-test")["threads"])
+    say(api, made["id"], "Still here")
+    again = api.post("/api/v2/threads/dm", json={"members": ["human:cara", "human:ben"], "body": "And again"},
+                     headers=headers("ana-test"))
+    assert again.status_code == 200 and again.json()["id"] == made["id"]
+
+
+def test_an_activity_event_says_whether_its_message_is_unread_for_each_viewer(api):
+    thread = new_thread(api, members=("human:ben", "human:cara"))
+    after = cursor(api)
+    say(api, thread["id"], "A person's update")
+
+    def activity(token):
+        return [d for _, topic, d in read_as(api, who(api, token), after, ("threads",))
+                if d.get("kind") == "activity" and d["thread_id"] == thread["id"]]
+
+    assert [d["unread"] for d in activity("ben-test")] == [True]
+    assert [d["unread"] for d in activity("ana-test")] == [False]          # one's own message
+    after = cursor(api)
+    post_as(api, thread["id"], "bot:ops", "Indexing finished")
+    assert [d["unread"] for d in activity("ben-test")] == [False]          # bot activity alone
+    after = cursor(api)
+    post_as(api, thread["id"], "bot:ops", "@ben please check", to_actor="human:ben")
+    assert [d["unread"] for d in activity("ben-test")] == [True]
+    assert [d["unread"] for d in activity("cara-test")] == [False]
+
+
+def test_a_hundred_long_pins_page_through_the_cursor_and_none_is_lost(api):
+    with api.app.state.store.transaction() as c:
+        made = [threads.create(c, "human:ana", title=f"Pinned {n:03d} " + "x" * 400, audience="company")["id"]
+                for n in range(100)]
+        c.executemany("INSERT INTO thread_pins(id,thread_id,actor,pinned,created_at,updated_at) "
+                      "VALUES(?,?,'human:ben',1,'2026-11-03','2026-11-03')", [("pin-" + t, t) for t in made])
+    joined = new_thread(api, title="Joined")
+    pinned, rest, page, pages = [], [], listed(api, "rail", "ben-test"), 1
+    while True:
+        pinned += ids(page["pinned"])
+        rest += ids(page["threads"])
+        if not page["next_cursor"]:
+            break
+        page, pages = listed(api, "rail", "ben-test", cursor=page["next_cursor"]), pages + 1
+    assert pages > 1 and pinned == made and rest == [joined["id"]]
+
+
+def test_catch_up_previews_in_tree_order_and_counts_every_other_new_message(api):
+    thread = new_thread(api, title="Long")
+    first = say(api, thread["id"], "Message 0")
+    for n in range(1, 31):
+        say(api, thread["id"], f"Message {n}")
+    sub = new_thread(api, title="Under", members=(), parent_message_id=first["id"])
+    say(api, sub["id"], "A late reply under the first")
+    item = listed(api, "catch-up", "ben-test")["items"][0]
+    assert [m["body"] for m in item["messages"]][:3] == ["Message 0", "A late reply under the first", "Message 1"]
+    assert len(item["messages"]) == thread_rail.CATCH_UP_MESSAGES and item["more"] == 32 - 20
+
+
+def test_catch_up_cuts_a_long_text_and_keeps_each_card_to_the_page_budget(api, monkeypatch):
+    big = new_thread(api, title="Big")
+    say(api, big["id"], "y" * (thread_rail.CATCH_UP_BODY + 500))
+    for n in range(10):
+        say(api, big["id"], f"{n} " + "z" * 900)
+    other = new_thread(api, title="Other")
+    say(api, other["id"], "Hello")
+    first = listed(api, "catch-up", "ben-test")["items"]
+    card = next(it for it in first if it["thread"]["id"] == big["id"])
+    assert card["messages"][0]["clipped"] is True and len(card["messages"][0]["body"]) <= thread_rail.CATCH_UP_BODY + 1
+    monkeypatch.setattr(threads, "MAX_PAGE_BYTES", 12000)
+    page = listed(api, "catch-up", "ben-test")
+    card = page["items"][0]
+    assert card["thread"]["id"] == other["id"] or len(card["messages"]) < 11
+    assert len(json.dumps(page)) < 12000 + 2000
+    shown = next((it for it in page["items"] if it["thread"]["id"] == big["id"]), None)
+    if shown:
+        assert len(shown["messages"]) + shown["more"] == 11

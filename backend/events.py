@@ -1289,6 +1289,8 @@ def _threads(view, rows):
                 continue
             entry["counters"] = {"last_seq": found.get("last_seq") or 0,
                                  "last_unread_seq": found.get("last_unread_seq") or 0}
+            entry["message_id"] = row["ref"]
+            entry["unread"] = _activity_unread(view, tid, row["ref"])
         elif kind == "counters":
             entry["counters"] = {"last_seq": found.get("last_seq") or 0,
                                  "last_unread_seq": found.get("last_unread_seq") or 0}
@@ -1310,6 +1312,20 @@ def _threads(view, rows):
             entry["thread"] = threads.view(view.c, view.reader, found)
         out.append((row, entry))
     return out
+
+
+def _activity_unread(view, thread_id, message_id):
+    """Whether the message an `activity` row is about is unread for this viewer (threads.unread_message_sql: a person's
+    message not their own, or a delivery to them that counts, past their mark), so a list bumps its row without a re-read.
+    One indexed lookup of the message and the viewer's follower row."""
+    from . import threads
+    reader = view.reader
+    actor = view.who.actor
+    floor = threads._backfill_floor(view.c, reader) if isinstance(reader, threads.Viewer) else 0
+    return view.c.execute(
+        "SELECT 1 FROM messages m LEFT JOIN thread_followers f ON f.thread_id=m.conversation_id AND f.actor=? "
+        f"WHERE m.id=? AND m.conversation_id=? AND m.seq>MAX(COALESCE(f.last_read_seq,0),{int(floor)}) "
+        f"AND {threads.unread_message_sql()}", (actor, message_id, thread_id, actor, actor)).fetchone() is not None
 
 
 def _activity_shown(view, thread, message_id):

@@ -61,6 +61,9 @@ EVENTS_DESCRIPTION = (
     "- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or "
     "`state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n"
     "- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n"
+    "- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md §9); an `activity` one also carries "
+    "`counters`, `message_id` and `unread` (whether that message is unread for the viewer), so a list bumps its row "
+    "without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`.\n"
     "- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. "
     "With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` "
     "since `base` (null when more than 100 moved: read the list whole); read the changed items with "
@@ -2579,6 +2582,9 @@ SCHEMAS.update({
     "ThreadRail": obj({"pinned": items(ref("ThreadView")), "threads": items(ref("ThreadView")),
                        "catch_up": {"type": ["integer", "null"], "description": "Catch up's count, at most 99 (first "
                                     "page only; null after)"},
+                       "catch_up_ids": {"type": "array", "items": {"type": "string"},
+                                        "description": "The root ids `catch_up` counts, at most 99 (first page only; "
+                                                       "[] after): a client keeps the set from the live stream"},
                        "dms": ref("ThreadDmCounts"), "next_cursor": "n"}),
     "ThreadBrowse": obj({"threads": items({"allOf": [ref("ThreadView"), obj({"member_count": "i"})]}),
                          "next_cursor": "n"}),
@@ -2593,7 +2599,7 @@ SCHEMAS.update({
     "ThreadMessage": obj({"id": "s", "conversation_id": "s", "thread_id": "s", "seq": "i", "sender_id": "s",
                           "recipient_id": "n", "kind": "s", "body": "n", "created_at": "s", "edited_at": "n",
                           "revision": "i", "refs": "o", "deleted": "b", "root_id": "n", "origin_id": "n",
-                          "parent_message_id": "n", "depth": "i", "hidden": "b",
+                          "parent_message_id": "n", "depth": "i", "hidden": "b", "clipped": "b",
                           "sub_thread": {"type": ["object", "null"], "description": "The sub-thread branching from this "
                                          "message: {id, count, last_seq, unread, more}"}},
                          required=["id", "seq", "thread_id"]),
@@ -2621,14 +2627,16 @@ STABLE.extend([
      "its first message is posted too; `pin_for_members` pins it for its starter and every person added. Only a DM with "
      "one teammate may have no title (422 `name_required` otherwise)", "ThreadView"),
     ("/api/v2/threads/rail", "get", "Threads", "listThreadRail",
-     "The threads the viewer is in, by title: `pinned` (first page, at most 200), then `threads`, a page at a time. "
+     "The threads the viewer is in, by title: `pinned` (at most 200 a page) and `threads`, each going on through "
+     "`next_cursor` until both are done; `catch_up`, `catch_up_ids` and `dms` on the first page. "
      "Company, team and members threads and group DMs; never a 1:1 DM, a Home, a task's thread or a meeting", "ThreadRail"),
     ("/api/v2/threads/browse", "get", "Threads", "browseThreads",
      "Company and team threads the viewer may read and is not in, newest activity first; `q` matches the title. "
      "Following one puts it in the rail", "ThreadBrowse"),
     ("/api/v2/threads/catch-up", "get", "Threads", "listThreadCatchUp",
      "Each thread with something new for the viewer and each open Needs attention item, mentions and asks first, then "
-     "newest activity, with its new messages in tree order (20 at most, `more` counts the rest); `count` is the badge",
+     "newest activity, with its new messages in tree order (20 at most, within the page's byte budget, each text cut "
+     "at 4,000 characters with `clipped`; `more` counts the rest); `count` is the badge",
      "ThreadCatchUp"),
     ("/api/v2/threads/{thread_id}/pin", "put", "Threads", "pinThread",
      "Pin a root thread for me; reading it is enough (404 otherwise, 422 for a sub-thread)", "ThreadView"),
