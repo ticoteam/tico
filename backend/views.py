@@ -1857,7 +1857,6 @@ def needs_marks(items):
     return marks, version
 
 
-FLEET_CACHE_S = 15
 NEEDS_IDS_MAX = 100     # the most a live `needs` event names; more changed than that reads the list whole
 NEEDS_PAGE = 50         # a page of Needs you when `cursor` comes without `limit`
 NEEDS_PAGE_MAX = 200
@@ -1913,13 +1912,6 @@ def needs_actor(it, me):
             actor = (next((a for a in options if H.is_bot(a) and a != me), None)
                      or next((a for a in options if a and a != me), None))
     return actor
-_FLEET_CACHE = {}
-
-
-def fleet_snapshot_cached(c, auth, identity, task_view, ttl=FLEET_CACHE_S):
-    """Build a fresh snapshot so participant changes revoke every read immediately."""
-    # Participant changes revoke reads immediately, including already warmed snapshots.
-    return fleet_snapshot(c, auth, identity, task_view)
 
 
 def fleet_snapshot(c, auth, identity, task_view):

@@ -3567,7 +3567,7 @@ def create_app(settings=None):
         def work(c):
             privacy.require_batch(c, who, batch.current(c, who.actor))
             items = views.needs_items(c, auth, who, task_view)
-            snapshot = views.fleet_snapshot_cached(c, auth, who, task_view)
+            snapshot = views.fleet_snapshot(c, auth, who, task_view)
             scope = body.bot if body.bot == batch.NEXT else (H.resolve_bot(c, body.bot) or {}).get("id", body.bot)
             return batch.start(c, who.actor, items, snapshot, scope=scope)
         return mutate(request, body, work)
@@ -3584,7 +3584,7 @@ def create_app(settings=None):
         start = views.since_time(since) or H.shift(H.now(), hours=-12)
         with store.read() as c:
             items = views.needs_items(c, auth, who, task_view)
-            snapshot = views.fleet_snapshot_cached(c, auth, who, task_view)
+            snapshot = views.fleet_snapshot(c, auth, who, task_view)
             rows, notes, reports = batch.candidates(c, who.actor, items)
             said = []
             for m in c.execute("SELECT * FROM messages WHERE recipient_id=? AND "

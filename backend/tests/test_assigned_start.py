@@ -597,7 +597,8 @@ def test_overdue_pages_past_more_than_two_hundred_ineligible_recoveries(api, clo
     monkeypatch.setattr(A.privacy, 'attempt_tasks', counted)
     with store.read() as c:
         assert [r['id'] for r in A.overdue(c, limit=1)] == [wanted['id']]
-        assert len(calls) == 1
+        # One page reads the carrier's run once: the first page of 200 ineligible recoveries, then the page holding `wanted`.
+        assert len(calls) == 2
     assert wanted['id'] in {r['id'] for r in get(api, 'needs-you')['items']}
     check = next(x for x in get(api, 'health')['checks'] if x['id'] == 'assigned_not_started')
     assert [r['task'] for r in check['items']] == [wanted['id']]
@@ -711,9 +712,10 @@ def traced_due(store, at):
     return found, seen
 
 
-def test_repeated_selection_stops_reading_attempts_once_each_assignment_is_settled(api):
-    """The scheduler's tick calls `due` forever. Once every picked task has its ledger entry (what sweep writes) and
-    each attempted task is remembered, a later tick reads no attempts for the bots: the work is per new event, not per tick."""
+def test_repeated_selection_reads_the_page_runs_once_per_tick(api):
+    """The scheduler's tick calls `due` forever. Once each picked task has its ledger entry (what sweep writes), a later
+    tick still reads the page's runs in one statement: no per-bot or per-row attempts reads, and no process-level memo
+    to skip them. Its cost is bounded by the page, not by how many ticks have run."""
     store = api.app.state.store
     fleet(store, 3, 200, 900)
     at = H.now()
@@ -723,7 +725,7 @@ def test_repeated_selection_stops_reading_attempts_once_each_assignment_is_settl
         A.sweep(c, at, found)
     found, second = traced_due(store, at)
     assert found == []
-    attempt_reads = [s for s in second if 'FROM attempts WHERE bot_id' in s or s.startswith('SELECT a.id AS primed_attempt')]
-    assert attempt_reads == []
-    # Only the page's own reads remain (its rows, ledger, owners and waits): 12 statements, 41 before this change.
-    assert len(second) <= 15
+    attempt_reads = [s for s in second if 'FROM attempts WHERE bot_id' in s]
+    assert len(attempt_reads) == 1
+    # The page's own reads (rows, ledger, owners, waits), the one runs read and its priming: 32 measured on this change.
+    assert len(second) <= 35

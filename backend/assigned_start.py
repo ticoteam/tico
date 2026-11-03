@@ -4,7 +4,6 @@ The audit ledger is keyed by the assignment event, not by mutable task.updated. 
 restarts and does not turn a Lead's profile into an idle task-pulling profile.
 """
 import logging
-import os
 import sqlite3
 
 from . import auto_tasks, hubdb as H, task_privacy as privacy
@@ -14,11 +13,6 @@ WAKE_HOURS = 1
 ESCALATE_HOURS = 2
 SCAN_LIMIT = 200
 CURSOR_KEY = "assignment-recovery-cursor"
-# (database file, task id, assignment key) -> True once the assignment's bot has run the task since it was assigned.
-# Attempts are never deleted and a new assignment has a new key, so the answer never turns false. Keyed by the
-# database file, as health's token cache is, so separate stores (and a restored file) never share entries.
-ATTEMPTED = {}
-ATTEMPTED_LIMIT = 20000
 
 
 def page_ledger(c, rows):
@@ -38,18 +32,8 @@ def page_ledger(c, rows):
     return owners, ledger
 
 
-def _memo_scope(c):
-    """The database file this connection reads, or None (no memo) for an unnamed or missing file."""
-    path = next((r[2] for r in c.execute("PRAGMA database_list") if r[1] == "main"), "")
-    try:
-        stat = os.stat(path) if path else None
-    except OSError:
-        return None
-    return (path, stat.st_dev, stat.st_ino) if stat else None
-
-
 def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=None, visible="1", manager_actor=None,
-               attempts=None, on_error=None, page=None):
+               on_error=None, page=None):
     if task_ids is not None and not task_ids:
         return
     at = at or H.now()
@@ -75,65 +59,103 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
         params.extend((manager_actor, H.actor_id(manager_actor)))
     # One page bounds Python wait/provenance work, including pages with no eligible wake.
     # The scheduler persists the last inspected id, so held/started rows cannot starve later work.
-    attempts = {} if attempts is None else attempts
     # Checked per candidate task (a key lookup), so the reader's rule keeps its own column names. As
     # `t.id IN (SELECT id FROM tasks WHERE ...)` SQLite listed every task the rule allows first: 55 ms a call on TIDY.
     visibility = f" AND EXISTS(SELECT 1 FROM tasks v WHERE v.id=t.id AND ({visible}))" if visible != "1" else ""
     rows = H._rows(c.execute("SELECT t.* FROM tasks t JOIN bots b ON t.owner_id='bot:'||b.id "
-                                 "WHERE t.status='open' AND b.state IN ('active','paused','quarantined') AND t.created_at<=? "
-                                 + scope + visibility + " ORDER BY t.id LIMIT ?",
-                                 (*params, SCAN_LIMIT)))
+                             "WHERE t.status='open' AND b.state IN ('active','paused','quarantined') AND t.created_at<=? "
+                             + scope + visibility + " ORDER BY t.id LIMIT ?",
+                             (*params, SCAN_LIMIT)))
     if page is not None:
         page[:] = [len(rows)]
     owners, ledger = page_ledger(c, rows)
-    # Only a committed view may be remembered: a write transaction can still roll back what it reads.
-    writing = getattr(c, 'write_transaction', False) or c.total_changes != getattr(c, 'provenance_changes', c.total_changes)
-    memo_scope = _memo_scope(c) if rows else None
+    # Each row's assignment and ledger entry, read before any row is checked. A row whose read failed keeps the error,
+    # raised for that row alone below.
+    picked = []
+    for row in rows:
+        try:
+            picked.append(_picked(row, owners, ledger, cutoff, at, recorded))
+        except Exception as exc:
+            logging.getLogger(__name__).exception('Assignment recovery could not read one task')
+            picked.append(exc)
+    latest, failed = _attempted(c, rows, picked)
     # Tasks the page's wait checks can't rule out; the rest of the page skips waiting() (auto_tasks.maybe_waiting).
     suspect = auto_tasks.maybe_waiting(c, rows)
-    for row in rows:
+    for i, row in enumerate(rows):
         if scanned is not None:
             scanned[:] = [row['id']]
         try:
-            owned = owners.get(row['id'])
-            key, since = (owned[0], owned[1]) if owned else (row['owner_id'] + ':' + row['created_at'], row['created_at'])
-            if since > cutoff:
+            entry = picked[i]
+            if isinstance(entry, Exception):
+                raise entry
+            if entry is None:
                 continue
-            saved = next((entry for entry in ledger.get(row['id'], ()) if entry.get('assignment') == key), None)
-            # Most reads need only one side of the ledger. Skip the other before wait/provenance checks.
-            if recorded is False and saved:
-                continue
-            if recorded is True and (not saved or saved['rewoken_at'] > H.shift(at, hours=-ESCALATE_HOURS)):
-                continue
+            key, since, saved = entry
             if row['id'] in suspect and auto_tasks.waiting(c, row, starting=True):
                 continue
-            # Include folded inputs and next-run carried work, not just the job's original task.
-            memo = (memo_scope, row['id'], key) if memo_scope else None
-            if memo in ATTEMPTED:
-                continue
-            bot = H.actor_id(row['owner_id'])
-            floor, touched = attempts.get(bot, ("9999", {}))
-            # Only runs since this assignment can count, so the bot's attempts are read from `since`, not the page's oldest row.
-            if since < floor:
-                found = c.execute("SELECT id,created_at FROM attempts WHERE bot_id=? AND created_at>=? AND created_at<? ORDER BY created_at DESC",
-                                  (bot, since, floor)).fetchall()
-                # Every run's task set in a fixed number of statements; attempt_tasks then reads each from that snapshot.
-                privacy.prime_attempts(c, [attempt['id'] for attempt in found])
-                for attempt in found:
-                    for tid in privacy.attempt_tasks(c, attempt['id']):
-                        touched.setdefault(tid, attempt['created_at'])
-                attempts[bot] = since, touched
-            if touched.get(row['id'], '') >= since:
-                if memo is not None and not writing:
-                    if len(ATTEMPTED) >= ATTEMPTED_LIMIT:
-                        ATTEMPTED.clear()
-                    ATTEMPTED[memo] = True
+            # A run of this bot that failed to read its tasks raises for every row it could have counted for.
+            broken = [item for item in failed.get(H.actor_id(row['owner_id']), ()) if item[0] >= since]
+            if broken:
+                raise max(broken, key=lambda item: item[0])[1]
+            if latest[i] >= since:
                 continue
             yield row, key, since, saved
         except Exception as exc:
             if on_error is None:
                 raise
             on_error(row, exc)
+
+
+def _picked(row, owners, ledger, cutoff, at, recorded):
+    """(assignment key, since, saved ledger entry) for a row the ledger filters keep, or None for one they skip."""
+    owned = owners.get(row['id'])
+    key, since = (owned[0], owned[1]) if owned else (row['owner_id'] + ':' + row['created_at'], row['created_at'])
+    if since > cutoff:
+        return None
+    saved = next((entry for entry in ledger.get(row['id'], ()) if entry.get('assignment') == key), None)
+    # Most reads need only one side of the ledger. Skip the other before wait/provenance checks.
+    if recorded is False and saved:
+        return None
+    if recorded is True and (not saved or saved['rewoken_at'] > H.shift(at, hours=-ESCALATE_HOURS)):
+        return None
+    return key, since, saved
+
+
+def _attempted(c, rows, picked):
+    """When each row's task was last carried by a run of its bot: the page's runs read in one statement, primed once.
+
+    Returns (latest, failed). latest[i] is the newest created_at of a run of row i's bot that carried row i's task, or ''
+    (a run of that bot is only counted when it is at or after the row's assignment, which candidates compares). Runs are
+    read from each bot's oldest assignment on the page, so every run that can count for a row is here. failed maps a bot
+    to [(created_at, error)] for each run whose tasks could not be read."""
+    floors = {}
+    for row, entry in zip(rows, picked, strict=True):
+        if isinstance(entry, tuple):
+            bot = H.actor_id(row['owner_id'])
+            floors[bot] = min(floors.get(bot, entry[1]), entry[1])
+    latest, failed = [''] * len(rows), {}
+    if not floors:
+        return latest, failed
+    where = {row['id']: (i, H.actor_id(row['owner_id'])) for i, row in enumerate(rows)}
+    runs = []
+    for part in H.chunks(sorted(floors)):
+        runs.extend(c.execute(f"SELECT id,bot_id,created_at FROM attempts WHERE bot_id IN ({','.join('?' * len(part))}) "
+                              "AND created_at>=? ORDER BY created_at DESC", (*part, min(floors.values()))))
+    runs = [run for run in runs if run['created_at'] >= floors[run['bot_id']]]
+    if runs:
+        privacy.prime_attempts(c, [run['id'] for run in runs])
+    for run in runs:
+        try:
+            carried = privacy.attempt_tasks(c, run['id'])
+        except Exception as exc:
+            logging.getLogger(__name__).exception('Assignment recovery could not read a run of the bot')
+            failed.setdefault(run['bot_id'], []).append((run['created_at'], exc))
+            continue
+        for tid in carried:
+            i, bot = where.get(tid, (None, None))
+            if i is not None and bot == run['bot_id'] and run['created_at'] > latest[i]:
+                latest[i] = run['created_at']
+    return latest, failed
 
 
 def due(c, at, limit=50, cursor=None, failures=None):
@@ -199,12 +221,12 @@ def sweep(c, at=None, task_ids=None):
 def overdue(c, at=None, *, visible="1", manager_actor=None, limit=200):
     """Page past ineligible ledger rows; cap alert output, not the pre-filter candidate window."""
     at = at or H.now()
-    after, count, attempts = "", 0, {}
+    after, count = "", 0
     while count < limit:
         scanned, page = [""], []
         for row, _, since, saved in candidates(c, at, recorded=True, visible=visible,
                                                manager_actor=manager_actor, after=after,
-                                               scanned=scanned, attempts=attempts, page=page):
+                                               scanned=scanned, page=page):
             yield {**row, 'assigned_at': since, 'rewoken_at': saved['rewoken_at'], 'rewake_refusal': saved.get('refusal')}
             count += 1
             if count >= limit:
