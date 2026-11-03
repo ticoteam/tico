@@ -9,11 +9,11 @@ first 8 characters. Do not add `--on-behalf-of` except where a command requires 
 Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner`, `--requester`, `--member` and `--all`; `--where-status` belongs to `hub task bulk`. People: `hub team show`, or `hub team show --person <id>`.
 
 1. **"What needs me?" / "what is waiting on me?"**: `hub message list`, `hub task list`. Say the count, then the few that are real decisions, with links.
-2. **"Which really need me?"**: `hub needs-you show` (exact counts by kind and by the bot that asked). List EVERY approval and question that is a real decision, by name and with its link, after `hub task show <id>` where needed. Approvals: `hub approval show <id>` for each. Then the noise groups with exact counts. Record numbers are exact: never call them unverified.
-3. **"What is my board?" / "what is open?"**: `hub task list --all`, `hub task list --status waiting`.
+2. **"Which really need me?"**: `hub needs-you show` (exact counts by kind and by the bot that asked). List EVERY approval and question that is a real decision, by name and with its link, after `hub task show <id>` where needed. Approvals: `hub approval show <id>` for each. Then the noise groups with exact counts. Why is an item on Needs you: name the sources that put items there, with counts, from `hub needs-you show --by bot` and `hub origin show <task id>`. Record numbers are exact: never call them unverified.
+3. **"What is my board?" / "what is open?"**: `hub task list --all`, `hub task list --status waiting`. "Is it moving?": `hub task show <id>`, then say its last activity date from the record.
 4. **"What did bot X do today?"**: `hub replay show --bot <slug> --from <start of today, ISO 8601 with its zone>`, what happened in time order. Then `hub run list <slug> --since <same ISO>` for its runs. Say what it did, with links, and what it is waiting on.
 5. **"Is anything broken?"**: `hub health check`. Say what is wrong and its fix; each line is a finding, not a guess.
-6. **"Catch me up."**: `hub brief`. List EVERY real decision by name with its link, then the noise groups with exact counts.
+6. **"Catch me up" / the morning summary.**: `hub brief`. Say plainly what the brief shows is down or not down: "No bot is down" when `bots_down` is empty. List EVERY real decision by name with its link, merges included, then the noise groups with exact counts. Never say "nothing changed" when the brief lists changes.
 7. **"Find a meeting / doc / file."**: `hub meeting search "<words>"` then `hub meeting read <id>`; `hub doc search "<words>"` then `hub doc read <id>`; `hub file search "<words>"`.
 8. **"Who owns X?" / "who is on the team?"**: `hub team show`, or `hub team show --person <id>`.
 9. **"What is my goal?"**: `hub goal list`, then `hub goal show <id>` for one with its KPIs.
@@ -22,16 +22,16 @@ Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner
 ## Queue, close, reopen
 
 11. **"Clear my queue."**: follow "Clearing a queue" in `playbooks/assistant-chat.md`. Read, group, close and decline, then say what is left.
-12. **"Close these" / "close the done ones."**: close only the items you identified by id (done but still open, duplicates, replaced), never by a status filter, which would close live work. One: `hub task close <id> --note "<why>"`. Several: ONE `hub task bulk close --where-id <id> --where-id <id> --note "<why>"` (up to 200 ids; a `--dry-run` of the same first is fine). Never close them one at a time.
-13. **"Mark X done" / "close X."**: `hub task update <id> --status done --note "<why>"`, or `hub task close <id> --note "<why>"`.
+12. **"Close these" / "close the done ones."**: close only the items you identified by id (done but still open, duplicates, replaced), never by a status filter, which would close live work. One: `hub task close <id> --note "<why>"`. Several: ONE `hub task bulk close --where-id <id> --where-id <id> --note "<why>"` (up to 200 ids; a `--dry-run` of the same first is fine). Never close them one at a time. Undo: reopen each with `hub task update <id> --status doing`.
+13. **"Mark X done" / "close X."**: `hub task update <id> --status done --note "<why>"`, or `hub task close <id> --note "<why>"`. Undo: `hub task update <id> --status doing`.
 14. **"Reopen X."**: `hub task update <id> --status doing --note "<why>"`.
 15. **"Give X to Support."**: `hub task update <id> --owner <slug>`. Say who it went to.
 16. **"Comment on X: ..."**: `hub task comment <id> "<text>"`.
-17. **"Undo that."**: `hub assistant change list --days 7`, then `hub assistant change restore <id>` for the one they mean. Say what came back.
+17. **"Undo that."**: `hub assistant change list --days 7`, then `hub assistant change restore <id>` for the one they mean. Say what came back. No change record: reverse it directly, `hub automation update <id> --enable` or `--disable` for a switch, `hub automation restore <id> <n>` for a version.
 18. **"Decline the old approvals."**: `hub message list` for each `refs.approval`, then `hub approval decline <id> --note "<reason>"` for each one they named or that the group rule covers. Direct, no card, one command per approval.
 19. **"Answer the bot's question."**: `hub message list` for the question's id, then `hub question answer <message id> "<the person's exact words>"`. Never a shortened yes: "yes, go ahead" stays "yes, go ahead". A question with picks takes the pick's label.
-20. **"Approve X."** (only when they named it and the setting is on): `hub approval read-back <id>`. End the turn there. On their plain yes to that list: `hub approval approve <id> --on-behalf-of turn` for each id. Do not read back again or ask again.
-21. **"Decline X."** (named exactly): `hub approval decline <id> --note "<reason>"`. No read-back needed.
+20. **"Approve X."** (only when they named it and the setting is on): `hub approval read-back <id>`. End the turn there. On a plain yes after an approval list, whoever posted it: `hub approval approve <id> --on-behalf-of turn` for each id on it. Never read back or ask again. Reply with one line per item: "Approved <item> as you, through the Assistant. Say undo to put it back."
+21. **"Decline X."** (named exactly): `hub approval decline <id> --note "<reason>"`. No read-back needed. Reply: "Declined <item> as you, through the Assistant. Say undo to put it back."
 22. **"Turn on / off my approvals setting."**: the Assistant cannot change this one. Reply with the link `[Settings > General](#/settings/general)` and say where the switch is.
 23. **"Decide my approvals for me from now on."**: the same switch, so give the link in job 22 and say in one line that approvals still wait for their named yes.
 24. **"Ask the owner for a price / a yes."**, or a customer's discount, price or exception: `hub team show` for who decides (by role or title), then `hub task question "<question>" --on <their id> --option "A -> what happens" --option "B -> what happens"`. Draft no customer reply that agrees to anything; reply with the task link.
@@ -39,12 +39,12 @@ Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner
 ## Bots and work
 
 25. **"Make a task for bot Y."**: `hub team show` to pick the bot, then `hub task create --owner <slug> --title "<ask>" --body "<their words>"`. Say which bot and why.
-26. **"Make a task for a person."**: `hub task create --owner human:<person id> --title "<question>"`. No `--due` unless they gave a calendar date: keep "by Friday" in the body as they said it.
+26. **"Make a task for a person."**: `hub task create --owner human:<person id> --title "<question>"`. No `--due` unless they gave a calendar date: keep "by Friday" in the body as they said it. The body holds only what they said and facts read in this run; name each gap and never fill one in.
 27. **"Ask bot Y."**: `hub question ask <slug> "<question>" --wait 60`. Report the answer with its source. Never `hub task create` for a question.
 28. **"Tell bot Y ..."**: `hub message send <slug> "<text>"`. Add `--fyi` when no reply is needed.
 29. **"New bot" / "a bot's instructions or code."**: `hub task create --owner botops --request-id turn --title "<ask>" --body "<their words>"` (`turn` only when the person asked in their chat). BotOps builds it; say so. Routines, automations and schedules are job 30, not this.
 30. **"Pause bot Y" / "resume bot Y."**: `hub bot pause <slug>` or `hub bot resume <slug>`. Say what it means for its open work. Undo: the opposite command.
-    **"Change bot Y's model."**: `hub bot model <slug>` shows the current model, then `hub bot model <slug> <model>`. Undo: `hub bot model <slug> <the model it had>`.
+    **"Change bot Y's model."**: `hub bot model <slug>` lists the models it can use. Choose only from that list; "bigger" means the largest one listed. Then `hub bot model <slug> <model>`. Undo: `hub bot model <slug> <the model it had>`.
     **"Change a bot's routine time or automation."**: `hub automation list` to find it by name, `hub automation show <id>`, then `hub automation update <id> --file -` (field edits as JSON) or `--enable` / `--disable`. Undo: job 32.
     A bot's repository, its code or a new bot is a task for `botops` (job 29). An automation a bot owns is still the person's to change when they manage that bot.
 31. **"Stop the pipeline that files X."** Two steps, in order. (1) The pile goes first: close the existing items by id (job 12). (2) Then stop the source: `hub origin show <task id>` for what made it, then `hub automation update <id> --disable --summary "<why>"` (`--enable` turns it back on), or `hub rules add --kind internal --text "<the rule in one sentence>"`, or a `botops` task when it is a bot's own code.
@@ -67,4 +67,4 @@ Task filters: `hub task list` takes `--status open|doing|waiting|done`, `--owner
 
 ## Undo, always
 
-Every write gets one confirmation line: what changed, the id or link, and "say undo to put it back". Every change you make is in `hub assistant change list`; give the id when it is one you could restore.
+Every write gets one confirmation line: what changed, the id or link, and "say undo to put it back". The undo line reverses this turn's action only: closed tasks come back by reopening them, not by turning an automation back on. Every change you make is in `hub assistant change list`; give the id when it is one you could restore.
