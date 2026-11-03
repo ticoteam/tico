@@ -1,4 +1,4 @@
-"""`python -m runner ...`, as units installed by earlier releases start it: runner_support/__main__.py."""
-from runner_support.__main__ import main
+"""`python -m runner ...`: runner_support/__main__.py (runner/__init__.py)."""
+import runpy
 
-main()
+runpy.run_module("runner_support", run_name="__main__", alter_sys=True)

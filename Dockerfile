@@ -188,7 +188,7 @@ LABEL org.opencontainers.image.version=${TICO_VERSION} \
       org.opencontainers.image.licenses=LicenseRef-PolyForm-Perimeter-1.0.1
 USER 10002:10002
 VOLUME /home/runner
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --start-interval=2s --retries=3 CMD pgrep -f '(python -m runner_support|tico-runner) .* run$' >/dev/null
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --start-interval=2s --retries=3 CMD pgrep -f '(python -m runner|tico-runner) .* run$' >/dev/null
 ENTRYPOINT ["tico-runner-entrypoint"]
 CMD ["run"]
 

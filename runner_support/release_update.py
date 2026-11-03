@@ -127,8 +127,10 @@ def prepare_binary(root, run=subprocess.run):
     return (done.stderr.strip().splitlines() or ["could not get the Rust runner ready"])[-1]
 
 
-# What the runner binary is built from: runner-rs/build.rs's source fingerprint (runner/engine.py source_id).
-RUNNER_SOURCES = ("runner-rs/build.rs", "runner-rs/Cargo.toml", "runner-rs/Cargo.lock", "runner-rs/src", "runner/harnesses")
+# What the runner binary is built from: runner-rs/build.rs's source fingerprint (runner_support/engine.py source_id).
+# runner/harnesses is where releases from before runner_support/ keep the manifests, for a move across that change.
+RUNNER_SOURCES = ("runner-rs/build.rs", "runner-rs/Cargo.toml", "runner-rs/Cargo.lock", "runner-rs/src", "runner-rs/harnesses",
+                  "runner/harnesses")
 
 
 def binary_pending(root, old, target, version, run=subprocess.run, listed=None, which=shutil.which):

@@ -24,7 +24,8 @@ files:
   - runner_support/worktrees.py           # reads runners/me/worktrees rows, which keep the wire's detail_json
   # Wave 2 on: the Python runner's side of the wire and its own state file keep their names (started, updated...).
   - runner_support/*.py
-  - runner/*.py                  # forwards old `python -m runner ...` commands to runner_support
+  - runner/*.py                  # forwards old `python -m runner ...` commands and imports to runner_support
+  - runner/**
   - runner_support/importers/**
   - runner-rs/harnesses/**
   - runner_support/tests/conformance/**  # fake harnesses speaking the runner's side

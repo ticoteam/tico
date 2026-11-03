@@ -294,8 +294,11 @@ not drive is not ready, with the reason on that bot; the other bots on the compu
 
 The Python runner is gone. `"engine": "python"` in `runner.json` and `TICO_RUNNER_ENGINE=python` are ignored. Python
 still runs the side jobs (connectors, Close calls, meeting importers), the catalog set-up and the update process, from
-`runner_support/`. A small `runner/` package forwards the old `python -m runner ...` commands there, so launchd plists,
-systemd units and cloud machine images written before the move keep working until they are reinstalled.
+`runner_support/`. A small `runner/` package forwards the old `python -m runner ...` commands and imports there, so
+launchd plists, systemd units and cloud machine images written before the move, and a runner or update process of an
+earlier release still running while its checkout moves, keep working. Units written since the move name
+`runner_support`, which a release from before it does not have: a computer installed (`scripts/tico install`) or a cloud
+machine image saved on a later release, then moved back to such a release, needs `scripts/tico install` run again there.
 
 ## A Docker runner
 

@@ -1,7 +1,10 @@
-"""`python -m runner.cloud_machine boot`, as cloud machine images saved by earlier releases start it."""
+"""`python -m runner.cloud_machine` and `import runner.cloud_machine`: runner_support/cloud_machine.py (runner/__init__.py)."""
+import runpy
 import sys
 
-from runner_support.cloud_machine import main
-
 if __name__ == "__main__":
-    sys.exit(main())
+    runpy.run_module("runner_support.cloud_machine", run_name="__main__", alter_sys=True)
+else:
+    from runner_support import cloud_machine as _real
+
+    sys.modules[__name__] = _real
