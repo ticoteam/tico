@@ -2882,6 +2882,21 @@ def _learner(conn, actor):
                "your manager in chat; a person above you marks onboarding complete when you are ready.")
 
 
+# The built-in Health Monitor's slug (backend/health_monitor.py). Its id is its slug, so its actor is bot:health-monitor.
+HEALTH_MONITOR = "health-monitor"
+
+
+def _botops_only(conn, actor, target):
+    """The Health Monitor gives its fixes to BotOps and never a person a task, a question, a wait on one or a message
+    nobody asked for (docs/health-monitor.md): BotOps decides who to ask. Approvals and support reports do not come
+    here (approval_request writes its own notice), so they are unaffected."""
+    if actor != bot_actor(HEALTH_MONITOR) or not is_human(target or ""):
+        return
+    refuse(conn, actor, "botops-only", "The Health Monitor gives its fixes to BotOps, not to a person: file it with "
+           "`hub task create --owner botops` (or hand a task to it with `hub task update <id> --owner botops`), and "
+           "BotOps decides who to ask")
+
+
 # ----------------------------------------------------------------------------- registry sync
 def default_human(conn):
     """Who an unaddressed human item goes to: the roster's `default_user`, else its first
@@ -3065,6 +3080,7 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
                                   {"ask": "ask", "notice": "notice"}.get(kind, "chat"), allow_held=True)
 
     if kind == "ask":
+        _botops_only(conn, actor, target)
         depth = _ask_depth(conn, actor, refs, in_reply_to)
         if depth > MAX_ASK_DEPTH:
             refuse(conn, actor, "depth",
@@ -6165,6 +6181,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     owner = route(conn, actor, owner)
     _learner(conn, actor)
     target = _reach(conn, actor, owner, allow_planned=allow_planned)
+    _botops_only(conn, actor, target)
     _takes_tasks(conn, actor, target, title, parent_id, routine)
     _learning(conn, actor, target)
     if occurrence and occurrence_step:
@@ -6522,6 +6539,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     # The same owner sent in another form (`cmo` for `bot:cmo`) is no reassignment: nothing to record or wake.
     if owner is not None and resolve_actor(conn, owner) == row["owner_id"]:
         owner = None
+    if owner is not None:
+        _botops_only(conn, actor, resolve_actor(conn, owner))
     mine = (_task_party(conn, actor, row) or type_bot_works(conn, actor, row)
             or task_manager_acts(conn, actor, row))
     if actor == TASK_MANAGER and actor not in (row["owner_id"], row["requester_id"]):
@@ -7282,6 +7301,7 @@ def _waiting_person(conn, actor, row, value, status, owner=None, private=None):
         refuse(conn, actor, "waiting_on",
                f"{value} is not a person or an active bot on the team: a task waits on a person with --on, or on "
                "another task with hub task wait <task> --on task:<other> (then --on bot:<its owner> names that bot)")
+    _botops_only(conn, actor, person)
     if not task_private_readable(conn, person, row if private is None else {**row, "private": int(bool(private))}):
         # A private task with no person on it can take one, its guest, when its owning bot waits on them.
         if private is not None or not bot_only(row) and not row.get("guest"):
