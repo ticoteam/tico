@@ -35,17 +35,36 @@ PLACEHOLDER = re.compile(r"<[^<>]+>")
 
 
 def commands_in(path):
-    """(line number, command text) for each `hub` command written in the file."""
-    found, fenced = [], False
+    """(line number, command text) for each `hub` command written in the file.
+
+    A backticked span is read across the lines of its paragraph, so a command that wraps is still checked. Whitespace inside
+    the span is collapsed. Fenced lines that start with `hub` are read one line at a time."""
+    found, paragraph, start, fenced = [], [], 0, False
+
+    def flush():
+        if paragraph:
+            text = "\n".join(paragraph)
+            for match in SPAN.finditer(text):
+                line = start + text[: match.start()].count("\n")
+                found.append((line, " ".join(match.group(1).split())))
+
     for number, line in enumerate(path.read_text().splitlines(), start=1):
         if line.lstrip().startswith("```"):
-            fenced = not fenced
+            flush()
+            paragraph, fenced = [], not fenced
             continue
         if fenced:
             if line.lstrip().startswith("hub "):
                 found.append((number, line.strip()))
             continue
-        found.extend((number, span) for span in SPAN.findall(line))
+        if not line.strip():
+            flush()
+            paragraph = []
+            continue
+        if not paragraph:
+            start = number
+        paragraph.append(line)
+    flush()
     return found
 
 
