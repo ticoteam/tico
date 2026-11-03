@@ -52,6 +52,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN, HUB, FILE = "TICO_ENROLL_TOKEN", "TICO_HUB_URL", "TICO_BOOT_ENV_FILE"
+SERVER = "TICO_SERVER_URL"           # the server's address under its new name; HUB is read too during the rename overlap
 MARKER = Path("/etc/tico/cloud-machine.json")
 SUDOERS = Path("/etc/sudoers.d/tico-runner")
 UNIT = "tico-cloud-machine.service"
@@ -106,7 +107,7 @@ def read(path: Path) -> str:
 
 def inputs(environ: dict[str, str], files: list[Path]) -> tuple[str, str, str]:
     """(code, hub URL, where they were found). Each is taken from the first place that has it."""
-    found = {TOKEN: "", HUB: ""}
+    found = {TOKEN: "", SERVER: "", HUB: ""}
     where: list[str] = []
     places = [("the service environment", environ)] + [(str(p), parse(read(p))) for p in files]
     for name, values in places:
@@ -116,7 +117,7 @@ def inputs(environ: dict[str, str], files: list[Path]) -> tuple[str, str, str]:
                 found[key] = value
                 if name not in where:
                     where.append(name)
-    return found[TOKEN], found[HUB], ", ".join(where)
+    return found[TOKEN], found[SERVER] or found[HUB], ", ".join(where)
 
 
 def mask(text: str, secret: str) -> str:

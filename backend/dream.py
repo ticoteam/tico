@@ -2,7 +2,7 @@
 
 A dream is an ordinary task: the bot owns it, the person who started it is its requester, it carries the label
 `dream` and its body is INSTRUCTIONS. It runs as a task turn on the bot's computer with the bot's own model, and its
-session resumes across the one question it may ask (`hub_task_ask`), so the answer lands in the same context. The
+session resumes across the one question it may ask (`task_ask`), so the answer lands in the same context. The
 commits it makes are memory updates like any other: the Learnings history names their run's task, and the panel
 filters them by this task. Nothing is stored here beyond the task.
 
@@ -47,7 +47,7 @@ INSTRUCTIONS = """Dream: tidy your own instructions and memory. {requester} star
    the answers come. Keep the draft in this conversation.
 
 4. Ask. If something only {requester} can settle, or one broad question would align you better, ask at most 3
-   questions in ONE `hub_task_ask` on this task. Number them. Each one makes sense on its own and ends with your
+   questions in ONE `task_ask` on this task. Number them. Each one makes sense on its own and ends with your
    suggested answer ("Suggested: ..."). Ask big alignment questions before small either/or ones. Zero questions is
    fine. Then stop and wait for the answer.
 

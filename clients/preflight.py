@@ -232,7 +232,7 @@ def check_access(r, slug, m):
     # `vault: hub` on an access entry: the value is granted in Settings -> Credentials and arrives
     # only during a run (docs/credential-vault.md), so there is nothing on disk to check here.
     hub_keys = {str(a["env"]) for a in declared
-                if isinstance(a, dict) and a.get("env") and a.get("vault") == "hub"}
+                if isinstance(a, dict) and a.get("env") and a.get("vault") in ("tico", "hub")}
     for k in keys:
         v, where = env.get(k, ("", None))
         if k in hub_keys and not v:

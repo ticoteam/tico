@@ -136,7 +136,7 @@ class InProcessApi:
         return payload
 
     def request(self, method, path, body=None, key=None, binary=False, delegate=False, raw=None):
-        """`Client.request` (clients/tico.py) for a tool that needs it: a file's bytes (`binary`, hub_file_read), a JSON
+        """`Client.request` (clients/tico.py) for a tool that needs it: a file's bytes (`binary`, file_read), a JSON
         call on a full /api/v2/ path, or an opaque body (`raw`: bytes, a file or a MultipartBody, sent as it is),
         answered through the same app and middleware as every other call here."""
         if not path.startswith("/api/v2/"):

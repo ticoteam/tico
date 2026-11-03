@@ -39,7 +39,7 @@ set -- ${ARGV[@]+"${ARGV[@]}"}
 
 NAME="Tico"
 BUNDLE_ID="team.tico.app"
-HUB_URL="${HUB_APP_URL:-${TICO_HUB_URL:-}}"
+HUB_URL="${HUB_APP_URL:-${TICO_SERVER_URL:-${TICO_HUB_URL:-}}}"
 UPDATE_URL="https://github.com/ticoteam/tico/releases/latest/download/latest.json"
 if [ -n "$HUB_URL" ]; then UPDATE_URL="${TICO_APP_BASE:-${HUB_URL%/}}/download/latest.json"; fi
 ICON_SRC="${ICON_SRC:-$HUB/ui/assets/tico/tico-1024.png}"
@@ -74,7 +74,7 @@ BUILD="$APP_DIR/target"
 ICONS="$BUILD/icons-${ENV_SLUG:-tico}"
 
 # What the Rust build reads (app/build.rs re-runs config.rs when these change).
-export TICO_HUB_URL="$HUB_URL" TICO_APP_NAME="$NAME" TICO_ENV_SLUG="$ENV_SLUG" TICO_LOCAL_TOKEN_FILE="$LOCAL_TOKEN_FILE"
+export TICO_SERVER_URL="$HUB_URL" TICO_HUB_URL="$HUB_URL" TICO_APP_NAME="$NAME" TICO_ENV_SLUG="$ENV_SLUG" TICO_LOCAL_TOKEN_FILE="$LOCAL_TOKEN_FILE"
 
 icons() {
   if [ ! -f "$ICONS/icon.icns" ] || [ "$ICON_SRC" -nt "$ICONS/icon.icns" ]; then

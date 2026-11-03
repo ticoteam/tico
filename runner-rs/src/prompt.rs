@@ -277,7 +277,7 @@ fn parts(attempt: &Value, names: &Names, after: Option<&str>, resumed: bool, rep
         put(&mut lines, Part::Standing, "If this asks for work, first file each distinct ask as a hub task you own (hub task create --owner <you>), or update the task that already covers it, then work them, up to three at a time, and finish each with hub task update --status done. A question you answer at once needs no task.".into());
     }
     if truthy(&message["refs"]["update"]) {
-        put(&mut lines, Part::Turn, "This message replies to your update. Your final answer is automatically attached to that update. hub_update_reply is for humans; do not call it yourself. A short acknowledgement needs only a short reply and no task. Create a task only if the person asks for new work.".into());
+        put(&mut lines, Part::Turn, "This message replies to your update. Your final answer is automatically attached to that update. update_reply is for humans; do not call it yourself. A short acknowledgement needs only a short reply and no task. Create a task only if the person asks for new work.".into());
     }
     if truthy(&message["refs"]["voice"]) {
         put(&mut lines, Part::Turn, "Spoken turn: the person said this aloud and your reply is read aloud to them. Answer first, in one to three short plain sentences, before reading files or running tools. No preamble about what you will read or do, no ids, paths, code or markdown. If it needs work, say in one sentence what you will do, then do it, and end with one short spoken sentence on the result.".into());

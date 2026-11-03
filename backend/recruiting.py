@@ -50,9 +50,9 @@ GATEWAY_MAX_TOKENS = 2000
 GATEWAY_EFFORT = "low"
 # The tools a card's `prerequisites` name, as a person reads them. Tico's own tasks, docs and the open web need nothing
 # set up, so a candidate needing them has them; any other tool is set up on hire (required) or later (optional).
-TOOL_LABELS = {"hub": "Tico tasks", "docs": "Docs", "web": "Web", "mail": "Email", "calendar": "Calendar",
-               "meetings": "Meetings", "github": "GitHub", "crm": "CRM", "chat": "Chat"}
-BUILT_IN_TOOLS = frozenset({"hub", "docs", "web"})
+TOOL_LABELS = {"tico": "Tico tasks", "hub": "Tico tasks", "docs": "Docs", "web": "Web", "mail": "Email",
+               "calendar": "Calendar", "meetings": "Meetings", "github": "GitHub", "crm": "CRM", "chat": "Chat"}
+BUILT_IN_TOOLS = frozenset({"tico", "hub", "docs", "web"})   # "hub": the name earlier releases wrote
 # Words of rank, not of the work: "Support lead" and "Engineering lead" share no job.
 RANKS = frozenset(stem for word in ("lead", "head", "manager", "senior", "junior", "chief", "director", "specialist",
                                     "associate", "officer", "staff", "principal") for stem, _ in R._words(word)) | {
