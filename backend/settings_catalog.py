@@ -208,6 +208,13 @@ def path_for(e, target, template=None):
                 raise Problem("validation", f"{e.name} names a repository as owner/name", 422)
             from urllib.parse import quote
             path = path.replace("{id}", quote(owner, safe="") + "/" + quote(repo, safe=""))
+        elif "{" + name + "}" in path and name == "id" and path.startswith("usage/pools/"):
+            # A pool is the whole company's or one group's: `company` or `groups/{group}`, two segments.
+            kind, _, group = str(target[name]).partition("/")
+            if not (kind == "company" and not group) and not (kind == "groups" and group and "/" not in group):
+                raise Problem("validation", f"{e.name} names a pool as company or groups/<group id>", 422)
+            from urllib.parse import quote
+            path = path.replace("{id}", kind + ("/" + quote(group, safe="") if group else ""))
         elif "{" + name + "}" in path:
             from urllib.parse import quote
             # Routine IDs use `<bot>:<routine-key>`; keep the colon in its path segment so Confirm cards can
@@ -332,12 +339,26 @@ def plan(c, auth, who, e, value, target=None, base="", propose=None, card_direct
     return {"run": request, "setting": public(e, base), "value": parsed}
 
 
+# An `{id}` that is more than one path segment, by the route it starts: a repository's full name (`owner/name`) and a
+# spending pool (`company`, or `groups/<group id>`). Anything else is one segment.
+ID_SHAPES = {"repositories/": "[^/]+/[^/]+", "usage/pools/": "company|groups/[^/]+"}
+_PROBES = {"repositories/": "o/n", "usage/pools/": "groups/x"}
+
+
+def probe(e):
+    """A path the entry's route writes, with a made-up value in each placeholder of the shape the route takes: what
+    a test asks of the Confirm-card gate (backend/assistant.py valid_operation) for this entry."""
+    def fill(m):
+        return _PROBES.get(e.route.split("/{")[0] + "/", "x") if m.group(1) == "id" else "x"
+    return "/api/v2/" + re.sub(r"\{(\w+)\}", fill, e.route)
+
+
 def _pattern(route):
     """An entry's route as a regex over the path a request names, one group per target."""
     out, at = "", 0
     for m in re.finditer(r"\{(" + "|".join(TARGETS) + r")\}", route):
         # A repository's id is its full name, `owner/name`: the route takes both (PUT /api/v2/repositories/{owner}/{repo}).
-        one = "[^/]+/[^/]+" if route.startswith("repositories/") and m.group(1) == "id" else "[^/]+"
+        one = ID_SHAPES.get(route.split("/{")[0] + "/", "[^/]+") if m.group(1) == "id" else "[^/]+"
         out += re.escape(route[at:m.start()]) + "(?P<" + m.group(1) + ">" + one + ")"
         at = m.end()
     return re.compile("/api/v2/" + out + re.escape(route[at:]))

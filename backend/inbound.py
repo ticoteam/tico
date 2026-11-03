@@ -230,12 +230,14 @@ class Inbound:
         return {'inboxes':rows[:limit],'next':rows[limit-1]['inbox_id'] if len(rows)>limit else None,'configured':not self.off or demo_inboxes,'last_synced_at':sync['last_synced_at'],'error':sync['error'],
                 'gaps':gaps}
 
-    def connection_actor(self, who, what='Inbox', code='inbox_connection'):
+    def connection_actor(self, who, what='Inbox', code='inbox_connection', tap=False):
         # Delegated human identities may manage other Inbox operations, never company linking. Also the rule for
         # linking this server to its company (backend/company_server.py), with its own `what` and error `code`.
+        # `tap`: the person's own tap on a Confirm card counts (a disconnect, which holds no code).
         forbidden = Problem(code+'_forbidden',f'A signed-in owner or admin must connect {what} directly.',403)
         if (who.role not in ('owner','human') or not who.actor.startswith('human:')
-                or any((who.support,who.via,who.via_token,who.runner_id,who.attempt_id,who.agent,who.task_actor))):
+                or (who.via and not (tap and who.confirmed))
+                or any((who.support,who.via_token,who.runner_id,who.attempt_id,who.agent,who.task_actor))):
             raise forbidden
         from . import access, census
         with self.store.read_transaction() as c:
