@@ -10,9 +10,6 @@ does, not by a click:
 - a write held for review (a native thread post or edit, a chat message, a run's reply) is open until it is decided:
   its reviewer releases or keeps it, or the person it is held for withdraws it (the hold leaves `held`);
 - a capped thread (the loop guard, spec 4.5) is open until its capped deliveries resume;
-- a thread with a message another company's Tico has not taken is open until the send goes through, the message is
-  edited or deleted, or that company leaves the thread. A paused or revoked peering lists nothing (it is already shown in
-  Connections, and its messages wait for it).
 A bot's mention of the person and a bot's ask are the thread's questions to the person and count; a bot's post that
 names nobody is activity, not attention.
 
@@ -22,9 +19,8 @@ may not see is named only to someone in the same thread (`teammate_access.Known`
 from . import hubdb as H
 
 ADDRESSED = ("mention", "ask", "assign", "addressed")
-# The held writes that are a message: a chat's and a run's, a native thread's post and edit (backend/org_rule_check.py),
-# and a message carried in from another install.
-HELD_OPERATIONS = ("message", "reply", "threads", "threads_edit", "federated_message")
+# The held writes that are a message: a chat's and a run's, and a native thread's post and edit (backend/org_rule_check.py).
+HELD_OPERATIONS = ("message", "reply", "threads", "threads_edit")
 
 
 def _clip(text, n=160):
@@ -71,11 +67,6 @@ def items(c, auth, who, skip=(), with_capped=True):
         if root and threads.readable(c, viewer, dict(root)) and threads.can_manage(c, viewer, dict(root)):
             out.append(_item("thread_capped", row["root_id"], row["root_id"],
                              _clip(root["subject"] or "Thread") + ": bot replies paused", row["since"]))
-    for row in _unsent(c):
-        root = c.execute("SELECT * FROM conversations WHERE id=?", (row["root_id"],)).fetchone()
-        if root and threads.readable(c, viewer, dict(root)) and threads.can_manage(c, viewer, dict(root)):
-            out.append(_item("thread_unsent", row["root_id"] + ":" + row["recipient"], row["root_id"],
-                             _clip(root["subject"] or "Thread") + ": not sent to another company", row["since"]))
     return sorted(out, key=lambda it: str(it["created_at"] or ""))
 
 
@@ -84,10 +75,12 @@ def _addressed(c, me):
     have not answered since in the same thread. A bot's plain post, one that names nobody, is not theirs to answer."""
     return [dict(r) for r in c.execute(
         "SELECT m.id, m.conversation_id, m.sender_id, m.kind, m.body, m.created_at, cv.subject FROM message_deliveries d "
-        "JOIN messages m ON m.id=d.message_id JOIN conversations cv ON cv.id=m.conversation_id "
+        # CROSS JOIN keeps this order whatever sqlite_stat1 says: the person's deliveries (message_deliveries_addressed),
+        # then each message and its conversation by key. Stale stats once put messages first, a scan a call.
+        "CROSS JOIN messages m ON m.id=d.message_id CROSS JOIN conversations cv ON cv.id=m.conversation_id "
         "WHERE d.recipient=? AND d.reason IN ('mention','ask','assign','addressed') "
         "AND d.state IN ('pending','delivered','read') AND m.sender_id<>? "
-        f"AND {H.delivery_counts_sql('m', 'd.recipient')} "
+        f"AND {H.delivery_counts_sql('m', 'd.recipient', 'd.reason')} "
         "AND (m.sender_id LIKE 'human:%' OR m.kind='ask' OR d.reason='mention') "
         "AND m.deleted_at IS NULL AND m.superseded_at IS NULL "
         "AND (m.kind<>'ask' OR m.answered_by_id IS NULL) "
@@ -103,15 +96,18 @@ def _unread_dms(c, viewer, me):
     takes that message's sender and time: a later message they cannot read sets neither."""
     from . import threads
     out = []
-    for cv in c.execute(
-            "SELECT cv.id, cv.subject, f.last_read_seq FROM thread_followers f JOIN conversations cv ON cv.id=f.thread_id "
-            "WHERE f.actor=? AND f.following=1 AND f.notify<>'muted' "
-            "AND (cv.audience='personal' OR (cv.audience='participants' AND cv.parent_id IS NULL)) "
-            "AND cv.closed_at IS NULL AND cv.archived_at IS NULL AND cv.last_unread_seq>f.last_read_seq "
-            "ORDER BY cv.last_unread_seq DESC", (me,)).fetchall():
-        if not threads.readable(c, viewer, cv["id"]):
+    found = c.execute(
+        "SELECT cv.id, cv.subject, f.last_read_seq FROM thread_followers f JOIN conversations cv ON cv.id=f.thread_id "
+        "WHERE f.actor=? AND f.following=1 AND f.notify<>'muted' "
+        "AND (cv.audience='personal' OR (cv.audience='participants' AND cv.parent_id IS NULL)) "
+        "AND cv.closed_at IS NULL AND cv.archived_at IS NULL AND cv.last_unread_seq>f.last_read_seq "
+        "ORDER BY cv.last_unread_seq DESC", (me,)).fetchall()
+    # Each DM's row and members are read together (threads.read_threads), not once per DM.
+    rows, members = threads.read_threads(c, viewer, [cv["id"] for cv in found])
+    for cv in found:
+        if not threads.readable(c, viewer, rows[cv["id"]]):
             continue
-        others = [a for a in threads._dm_members(c, threads.thread_row(c, cv["id"])) if a != me]
+        others = [a for a in threads._dm_members(c, rows[cv["id"]], rows=members[cv["id"]]) if a != me]
         if len(others) == 1 and others[0].startswith("bot:"):
             continue                                    # its bot's row in Team counts it (threads.bot_dm_unread)
         for m in c.execute(
@@ -143,12 +139,6 @@ def _held_thread(c, viewer, hold_id):
     message = H.message(c, row["message"]) if row["message"] and not row["thread"] else None
     place = row["thread"] or (message or {}).get("conversation_id")
     return place if place and threads.readable(c, viewer, place) else None
-
-
-def _unsent(c):
-    """One row per thread and company whose peering is live and whose messages have not gone (`federation_threads.unsent`)."""
-    from . import federation_threads
-    return federation_threads.unsent(c)
 
 
 def _capped(c):

@@ -5,7 +5,7 @@ choose one of their own computers whose runner drives the Grok Mac app: `config.
 {"computer": <runner id>, "app": "grok"}`, set through the bot's definition (settings_admin.update_bot). While
 that computer is registered:
 
-- a message to the bot in its chat queues a job for that computer like any bot's (store.EXTERNAL_BOT_SQL), and
+- a message to the bot in its chat queues a job for that computer like any bot's (backend/enqueue.py), and
   the claim carries `app_delivery` and the bot's identity in the app (`app_bot`) in its config; the sync's inbox
   never hands the same message over as well (external_sync.take_inbox);
 - the computer reports what the app's conversation shows (`POST /api/v2/runners/me/app-delivery/{slug}`): the
@@ -64,11 +64,11 @@ def _config(c, bot):
 
 
 def active(c, config):
-    """The registered computer the bot is delivered through, or None: the same rule the queue trigger applies."""
+    """The registered computer the bot is delivered through, or None: the same rule backend/enqueue.py applies."""
     found = setting(config)
     if not found:
         return None
-    return c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (found["computer"],)).fetchone()
+    return c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (found["computer"],)).fetchone()
 
 
 def view(c, config):
@@ -117,7 +117,7 @@ def change(c, who, auth, bot, value, declared, operator):
     if who.actor != person:
         raise Problem("app_delivery", f"Only the person who synced this {meta['label']} Bot can choose where it is "
                       "delivered", 422)
-    runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (value.computer,)).fetchone()
+    runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (value.computer,)).fetchone()
     if not runner or runner["owner_id"] != operator:
         raise Problem("app_delivery", f"Choose one of your own computers to deliver this {meta['label']} Bot", 422)
     why = _not_ready(app_report(runner, value.app))
@@ -327,7 +327,7 @@ def health_problems(c, who, auth, online_ids):
             used.setdefault((found["computer"], found["app"]), []).append(row["slug"] or row["bot"])
     out = []
     for (runner_id, app), bots in sorted(used.items()):
-        runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
+        runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
         if not runner or not (full or who.actor == "human:" + runner["owner_id"]):
             continue
         state = app_report(runner, app)

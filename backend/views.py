@@ -7,6 +7,7 @@ import os
 import re
 from datetime import timezone
 from typing import Literal
+from urllib.parse import quote
 
 import yaml
 from fastapi import Query, Request
@@ -411,21 +412,23 @@ def bot_owner_rows(c, registry, slug, people, configs, archived):
 # A bot's computer, as machine() reads it; prime_machines reads it for many bots at once.
 ASSIGNED_COLUMNS = ("SELECT a.runner_id,a.generation,r.label,r.owner_id,r.last_seen_at,r.revoked_at,r.readiness,"
                     "r.platform,r.version,r.awake_since,r.screen,r.capabilities")
-ASSIGNED_SQL = ASSIGNED_COLUMNS + " FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?"
+ASSIGNED_SQL = ASSIGNED_COLUMNS + " FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?"
 
 
 def prime_machines(c, slugs):
     """Read what machine() and H.status read for each of these bots one table at a time (one query per 500 bots
     each), so Health's pass over every bot reads none of them again per bot. Outside a snapshot nothing is kept."""
     from .agents import CONFIG_SQL, ROW_SQL
+    from .auth import OPERATOR_SQL
     if read_cache.cache(c) is None:
         return
     for part in H.chunks(sorted(set(slugs))):
         marks = ",".join("?" * len(part))
         for statement, query in ((CONFIG_SQL, f"SELECT config,bot FROM bot_config WHERE bot IN ({marks})"),
+                                 (OPERATOR_SQL, f"SELECT bot,owner_id FROM bot_config WHERE bot IN ({marks})"),
                                  (ROW_SQL, f"SELECT * FROM agents WHERE bot IN ({marks})"),
                                  (ASSIGNED_SQL, ASSIGNED_COLUMNS + ",a.bot FROM assignments a "
-                                                f"JOIN runners r ON r.id=a.runner_id WHERE a.bot IN ({marks})"),
+                                                f"JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot IN ({marks})"),
                                  ("SELECT * FROM bot_status WHERE bot=?", f"SELECT * FROM bot_status WHERE bot IN ({marks})")):
             found = {row["bot"]: row for row in c.execute(query, part)}
             read_cache.prime(c, statement, {(s,): found.get(s) for s in part})
@@ -752,15 +755,17 @@ def operation_issues(c, who, auth):
     if who.role == "owner":
         # Container backups report through replication; imported VM timer history stays historical.
         managed_backups = bool(os.environ.get("TICO_BACKUP_MODE"))
-        for row in c.execute("SELECT id,label,owner_id,last_seen_at,revoked_at,version,checkout,restart_requested_at "
-                             "FROM runners WHERE revoked_at IS NULL"):
+        runners = c.execute("SELECT id,label,owner_id,last_seen_at,revoked_at,version,checkout,restart_requested_at "
+                            "FROM runners_with_state WHERE revoked_at IS NULL").fetchall()
+        busy = runner_busy_many(c, [row["id"] for row in runners])     # every computer's running turns in one read
+        for row in runners:
             online = row["last_seen_at"] and row["last_seen_at"] > H.shift(H.now(), seconds=-60)
             if online and not runner_version_supported(row["version"]):
                 add("runner_version", row["label"] + " needs a runner update",
                     "Install the current " + auth.settings.app_name + " runner before assigning new work.",
                     machine=row["id"], action="Update this runner in Settings → Computers.")
             if online:
-                checkout_issue(add, row, runner_busy(c, row["id"]))
+                checkout_issue(add, row, busy[row["id"]])
         for row in c.execute("SELECT service,last_error,detail FROM service_health WHERE last_error IS NOT NULL"):
             if managed_backups and row["service"] in SNAPSHOT_BACKUP_ROWS:
                 continue
@@ -778,7 +783,7 @@ def operation_issues(c, who, auth):
         # A connector that stopped refreshing (the Mac lost the network, or the sync hung) writes no
         # error, so its age is checked while a Mac is online: calendar refreshes every 45 s, mail
         # reports every 10 minutes.
-        if c.execute("SELECT 1 FROM runners WHERE revoked_at IS NULL AND last_seen_at>?",
+        if c.execute("SELECT 1 FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
                      (H.shift(H.now(), seconds=-60),)).fetchone():
             for service, label, limit in (("connector:calendar", "Calendar", 15), ("connector:mail", "Mail", 90)):
                 row = c.execute("SELECT last_succeeded_at,last_error FROM service_health WHERE service=?", (service,)).fetchone()
@@ -830,7 +835,7 @@ def own_sign_in(c, bot, settings=None):
 def free_turn(c, bot, location, human=False):
     """The computer whose running work and short starts occupy all its places, or ''."""
     machine = location.get("machine") or {}
-    row = c.execute("SELECT * FROM runners WHERE id=?", (machine.get("runner_id"),)).fetchone()
+    row = c.execute("SELECT * FROM runners_with_state WHERE id=?", (machine.get("runner_id"),)).fetchone()
     if not row:
         return ""
     held = turns_here(c, machine["runner_id"])
@@ -962,10 +967,13 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     person = "m.sender_id LIKE 'human:%'"
     which = (f"AND (j.bot_id=? OR {person}) " if bot and people else "AND j.bot_id=? " if bot
              else f"AND {person} " if people else "")
-    job = c.execute("SELECT j.*,m.sender_id AS sender,a.state AS attempt_state,a.lease_until,a.stop_requested_at "
+    # A send the duplicate trigger dismissed (wake_presets.HOLD_TRIGGER) repeats a run still going: the chat shows that run.
+    job = c.execute("SELECT j.*,m.sender_id AS sender,a.state AS attempt_state,a.lease_until,a.stop_requested_at,"
+                    "a.started_at AS attempt_started_at "
                     "FROM jobs j JOIN messages m ON m.id=j.message_id "
                     "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
                     "AND coalesce(json_extract(m.refs,'$.maintenance'),'')!='checkpoint' "
+                    "AND NOT (j.state='canceled' AND coalesce(j.wake_class,'')='duplicate') "
                     + which + "ORDER BY m.rowid DESC LIMIT 1", (cid, bot) if bot else (cid,)).fetchone()
     execution = None
     if job and who and (not privacy.message_readable(c, privacy.actor(who), H.message(c, job["message_id"]))
@@ -1026,6 +1034,8 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
             execution["waiting"] = waiting
         if readiness_reason:
             execution["readiness_reason"] = readiness_reason
+        if state in ("leased", "running") and job["attempt_started_at"]:
+            execution["started_at"] = job["attempt_started_at"]   # the chat counts the turn's time from it
     return execution
 
 
@@ -1039,7 +1049,7 @@ DECISIVE_DAYS = 1
 KIND_RANK = {"approval": 0, "question": 1, "ask": 1, "waiting": 1, "setup": 1, "declined": 2, "stale": 3, "task": 3, "report": 4,
              # Thread items (backend/thread_attention.py): an ask, a held message or a paused thread blocks a bot; a
              # mention or an unread DM is a person's to read.
-             "thread_ask": 1, "thread_held": 1, "thread_capped": 1, "thread_unsent": 1, "thread_mention": 2, "thread_dm": 2}
+             "thread_ask": 1, "thread_held": 1, "thread_capped": 1, "thread_mention": 2, "thread_dm": 2}
 # A card whose bot has not yet said plainly what it needs (`ask_missing`) waits at the very bottom: there is nothing
 # for the person to do on it until the bot restates it (backend/restate_asks.py asks it to).
 
@@ -1123,6 +1133,17 @@ def runner_busy(c, runner_id):
     """Turns running on a computer now: what a restart would wait for."""
     return c.execute("SELECT count(*) FROM attempts WHERE runner_id=? AND state IN ('leased','running') "
                      "AND lease_until>?", (runner_id, H.now())).fetchone()[0]
+
+
+def runner_busy_many(c, runner_ids):
+    """runner_busy for many computers, {runner: turns}, in one read per 500 computers."""
+    now, found = H.now(), {}
+    ids = sorted(set(runner_ids))
+    for part in H.chunks(ids):
+        found.update(c.execute("SELECT runner_id,count(*) FROM attempts WHERE runner_id IN (%s) "
+                               "AND state IN ('leased','running') AND lease_until>? GROUP BY runner_id"
+                               % ",".join("?" * len(part)), (*part, now)).fetchall())
+    return {rid: found.get(rid, 0) for rid in runner_ids}
 
 
 def restart_issue(add, row, busy, since=None):
@@ -1227,7 +1248,7 @@ def need_of(item):
         return "decide"         # a thread's question to the person, answered in the thread
     if kind == "thread_held":
         return "review"         # a message held for review (backend/org_rule_check.py)
-    if kind in ("thread_mention", "thread_dm", "thread_capped", "thread_unsent"):
+    if kind in ("thread_mention", "thread_dm", "thread_capped"):
         return "do"             # read or answer in the thread
     if item.get("reconnect"):
         return "connect"        # an account or credential a bot's task stopped on (backend/reconnects.py)
@@ -1916,6 +1937,47 @@ def needs_actor(it, me):
     return actor
 
 
+NEEDS_SUMMARY_ITEMS = 10     # the newest items listed under each bot (at most)
+NEEDS_SUMMARY_BOTS = 25      # the bots listed, most waiting first; the rest are counted in `bots_left`
+
+
+def needs_summary(c, auth, who, task_view, limit):
+    """What the caller's Needs you holds, counted the way the list counts it (`count=1`): the total, the number per kind,
+    and per bot (`by_bot`): its count, the ones made this week and the ones older than three days, and its newest
+    `limit` items. A finished task that still holds an open ask is `done_but_open`. Items no bot put there are grouped
+    under `other`. Ages are days from each item's `created_at`."""
+    items = needs_items(c, auth, who, task_view, count_only=True)
+    now = H.now()
+    week, older = H.shift(now, days=-7), H.shift(now, days=-3)
+    groups, kinds, this_week = {}, {}, 0
+    for it in items:
+        key = needs_actor(it, who.actor) or "other"
+        created = it.get("created_at") or now
+        kinds[it["kind"]] = kinds.get(it["kind"], 0) + 1
+        this_week += created >= week
+        group = groups.setdefault(key, {"count": 0, "this_week": 0, "older_than_3_days": 0, "items": []})
+        group["count"] += 1
+        group["this_week"] += created >= week
+        group["older_than_3_days"] += created < older
+        group["items"].append({"id": str(it["id"]), "short_id": str(it["id"])[:8], "kind": it["kind"],
+                               "title": _clip(it.get("title"), 80), "created_at": created,
+                               "age_days": round(age_days(created, now), 1),
+                               "done_but_open": it.get("status") in ("done", "closed") and bool(it.get("open_asks"))})
+    ordered = sorted(groups.items(), key=lambda kv: (-kv[1]["count"], kv[0]))
+    by_bot = []
+    for key, group in ordered[:NEEDS_SUMMARY_BOTS]:
+        group["items"].sort(key=lambda x: x["created_at"], reverse=True)
+        by_bot.append({"bot": key, "name": H.actor_name(c, key) if key != "other" else "Other",
+                       **{k: v for k, v in group.items() if k != "items"}, "items": group["items"][:limit]})
+    return {"actor": who.actor, "total": len(items), "this_week": this_week, "by_kind": kinds, "by_bot": by_bot,
+            "bots_left": max(0, len(ordered) - len(by_bot))}
+
+
+def age_days(created, now):
+    """Whole-day age in days (fractions kept) from an ISO time to `now`; 0 when it does not parse."""
+    start, end = H.parse_ts(created), H.parse_ts(now)
+    return max(0.0, (end - start).total_seconds() / 86400) if start and end else 0.0
+
 def fleet_snapshot(c, auth, identity, task_view):
     """One live, actor-scoped control-plane snapshot for Tico's private room."""
     privacy.snapshot(c)
@@ -1989,6 +2051,113 @@ def fleet_snapshot(c, auth, identity, task_view):
             "needs_you": items,
             "approvals": [row for row in items if row.get("kind") == "approval"]}
 
+
+APPROVAL_STATUSES = ("pending", "approved", "declined")
+APPROVALS_PAGE = 20
+APPROVALS_PAGE_MAX = 100
+APPROVAL_SUMMARY = 200      # one line of a row's summary at most
+APPROVAL_LIST_BYTES = 64 * 1024   # a page stops here, as the other lists do (automations.page); `next` picks it up
+
+
+def _list_row(aid, status, from_actor, kind, payload, task_id, task_title, readable, message_id, conversation_id, created):
+    """One list row. Its link is the task it came with when the caller may see that task, else the thread of the message
+    it came in, else null. `task_title` is passed only for a readable task."""
+    if readable and task_id:
+        link = "#/task/" + quote(task_id, safe="")
+    elif conversation_id:
+        link = "#/thread/%s?m=%s" % (quote(conversation_id, safe=""), quote(message_id, safe=""))
+    else:
+        link = None
+    return {"id": aid, "status": status, "from_actor": from_actor,
+            "summary": approval_title(kind, payload, task_title)[:APPROVAL_SUMMARY],
+            "message_id": message_id, "task_id": task_id, "created": created, "link": link}
+
+
+def pending_rows(c, auth, who, task_view):
+    """The approvals in Needs you's approval set, newest first: `needs_items`, the same read its count takes, so the
+    list and that count cannot disagree. Each row passes the checks GET /api/v2/approvals/{aid} makes."""
+    ids = [x["id"] for x in needs_items(c, auth, who, task_view, count_only=True) if x.get("kind") == "approval"]
+    rows = []
+    for aid in ids:
+        row = H.approval(c, aid)
+        msg = H.message(c, row["message_id"]) if row and row.get("message_id") else None
+        if not row or not msg or msg["recipient_id"] != who.actor:
+            continue
+        try:
+            privacy.require_payload(c, who, row)
+            privacy.require_message(c, who, msg)
+        except Problem:
+            continue
+        task_id = row.get("task_id")
+        readable = bool(task_id) and bool(_readable_task_ids(c, auth.task_sql(c, who), [task_id]))
+        task = H.task(c, task_id) if readable else None
+        rows.append(_list_row(row["id"], "pending", row["requested_by_id"], row["kind"], row["payload"], task_id,
+                              (task or {}).get("title"), readable, msg["id"], msg.get("conversation_id"),
+                              row["created_at"]))
+    return sorted(rows, key=lambda r: (r["created"], r["id"]), reverse=True)
+
+
+def history_rows(c, auth, who, status, from_actor, before, since, need):
+    """The approvals addressed to the caller in a decided `status`, newest first, until `need` of them pass the checks
+    (or the history ends). One SQL read per window: the caller's messages joined to their approvals (approvals_message
+    serves the join), the filters in the WHERE, keyset-paged on (created_at, id), so the rows read are the window's and
+    never the company's history. Returns (rows, total) where total counts the rows the SQL filters match, before the
+    checks; the checks are per row of the window."""
+    clauses, args = ["m.recipient_id = ?", "a.decision = ?"], [who.actor, status]
+    if from_actor:
+        clauses.append("a.requested_by_id = ?")
+        args.append(from_actor)
+    if before:
+        clauses.append("a.created_at < ?")
+        args.append(before)
+    if since:
+        clauses.append("a.created_at >= ?")
+        args.append(since)
+    where = " AND ".join(clauses)
+    total = c.execute("SELECT COUNT(*) FROM messages m CROSS JOIN approvals a WHERE a.message_id=m.id AND " + where,
+                      args).fetchone()[0]
+    message_cols = [r[1] for r in c.execute("PRAGMA table_info(messages)")]
+    select = ", ".join(["a.id", "a.kind", "a.task_id", "a.message_id", "a.payload", "a.requested_by_id", "a.created_at",
+                        "a.decision", "t.title AS task_title"]
+                       + [f'm."{k}" AS "m_{k}"' for k in message_cols])
+    # CROSS JOIN keeps messages as the outer loop: the recipient index seeks the caller's messages, not a scan of approvals.
+    sql = (f"SELECT {select} FROM messages m CROSS JOIN approvals a ON a.message_id=m.id "
+           f"LEFT JOIN tasks t ON t.id=a.task_id WHERE {where}")
+    visible_task = auth.task_sql(c, who)
+    visible, cursor, window = [], None, max(2 * need, 40)
+    while len(visible) < need:
+        cut, cut_args = ("", []) if cursor is None else (
+            " AND (a.created_at < ? OR (a.created_at = ? AND a.id < ?))", [cursor[0], cursor[0], cursor[1]])
+        cur = c.execute(sql + cut + " ORDER BY a.created_at DESC, a.id DESC LIMIT ?", [*args, *cut_args, window])
+        names = [d[0] for d in cur.description]
+        found = [dict(zip(names, r, strict=True)) for r in cur.fetchall()]
+        if not found:
+            break
+        cursor = (found[-1]["created_at"], found[-1]["id"])
+        readable = _readable_task_ids(c, visible_task, [r["task_id"] for r in found if r["task_id"]])
+        for r in found:
+            if len(visible) >= need:
+                break
+            msg = {k[2:]: v for k, v in r.items() if k.startswith("m_")}
+            msg["refs"] = H._json(msg.get("refs"), {}) or {}
+            payload = H._json(r["payload"], {}) or {}
+            row = {"id": r["id"], "kind": r["kind"], "task_id": r["task_id"], "message_id": r["message_id"],
+                   "payload": payload, "requested_by_id": r["requested_by_id"], "decision": r["decision"],
+                   "created_at": r["created_at"], "decision_owner": msg["recipient_id"]}
+            try:
+                if not privacy.message_readable(c, privacy.actor(who), msg, current=True):
+                    continue
+                privacy.require_payload(c, who, row)
+            except Problem:
+                continue
+            task_id = r["task_id"]
+            ok = bool(task_id) and task_id in readable
+            visible.append(_list_row(r["id"], r["decision"], r["requested_by_id"], r["kind"], payload, task_id,
+                                     r["task_title"] if ok else None, ok, r["message_id"], msg.get("conversation_id"),
+                                     r["created_at"]))
+        if len(found) < window:
+            break
+    return visible[:need], total
 
 def install_views(app, store, auth, mutate, task_view):
     def visible_turns(c, who, bot=None, limit=200):
@@ -2392,7 +2561,7 @@ def install_views(app, store, auth, mutate, task_view):
             runners = list(c.execute("SELECT id,label,owner_id,last_seen_at,revoked_at,platform,version,capacity,readiness,"
                                       "accepts_member_bots,turns_at_once,screen,performance,capabilities,"
                                       "restart_since,"
-                                      "readiness_at FROM runners ORDER BY created_at"))
+                                      "readiness_at FROM runners_with_state ORDER BY created_at"))
             from . import usage_limits
             from .start_places import describe, summaries, turn_limit
             # One company Default for every computer's queue classify: without it each summary rebuilds
@@ -2754,6 +2923,34 @@ def install_views(app, store, auth, mutate, task_view):
             return {"actor": who.actor, "since": since,
                     "bots": recent_bots(c, auth, who, since, limit, needs_items(c, auth, who, task_view))}
 
+    @app.get("/api/v2/approvals")
+    def approval_list(request: Request, status: str = "pending", limit: int = APPROVALS_PAGE, offset: int = 0,
+                      from_actor: str | None = Query(None, alias="from"), before: str | None = None,
+                      since: str | None = None):
+        """The approvals addressed to you, newest first: `status` pending (the set Needs you counts), approved or declined;
+        `from` the actor that asked; `before` and `since` a date (YYYY-MM-DD). `next` is the offset of the page after."""
+        who = request.state.identity
+        human_only(who)
+        if status not in APPROVAL_STATUSES:
+            raise Problem("validation", "status is pending, approved or declined", 422)
+        limit, offset = max(1, min(int(limit), APPROVALS_PAGE_MAX)), max(0, int(offset))
+        need = offset + limit + 1          # one row past the page says whether there is a next page
+        with store.read_transaction() as c:
+            if status == "pending":
+                rows = pending_rows(c, auth, who, task_view)
+                if from_actor:
+                    rows = [r for r in rows if r["from_actor"] == from_actor]
+                if before:
+                    rows = [r for r in rows if r["created"] < before]
+                if since:
+                    rows = [r for r in rows if r["created"] >= since]
+                total, rows = len(rows), rows[:need]
+            else:
+                rows, total = history_rows(c, auth, who, status, from_actor, before, since, need)
+            from .automations import page      # local: automations imports this module
+            shown, more = page(rows[offset:], limit, offset, APPROVAL_LIST_BYTES)
+            return {"actor": who.actor, "status": status, "total": total, "approvals": shown, "next": more}
+
     @app.get("/api/v2/needs-you")
     def needs(request: Request, count: bool = False, ids: str | None = None, version: str | None = None,
               limit: int | None = None, cursor: str | None = None):
@@ -2792,6 +2989,15 @@ def install_views(app, store, auth, mutate, task_view):
                     out["restart"] = True
             needs_visuals(c, who, out["items"])
             return out
+
+    @app.get("/api/v2/needs-you/summary")
+    def needs_summary_route(request: Request, limit: int = NEEDS_SUMMARY_ITEMS):
+        """What the Needs you list holds, counted as the board counts it: the total, per kind and per bot, with each
+        bot's newest `limit` items (at most 10). `hub needs-you show` over MCP. A person only: the list is theirs."""
+        who = request.state.identity
+        human_only(who)
+        with store.read_transaction() as c:
+            return needs_summary(c, auth, who, task_view, max(0, min(int(limit), NEEDS_SUMMARY_ITEMS)))
 
     def needs_visuals(c, who, items):
         """A question's files under review (backend/file_reviews.py) as this reader sees them, with fresh addresses,

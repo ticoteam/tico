@@ -9,7 +9,9 @@ from backend import automation_flow as F
 from backend import hubdb as H
 from backend import redesign_migration as M
 from backend import rules as R
+from backend import team_rules
 from backend.tests.test_api import api, get, post  # noqa: F401
+from backend import usage_limits
 
 DUE = "2026-11-02T09:00:00.000000Z"
 LONG = "Sort Acme mail by sender and urgency. " * 300                   # about 11,000 characters
@@ -46,8 +48,7 @@ def rule(api, rid, event="comment", then="wake", scope=("bot", "coo"), position=
 
 def hourly(api, bot, usd):
     with db(api).transaction() as c:
-        c.execute("INSERT INTO usage_limits(bot, hourly_usd) VALUES(?,?) ON CONFLICT(bot) DO UPDATE SET "
-                  "hourly_usd=excluded.hourly_usd", (bot, usd))
+        usage_limits.save_own(c, bot, {**usage_limits.own(c, bot), "hourly_usd": usd}, None)
 
 
 def first_start(api):
@@ -115,8 +116,8 @@ def test_every_object_moves_once_and_runs_from_one_system(api):
             assert made["next_due_at"] == DUE                                     # its next occurrence, once
     assert not rows(api, "SELECT id FROM rules WHERE id IN ('rule_wake','rule_note','rule_team')")
     assert decisions(api, events, targets) == before_decisions                # the same wakes, from What wakes
-    assert rows(api, "SELECT hourly_usd, per_30m_usd FROM usage_limits WHERE bot='coo'") == [
-        {"hourly_usd": None, "per_30m_usd": 0.2}]
+    with db(api).read() as c:
+        assert (usage_limits.own(c, "coo")["hourly_usd"], usage_limits.own(c, "coo")["per_30m_usd"]) == (None, 0.2)
 
     # Once: a second start (or a catch-up) changes nothing and tells nobody again.
     automations = rows(api, "SELECT id FROM automations ORDER BY id")
@@ -360,3 +361,102 @@ def test_the_upgrade_drops_the_cutover_record_and_accepts_tables_and_holds_still
         assert "redesign_migrated" in tables
         assert M.holds(conn, "routine", "sch_1") is True
         assert M.holds(conn, "routine", "sch_2") is False
+
+
+OLD_FLOW = {"name": "Stale ticket review", "owner": "human:ana", "enabled": True,
+            "trigger": {"type": "schedule", "cron": "0 * * * *", "tz": "Europe/London"},
+            "steps": [{"id": "tasks", "type": "find", "source": "tasks",
+                       "query": "open tasks that look finished or forgotten", "limit": 20},
+                      {"id": "verdict", "type": "decide", "set": "stale-review@1", "out": "d1", "level": "low"},
+                      {"id": "route", "type": "paths", "paths": []}],
+            "source": {"kind": "system_job", "id": "job:stale_review"}}
+
+
+def old_stale_automation(api, enabled=True, rule_on=False):
+    """The cutover as it was before this fix: Stale ticket review became a find-based automation, the team rule off."""
+    aid = "auto_mig_old_stale"
+    flow = {**OLD_FLOW, "enabled": enabled}
+    with db(api).transaction() as c:
+        M.ensure(c)
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (M.REPAIR,))   # an install that has not been repaired
+        c.execute("INSERT INTO automations(id,name,owner_id,trigger_type,enabled,builtin,flow,version,created_at,"
+                  "created_by_id,updated_at) VALUES(?,?,?,?,?,0,?,1,?,?,?)",
+                  (aid, "Stale ticket review", "human:ana", "schedule", int(enabled), json.dumps(flow), DUE,
+                   "human:ana", DUE))
+        c.execute("INSERT INTO redesign_migrated(kind,id,migration,automation,outcome,why,title,migrated_at) "
+                  "VALUES('system_job','job:stale_review','mig_old',?,'converted','','Stale ticket review',?)",
+                  (aid, DUE))
+        team_rules.save(c, "human:ana", {"stale_review": rule_on})
+    return aid
+
+
+def stale_automations(api):
+    return rows(api, "SELECT id, enabled, deleted_at, json_array_length(json_extract(flow,'$.steps')) AS steps, "
+                "json_extract(flow,'$.readonly') AS readonly FROM automations WHERE json_extract(flow,'$.source.id')=? "
+                "ORDER BY created_at, id", ("job:stale_review",))
+
+
+def stale_mirror(api):
+    """The live read-only mirror of the job: no steps, nothing it runs itself."""
+    (mirror,) = [r for r in stale_automations(api) if not r["deleted_at"]]
+    assert mirror["steps"] == 0 and mirror["readonly"] == 1
+    return mirror
+
+
+def repair(api):
+    with db(api).transaction() as c:
+        return M.repair_stale_review(c)
+
+
+def stale_rule(api):
+    with db(api).read() as c:
+        return team_rules.load(c)["stale_review"]
+
+
+def test_stale_review_stays_the_built_in_job_on_a_fresh_install(api):
+    with db(api).transaction() as c:
+        team_rules.save(c, "human:ana", {"stale_review": True})
+    first_start(api)
+    mirror = stale_mirror(api)                                # a read-only mirror, like every built-in job; the job runs
+    assert stale_rule(api) is True                            # the cutover does not switch the rule off
+    assert marks(api)[("system_job", "job:stale_review")]["automation"] == mirror["id"]
+    with db(api).read() as c:
+        assert [i["now"] for i in M.inventory(c) if i["id"] == "job:stale_review"] == ["runs as before"]
+    assert repair(api) == [] and stale_rule(api) is True      # a mirror is not the no-op: nothing to repair
+
+
+def test_the_repair_turns_the_rule_on_for_an_enabled_no_op_automation_once(api):
+    aid = old_stale_automation(api, enabled=True, rule_on=False)
+    assert stale_rule(api) is False
+    assert repair(api) == [aid]
+    assert stale_rule(api) is True
+    gone = next(r for r in stale_automations(api) if r["id"] == aid)
+    assert gone["deleted_at"] and gone["enabled"] == 0        # removed through automations.remove, on record
+    with db(api).read() as c:
+        assert c.execute("SELECT 1 FROM audit_log WHERE object=? AND via=?", ("automation:" + aid, "migration repair")).fetchone()
+    mirror = stale_mirror(api)                                # in its place the read-only mirror
+    assert marks(api)[("system_job", "job:stale_review")]["outcome"] == "converted"
+    assert marks(api)[("system_job", "job:stale_review")]["automation"] == mirror["id"]
+    # Once: a second start changes nothing, and the cutover run again (its done bookkeeping) makes no automation.
+    before = stale_automations(api)
+    assert repair(api) == [] and stale_rule(api) is True
+    first_start(api)
+    assert stale_automations(api) == before and stale_rule(api) is True
+
+
+def test_the_repair_with_the_old_automation_off_removes_it_and_leaves_the_rule_off(api):
+    aid = old_stale_automation(api, enabled=False, rule_on=False)
+    assert repair(api) == [aid]
+    assert stale_rule(api) is False
+    gone = next(r for r in stale_automations(api) if r["id"] == aid)
+    assert gone["deleted_at"] and gone["enabled"] == 0
+    stale_mirror(api)
+    assert repair(api) == [] and stale_rule(api) is False
+
+
+def test_the_repair_leaves_an_install_without_the_automation_alone(api):
+    with db(api).transaction() as c:
+        team_rules.save(c, "human:ana", {"stale_review": False})
+    assert repair(api) == [] and stale_rule(api) is False
+    assert stale_automations(api) == []
+

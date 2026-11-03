@@ -1267,7 +1267,7 @@ BOTOPS, HEALTH = "botops", "health-monitor"
 
 def builtin_health(org):
     """The Health Monitor shows as a built-in automation (CONTRACT §4, PLAN §8), so wave 5."""
-    reply = org.api("get", "/api/v2/automations", who=DANA, wave=W5)
+    reply = org.api("get", "/api/v2/automations?limit=500", who=DANA, wave=W5)
     if reply.status != 200:
         raise Unmet(W5, f"list: {reply.status} {reply.excerpt()}")
     found = [r for r in rows(reply.body) if r.get("builtin") is True and "health" in str(r.get("name")).lower()]

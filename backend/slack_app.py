@@ -153,6 +153,22 @@ class Tokens(BaseModel):
     app_token: str
 
 
+def with_hosts(manifest, settings):
+    """The manifest with this server's link-preview hosts (backend/slack_unfurl.py) for the example one; with
+    none Slack can register (a loopback install), no previews are asked for."""
+    from .slack_unfurl import hosts
+    names = sorted(hosts(settings))
+    if names:
+        manifest["features"]["unfurl_domains"] = names
+        return manifest
+    manifest["features"].pop("unfurl_domains", None)
+    manifest["oauth_config"]["scopes"]["bot"] = [s for s in manifest["oauth_config"]["scopes"]["bot"]
+                                                 if s not in ("links:read", "links:write")]
+    events = manifest["settings"]["event_subscriptions"]["bot_events"]
+    manifest["settings"]["event_subscriptions"]["bot_events"] = [e for e in events if e != "link_shared"]
+    return manifest
+
+
 def install_slack_app(app, settings, store):
     def owner(request):
         who = request.state.identity
@@ -169,7 +185,7 @@ def install_slack_app(app, settings, store):
     @app.get("/api/v2/slack/manifest")
     def manifest(request: Request):
         owner(request)
-        return json.loads(MANIFEST.read_text())
+        return with_hosts(json.loads(MANIFEST.read_text()), settings)
 
     @app.put("/api/v2/slack/tokens")
     def tokens(request: Request, body: Tokens):

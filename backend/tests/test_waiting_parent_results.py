@@ -59,7 +59,7 @@ def queued(api, task_id, bot="ops"):
 def refusal(api, machine, job):
     """job_refusal's verdict on `job` as the claim would ask it, with nothing busy."""
     with api.app.state.store.read() as c:
-        runner = c.execute("SELECT * FROM runners WHERE id=?", (machine["runner_id"],)).fetchone()
+        runner = c.execute("SELECT * FROM runners_with_state WHERE id=?", (machine["runner_id"],)).fetchone()
         ready = execution.readiness_document(runner["readiness"])
         return execution.job_refusal(c, job, {}, ready, set(), execution.lanes_on(runner),
                                      execution.roots_on(runner))

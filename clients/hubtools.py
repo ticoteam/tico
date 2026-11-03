@@ -657,6 +657,8 @@ def tag_update(api, args):
                         "it creates the task, then requests a publication", enum=["public", "private"]),
        "public_title": _s("People only (a bot is refused): public title; the internal title is never published"),
        "public_summary": _s("People only (a bot is refused): public summary; the internal body is never published"),
+       "check_back_at": _s("When to inspect progress: ISO timestamp or duration such as 45m; defaults automatically"),
+       "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
        "due": _s("ISO-8601 date-time with timezone"),
        "private": {"type": "boolean", "description": "Only requester and assignee may read; bot defaults also apply"},
        "from_private": {"type": "boolean", "default": False,
@@ -712,7 +714,7 @@ def task_create(api, args):
         body["relations"] = [{"task": args["parent"], "kind": "parent"}]
     for field in ("labels", "top", "links", "next_run", "request_id", "type", "step", "number", "check_model",
                   "check_role", "visibility", "public_title", "public_summary", "from_private", "model", "effort",
-                  "harness"):
+                  "harness", "check_back_at", "check_back_note"):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
     for field in ("qa", "change_paths", "qa_not_checkable_live", "blocker"):
@@ -756,14 +758,14 @@ def task_tree(api, args):
 @tool("hub_task_worktree_add", "Create a task worktree from a repository this bot may write.",
       {"repo": _s("Repository owner/name"), "task": TASK_ID}, required=("repo",), writes=True, local=True)
 def task_worktree_add(api, args):
-    from runner.worktrees import command
+    from runner_support.worktrees import command
     return command(api, 'add', args['repo'], args.get('task'))
 
 
 @tool("hub_task_worktree_attach", "Attach a Git worktree inside the team workspace to this task.",
       {"path": _s("Path inside the team workspace"), "task": TASK_ID}, required=("path",), writes=True, local=True)
 def task_worktree_attach(api, args):
-    from runner.worktrees import command
+    from runner_support.worktrees import command
     return command(api, 'attach', args['path'], args.get('task'))
 
 
@@ -786,6 +788,15 @@ def task_show_many(api, args):
       "For a person, the task's requester, or BotOps's sweep.", {"id": TASK_ID}, required=("id",))
 def task_run(api, args):
     return api.post(f"tasks/{args['id']}/run-now", {}, key=_key(args))
+
+
+@tool("hub_task_check_back", "Set when to follow up unfinished bot-owned or bot-requested work. "
+      "Use a time conservatively longer than the expected work. Inspect the actual result or handoff when woken; "
+      "repair missing assignments before waiting again. Human-only tasks are excluded. A human snooze takes precedence.",
+      {"id": TASK_ID, "at": _s("ISO date-time with timezone or duration such as 45m or 2h"),
+       "note": _s("The result or handoff to inspect, at most 500 characters")}, required=("id", "at"), writes=True)
+def task_check_back(api, args):
+    return api.post(f"tasks/{args['id']}/check-back", {"at": args["at"], "note": args.get("note")}, key=_key(args))
 
 
 @tool("hub_task_snooze", "Set a task aside until a date: it leaves the board, task lists and Needs you, and nothing "
@@ -1027,6 +1038,8 @@ BRIEF_OLD = {"type": "boolean", "description": "Older name for brief"}
        "note": _s("What changed, or the result"),
        "brief": BRIEF, "quiet": BRIEF_OLD,
        "owner": _s("Hand the task to this bot or person"),
+       "check_back_at": _s("When to inspect progress: ISO timestamp or duration such as 45m; defaults automatically"),
+       "check_back_note": _s("What result or handoff to inspect, at most 500 characters"),
        "due": _s("ISO-8601 date-time with timezone"),
        "labels": {"type": "array", "items": {"type": "string"}, "description": "Replace the labels"},
        "waiting_on": _s("With status waiting: the person you need (their id). The note is your ask to them: one or two "
@@ -1055,7 +1068,7 @@ def task_update(api, args):
     if args.get("labels") is not None:
         body["labels"] = args["labels"]
     for field in ("title", "type", "step", "step_rank", "number", "visibility", "public_title", "public_summary", "approval_id", "size",
-                  "verdict", "verdict_head"):
+                  "verdict", "verdict_head", "check_back_at", "check_back_note"):
         if args.get(field) is not None:
             body[field] = args[field]
     if args.get("private") is not None:
@@ -2913,6 +2926,23 @@ def _file_target(api, target, command):
     return {"path": relative, "digest": digest.hexdigest()}
 
 
+@tool("hub_approval_list", "The approvals addressed to you, newest first. `status` pending (the default: exactly the "
+      "set Needs you counts), approved or declined. `from` is the actor that asked; `before` and `since` a date "
+      "(YYYY-MM-DD). Pages of up to 100 rows: `limit` and `offset`; `next` is the offset of the next page, null on the "
+      "last. Each row: id, status, from_actor, summary, message_id, task_id, created, link (the task it came with, "
+      "else the thread of its message; null if neither). Only approvals you can open are listed.",
+      {"status": {"type": "string", "enum": ["pending", "approved", "declined"], "description": "Default pending"},
+       "from": _s("Only the ones this actor asked for"),
+       "before": _s("Only those asked before this date (YYYY-MM-DD)"),
+       "since": _s("Only those asked on or after this date (YYYY-MM-DD)"),
+       "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Rows per page, default 20"},
+       "offset": {"type": "integer", "minimum": 0, "description": "Start at this row, default 0"}})
+def approval_list(api, args):
+    query = {"status": args.get("status", "pending"), "limit": args.get("limit", 20), "offset": args.get("offset", 0)}
+    query.update({k: args[k] for k in ("from", "before", "since") if args.get(k)})
+    return api.get("approvals", **query)
+
+
 @tool("hub_file_approved", "Whether this exact file version is approved: `approved` true only when the newest verdict "
       "on that version, with the same bytes, approved it. By default only a person's verdict counts (an answer to "
       "hub_task_question with review); `by` bot:SLUG or any also reads bots' hub_file_review. A later Request changes "
@@ -3324,93 +3354,6 @@ def trigger_list(api, args):
     return [{k: t.get(k) for k in ("id", "name", "event", "signed", "preset", "type_from", "hourly", "keep_days",
                                    "unheard", "last_received", "received_24h", "refused_24h", "automations")}
             for t in api.get("triggers")["triggers"]]
-
-
-# ----------------------------------------------------------------------------- federation: peers and shared threads
-PEERING = {"peering": _s("The peering's id from hub_peer_list")}
-PEER_INSTALL = {"install": _s("The other install's id: gi_ and 24 hex digits")}
-PEER_THREAD = {"thread": _s("The thread's id: a thread this install owns")}
-
-
-@tool("hub_peer_list", "This install's federation with other Tico installs: its key id (no key material), the Gateway it goes "
-      "through, its peerings (newest first) and the threads you may read that it shares or was given (members listed for the "
-      "ones it owns, with how many messages each company has not taken). Owner or admin.", {})
-def peer_list(api, args):
-    return _as_person(api).get("federation")
-
-
-@tool("hub_peer_key", "Make this install's federation key and register it with Tico HQ. Does nothing when the install has "
-      "one. Owner or admin.", {}, writes=True)
-def peer_key(api, args):
-    return _as_person(api).post("federation/keys", {}, key=_key(args))
-
-
-@tool("hub_peer_rotate_key", "Give this install a new federation key and retire the old one. Every peering needs approving "
-      "again, on both sides. Owner or admin.", {}, writes=True)
-def peer_rotate_key(api, args):
-    return _as_person(api).post("federation/keys/rotate", {}, key=_key(args))
-
-
-@tool("hub_peer_request", "Ask another install to peer with this one. It approves on its side; then you approve here. "
-      "Owner or admin.", PEER_INSTALL, required=("install",), writes=True)
-def peer_request(api, args):
-    return _as_person(api).post("federation/peerings", {"peer": args["install"]}, key=_key(args))
-
-
-@tool("hub_peer_approve", "Approve a peering, having checked the other install's key: from now on its envelopes must be signed "
-      "with that key. The peering is active once both installs approve. Owner or admin.", PEERING, required=("peering",), writes=True)
-def peer_approve(api, args):
-    return _as_person(api).post(f"federation/peerings/{args['peering']}/approve", {}, key=_key(args))
-
-
-@tool("hub_peer_pause", "The kill switch: pause a peering. While it is paused nothing crosses it, in either direction. "
-      "Owner or admin.", PEERING, required=("peering",), writes=True)
-def peer_pause(api, args):
-    return _as_person(api).post(f"federation/peerings/{args['peering']}/pause", {"paused": True}, key=_key(args))
-
-
-@tool("hub_peer_resume", "Resume a paused peering. What was missed while it was paused is caught up. Owner or admin.",
-      PEERING, required=("peering",), writes=True)
-def peer_resume(api, args):
-    return _as_person(api).post(f"federation/peerings/{args['peering']}/pause", {"paused": False}, key=_key(args))
-
-
-@tool("hub_peer_revoke", "End a peering. Nothing more crosses it; a new request starts over and needs both approvals again. "
-      "Owner or admin.", PEERING, required=("peering",), writes=True)
-def peer_revoke(api, args):
-    return _as_person(api).post(f"federation/peerings/{args['peering']}/revoke", {}, key=_key(args))
-
-
-@tool("hub_peer_share", "Share a thread this install owns with an install it has an active peering with. That install gets "
-      "the thread from now on, not its history. You must read and manage the thread. Owner or admin.",
-      {**PEER_THREAD, **PEER_INSTALL}, required=("thread", "install"), writes=True)
-def peer_share(api, args):
-    return _as_person(api).post(f"federation/threads/{quote(str(args['thread']), safe='')}/installs",
-                                {"install": args["install"]}, key=_key(args))
-
-
-@tool("hub_peer_unshare", "Take an install out of a thread this install owns. It gets the removal and nothing after. You must "
-      "read and manage the thread. Owner or admin.", {**PEER_THREAD, **PEER_INSTALL}, required=("thread", "install"), writes=True)
-def peer_unshare(api, args):
-    return _as_person(api).call("DELETE", f"federation/threads/{quote(str(args['thread']), safe='')}/installs/"
-                                          f"{quote(str(args['install']), safe='')}", None, _key(args))
-
-
-@tool("hub_peer_retry", "Send again now what another install has not taken from a shared thread (Needs you lists it). "
-      "Whoever manages the thread.", {"thread": _s("The thread's id on this install"), **PEER_INSTALL},
-      required=("thread", "install"), writes=True)
-def peer_retry(api, args):
-    return _as_person(api).post(f"federation/threads/{quote(str(args['thread']), safe='')}/installs/"
-                                f"{quote(str(args['install']), safe='')}/retry", {}, key=_key(args))
-
-
-@tool("hub_peer_add_reader", "Let a person on this install read a shared copy of a thread. Until an admin who reads it adds "
-      "them, only the accepting admin reads a copy. Owner or admin.",
-      {"thread": _s("The thread's id on this install (a shared copy)"), "actor": _s("The person, as human:<name>")},
-      required=("thread", "actor"), writes=True)
-def peer_add_reader(api, args):
-    return _as_person(api).post(f"federation/threads/{quote(str(args['thread']), safe='')}/readers", {"actor": args["actor"]},
-                                key=_key(args))
 
 
 TRIGGER = {"id": _s("The trigger's id from hub_trigger_list")}
@@ -5615,6 +5558,12 @@ def update_settings(api, args):
                     {k: flag(args[k]) for k in ("daily", "weekly") if args.get(k) is not None}, key=_key(args))
 
 
+@tool("hub_bot_show", "One bot: its profile (name, role, who runs it, who it reports to, who it works for), and for "
+      "one who may read it also its status, machine, queue and goals.", {"slug": _s("The bot's slug")}, required=("slug",))
+def bot_show(api, args):
+    return _as_person(api).get(f"bots/{args['slug']}")
+
+
 @tool("hub_bot_status_list", "Every bot you may see with its live status.",
       {"team": _s("Only this team")})
 def status_list(api, args):
@@ -5999,11 +5948,15 @@ def thread_task(api, args):
       {"summary": _s("One plain sentence saying what will happen if they confirm"),
        "method": {"enum": ["POST", "PUT", "PATCH", "DELETE"], "default": "POST"},
        "path": _s("The API path, e.g. /api/v2/approvals/<id> or /api/v2/messages/<id>/answer"),
-       "body": {"type": "object", "description": "The JSON body of that request"}},
+       "body": {"type": "object", "description": "The JSON body of that request"},
+       "for_person": _s("Only the Assistant's own background run: the person (human:<id>) whose Assistant chat gets the card")},
       required=("summary", "path"), writes=True)
 def assistant_propose(api, args):
-    return api.post("assistant/actions", {"summary": args["summary"], "method": args.get("method") or "POST",
-                                          "path": args["path"], "body": args.get("body") or {}}, key=_key(args))
+    sent = {"summary": args["summary"], "method": args.get("method") or "POST", "path": args["path"],
+            "body": args.get("body") or {}}
+    if args.get("for_person"):
+        sent["for"] = args["for_person"]
+    return api.post("assistant/actions", sent, key=_key(args))
 
 
 @tool("hub_assistant_withdraw", "Take back a Confirm card that still waits for the person (its id from "
@@ -6552,6 +6505,52 @@ def batch_commit(api, args):
       {"batch": _s("The batch id")}, required=("batch",), writes=True)
 def batch_abandon(api, args):
     return api.post("batch/" + args["batch"] + "/abandon", {}, key=_key(args))
+
+
+@tool("hub_needs_you_show", "What is on the person's Needs you, counted as the board counts it: the total, the number "
+      "per kind (task, question, approval, ...), and per bot: how many it put there, how many are from this week and how "
+      "many are older than 3 days, with its newest items (title, age, and `done_but_open` for a finished task that still "
+      "holds an open ask). Use it to see the pile and where it comes from, before closing or stopping anything.",
+      {"by": _s("bot (the default) or kind: what the answer is about; both come back"),
+       "limit": {"type": "integer", "minimum": 0, "maximum": 10,
+                 "description": "The newest items listed under each bot (default 5, at most 10)"}})
+def needs_you_show(api, args):
+    by = args.get("by") or "bot"
+    view = api.get("needs-you/summary", limit=args.get("limit") or 5)
+    if by == "kind":
+        return {k: view[k] for k in ("actor", "total", "this_week", "by_kind")}
+    return view
+
+
+@tool("hub_origin_show", "Why an item is on the person's list: the task, the bot's question or the approval it names. "
+      "Answers who made it, its cause (the automation that opened it, the org rule that asked for it, the parent task, or "
+      "the bot that filed it), how many items that cause made this week and how many are still open, and up to three "
+      "ready-to-run commands that would stop the source. Read-only; a ref the person cannot read is not found.",
+      {"ref": _s("A task id (or its first 8 or more characters), a message id (a bot's question) or an approval id")},
+      required=("ref",))
+def origin_show(api, args):
+    return api.get("origins/" + args["ref"])
+
+
+@tool("hub_assistant_change_list", "What the person's Assistant did for them, newest first (last 30 days by default): "
+      "each change's `what` in one line, the `words` of the person it acted on, its `object` (task:, approval:, "
+      "automation:, org_rule:, message:), and `undoable` with `why_not` when it cannot be taken back. Use it when the "
+      "person asks what was done for them or wants something undone.",
+      {"days": {"type": "integer", "minimum": 1, "maximum": 90, "description": "How far back (default 30)"},
+       "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Changes per page (default 50)"},
+       "before": _s("The `next` of the page before, to read older changes")})
+def assistant_change_list(api, args):
+    return api.get("assistant/changes", days=args.get("days"), limit=args.get("limit"), before=args.get("before"))
+
+
+@tool("hub_assistant_change_restore", "Undo one change the person's Assistant made for them (its id from "
+      "hub_assistant_change_list): a task's status or owner goes back to what it was, an approval goes back to waiting "
+      "for the person, an automation goes back to its earlier version, an org rule it added is retired. A message sent "
+      "stays sent. Restoring one again changes nothing.",
+      {"id": _s("The change's id from hub_assistant_change_list")},
+      required=("id",), writes=True)
+def assistant_change_restore(api, args):
+    return api.post(f"assistant/changes/{args['id']}/restore", {}, key=_key(args))
 
 
 # ----------------------------------------------------------------------------- the Librarian (docs/librarian.md)
@@ -7484,6 +7483,7 @@ ASSISTANT_WRITES = {"hub_goal_read_back", "hub_goal_save", "hub_goal_create", "h
                     "hub_question_answer",
                     "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn",
                     "hub_assistant_withdraw",
+                    "hub_assistant_change_restore",
                     "hub_settings_set", "hub_rules_read", "hub_rules_ask"}
 AUDIENCE = {
     # Task caps (CONTRACT §1): people read and set them; a bot's own change is a proposal a person decides.
@@ -7522,7 +7522,9 @@ AUDIENCE = {
                                    "hub_meeting_pending", "hub_meeting_approve", "hub_meeting_dismiss", "hub_meeting_restore")},
     **{name: REQUESTER for name in CALL_TOOLS},     # a person's act; BotOps acts as the person it works for
     # The Assistant only.
-    "hub_assistant_propose": ("assistant",), "hub_approval_read_back": ("assistant",),
+    # The Assistant bot's own background run (a routine, kind `bot`) proposes a card for its person too; the server admits
+    # only the Assistant bot, and only with `for` naming an active person (backend/app.py propose).
+    "hub_assistant_propose": ("assistant", "bot"), "hub_approval_read_back": ("assistant",),
     # Any teammate may withdraw a waiting card or find one (backend/assistant.py teammate); confirming stays the owner's.
     "hub_assistant_withdraw": KINDS, "hub_assistant_proposals": KINDS,
     # A bot's add is a suggestion; the Assistant's is an org rule the person asked for in their own chat, citing their words.
@@ -7532,6 +7534,9 @@ AUDIENCE = {
     "hub_approval_decline": HUMANS_AND_ASSISTANT,         # only a person decides an approval
     "hub_approval_approve": HUMANS_AND_ASSISTANT,         # ... or their own Assistant, when they let it
     "hub_assistant_read": PEOPLE, "hub_assistant_send": PEOPLE,
+    "hub_needs_you_show": HUMANS_AND_ASSISTANT,            # views.human_only: a person's own list
+    "hub_assistant_change_list": HUMANS_AND_ASSISTANT,     # what the person's Assistant did for them
+    "hub_assistant_change_restore": HUMANS_AND_ASSISTANT,  # taking one back, as the person
     # A person's own layers (backend/learned.py): the person, or their own chat's turn; never a bot of its own.
     "hub_assistant_learn": HUMANS_AND_ASSISTANT, "hub_assistant_learned": HUMANS_AND_ASSISTANT,
     # Humans only (views.human_only and the batch routes refuse a bot); a bot's own posts are the other way round.
@@ -7588,8 +7593,41 @@ COUNSEL_TOOLS = frozenset({"hub_rules_list", "hub_rules_get", "hub_rules_add", "
                            "hub_task_close"})
 
 
+# The tools whose route the Assistant's own turn may never make (backend/assistant.py `NEVER`): a credential, a key, a
+# sign-in, a support report, SQL, a message's redaction. The server refuses them on a turn whatever is offered; they are
+# not offered to the Assistant either, so the live Assistant is shown what its gate admits and nothing else.
+ASSISTANT_HIDDEN = frozenset({
+    "hub_credential_grant", "hub_credential_revoke", "hub_credential_delete", "hub_credential_set", "hub_credential_import",
+    "hub_agent_pair_approve", "hub_agent_pair_decline", "hub_call_token",
+    "hub_sql", "hub_support_file", "hub_support_report", "hub_support_send", "hub_trigger_sign", "hub_message_redact",
+})
+
+
+# The tools an Assistant turn is offered beyond the ones its audience already names: the ones the Assistant template
+# (templates/catalog/assistant) tells it to run, found by walking clients/hubcli's own command tree for each `hub ...` span
+# (the same tool each command runs, `remotecli.tool_name`), plus the few it needs to change automations, rules and its
+# proposals. The gate is unchanged: the CLI still reaches every route the gate admits; this only sizes the MCP listing.
+ASSISTANT_TOOLS = frozenset({
+    "hub_approval_approve", "hub_approval_decline", "hub_approval_read_back", "hub_approval_request",
+    "hub_approval_show", "hub_assistant_learn", "hub_assistant_proposals", "hub_assistant_propose",
+    "hub_assistant_withdraw", "hub_automation_get", "hub_automation_update", "hub_bot_status_history",
+    "hub_bot_status_list", "hub_bot_status_set", "hub_brief", "hub_conversation_show", "hub_doc_read",
+    "hub_doc_search", "hub_file_import", "hub_file_link", "hub_file_publish", "hub_file_touch",
+    "hub_goal_list", "hub_goal_read_back", "hub_goal_save", "hub_goal_show", "hub_health_check",
+    "hub_kpi_list", "hub_meeting_read", "hub_meeting_search", "hub_message_list", "hub_message_send",
+    "hub_needs_you_commit", "hub_needs_you_next", "hub_proposal_list", "hub_question_answer",
+    "hub_question_ask", "hub_replay_show", "hub_rules_add", "hub_settings_ask", "hub_settings_find",
+    "hub_settings_set", "hub_settings_show", "hub_strategy_show", "hub_task_ask", "hub_task_close",
+    "hub_task_comment", "hub_task_create", "hub_task_list", "hub_task_question", "hub_task_show",
+    "hub_task_update", "hub_team_show",
+    "hub_automation_restore", "hub_automation_versions", "hub_bot_model", "hub_bot_pause", "hub_bot_resume",
+    "hub_rules_retire", "hub_task_bulk",
+})
+
+
 def offered_to(tool_):
-    """The kinds a tool is offered to."""
+    """The kinds a tool is offered to. The Assistant's turn is offered the tools it is told to run (ASSISTANT_TOOLS) and
+    what its audience already names, minus ASSISTANT_HIDDEN; the gate and the route decide what it may do."""
     name = tool_["name"]
     if name in AUDIENCE:
         kinds = tuple(AUDIENCE[name])
@@ -7597,6 +7635,10 @@ def offered_to(tool_):
         kinds = NOT_ASSISTANT
     else:
         kinds = KINDS
+    if name in ASSISTANT_HIDDEN:
+        kinds = tuple(k for k in kinds if k != "assistant")
+    elif name in ASSISTANT_TOOLS and "assistant" not in kinds:
+        kinds = (*kinds, "assistant")
     return (*kinds, COUNSEL) if name in COUNSEL_TOOLS else kinds
 
 

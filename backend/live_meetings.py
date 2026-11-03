@@ -476,11 +476,11 @@ def _dispatch_turn(c, rid, turn_id, slug, retry=0):
 def _wait_for_update(c, rid, turn_id, slug):
     """Say once per meeting and bot when no computer running the bot can take a private meeting's turn: one without
     private lanes is never handed it (execution.PRIVATE_LANES), so the turn waits for its runner's update."""
-    from .execution import PRIVATE_LANES, _capability_set
-    computers = c.execute("SELECT r.label,r.capabilities FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    from .execution import PRIVATE_LANES, capability_set
+    computers = c.execute("SELECT r.label,r.capabilities FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                           "WHERE a.bot=? AND r.revoked_at IS NULL", (slug,)).fetchall()
     old = [r["label"] or "This bot's computer" for r in computers
-           if PRIVATE_LANES not in _capability_set(r["capabilities"])]
+           if PRIVATE_LANES not in capability_set(r["capabilities"])]
     if not computers or len(old) < len(computers):
         return
     if c.execute("SELECT 1 FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_waiting' "
@@ -1250,7 +1250,7 @@ def install_live_meetings(app, store, auth, write):
                                          (who.actor, body.client_id)).fetchone()
                     if existing:
                         _require_read(c, auth, who, existing["id"])
-                cached = c.execute("SELECT response FROM idempotency WHERE actor=? AND operation=? AND key=?",
+                cached = c.execute("SELECT response FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                                    (who.actor, request.url.path, request.headers.get("idempotency-key"))).fetchone()
                 if cached:
                     _require_read(c, auth, who, (H._json(cached["response"], {}) or {}).get("id"))

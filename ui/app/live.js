@@ -129,6 +129,7 @@ function liveUrl() {
   const topics = (conversations.length || threads.length ? LIVE_TOPICS : LIVE_TOPICS.filter(t => t !== 'messages' && t !== 'runs'))
     .filter(t => t !== 'tasks' || scope.all || scope.task.length || scope.party.length);
   // Needs you as changed ids against the list the page holds (v2NeedsChanged), not the whole list each time.
+  LIVE.urlTopics = topics;
   const q = new URLSearchParams({topics: topics.join(','), needs: 'changes'});
   if (LIVE.after != null) q.set('after', String(LIVE.after));
   if (conversations.length) q.set('conversation', conversations.join(','));
@@ -147,14 +148,20 @@ function liveEventsConnect() {
   if (SESSION.out) return;                                // signed out: nothing reconnects until the person signs in
   try { LIVE.es?.close(); } catch {}
   const es = LIVE.es = new EventSource(liveUrl());
+  es.topics = LIVE.urlTopics || [];
   LIVE.opened = Date.now();
   const current = () => LIVE.es === es;
   es.addEventListener('ready', ev => {
     if (!current()) return;
     const d = liveData(ev) || {};
-    if (LIVE.after == null) LIVE.after = Number(d.seq) || 0;
+    // `carried`: the topics this stream resumed without a gap, so it replays what changed in them meanwhile: those the
+    // last stream also carried, when it resumes from the last change number (`after`). The first stream carries none,
+    // and a topic newly added was not followed up to `after`.
+    const resumed = LIVE.after != null, carried = resumed ? es.topics.filter(t => LIVE.readyTopics?.includes(t)) : [];
+    LIVE.readyTopics = es.topics;
+    if (!resumed) LIVE.after = Number(d.seq) || 0;
     // The list as this stream counts from: a held copy of another version (missed while away) is read again.
-    if (d.needs_version) liveEmit('needs', {version: d.needs_version});
+    if (d.needs_version) liveEmit('needs', {version: d.needs_version, connect: true, carried});
     const was = LIVE.connected;
     LIVE.connected = true;
     if (!was) liveEmit('status', {connected: true});

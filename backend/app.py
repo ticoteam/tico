@@ -29,6 +29,7 @@ from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifecycle, mcp_oauth, recruiting, harness_actions, model_login, oidc, personal_tokens, views
 from . import outcome_stats
+from . import assistant_changes, why_here
 from . import teammate_access
 from . import start_places
 from . import ask_ingest, delivery, strategy_bot, invites, owner_link
@@ -105,6 +106,8 @@ INBOX_LIMIT = 100
 INBOX_PAGE = 500            # unread messages read per query while looking for the newest INBOX_LIMIT readable ones
 # Gateway image calls in flight per process (each holds a thread up to 130 s); more answer 429 with Retry-After.
 GATEWAY_IMAGE_SLOTS = 4
+# The defers the web's Send can keep (preference compose.send_way): the durations its menu offers (ui/app/pill.js).
+SEND_WAY_DEFERS = frozenset("defer:" + f for f in ("30m", "1h", "4h", "24h", "2d", "7d", "never"))
 
 
 def _first_visible(items, visible):
@@ -197,6 +200,12 @@ def create_app(settings=None):
                 onboarding.ensure_counsel(c)
         except Exception as exc:
             telemetry.capture("librarian", exc)
+        # The active Assistant gets its daily sweep if it has never had it (backend/onboarding.py): once, never back.
+        try:
+            with store.transaction() as c:
+                onboarding.ensure_builtin_routines(c)
+        except Exception as exc:
+            telemetry.capture("builtin_routines", exc)
         # Finance on every install (backend/finance/setup.py): idempotent, after the migrations, one short transaction.
         try:
             from .finance import actions as finance
@@ -390,8 +399,6 @@ def create_app(settings=None):
             books_sync.start(store, app.state.vault, settings, rehearsal=settings.rehearsal)
         # Webhooks waiting at Tico Gateway; the loop does nothing without a relay or a key.
         hook_relay_task = asyncio.create_task(app.state.hook_relay.loop(stop)) if timers else None
-        # Shared threads between installs (backend/federation_relay.py): peerings and envelopes through Tico HQ.
-        federation_task = asyncio.create_task(app.state.federation_relay.loop(stop)) if timers else None
         # Physical mail (backend/postal_mail.py): reads and routes the letters the relay and the mail-intake inbox kept.
         postal_mail_task = asyncio.create_task(app.state.postal_mail.loop(stop)) if timers else None
         # Sleep when idle (backend/sleep_idle.py): looks every five minutes (a cell: every minute), and only on a hosted server that asked for it.
@@ -436,8 +443,6 @@ def create_app(settings=None):
                 await inbound_task
             if hook_relay_task:
                 await hook_relay_task
-            if federation_task:
-                await federation_task
             if postal_mail_task:
                 await postal_mail_task
             if sleep_idle_task:
@@ -609,7 +614,7 @@ def create_app(settings=None):
     from .assistant import write_allowed as assistant_writes, own_room as assistant_room, create_proposal
     from .assistant import valid_operation as assistant_valid
     from .assistant import describe as describe_action
-    from .assistant import instructed_route as assistant_instructed, instruction as assistant_instruction
+    from .assistant import instruction as assistant_instruction
     from . import goal_read_back
     from . import assistant as assistant_mod
     from . import botops_act
@@ -626,7 +631,8 @@ def create_app(settings=None):
                 return all(a == actor or not str(a).startswith("human:") for a in people)
             if row["owner_id"] != actor:
                 return False
-            if any(str(a).startswith("bot:") for a in people):
+            # Alone: no bot and no other person on it (a human requester is another person, who would see the comment).
+            if any(str(a).startswith("bot:") or (str(a).startswith("human:") and a != actor) for a in people):
                 return False
             return not c.execute("SELECT 1 FROM task_delegations WHERE task_id=? AND expires_at>?",
                                  (task_id, H.now())).fetchone()
@@ -642,6 +648,13 @@ def create_app(settings=None):
     def assistant_decides(actor):
         with store.read() as c:
             return assistant_mod.decides(c, actor)
+
+    def assistant_confirm_hint():
+        """What a write the person's Assistant may not make on its own is refused with (`confirm_required`)."""
+        return ("The " + settings.assistant_name + " does not make this on its own: it is a credential, sign-in, owner, "
+                "support or deletion change, one of its own switches, or the owner turned off \u201cAssistant acts without "
+                "asking\u201d. Propose it with `hub assistant propose` (or POST /api/v2/assistant/actions) and the person "
+                "confirms a card in " + settings.app_name + ".")
 
     @app.middleware("http")
     async def request_guard(request, call_next):
@@ -812,10 +825,11 @@ def create_app(settings=None):
                             request.state.identity.actor,
                             lambda tid, shared: assistant_owns(tid, request.state.identity.actor, shared),
                             assistant_direct(), assistant_to_bot))):
-                    # A task change, comment or link, a decline or an answer the person asked for in their own Assistant
-                    # chat: the turn cites their message and it runs as them, recorded via assistant for that message
-                    # (backend/assistant.py).
-                    asked = request.headers.get(botops_act.HEADER)
+                    # A write the person's own Assistant run makes (backend/assistant.py): the run cites the message that
+                    # started it (its turn), unless the request names another (`X-Tico-On-Behalf-Of`), and the write runs as
+                    # the person, recorded via assistant for that message. Their rights are the ceiling: the route checks them.
+                    header = request.headers.get(botops_act.HEADER)
+                    asked = header or "turn"
                     raw = getattr(request, "_body", b"")
                     # Approving on the person's words: only when they let their Assistant decide approvals (and the
                     # team allows it); otherwise the one sentence it tells them about the setting.
@@ -824,35 +838,34 @@ def create_app(settings=None):
                     state = assistant_decides(request.state.identity.actor) if approves else None
                     if approves and not state["active"]:
                         raise Problem("approve_setting_off", assistant_mod.approve_hint(settings, state), 403)
-                    # A direct setting from the catalogue the person asked for runs on their words the same way.
+                    # A setting from the catalogue is refused here only when only the person may change it (class `person`,
+                    # `require_direct_setting`).
                     setting = (not approves and request.state.identity.via == "assistant"
-                               and assistant_mod.instructed_setting(request.method, request.url.path, raw))
-                    # An org change they asked for (a Strategy Bot suggestion they said to make) runs the same way.
-                    org = (not approves and request.state.identity.via == "assistant"
-                           and assistant_mod.instructed_org(request.method, request.url.path, raw))
+                               and assistant_mod.catalogue_setting(request.method, request.url.path, raw))
                     # The owner's yes to a goal read-back in their own Assistant chat (backend/goal_read_back.py): the
                     # goal, measure and suggestion routes save exactly what it read back, or nothing (`not_agreed`).
                     goal_yes = (not approves and goal_read_back.strategy_turn(request.state.identity)
                                 and goal_read_back.saving(request.method, request.url.path))
                     # The owner's "no" to a suggestion in their chat (backend/goal_read_back.py `turns_down`): admitted on
-                    # their cited turn, and not on the autonomous-action setting, which only gates the other instructed writes.
+                    # their cited turn, and not on the autonomous-action setting, which only gates the other writes.
                     goal_no = (not approves and asked and request.state.identity.via == "assistant"
                                and goal_read_back.turns_down(request.method, request.url.path))
-                    if goal_yes and not asked:
+                    if goal_yes and not header:
                         raise goal_read_back.not_agreed("A goal change is saved only on the owner's yes to its "
                                                         "read-back, citing it (`--on-behalf-of turn`)")
-                    if not goal_yes and not goal_no and not (asked and request.state.identity.via == "assistant" and assistant_direct()
-                            and (setting or org or assistant_instructed(request.method, request.url.path, raw,
-                                                                 decides=bool(approves)))):
-                        raise Problem("confirm_required", "The " + settings.assistant_name + " may not do this on its "
-                                      "own. A task change, comment or link, declining an approval, answering a bot's "
-                                      "question, a direct setting (`hub settings set`) or an org change (groups, leads, "
-                                      "reports to) that the person clearly asked for in this chat runs when you cite their "
-                                      "message (`--on-behalf-of turn`). Otherwise propose it with `hub assistant propose` "
-                                      "(or POST /api/v2/assistant/actions), several actions on one card (path "
-                                      "/api/v2/assistant/batch); approving is a card unless the person lets you "
-                                      "decide approvals, then their cited words. The person confirms a card in "
-                                      + settings.app_name, 403)
+                    # Every write the turn makes is admitted on its cited words, except what the Assistant may not do as the
+                    # person (`admits_on_turn`); an approve is admitted only on its read-back and the person's yes (`approves`).
+                    # A settings route's write that is not exactly one catalogue setting, and a change to an automation that
+                    # sends outside, are cards whatever the rest of the turn may do (backend/assistant.py).
+                    on_turn = request.state.identity.via == "assistant" and not approves
+                    unmatched = on_turn and assistant_mod.settings_route_unmatched(request.method, request.url.path, raw)
+                    outside = on_turn and await asyncio.to_thread(
+                        assistant_mod.automation_sends_outside, store, request.method, request.url.path, raw)
+                    admitted = (request.state.identity.via == "assistant" and assistant_direct()
+                                and (approves or (not unmatched and not outside
+                                                  and assistant_mod.admits_on_turn(request.method, request.url.path, raw))))
+                    if not goal_yes and not goal_no and not admitted:
+                        raise Problem("confirm_required", assistant_confirm_hint(), 403)
                     def cited():
                         with store.read() as c:
                             if goal_yes:
@@ -865,7 +878,13 @@ def create_app(settings=None):
                                 return {**record, "assistant": request.state.identity.task_actor,
                                         **goal_read_back.agreement(c, request.state.identity, record["cited"],
                                                                    request.method, request.url.path, raw, auth=auth)}
-                            record = assistant_instruction(c, request.state.identity, asked)
+                            try:
+                                record = assistant_instruction(c, request.state.identity, asked)
+                            except Problem:
+                                if header:
+                                    raise
+                                # No message of the person's own is behind this run, so it is a card, as it always was.
+                                raise Problem("confirm_required", assistant_confirm_hint(), 403) from None
                             assistant_mod.require_on_task(c, auth, request.state.identity, request.url.path)
                             if setting:
                                 def trial(e, target, body):
@@ -1215,6 +1234,8 @@ def create_app(settings=None):
             value.pop("occurrence", None)       # only a due-date routine's task has one: a board of 500 carries none
         value.pop("occurrence_step", None)      # the server's: which step made an occurrence's task (never in a view)
         value.pop("rule_due_id", None)          # the server's: the rule due date its run was fired for (rule_due.py)
+        from .task_check_backs import view as check_back_view
+        value["check_back"] = check_back_view(row, c)
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
         value.pop("blocker_key", None)          # blocker_asks' match key, for the server only
         value.pop("holds_cleared_at", None)     # the stranded sweep's clock (task_holds), for the server only
@@ -1365,8 +1386,12 @@ def create_app(settings=None):
         step_since = step_age.since_map(c, rows)
         hold_marks = task_holds.marks(c, rows)
         result = []
+        from . import task_check_backs
+        check_backs_on = task_check_backs.enabled(c)
         for row in rows:
             value = task_view(row, pipelines=pipelines, hold_marks=hold_marks)
+            if value.get("check_back"):
+                value["check_back"]["enabled"] = check_backs_on
             value.pop("checkpoint", None)    # up to a page of text per task; the full task view carries it
             value.update({
                 "relations": relations[row["id"]],
@@ -1659,7 +1684,7 @@ def create_app(settings=None):
         with store.read() as c:
             cutoff = H.shift(H.now(), seconds=-views.AWAKE_GAP)
             known = runner_versions.load(c)
-            for row in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL AND last_seen_at>?", (cutoff,)):
+            for row in c.execute("SELECT id FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?", (cutoff,)):
                 state = runner_versions.view(known.get(row["id"]))["state"]
                 counts[state] = counts.get(state, 0) + 1
         return counts
@@ -2047,7 +2072,7 @@ def create_app(settings=None):
         if not person or person.get("hidden"):
             raise Problem("not_found", "Person not found", 404)
         invites.once(store, auth, settings, who, request, body, person)
-        at = mutate(request, body, lambda c: invites.record(c, who.actor, pid))   # a repeat replays its receipt
+        at = invites.record_send(store, who, request, pid)  # a repeat answers the time its own send recorded
         return {"person": pid, "invited_at": at}
 
     @app.post("/api/v2/access/people/{pid}/password")
@@ -2290,7 +2315,17 @@ def create_app(settings=None):
         from . import company_import
         who = request.state.identity
         owner_only(who, "invites the people from setup")
-        row = mutate(request, body, lambda c: company_import.add_invitee(onboarding, c, who, key, body.email))
+        invites.request_key(request)         # checked before anything is written, as `mutate` checks it
+        bound = invites.replay(store, who, request, body)     # a bound key answers before the roster is touched
+        if bound is not None:
+            with store.transaction() as c:
+                # A repeat records a send whose record was lost, unless the person has since been removed.
+                if bound not in invites.sent(c) and c.execute("SELECT 1 FROM humans WHERE id=?", (bound,)).fetchone():
+                    invites.record(c, who.actor, bound)
+                return onboarding.view(c, who)
+        # Not `mutate`: the invite binding below is this request's record under the same key (one row per key).
+        # add_invitee answers the same roster row again when the person is already added.
+        row = store.write(who, lambda c: company_import.add_invitee(onboarding, c, who, key, body.email))
         sent = invites.once(store, auth, settings, who, request, body, row)
         with store.transaction() as c:                  # not a second `mutate`: one request has one idempotency key
             if sent or row["id"] not in invites.sent(c):      # a repeat keeps the first send's time
@@ -3303,7 +3338,7 @@ def create_app(settings=None):
 
         def admit(c):                         # read with the gate, inside the check's time budget
             from .shared_bots import route
-            if c.execute("SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
+            if c.execute("SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                          (who.actor, path, key)).fetchone():
                 return False
             target = H.actor_id(route(c, who.actor, "bot:" + bot))
@@ -3913,9 +3948,10 @@ def create_app(settings=None):
                 if brief:
                     for row in rows:
                         for field in ("body", "acceptance_criteria", "acceptance", "public_title", "public_summary",
+                                      "check_back_note", "check_back",
                                       "requester_count", "external_requesters", "internal_requesters", "important_requesters", "organization", "size"):
                             row.pop(field, None)
-                        for field in ("verdict", "verdict_head"):   # only a review or QA subtask has one
+                        for field in ("verdict", "verdict_head", "check_back_at", "done_at", "closed_at", "closed_by_id", "guest"):
                             if row.get(field) is None:
                                 row.pop(field, None)
                         if isinstance(row.get("step"), dict):
@@ -4401,6 +4437,7 @@ def create_app(settings=None):
                             requester_actor=requester_actor, visibility=body.visibility,
                             public_title=body.public_title, public_summary=body.public_summary,
                             public_warning=public_warning,
+                            check_back_at=body.check_back_at, check_back_note=body.check_back_note,
                             private=private, conversation_id=rooms.task_conversation_id(c, auth, owner, who.actor),
                             lane=body.lane, labels=body.labels, top=body.top, lint=lint,
                             goal_id=body.goal_id, next_run=body.next_run, type=body.type, step=body.step,
@@ -4638,7 +4675,7 @@ def create_app(settings=None):
             warned = rule_warned_fields(rule_gate, body, row, approved=exact_approval(c, who.actor))
             body, allowance = body.model_copy(update=warned), rule_summary_allowance(rule_gate, warned)
         if body.close:
-            if any(v is not None for v in (body.title, body.status, body.owner, body.due, body.body, body.lane,
+            if any(v is not None for v in (body.title, body.status, body.owner, body.due, body.check_back_at, body.check_back_note, body.body, body.lane,
                                            body.labels, body.waiting_on, body.rank, body.roles,
                                            body.goal_id, body.type, body.step, body.step_rank, body.number, body.private, body.visibility, body.public_title, body.public_summary, body.size,
                                            body.verdict, body.verdict_head)):
@@ -5013,6 +5050,18 @@ def create_app(settings=None):
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
             return settings_admin.set_task_run_model(c, who, task_id, body)
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/tasks/{tid}/check-back")
+    def task_check_back(request: Request, tid: str, body: M.TaskCheckBack):
+        who = request.state.identity
+        def work(c):
+            from . import task_check_backs
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            H.TS._check(c, who.actor, task_id, mover(c, who))
+            return {"task": task_view(task_check_backs.set_time(c, H.task(c, task_id), body.at, body.note, actor=who.actor),
+                                      c, visible_sql=auth.task_sql(c, who), who=who)}
         return mutate(request, body, work)
 
     @app.post("/api/v2/tasks/{tid}/snooze")
@@ -5594,6 +5643,10 @@ def create_app(settings=None):
             views.human_only(who)
             if not isinstance(body.value, bool):
                 raise Problem("validation", "meetings.auto_share is a boolean", 422)
+        # The way the web's Send goes (ui/app/pill.js): read by any client; sends that name no delivery ignore it.
+        if key == "compose.send_way" and not (body.value in ("steer", "queue") or isinstance(body.value, str)
+                                              and body.value in SEND_WAY_DEFERS):
+            raise Problem("validation", "compose.send_way is steer, queue or defer:<30m|1h|4h|24h|2d|7d|never>", 422)
         # Hide from my chart on the Strategy Bot: a person's own view
         if key == strategy_bot.HIDE_PREF:
             views.human_only(who)
@@ -6840,7 +6893,7 @@ def create_app(settings=None):
         main when that is safe and restarts once no turn is running, so nothing is cut off."""
         who = request.state.identity
         def work(c):
-            runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+            runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
             if not runner or not (auth.bot_admin(who) or who.role == "human" and who.actor == "human:" + runner["owner_id"]):
                 raise Problem("forbidden", "You cannot restart this runner", 403)
             c.execute("UPDATE runners SET restart_requested_at=? WHERE id=?", (H.now(), rid))
@@ -6853,7 +6906,7 @@ def create_app(settings=None):
         """Keep this computer for inbox bots, or stop (backend/inbox_isolation.py)."""
         who = request.state.identity
         def work(c):
-            runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+            runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
             if not runner or not (auth.bot_admin(who) or who.role == "human" and who.actor == "human:" + runner["owner_id"]):
                 raise Problem("forbidden", "You cannot change this computer", 403)
             people = views.roster(c)
@@ -6999,7 +7052,7 @@ def create_app(settings=None):
     def revoke(request: Request, rid: str, body: M.Empty):
         who = request.state.identity
         def work(c):
-            runner = c.execute("SELECT * FROM runners WHERE id=?", (rid,)).fetchone()
+            runner = c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone()
             if not runner or not (auth.bot_admin(who) or who.role == "human" and who.actor == "human:" + runner["owner_id"]):
                 raise Problem("forbidden", "You cannot revoke this runner", 403)
             c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), rid))
@@ -7156,7 +7209,7 @@ def create_app(settings=None):
         rows = []
         # One Default for the whole listing: each computer's summary reuses pools/groups/spend memos.
         limits = usage_limits.company(c)
-        runners = list(c.execute("SELECT * FROM runners WHERE revoked_at IS NULL ORDER BY label"))
+        runners = list(c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL ORDER BY label"))
         # One pass for every computer's turn counts and load (not one summary and one load per computer).
         turn_counts = summaries(c, [r["id"] for r in runners], settings, limits)
         loads = load_statuses(c, [r["id"] for r in runners])
@@ -7390,7 +7443,7 @@ def create_app(settings=None):
         who = request.state.identity
         def work(c):
             admin_only(who, "sets how many turns a computer runs at once")
-            row = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+            row = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
             if not row:
                 raise Problem("not_found", "Computer not found", 404)
             c.execute("UPDATE runners SET turns_at_once=? WHERE id=?", (body.turns_at_once, rid))
@@ -7672,7 +7725,7 @@ def create_app(settings=None):
                 raise Problem("not_found", "Bot not found", 404)
             if config["revision"] != body.expected_revision:
                 raise Problem("version_conflict", "Bot configuration changed; refresh before moving it", 409)
-            runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (body.runner_id,)).fetchone()
+            runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (body.runner_id,)).fetchone()
             if not runner:
                 raise Problem("not_found", "Computer is not registered", 404)
             if (who.role != "owner" and not auth.bot_admin(who) and runner["owner_id"] != H.actor_id(who.actor)
@@ -8074,7 +8127,7 @@ def create_app(settings=None):
         if 0 < len(key) <= 200:
             with store.read_transaction() as c:
                 validate_identity(c, request.state.identity)
-                if not c.execute("SELECT 1 FROM idempotency WHERE actor=? AND operation=? AND key=?",
+                if not c.execute("SELECT 1 FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?",
                                  (request.state.identity.actor, request.url.path, key)).fetchone():
                     idle = execution.idle_inputs(c, request.state.identity, aid)
                     if idle is not None:
@@ -8350,14 +8403,14 @@ def create_app(settings=None):
     org_rule_check.REPLAY["automation"] = replay_step
     org_rule_check.AUDIENCE.update(rule_audiences())
     org_rule_check.AUDIENCE["automation"] = replay_audience
-    from .federation_routes import release_replayer
-    org_rule_check.REPLAY["federated_message"] = release_replayer(app)
     org_rule_check.install(app, store, auth, mutate)
     thread_api.install(app, store, auth, mutate, rule_check)     # thread routes (§3.4); /threads/search before /threads/{id}
     from . import thread_tasks
     thread_tasks.install(app, store, auth, create_task, settings.public_url or "")    # Make task from a message
     counsel.install(app, store, auth, mutate)      # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
+    why_here.install(app, store, auth)               # GET /api/v2/origins/{ref}: why an item is on the list
+    assistant_changes.install(app, store, auth, mutate, settings_admin)  # the Assistant's changes, and undoing one
     reach.install(app, store, auth, mutate)        # Rules › Internal: who reaches whom (docs/reach.md)
     from . import feedback
     feedback.install(app, store, auth, mutate)     # 👍/👎 on bot work (backend/feedback.py)
@@ -8477,8 +8530,6 @@ def create_app(settings=None):
     install_inbound(app, store, settings, auth)
     from .hook_relay import install as install_hook_relay
     install_hook_relay(app, settings, store, auth)
-    from .federation_routes import install as install_federation
-    install_federation(app, settings, store, auth)
     from .postal_mail import install as install_postal_mail
     install_postal_mail(app, settings, store, auth)
     from .sleep_idle import install as install_sleep_idle

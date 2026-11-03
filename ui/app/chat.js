@@ -809,7 +809,6 @@ async function v2ChatSend(P, text, slug = P.slug, extraRefs = {}, extra = {}) {
     watch.end('sent');
     if (pending) pending.acknowledged = true;       // restored composers share this identity too
     pillAcknowledge(P, text, files, draftScope);
-    pillWaySent(P, extra);
     if (j.message?.refs?.action_result) toast(j.message.refs.action_result.decision === 'approved' ? 'Approved' : 'Declined');
     v2ChatAdopt(slug, j);
     P.retryTries = 0;

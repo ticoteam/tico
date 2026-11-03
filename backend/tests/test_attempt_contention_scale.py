@@ -14,6 +14,7 @@ from backend.scheduler import Scheduler
 from backend.store import H, encode, _pooled
 from backend.tests.test_api import api, headers  # noqa: F401
 from backend.tests.test_attempt_contention import fleet
+from backend.enqueue import enqueue_stored
 
 
 @pytest.mark.slow
@@ -38,17 +39,19 @@ def test_busy_install_routes(api, monkeypatch):
                           "VALUES(?,?,'human:ana','bot:ops','say','Synthetic input',?,?,?)",
                           (mid, f'room-{i}', now, encode({'task': f'task-{i}', 'answers': [f'message-{k}' for k in range(10)]}),
                            f'input-{i}-{j-1}' if j else None))
+                enqueue_stored(c, mid)
                 c.execute('INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)',
                           (f'attempt-{i}', mid))
                 c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE id=?", (f'attempt-{i}', mid))
         # Distinct task lanes leave real work for concurrent claims. The heartbeat
         # reports every checkout, as a busy runner does, rather than an empty inventory.
-        c.execute('UPDATE runners SET capacity=200,capabilities=? WHERE id=?',
+        c.execute('UPDATE runner_states SET capacity=200,capabilities=? WHERE runner_id=?',
                   (encode([execution.LANES, execution.ROOTS]), computer['runner_id']))
         for i in range(197, 200):
             c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
                       "VALUES(?,?,'human:ana','bot:ops','say','Synthetic queued work',?,?)",
                       (f'queued-{i}', f'room-{i}', now, encode({'task': f'task-{i}'})))
+            enqueue_stored(c, f'queued-{i}')
         c.execute("UPDATE tasks SET updated_at=?,owner_id='bot:finance',private=0 WHERE id IN (" + ','.join('?' * 10) + ")",
                   (H.shift(now, hours=-2), *(f'task-{i}' for i in range(100, 110))))
         # Fixture construction is not part of the lease workload. Start the real lease

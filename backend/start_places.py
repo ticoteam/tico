@@ -54,7 +54,7 @@ def hold_rows(c, runner_ids):
     out = {}
     for start in range(0, len(ids), 500):
         part = ids[start:start + 500]
-        for row in c.execute(f"SELECT * FROM runners WHERE id IN ({','.join('?' * len(part))})", part):
+        for row in c.execute(f"SELECT * FROM runners_with_state WHERE id IN ({','.join('?' * len(part))})", part):
             out[row['id']] = row
     return out
 
@@ -75,7 +75,7 @@ def computer_hold(c, runner_id, now=None, status=None, row=None):
     def runner():
         nonlocal row
         if row is None:
-            row = c.execute("SELECT * FROM runners WHERE id=?", (runner_id,)).fetchone()
+            row = c.execute("SELECT * FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
         return row
 
     def diagnostics_on():
@@ -174,6 +174,20 @@ def at_turn_limit(c, bot):
     return limit is not None and bot_held(c, bot) >= limit
 
 
+def held_counts(c, bots):
+    """{bot: the turns it holds on every computer} for every bot in `bots`, in set queries: bot_held's predicate,
+    grouped by bot."""
+    from .hubdb import chunks
+    now = H.now()
+    counts = {}
+    for part in chunks(bots):
+        for bot, count in c.execute(
+                "SELECT a.bot_id,count(*) FROM attempts a WHERE a.bot_id IN (" + ",".join("?" * len(part)) + ") "
+                "AND (a.state='running' OR (a.state='leased' AND a.lease_until>?)) GROUP BY a.bot_id", (*part, now)):
+            counts[bot] = count
+    return {bot: counts.get(bot, 0) for bot in bots}
+
+
 def bot_held(c, bot, exclude=None):
     """Turns the bot holds on every computer together: what its "Turns at once" is checked against. A turn holds its
     place from its claim until it ends, whether it is starting, parked on a wait or running: a parked turn still
@@ -213,19 +227,26 @@ def overdue(c):
         "AND a.state IN ('leased','running') AND p.start_until<=?", (H.now(),))]
 
 
+# A person's own message, or the keeper carrier of one (threads._carrier): a keeper notice naming the message
+# (refs.carries) and its sender (refs.from). Other keeper notices (a routine, a sweep) carry none.
+PERSON_SQL = (f"(m.sender_id LIKE 'human:%' OR (m.sender_id='{H.KEEPER}' "
+              "AND json_extract(m.refs,'$.carries') IS NOT NULL AND json_extract(m.refs,'$.from') LIKE 'human:%'))")
+
+
 def from_person(c, job_id):
-    """Whether a job answers a person's own message to the bot: a chat, a message in its task, an answer to its ask.
-    Such a turn starts on an overloaded computer and ahead of the turns waiting there: the load is the bots' own work,
-    and holding it left a person's message waiting behind a hundred bot turns. A keeper notice (a routine, a sweep,
+    """Whether a job answers a person's own message to the bot: a chat, a message in its task, an answer to its ask, or
+    a person's message in a thread with it (its keeper carrier, PERSON_SQL). Such a turn starts on an overloaded
+    computer and ahead of the turns waiting there: the load is the bots' own work, and holding it left a person's
+    message waiting behind a hundred bot turns. A keeper notice that carries no person's message (a routine, a sweep,
     a rule's wake), or a bot's message, is not one, even when a person's act caused it. Two primary-key reads."""
     return bool(c.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
-                          "WHERE j.id=? AND m.sender_id LIKE 'human:%'", (job_id,)).fetchone())
+                          f"WHERE j.id=? AND {PERSON_SQL}", (job_id,)).fetchone())
 
 
 def person_queued(c, runner_id):
     """Whether a person's message waits in this computer's queue: only then does a held claim look for a job."""
     return bool(c.execute("SELECT 1 FROM assignments x JOIN jobs j ON j.bot_id=x.bot AND j.state='queued' AND j.held=0 "
-                          "JOIN messages m ON m.id=j.message_id WHERE x.runner_id=? AND m.sender_id LIKE 'human:%' "
+                          f"JOIN messages m ON m.id=j.message_id WHERE x.runner_id=? AND {PERSON_SQL} "
                           "LIMIT 1", (runner_id,)).fetchone())
 
 
@@ -257,7 +278,7 @@ def reserve(c, attempt, settings=None):
     if bot_cap is not None and bot_held(c, attempt['bot_id'], exclude=aid) >= bot_cap:
         waiting(c, aid, BOT_WAIT)
         return {'reserved': False, 'waiting': BOT_WAIT}
-    capacity = turn_limit(c.execute("SELECT * FROM runners WHERE id=?", (rid,)).fetchone())
+    capacity = turn_limit(c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone())
     # Waiters ready to run take their turns by original claim order. Login/lane waiters are not ready yet.
     ahead = c.execute("SELECT 1 FROM start_places p JOIN attempts a ON a.id=p.attempt_id "
                       "WHERE a.runner_id=? AND a.state='leased' AND a.lease_until>? AND a.stop_requested_at IS NULL "
@@ -324,7 +345,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
             out[rid]['queued'] += 1
     from .execution import claim_refusal
     from .store import readiness_document
-    runners = {row['id']: row for row in c.execute(f"SELECT * FROM runners WHERE id IN ({marks})", runner_ids)}
+    runners = {row['id']: row for row in c.execute(f"SELECT * FROM runners_with_state WHERE id IN ({marks})", runner_ids)}
     statuses = performance.load_statuses(c, runner_ids)
     holds = {}      # a computer's hold, asked once and only for a computer with queued work
     reasons = {'cooling_off': 'quota', 'limit': 'spending limit', 'not_ready': 'computer readiness',

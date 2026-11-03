@@ -16,7 +16,7 @@ def test_claim_hands_out_the_queued_job_to_the_free_claude_fallback_that_health_
     machine = runner(api)
     assign(api, machine, "ops")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capacity=8 WHERE id=?", (machine["runner_id"],))
+        c.execute("UPDATE runner_states SET capacity=8 WHERE runner_id=?", (machine["runner_id"],))
     signed_in(api, machine, ["ops"], ["codex", "claude"])
     hit, reset = "2026-10-20T10:00:00.000000Z", "2026-10-20T12:00:00.000000Z"
     with api.app.state.store.transaction() as c:

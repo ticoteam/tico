@@ -63,10 +63,17 @@ def test_every_cli_command_has_a_tool_of_the_same_name():
         groups = [a for a in parser._actions if getattr(a, "choices", None) and not isinstance(a.choices, (list, tuple))]
         if not groups:
             return {prefix}
-        return {leaf for word, sub in groups[0].choices.items() for leaf in leaves(sub, prefix + "_" + word.replace("-", "_"))}
+        return {leaf for word, sub in unique(groups[0].choices) for leaf in leaves(sub, prefix + "_" + word.replace("-", "_"))}
+    def unique(choices):
+        # An alias (`tasks` for `task`) is the same parser under another name: it adds no tool of its own.
+        seen = set()
+        for word, sub in choices.items():
+            if id(sub) not in seen:
+                seen.add(id(sub))
+                yield word, sub
     names = set()
     for action in hubcli.parser()._subparsers._group_actions:
-        for word, sub in action.choices.items():
+        for word, sub in unique(action.choices):
             names |= leaves(sub, "hub_" + word.replace("-", "_"))
     # Repository convenience commands select one of the explicit read/write MCP tools.
     for command, tools in hubtools.CLI_TOOL_ALIASES.items():

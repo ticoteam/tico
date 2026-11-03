@@ -14,7 +14,7 @@ Don't edit these except where your brief says so; ask core in your report.
 
 | File | What core owns |
 |---|---|
-| `backend/threads.py` (new) | everything: schema `ensure`, C1-C5, `post`, `create`, read state, edit/delete, migration |
+| `backend/threads.py` (new) | everything: C1-C5, `post`, `create`, read state, edit/delete, migration |
 | `backend/hubdb.py` | the conversation and message write paths: `open_conversation`, `say`, `_write_message`, `answer`, `notice`, `mark_delivered`, `mark_read`, `task_comment*`, `inbox*`, `undelivered`, the conversation/message columns in `migrate` |
 | `backend/auth.py` | `Auth.conversation`, `Auth.run_conversation`, `Auth.tico_principal`, `_own_ask_to_a_person` (~lines 940-1060) |
 | `backend/events.py` | `_Viewer`, `_messages`, `_readable_before_deletion`, the `messages`/`threads` entries of `TRIGGERS`, the one `threads` hook line in `read()` |
@@ -25,9 +25,12 @@ Don't edit these except where your brief says so; ask core in your report.
 
 ## 1. Schema
 
-All columns are added with `H.add_column` on every start (`threads.ensure(c)`, called from `hubdb.migrate` and from
-the cloud store's unversioned boot list), the pattern the latest releases use. The one-time data migration (§7) is
-recorded under `registry_metadata` key `threads-migration` and runs inside one transaction.
+The columns, tables, triggers and indexes below are migration `backend/migrations/0047_native_threads_schema.py`, which
+also makes the search index and the tables of the thread helpers, the Slack bridge and Tico Meet calls, and tables
+that migration 0058 drops. It runs once; a change to any of that SQL is a new migration. `threads_primary_delivery` is made again by
+`backend/migrations/0048_tasks_conversation.sql` with hubdb's `delivery_counts_sql` (the task-thread mention rule). The
+five message indexes are built by `threads.migrate` after its backfill. The one-time data migration (§7) is recorded under `registry_metadata` key `threads-migration` and runs
+in chunks that each commit with their progress.
 
 ### 1.1 `conversations` (a thread)
 
@@ -91,8 +94,7 @@ and **no `seq`**: timelines, counters, search and SSE thread views never show it
 
 ```sql
 -- Access membership (C2). Only for audience members|personal|participants. actor: 'human:<id>' | 'bot:<slug>' |
--- 'group:<id>' (resolved live, people and bots, nested) | 'peer:<install>' (a linked install) |
--- '<human|bot>:<name>@<install>' (a remote guest, federation).
+-- 'group:<id>' (resolved live, people and bots, nested).
 CREATE TABLE IF NOT EXISTS thread_members (
   id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, actor TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner','member')),
@@ -256,7 +258,7 @@ threads.AUDIENCES, threads.PRIVATE_AUDIENCES, threads.SAFE_REF_KEYS
 
 ```python
 threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None,
-             via=None, origin=None, checked=None, attachments=None, as_actor=None, start=None) -> message view
+             via=None, origin=None, checked=None, attachments=None, start=None) -> message view
 ```
 - `c`: inside the caller's write transaction (`mutate`/`store.transaction`). `principal`: a `threads.viewer(...)`, or
   an actor string for system writes (`keeper`, a migration) which skip C1.
@@ -264,8 +266,8 @@ threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_mes
   if it has none (§3.2), and `thread_id` must be the message's thread.
 - `kind`: `say|ask|answer|notice|steer`. `to_actor`: the explicit addressee (optional); otherwise the first
   in-audience mention or ask target, otherwise NULL.
-- `via`: who really acts (`assistant`, `botops`, `slack`, `peer`), recorded in `refs.via`. `origin`:
-  `{"origin_id", "revision", "install", "actor"}` for replicated inbound (Slack, federation); a repeat
+- `via`: who really acts (`assistant`, `botops`, `slack`), recorded in `refs.via`. `origin`:
+  `{"origin_id", "revision", "actor"}` for replicated inbound (Slack); a repeat
   `(origin_id, revision)`, once the writer is authorized, returns the existing message (`duplicate: true`) and writes
   nothing. A repeat whose message is in another thread or from another signer is 409 `origin_taken`.
 - `checked`: the org-rule verdict from `org_rule_check.preflight` (step 5, done by the caller **outside** the
@@ -287,7 +289,7 @@ threads.post(c, principal, thread_id, body, *, kind="say", refs=None, parent_mes
 
 Step order (§3.1): (1) the caller authenticated `principal` (actor, represented principal, provenance); (2) C1 post
 right (`can_post`); (3) server mention parse (`threads.mentions(c, thread, body)`); (4) screening for outside
-authors (the caller's door: Slack/peer); (5) rule preflight, outside the transaction, by the caller; (6) in the
+authors (the caller's door: Slack); (5) rule preflight, outside the transaction, by the caller; (6) in the
 transaction: revalidate rights and audience, apply the verdict, write the message, mentions, deliveries, counters,
 followers and events; (7) commit rings the doorbell (`changes` rows from triggers).
 
@@ -363,7 +365,7 @@ threads.apply_revision(c, origin, *, body=None, deleted=False) -> message view|N
 ### 4.1 Recipients
 Deliveries are written, in the post's transaction, for: the `to_actor`; every in-audience mention, ask or assign;
 the other members of a `personal`/`participants` thread (DMs); bots chosen by the wake rule; outside destinations
-linked to the thread (`slack:<channel>`, `peer:<install>`, written by those tracks through
+linked to the thread (`slack:<channel>`, written by those tracks through
 `threads.add_outside_delivery`). Never one row per follower: unread counts come from counters (§5).
 
 ### 4.2 Modes, reasons and states
@@ -407,7 +409,7 @@ so a bot's own message coming back never wakes it, however late. Today's bot-to-
 and `wake_rules.judge` still run per delivery and may turn `queue` into `defer`.
 
 ### 4.4 Runs
-The primary bot recipient (`to_actor`) is queued by the existing `queue_bot_message` trigger (job id = message id).
+The primary bot recipient (`to_actor`) is queued by `backend/enqueue.py`, called by the writer in the same transaction as the message (job id = message id).
 Each further woken bot gets a **carrier**: a keeper notice to that bot in the same thread, `refs={"carries": <id>,
 "wake": "thread", "reason": ...}`, no `seq`; its job starts the run, and the delivery's `carrier_id` names it.
 `jobs.message_id` stays unique. No carrier is written when the bot may not read the message (audience and the
@@ -483,9 +485,15 @@ threads.unread(c, viewer, thread_id) -> {"unread": n, "activity": bool}
   (`threads.task_opened`). Task news (a keeper message with `refs.task`, `hubdb.task_news`) is the task's own history:
   it is written to the task's conversation and no person gets a delivery for it, so the requester who did not make the
   task hears nothing in the thread (no unread, Inbox row, digest or push). Bots still get it as a delivery.
+  A bot's say, notice or ask in a task's own thread (`hubdb.task_post_sql`, the thread is some task's
+  `conversation_id`) is the same: the message is written and shown on the task, and a person gets a delivery for it only
+  when its body @-mentions them (`threads.mentions`, reason `mention`). Without the mention no person is unread for it,
+  it is in no Inbox row, digest or push, and an ask still lists its task in Needs you (that reads messages, not
+  deliveries). Old deliveries of such posts stop counting by the same rule (`hubdb.delivery_counts_sql`), with no
+  migration.
 - Unread count for a viewer = messages in the thread with `seq > last_read_seq` that are human-authored or
-  addressed to that viewer (a delivery row for them, except task news, which no person has a delivery for), excluding
-  their own. Other bot posts are **activity** (a dot, never a count).
+  addressed to that viewer (a delivery row for them, except task news, and a task thread's bot post with no @mention of
+  them, which no person has a delivery for), excluding their own. Other bot posts are **activity** (a dot, never a count).
 
 Retention: a root may set `conversations.retention_days` (1 to `RETENTION_MAX_DAYS`; null keeps messages for good;
 never on a task or meeting thread). `backend/thread_retention.py` deletes what is past it in the root and its sub-threads,
@@ -656,17 +664,10 @@ Timeline messages: the existing message view plus `thread_id`, `root_id`, `seq`,
 - Runner replies in a sub-thread: the claim's `message` carries `parent_message_id` (its thread's), the runner sends
   it back as `Completion.parent_message_id`, and `threads.reply_destination(c, actor, thread, parent_message_id)`
   puts the reply in that message's sub-thread when it is in the run's thread tree (else the run's thread).
-- Slack/federation inbound: `threads.post(..., via="slack"|"peer", origin={...})`; edits and deletes:
+- Slack inbound: `threads.post(..., via="slack", origin={...})`; edits and deletes:
   `threads.apply_revision`.
-- Remote authors (spec §7.2): `threads.post(c, "keeper", thread_id, body, via="peer", origin={..., "install": I},
-  as_actor="human:ana@I")`. Only the keeper principal with `via="peer"` may pass `as_actor` (else 403); it must match
-  `^(human|bot):[^@]+@<origin.install>$` and not be a local teammate (else 422); kind say|ask|answer. It is stored
-  as `from_actor`. Remote actors are guests: C1 for them is a `thread_members` row on the root for the actor or for
-  `peer:<install>` (else 404, and `audience_has` is false); never an owner (`add_member(..., role="owner")` → 422),
-  never Manage, no bot in-turn grant, no follower rows. `threads.remote_guest(c, actor)` → the install or None.
-  Federation may call with the keyword and fall back without it.
 - `threads.remove_outside_member(c, principal, thread_id, actor) -> {"thread_id", "recipient", "removed"}` takes a
-  `slack:`/`peer:` destination off a thread (Manage on the thread or an admin; an actor-string principal must be
+  `slack:` destination off a thread (Manage on the thread or an admin; an actor-string principal must be
   `keeper`); its pending deliveries become `moot`; audit row and `thread.outside_removed` event. Bridges call this,
   never a direct `thread_members` delete.
 - Outbound: `threads.add_outside_delivery(c, thread_id, recipient)` registers a linked destination; core writes a

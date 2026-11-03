@@ -20,6 +20,8 @@ class TaskRow(TypedDict):
     owner_id: str | None
     status: str | None
     due_at: str | None
+    check_back_at: str | None
+    check_back_note: str | None
     conversation_id: str | None
     created_at: str | None
     updated_at: str | None
@@ -74,6 +76,14 @@ class TaskRow(TypedDict):
     acceptance: str
 
 
+class TaskCheckBackWakeRow(TypedDict):
+    """A reminder occurrence; jobs and attempts retain all execution state."""
+    task_id: str
+    check_back_at: str
+    sent_at: str
+    message_id: str | None
+
+
 class AttemptRow(TypedDict):
     """One `attempts` row (SELECT *)."""
     id: str
@@ -101,29 +111,34 @@ class AttemptRow(TypedDict):
 
 
 class RunnerRow(TypedDict):
-    """One `runners` row (SELECT *)."""
+    """One `runners` row (SELECT *): the computer's identity and its owner's settings."""
     id: str
     label: str
     owner_id: str
     token_hash: str
     created_at: str
-    last_seen_at: str | None
     revoked_at: str | None
     platform: str | None
-    version: str | None
-    capacity: int
-    readiness: str
-    capabilities: str
-    awake_since: str | None
-    checkout: str | None
     restart_requested_at: str | None
-    readiness_at: str | None
     accepts_member_bots: int
     screen: str
     screen_default_pending: int
     performance: str
-    restart_since: str | None
     turns_at_once: int | None
+
+
+class RunnerStateRow(TypedDict):
+    """One `runner_states` row (SELECT *): what the computer's heartbeats and samples report."""
+    runner_id: str
+    last_seen_at: str | None
+    awake_since: str | None
+    version: str | None
+    capacity: int
+    readiness: str
+    readiness_at: str | None
+    capabilities: str
+    checkout: str | None
+    restart_since: str | None
     memory_hold: int
     last_sampled_at: int | None
 
@@ -227,3 +242,56 @@ class MemoryTidyPacketRow(TypedDict):
     conflicts: int | None
     flags: str
     stage: str
+
+
+class UsageFactRow(TypedDict):
+    """One `usage_facts` row (SELECT *): a metered segment, append-only (backend/usage_facts.py)."""
+    id: int
+    source: str
+    run_id: str | None
+    position: int
+    bot_id: str | None
+    task_id: str | None
+    provider: str | None
+    model: str | None
+    family: str | None
+    runtime: str | None
+    harness: str | None
+    effort: str | None
+    profile: str | None
+    billing: str | None
+    input_tokens: int
+    cached_tokens: int
+    output_tokens: int
+    cost_nano: int | None
+    low_estimate: int | None
+    meter_key: str | None
+    gateway_key_id: str | None
+    install_id: str | None
+    started_at: str
+    metered_at: str
+    created_at: str
+
+
+class UsageMeterReadRow(TypedDict):
+    """One `usage_meter_reads` row (SELECT *): the newest read of the Gateway's meter taken for a month
+    (backend/usage_facts.py `record_meter`)."""
+    id: int
+    month: str
+    as_of: str
+    total_nano: int
+    read_at: str
+
+
+class BudgetNodeRow(TypedDict):
+    """One `budget_nodes` row (SELECT *): a money limit, its amount, period and scope (backend/usage_limits.py)."""
+    id: str
+    scope: str
+    team_id: str | None
+    bot_id: str | None
+    per_bot: int
+    period: str
+    amount_nano: int
+    created_at: str
+    updated_at: str
+    updated_by_id: str | None

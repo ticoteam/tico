@@ -117,11 +117,38 @@ def task_news_sql(m="m"):
     return f"({m}.sender_id='{KEEPER}' AND COALESCE(json_extract({refs},'$.task'),'')<>'')"
 
 
-def delivery_counts_sql(m, recipient):
-    """SQL: a delivery of message `m` to `recipient` is a reason for a person to see it: TRUE unless the recipient is a
-    person and the message is task news. One rule for the write side (threads' primary delivery trigger) and every
-    read side (unread, the Inbox, the sidebar, digests), so old notices already delivered stop counting too."""
-    return f"NOT ({recipient} LIKE 'human:%' AND {task_news_sql(m)})"
+# A bot's posts in a task's own thread reach a person only by an @mention (`counts_for_person`).
+BOT_TASK_KINDS = ("say", "notice", "ask")
+
+
+def task_post_sql(m="m"):
+    """SQL: the messages row `m` is a bot's say, notice or ask in some task's own thread (the thread is a task's
+    conversation_id, which tasks_conversation indexes)."""
+    return (f"({m}.sender_id LIKE 'bot:%' AND {m}.kind IN ('say','notice','ask') "
+            f"AND EXISTS (SELECT 1 FROM tasks t WHERE t.conversation_id={m}.conversation_id))")
+
+
+def delivery_counts_sql(m, recipient, reason):
+    """SQL: a delivery of message `m` to `recipient`, whose reason is the SQL `reason`, is a reason for a person to see
+    it. Not when the recipient is a person and the message is task news (`task_news_sql`), nor when it is a bot's post
+    in a task's own thread (`task_post_sql`) that is not a mention (reason 'mention'). One rule for the write side
+    (threads' primary delivery trigger, `counts_for_person`) and every read side (unread, the Inbox, the sidebar,
+    digests), so deliveries already made stop counting without a migration."""
+    return (f"NOT ({recipient} LIKE 'human:%' AND ({task_news_sql(m)} "
+            f"OR ({task_post_sql(m)} AND COALESCE({reason},'')<>'mention')))")
+
+
+def counts_for_person(conn, message, reason, conversation_id):
+    """The Python side of `delivery_counts_sql`: whether a delivery of `message` to a person, for `reason`, in
+    conversation `conversation_id`, is written. False for task news, and for a bot's post in a task's thread that is not
+    a mention. Used by threads._insert_delivery."""
+    sender = str(message.get("sender_id") or "")
+    if task_news(sender, message.get("refs")):
+        return False
+    if (sender.startswith("bot:") and message.get("kind") in BOT_TASK_KINDS and reason != "mention"
+            and conn.execute("SELECT 1 FROM tasks WHERE conversation_id=? LIMIT 1", (conversation_id,)).fetchone()):
+        return False
+    return True
 
 
 REVIEW_OWNER = "coo"                        # rule 8's first review task
@@ -901,8 +928,9 @@ CREATE TABLE IF NOT EXISTS browser_exit_marks (boot TEXT PRIMARY KEY, seq INTEGE
 
 
 # Growth (backend/growth.py) and the brand page (backend/brand.py). The brand keeps one draft row (id 1, with a revision
-# so two editors never overwrite each other) and numbered published versions. The idea and go-to-market tables made
-# here are dropped by backend/migrations/0035_growth_rethink.py.
+# so two editors never overwrite each other) and numbered published versions. The idea and go-to-market tables are
+# gone: backend/migrations/0035_growth_rethink.py dropped the ones an older database still had, so this step creates
+# only what is live.
 # A cohort with no channel is the Unknown row: SQLite treats NULLs as distinct in UNIQUE, so the one-row-per-month
 # rule is an expression index over coalesce(channel_id, '').
 GROWTH_SCHEMA = """
@@ -910,12 +938,6 @@ CREATE TABLE IF NOT EXISTS brand_drafts (
   id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL DEFAULT '{}', revision INTEGER NOT NULL DEFAULT 0,
   updated_by TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS brand_versions (
-  id TEXT PRIMARY KEY, n INTEGER NOT NULL UNIQUE, body TEXT NOT NULL DEFAULT '{}', note TEXT NOT NULL DEFAULT '',
-  published_by TEXT, published_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS gtm_drafts (
-  id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL DEFAULT '{}', revision INTEGER NOT NULL DEFAULT 0,
-  updated_by TEXT, updated_at TEXT);
-CREATE TABLE IF NOT EXISTS gtm_versions (
   id TEXT PRIMARY KEY, n INTEGER NOT NULL UNIQUE, body TEXT NOT NULL DEFAULT '{}', note TEXT NOT NULL DEFAULT '',
   published_by TEXT, published_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS gtm_sources (
@@ -928,21 +950,6 @@ CREATE TABLE IF NOT EXISTS growth_channels (
   stage TEXT NOT NULL DEFAULT 'idea' CHECK(stage IN ('idea','testing','scaling','paused')),
   owner_ref TEXT, budget_month REAL, source_id TEXT, why TEXT NOT NULL DEFAULT '', guardrail_kpi_id TEXT,
   guardrail_max REAL, sort INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, retired_at TEXT);
-CREATE TABLE IF NOT EXISTS growth_ideas (
-  task_id TEXT PRIMARY KEY REFERENCES tasks(id), hypothesis TEXT NOT NULL DEFAULT '', prediction TEXT NOT NULL DEFAULT '',
-  bet_id TEXT, kpi_id TEXT, judged_kpi_id TEXT, ice_i INTEGER, ice_c INTEGER, ice_e INTEGER,
-  status TEXT NOT NULL DEFAULT 'idea'
-    CHECK(status IN ('idea','testing','paused','won','lost','inconclusive','dropped')),
-  source_kind TEXT, source_ref TEXT, test_from TEXT, test_to TEXT, change TEXT, stop_if TEXT, min_events INTEGER,
-  audience TEXT, external_ref TEXT, result TEXT, learning TEXT,
-  bet_effect TEXT CHECK(bet_effect IS NULL OR bet_effect IN ('supports','weakens','none')),
-  confidence TEXT CHECK(confidence IS NULL OR confidence IN ('low','medium','high')),
-  verdict_at TEXT, verdict_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS growth_ideas_status ON growth_ideas(status, updated_at);
-CREATE INDEX IF NOT EXISTS growth_ideas_bet ON growth_ideas(bet_id) WHERE bet_id IS NOT NULL;
-CREATE TABLE IF NOT EXISTS growth_idea_channels (
-  task_id TEXT NOT NULL REFERENCES tasks(id), channel_id TEXT NOT NULL, PRIMARY KEY(task_id, channel_id));
-CREATE INDEX IF NOT EXISTS growth_idea_channels_channel ON growth_idea_channels(channel_id);
 CREATE TABLE IF NOT EXISTS growth_cohorts (
   id TEXT PRIMARY KEY, channel_id TEXT, month TEXT NOT NULL, spend REAL, bot_cost REAL, new_customers INTEGER,
   kept_d30 REAL, kept_d90 REAL, kept_d180 REAL, revenue_month REAL, margin_pct REAL,
@@ -950,8 +957,7 @@ CREATE TABLE IF NOT EXISTS growth_cohorts (
   updated_by TEXT, updated_at TEXT NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS growth_cohorts_month ON growth_cohorts(coalesce(channel_id, ''), month);
 CREATE TABLE IF NOT EXISTS growth_settings (
-  id INTEGER PRIMARY KEY CHECK(id=1), unit TEXT NOT NULL DEFAULT 'customers', revenue_month REAL, margin_pct REAL,
-  framework TEXT NOT NULL DEFAULT '', verdict_win_pct REAL NOT NULL DEFAULT 60);
+  id INTEGER PRIMARY KEY CHECK(id=1), unit TEXT NOT NULL DEFAULT 'customers', revenue_month REAL, margin_pct REAL);
 ALTER TABLE kpis ADD COLUMN parent_kpi_id TEXT;
 ALTER TABLE kpis ADD COLUMN growth_role TEXT;
 ALTER TABLE kpis ADD COLUMN stage TEXT;
@@ -1363,15 +1369,7 @@ def migrate(conn, adopt_legacy=False):
     from . import migrations
     migrations.apply(conn)
     ensure_market_reads(conn)
-    # Cloud added explicit room scopes after the original local schema. Keep old local
-    # databases usable without relying on SQLite's unsupported ADD COLUMN IF NOT EXISTS.
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(conversations)")}
-    if "scope" not in columns:
-        conn.execute("ALTER TABLE conversations ADD COLUMN scope TEXT NOT NULL DEFAULT 'direct'")
-    if "owner_id" not in columns:
-        conn.execute("ALTER TABLE conversations ADD COLUMN owner_id TEXT")
-    if "room_key" not in columns:
-        conn.execute("ALTER TABLE conversations ADD COLUMN room_key TEXT")
+    # conversations.scope, owner_id and room_key (cloud room scopes) and their two room indexes are migration 0047's.
     # Deleted tasks wait here until restored or purged (backend/task_delete.py).
     from .task_delete import ensure as ensure_task_trash
     ensure_task_trash(conn)
@@ -1384,13 +1382,6 @@ def migrate(conn, adopt_legacy=False):
     # Recruiting seats: org-chart roles with no bot yet (backend/lifecycle.py).
     from .lifecycle import ensure as ensure_seats
     ensure_seats(conn)
-    # Hourly and weekly spend limits, and limits on a group's or the whole team's combined spend (backend/usage_limits.py).
-    from .usage_limits import ensure as ensure_usage_limits
-    ensure_usage_limits(conn)
-    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_personal_room "
-                 "ON conversations(owner_id,room_key) WHERE scope='personal' AND closed_at IS NULL")
-    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_shared_room "
-                 "ON conversations(room_key) WHERE scope='shared' AND closed_at IS NULL")
     # What every bot may do with a type's tasks (TYPE_BOTS); NULL keeps them to the parties.
     add_column(conn, "task_types", "bots", "TEXT")
     # The tasks board columns. The cloud store backfills rank
@@ -1484,13 +1475,6 @@ def migrate(conn, adopt_legacy=False):
     add_column(conn, "humans", "idp_issuer", "TEXT")
     add_column(conn, "humans", "idp_sub", "TEXT")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS humans_idp ON humans(idp_issuer, idp_sub) WHERE idp_sub IS NOT NULL")
-    # 1 when a run segment's estimate may be low: its model's long prompts cost more and the runner did not
-    # send every request's tokens (providers.estimate). NULL on segments from before it was recorded.
-    add_column(conn, "turn_usage_segments", "est_cost_low", "INTEGER")
-    # On a Tico AI Gateway segment, which gateway key paid for it (backend/gateway_connection.py `key_id`, never the key)
-    # and this install's id (backend/census.py), so the Gateway's own ledger can be matched. NULL on every other one.
-    add_column(conn, "turn_usage_segments", "gateway_key_id", "TEXT")
-    add_column(conn, "turn_usage_segments", "install_id", "TEXT")
     # The newest of the bot's own model requests' whole prompt (uncached + cached), when its runner marked them from
     # its subagents': the session's context size (backend/topic_change.py). NULL when it did not; the summed columns
     # are not a context size.
@@ -3263,7 +3247,7 @@ def _held_queue_drains(actor, target, refs_json):
     pending stored row. A bot's message to itself, a quiet message nothing carries (a wake=False comment, a
     same-state skip) and live run output are never handed over, and charging them would fill the cap for good."""
     if actor == target:
-        return False                       # store.QUEUE_TRIGGER queues no job for a bot's message to itself
+        return False                       # enqueue queues no job for a bot's message to itself
     try:
         refs = refs_json if isinstance(refs_json, dict) else json.loads(refs_json or "{}")
     except ValueError:
@@ -3284,8 +3268,8 @@ def _held_queue_settled_sql(conn):
     if _has_table(conn, "jobs"):
         # A runner-delivered bot gets a held message only through its job, so one finished or canceled (a
         # duplicate wake) is never handed over. An external harness's inbox still holds it whatever its job did.
-        from .store import EXTERNAL_BOT_SQL
-        settled.append("(NOT " + EXTERNAL_BOT_SQL.replace("NEW.", "m.") + " AND EXISTS(SELECT 1 FROM jobs j "
+        from .enqueue import external_bot_sql
+        settled.append("(NOT " + external_bot_sql("m.recipient_id") + " AND EXISTS(SELECT 1 FROM jobs j "
                        "WHERE j.message_id=m.id) AND NOT EXISTS(SELECT 1 FROM jobs j "
                        "WHERE j.message_id=m.id AND j.state NOT IN ('completed','canceled')))")
     waiting = NOTE_WAITING_SQL if _has_table(conn, "attempts") else "n.canceled_at IS NULL"
@@ -3431,6 +3415,8 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         "legacy_audience) VALUES (:id, :conversation_id, :sender_id, :recipient_id, :kind, :body, :refs, "
         ":in_reply_to, :created_at, :delivered_at, :read_at, :expires_at, :wait_s, :origin_id, :revision, "
         ":restricted, :legacy_audience)", row)
+    from .enqueue import enqueue
+    enqueue(conn, row)                      # the job it starts, in this transaction (backend/enqueue.py)
     conn.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (row["created_at"], conv["id"]))
     # A mention outside the audience grants nothing and warns the author (contract §2): carried on the result.
     mention_warnings = (threads.record(conn, message(conn, row["id"]), conv) or {}).get("warnings") or []
@@ -3454,7 +3440,7 @@ def feed(conn, target, body, conv, refs=None):
     """Context the system hands a bot to read: a Slack channel digest (backend/slack_gateway.py).
 
     Written by the keeper, not by a bot or a person: nobody said it. It is a turn for the bot
-    (the queue trigger fires, as for any message to a bot), but it is quoted Slack text, so the
+    (enqueue queues its job, as for any message to a bot), but it is quoted Slack text, so the
     escape and lint rules a bot's own words go through do not apply; what it quotes was said
     in a channel the bot is in. Rule 2 still holds: the bot must be active.
     """
@@ -4367,6 +4353,8 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *,
     # A step chosen by hand holds: the keeper re-syncs the item from its tickets when one of them moves next.
     roadmap_changed(conn, row["id"], itself=actor == KEEPER or step is None)
     if row.get("status") != effective:
+        from .task_check_backs import moved as check_back_moved
+        check_back_moved(conn, task(conn, row["id"]))
         from .ticket_notices import moved as ticket_moved
         ticket_moved(conn, actor, row["id"], row.get("status"), effective)
     if step_id and row.get("step_id") != step_id and row.get("status") is not None:
@@ -4792,7 +4780,7 @@ def _unblock(conn, done_task, told=()):
         # Only a blocker still open holds the wake: a kept, finished ticket blocks nothing. A kept ticket that finishes
         # again (reopened, then done) does not wake the item's owner twice.
         waits = TR.live_blocker(conn, row["id"], ACTIVE_STATUSES) or kept and _one(
-            conn, "SELECT 1 FROM messages WHERE conversation_id=? AND json_extract(refs,'$.task')=? "
+            conn, "SELECT 1 FROM message_refs WHERE conversation_id=? AND ref_task_id=? "
                   "AND json_extract(refs,'$.trigger_source')=? AND body LIKE 'Unblocked: %' LIMIT 1",
             (row["conversation_id"], row["id"], done_task["id"]))
         if row["status"] in ACTIVE_STATUSES and not waits and row["id"] not in told:
@@ -4998,9 +4986,25 @@ RESUME_COMMAND = re.compile(r"^(?:cd \S+ && )?(claude|codex|gemini|grok|pi|curso
 
 def _session_detail(link):
     try:
-        return json.loads(link.get("detail") or "{}")
+        detail = json.loads(link.get("detail") or "{}")
     except ValueError:
         return {}
+    return detail if isinstance(detail, dict) else {}
+
+
+def _with_thread(link):
+    """A session link as the API shows it: the provider thread id joins its detail. The url is the one place the
+    thread is stored (`session:<bot>/<thread>`, or the resume command it came from), so the detail does not repeat it."""
+    if not link or link.get("kind") != "session":
+        return link
+    detail, url = _session_detail(link), str(link.get("url") or "")
+    thread = None
+    if detail.get("bot") and url.startswith(f"session:{detail['bot']}/"):
+        thread = url[len(f"session:{detail['bot']}/"):]
+    elif detail.get("harness") and url.startswith("session:"):
+        resume = RESUME_COMMAND.match(url[len("session:"):])
+        thread = resume.group(2) if resume else None
+    return {**link, "detail": json.dumps({**detail, "thread_id": thread})} if thread else link
 
 
 def _task_session_link(conn, actor, task_id, value, title):
@@ -5012,9 +5016,9 @@ def _task_session_link(conn, actor, task_id, value, title):
     url = value if re.match(r"^https?://\S+$", value) else "session:" + value
     have = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND url=?", (task_id, url))
     if have:
-        return have
+        return _with_thread(have)
     resume = RESUME_COMMAND.match(value)
-    detail = {"primary": False, **({"harness": resume.group(1), "thread_id": resume.group(2)} if resume else {})}
+    detail = {"primary": False, **({"harness": resume.group(1)} if resume else {})}
     title = str(title or "").strip() or (urlsplit(value).netloc if url == value else
                                          f"{resume.group(1)} {resume.group(2)[:8]}" if resume else value[:60])
     link = {"id": new_id(), "task_id": task_id, "url": url, "title": title[:200], "added_by": actor,
@@ -5024,7 +5028,7 @@ def _task_session_link(conn, actor, task_id, value, title):
     _task_event(conn, task_id, actor, "link", None, url, title)
     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))
     event(conn, actor, "task.link", task_id, {"url": url, "kind": "session"})
-    return _one(conn, "SELECT * FROM task_links WHERE id=?", (link["id"],))
+    return _with_thread(_one(conn, "SELECT * FROM task_links WHERE id=?", (link["id"],)))
 
 
 def _demote_sessions(conn, task_id, owner=None):
@@ -5116,7 +5120,7 @@ def task_session_started(conn, bot, lane, message_id, thread_id, runtime):
     if not thread_id or not row or row["owner_id"] != "bot:" + bot:
         return
     url = f"session:{bot}/{thread_id}"
-    detail = json.dumps({"primary": True, "harness": runtime, "thread_id": thread_id, "bot": bot})
+    detail = json.dumps({"primary": True, "harness": runtime, "bot": bot})
     links = _rows(conn.execute("SELECT * FROM task_links WHERE task_id=? AND kind='session'", (task_id,)))
     # The row this thread already has, else the bot's primary from an earlier thread (a reset, a
     # compaction), which this one replaces in place.
@@ -5553,7 +5557,8 @@ def _private_followups(conn, task_id):
 
 
 def task_links(conn, task_id):
-    return _rows(conn.execute("SELECT * FROM task_links WHERE task_id=? ORDER BY created_at", (task_id,)))
+    return [_with_thread(link) for link in _rows(conn.execute(
+        "SELECT * FROM task_links WHERE task_id=? ORDER BY created_at", (task_id,)))]
 
 
 
@@ -5961,7 +5966,7 @@ def _refresh_comment_replies(conn, msg):
     # By index (backend/idempotency_messages.py): reading every stored answer here held the write lock for 35 s.
     rows = idempotency_messages.quoting(conn, msg["id"]) if _has_table(conn, "idempotency_messages") else None
     if rows is None:        # not indexed yet: an older file, or before its first start's backfill finished
-        rows = conn.execute("SELECT rowid,response FROM idempotency WHERE instr(response,?)>0",
+        rows = conn.execute("SELECT rowid,response FROM idempotency WHERE binding IS NULL AND instr(response,?)>0",
                             (msg["id"],)).fetchall()
     for row in rows:
         conn.execute("UPDATE idempotency SET response=? WHERE rowid=?",
@@ -6124,7 +6129,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
                 change_paths=None, qa=None, qa_not_checkable_live=False, receipt_owner=None,
                 quiet_notice=False, from_private=False, routine=False, same=None, occurrence=None,
-                occurrence_step=None, rule_due_id=None, public_warning=""):
+                occurrence_step=None, rule_due_id=None, public_warning="", check_back_at=None, check_back_note=None):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -6344,6 +6349,12 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
         # warn mode: the problem is on the record, the task still exists (the refuse week follows)
         _task_event(conn, row["id"], KEEPER, "lint", None, "; ".join(plain), "")
         event(conn, actor, "task.lint", row["id"], {"problems": plain})
+    from . import task_check_backs
+    made = task(conn, row["id"])
+    task_check_backs.ensure(conn, made)
+    if check_back_at is not None or check_back_note is not None:
+        made = task(conn, row["id"])
+        task_check_backs.set_time(conn, made, check_back_at or made["check_back_at"], check_back_note, actor=actor)
     event(conn, actor, "task.create", row["id"], {"owner": target, "title": title})
     _building(conn, None)
     if dedicated:
@@ -6478,7 +6489,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 step_rank=None, number=None, title=None, private=None, waiting_on=None, roles=None, visibility=None, public_title=None,
                 public_summary=None, approval_id=None, size=None, clear_size=False, review_prs=None, verdict=None,
                 verdict_head=None, skip_step_wake=(), review_reader=None, receipt_owner=None, public_allowance=0,
-                wake_others=True):
+                wake_others=True, check_back_at=None, check_back_note=None):
     """Rule 5. The owner may set open|doing|waiting|review|done|declined and a note; it may not close.
 
     `lane` and `labels` are a mover's to change (`mover` says whether this actor is one; the
@@ -6845,7 +6856,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     # After the status write is decided and before the parent hears of it: its wake carries the verdict.
     verdict_set = False if reopening else record_verdict(conn, actor, row, verdict, verdict_head, note)
     if not sets and not state_change and not roles and not clear_size and not verdict_set and all(
-            v is None for v in (visibility, public_title, public_summary, size)):
+            v is None for v in (visibility, public_title, public_summary, size, check_back_at, check_back_note)):
         return row
     # A person finishing it is news for every bot on it; the bots that asked it open questions are read
     # before the status write supersedes those questions.
@@ -6985,6 +6996,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
         if is_human(after["requester_id"]):
             # Keep completion notices out of ordinary Slack reply mirroring, including quiet
             # updates. One eligible notice per task/status also covers reopen/retry cycles.
+            # messages, not message_refs: store.py's slack_task_completion_notices index is on json_extract(refs,'$.task').
             duplicate = _one(conn, "SELECT 1 FROM messages WHERE json_extract(refs,'$.task')=? "
                              "AND json_extract(refs,'$.task_completion.status')=? "
                              "AND json_extract(refs,'$.task_completion.notify')=1 LIMIT 1",
@@ -7059,6 +7071,12 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             check_pools.safely(conn, verdict_moves.skip, after)
         else:
             check_pools.safely(conn, check_pools.entered, actor, after, review_prs)
+    from . import task_check_backs
+    task_check_backs.ensure(conn, after)
+    if check_back_at is not None or check_back_note is not None:
+        fresh = task(conn, task_id)
+        task_check_backs.set_time(conn, fresh, check_back_at or fresh["check_back_at"], check_back_note, actor=actor)
+    after = {**after, **{k: task(conn, task_id).get(k) for k in ("check_back_at", "check_back_note", "version")}}
     recount(conn, [after["owner_id"], after["requester_id"], row["owner_id"]])   # the old owner too, on a handoff
     if not closing_step:
         _parent_finished(conn, after, row["status"], actor, told=subtask_told, wake=wake_others)
@@ -7618,8 +7636,8 @@ def _task_changed(conn, task_id, actor, field, old, new, revision):
                                        **({"owner_id": new} if field == "owner" else {})}, actor, revision=revision)
 
 
-def _task_event(conn, task_id, actor, field, old, new, note=""):
-    event_id = new_id()
+def _task_event(conn, task_id, actor, field, old, new, note="", *, event_id=None):
+    event_id = event_id or new_id()
     via = VIA.get()
     if via and not any(r[1] == "via" for r in conn.execute("PRAGMA table_info(task_events)")):
         conn.execute("ALTER TABLE task_events ADD COLUMN via TEXT")
@@ -7666,7 +7684,9 @@ def message_task_id(message, conversation=None):
 
 
 def _task_ref_sql(path):
-    """The SQL twin of `_task_ref` for one `$.key` of `m.refs`: an array yields its first element."""
+    """The SQL twin of `_task_ref` for one `$.key` of `m.refs`: an array yields its first element. A query that reads
+    the message alone reads `message_refs.ref_task_id` (migration 0051), the same value for `$.task`; this stays for
+    MESSAGE_TASK_SQL, which callers splice under other aliases."""
     return (f"CASE WHEN json_type(m.refs,'{path}')='array' THEN json_extract(m.refs,'{path}[0]') "
             f"ELSE json_extract(m.refs,'{path}') END")
 
@@ -7931,7 +7951,7 @@ def next_run_tasks_by(conn, bots):
     return out
 
 
-def own_stuck_blockers(conn, row, at=None):
+def own_stuck_blockers(conn, row, at=None, blockers=None):
     """The blockers of `row` when every one is its own subtask that nothing visible will finish, else [].
 
     Such a subtask belongs to a bot, has gone quiet, and waits on no task, no person's answer and no time of
@@ -7947,7 +7967,8 @@ def own_stuck_blockers(conn, row, at=None):
     at = at or now()
     if row.get("status") == "waiting" and is_human(row.get("waiting_on")):
         return []
-    blockers = TR.live_blockers(conn, row["id"], ACTIVE_STATUSES)
+    if blockers is None:
+        blockers = TR.live_blockers(conn, row["id"], ACTIVE_STATUSES)
     if not blockers:
         return []
     quiet = shift(at, seconds=-STALL_MINUTES * 60)
@@ -7960,6 +7981,18 @@ def own_stuck_blockers(conn, row, at=None):
                 or milestone_pending(conn, block["id"]) or own_job(conn, block, claimable=True)):
             return []
     return [block["id"] for block in blockers]
+
+
+def prime_own_stuck(conn, blockers):
+    """own_stuck_blockers' reads for every blocker in `blockers` ({task: its live blockers}), in set reads seeded into
+    the snapshot: each blocker's live blocker, pending milestone, approvals, ancestry and claimable job."""
+    from . import auto_tasks, quiet_work
+    found = [block for rows in blockers.values() for block in rows]
+    if not found:
+        return
+    auto_tasks.prime_waits(conn, found)
+    TR.prime_ancestry(conn, [block["id"] for block in found])
+    quiet_work.prime_own_jobs(conn, found, claimable=True)
 
 
 def stuck_tasks(conn, hours=STUCK_HOURS, hidden=()):
@@ -8391,18 +8424,19 @@ def _settle_undiagnosed(conn, row, cause):
           {"bot": actor_id(row["owner_id"]), "recovery_task": None, "owner": None, "cause": cause})
 
 
-def _stall_stand(conn, row):
+def _stall_stand(conn, row, exclude_actors=()):
     """What a stall check can tell moved: the task's status, step, owner, what it waits on, its relations and their
     states, and every comment from anyone but its bot. The bot's own notes ("still waiting") are not a change."""
     tid = row["id"]
+    excluded = tuple(dict.fromkeys((row["owner_id"], KEEPER, *exclude_actors)))
     parts = [row["status"], row.get("step_id"), row["owner_id"], row.get("waiting_on"),
              [list(r) for r in conn.execute(
                  "SELECT r.kind, r.from_task, r.to_task, o.status FROM task_relations r JOIN tasks o "
                  "ON o.id=CASE WHEN r.from_task=? THEN r.to_task ELSE r.from_task END "
                  "WHERE ? IN (r.from_task, r.to_task) ORDER BY r.kind, r.from_task, r.to_task", (tid, tid))],
              [list(r) for r in conn.execute(
-                 "SELECT id, edited_at, deleted_at FROM messages WHERE conversation_id=? AND sender_id NOT IN (?,?) "
-                 "ORDER BY rowid", (row["conversation_id"], row["owner_id"], KEEPER))]]
+                 "SELECT id, edited_at, deleted_at FROM messages WHERE conversation_id=? AND sender_id NOT IN (" +
+                 ",".join("?" * len(excluded)) + ") ORDER BY rowid", (row["conversation_id"], *excluded))]]
     return hashlib.sha256(json.dumps(parts, default=str).encode()).hexdigest()[:16]
 
 
@@ -8500,6 +8534,9 @@ def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
                     held.append(row["id"])
                 continue
             spot, nudged = spots.get(row["id"]), None
+            from . import task_check_backs
+            if not spot and task_check_backs.enabled(conn) and task_check_backs.pending(row, at):
+                continue  # only ordinary idle nudges defer; spot checks and diagnostic readers stay independent
             if spot:
                 nudged = conn.execute("SELECT min(created_at) FROM events WHERE action='task.stall_wake' AND target=? AND created_at>?",
                                       (row["id"], spot["progress"])).fetchone()[0]
@@ -8774,7 +8811,7 @@ def _wake(conn, task_row, target, body, refs=None, quiet_bots=False, quiet=False
     if quiet_bots and (quiet or tasks_only(conn, target)):
         refs = {**(refs or {}), "quiet": True}
     if (is_bot(target) and target == task_row.get("owner_id") and TS.snoozed(task_row)
-            and not (refs or {}).get("run_now") and (refs or {}).get("wake") != "snooze"):
+            and not (refs or {}).get("run_now") and (refs or {}).get("wake") not in ("snooze", "check_back")):
         # Nobody plans to get to a snoozed task before its date: news about it waits for its bot's next run.
         # Anyone else (a requester bot handed it for review) hears as usual.
         refs = {**(refs or {}), "quiet": True}
@@ -9206,28 +9243,27 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, 
     conn.execute("UPDATE turns SET finished_at=?, exit=?, summary=? WHERE id=?", (ts, exit_code, summary, turn_id))
     # Whether it acted, from what it wrote and its task's state as it ends (backend/run_triggers.py).
     conn.execute(f"UPDATE turns SET {RT.SETTLE_SQL} WHERE id=?", (turn_id,))
+    measured = usage or None
     if usage:
         reason = "cost_unpriced" if usage.get("est_cost_usd") is None else None
     else:
         reason, usage = usage_reason, NO_USAGE
-    conn.execute("UPDATE turns SET input_tokens=:input_tokens, cached_tokens=:cached_tokens, "
-                 "output_tokens=:output_tokens, model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
-                 "billing=:billing, prompt_tokens=:prompt_tokens, usage_reason=:usage_reason WHERE id=:id",
-                 {"input_tokens": None, "cached_tokens": None, "output_tokens": None, "model": None,
-                  "provider": None, "est_cost_usd": None, "billing": None, "prompt_tokens": None, **usage,
-                  "usage_reason": reason, "id": turn_id})
-    if usage and usage.get("segments"):
-        conn.execute("DELETE FROM turn_usage_segments WHERE turn_id=?", (turn_id,))
-        for position, part in enumerate(usage["segments"]):
-            conn.execute("INSERT INTO turn_usage_segments(turn_id,position,input_tokens,cached_tokens,output_tokens,"
-                         "model,provider,est_cost_usd,billing,runtime,harness,effort,profile,est_cost_low,"
-                         "gateway_key_id,install_id) "
-                         "VALUES(:turn_id,:position,:input_tokens,:cached_tokens,:output_tokens,:model,:provider,"
-                         ":est_cost_usd,:billing,:runtime,:harness,:effort,:profile,:est_cost_low,"
-                         ":gateway_key_id,:install_id)",
-                         {"est_cost_low": None, "gateway_key_id": None, "install_id": None, **part,
-                          "turn_id": turn_id, "position": position})
+    # Once a run's usage is kept as facts the first report stands for its own row too: a late result (or a lease
+    # that ran out after the result) leaves the columns the facts were taken from as they are.
+    recorded = conn.execute("SELECT 1 FROM usage_facts WHERE run_id=? AND source='estimate' LIMIT 1",
+                            (turn_id,)).fetchone()
+    if not recorded:
+        conn.execute("UPDATE turns SET input_tokens=:input_tokens, cached_tokens=:cached_tokens, "
+                     "output_tokens=:output_tokens, model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
+                     "billing=:billing, prompt_tokens=:prompt_tokens, usage_reason=:usage_reason WHERE id=:id",
+                     {"input_tokens": None, "cached_tokens": None, "output_tokens": None, "model": None,
+                      "provider": None, "est_cost_usd": None, "billing": None, "prompt_tokens": None, **usage,
+                      "usage_reason": reason, "id": turn_id})
     row = _one(conn, "SELECT * FROM turns WHERE id=?", (turn_id,))
+    if measured and not recorded:
+        # One append-only fact per segment it measured (backend/usage_facts.py); every usage reader sums those.
+        from . import usage_facts
+        usage_facts.record_run(conn, row, measured, ts)
     if row:
         conn.execute("UPDATE bots SET last_turn_at=? WHERE id=?", (ts, row["bot"]))
         conn.execute("UPDATE bot_status SET last_turn_at=?, updated_at=? WHERE bot=?",
@@ -9521,7 +9557,7 @@ WAITING_TERMS = "d.state IN ('pending','delivered','capped','held')"
 # Paged on the delivery's own (created_at, rowid), which the waiting index holds in order: no sort.
 UNREAD_PAGE_SQL = ("SELECT d.rowid AS _seq, d.created_at AS _at, m.* FROM message_deliveries d "
                    "JOIN messages m ON m.id=d.message_id WHERE d.recipient=? AND " + WAITING_TERMS + " "
-                   "AND " + delivery_counts_sql("m", "d.recipient") + " AND m.deleted_at IS NULL "
+                   "AND " + delivery_counts_sql("m", "d.recipient", "d.reason") + " AND m.deleted_at IS NULL "
                    "AND (m.expires_at IS NULL OR m.expires_at > ?) AND d.created_at<=? "
                    "AND (d.created_at<? OR d.rowid<?) ORDER BY d.created_at DESC, d.rowid DESC LIMIT ?")
 

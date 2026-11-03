@@ -15,21 +15,22 @@ A machine is a boat.dev VM Tico HQ owns (tico-services); HQ keeps the boat key, 
 
     Machine {id, key, size, state: starting|running|stopping|stopped|deleted|failed, started_at, stopped_at,
              cost_month_usd, starts_month, last_error}
-    Size    {name, cpu, memory_gb, usd_per_hour (the customer's price), start_usd, idle_stop_s (break-even)}
+    Size    {name, cpu, memory_gb, usd_per_hour (the customer's price), start_usd, idle_stop_s (HQ's break-even; the
+             server pauses by a machine's Pause after, not by this)}
 
 `key` is a bot's id for its own machine and SHARED (`_shared`, never a bot id: ids are [a-z0-9-]) for the company's
 shared one, so each is made once. HQ counts the shared machine as one machine against its caps.
 
 One row per bot (`cloud_machines`): where it runs (`mode` cloud, or computer: any other Computer), on which cloud
-machine (`placement` shared, the default, or own), its own machine's size and Always on, and that machine as HQ last
-described it. The shared machine is one more row, keyed SHARED, with the company's size and Always on for it. A bot's
-placement defaults by role when its row is made (`default_placement`): `own` for a bot from a template in OWN_TEMPLATES
-(the video producer) or in the Engineering department of the team chart, `shared` for every other; a person switches
-it either way. Off a cloud company (cloud_access.state is None) there are no rows, the option is hidden and nothing here
-runs; on one, the same until HQ has listed its sizes (`offered`). On one, a bot with no computer defaults to a cloud
-machine (placement.auto_place; a setup that finished before HQ listed its sizes is placed when they come,
-Onboarding.on_cloud_offered); choosing another computer for it (Execution.assign) sets `computer`, and another bot's
-own machine is never one to choose (`check_host`).
+machine (`placement` shared, the default, or own), its own machine's size, Always on and Pause after, and that machine
+as HQ last described it. The shared machine is one more row, keyed SHARED, with the company's size, Always on and Pause
+after for it. A bot's placement defaults by role when its row is made (`default_placement`): `own` for a bot from a
+template in OWN_TEMPLATES (the video producer) or a Builder (display name "Builder" or "Builder (...)"), `shared`
+for every other, the rest of Engineering included; a person switches it either way. Off a cloud company (cloud_access.state is None) there are no rows, the option
+is hidden and nothing here runs; on one, the same until HQ has listed its sizes (`offered`). On one, a bot with no
+computer defaults to a cloud machine (placement.auto_place; a setup that finished before HQ listed its sizes is placed
+when they come, Onboarding.on_cloud_offered); choosing another computer for it (Execution.assign) sets `computer`, and
+another bot's own machine is never one to choose (`check_host`).
 
 A machine's runner is a normal Computer, enrolled with a one-time code minted here (the add-a-runner flow,
 `enrollments`) that HQ hands the machine and never keeps. Execution.enroll recognises the code (`cloud_machine_codes`)
@@ -53,10 +54,11 @@ machine; a shared machine's facts are its member bots' together:
              has passed (`update_due`): a release on a shared host starts no storm of machines at once.
     wake     a stopped machine with a want is started (created on first use); the size set since applies here
     keep     a running machine gets a heartbeat every HEARTBEAT seconds; HQ's ttl stops it if they stop coming
-    idle     with no turn out on it, and no attempt or watcher activity on it for the size's `idle_stop_s` since the
-             later of its start, its last activity and its want (a job queued for it, a watcher due: work its runner
-             has not taken yet), it is stopped, unless Always on: the shared one only once every member is idle. A
-             watcher running often keeps it on by itself, and so does a runner still updating (`runner_updating`).
+    idle     a machine pauses (stops) after its Pause after minutes (`pause_after`: 30 by default, 5 to 1440 if a person
+             set one) with no turn out on it and no attempt or watcher activity on it, counted from the later of its
+             start, its last activity and its want (a job queued for it, a watcher due: work its runner has not taken
+             yet). Always on never pauses, and the shared machine pauses only once every member is idle. A watcher
+             running often keeps it on by itself, and so does a runner still updating (`runner_updating`).
              With no active bot left on it, it stops, once no turn is out and no update under way: every stop but out
              of credit's waits for both.
     guard    a machine woken for one want that saw no activity is not woken again for that same want: a job its
@@ -104,7 +106,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS cloud_machines(
  bot TEXT PRIMARY KEY, mode TEXT NOT NULL DEFAULT 'cloud', placement TEXT NOT NULL DEFAULT 'shared',
  size TEXT NOT NULL DEFAULT 'default',
- always_on INTEGER NOT NULL DEFAULT 0, machine_id TEXT, runner_id TEXT, state TEXT NOT NULL DEFAULT 'none',
+ always_on INTEGER NOT NULL DEFAULT 0, pause_minutes INTEGER, machine_id TEXT, runner_id TEXT,
+ state TEXT NOT NULL DEFAULT 'none',
  machine_size TEXT, started_at TEXT, stopped_at TEXT, cost_month_usd REAL NOT NULL DEFAULT 0,
  starts_month INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
  active_at REAL, heartbeat_at REAL, ttl_s INTEGER, next_try_at REAL, failures INTEGER NOT NULL DEFAULT 0,
@@ -117,7 +120,7 @@ MODES = ("cloud", "computer")
 PLACEMENTS = ("shared", "own")
 SHARED = "_shared"              # the shared machine's row and HQ key: no bot id has an underscore
 OWN_TEMPLATES = ("video-producer",)     # heavy work (renders, encodes) whatever department the bot is in
-OWN_DEPARTMENTS = ("engineering",)      # developers: builds, tests and toolchains of their own
+OWN_TITLE = "builder"                   # a Builder ("Builder", "Builder (Claude)"): long builds, tests and toolchains
 SIZES = ("small", "default", "large", "xlarge")       # the names before HQ has listed its own
 STATES = ("starting", "running", "stopping", "stopped", "deleted", "failed")
 ON = ("starting", "running")
@@ -125,7 +128,8 @@ SIZES_KEY = "cloud-machine-sizes"
 TICK = 10                       # seconds between looks
 SYNC = 60                       # seconds between HQ lists
 HEARTBEAT = 60
-IDLE_FALLBACK = 600             # a size HQ has not listed stops soonest: stopping early never makes a bill large
+PAUSE_MINUTES = 30              # a machine with no Pause after of its own pauses after this many idle minutes
+PAUSE_MIN, PAUSE_MAX = 5, 1440  # the whole minutes a person may set
 BACKOFF, BACKOFF_MAX = 15, 900
 STOPPING_RETRY = 5              # boat answers 409 sandbox_stopping to a resume right after a stop
 FROZEN_RETRY = 600              # a 402 is asked again this late, or as soon as HQ says the company is open
@@ -309,9 +313,10 @@ def save(c, key, **fields):
 
 
 def default_placement(c, bot):
-    """Where a bot's cloud machine is when nobody has chosen: its own for a template in OWN_TEMPLATES or a bot in an
-    OWN_DEPARTMENTS department of the team chart (its group, or its manager's up the chain), the shared one for the
-    rest. Read once, when its row is made: moving it on the chart later moves no machine."""
+    """Where a bot's cloud machine is when nobody has chosen: its own for a template in OWN_TEMPLATES or a Builder (a
+    display name of "Builder", or "Builder (...)"), the shared one for every other bot, the rest of Engineering
+    included (leads, reviewers and QA run short turns). Read once, when its row is made: renaming it later moves no
+    machine."""
     found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     try:
         config = json.loads(found["config"] or "{}") if found else {}
@@ -319,8 +324,9 @@ def default_placement(c, bot):
         config = {}
     if isinstance(config, dict) and config.get("template") in OWN_TEMPLATES:
         return "own"
-    from .task_manager import Chart
-    return "own" if Chart(c).of("bot:" + bot) in OWN_DEPARTMENTS else "shared"
+    named = c.execute("SELECT display_name FROM bots WHERE id=?", (bot,)).fetchone()
+    name = ((named["display_name"] if named else "") or "").strip().lower()
+    return "own" if name == OWN_TITLE or name.startswith(OWN_TITLE + " (") else "shared"
 
 
 def adopt(c, bot, actor=H.KEEPER):
@@ -407,12 +413,18 @@ def size_names(c):
     return [s["name"] for s in sizes(c)] or list(SIZES)
 
 
-def idle_after(c, size, known=None):
-    """The break-even idle time of a size (HQ's `idle_stop_s`), or IDLE_FALLBACK for one HQ has not listed."""
-    for found in known if known is not None else sizes(c):
-        if found["name"] == size:
-            return found["idle_stop_s"]
-    return IDLE_FALLBACK
+def pause_after(current):
+    """Seconds machine row `current` pauses after with no turn out and no activity: its Pause after minutes, or
+    PAUSE_MINUTES when none is set (NULL)."""
+    return (current["pause_minutes"] or PAUSE_MINUTES) * 60
+
+
+def checked_pause(value):
+    """A person's Pause after: a whole number of minutes from PAUSE_MIN to PAUSE_MAX. Anything else is refused before a
+    change is written."""
+    if type(value) is not int or not PAUSE_MIN <= value <= PAUSE_MAX:
+        raise Problem("validation", f"Pause after takes whole minutes from {PAUSE_MIN} to {PAUSE_MAX}", 422)
+    return value
 
 
 # ----------------------------------------------------------------------------- enrollment
@@ -769,7 +781,7 @@ def reserve(c, settings, key, action, machine_id):
     if not current or current["machine_id"] != machine_id:
         return None
     found = facts(c, settings, current, at)
-    if decide(current, found, at, idle_after(c, current["machine_size"] or current["size"]))[0] != action:
+    if decide(current, found, at, pause_after(current))[0] != action:
         return None
     if current["runner_id"] and c.execute("SELECT 1 FROM attempts WHERE runner_id=? AND state IN ('leased','running') "
                                           "LIMIT 1", (current["runner_id"],)).fetchone():
@@ -807,6 +819,7 @@ class Manager:
         self.lock = threading.Lock()
         self.synced = None
         self.relist = False             # a create was refused: no other create until HQ's list has been read
+        self.list_refused = None        # the code of HQ's last refused list, None once one is read: a waiting create says it
 
     @property
     def off(self):
@@ -838,7 +851,11 @@ class Manager:
             if hq is None:
                 return
         if self.synced is None or at - self.synced >= SYNC:
-            self.sync(hq, at)                               # also how this server learns HQ makes machines at all
+            try:
+                self.sync(hq, at)                           # also how this server learns HQ makes machines at all
+            except Exception as exc:  # noqa: BLE001 - the looks still run; a create waiting on the list says why
+                log.exception("Reading HQ's cloud machine list failed")
+                self.list_refused = type(exc).__name__[:60]
         with self.store.read() as c:
             if not offered(c, self.settings):
                 return
@@ -851,8 +868,22 @@ class Manager:
         for key in keys:
             try:
                 self.step(hq, key, at)
-            except Exception:  # noqa: BLE001 - one machine's failure never holds the others
+            except Exception as exc:  # noqa: BLE001 - one machine's failure never holds the others
                 log.exception("Cloud machine step failed for %s", key)
+                self.failed(key, exc)
+
+    def failed(self, key, exc):
+        """Name a look's failure on machine `key`'s row, so its bots' work says why (the log has the trace)."""
+        code = (str(exc.code) if isinstance(exc, Problem) else type(exc).__name__)[:60]
+        try:
+            with self.store.transaction() as c:
+                current = row(c, key)
+                # A problem already named (out of credit, a refusal, stuck) says more, and its retries key on it.
+                if current and (current["problem"] == "" or current["problem"].startswith("error:")) \
+                        and current["problem"] != "error:" + code:
+                    save(c, key, problem="error:" + code, problem_at=H.now())
+        except Exception:  # noqa: BLE001 - recording the failure never breaks the loop
+            log.exception("Naming a cloud machine's failure failed for %s", key)
 
     def sync(self, hq, at):
         """HQ's list: every machine's state, size, cost and starts onto its row (by key), and the sizes. The first sizes
@@ -863,12 +894,17 @@ class Manager:
         try:
             listed = hq.list()
         except Refused as refused:
+            self.list_refused = refused.code
             if refused.status == 503 and refused.code == "not_configured":   # off, or turned off for this company
                 with self.store.transaction() as c:
                     c.execute("DELETE FROM registry_metadata WHERE key=?", (SIZES_KEY,))
             return None
         self.relist = False
+        self.list_refused = None
         with self.store.transaction() as c:
+            # What a create waiting on the list said: an hq: problem with no refusal of its own (a refused create or
+            # start counts a failure), whatever the code and across restarts.
+            c.execute("UPDATE cloud_machines SET problem='',problem_at=NULL WHERE problem LIKE 'hq:%' AND failures=0")
             learned = bool(listed["sizes"]) and (first or not sizes(c))
             if listed["sizes"]:
                 c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
@@ -931,14 +967,16 @@ class Manager:
             if not current:
                 return None
             found = facts(c, self.settings, current, at)
-            idle_s = idle_after(c, current["machine_size"] or current["size"])
-        action, problem = decide(current, found, at, idle_s)
+        action, problem = decide(current, found, at, pause_after(current))
         if problem is not None and problem != current["problem"] and not action:
             with self.store.transaction() as c:
                 save(c, key, problem=problem, problem_at=H.now())
         elif problem is None and not action and current["problem"] == "stuck" \
                 and not covers(current["wake_key"], found["want"]):
             with self.store.transaction() as c:
+                save(c, key, problem="", problem_at=None)
+        elif problem is None and not action and current["problem"].startswith("error:"):
+            with self.store.transaction() as c:                 # a look that ran clean again
                 save(c, key, problem="", problem_at=None)
         if action:
             self.act(hq, current, action, found, at)
@@ -953,7 +991,12 @@ class Manager:
             if current is None:
                 return                                      # a claim came first, or the facts changed: not now
         if action == "create" and self.relist:
-            return                                          # the last create was refused, and HQ's list not read since
+            # The last create was refused, and HQ's list not read since. A refused list is said on this row, so the
+            # bot's work says why; a list not yet asked for is waited on silently.
+            if self.list_refused and current["problem"] != "hq:" + self.list_refused:
+                with self.store.transaction() as c:
+                    save(c, key, problem="hq:" + self.list_refused, problem_at=H.now())
+            return
         if action == "create":
             with self.store.transaction() as c:
                 code = mint(c, key, self.execution.auth.owner_id(c) if key == SHARED else None)
@@ -1070,6 +1113,8 @@ def problem_words(problem):
         return ""
     if problem.startswith("hq:"):
         return f"Didn't start ({problem[3:]}): trying again"
+    if problem.startswith("error:"):
+        return f"Couldn't be made or started ({problem[6:]}): trying again"
     return PROBLEMS.get(problem, problem)
 
 
@@ -1083,6 +1128,8 @@ def waiting(c, bot):
         return "out of credit: its cloud machine can't start"
     if machine["problem"].startswith("hq:"):
         return f"its cloud machine didn't start ({machine['problem'][3:]}); trying again"
+    if machine["problem"].startswith("error:"):
+        return f"its cloud machine couldn't be made or started ({machine['problem'][6:]}); trying again"
     if machine["problem"] == "stuck":
         return "its cloud machine started, but this did not run there"
     if machine["problem"] == "no_enroll":
@@ -1116,11 +1163,13 @@ def view(c, bot, settings=None):
 
 def machine_view(current):
     """A machine row as people see it: the size the next start uses (`size`), the one HQ last said it has, Always on,
-    its state, this month's cost and starts, its computer and what keeps it from starting."""
+    its Pause after (the effective minutes, PAUSE_MINUTES when none is set), its state, this month's cost and starts,
+    its computer and what keeps it from starting."""
     if current is None:
-        return {"size": "default", "always_on": False, "state": "none", "machine_size": None, "cost_month_usd": 0.0,
-                "starts_month": 0, "runner_id": None, "problem": ""}
-    return {"size": current["size"], "always_on": bool(current["always_on"]), "state": current["state"],
+        return {"size": "default", "always_on": False, "pause_minutes": PAUSE_MINUTES, "state": "none",
+                "machine_size": None, "cost_month_usd": 0.0, "starts_month": 0, "runner_id": None, "problem": ""}
+    return {"size": current["size"], "always_on": bool(current["always_on"]),
+            "pause_minutes": current["pause_minutes"] or PAUSE_MINUTES, "state": current["state"],
             "machine_size": current["machine_size"], "cost_month_usd": round(current["cost_month_usd"] or 0, 2),
             "starts_month": current["starts_month"], "runner_id": current["runner_id"],
             "problem": problem_words(current["problem"])}
@@ -1136,10 +1185,10 @@ def shown(bot, current, assigned, shared=None):
     return {"mode": current["mode"], "placement": current["placement"], **machine_view(machine)}
 
 
-def change(c, execution, who, bot, mode=None, size=None, always_on=None, placement=None):
+def change(c, execution, who, bot, mode=None, size=None, always_on=None, placement=None, pause_minutes=None):
     """A person's choice for the bot: a cloud machine (`mode` cloud), which one (`placement` shared or own), its own
-    machine's size (applied at its next start) and Always on. Moving to another computer is Execution.assign's (which
-    sets `computer`). Those who manage the bot only."""
+    machine's size (applied at its next start), Always on and Pause after (`pause_minutes`, whole minutes). None leaves a
+    choice as it is. Moving to another computer is Execution.assign's (which sets `computer`). Those who manage the bot only."""
     auth = execution.auth
     if not (auth.operator(c, who, bot) or auth.bot_manager(c, who, bot)):
         raise Problem("forbidden", "You do not manage this bot's computer", 403)
@@ -1154,6 +1203,8 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
         raise Problem("validation", "Choose a computer to move it there; mode only takes cloud", 422)
     if placement is not None and placement not in PLACEMENTS:
         raise Problem("validation", "Choose shared or own", 422)
+    if pause_minutes is not None:
+        checked_pause(pause_minutes)
     c.execute("INSERT OR IGNORE INTO cloud_machines(bot,mode,placement,changed_by,updated_at) VALUES(?,?,?,?,?)",
               (bot, "computer" if c.execute("SELECT 1 FROM assignments WHERE bot=?", (bot,)).fetchone() else "cloud",
                placement or default_placement(c, bot), who.actor, H.now()))
@@ -1161,14 +1212,18 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
     fields = {"changed_by": who.actor, "enroll_fails": 0}        # a person's choice lets a machine be made again
     if before["problem"] == "no_enroll":
         fields["problem"] = ""
-    if mode is not None:
+    # The same choice again is no change: a refusal it has (a start HQ said no to) and its wake guard stay, so a repost
+    # that only reads the view does not hide why the machine is not running.
+    if mode is not None and mode != before["mode"]:
         fields.update(mode=mode, wake_key=None, problem="")
-    if placement is not None:
+    if placement is not None and placement != before["placement"]:
         fields.update(placement=placement, wake_key=None, problem="")
     if size is not None:
         fields["size"] = size
     if always_on is not None:
         fields["always_on"] = int(always_on)
+    if pause_minutes is not None:
+        fields["pause_minutes"] = pause_minutes
     save(c, bot, **fields)
     after = row(c, bot)
     if after["mode"] == "cloud" and after["placement"] == "shared":
@@ -1185,7 +1240,8 @@ def change(c, execution, who, bot, mode=None, size=None, always_on=None, placeme
         if moving and target and chose and MS.is_admin(auth, who):
             lend_plans(c, execution, bot, target, who.actor)
     H.event(c, who.actor, "cloud_machine.changed", bot, {
-        key: after[key] for key in ("mode", "placement", "size", "always_on") if after[key] != before[key]})
+        key: after[key] for key in ("mode", "placement", "size", "always_on", "pause_minutes")
+        if after[key] != before[key]})
     return view(c, bot, execution.store.settings)
 
 
@@ -1194,13 +1250,16 @@ def shared_view(c):
     return {**machine_view(row(c, SHARED)), "bots": members(c)}
 
 
-def change_shared(c, auth, who, size=None, always_on=None):
-    """The company's choice for the shared machine: its size (applied at its next start) and Always on. Owners and
-    admins only: it spends the company's credit for every bot on it. The route checks the company is on Tico Cloud."""
+def change_shared(c, auth, who, size=None, always_on=None, pause_minutes=None):
+    """The company's choice for the shared machine: its size (applied at its next start), Always on and Pause after.
+    Owners and admins only: it spends the company's credit for every bot on it. The route checks the company is on
+    Tico Cloud."""
     if not auth.bot_admin(who):
         raise Problem("forbidden", "Only owners and admins change the shared cloud machine", 403)
     if size is not None and size not in size_names(c):
         raise Problem("validation", "Choose one of: " + ", ".join(size_names(c)), 422)
+    if pause_minutes is not None:
+        checked_pause(pause_minutes)
     ensure_shared(c)
     before = row(c, SHARED)
     fields = {"changed_by": who.actor, "enroll_fails": 0}        # a person's choice lets a machine be made again
@@ -1210,10 +1269,12 @@ def change_shared(c, auth, who, size=None, always_on=None):
         fields["size"] = size
     if always_on is not None:
         fields["always_on"] = int(always_on)
+    if pause_minutes is not None:
+        fields["pause_minutes"] = pause_minutes
     save(c, SHARED, **fields)
     after = row(c, SHARED)
     H.event(c, who.actor, "cloud_machine.changed", SHARED, {
-        key: after[key] for key in ("size", "always_on") if after[key] != before[key]})
+        key: after[key] for key in ("size", "always_on", "pause_minutes") if after[key] != before[key]})
     return shared_view(c)
 
 
@@ -1260,8 +1321,8 @@ def remove(store, hq, who, auth, key):
         current = removable(c, auth, who, key)
         if current["runner_id"]:
             c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), current["runner_id"]))
-        # The machine goes; the choices stay (size, Always on, where the bot runs): a bot's own is not made again unless
-        # someone picks it, and the shared one is made again at a member's next work (or at once if Always on). Its id
+        # The machine goes; the choices stay (size, Always on, Pause after, where the bot runs): a bot's own is not made
+        # again unless someone picks it, and the shared one is made again at a member's next work (or at once if Always on). Its id
         # stays, as deleted, as never_enrolled leaves it: a create before boat confirms the delete gets this machine
         # back from HQ (idempotent on key), which `act` takes for no new one and tries again later.
         save(c, key, runner_id=None, state="deleted", machine_size=None, started_at=None,
@@ -1295,12 +1356,14 @@ class Change(BaseModel):
     placement: str | None = Field(None, max_length=20)
     size: str | None = Field(None, max_length=20)
     always_on: bool | None = None
+    pause_minutes: int | None = None
 
 
 class SharedChange(BaseModel):
     model_config = ConfigDict(extra="forbid")
     size: str | None = Field(None, max_length=20)
     always_on: bool | None = None
+    pause_minutes: int | None = None
 
 
 def install(app, settings, store, auth, execution, mutate):
@@ -1312,9 +1375,9 @@ def install(app, settings, store, auth, execution, mutate):
 
     @app.get("/api/v2/cloud-machines")
     def cloud_machine_sizes(request: Request):
-        """Whether bots here may run on cloud machines, the sizes HQ offers (its customer price per hour, one start's
-        price, and the idle time after which it stops), and the shared machine (`shared`: its size, Always on, state
-        and the bots set to run there). `offered` false off Tico Cloud."""
+        """Whether bots here may run on cloud machines, the sizes HQ offers (its customer price per hour and one start's
+        price), and the shared machine (`shared`: its size, Always on, Pause after, state and the bots set to run
+        there). `offered` false off Tico Cloud."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
@@ -1331,20 +1394,20 @@ def install(app, settings, store, auth, execution, mutate):
 
     @app.post("/api/v2/cloud-machines/shared")
     def cloud_machine_shared_set(request: Request, body: SharedChange):
-        """The shared cloud machine's `size` (applied at its next start) and `always_on`. Owners and admins only."""
+        """The shared cloud machine's `size` (applied at its next start), `always_on` and `pause_minutes` (5 to 1440). Owners and admins only."""
         who = request.state.identity
         auth.domain(who)
 
         def run(c):
             if not offered(c, settings):
                 raise Problem("not_cloud", "Cloud machines are for Tico Cloud companies", 409)
-            return {"shared": change_shared(c, auth, who, body.size, body.always_on)}
+            return {"shared": change_shared(c, auth, who, body.size, body.always_on, body.pause_minutes)}
         return mutate(request, body, run)
 
     @app.delete("/api/v2/cloud-machines/shared")
     def cloud_machine_shared_delete(request: Request):
         """Delete the shared cloud machine (its disk) and the computer it was, to replace a broken one: a member's next
-        work makes a new one. Its size and Always on stay. Owners and admins only."""
+        work makes a new one. Its size, Always on and Pause after stay. Owners and admins only."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
@@ -1357,11 +1420,12 @@ def install(app, settings, store, auth, execution, mutate):
     def cloud_machine_set(bot: str, request: Request, body: Change):
         """Where the bot runs and how: `mode` cloud puts it on a cloud machine (another computer is chosen with a
         machine transition), `placement` on the shared one or its own; its own machine's `size` applies at that
-        machine's next start, and `always_on` keeps it running. Those who manage the bot only; Tico Cloud only."""
+        machine's next start, `always_on` keeps it running, and `pause_minutes` (5 to 1440)
+        pauses it after that many idle minutes. Those who manage the bot only; Tico Cloud only."""
         who = request.state.identity
         auth.domain(who)
         return mutate(request, body, lambda c: {"cloud_machine": change(
-            c, execution, who, _known(c, bot), body.mode, body.size, body.always_on, body.placement)})
+            c, execution, who, _known(c, bot), body.mode, body.size, body.always_on, body.placement, body.pause_minutes)})
 
     @app.delete("/api/v2/bots/{bot}/cloud-machine")
     def cloud_machine_delete(bot: str, request: Request):

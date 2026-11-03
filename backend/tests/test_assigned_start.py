@@ -9,6 +9,7 @@ from backend.tests.test_api import api, claim, get, post  # noqa: F401
 from backend.tests.test_auto_tasks import deck, finish, set_cap, take
 from backend.tests.test_profiles import put
 from backend.tests.test_task_lanes import new_task, task_bot
+from backend.enqueue import enqueue_stored
 
 
 @pytest.fixture
@@ -21,7 +22,7 @@ def clock(monkeypatch):
 def advance(api, clock, hours):
     clock[0] = H.shift(clock[0], hours=hours)
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET last_seen_at=?', (H.now(),))
+        c.execute('UPDATE runner_states SET last_seen_at=?', (H.now(),))
 
 
 def sweep(api):
@@ -271,7 +272,7 @@ def observe_for(api, clock, hours):
     with store.transaction() as c:
         while clock[0] < until:
             clock[0] = min(until, H.shift(clock[0], seconds=queue_refusals.MAX_GAP_SECONDS))
-            c.execute('UPDATE runners SET last_seen_at=?', (H.now(),))
+            c.execute('UPDATE runner_states SET last_seen_at=?', (H.now(),))
             queue_refusals.observe(c, store.settings)
 
 
@@ -643,8 +644,9 @@ def fleet(store, bots, tasks, attempts, *, days=30):
     with store.transaction() as c:
         c.execute("INSERT INTO conversations(id,kind,subject,created_at,last_message_at) VALUES('fleet-conv','task','',?,?)",
                   (now, now))
-        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at,last_seen_at,readiness) "
-                  "VALUES('fleet-runner','fleet','ana','fleet-token',?,?,'{}')", (now, now))
+        c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) "
+                  "VALUES('fleet-runner','fleet','ana','fleet-token',?)", (now,))
+        c.execute("UPDATE runner_states SET last_seen_at=?,readiness='{}' WHERE runner_id='fleet-runner'", (now,))
         for slug in slugs:
             c.execute("INSERT INTO bots(id,slug,display_name,state,created_at) VALUES(?,?,?,'active',?)",
                       (slug, slug, slug, now))
@@ -662,7 +664,8 @@ def fleet(store, bots, tasks, attempts, *, days=30):
             c.execute("INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
                       "VALUES(?, 'fleet-conv','human:ana',?,'task','',?,?)",
                       (f'fleet-m-{i}', 'bot:' + slugs[b], json.dumps({'task': task}) if task and i % 3 == 0 else '{}', at))
-            # A message to a bot queues its job under the message's id (store.QUEUE_TRIGGER).
+            enqueue_stored(c, f'fleet-m-{i}')
+            # A message to a bot queues its job under the message's id (backend/enqueue.py).
             c.execute("UPDATE jobs SET state='completed' WHERE id=?", (f'fleet-m-{i}',))
             c.execute("INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
                       "VALUES(?,?,?,'fleet-runner',1,?,'completed',?,?)",

@@ -1,5 +1,5 @@
 //! `state-<id>/runner.sqlite`: the durable outbox and session references, the same file and schema as
-//! `runner/state.py` (the Python side jobs' store). Tables and columns are only ever added, so an older runner can still read it.
+//! `runner_support/state.py` (the Python side jobs' store). Tables and columns are only ever added, so an older runner can still read it.
 
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};

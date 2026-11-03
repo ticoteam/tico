@@ -176,8 +176,8 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
   group or any group above it. **members**, **personal** and **participants** threads open to a bot only as a member (or
   a participant). An external agent (an agent token) gets no company or team reading: only the threads it is in.
   Posting in a Home takes **Write** on its owner, for bots as for people.
-- A thread can reach outside the company through a linked Slack channel or a shared install. Taking that away (unlink,
-  unshare) removes the outside readers at once ([Slack](slack.md), [Federation](federation.md)).
+- A thread can reach outside the company through a linked Slack channel. Unlinking it removes the outside readers at
+  once ([Slack](slack.md)).
 - A message the org rules hold writes nothing. The author may withdraw it, and so may the person a bot reports to; only
   the reviewer sends it anyway ([Rules](rules-plan.md)).
 
@@ -201,7 +201,7 @@ The product favours getting going fast, and the owner tightens it later. Setting
 
 | Rule | On (default) | Off |
 | --- | --- | --- |
-| **Assistant acts without asking** | the Assistant makes tasks for bots, comments on tasks no other human is on, and messages bots directly, and does the task actions the human asks for in their Assistant chat; a card is for anything else ([Assistant](assistant.md)) | the Assistant acts directly only on the human's own tasks; a task, message or comment involving a bot, and a task action they asked for, is a card |
+| **Assistant acts without asking** | the Assistant does what the human asks for in their Assistant chat, as them, with their rights as the ceiling; only what it may never do there (credentials, sign-in, owner transfer, support reports, deleting people, the server connection or storage) is a card ([Assistant](assistant.md)) | the Assistant writes only the human's own tasks and changes to tasks that are theirs alone; everything else, including what they asked for in chat, is a card |
 | **People may let their Assistant decide their approvals** | each person may turn on "My assistant can decide approvals for me" in Settings > General; their own Assistant then approves or declines approvals addressed to them on their words in its chat, recorded and undoable ([Assistant](assistant.md#letting-it-decide-your-approvals)) | approving is the person's click on a card again, whatever their own setting |
 | **BotOps changes providers and limits without asking** (`botops_direct`) | BotOps changes the AI providers and raises spending limits for the person who asked, with their rights | a provider change, or a limit raised or removed, is a Confirm card in that person's BotOps chat; lowering a limit stays direct |
 | **BotOps manages every bot** (`botops_manages_bots`) | in its own runs (the daily update, or a routine the owner set for BotOps) BotOps manages every bot but the built-in ones: their Tools, repositories, contact and Instructions, with write access to each bot's repository in its GitHub token (below) | BotOps in its own runs changes only itself |
@@ -740,10 +740,10 @@ what `set` does when BotOps or the Assistant asks for a person (the same answer 
   a one-line reason and the card's link.
 
 The Assistant's Confirm card is in the person's own Assistant chat (the owner's Strategy Bot chat), and it may card every
-catalogue route BotOps may. A direct entry runs on the person's own words: the write cites their message in that chat
-(`--on-behalf-of turn`), as a task action does. Without it, or while the owner's "Assistant acts without asking" is off,
-a direct entry is a card too. A card or a cited write from the Assistant is exactly one entry's body: two settings at
-once, or a person-only one, is refused.
+catalogue route BotOps may. A direct or a confirm entry runs on the person's own words: the Assistant's run cites their
+message in that chat, as a task action does (its route checks who may change it). Without that, or while the owner's
+"Assistant acts without asking" is off, it is a card too. A card or a cited write from the Assistant is exactly one
+entry's body: two settings at once, or a person-only one, is refused.
 
 Someone without the rights is refused with who can change it ("Only the owner or an admin changes Release times").
 "Whose it is" is read from the thing itself: a trigger's or an outgoing webhook's maker (a bot that made an incoming

@@ -498,13 +498,19 @@ Already constrained by a CHECK in the base schema (values unchanged on this bran
 - `live_meetings.state`: live, paused, ended.
 - `meeting_items.status`: proposed, pushed, dismissed.
 - `org_rules.status`: suggested, active, retired. `org_rule_holds.state`: held, sent, kept.
-- `growth_channels.stage`, `growth_ideas.status`: the Growth module's stages and statuses. `growth_segments.status`: serving, testing, next, dropped.
+- `growth_channels.stage`: the Growth module's channel stages. (The idea and segment tables it used to hold are gone; see the growth rethink migration.)
 - `fin_cards.status`: active, frozen, canceled (`backend/status_values.py` enforces it with a CHECK).
 - `fin_actions.status`, `fin_bills.status`, `fin_invoices.status`, `fin_entries.status`, `fin_holds.status`, `fin_outbox.status`
   (pending, sent, failed, withheld), `fin_feed_txns.status`, `fin_periods.status`, `fin_reconciliations.status`,
   `fin_recipients.status`, `fin_view_grants.status`, `fin_money_accounts.kind`, and others in the Finance schema.
 - `strategy_bets.status`, `strategy_versions.status`, `tico_storage.state`, `storage_moves.state`,
-  `update_archive_overrides.state`, `invite_sends.state`, `blob_media.media_state`, `bot_file_versions.media_state`.
+  `update_archive_overrides.state`, `blob_media.media_state`, `bot_file_versions.media_state`.
+- `idempotency.state`: pending, completed, refused (a CHECK). A stored answer is always completed and is swept after
+  48 hours. An operation binding (`binding` set: `invites`, `github_product_repo`, `github_review`) is never swept: it is
+  pending while its outcome is unknown (a repeat is refused with no second external call), then completed or refused.
+  Invites map `sending` to pending, `sent` to completed and `refused` to refused; a product repository's `rejected` is
+  refused; a review with no response yet is pending. An access invite's binding keeps the time it recorded as
+  `response` {"invited_at"}, so a repeat of that request answers its own time.
 - `task_links.review_state` and others with a CHECK in the base schema.
 
 Without a CHECK (not constrained here; values are whatever the code writes):

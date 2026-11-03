@@ -254,7 +254,7 @@ ahead of time so it doesn't try.
     (`GET /api/v2/rule-holds?thread=`), which the chat draws under its messages.
   - **`where:`** narrows a rule to some places: `thread:<conversation id>`, `team:<group>` (the sender's or the
     conversation owner's group chain), `kind:dm` (a direct chat, or a write with no conversation), and
-    `has_outside_members` (someone in it is outside the roster, or is a Slack or federated actor). A write meets the
+    `has_outside_members` (someone in it is outside the roster, or is a Slack actor). A write meets the
     rule when one of its terms holds. A message has the place of its thread (`conversations.id` is the thread id, with
     its root, audience and members read from the thread); a task comment has its task's conversation. The Rules panel
     sets one choice (anywhere, direct chats, outside, a team, or a thread). Its thread list is the threads sidebar

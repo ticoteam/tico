@@ -596,3 +596,14 @@ def test_a_one_time_budget_at_its_cutoff_pauses_its_bots_with_no_end(books):
         assert met["scope"] == "budget" and met["until"] == ""
         assert usage_limits.why(met) == "Paused: AI services budget reached"
         assert "used up; it starts again when a person raises it" in usage_limits.warning(c, "bot:coder", at=NOON)
+
+
+def test_usage_facts_take_a_meter_read_only_when_finance_keeps_its_snapshot(books):
+    """A same-time read with a lower total is refused by Finance and changes no usage fact; a higher one replaces both."""
+    with books.transaction() as c:
+        assert FA.usage_snapshot(c, _meter("2026-10-15T16:00:00Z", **{"tico-medium": "0.60"}), fetched_at=AT)
+        assert finance_tico.usage_reconciled(c, "2026-10")["tico-medium"]["metered_nano"] == 600_000_000
+        assert FA.usage_snapshot(c, _meter("2026-10-15T16:00:00Z", **{"tico-medium": "0.55"}), fetched_at=AT) is None
+        assert finance_tico.usage_reconciled(c, "2026-10")["tico-medium"]["metered_nano"] == 600_000_000
+        assert FA.usage_snapshot(c, _meter("2026-10-15T16:00:00Z", **{"tico-medium": "0.65"}), fetched_at=AT)
+        assert finance_tico.usage_reconciled(c, "2026-10")["tico-medium"]["metered_nano"] == 650_000_000

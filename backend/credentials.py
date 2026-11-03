@@ -103,6 +103,28 @@ def granted(c, subject):
     return found
 
 
+def prime_granted(c, subjects):
+    """`granted` for many subjects in one read per 500, seeded into the snapshot so each later `granted(c, subject)`
+    reads nothing. Outside a snapshot nothing is kept."""
+    from . import read_cache
+    values = read_cache.cache(c)
+    if values is None:
+        return
+    wanted = sorted({s for s in subjects if ("credential_granted", s) not in values})
+    found = {s: set() for s in wanted}
+    for part in H.chunks(wanted):
+        for subject, credential in c.execute(
+                'SELECT g.subject,g.credential_id FROM credential_grants g '
+                'LEFT JOIN credential_grants p ON p.id=g.parent_id '
+                "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
+                f"WHERE g.subject IN ({','.join('?' * len(part))}) AND g.revoked_at IS NULL "
+                "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL "
+                "AND p.subject='human:'||bc.owner_id))", part):
+            found[subject].add(credential)
+    for subject in wanted:
+        values[("credential_granted", subject)] = frozenset(found[subject])
+
+
 def permitted(c, who, credential, admins):
     return administrator(c, who, admins) or (who.role in ('human', 'owner', 'bot')
                                              and effective_grant(c, credential, who.actor) is not None)
@@ -366,14 +388,14 @@ class Vault:
             if isinstance(payload.get('secret'), SecretStr):
                 payload['secret'] = payload['secret'].get_secret_value()
             fingerprint = hmac.new(self.cipher.key(c), b'tico-request:v1:' + encode(payload).encode(), hashlib.sha256).hexdigest()
-            old = c.execute('SELECT request_hash,response FROM idempotency WHERE actor=? AND operation=? AND key=?',
+            old = c.execute('SELECT request_hash,response FROM idempotency WHERE binding IS NULL AND actor=? AND operation=? AND key=?',
                             (who.actor, operation, key)).fetchone()
             if old:
                 if not hmac.compare_digest(old['request_hash'], fingerprint):
                     raise Problem('idempotency_conflict', 'This request key was already used for different content', 409)
                 return json.loads(old['response'])
             result = fn(c)
-            c.execute('INSERT INTO idempotency VALUES(?,?,?,?,?,?)',
+            c.execute('INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)',
                       (who.actor, operation, key, fingerprint, encode(result), H.now()))
             return result
 

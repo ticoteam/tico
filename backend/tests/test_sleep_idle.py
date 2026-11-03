@@ -467,7 +467,7 @@ def test_an_online_bot_computer_keeps_a_cell_company_up_until_it_goes_quiet(api,
     tick(api)
     assert cell.sleeps == [] and quiet(api)["blocker"] == "computer_online"
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET last_seen_at=?", (sleep_idle.stamp(time.time() - 300),))
+        c.execute("UPDATE runner_states SET last_seen_at=?", (sleep_idle.stamp(time.time() - 300),))
     tick(api)
     assert len(cell.sleeps) == 1
 

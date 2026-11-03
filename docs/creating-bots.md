@@ -650,7 +650,7 @@ Levers set in **Settings → Bots**, not in the repository:
 - A line under **Model** says "Runs on *tool* · Computer's login on *computer*": every bot runs on its computer's
   login for that tool, with no sign-in of its own. For a different account, move the bot to a computer signed in to it
   ([Computers](computers.md#which-connection-a-bot-runs-on)).
-- **Compact at**: how full the bot's conversation gets before it is compacted: 150k, 250k tokens (the default),
+- **Compact at**: how full the bot's conversation gets before it is compacted: 100k, 150k, 250k tokens (the default),
   400k, 600k or 1M. Claude Code and Codex only. Changing it keeps the session. A bot's tasks can use another length
   (**Task model**, **Task context length**).
 - **Profile**: what wakes the bot and which tasks it takes: **Doer** (the default for a new bot), **Reviewer**, **Lead**,

@@ -174,18 +174,22 @@ function chatGoalRender(state, force = false) {
     const actions = host.querySelector('.cg-actions'); if (actions) actions.hidden = !state.goalOpen;
   }
   const P = cgPill(state), btn = P && pq(P, '.p-goal');
-  if (btn) {
-    if (P.goalMode == null) P.goalMode = chatGoalModeSaved(state.slug);
+  // A bot's thread composer (thread-view.js, P.ways) has no target: Set as goal is in its ways menu, for one goal.
+  if (P && (btn || P.ways)) {
+    if (P.goalMode == null) P.goalMode = !P.ways && chatGoalModeSaved(state.slug);
     // A pinned goal is edited and cleared from its bar, so the composer is for chatting: no target, and Send sends.
     const pinned = goalPinned(state.goal);
     if (pinned && P.goalMode) { P.goalMode = false; chatGoalModeStore(state.slug, false); }
+  }
+  if (btn) {
+    const pinned = goalPinned(state.goal);
     btn.hidden = pinned || (!state.goalSupported && !P.goalMode);
     btn.classList.toggle('on', !!P.goalMode);
     btn.setAttribute('aria-pressed', String(!!P.goalMode));
     btn.setAttribute('aria-label', P.goalMode ? 'Goal mode on' : 'Goal mode');
     btn.title = P.goalMode ? 'Goal mode on · Send text as the goal' : 'Goal';
-    cgLabel(P);
   }
+  if (P && (btn || P.ways)) cgLabel(P);
 }
 function chatGoalWireBar(state, host) {
   const bar = host.querySelector('.cg-bar');
@@ -234,7 +238,7 @@ function chatGoalButton(state = V2C) {
     P.goalMode = false; chatGoalModeStore(state.slug, false); chatGoalRender(state); return;
   }
   if (!state.goalSupported) { toast("This bot's harness doesn't support goals.", true); return; }
-  P.goalMode = true; chatGoalModeStore(state.slug, true); chatGoalRender(state);
+  P.goalMode = true; if (!P.ways) chatGoalModeStore(state.slug, true); chatGoalRender(state);
 }
 async function chatGoalSend(P, text) {
   const state = P.goalsOf ? P.goalsOf() : V2C, box = pq(P, '.p-text');
@@ -261,6 +265,7 @@ async function chatGoalSend(P, text) {
     if (!await chatGoalAct(intent.action, text, state)) return false;
     sessionAcknowledge(box, scope);
     if (P.goalPending === intent) P.goalPending = null;
+    if (P.ways) P.goalMode = false;                  // Set as goal from the ways menu is for one goal
     // Do not erase edits made while the server was saving. Goal writes use the shared API's
     // stable Idempotency-Key retries, and failed/uncertain writes leave the draft untouched.
     if ((pq(P, '.p-text')?.value || '').trim() === text) {

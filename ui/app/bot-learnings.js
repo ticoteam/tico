@@ -4,8 +4,8 @@
    and the bot's learnings.md and decisions.md, working rules first and then newest entries first (learnNewestFirst).
    Opening it marks the updates seen.
    Dream (backend/dream.py): a button at the top of the panel starts a cleanup task for the bot over its own memory.
-   While it runs the panel is in dream mode: a status line, its questions as cards to answer, then its summary and
-   the commits it made. A question also shows as a small card on the bot's page, and the button carries a mark. */
+   While it runs the panel is in dream mode: a status line (with the reason, for an auto dream), its questions as cards
+   to answer, then its summary and the commits it made. A question also shows as a small card on the bot's page, and the button carries a mark. */
 'use strict';
 
 const learnApi = slug => `/v2/bots/${encodeURIComponent(slug)}/memory`;
@@ -243,7 +243,10 @@ function learnOpen(slug, data, dream = null) {
     dreamPageShow(slug, latest);
     if (!latest) { dreamLeave(); return; }
     const ask = latest.state === 'asking' && latest.questions ? latest.questions : null;
-    if (before && before.state === latest.state && before.questions?.message_id === ask?.message_id) return;
+    if (before && before.state === latest.state && before.questions?.message_id === ask?.message_id) {
+      dreamDoing(latest);
+      return;
+    }
     const line = DREAM_LINES[latest.state] || 'Dreaming…';
     let content = '';
     if (ask) content = ask.mine ? dreamQuestionsHTML(ask) : `<div class="dream-quiet md">${md(ask.text)}</div>`;
@@ -260,11 +263,24 @@ function learnOpen(slug, data, dream = null) {
     }
     body.innerHTML = `<div class="dream-view">
       <p class="dream-line" role="status">${esc(line)}</p>
+      ${latest.auto && latest.reason ? `<p class="dream-reason">${esc(latest.reason)}</p>` : ''}
+      <p class="dream-doing" aria-live="polite"></p>
       <div class="dream-content">${content}</div>
       ${dreamOpen(latest) ? `<div class="dream-foot"><a href="#/task/${encodeURIComponent(latest.task)}">Task</a>
         <button class="ghost" type="button" data-dream-stop>Stop</button></div>` : ''}
     </div>`;
+    dreamDoing(latest);
     if (ask?.mine) dreamWire(body, ask, () => { void dreamRefresh(); });
+  };
+  // While it dreams: the bot's own line on what it is doing now, and how long the dream has run.
+  const dreamDoing = latest => {
+    const el = $('.dream-doing', body);
+    if (!el) return;
+    const mins = Math.max(0, Math.round((Date.now() - new Date(latest.started_at)) / 60000));
+    const text = latest.state === 'dreaming' ? [latest.doing, `${mins} min`].filter(Boolean).join(' · ') : '';
+    if (el.textContent === text) return;
+    el.textContent = text;
+    el.classList.remove('fresh'); void el.offsetWidth; el.classList.add('fresh');
   };
   const dreamRefresh = async () => {
     const latest = await dreamFetch(slug, true);

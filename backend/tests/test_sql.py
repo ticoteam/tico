@@ -14,7 +14,7 @@ import pytest
 from backend.store import H
 from backend.tests.test_api import api, as_member, assign, claim, headers, post, ready, runner
 
-SECRET_TABLES = ("credentials", "credential_keys", "credential_grants", "idempotency", "runners",
+SECRET_TABLES = ("credentials", "credential_keys", "credential_grants", "idempotency", "runners", "runner_states",
                  "enrollments", "session_epochs", "bot_session_epochs", "settings_changes", "backup_verified_blobs",
                  "sqlite_temp_master", "sqlite_sequence", "_litestream_seq")
 SECRET_COLUMNS = (("attempts", "token_hash"), ("service_jobs", "token_hash"))
@@ -167,6 +167,17 @@ def test_secret_tables_and_columns_are_denied_for_everyone(api, world):
     assert query(api, "SELECT email FROM humans WHERE id='ben'", "ben-test")["rows"] == [["ben@acme.example"]]
 
 
+def test_the_message_refs_view_is_denied_to_everyone(api, world):
+    """`message_refs` (migration 0051) reads `messages` without the per-caller rows a `messages` query sees, so SQL
+    never reads it: the typed refs keys are read as json_extract over the caller's own `messages`."""
+    for token in ("ana-test", "cara-test", world["attempt"]["token"]):
+        for sql in ("SELECT * FROM message_refs", "SELECT ref_task_id FROM message_refs",
+                    "SELECT count(*) FROM message_refs", "SELECT * FROM main.message_refs"):
+            detail = error(api, sql, token)
+            assert "prohibited" in detail or detail == "not authorized", (sql, token, detail)
+        assert "message_refs" in column(api, "SELECT name FROM sqlite_master WHERE type='view'", token)
+
+
 def test_the_company_page_s_readers_are_denied_to_everyone_and_its_rules_are_the_owner_s(api, world):
     """Who the readers are, their sessions and invites, what they wrote and read: nobody reads these through SQL, the owner
     included. The company's own rules, drafts and stats are the owner's, as its page's API shows them."""
@@ -239,7 +250,7 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "idempotency_messages.ready", "inbox-only-runners", "librarian_wording35", "librarian_wording36",
         "message_links.ready", "onboarding", "owner", "people", "redesign_cutover", "release-history",
         "repositories-access-migrated", "roadmap_ready_to_ship_step", "roadmaps_copies_cleared_by_field",
-        "roadmaps_explicit_public_text", "strategy-bot", "task_session_default",
+        "roadmaps_explicit_public_text", "stale_review_repair", "strategy-bot", "task_session_default",
         "threads-migration", "threads-neutral-titles", "usage-count"]
 
 

@@ -522,7 +522,7 @@ class Onboarding:
         """The machine this bot runs on, and what it last said about the repository. A null
         repository report means no machine has looked yet, not that the repository is missing."""
         row = c.execute("SELECT r.id,r.label,r.readiness FROM assignments a "
-                        "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (slug,)).fetchone()
+                        "JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot=?", (slug,)).fetchone()
         if not row:
             return None, None
         reported = readiness_document(row["readiness"]).get("bots", {}).get(slug)
@@ -534,7 +534,7 @@ class Onboarding:
         recent = H.shift(H.now(), seconds=-60)
         runners = [{"id": row["id"], "label": row["label"],
                     "online": bool(row["last_seen_at"] and row["last_seen_at"] > recent)}
-                   for row in c.execute("SELECT id,label,last_seen_at FROM runners "
+                   for row in c.execute("SELECT id,label,last_seen_at FROM runners_with_state "
                                         "WHERE revoked_at IS NULL ORDER BY created_at")]
         return {"runners": runners, "enrolled": bool(runners)}
 
@@ -1025,17 +1025,62 @@ class Onboarding:
 
     def _seed_routines(self, c, who, slug, template):
         """The template's `routines:` (older: `schedules:`) become the bot's first routines, once. A routine a person
-        changed or deleted is never put back: only a key the bot has never had is created. (A bot
-        BotOps builds gets these from `hub bot create`; a built-in one is made here.)"""
-        made = []
+        changed or deleted is never put back: only a key the bot has never had is created. The bot's config names every
+        key it has had (`routines_seeded`), so a key stays seeded even if its schedule row is gone; a key whose row
+        exists (deleted, moved to an automation or changed) counts as seeded too. (A bot BotOps builds gets these from
+        `hub bot create`; a built-in one is made here.) Returns the keys it created."""
+        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        declared = (_json(row[0], {}) or {}) if row else {}
+        had = list(declared.get("routines_seeded") or [])
+        seeded, made = list(had), []
         for entry in self._template_routines(c, template):
-            if c.execute("SELECT 1 FROM schedules WHERE bot=? AND routine_key=?", (slug, entry["id"])).fetchone():
+            key = entry["id"]
+            if key in seeded:
+                continue
+            if c.execute("SELECT 1 FROM schedules WHERE bot=? AND routine_key=?", (slug, key)).fetchone():
+                seeded.append(key)
                 continue
             routines.create(c, who.actor, slug, {"title": entry["title"], "text": entry["instructions"],
                                                  "cron": entry["cron"], "on": entry["on"],
                                                  "timezone": entry["timezone"],
-                                                 "enabled": entry["enabled"]}, key=entry["id"])
-            made.append(entry["id"])
+                                                 "enabled": entry["enabled"]}, key=key)
+            seeded.append(key)
+            made.append(key)
+        if row and seeded != had:
+            declared["routines_seeded"] = seeded
+            self._write_config(c, slug, declared)
+        return made
+
+    def ensure_builtin_routines(self, c):
+        """At startup (an update): the active Assistant gets its template's routines it has never had, its daily sweep,
+        which a company from before it existed never had. Only keys the bot has never had are created (`_seed_routines`),
+        so a routine a person deleted or changed stays so. No other built-in bot is backfilled: its routines are set up
+        with the bot (`_turn_on`), and a backfill would switch on what nobody asked for (a bookkeeper's monthly report).
+        A planned bot gets them when it is set up; a paused or archived bot is a person's stop and is left alone. Returns
+        the (bot, key) pairs it created."""
+        # Only the Assistant (a bootstrap card): its daily sweep is the one routine an install from before it never had.
+        boot = {card["template"] for card in read_cards(self.settings) if card.get("bootstrap")} & {"assistant"}
+        if not boot:
+            return []
+        try:
+            who = self.auth.owner_identity(c)
+        except Problem:
+            return []
+        made = []
+        for bot in c.execute("SELECT bc.bot, bc.config FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+                             "WHERE b.state='active'").fetchall():
+            declared = _json(bot["config"], {}) or {}
+            if declared.get("template") not in boot:
+                continue
+            # Best effort per bot: one bot's failure does not stop the others (the same savepoint pattern as _ensure_builtin).
+            c.execute("SAVEPOINT builtin_routines")
+            try:
+                keys = self._seed_routines(c, who, bot["bot"], declared["template"])
+                c.execute("RELEASE builtin_routines")
+                made += [(bot["bot"], key) for key in keys]
+            except (Problem, ValueError):
+                c.execute("ROLLBACK TO builtin_routines")
+                c.execute("RELEASE builtin_routines")
         return made
 
     def start_setup(self, c, who, slug):
@@ -1104,7 +1149,7 @@ class Onboarding:
             if not row:
                 # The owner changed after the machine enrolled; a lone online machine is still
                 # the one this company's bots belong on.
-                online = c.execute("SELECT id,label FROM runners WHERE revoked_at IS NULL AND last_seen_at>?",
+                online = c.execute("SELECT id,label FROM runners_with_state WHERE revoked_at IS NULL AND last_seen_at>?",
                                    (H.shift(H.now(), seconds=-60),)).fetchall()
                 row = online[0] if len(online) == 1 else None
                 if row:

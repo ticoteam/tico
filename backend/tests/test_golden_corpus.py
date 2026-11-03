@@ -247,6 +247,18 @@ def test_display_names_add_names_beside_ids_and_keep_every_body_as_written(named
         notice = H.notice(c, "bot:ops", "human:ana", "New task from bot:ops: Brightwater handover")
     doc = post(api, "docs", {"title": "Brightwater export", "body": _text(CORPUS / "kept" / "customer-export.json")})["doc"]
 
+    # A bot's post in a task's thread reaches a person only by an @mention (hubdb.counts_for_person), and H.say, a legacy
+    # write, takes none: these are on the task, in no one's Inbox. Ana reads them in the task's thread.
+    thread = api.get("/api/v2/conversations/" + task["conversation_id"] + "/messages", headers=headers())
+    assert thread.status_code == 200, thread.text
+    mine = [m for m in thread.json()["messages"] if m["id"] in sent]
+    assert len(mine) == len(sent)
+    for message in mine:
+        assert message["body"] == sent[message["id"]]
+        assert "body_raw" not in message
+        assert message["sender_name"] == "Operations"
+        assert message["recipient_name"] == "Ana Example"
+
     # The inbox through the door route_renames.py adds (v0.3.10 lost its names), and the old door, which is not a
     # stable route: no names there, and the same words.
     for url in ("/api/v2/messages", "/api/v2/messages?unread=1", "/api/v2/inbox"):
@@ -254,14 +266,6 @@ def test_display_names_add_names_beside_ids_and_keep_every_body_as_written(named
         result = api.get(url, headers=headers())
         assert result.status_code == 200, (url, result.text)
         inbox = result.json()
-        mine = [m for m in inbox["messages"] if m["id"] in sent]
-        assert len(mine) == len(sent), url
-        for message in mine:
-            assert message["body"] == sent[message["id"]], url
-            assert "body_raw" not in message, url
-            if named_door:
-                assert message["sender_name"] == "Operations", url
-                assert message["recipient_name"] == "Ana Example", url
         shown = next(m for m in inbox["notices"] if m["id"] == notice["id"])
         if named_door:
             assert inbox["actors"] == {"bot:ops": "Operations", "human:ana": "Ana Example"}, url

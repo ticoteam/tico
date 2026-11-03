@@ -37,7 +37,7 @@ SCHEMA = '''
 CREATE TABLE IF NOT EXISTS inbound_inboxes(
  inbox_id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, address TEXT NOT NULL,
  state TEXT NOT NULL, created_by TEXT NOT NULL, period_end REAL, cancel_pending INTEGER NOT NULL DEFAULT 0,
- used_for TEXT NOT NULL DEFAULT '');
+ used_for TEXT NOT NULL DEFAULT '', audience TEXT NOT NULL DEFAULT 'company', group_id TEXT);
 CREATE TABLE IF NOT EXISTS inbound_messages(
  seq INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT NOT NULL UNIQUE, inbox_id TEXT NOT NULL,
  kind TEXT NOT NULL, received_at REAL NOT NULL, sender TEXT NOT NULL, subject TEXT NOT NULL,
@@ -53,12 +53,6 @@ INSERT OR IGNORE INTO inbound_sync(singleton) VALUES(1);
 
 
 AUDIENCES = ('company','team')
-
-
-def ensure(c):
-    """Columns added after the first release (idempotent)."""
-    H.add_column(c,'inbound_inboxes','audience',"TEXT NOT NULL DEFAULT 'company'")
-    H.add_column(c,'inbound_inboxes','group_id','TEXT')
 
 
 class InboxAudience(Contract):

@@ -99,8 +99,8 @@ def _runs(c, row):
         "ORDER BY coalesce(a.finished_at,a.created_at) DESC, a.id DESC LIMIT 20", (slug, *lanes)))
     live = any(a["state"] in ("leased", "running") for a in attempts)
     jobs = [r[0] for r in c.execute(
-        "SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? "
-        "AND j.state IN ('queued','held','uncertain') AND (m.conversation_id=? OR json_extract(m.refs,'$.task')=?)",
+        "SELECT j.state FROM jobs j JOIN message_refs m ON m.id=j.message_id WHERE j.bot_id=? "
+        "AND j.state IN ('queued','held','uncertain') AND (m.conversation_id=? OR m.ref_task_id=?)",
         (slug, row.get("conversation_id") or "", row["id"]))]
     return live, [a for a in attempts if a["state"] not in ("leased", "running")], jobs
 
@@ -287,7 +287,7 @@ def _outages(c, out, typ, rows, at):
             out.add("bot:" + slug, "outage", f"{row['slug']} is {row['status']}", row["updated_at"] or at,
                     bot=row["slug"])
         elif not check_pools.online(c, slug):
-            seen = c.execute("SELECT max(r.last_seen_at) FROM assignments a JOIN runners r ON r.id=a.runner_id "
+            seen = c.execute("SELECT max(r.last_seen_at) FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                              "WHERE a.bot=? AND r.revoked_at IS NULL", (slug,)).fetchone()[0]
             out.add("bot:" + slug, "outage", f"{row['slug']}'s computer is offline", seen or at, bot=row["slug"])
 

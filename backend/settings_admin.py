@@ -59,7 +59,7 @@ def repository_present(c, bot):
     from .agents import external_harness
     if external_harness(c, bot):
         return True
-    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    row = c.execute("SELECT r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                     "WHERE a.bot=?", (bot,)).fetchone()
     report = bot_readiness(row["readiness"], bot) if row else {}
     return bool(report.get("repository_present"))
@@ -67,7 +67,7 @@ def repository_present(c, bot):
 
 # Where a bot's conversation compacts, in tokens (runner-rs/src/hosts/mod.rs DEFAULT_COMPACT_AT): the choices offered,
 # and what a bot that never chose one gets.
-COMPACT_AT = (150_000, 250_000, 400_000, 600_000, 1_000_000)
+COMPACT_AT = (100_000, 150_000, 250_000, 400_000, 600_000, 1_000_000)
 DEFAULT_COMPACT_AT = 250_000
 
 
@@ -197,10 +197,22 @@ class SettingsAdmin:
         return P.load(_json(row[0], {}) if row else {"people": H.humans(c)})
 
     def _team(self, c, bot, proposed=None):
+        """The group a bot is made in. Its own team wins (`team_of`). A bot that names none, and that `team_of` leaves
+        in no group because it reports to a person, takes the group that person is in (`P.manager_team`), and keeps it
+        as its own `team` in `proposed` (its config, changed in place) so the chart shows it under that person. The
+        company's own bots and helpers stay out of groups (groups.outside), as the groups migration keeps them."""
+        from . import groups as Groups
         entries = self._entries(c)
+        roster = self._roster(c)
         if proposed is not None:
             entries[bot] = proposed
-        return P.team_of(bot, entries, self._roster(c))
+        team = P.team_of(bot, entries, roster)
+        if team is None and proposed is not None and proposed.get("team") is None \
+                and not Groups.outside(self.settings, proposed.get("name") or bot, proposed):
+            team = P.manager_team(proposed.get("reports_to"), entries, roster)
+            if team:
+                proposed["team"] = team
+        return team
 
     @staticmethod
     def _people(c, ids):
@@ -444,7 +456,7 @@ class SettingsAdmin:
             raise Problem("harness", "A bot run by an external agent has no computer; leave the "
                           "computer unassigned and give it an agent credential after saving", 422)
         if body.runner_id:
-            runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (body.runner_id,)).fetchone()
+            runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (body.runner_id,)).fetchone()
             if not runner:
                 raise Problem("not_found", "Computer is not registered", 404)
         parent = (self._config(c, body.reports_to)
@@ -943,7 +955,7 @@ class SettingsAdmin:
                 raise Problem("runner_not_ready", can["problem"], 409, extra={"fix": can["fix"], "link": can["link"]})
             return {"model": choice["id"], "runtime": runtime_name, "harness": harness,
                     "effort": effort}
-        runner = c.execute("SELECT id,label,owner_id,revoked_at,last_seen_at,readiness FROM runners WHERE id=?",
+        runner = c.execute("SELECT id,label,owner_id,revoked_at,last_seen_at,readiness FROM runners_with_state WHERE id=?",
                            (body.runner_id,)).fetchone()
         if not runner or runner["revoked_at"]:
             raise Problem("not_found", "Computer is not registered", 404)
@@ -1068,7 +1080,7 @@ class SettingsAdmin:
                 # same spent login or Gateway key.
                 lift_after_model_change(c, self.settings, who.actor, bot, was)
             else:
-                runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (target["runner_id"],)).fetchone()
+                runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (target["runner_id"],)).fetchone()
                 if not runner:
                     raise Problem("not_found", "The destination computer is no longer registered", 409)
                 current = c.execute("SELECT * FROM assignments WHERE bot=?", (bot,)).fetchone()
@@ -1268,13 +1280,20 @@ class SettingsAdmin:
         """Whether a change is one a manager bot made to its report, which anyone who manages the bot may undo."""
         return row["via"] == report_managers.VIA and row["field"] in REPORT_UNDO
 
-    def _undoer(self, c, who, change):
-        """The owner undoes any change. A person who manages the bot undoes what its manager bot changed on it, and nothing else."""
+    def may_undo(self, c, who, change):
+        """Whether `who` may undo this settings change. The owner undoes any change. A person who manages the bot undoes
+        what its manager bot changed on it, and what their own Assistant changed for them as themselves (the same right
+        that made it, held now)."""
         if who.role == "owner":
-            return
-        if not self._report_undo(change) or not self.auth.bot_manager(c, who, change["bot"]):
+            return True
+        if not self.auth.bot_manager(c, who, change["bot"]):
+            return False
+        return self._report_undo(change) or (change["via"] == "assistant" and change["actor"] == who.actor)
+
+    def _undoer(self, c, who, change):
+        if not self.may_undo(c, who, change):
             raise Problem("forbidden", "Only the owner may undo this settings change; a person who manages the bot may "
-                          "undo what its manager bot changed", 403)
+                          "undo what its manager bot changed, and what their own Assistant changed for them", 403)
 
     def undo(self, c, who, change_id, body):
         change = c.execute("SELECT * FROM settings_changes WHERE id=?", (change_id,)).fetchone()
@@ -1325,7 +1344,7 @@ class SettingsAdmin:
         if change["field"] == "placement":
             if not before.get("runner_id"):
                 raise Problem("not_reversible", "There was no previous computer to restore", 409)
-            runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (before["runner_id"],)).fetchone()
+            runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (before["runner_id"],)).fetchone()
             if not runner:
                 raise Problem("not_reversible", "The previous computer is no longer registered", 409)
             current = c.execute("SELECT * FROM assignments WHERE bot=?", (bot,)).fetchone()

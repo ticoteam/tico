@@ -263,7 +263,7 @@ async function restrictPerson(hub) {
       // The audience shows in the thread's header on either screen.
       assert.equal(await page.locator('.thv-aud').innerText(), 'Company', `${tag}: the header names the audience`);
 
-      // Who can read: one title, a one-line team row, and neither Slack nor another company with neither set up here.
+      // Who can read: one title, a one-line team row, and no Slack with Slack off.
       await page.goto(hub.url + '/#/thread/' + secret.id);
       await page.locator('[data-thv-menu]').click();
       await page.locator('.thv-pop').getByText('Who can read').click();
@@ -274,7 +274,6 @@ async function restrictPerson(hub) {
       const word = await share.locator('.thd-aud-word').boundingBox();
       assert.ok(word.height < 26, `${tag}: A team stays on one line (${word.height}px)`);
       assert.equal(await share.locator('[name=tcn-channel]').count(), 0, `${tag}: no Slack with Slack off`);
-      assert.equal(await share.getByText('Connect a company').count(), 0, `${tag}: no company without the Gateway`);
       await share.locator('[data-close]').first().click();
 
       // Make task twice: the refusal links to the task it repeats, and the button keeps its one line.

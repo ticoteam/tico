@@ -102,7 +102,7 @@ def bot_proposal(world):
     as BotOps writes it when Builder Claude asks (Builder Claude's rights, which do not reach Dana's automation, so the
     PATCH is a proposal). No model runs."""
     from .harness import CLAUDE, DANA, rows
-    listed = _ok(world.api("get", "/api/v2/automations", who=DANA), "list")
+    listed = _ok(world.api("get", "/api/v2/automations?limit=500", who=DANA), "list")
     auto = next(a for a in rows(listed) if a.get("name") == "Inbox triage")
     full = _ok(world.api("get", f"/api/v2/automations/{auto['id']}", who=DANA), "read")
     steps = [dict(s) for s in full["steps"]]
