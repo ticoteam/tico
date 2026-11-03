@@ -72,7 +72,7 @@ def test_a_rule_that_names_no_step_is_flagged_in_the_list_and_the_detail_and_sti
     typ = build_type(api)
     convert(api, typ, [("rule_qa", "QA Fixes")])
     aid = wake_id(api, typ)
-    listed = [a for a in get(api, "automations")["automations"] if a["id"] == aid][0]
+    listed = [a for a in get(api, "automations?limit=500")["automations"] if a["id"] == aid][0]
     [problem] = listed["problems"]
     assert problem["rule"] == "rule_qa" and problem["step"] == "QA Fixes"
     assert "QA/PR Rejected" in problem["why"] and "Ready" in problem["why"]
