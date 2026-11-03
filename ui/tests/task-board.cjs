@@ -553,7 +553,9 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
       await page.goto('http://tico-ui.test/#/settings/tasks');
       const form = page.locator('#settings-tags [data-tag-create]');
       await form.waitFor();
-      await form.locator('.tag-advanced > summary').click();
+      // The form may still be the last create's, left on screen when its tag page was superseded by this visit, with
+      // Advanced already open; a click would close it. Open Advanced only when it is shut.
+      if (!await form.locator('.tag-advanced').evaluate(d => d.open)) await form.locator('.tag-advanced > summary').click();
       return form;
     };
     let form = await newTag();
