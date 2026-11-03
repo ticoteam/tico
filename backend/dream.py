@@ -25,12 +25,16 @@ TITLE = "Dream"
 RECENT_HOURS = 24          # a finished dream is still shown for this long
 SINCE_DAYS = 14            # a first dream reads this far back
 MAX_TEXT = 4000            # the question and the summary, as the panel shows them
+DOING_TEXT = 200           # the one line the bot keeps in the task note while it dreams
 MARK = "dream.start"       # the event dream_start writes on the task; its actor is the task's requester
 # The marker as SQL over `tasks`: an index probe on events_task_origin (actor, action, target) per candidate row.
 MARKED = (f"EXISTS(SELECT 1 FROM events e WHERE e.actor=tasks.requester_id AND e.action='{MARK}' "
           "AND e.target=tasks.id)")
 
 INSTRUCTIONS = """Dream: tidy your own instructions and memory. {requester} started this and is waiting for it.
+They watch this task's note while you work: at the start of each step below, and whenever you begin something that
+takes a while, set it with `hub_task_update` (note only, never the status) to one short line saying what you are
+doing now, e.g. "2/7 Gathering: reading chats since Oct 20" or "5/7 Applying: rewriting the merge rules in AGENT.md".
 
 1. Orient. Read your instructions and memory: AGENT.md, AGENTS.md or CLAUDE.md if present, `memory/` (the working
    rules at the top of memory/learnings.md first, then memory/decisions.md and any index), state.md and `knowledge/`.
@@ -145,7 +149,7 @@ def view(c, who, row):
         return {"dream": None}
     row = dict(row)
     ended = row["status"] in H.TASK_ENDED
-    questions, summary = None, None
+    questions, summary, doing = None, None, None
     if ended:
         state = "done" if row["status"] == "done" else "stopped"
         summary = (row.get("note") or "").strip()
@@ -166,8 +170,9 @@ def view(c, who, row):
             state = "starting"
         else:
             state = "dreaming"
+            doing = (row.get("note") or "").strip()[:DOING_TEXT] or None
     return {"dream": {"task": row["id"], "status": row["status"], "state": state, "questions": questions,
-                      "summary": summary, "closed_at": _ended_at(row) if ended else None,
+                      "summary": summary, "doing": doing, "closed_at": _ended_at(row) if ended else None,
                       "started_at": row["created_at"]}}
 
 

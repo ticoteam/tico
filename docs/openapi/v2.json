@@ -43955,6 +43955,13 @@
                       "null"
                     ]
                   },
+                  "doing": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "While dreaming: the bot's one line on what it is doing now (the task note)"
+                  },
                   "closed_at": {
                     "type": [
                       "string",
@@ -43967,6 +43974,7 @@
                 },
                 "required": [
                   "closed_at",
+                  "doing",
                   "questions",
                   "started_at",
                   "state",

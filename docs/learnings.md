@@ -94,11 +94,13 @@ questions, to someone who may not read the bot). Starting one also records a `dr
 event, not the label, is what makes a task a dream, since anyone can label a task `dream`. It runs as a task turn with the
 bot's own model, and its session resumes after the question. The question is the task's one `hub_task_ask`; ask
 ingest never judges it, since the person started the dream to be asked. They answer it in the panel, on the bot's
-page, where it shows until answered, or in Needs you; the answer wakes the bot as any answer does. The bot ends with
+page, where it shows until answered, or in Needs you; the answer wakes the bot as any answer does. While it works, the bot keeps
+the task note at one short line on what it is doing now, and the panel shows that line and how long the dream has run
+under "Dreaming…". The bot ends with
 one commit of everything it changed, `Dream: ...`, and marks the task done with a short summary. The panel then shows that summary and
 the commits whose source is the dream's task, and **Wake up** returns to the history. **Stop** closes the task.
 
-`GET` answers `{dream: {task, status, state, questions, summary, closed_at, started_at}}` for the bot's open dream
+`GET` answers `{dream: {task, status, state, questions, summary, doing, closed_at, started_at}}` for the bot's open dream
 (on a shared bot, the caller's own branch, where POST files it), or else the newest one finished in the last day, or `{dream: null}`. `state` is `starting`, `dreaming`, `asking`
 (an open question to the requester: `questions` is `{message_id, text, mine}`), `done` or `stopped`.
 
