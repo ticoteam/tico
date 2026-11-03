@@ -40,11 +40,6 @@ function chatDraftSave(P) {
   if (P.files.length) CHAT_FILES.set(P.slug, P.files.slice()); else CHAT_FILES.delete(P.slug);
   try { localStorage.setItem(CHAT_DRAFTS, JSON.stringify(all)); } catch {}
 }
-function botPill(slug) {
-  if (BOT_PILL?.slug === slug) return BOT_PILL;
-  if (BOT_PILL) { chatDraftSave(BOT_PILL); PILLS.delete(BOT_PILL); }
-  return BOT_PILL = pillRestore(makePill({mode: 'chat', slug}));
-}
 // The draft (and files) last left in this bot's box come back.
 function pillRestore(P) {
   const draft = chatDrafts()[P.slug], files = CHAT_FILES.get(P.slug);
@@ -113,7 +108,6 @@ const sendWayOk = mode => mode === 'steer' || mode === 'queue'
   || typeof mode === 'string' && /^defer:[^:]+$/.test(mode) && DELIVERY_FOR.includes(deliveryFor(mode));
 let SEND_WAY = 'steer', SEND_WAY_TIMER = null, SEND_WAY_PICKS = 0;     // picks made on this page, so a late read loses
 const SEND_WAY_PAINT = new Set();          // repaint hooks of the composers on screen that show the way
-SEND_WAY_PAINT.add(() => { for (const P of PILLS) if (P.ways) pillLabel(P); });
 const svgIcon = body => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 const SEND_WAY_ICONS = {
   steer: ICON_SEND,
@@ -194,8 +188,6 @@ function makePill(cfg) {
     el: null, files: [], send: cfg.send || null,
   };
   const attach = cfg.files !== false;
-  // A bot's own chat (not the Assistant page) has the "/" menu and the ways to send, Set as goal among them.
-  const goals = P.ways = P.mode === 'chat' && !!P.slug && !cfg.send;
   const el = P.el = document.createElement('div');
   el.className = 'ask pill-' + P.mode;
   el.innerHTML = `<div class="p-hint muted" hidden></div>
@@ -204,10 +196,7 @@ function makePill(cfg) {
       <textarea class="p-text" rows="1" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="${esc(cfg.label || 'Message this bot')}" placeholder="${esc(cfg.placeholder || 'Type a message…')}"></textarea>
       ${attach ? `<button class="p-attach p-icon" type="button" title="Attach files" aria-label="Attach files">${ICON_CLIP}</button>
       <input type="file" multiple hidden class="p-file">` : ''}
-      ${goals ? `<span class="p-sendbox"><button class="p-stop p-send-icon" type="button" aria-label="Stop" title="Stop" hidden>${ICON_STOP}</button>` : ''}
       <button class="p-send p-send-icon" type="button" aria-label="Send" title="Send">${ICON_SEND}</button>
-      ${goals ? `<button class="p-way p-icon" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Ways to send" title="Ways to send" hidden><span class="nav-icon" aria-hidden="true">expand_more</span></button>
-      <div class="p-menu p-ways" role="menu" aria-label="Ways to send" hidden></div></span>` : ''}
     </div>
     <div class="p-slow muted" role="status" hidden></div>
     <div class="p-why muted" id="p-why-${++PILL_WHY_N}" role="status"></div>
@@ -252,7 +241,6 @@ function makePill(cfg) {
   });
   box.addEventListener('pointerdown', () => { breaks = 0; });
   if (attach) q('.p-attach').onclick = () => q('.p-file').click();
-  if (goals) slashAttach(P);
   if (q('.p-bot')) pillBotWire(q('.p-bot'), P.slug);
   if (attach) q('.p-file').onchange = ev => { P.files.push(...ev.target.files); pillChips(P); chatDraftSave(P); ev.target.value = ''; };
   box.addEventListener('paste', ev => {
@@ -303,21 +291,6 @@ function makePill(cfg) {
     window.addEventListener('pointercancel', release);
     window.addEventListener('blur', release);
   }));
-  if (goals) {
-    q('.p-stop').onclick = () => pillStop(P);
-    // The caret, a right-click or a long press on Send: how messages reach the bot. A way picked here is kept.
-    q('.p-way').onclick = () => pillWayMenu(P, q('.p-ways').hidden);
-    sendWayHold(q('.p-send'), () => pillWayMenu(P, true), () => pillWaysOn(P) && !q('.p-send').disabled);
-    q('.p-ways').onclick = ev => { const b = ev.target.closest?.('[data-deliver]'); if (b) pillWayPick(P, b.dataset.deliver); };
-    q('.p-ways').addEventListener('keydown', ev => deliveryMenuKeys(q('.p-ways'), ev));
-    // Escape closes the menu only, wherever focus is in the composer.
-    el.addEventListener('keydown', ev => {
-      if (ev.key !== 'Escape' || q('.p-ways').hidden) return;
-      ev.preventDefault(); ev.stopPropagation();
-      pillWayMenu(P, false);
-      if (!touchKeyboard()) q('.p-way').focus();
-    }, true);
-  }
   // Safari does not focus buttons on tap. Keep the composer in place until its
   // control click runs; restoring navigation on blur can swallow that tap.
   // Delegate so attachment-removal controls added after selection work too.
@@ -349,56 +322,12 @@ function pillButtons(P) {
   // While the bot runs (chatStopSync sets P.running), Stop takes Send's place until something is typed: a message
   // typed meanwhile still queues for after the run.
   const stop = pq(P, '.p-stop');
-  let stopping = false;
   if (stop) {
-    const show = stopping = !!P.running && !box.value.trim() && !P.files.length;
+    const show = !!P.running && !box.value.trim() && !P.files.length;
     stop.hidden = !show; btn.hidden = show; stop.disabled = !!P.stopping;
-  }
-  const caret = pq(P, '.p-way');
-  if (caret) {
-    caret.hidden = !pillWaysOn(P) || stopping;
-    caret.disabled = btn.disabled;
-    if (caret.hidden || caret.disabled) pillWayMenu(P, false);
   }
   pillWhy(P);
 }
-// The bot chat's ways to send: a hub bot's own chat, sending a message (not a task).
-const pillWaysOn = P => !!P.ways && isKeeper(P.slug) && P.action !== 'task';
-// The way every send goes: the kept way (Steer until one is picked). Goal mode sets a goal instead.
-const pillWay = P => pillWaysOn(P) && !pillGoalMode(P) ? SEND_WAY : null;
-const PILL_DEFER_DEFAULT = 'never';
-function pillWayMenu(P, open) {
-  const menu = pq(P, '.p-ways'), caret = pq(P, '.p-way'); if (!menu || !caret) return;
-  if (!open && menu.hidden) return;
-  const state = V2C?.slug === P.slug ? V2C : null;
-  const goal = !!P.goalMode || !!state?.goalSupported && !goalPinned(state.goal);
-  const current = pillGoalMode(P) ? 'goal' : SEND_WAY;
-  const deferFor = deliveryWay(SEND_WAY) === 'defer' ? deliveryFor(SEND_WAY) : PILL_DEFER_DEFAULT;
-  menu.innerHTML = open ? deliveryMenuHTML({goal, current, deferFor}) : '';
-  menu.hidden = !open;
-  caret.setAttribute('aria-expanded', String(!!open));
-  // On a phone the keyboard stays up: focus stays in the box.
-  if (open && !touchKeyboard()) (menu.querySelector('[aria-checked="true"]') || menu.querySelector('button'))?.focus();
-}
-// Steer, Queue or Defer is kept (compose.send_way); Set as goal is goal mode for one goal, never kept.
-function pillWayPick(P, mode) {
-  pillWayMenu(P, false);
-  if (mode === 'goal') {
-    if (!P.goalMode) chatGoalButton();               // goal mode (ui/app/chat-goal.js)
-  } else {
-    if (P.goalMode) chatGoalButton();                // a way to send leaves goal mode
-    sendWayPick(mode);
-  }
-  pillLabel(P); pillButtons(P);
-  if (!touchKeyboard()) pq(P, '.p-text')?.focus();
-}
-// A press outside the open menu closes it.
-document.addEventListener('pointerdown', ev => {
-  for (const P of PILLS) {
-    const box = pq(P, '.p-sendbox');
-    if (box && !pq(P, '.p-ways').hidden && !box.contains(ev.target)) pillWayMenu(P, false);
-  }
-});
 // Ask the bot's running turn to stop; the button stays pressed until the run ends. `P` is this pill or a composer that
 // redraws its own buttons (P.buttons: a bot's Home or DM, ui/app/thread-view.js).
 async function pillStop(P) {
@@ -466,18 +395,15 @@ const pillGoalMode = P => !!P.goalMode && P.action === 'chat' && !P.send && !P.f
 function pillLabel(P) {
   const btn = pq(P, '.p-send'); if (!btn) return;
   const goal = pillGoalMode(P);
-  if (pillWaysOn(P)) sendWayPaint(btn, goal ? 'goal' : SEND_WAY);           // the way's icon, as on a task
-  else {
-    const word = goal ? 'Set goal' : P.action === 'task' ? 'Send as a task' : P.action === 'reply' ? `Reply on #${P.needsIssue}` : 'Send';
-    // A redraw that replaces the arrow between press and release loses the click in every engine, so the
-    // contents change only when goal mode swaps the arrow for words (and ui/styles/chat.css makes the button itself
-    // the press target).
-    const shows = goal ? word : 'icon';
-    if (btn.dataset.shows !== shows) { btn.innerHTML = goal ? esc(word) : ICON_SEND; btn.dataset.shows = shows; }
-    btn.dataset.word = word;
-    btn.classList.toggle('p-send-goal', goal);
-  }
-  btn.setAttribute('aria-label', btn.disabled && btn.dataset.busy || btn.dataset.word);
+  const word = goal ? 'Set goal' : P.action === 'task' ? 'Send as a task' : P.action === 'reply' ? `Reply on #${P.needsIssue}` : 'Send';
+  // A redraw that replaces the arrow between press and release loses the click in every engine, so the
+  // contents change only when goal mode swaps the arrow for words (and ui/styles/chat.css makes the button itself
+  // the press target).
+  const shows = goal ? word : 'icon';
+  if (btn.dataset.shows !== shows) { btn.innerHTML = goal ? esc(word) : ICON_SEND; btn.dataset.shows = shows; }
+  btn.dataset.word = word;
+  btn.classList.toggle('p-send-goal', goal);
+  btn.setAttribute('aria-label', btn.disabled && btn.dataset.busy || word);
   pillWhy(P);
   const box = pq(P, '.p-text');
   if (box) {
@@ -615,8 +541,7 @@ async function pillSend(P) {
     sessionAcknowledge(box); pillClear(P, true); return;
   }
   if (isKeeper(P.slug)) {                                     // hub.db, not an Issue comment
-    // Every message names the kept way.
-    return P.action === 'task' ? v2PillTask(P, text) : v2ChatSend(P, text, P.slug, {}, deliveryBody(pillWay(P)));
+    return P.action === 'task' ? v2PillTask(P, text) : v2ChatSend(P, text);
   }
   if (P.action === 'task') return pillTask(P, text);
   if (P.action === 'reply' && P.needsIssue) return pillReply(P, text);

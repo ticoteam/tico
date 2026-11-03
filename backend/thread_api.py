@@ -10,12 +10,17 @@ operation), an edit as `threads_edit`. Every list is paged and byte-capped by th
 
 import asyncio
 import json
+from typing import Literal
 
 from fastapi import Query, Request
 from pydantic import BaseModel, Field
 
-from . import org_rule_check, reach, teammate_access, thread_search, threads
+from . import delivery, org_rule_check, reach, teammate_access, thread_search, threads
 from .store import H, Problem
+
+# How a person's message reaches the bot across a bot's Home or a DM with it (backend/delivery.py). Optional: with none
+# a post goes as it always has, into the bot's running turn.
+Way = Literal["steer", "queue", "defer"]
 
 
 class Nothing(BaseModel):
@@ -47,6 +52,8 @@ class ThreadPost(BaseModel):
     to: str | None = None
     refs: dict = Field(default_factory=dict)
     parent_message_id: str | None = None
+    delivery: Way | None = None                   # only in a bot's Home or a DM with one bot
+    defer_for: str | None = None                  # with delivery defer: <n>m, <n>h, <n>d or never (the default)
 
 
 class MessagePatch(BaseModel):
@@ -71,6 +78,8 @@ class DmCreate(BaseModel):
     members: list[str] = Field(..., min_length=1, max_length=50)
     body: str | None = None
     title: str = ""
+    delivery: Way | None = None                   # with `body`, in a DM with one bot
+    defer_for: str | None = None
 
 
 class ThreadUpload(BaseModel):
@@ -81,6 +90,84 @@ class ThreadUpload(BaseModel):
     to: str | None = None
     parent_message_id: str | None = None
     titles: list[str] = Field(default_factory=list, max_length=10)
+    delivery: Way | None = None
+    defer_for: str | None = None
+
+
+def _delivery_words(body):
+    """The `delivery` and `defer_for` a post named, checked before anything is read: 422 when they do not hold together."""
+    if wrong := delivery.check(body.delivery, body.defer_for):
+        raise Problem("delivery", wrong, 422)
+    if body.delivery and getattr(body, "kind", "say") != "say":
+        raise Problem("delivery", "delivery goes with a plain message (kind say)", 422)
+    if any(k in (getattr(body, "refs", None) or {}) for k in ("delivery", "defer_for")):
+        raise Problem("delivery", "Name the way with delivery and defer_for, not in refs", 422)
+    if body.delivery and getattr(body, "parent_message_id", None):
+        raise Problem("delivery", "delivery goes with a message in a bot's Home or DM, not in a sub-thread", 422)
+
+
+def _bot_across(c, v, thread_id, members=None):
+    """The bot on the other side of a post: a bot's Home (its owner), or a DM whose one other member is a bot (`members`
+    for a DM its first message makes). None anywhere else."""
+    if members is not None:
+        others = [a for a in dict.fromkeys(H.resolve_actor(c, m) or m for m in members) if a != v.actor]
+        return others[0] if len(others) == 1 and str(others[0]).startswith("bot:") else None
+    row = threads.thread_row(c, thread_id)
+    if row is None or row.get("parent_id"):
+        return None
+    audience = threads.audience_of(row)
+    if audience == "home":
+        owner = str(threads.home_owner(row) or "")
+        return owner if owner.startswith("bot:") else None
+    if audience in ("personal", "participants"):
+        others = [a for a in threads._dm_members(c, row) if a != v.actor]
+        return others[0] if len(others) == 1 and others[0].startswith("bot:") else None
+    return None
+
+
+def _delivery_refs(c, auth, who, body, thread_id=None, members=None):
+    """(the way, the refs that send it) for a post that named `delivery`, or (None, {}) for one that did not, which goes
+    exactly as before. The rules are a task comment's (backend/app.py): steer and queue wake the bot, so they take the
+    right to message it (Write); a deadline wakes it too, so anyone without that right defers with none. A defer while
+    the bot has a turn going in this thread rides along as a queue. Only a person names a way; a bot's message goes as
+    bot-to-bot messages do."""
+    way, defer_for = body.delivery, body.defer_for
+    if not way:
+        return None, {}
+    if who.role == "bot":
+        raise Problem("delivery", "A bot's message goes as bot-to-bot messages do: send it without a delivery", 422)
+    v = threads.viewer(auth, who)
+    bot = _bot_across(c, v, thread_id, members)
+    if not bot:
+        raise Problem("delivery", "delivery is for a message to a bot: in its Home or a DM with it", 422)
+    try:
+        directs = teammate_access.can(c, who, "write", bot, auth=auth)
+    except (ValueError, KeyError):
+        directs = False
+    if way in ("steer", "queue") and not directs:
+        raise Problem("delivery", "Only someone who may message this bot can wake it: send it with defer", 403)
+    if way == "defer" and not directs:
+        if defer_for not in (None, delivery.NEVER):
+            raise Problem("delivery", "Only someone who may message this bot can give it a deadline: send it with "
+                          "defer and no defer_for", 403)
+        defer_for = None
+    if way == "defer" and thread_id and delivery.running_in_session(c, H.actor_id(bot), [thread_id]):
+        way = "queue"
+    if way == "queue":
+        return way, {"delivery": "queue"}
+    if way == "defer":
+        return way, {"delivery": "defer", "quiet": True, **({"defer_for": defer_for} if defer_for else {})}
+    return way, {}
+
+
+def _sent_as(c, way, message):
+    """What a post that named a way did (delivery.sent_as): the way and, for a defer, its deadline (null: none)."""
+    due = None
+    if way == "defer":
+        row = c.execute("SELECT due_at FROM deferrals WHERE item=? OR item IN (SELECT carrier_id FROM message_deliveries "
+                        "WHERE message_id=? AND carrier_id IS NOT NULL) LIMIT 1", (message["id"], message["id"])).fetchone()
+        due = row[0] if row else None
+    return delivery.sent_as(way, due)
 
 
 def _thread_message(message):
@@ -341,14 +428,18 @@ def install(app, store, auth, mutate, rule_check):
         """A message in the thread (in its sub-thread with `parent_message_id`). A person's or a bot's message passes the
         org-rule check first, outside the write; a held one writes nothing but its hold."""
         who = request.state.identity
+        _delivery_words(body)
         rc = check(who, thread_id, body)
 
         def work(c):
-            message = threads.post(c, threads.viewer(auth, who), thread_id, body.text, kind=body.kind, refs=body.refs,
+            way, marks = _delivery_refs(c, auth, who, body, thread_id) if body.delivery else (None, {})
+            message = threads.post(c, threads.viewer(auth, who), thread_id, body.text, kind=body.kind,
+                                   refs={**body.refs, **marks} if marks else body.refs,
                                    parent_message_id=body.parent_message_id, to_actor=body.to, checked=rc, reach=True)
             if "id" not in message:         # held: post wrote nothing and answers with the hold
                 return message
-            return _thread_message(message)
+            out = _thread_message(message)
+            return {**out, "sent_as": _sent_as(c, way, message)} if way else out
         return mutate(request, body, work)
 
     @app.patch("/api/v2/messages/{message_id}")
@@ -431,6 +522,9 @@ def install(app, store, auth, mutate, rule_check):
         `body` is given. Starting one needs Write on each of them (the reply-back rule applies), as adding them to a
         thread does."""
         who = request.state.identity
+        if body.delivery and not body.body:
+            raise Problem("delivery", "delivery goes with a first message (body)", 422)
+        _delivery_words(body)
         start = {"dm": body.members, "title": body.title}
         rc = rule_check(who, "threads", body.body, lambda c: org_rule_check.thread_people(c, {"start": start}), "", {},
                         place=lambda c, author, people: org_rule_check.place_for_start(
@@ -441,10 +535,14 @@ def install(app, store, auth, mutate, rule_check):
             if not body.body:
                 return threads.dm(c, v, body.members, title=body.title)
             # The open DM with these people gets the message, or a new one is made with it: a held message makes none.
-            posted = threads.post(c, v, None, body.body, checked=rc, start=start, reach=True)
+            way, marks = _delivery_refs(c, auth, who, body, members=body.members) if body.delivery else (None, {})
+            posted = threads.post(c, v, None, body.body, refs=marks or None, checked=rc, start=start, reach=True)
             if "id" not in posted:          # held: no DM is made, its first message is the hold
                 return posted
-            return {**threads.get(c, v, posted["conversation_id"]), "message": _thread_message(posted)}
+            message = _thread_message(posted)
+            if way:
+                message = {**message, "sent_as": _sent_as(c, way, posted)}
+            return {**threads.get(c, v, posted["conversation_id"]), "message": message}
         return mutate(request, body, work)
 
     @app.put("/api/v2/messages/{message_id}/reactions/{emoji}")
@@ -485,6 +583,7 @@ def install(app, store, auth, mutate, rule_check):
         checked = {}
 
         def admit(body):
+            _delivery_words(body)
             with store.read() as c:
                 threads.require(c, threads.viewer(auth, who), thread_id, write=True)
             checked["rc"] = check(who, thread_id, body)
@@ -494,16 +593,20 @@ def install(app, store, auth, mutate, rule_check):
 
         def work(c):
             v = threads.viewer(auth, who)
+            way, marks = _delivery_refs(c, auth, who, body, thread_id) if body.delivery else (None, {})
             items = [register(c, who, **upload) for upload in uploads]
             for index, item in enumerate(items):
                 caption = body.titles[index] if index < len(body.titles) else ""
                 item["title"] = caption or item["name"]
-            posted = threads.post(c, v, thread_id, body.text, kind=body.kind, to_actor=body.to,
+            posted = threads.post(c, v, thread_id, body.text, kind=body.kind, to_actor=body.to, refs=marks or None,
                                   parent_message_id=body.parent_message_id, checked=checked["rc"],
                                   attachments=items or None)
             if "id" not in posted:          # held: its files are in the hold's replay, linked when it is released
                 return posted
-            return {"thread": threads.get(c, v, thread_id), "message": _thread_message(H.message(c, posted["id"]))}
+            message = _thread_message(H.message(c, posted["id"]))
+            if way:
+                message = {**message, "sent_as": _sent_as(c, way, posted)}
+            return {"thread": threads.get(c, v, thread_id), "message": message}
         return await asyncio.to_thread(app.state.uploads.write, request, body, uploads, work)
 
     # The search index (migration 0047) follows every write through its triggers. Install can run before the schema,
