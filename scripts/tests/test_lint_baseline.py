@@ -3,6 +3,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import lint_baseline  # noqa: E402
 
@@ -54,3 +56,48 @@ def test_a_copy_whose_old_path_still_holds_code_or_a_suppression_carries_nothing
     # Only the forwarder's allowance moves, and it leaves its old path: the other two copies show up as growth.
     assert carried == {("old/rewritten.py", "BLE001"), ("old/kept.py", "BLE001"), ("new/forwarder.py", "BLE001")}
     assert new - carried == {("new/rewritten.py", "BLE001"), ("new/kept.py", "BLE001")}
+
+
+FORWARDERS = {
+    "comment only": ("def jobs(value):  # moved to new.jobs\n    return value\n", False),
+    "near-name import": ("from new import jobs_extra as _real\n\n\ndef jobs(value):\n    return _real.run(value)\n", False),
+    "a near-name import alone": ("import sys\n\nfrom new import jobs_extra as _real\n\nsys.modules[__name__] = _real\n", False),
+    "sys.modules": ('"""Moved."""\nimport sys\n\nfrom new import jobs as _real\n\nsys.modules[__name__] = _real\n', True),
+    "import as": ("import sys\n\nimport new.jobs as _real\n\nsys.modules[__name__] = _real\n", True),
+    "runpy __main__": ('import runpy\nimport sys\n\nif __name__ == "__main__":\n'
+                       '    runpy.run_module("new.jobs", run_name="__main__", alter_sys=True)\n'
+                       "else:\n    from new import jobs as _real\n\n    sys.modules[__name__] = _real\n", True),
+    "runpy of another module": ('import runpy\n\nrunpy.run_module("new.jobs_extra", run_name="__main__")\n', False),
+    "getattr package": ("from new import jobs as _real\n\n\ndef __getattr__(name):\n    return getattr(_real, name)\n", True),
+    "forwarder plus a function": ("import sys\n\nfrom new import jobs as _real\n\nsys.modules[__name__] = _real\n\n\n"
+                                  "def helper(value):\n    return value\n", False),
+}
+
+
+@pytest.mark.parametrize("case", list(FORWARDERS))
+def test_only_a_real_forwarder_takes_a_copied_files_allowances_along(case, tmp_path, monkeypatch):
+    text, moves = FORWARDERS[case]
+    body = "".join(f"def helper_{i}(value):\n    return value + {i}\n\n\n" for i in range(40))
+    (tmp_path / "old").mkdir()
+    (tmp_path / "old" / "jobs.py").write_text(body)
+    git(tmp_path, "init", "-q", "-b", "main")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-q", "-m", "one")
+    (tmp_path / "new").mkdir()
+    (tmp_path / "new" / "jobs.py").write_text(body)
+    (tmp_path / "old" / "jobs.py").write_text(text)
+    git(tmp_path, "add", "-A")
+    monkeypatch.setattr(lint_baseline, "ROOT", tmp_path)
+    assert lint_baseline.forwards_to("old/jobs.py", "new/jobs.py") is moves
+    carried = lint_baseline.carry_moves({("old/jobs.py", "BLE001")}, {("new/jobs.py", "BLE001")}, "HEAD")
+    assert carried == {("new/jobs.py" if moves else "old/jobs.py", "BLE001")}
+
+
+def test_a_package_main_forwarder_and_a_shell_file(tmp_path, monkeypatch):
+    (tmp_path / "old").mkdir()
+    (tmp_path / "old" / "__main__.py").write_text('import runpy\n\nrunpy.run_module("new", run_name="__main__")\n')
+    (tmp_path / "old" / "bash-env").write_text('. "${BASH_ENV%/old/bash-env}/new/bash-env"\n')
+    monkeypatch.setattr(lint_baseline, "ROOT", tmp_path)
+    assert lint_baseline.forwards_to("old/__main__.py", "new/__main__.py")
+    assert not lint_baseline.forwards_to("old/__main__.py", "new/jobs.py")
+    assert not lint_baseline.forwards_to("old/bash-env", "new/bash-env")    # ruff allowances are Python's only

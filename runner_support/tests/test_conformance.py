@@ -1351,8 +1351,9 @@ def test_a_completed_turn_publishes_the_bots_report_as_a_tico_file(api, computer
 
 
 def test_python_m_runner_run_is_the_rust_runner_and_says_so_in_readiness(api, live, tmp_path, rust_binary):
-    """What launchd, systemd and the image start: `python -m runner_support run` with no engine setting execs the Rust runner,
-    which reports its engine and build, and follows the server's release (it reports one)."""
+    """What launchd, systemd (`python -m runner run`, forwarded) and the image start: `python -m runner_support run` with
+    no engine setting execs the Rust runner, which reports its engine and build, and follows the server's release (it
+    reports one)."""
     machine = Computer(api, live, tmp_path, "claude", rust_binary, shim=True, env={"TICO_RUNNER_BIN": str(rust_binary)})
     try:
         machine.start()

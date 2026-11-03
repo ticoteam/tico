@@ -12,8 +12,8 @@ from . import importers, mail_key
 
 
 # The Rust runner's own commands: `python -m runner_support <one>` execs it with the same arguments (engine.py), so
-# launchd plists and systemd units that say `python -m runner_support run|doctor|...` (or `python -m runner ...`, from
-# earlier releases: runner/__main__.py) keep working.
+# launchd plists and systemd units, which say `python -m runner run|doctor|...` (runner/__main__.py forwards here),
+# keep working.
 BINARY = ("enroll", "profile", "status", "doctor", "adopt", "run")
 
 

@@ -1,5 +1,6 @@
 """`python -m runner_support run` is a shim: it execs this checkout's Rust runner (runner-rs/). launchd plists and systemd
-units from every install start it, and the binary's path changes with the checkout, so no unit names the binary.
+units from every install start it (as `python -m runner run`, runner/__main__.py), and the binary's path changes with
+the checkout, so no unit names the binary.
 
 The binary is $TICO_RUNNER_BIN (the Docker image's), else this checkout's runner-rs/target/release/tico-runner, else
 the one downloaded for this release (runner-rs/target/dist/<source id>/tico-runner), and only one whose `--version` is

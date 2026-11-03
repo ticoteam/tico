@@ -13,6 +13,7 @@ Findings are read with the baseline switched off (`--config "lint.per-file-ignor
 every real finding. Test files keep their own minimal rule set in ruff.toml and are not part of the baseline.
 """
 import argparse
+import ast
 import collections
 import json
 import os
@@ -97,21 +98,62 @@ def suppression_set(ruff_text, baseline_text):
     return ignores, set(config.get("select", []))
 
 
-FORWARDER_LINES = 40
-
-
 def forwards_to(source, dest):
-    """True when `source` is now a small file that hands over to `dest`'s module (runner/engine.py importing
-    runner_support.engine), not a rewritten implementation."""
+    """True when `source` is now only a forwarder to `dest`'s module (runner/engine.py: `from runner_support import
+    engine as _real; sys.modules[__name__] = _real`, or `runpy.run_module("runner_support.engine", ...)`), not code.
+    Ruff allowances are Python's, so only a Python file can be one."""
     path = ROOT / source
-    if not path.is_file():
+    if path.suffix != ".py" or Path(dest).suffix != ".py" or not path.is_file():
         return False
-    text = path.read_text(encoding="utf-8", errors="replace")
-    if len(text.splitlines()) > FORWARDER_LINES:
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (SyntaxError, UnicodeDecodeError, ValueError):
         return False
-    module = dest.removesuffix(".py").removesuffix("/__init__").replace("/", ".")
+    parts = Path(dest).with_suffix("").parts
+    module = ".".join(parts[:-1] if parts[-1] in ("__init__", "__main__") else parts)
     package, _, name = module.rpartition(".")
-    return module in text or bool(package) and f"from {package} import {name}" in text
+    reaches = []
+
+    def is_target_import(node):
+        if isinstance(node, ast.ImportFrom):
+            return node.level == 0 and node.module == package and [a.name for a in node.names] == [name]
+        return isinstance(node, ast.Import) and [a.name for a in node.names] == [module]
+
+    def allowed(node):
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            return True
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            if is_target_import(node):
+                reaches.append(node)
+                return True
+            return isinstance(node, ast.Import) and all(a.name in ("sys", "runpy") and a.asname is None
+                                                        for a in node.names)
+        if isinstance(node, ast.Assign):      # sys.modules[__name__] = <name>
+            target = node.targets[0] if len(node.targets) == 1 else None
+            return (isinstance(target, ast.Subscript) and ast.unparse(target) == "sys.modules[__name__]"
+                    and isinstance(node.value, ast.Name))
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):     # runpy.run_module("<module>", ...)
+            call = node.value
+            if (ast.unparse(call.func) == "runpy.run_module" and call.args
+                    and isinstance(call.args[0], ast.Constant) and call.args[0].value == module):
+                reaches.append(node)
+                return True
+            return False
+        if isinstance(node, ast.If):          # if __name__ == "__main__": ... else: ...
+            return (ast.unparse(node.test) in ("__name__ == '__main__'", '__name__ == "__main__"')
+                    and all(map(allowed, node.body)) and all(map(allowed, node.orelse)))
+        if isinstance(node, ast.FunctionDef):  # def __getattr__(name): return getattr(<alias>, name)
+            args = node.args
+            return (node.name == "__getattr__" and not node.decorator_list and [a.arg for a in args.args] == ["name"]
+                    and not (args.posonlyargs or args.kwonlyargs or args.vararg or args.kwarg or args.defaults)
+                    and len(node.body) == 1 and isinstance(node.body[0], ast.Return) and node.body[0].value is not None
+                    and isinstance(node.body[0].value, ast.Call)
+                    and ast.unparse(node.body[0].value.func) == "getattr" and len(node.body[0].value.args) == 2
+                    and isinstance(node.body[0].value.args[0], ast.Name)
+                    and ast.unparse(node.body[0].value.args[1]) == "name")
+        return False
+
+    return all(map(allowed, tree.body)) and bool(reaches)
 
 
 def moved_since(ref, suppressed=frozenset()):

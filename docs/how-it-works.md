@@ -146,14 +146,16 @@ one `SELECT` at a time, each caller seeing only what the JSON API would show it,
 
 **Your Mac's runner** — the Rust runner `tico-runner` (`runner-rs/`), with Python helpers in `runner_support/` for the side
 jobs, registered once with **Add computer** in **Settings → Computers** (`scripts/setup-runner.sh`, credential in
-`~/.config/tico/runner.json`). Four launchd jobs, installed and managed with `scripts/tico`:
+`~/.config/tico/runner.json`). Four launchd jobs, installed and managed with `scripts/tico`. Their plists name
+`runner`, which forwards to `runner_support/` (runner/__init__.py), so a computer moved back to an older release still
+starts them:
 
 | Job | Command | What it does |
 |---|---|---|
-| `team.tico.tico-bot` | `python -m runner_support run` (execs `tico-runner run`) | Heartbeats every 15 s with readiness, claims work for the bots assigned to this computer, runs each run in the bot's local repository with the local model CLI, streams output back |
-| `team.tico.tico-connectors` | `python -m runner_support connectors` | Publishes calendar snapshots, executes Tico-queued calendar appointments, and pushes persisted mail from local Google access (Ana's Mac, or a Linux runner that holds the Google key) |
-| `team.tico.tico-close-calls` | `python -m runner_support close-calls` | Every five minutes, imports available Close call and Notetaker meeting transcripts without fetching audio, using the local Close key (Ana's Mac only; `scripts/tico install close-calls`) |
-| `team.tico.tico-importers` | `python -m runner_support importers` | Runs the meeting importers the owner turned on for this computer (Zoom, Google Meet, Granola), using credentials kept in `secrets/` here; see [Meetings](meetings.md#meeting-importers) (`scripts/tico install importers`) |
+| `team.tico.tico-bot` | `python -m runner run` (execs `tico-runner run`) | Heartbeats every 15 s with readiness, claims work for the bots assigned to this computer, runs each run in the bot's local repository with the local model CLI, streams output back |
+| `team.tico.tico-connectors` | `python -m runner connectors` | Publishes calendar snapshots, executes Tico-queued calendar appointments, and pushes persisted mail from local Google access (Ana's Mac, or a Linux runner that holds the Google key) |
+| `team.tico.tico-close-calls` | `python -m runner close-calls` | Every five minutes, imports available Close call and Notetaker meeting transcripts without fetching audio, using the local Close key (Ana's Mac only; `scripts/tico install close-calls`) |
+| `team.tico.tico-importers` | `python -m runner importers` | Runs the meeting importers the owner turned on for this computer (Zoom, Google Meet, Granola), using credentials kept in `secrets/` here; see [Meetings](meetings.md#meeting-importers) (`scripts/tico install importers`) |
 
 A Linux runner (the Docker image) has no launchd: with `TICO_SIDE_JOBS=1` (set by the image) `tico-runner run` supervises `importers` (while Tico assigns importers to this computer) and
 `close-calls` (while the Close key is in `secrets/`) and `connectors` (while `secrets/google-sa.json` is there, or
