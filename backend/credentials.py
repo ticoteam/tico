@@ -103,6 +103,28 @@ def granted(c, subject):
     return found
 
 
+def prime_granted(c, subjects):
+    """`granted` for many subjects in one read per 500, seeded into the snapshot so each later `granted(c, subject)`
+    reads nothing. Outside a snapshot nothing is kept."""
+    from . import read_cache
+    values = read_cache.cache(c)
+    if values is None:
+        return
+    wanted = sorted({s for s in subjects if ("credential_granted", s) not in values})
+    found = {s: set() for s in wanted}
+    for part in H.chunks(wanted):
+        for subject, credential in c.execute(
+                'SELECT g.subject,g.credential_id FROM credential_grants g '
+                'LEFT JOIN credential_grants p ON p.id=g.parent_id '
+                "LEFT JOIN bot_config bc ON g.subject='bot:'||bc.bot "
+                f"WHERE g.subject IN ({','.join('?' * len(part))}) AND g.revoked_at IS NULL "
+                "AND (g.parent_id IS NULL OR (p.revoked_at IS NULL AND p.id IS NOT NULL "
+                "AND p.subject='human:'||bc.owner_id))", part):
+            found[subject].add(credential)
+    for subject in wanted:
+        values[("credential_granted", subject)] = frozenset(found[subject])
+
+
 def permitted(c, who, credential, admins):
     return administrator(c, who, admins) or (who.role in ('human', 'owner', 'bot')
                                              and effective_grant(c, credential, who.actor) is not None)
