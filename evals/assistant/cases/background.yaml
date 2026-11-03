@@ -21,7 +21,7 @@
           - {id: 7d21c4a0-1000-4000-8000-000000000008, title: "Approve the v0.5.0 release publish", status: waiting, owner: "human:dana", requester: "bot:release-manager", note: "Ready for your publish approval.", created: "2026-10-29T09:00:00Z", updated: "2026-11-01T09:00:00Z"}
         next_offset: null
     - match: '^assistant propose'
-      out: {ok: true, proposal: {id: prop_sweep_1, status: waiting_for_confirm, actions: 5}}
+      out: {ok: true, proposal: {id: prop_sweep_1, status: waiting_for_confirm, actions: 6}}
     - match: '^task (bulk close|close)'
       out: {ok: true, closed: 0}
   must:

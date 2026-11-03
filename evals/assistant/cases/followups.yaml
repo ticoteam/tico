@@ -89,6 +89,8 @@
         more_messages: false
         tasks: []
         notices: []
+    - match: '^needs-you show'
+      out: {total: 4, by_kind: {approval: 4}, by_bot: [{bot: release-manager, count: 3}, {bot: billing, count: 1}]}
     - match: '^approval decline 3a7c9e01-8200-4000-8000-000000000001\S*'
       out: {ok: true, id: 3a7c9e01-8200-4000-8000-000000000001, status: declined, decided_by: "human:dana (via Assistant)"}
     - match: '^approval decline 3a7c9e02-8200-4000-8000-000000000002\S*'
@@ -167,8 +169,12 @@
         automations:
           - {id: auto_health_pings, name: "Health Monitor runner queue ping", owner: "bot:health-monitor", trigger: "every 6 hours", enabled: true, runs_7d: 24, creates: "one task per run, owner human:dana"}
         next: null
-    - match: '^automation update auto_health_pings'
+      after:
+        - {when: '^automation update auto_health_pings .*--disable', out: {automations: [{id: auto_health_pings, name: "Health Monitor runner queue ping", owner: "bot:health-monitor", trigger: "every 6 hours", enabled: false, runs_7d: 24, creates: "one task per run, owner human:dana"}], next: null}}
+    - match: '^automation update auto_health_pings .*--disable'
       out: {ok: true, id: auto_health_pings, enabled: false, version: 4, summary: "turned off at the owner's request via Assistant"}
+    - match: '^automation update auto_health_pings'
+      out: {ok: true, id: auto_health_pings, enabled: true, version: 4}
     - match: '^rules add'
       out: {ok: true, id: rule_1190, status: active}
   must:

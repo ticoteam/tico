@@ -63,6 +63,8 @@
           requested_by: "bot:release-manager"
           payload: {release: "v0.5.17", channel: stable}
           note: "Superseded by v0.5.20, which shipped Nov 2."
+      after:
+        - {when: '^approval decline 2a7f0c9e', out: {approval: {id: 2a7f0c9e-4000-4000-8000-000000000001, kind: publish, status: declined, requested_by: bot:release-manager, payload: {release: v0.5.17, channel: stable}, note: "Superseded by v0.5.20, which shipped Nov 2.", decided_by: "human:dana (via Assistant)"}}}
     - match: '^approval decline 2a7f0c9e\S*'
       out: {ok: true, id: 2a7f0c9e-4000-4000-8000-000000000001, status: declined, decided_by: "human:dana (via Assistant)"}
   must:
