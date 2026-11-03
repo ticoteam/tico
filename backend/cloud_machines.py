@@ -866,7 +866,9 @@ class Manager:
         try:
             with self.store.transaction() as c:
                 current = row(c, key)
-                if current and current["problem"] != "error:" + code:
+                # A problem already named (out of credit, a refusal, stuck) says more, and its retries key on it.
+                if current and (current["problem"] == "" or current["problem"].startswith("error:")) \
+                        and current["problem"] != "error:" + code:
                     save(c, key, problem="error:" + code, problem_at=H.now())
         except Exception:  # noqa: BLE001 - recording the failure never breaks the loop
             log.exception("Naming a cloud machine's failure failed for %s", key)
@@ -886,8 +888,11 @@ class Manager:
                     c.execute("DELETE FROM registry_metadata WHERE key=?", (SIZES_KEY,))
             return None
         self.relist = False
-        self.list_refused = None
+        was, self.list_refused = self.list_refused, None
         with self.store.transaction() as c:
+            if was:                                         # what a create waiting on the list said (no refusal of its own)
+                c.execute("UPDATE cloud_machines SET problem='',problem_at=NULL WHERE problem=? AND failures=0",
+                          ("hq:" + was,))
             learned = bool(listed["sizes"]) and (first or not sizes(c))
             if listed["sizes"]:
                 c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "

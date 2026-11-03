@@ -1926,3 +1926,16 @@ def test_a_list_that_breaks_outside_hq_still_lets_the_looks_run_and_says_why(clo
     assert cloud.tick(CM.BACKOFF) == [] and cloud.row("cpo")["problem"] == "hq:ValueError"
     cloud.hq.list = listed
     assert "create" in cloud.tick(CM.BACKOFF_MAX) and cloud.row("cpo")["problem"] == ""
+
+
+def test_a_failing_look_never_hides_a_named_problem_and_a_listed_outage_clears_without_a_create(cloud):
+    adopt(cloud)
+    with cloud.store.transaction() as c:
+        CM.save(c, "ops", problem="out_of_credit", problem_at=H.now())
+    cloud.manager.failed("ops", RuntimeError("blip"))
+    assert cloud.row()["problem"] == "out_of_credit"            # its credit retry keys on it
+    with cloud.store.transaction() as c:
+        CM.save(c, "ops", problem="hq:unreachable", problem_at=H.now())   # said while a create waited on the list
+    cloud.manager.list_refused = "unreachable"
+    cloud.manager.synced = None
+    assert cloud.tick(10) == [] and cloud.row()["problem"] == ""          # the list is back; no work, nothing made
