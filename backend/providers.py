@@ -202,7 +202,7 @@ class _ById(dict):
 MODEL_BY_ID = _ById((row["id"], row) for row in MODEL_CATALOG)
 
 # What a model costs at the provider's public list price, in USD per 1M tokens: (input, cached input,
-# output). Usage (backend/usage.py) multiplies a run's token counts by these to estimate spend, so a
+# output). The one exception is gpt-6.1-terra, Tico's approved rate (its row says so). Usage (backend/usage.py) multiplies a run's token counts by these to estimate spend, so a
 # model missing here shows its tokens and no cost. Standard tier, prompts under the long-context
 # threshold; batch, priority, regional and cache-write premiums are not modelled (a cache write is
 # counted as input). A bot that names a model by another id than these gets no estimate.
@@ -276,9 +276,12 @@ PRICES = _Priced({
 # included, and each request is priced on its own. Anthropic's pricing page ("Long context pricing"), read
 # 2026-10-17: only Claude Haiku 5.5; Claude 4.6 and later models bill their whole context at the standard rate.
 # The Gateway's (Low tiers, Cheap 1.1) come from its own price (backend/gateway_tiers.py), not Anthropic's page.
+# gpt-6.1-terra's row is Tico's approved long-prompt tier (Product, 2026-11-01), not a provider page: its 272,000
+# threshold is not yet confirmed on OpenRouter's model page, which must happen before availability is opened.
 LONG_PROMPT_AS_OF = "2026-10-17"
 LONG_PROMPT = _Priced({
     "claude-haiku-5-5": (100_000, (0.50, 0.05, 2.50)),
+    "gpt-6.1-terra": (272_000, (2.50, 0.125, 9.375)),
 }, gateway_tiers.long_prompt_for)
 
 

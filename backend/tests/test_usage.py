@@ -245,11 +245,24 @@ def test_tico_cheap_1_1_bills_a_prompt_over_100k_whole_at_its_long_rate():
         (100_001 * 0.15 + 1_000 * 0.75) / 1e6)
 
 
+def test_gpt_6_1_terra_bills_a_prompt_over_272k_whole_at_its_long_rate():
+    """Product's tier (2026-11-01): a prompt of exactly 272,000 tokens is standard; one more is the whole request at the long rate."""
+    standard = lambda n: (n * 1.25 + 1_000 * 6.25) / 1e6
+    over = lambda n: (n * 2.50 + 1_000 * 9.375) / 1e6
+    assert providers.estimate("gpt-6.1-terra", 272_000, 0, 1_000, [[272_000, 0, 1_000]]) == (pytest.approx(standard(272_000)), False)
+    assert providers.estimate("gpt-6.1-terra", 272_001, 0, 1_000, [[272_001, 0, 1_000]]) == (pytest.approx(over(272_001)), False)
+    # Cached input counts toward the prompt: 1,000 uncached plus 271,001 cached is over; 271,000 cached is not.
+    assert providers.estimate("gpt-6.1-terra", 1_000, 271_001, 500, [[1_000, 271_001, 500]])[0] == pytest.approx(
+        (1_000 * 2.50 + 271_001 * 0.125 + 500 * 9.375) / 1e6)
+    assert providers.estimate("gpt-6.1-terra", 1_000, 271_000, 500, [[1_000, 271_000, 500]])[0] == pytest.approx(
+        (1_000 * 1.25 + 271_000 * 0.0625 + 500 * 6.25) / 1e6)
+
+
 def test_gpt_6_1_terra_is_priced_at_tico_s_approved_rate_for_a_run_and_its_estimate(api):
     """Synthetic run only: no provider or billing call. The rate is Tico's (Chris, 2026-10-28), not OpenAI's list price."""
     expected = (1_000 * 1.25 + 2_000 * 0.0625 + 500 * 6.25) / 1e6                  # 0.0045
     assert providers.estimate_cost("gpt-6.1-terra", 1_000, 2_000, 500) == pytest.approx(expected)
-    assert providers.estimate("gpt-6.1-terra", 1_000, 2_000, 500) == (pytest.approx(expected), False)
+    assert providers.estimate("gpt-6.1-terra", 1_000, 2_000, 500) == (pytest.approx(expected), True)   # no per-request counts: may be low
     r, _, attempt = setup_attempt(api)
     complete(api, r, attempt, {"input_tokens": 1_000, "cached_tokens": 2_000, "output_tokens": 500,
                                "model": "gpt-6.1-terra", "runtime": "codex", "billing": "api"})
