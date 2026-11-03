@@ -365,3 +365,25 @@ def test_the_screen_relay_borrowers_and_scripts_tico_runs_are_native():
     names = ['backend/tests/test_screen.py', 'backend/tests/test_browser_exit_relay.py',
              'runner/tests/test_systemd_units.py', 'backend/tests/test_api.py', 'backend/tests/test_selected_claim.py']
     assert release_checks.native_test_files(names) == set(names[:3])
+
+
+def test_batches_cut_a_shard_in_order_at_the_test_budget():
+    counts = {'a': 300, 'b': 200, 'c': 100, 'd': 500, 'e': 50}
+    assert release_checks.batches(['a', 'b', 'c', 'd', 'e'], counts, limit=400) == [['a'], ['b', 'c'], ['d'], ['e']]
+    assert release_checks.batches([], {}) == []
+
+
+def test_python_shard_runs_every_batch_in_its_own_pytest_process_even_after_a_failure(monkeypatch):
+    counts = {'a.py': 300, 'b.py': 300, 'c.py': 10}
+    runs = []
+
+    def run(cmd, **kwargs):
+        runs.append(cmd)
+        return SimpleNamespace(returncode=1 if 'a.py' in cmd else 0)
+    monkeypatch.setattr(release_checks, 'collected_counts', lambda env, selection: counts)
+    monkeypatch.setattr(release_checks, 'shard_files', lambda index, total, env, selection=(), counts=None: sorted(counts))
+    monkeypatch.setattr(release_checks, 'subprocess', SimpleNamespace(run=run))
+
+    assert release_checks.python_shard(1, 1) == 1
+    assert len(runs) == 2
+    assert runs[0][-1:] == ['a.py'] and runs[1][-2:] == ['b.py', 'c.py']

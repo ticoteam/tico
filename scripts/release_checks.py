@@ -272,11 +272,8 @@ def native_test_files(names):
 NATIVE_SHARDS = 2
 
 
-def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=False):
-    """The test files of shard `index` of `total`: every file pytest collects with `selection` (by default the
-    release Python step's), grouped so each shard takes about the same time: the slowest file by its recorded
-    seconds first, into the lightest shard. A file with no record weighs its test count times the recorded files'
-    seconds per test. Deterministic, so the N shards together cover each collected file exactly once."""
+def collected_counts(env, selection):
+    """{test file: its number of collected tests} for pytest's `selection` (by default the release Python step's)."""
     result = subprocess.run([sys.executable, '-m', 'pytest', '--collect-only', '-q', '-n', '0', *selection],
                             cwd=ROOT, env=env, capture_output=True, text=True)
     if result.returncode:
@@ -287,6 +284,15 @@ def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=Fal
         if '::' in line and not line.startswith(' '):
             name = line.split('::', 1)[0]
             counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def shard_files(index, total, env, selection=RELEASE_SELECTION, native_first=False, counts=None):
+    """The test files of shard `index` of `total`: every file pytest collects with `selection` (by default the
+    release Python step's), grouped so each shard takes about the same time: the slowest file by its recorded
+    seconds first, into the lightest shard. A file with no record weighs its test count times the recorded files'
+    seconds per test. Deterministic, so the N shards together cover each collected file exactly once."""
+    counts = collected_counts(env, selection) if counts is None else counts
     if len(counts) < total:
         raise RuntimeError(f'{len(counts)} test files cannot fill {total} shards')
     timings = recorded_timings('release' if selection else 'default')
@@ -444,18 +450,41 @@ def record_browser_timings(*logs):
     return 0
 
 
+# Each test leaves memory behind in its xdist worker, and xdist frees none of it: one pytest process per shard grew
+# about 25 MB per test per worker until the 32 GB VM ran out. A shard therefore runs as batches of about this many
+# tests, each in a fresh pytest process, so the workers start empty for every batch.
+TESTS_PER_BATCH = 400
+
+
+def batches(files, counts, limit=TESTS_PER_BATCH):
+    """`files`, in order, cut into groups of at most `limit` tests; a file with more tests than that forms a group alone."""
+    groups, group, tests = [], [], 0
+    for name in files:
+        if group and tests + counts[name] > limit:
+            groups.append(group)
+            group, tests = [], 0
+        group.append(name)
+        tests += counts[name]
+    if group:
+        groups.append(group)
+    return groups
+
+
 def python_shard(index, total):
     """File group `index` of `total` of the default Python suite: the PR-check Python job, split over VMs."""
     started, initial_load = time.monotonic(), load()
     env = {**os.environ, 'TICO_PYTHON': sys.executable}
+    counts = collected_counts(env, ())
+    files = shard_files(index, total, env, selection=(), counts=counts)
     # Alone on its VM, a shard uses every core rather than pytest.ini's shared-box cap.
     workers = str(os.cpu_count() or 2)
-    result = subprocess.run([sys.executable, '-m', 'pytest', '-q', '-n', workers, '--api-database-snapshots']
-                            + shard_files(index, total, env, selection=()),
-                            cwd=ROOT, env=env)
-    print(f'Python shard {index}/{total}: exit {result.returncode}, {time.monotonic() - started:.2f}s; '
+    codes = [subprocess.run([sys.executable, '-m', 'pytest', '-q', '-n', workers, '--api-database-snapshots', *group],
+                            cwd=ROOT, env=env).returncode
+             for group in batches(files, counts)]
+    code = next((code for code in codes if code), 0)
+    print(f'Python shard {index}/{total}: {len(codes)} batches, exit {code}, {time.monotonic() - started:.2f}s; '
           f'load {initial_load} -> {load()}', flush=True)
-    return result.returncode
+    return code
 
 
 def phase_table(checks, started, not_run=()):
