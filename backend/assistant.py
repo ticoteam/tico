@@ -254,8 +254,21 @@ NEVER = [(m, re.compile(p)) for m, p in (
     ("PATCH", r"/api/v2/messages/[^/]+"), ("DELETE", r"/api/v2/messages/[^/]+"),
     ("POST", r"/api/v2/messages/[^/]+/redact"),
     # A person's password and a reader's invite link: each carries a credential the chat would hold.
-    ("POST", r"/api/v2/access/(people|humans)/[^/]+/password"), ("POST", r"/api/v2/audiences/[^/]+/invites"),
-    (None, r"/api/v2/setup/company/people/[^/]+/invite"),
+    ("POST", r"/api/v2/access/(people|humans)/[^/]+/password"), (None, r"/api/v2/audiences/[^/]+/invites(/.*)?"),
+    (None, r"/api/v2/setup/company/people/[^/]+/invite"), (None, r"/api/v2/access/(humans|people)/[^/]+/invite"),
+    # The access rules say who may use the company's credentials: the owner's own sign-in.
+    (None, r"/api/v2/access/rules"),
+    # A computer's adoption and removal (its enrolment is the person's own tap, and a removal ends its sign-ins).
+    (None, r"/api/v2/runners/adopt"), (None, r"/api/v2/computers/[^/]+/removals(/.*)?"),
+    # A token for GitHub, a webhook's signing secret and the wake-URL secret: credentials, never a chat's to set.
+    (None, r"/api/v2/github/token"), (None, r"/api/v2/webhooks/[^/]+/rotate"), (None, r"/api/v2/hooks/wake-url"),
+    # Connections to an outside account: a mail sign-in, the bank and the books, a meeting provider, an importer's login
+    # and the postal intake. Federation shares threads with another company, so it sends outside.
+    (None, r"/api/v2/mail/google/connect"), (None, r"/api/v2/finance/(connections|books/connect)(/.*)?"),
+    ("POST", r"/api/v2/live-meetings"), ("POST", r"/api/v2/meeting-importers/[^/]+"), (None, r"/api/v2/postal/intake"),
+    (None, r"/api/v2/federation(/.*)?"),
+    # Subscriptions: the owner's own tap.
+    (None, r"/api/v2/subscriptions(/.*)?"), (None, r"/api/v2/runner-subscription-refreshes(/.*)?"),
     # Single sign-on, the directory and its SCIM token, and the OAuth sign-in of an agent.
     (None, r"/api/v2/directory(/.*)?"), (None, r"/api/v2/oauth(/.*)?"),
     # Handing the company to another owner.
@@ -488,11 +501,13 @@ def approval_id(path):
 
 
 def edited(c, msg):
-    """Whether a message was changed after it was posted: an edit (`edited_at`, a revision above zero) or any revision
-    row in `message_revisions`. The person's words are what they posted, so an edited message lends nothing."""
+    """Whether a message was changed after it was posted: an edit or a delete (`edited_at`, a revision above zero). The
+    post itself writes revision 0 into `message_revisions` (backend/threads.py `record`), so only a row above zero counts.
+    The person's words are what they posted, so an edited message lends nothing."""
     if msg.get("edited_at") or int(msg.get("revision") or 0) > 0:
         return True
-    return bool(c.execute("SELECT 1 FROM message_revisions WHERE message_id=? LIMIT 1", (msg["id"],)).fetchone())
+    return bool(c.execute("SELECT 1 FROM message_revisions WHERE message_id=? AND revision>0 LIMIT 1",
+                          (msg["id"],)).fetchone())
 
 
 def approval_words(c, who, cited, assistant_bot, approval):

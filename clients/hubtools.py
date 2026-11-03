@@ -7667,9 +7667,29 @@ ASSISTANT_HIDDEN = frozenset({
 })
 
 
+# The tools an Assistant turn is offered beyond the ones its audience already names: the ones the Assistant template
+# (templates/catalog/assistant) tells it to run, found by walking clients/hubcli's own command tree for each `hub ...` span
+# (the same tool each command runs, `remotecli.tool_name`), plus the few it needs to change automations, rules and its
+# proposals. The gate is unchanged: the CLI still reaches every route the gate admits; this only sizes the MCP listing.
+ASSISTANT_TOOLS = frozenset({
+    "hub_approval_approve", "hub_approval_decline", "hub_approval_read_back", "hub_approval_request",
+    "hub_approval_show", "hub_assistant_learn", "hub_assistant_proposals", "hub_assistant_propose",
+    "hub_assistant_withdraw", "hub_automation_get", "hub_automation_update", "hub_bot_status_history",
+    "hub_bot_status_list", "hub_bot_status_set", "hub_brief", "hub_conversation_show", "hub_doc_read",
+    "hub_doc_search", "hub_file_import", "hub_file_link", "hub_file_publish", "hub_file_touch",
+    "hub_goal_list", "hub_goal_read_back", "hub_goal_save", "hub_goal_show", "hub_health_check",
+    "hub_kpi_list", "hub_meeting_read", "hub_meeting_search", "hub_message_list", "hub_message_send",
+    "hub_needs_you_commit", "hub_needs_you_next", "hub_proposal_list", "hub_question_answer",
+    "hub_question_ask", "hub_replay_show", "hub_rules_add", "hub_settings_ask", "hub_settings_find",
+    "hub_settings_set", "hub_settings_show", "hub_strategy_show", "hub_task_ask", "hub_task_close",
+    "hub_task_comment", "hub_task_create", "hub_task_list", "hub_task_question", "hub_task_show",
+    "hub_task_update", "hub_team_show",
+})
+
+
 def offered_to(tool_):
-    """The kinds a tool is offered to. The Assistant's turn is offered every tool except the ones in ASSISTANT_HIDDEN:
-    its gate admits all the rest on the person's cited words, and the route checks the person's own rights."""
+    """The kinds a tool is offered to. The Assistant's turn is offered the tools it is told to run (ASSISTANT_TOOLS) and
+    what its audience already names, minus ASSISTANT_HIDDEN; the gate and the route decide what it may do."""
     name = tool_["name"]
     if name in AUDIENCE:
         kinds = tuple(AUDIENCE[name])
@@ -7679,7 +7699,7 @@ def offered_to(tool_):
         kinds = KINDS
     if name in ASSISTANT_HIDDEN:
         kinds = tuple(k for k in kinds if k != "assistant")
-    elif "assistant" not in kinds:
+    elif name in ASSISTANT_TOOLS and "assistant" not in kinds:
         kinds = (*kinds, "assistant")
     return (*kinds, COUNSEL) if name in COUNSEL_TOOLS else kinds
 

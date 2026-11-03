@@ -3,6 +3,7 @@
 ceiling, the owner's switch, and approvals that only the person decides stay as they were."""
 
 import inspect
+import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -257,8 +258,10 @@ def test_a_turn_never_edits_deletes_or_redacts_a_message_the_person_wrote(api):
     assert not assistant.admits_on_turn("PATCH", f"/api/v2/messages/{mid}", {"body": "yes"})
     assert not assistant.admits_on_turn("DELETE", f"/api/v2/messages/{mid}")
     assert not assistant.admits_on_turn("POST", f"/api/v2/messages/{mid}/redact", {})
-    for method, body in (("PATCH", {"body": "yes"}), ("DELETE", None), ("POST", {})):
-        raw = api.request(method, f"/api/v2/messages/{mid}", json=body, headers=cited)
+    for method, path, body in (("PATCH", f"/api/v2/messages/{mid}", {"body": "yes"}),
+                               ("DELETE", f"/api/v2/messages/{mid}", None),
+                               ("POST", f"/api/v2/messages/{mid}/redact", {})):
+        raw = api.request(method, path, json=body, headers=cited)
         assert raw.status_code == 403 and raw.json()["error"]["code"] == "confirm_required", (method, raw.text)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT body FROM messages WHERE id=?", (mid,)).fetchone()["body"] == "No"
@@ -283,10 +286,39 @@ def test_a_message_edited_after_it_was_posted_lends_no_words(api):
         assert assistant.edited(c, {"id": mid, "edited_at": None, "revision": 1})
 
 
+# The walk's keyword match reads a handler's source, so a word like "provider" or "login" can match a route that writes no
+# credential. Each such route is reviewed here with the reason; a new route that the walk flags and this list does not
+# name fails the test. A route that does touch a credential, a sign-in, an invite, a subscription or a signing key is on
+# NEVER instead (backend/assistant.py), and a route here must never be one of those.
+REVIEWED = {
+    "POST /api/v2/humans/{pid}": "a profile edit; 'login' is a last-login field",
+    "POST /api/v2/people/{pid}": "a profile edit; 'login' is a last-login field",
+    "POST /api/v2/runners/heartbeat": "the runner's own heartbeat; 'provider' is a field name",
+    "POST /api/v2/bots/{bot}/go-live": "switches a bot live on credentials the person already granted; writes none",
+    "POST /api/v2/grokbot/sync": "syncs a bot's state from its provider; writes no credential",
+    "POST /api/v2/bots/{bot}/model": "a bot's model choice; a computer's sign-in is NEVER",
+    "POST /api/v2/bots/{bot}/limit/retry": "retries a bot's limit; writes no sign-in",
+    "POST /api/v2/lenses/{lens_id}/runs": "runs a lens on the model provider the company already set",
+    "POST /api/v2/files/links": "a file link; 'provider' names the file's host",
+    "POST /api/v2/connectors/calendar/actions/claim": "claims a calendar card the person taps; 'invite' is a calendar invite",
+    "POST /api/v2/calendar/appointments": "books a calendar event; its invites go out through the calendar (see the report)",
+    "POST /api/v2/imports/transcripts": "imports a transcript; 'provider' is its source field",
+    "POST /api/v2/credential-requests": "asks the person for a credential; they enter it in Settings, which is NEVER",
+    "POST /api/v2/credential-requests/{rid}/cancel": "cancels that ask; writes no credential",
+    "POST /api/v2/decisions": "asks the LLM judge; 'provider' is the model provider",
+    "POST /api/v2/judge": "asks the LLM judge; 'provider' is the model provider",
+    "POST /api/v2/rules/read": "reads a rules document with the company's model provider; writes nothing",
+    "POST /api/v2/bots/{bot}/tools": "registers a bot's tool manifest; clients/access_entry refuses any credential in it",
+    "POST /api/v2/bots/{bot}/copy": "copies a bot the person may copy; no secret is shown in the chat, and the route checks the person's right",
+    "PUT /api/v2/usage/limits": "a spend cap, not a credential; the person sets it on their own word",
+    "POST /api/v2/assistant/actions": "the Assistant's own card route: a proposal the person confirms",
+}
+
+
 def test_every_route_that_touches_a_credential_or_a_sign_in_is_never_a_chat_write(api):
     """Walks app.routes: any route whose handler reads or writes a credential, a grant, a computer's sign-in or keys, a
-    subscription, a federation or signing key, an invite, or the providers, must be on NEVER for every write it takes.
-    A new such route that is not listed fails here, not in a chat."""
+    subscription, a federation or signing key, an invite, or the providers, must be on NEVER for every write it takes
+    (or be reviewed in REVIEWED with its reason). A new such route that is neither fails here, not in a chat."""
     touches = re.compile(r"credential|model_login|computer_keys|shared_key|attach_shared|login|logout|password|service_key|"
                          r"enroll|pairing|subscription|federation|signing|replace_lost|invite|provider")
     checked, offenders = 0, []
@@ -307,21 +339,50 @@ def test_every_route_that_touches_a_credential_or_a_sign_in_is_never_a_chat_writ
             if assistant.admits_on_turn(method, path, None):
                 offenders.append(f"{method} {route.path}")
     assert checked >= 20, checked
-    assert not offenders, offenders
+    unreviewed = [o for o in offenders if o not in REVIEWED]
+    assert not unreviewed, "\n".join(unreviewed)
 
 
-def test_the_assistant_turn_is_offered_every_tool_its_gate_admits_and_the_template_commands(api):
-    """Only the NEVER tools are hidden from an Assistant turn (hubtools.ASSISTANT_HIDDEN); every command the Assistant
-    template tells it to run maps to a tool it is offered, and the Assistant bot's routine may propose a card for a person."""
-    everything = {t["name"] for t in hubtools.TOOLS}
-    offered = {t["name"] for t in hubtools.listing(local=True, kind="assistant")}
-    assert everything - offered == set(hubtools.ASSISTANT_HIDDEN) and set(hubtools.ASSISTANT_HIDDEN) <= everything
+def _template_tools():
+    """Every command the Assistant template tells it to run, as the tool it runs: the hubcli command tree walked for each
+    `hub ...` span (clients/remotecli.tool_name names the tool), not a pattern."""
+    import argparse
+    from clients import hubcli, remotecli
+
+    def fn_of(words):
+        node, fn = hubcli.parser(), None
+        for word in words:
+            sub = next((a for a in node._actions if isinstance(a, argparse._SubParsersAction)), None)
+            if not sub or word not in sub.choices:
+                break
+            node = sub.choices[word]
+            fn = node._defaults.get("fn", fn)
+        return fn
+
     template = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "assistant"
-    commands = set()
+    tools = set()
     for path in template.rglob("*.md"):
-        commands.update(re.findall(r"\bhub ([a-z][a-z-]*(?: [a-z][a-z-]*)?)", path.read_text(encoding="utf-8")))
-    mapped = {"hub_" + c.replace(" ", "_").replace("-", "_") for c in commands} & everything
-    assert len(mapped) >= 40, sorted(mapped)
-    assert mapped - offered == set(), sorted(mapped - offered)
-    assert "hub_assistant_propose" in {t["name"] for t in hubtools.listing(local=True, kind="bot")}
+        for span in re.findall(r"\bhub ([^\n`]+)", path.read_text(encoding="utf-8")):
+            words = []
+            for token in span.split():
+                if not re.fullmatch(r"[a-z][a-z-]*", token):
+                    break
+                words.append(token)
+            fn = fn_of(words)
+            if fn:
+                tools.add(remotecli.tool_name(fn))
+    return tools
 
+
+def test_the_assistant_turn_is_offered_the_tools_its_template_runs_and_never_the_hidden_ones():
+    """The Assistant's MCP listing: every tool its template runs is offered, the NEVER tools are not, and the listing stays
+    small enough for the model (about 165 KB today; the cliff is past 200 KB)."""
+    everything = {t["name"] for t in hubtools.TOOLS}
+    offered = hubtools.listing(local=True, kind="assistant")
+    names = {t["name"] for t in offered}
+    template = _template_tools()
+    assert len(template) >= 40, sorted(template)
+    assert template - names == set(), sorted(template - names)
+    assert not set(hubtools.ASSISTANT_HIDDEN) & names and set(hubtools.ASSISTANT_HIDDEN) <= everything
+    assert len(json.dumps(offered)) <= 200_000, len(json.dumps(offered))
+    assert "hub_assistant_propose" in {t["name"] for t in hubtools.listing(local=True, kind="bot")}
