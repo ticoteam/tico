@@ -172,6 +172,10 @@ Plan logins stay on the computer that holds them. Tico stores each connection's 
 reports and its usage readings, never the login itself. A key added from Tico is kept sealed in Tico's credential vault
 for that computer alone.
 
+A company plan or API key given to a computer (see Subscriptions above) signs its tool in there as well. Getting
+started counts that as signed in, and Health's row for the computer reads **company plan** or **company API key**
+instead of **not signed in**, with no sign-in warning for it.
+
 Named subscriptions that an earlier release signed in on a computer are no longer used or shown. Bots that ran on one
 now run on the computer's login for that tool, which must be signed in for them to run
 ([Subscriptions from earlier releases](#subscriptions-from-earlier-releases)).

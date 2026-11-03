@@ -23,7 +23,9 @@ cloud machine" under Computer).
   elsewhere (`DELETE /api/v2/bots/{bot}/cloud-machine`).
 - Its computer is "Shared cloud machine", owned by the company owner and open to member bots: a bot that joins is
   assigned to it, one that leaves (to its own machine or a computer) is unassigned, and the machine keeps running.
-  When the last bot leaves it idles to a stop like any other.
+  When the last bot leaves it idles to a stop like any other. Health does not call a machine stopped this way offline:
+  its row reads **stopped until work comes**, and the Computers check says how many are stopped. A machine with a
+  problem (out of credit, stuck, never enrolled) is still named as one.
 - A new cloud machine gets the company's plan when an admin moves a bot onto it. Before this, the bot waited on "login required" until someone
   signed in to the machine by hand. The machine takes a plan only when all of these hold: the machine is that bot's own cloud
   machine; the admin's choice put the bot there, either by moving it or by the machine's first enrollment for a bot an admin placed; no other bot on that machine already runs the same tool; and the machine has no plan or sign-in of its own for

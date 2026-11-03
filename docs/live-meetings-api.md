@@ -326,3 +326,12 @@ change clears it. A missing/stopped share returns 410; an obsolete generation or
 returns 409; an oversized image returns 413. The viewer clears/revokes its image on stop, errors,
 access loss, hiding the page or navigation. Frame fetching is separate from transcript refresh. Authorization and contended memory locks run on workers, never the ASGI event loop. A separate status request revokes the displayed image while a slow image download is pending.
 Screen lifecycle is ephemeral; it is not replayable from SSE.
+
+### Sharing a screen from Recorder
+
+In a live meeting the Mac Recorder's **Share screen** button (shown to people who may share) picks a window or
+display. Its viewers see it a few times a second, for documents and slides. Nothing is saved: the image lives in
+server memory only and is not in the transcript, the database or the event stream, and bots never see it. Recorder's
+own windows are left out. Sharing the whole screen needs Screen Recording permission in System Settings, otherwise
+choose a window. Stopping the share ends it at once. Making a meeting public asks first, and stops the share if
+one is running. **Copy meeting link** copies the `link` above, and people must still be added to see the meeting.
