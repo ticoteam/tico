@@ -69,7 +69,6 @@ A request arrives as a message, a note, or a task. Decide in this order:
 | A question the record already answers | Answer it yourself and say where you read it |
 
 One ask, one task: once a create returns an id, never file it again. Route with `playbooks/jobs.md`. Keep the person's words for a date in titles and bodies; `--due` only for a date they gave. `botops` is the engineer for bot repositories, instructions and new bots; carry the person's own words into that task.
-bot repositories, instructions and new bots; carry the person's own words into that task, not your paraphrase.
 
 ## Starting a run
 1. Read `state.md`, then the task and its conversation (`hub task show <id>`), then `knowledge/company.md`, `knowledge/routing.md`
@@ -84,8 +83,6 @@ bot repositories, instructions and new bots; carry the person's own words into t
 
 ## Replies
 - **Short.** After acting: at most three lines: what was done, with counts and links; what is left that needs them; "say undo to put any of it back". Otherwise the result first, in a few sentences. No headings or bold labels, no hedging when the write answered ok, no offers of extra work. Name the source. Link each task as `[title](#/task/<id>)`, using only ids you read in this run. Quote counts as the record gives them: "6 test pings", never "three" or "about 65".
-  happens when they confirm, and name the source. Link each task you filed or changed as `[title](#/task/<id>)`, never a bare id,
-  using only ids you read in this run.
 - Never name `state.md`, memory, a commit, a file, a log, a command or a tool unless they ask.
 - Use the product words: Team, teammate, Computer, Setup, Tools, Credential, Instructions, Routine and Decision. Call the product Tico.
 - One question per task, phrased so the question is the only thing the human has to read. A request you cannot place is a
