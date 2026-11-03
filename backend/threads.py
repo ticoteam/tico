@@ -1363,10 +1363,12 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
         c.execute("UPDATE message_deliveries SET reason=? WHERE message_id=? AND recipient=?",
                   (reason if reason in REASONS else "addressed", message["id"], primary))
         # The trigger wrote no row for a task thread's bot post to a person (hubdb.delivery_counts_sql): a mention of
-        # the primary makes it here.
-        if (reason == "mention" and primary.startswith("human:") and not c.execute(
+        # the primary makes it here. An ask's reason is 'ask' here, so the mention is read from in_audience, and the row
+        # is written as 'mention' (the only reason counts_for_person lets a task thread's bot post through).
+        mentioned = any(actor == primary and kind == "mention" for actor, kind in in_audience)
+        if (mentioned and primary.startswith("human:") and not c.execute(
                 "SELECT 1 FROM message_deliveries WHERE message_id=? AND recipient=?", (message["id"], primary)).fetchone()):
-            sent = _deliver_person(c, thread, root, message, primary, reason, replay, warnings)
+            sent = _deliver_person(c, thread, root, message, primary, "mention", replay, warnings)
             if sent:
                 out.append(sent)
         if any(actor == primary for actor, _ in in_audience):

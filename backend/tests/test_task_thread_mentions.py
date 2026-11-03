@@ -80,3 +80,11 @@ def test_a_bot_question_to_a_person_in_a_task_thread_is_not_a_delivery_but_still
     with api.app.state.store.read() as c:
         task_ids = [t["id"] for t in H.tasks_asked_of(c, "human:ben") if t["conversation_id"] == thread_id]
     assert len(task_ids) == 1
+
+
+def test_a_bot_question_that_mentions_the_person_in_a_task_thread_reaches_them(api):
+    thread_id = task_thread(api)
+    asked = bot_say(api, thread_id, "@ben is the total final? If yes, I'll send it to the board.", kind="ask")
+    row = delivery(api, asked["id"], "human:ben")
+    assert row is not None and row["reason"] == "mention" and row["state"] == "pending"
+    assert unread_for(api, "human:ben", thread_id) == 1
