@@ -35,7 +35,9 @@ summary then covers only the samples that finished.
    the built-in layer for that read. A failed or `--dry-run` write is not logged, so the old value stays.
    A read with no canned row is no longer a bare ok: a list read (`* list`, `*status list`, `needs-you show`,
    `conversation show`) returns an empty list in its shape with `note: "no canned data"`. `approval list` with no canned
-   row is built from the approval refs in the case's canned `message list` (each one a pending row).
+   row is built from the approval refs in the case's canned `message list`, in the real envelope (`actor`, `status`,
+   `total`, `approvals` newest first, `next`). `--status` picks the rows (pending by default); an approval a run declined
+   or approved moves to that status.
 3. Builds the prompt the way the runner builds an Assistant DM turn (`runner-rs/src/prompt.rs`): the standing opening,
    the personal-chat block ("You are privately assisting human:dana"), the case's `history` if it has one, then
    "Current message from human:dana:" and the person's message. The runner's full prompt is longer; this keeps the parts

@@ -286,13 +286,130 @@ def test_an_uncanned_list_read_is_an_empty_list_with_a_note(tmp_path, monkeypatc
     assert out["messages"] == [] and out["note"] == "no canned data"
 
 
-def test_approval_list_is_built_from_the_message_list_and_follows_a_decline(tmp_path, monkeypatch):
-    approval = "2a7f0c9e-4000-4000-8000-000000000001"
-    message = {"id": "m1", "from_actor": "bot:release", "text": "Approve this publish", "refs": {"approval": approval}}
-    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^message list", "out": {"messages": [message]}}])
-    rows = json.loads(answer(["approval", "list"], "cli")[0])["items"]
-    assert [(r["id"], r["status"]) for r in rows] == [(approval, "pending")]
-    answer(["approval", "decline", "2a7f0c9e"], "cli")
-    rows = json.loads(answer(["approval", "list"], "cli")[0])["items"]
-    assert rows[0]["status"] == "declined"
+def test_approval_list_is_built_from_the_message_list_in_the_real_shape(tmp_path, monkeypatch):
+    old, new = "2a7f0c9e-4000-4000-8000-000000000001", "5f3e21c0-4000-4000-8000-000000000002"
+    long_text = "Approve this spend: " + "x" * 300
+    messages = [
+        {"id": "m1", "from_actor": "bot:release", "text": "Approve this publish:\n{\"release\": \"v0.5.17\"}",
+         "refs": {"approval": old, "task": "b1c2d3e4"}, "created": "2026-10-30T10:00:00Z"},
+        {"id": "m2", "from_actor": "bot:growth", "text": long_text, "refs": {"approval": new},
+         "created": "2026-11-01T09:00:00Z"}]
+    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^message list", "out": {"actor": "human:dana",
+                         "messages": messages}}])
+    env = json.loads(answer(["approval", "list"], "cli")[0])
+    assert set(env) == {"actor", "status", "total", "approvals", "next"}
+    assert (env["actor"], env["status"], env["total"], env["next"]) == ("human:dana", "pending", 2, None)
+    rows = env["approvals"]
+    assert [r["id"] for r in rows] == [new, old]          # newest first
+    assert set(rows[0]) == {"id", "status", "from_actor", "summary", "message_id", "task_id", "created", "link"}
+    assert rows[0]["task_id"] is None and rows[0]["link"] is None
+    assert len(rows[0]["summary"]) <= 200 and rows[0]["summary"].endswith("...")
+    assert rows[1]["summary"] == 'Approve this publish: {"release": "v0.5.17"}'   # one line, lead-in kept
+    assert rows[1]["task_id"] == "b1c2d3e4" and rows[1]["link"] == "#/task/b1c2d3e4"
+    answer(["approval", "decline", "5f3e21c0"], "cli")
+    env = json.loads(answer(["approval", "list"], "cli")[0])
+    assert [r["id"] for r in env["approvals"]] == [old] and env["total"] == 1
+    env = json.loads(answer(["approval", "list", "--status", "declined"], "cli")[0])
+    assert env["status"] == "declined" and [(r["id"], r["status"]) for r in env["approvals"]] == [(new, "declined")]
+
+
+FAKE_CLAUDE = r"""#!/usr/bin/env python3
+import json, os, sys
+argv = sys.argv[1:]
+with open(os.environ["FAKE_CLAUDE_LOG"], "a") as log:
+    log.write("judge\n" if "--disallowedTools" in argv else "model\n")
+if "--disallowedTools" in argv:  # the judge
+    if os.environ.get("FAKE_JUDGE") == "nojson":
+        print(json.dumps({"result": "I cannot grade this turn."}))
+    else:
+        print(json.dumps({"result": json.dumps({"pass": True, "score": 4, "why": "fine"})}))
+elif os.environ.get("FAKE_MODEL") == "rate":
+    print(json.dumps({"result": "API Error: 429 rate limit exceeded", "is_error": True, "num_turns": 0}))
+else:
+    print(json.dumps({"result": "done", "num_turns": 1, "total_cost_usd": 0.01}))
+"""
+
+
+def _fake_claude_env(tmp_path, monkeypatch, model_mode="ok", judge_mode="ok"):
+    bin_dir = tmp_path / "fakebin"
+    bin_dir.mkdir()
+    claude = bin_dir / "claude"
+    claude.write_text(FAKE_CLAUDE)
+    claude.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_CLAUDE_LOG", str(tmp_path / "calls.log"))
+    monkeypatch.setenv("FAKE_MODEL", model_mode)
+    monkeypatch.setenv("FAKE_JUDGE", judge_mode)
+    monkeypatch.setattr(live, "JUDGE_BACKOFF", 0)
+    return tmp_path / "calls.log"
+
+
+def _sample_args(surface="cli"):
+    return argparse.Namespace(repo=str(REPO), model="claude-haiku-5-5", judge="claude-opus-5-5", effort="",
+                              surface=surface, max_turns=3, timeout=120)
+
+
+GRADED_CASE = {"id": "err-case", "group": "smoke", "prompt": "close x", "reply": "Says it closed x."}
+
+
+def test_a_rate_limited_model_run_is_an_error_not_a_failed_check(tmp_path, monkeypatch):
+    log = _fake_claude_env(tmp_path, monkeypatch, model_mode="rate")
+    (tmp_path / "out").mkdir()
+    res = live.run_sample(GRADED_CASE, 1, _sample_args(), tmp_path / "out")
+    assert res["error"] == "model" and res["pass"] is False and res["fails"] == []
+    assert "rate limit" in res["why"]
+    assert log.read_text().split() == ["model"]          # no judge call for a run that never ran
+
+
+def test_a_judge_with_no_json_is_retried_then_marked_an_error(tmp_path, monkeypatch):
+    log = _fake_claude_env(tmp_path, monkeypatch, judge_mode="nojson")
+    (tmp_path / "out").mkdir()
+    res = live.run_sample(GRADED_CASE, 1, _sample_args(), tmp_path / "out")
+    assert res["error"] == "judge" and res["fails"] == []
+    assert log.read_text().split() == ["model"] + ["judge"] * live.JUDGE_TRIES
+
+
+def test_a_judge_that_answers_after_a_retry_scores_the_sample(tmp_path, monkeypatch):
+    _fake_claude_env(tmp_path, monkeypatch)
+    calls = {"n": 0}
+    real_run = subprocess.run
+
+    def flaky_judge(cmd, **kw):
+        if "--disallowedTools" in cmd:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"result": "no json"}), stderr="")
+        return real_run(cmd, **kw)
+    monkeypatch.setattr(live.subprocess, "run", flaky_judge)
+    assert live.judge(GRADED_CASE, "Closed x.", [], {}, _sample_args()) == {"pass": True, "score": 4, "why": "fine"}
+    assert calls["n"] == 2
+
+
+def test_the_summary_line_counts_errors_apart_from_the_pass_rate(tmp_path):
+    rows = [{"id": "a", "sample": 1, "pass": True, "score": 5, "turns": 2, "cost_usd": 0.1, "fails": [],
+             "surfaces": ["mcp"], "invalid": 0, "invalid_by_surface": {}},
+            {"id": "a", "sample": 2, "pass": False, "score": 2, "turns": 2, "cost_usd": 0.1,
+             "fails": ["no call /x/ that worked"], "surfaces": ["cli"], "invalid": 0, "invalid_by_surface": {}},
+            {"id": "b", "sample": 1, "pass": False, "score": None, "turns": None, "cost_usd": 0, "fails": [],
+             "surfaces": [], "invalid": 0, "invalid_by_surface": {}, "error": "model"},
+            {"id": "b", "sample": 2, "pass": False, "score": None, "turns": None, "cost_usd": 0, "fails": [],
+             "surfaces": [], "invalid": 0, "invalid_by_surface": {}, "error": "judge"}]
+    for r in rows:
+        (tmp_path / f"{r['id']}.s{r['sample']}.json").write_text(json.dumps(r))
+    head = live.summarise(tmp_path, "t1", "claude-haiku-5-5", "claude-opus-5-5", 2)
+    lines = head.splitlines()
+    assert lines[0] == "# t1: 1/2 pass (50%), 2 errored, model claude-haiku-5-5, judge claude-opus-5-5"
+    assert lines[3] == "2 samples errored: judge 1, model 1 (b s1, b s2). Left out of the pass rate; " \
+                        "rerun with --rerun-errors t1."
+    md = (tmp_path / "summary.md").read_text()
+    assert "| b | errored 2 | - | - | - | model error |" in md
+    assert "| a | 1/2 |" in md
+
+
+def test_rerun_errors_selects_only_the_errored_samples(tmp_path):
+    rows = [{"id": "a", "sample": 1, "pass": True}, {"id": "a", "sample": 2, "pass": False, "error": "model"},
+            {"id": "b", "sample": 1, "pass": False, "error": "judge"}]
+    for r in rows:
+        (tmp_path / f"{r['id']}.s{r['sample']}.json").write_text(json.dumps(r))
+    assert live.errored_samples(tmp_path) == {("a", 2), ("b", 1)}
 
