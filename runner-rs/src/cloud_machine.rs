@@ -1,4 +1,4 @@
-//! A Tico cloud machine (runner/cloud_machine.py `base`, docs/cloud-machines.md): one company's VM, where every bot runs
+//! A Tico cloud machine (runner_support/cloud_machine.py `base`, docs/cloud-machines.md): one company's VM, where every bot runs
 //! as the machine's one user, who may use sudo on purpose. Its bots are that company's trust group, so a turn on a Tico
 //! model runs here without a leased user of its own (gateway_relay.rs `Separation::TrustGroup`). The Gateway key still
 //! stays in this runner's relay, never in a turn's environment or files; that the company's own bots could read it from

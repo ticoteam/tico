@@ -1,4 +1,4 @@
-//! Git the runner itself runs in a bot's checkout (`runner/safe_git.py`): no supervisor secrets, no repository
+//! Git the runner itself runs in a bot's checkout (`runner_support/safe_git.py`): no supervisor secrets, no repository
 //! hooks or fsmonitor program, no global or system config beyond the machine's credential and proxy settings.
 
 use std::path::{Path, PathBuf};

@@ -1,6 +1,6 @@
 """Mail actions an automation queued in Tico, carried out on the computer that reads the mailbox.
 
-The runner (runner/connectors.py) claims them from the hub and runs `mail.sh mail-action` with one action on stdin.
+The runner (runner_support/connectors.py) claims them from the hub and runs `mail.sh mail-action` with one action on stdin.
 The hub decided them, its send switch included, so like the owner's own commands they pass no bot policy, lint or
 reviewer. Each is safe to run again after a lost answer or a lost lease:
   archive, label, leave       Gmail label changes, the same the second time

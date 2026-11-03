@@ -4,7 +4,7 @@ The person asks to connect (`POST /api/v2/mail/google/connect`) and gets Google'
 own OAuth client (TICO_GOOGLE_OAUTH_CLIENT_ID/SECRET, run by whoever runs this server; nobody makes a Google
 Cloud project, a service account or domain-wide delegation). Google sends their browser back to
 `/api/v2/mail/google/callback`, which checks the state belongs to the same person and keeps the one-time code.
-The computer that syncs mail (runner/connectors.py) claims it, asks this server to trade it for the grant, confirms
+The computer that syncs mail (runner_support/connectors.py) claims it, asks this server to trade it for the grant, confirms
 the account that signed in is the mailbox asked for and keeps the grant (connectors/mail/oauth.py `finish`).
 
 The OAuth client secret never leaves this server. It is one secret for every team on Tico's public app, so no
@@ -128,7 +128,7 @@ class ConnectorResult(M.Contract):
 
 
 class ClaimRequest(M.Contract):
-    holds_mail: bool = False        # this computer has a Google key or connected accounts (runner/connectors.py)
+    holds_mail: bool = False        # this computer has a Google key or connected accounts (runner_support/connectors.py)
 
 
 class TokenRequest(M.Contract):
