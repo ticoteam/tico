@@ -35,6 +35,7 @@ def wakes(c, tid):
 
 def test_creation_defaults_human_exclusion_and_assignment_scope(followups):
     bot = post(followups, "tasks", {"owner": "ops", "title": "Inspect", "body": "x"})
+    assert bot["version"] == 1  # the automatic date is part of creation, not a separate edit
     assert bot["check_back_at"] > H.now() and bot["check_back"]["by"] == "bot:ops"
     human = post(followups, "tasks", {"owner": "ana", "title": "Decide", "body": "x"})
     assert human["check_back_at"] is None
@@ -55,6 +56,15 @@ def test_api_setter_dates_privacy_and_atomic_validation(followups):
     for wrong in ("1m", "2020-01-01T00:00:00Z", "2027-01-01T00:00:00"):
         post(followups, f"tasks/{row['id']}/check-back", {"at": wrong}, expected=422)
     post(followups, f"tasks/{row['id']}/check-back", {"at": "2h"}, token="cara-test", expected=403)
+
+
+def test_legacy_date_only_deadline_cannot_break_creation_or_backfill(followups):
+    with followups.app.state.store.transaction() as c:
+        row = task(c, due="2030-01-01")
+        assert row["due_at"] == "2030-01-01" and row["check_back_at"] > H.now()
+        c.execute("UPDATE tasks SET check_back_at=NULL WHERE id=?", (row["id"],))
+        assert CB.sweep(c)["repaired"] == [row["id"]]
+        assert H.task(c, row["id"])["check_back_at"] < H.shift(H.now(), hours=1)
 
 
 @pytest.mark.parametrize("status", CB.ACTIVE)

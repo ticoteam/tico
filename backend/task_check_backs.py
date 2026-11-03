@@ -68,6 +68,8 @@ def timestamp(value, at):
 
 def set_time(c, row, value, note=None, *, actor=None, at=None, system=False):
     H = _H()
+    if system and ("version" not in row or "check_back_at" not in row):
+        return row  # legacy upgrade helpers create tasks before the file migrations finish
     at = at or H.now()
     actor = actor or H.KEEPER
     if not involved(row) or row["status"] not in STATUSES:
@@ -94,7 +96,8 @@ def set_time(c, row, value, note=None, *, actor=None, at=None, system=False):
         H.refuse(c, actor, "check_back", "Say what to inspect in at most 500 characters")
     if (stamp, text) == (row.get("check_back_at"), row.get("check_back_note")):
         return row
-    c.execute("UPDATE tasks SET check_back_at=?,check_back_note=?,updated_at=?,version=version+1 WHERE id=?", (stamp, text, at, row["id"]))
+    bump = int(getattr(c, "building", None) != row["id"])
+    c.execute("UPDATE tasks SET check_back_at=?,check_back_note=?,updated_at=?,version=version+? WHERE id=?", (stamp, text, at, bump, row["id"]))
     H._task_event(c, row["id"], actor, "check_back_at", row.get("check_back_at"), stamp, text)
     if not system and stamp != row.get("check_back_at"):
         H._task_event(c, row["id"], actor, "check_back_explicit", None, stamp, text)
@@ -115,7 +118,14 @@ def default_time(c, row, at):
         deferred = c.execute("SELECT min(due_at) FROM deferrals WHERE task_id=? AND settled_at IS NULL AND due_at>?",
                              (row["id"], at)).fetchone()[0]
         values.append(deferred)
-    future = [timestamp(x, at) for x in values if x and H.parse_ts(x) and H.parse_ts(x) > H.parse_ts(at)]
+    future = []
+    for value in values:
+        try:
+            candidate = timestamp(value, at)
+        except ValueError:
+            continue  # old date-only or malformed deadlines cannot supply an unambiguous appointment
+        if candidate > at:
+            future.append(candidate)
     if future:
         return min(future)
     # Check children share the step's timeout rather than adding a second 30-minute timer.
@@ -130,6 +140,8 @@ def default_time(c, row, at):
 
 def ensure(c, row, at=None):
     H = _H()
+    if "version" not in row or "check_back_at" not in row:
+        return
     at = at or H.now()
     if not involved(row) or row["status"] not in STATUSES:
         clear(c, row)
