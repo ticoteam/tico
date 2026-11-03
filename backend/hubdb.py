@@ -1599,6 +1599,9 @@ def migrate(conn, adopt_legacy=False):
     from . import threads
     threads.ensure(conn)
     threads.migrate(conn)
+    # Once: everyone's old personal chat with a bot moves into that bot's Home (backend/bot_home_merge.py).
+    from . import bot_home_merge
+    bot_home_merge.run_once(conn)
     message_links.ensure(conn)
     clear_finished_close_times(conn)
     return len(MIGRATIONS)
@@ -3057,6 +3060,10 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
         refuse(conn, actor, "self", "a bot cannot send work to itself")
 
     if conversation_id:
+        # A person's old chat with a bot moved into the bot's Home: what still names it (an old task's room, a run
+        # that started before the move) is written there (backend/bot_home_merge.py).
+        from . import bot_home_merge
+        conversation_id = bot_home_merge.home_for(conn, conversation_id) or conversation_id
         conv = conversation(conn, conversation_id)
         if not conv:
             refuse(conn, actor, "not-found", f"no conversation {conversation_id}")
@@ -5805,11 +5812,14 @@ def task_comments(conn, task_id, *, actor=None):
     row = task(conn, task_id)
     if not row or not row.get("conversation_id"):
         return []
-    conv = conversation(conn, row["conversation_id"])
-    out, sql, args = [], "conversation_id=?", [row["conversation_id"]]
+    # A person's old chat with the bot moved into its Home, comments and all (backend/bot_home_merge.py).
+    from . import bot_home_merge
+    cid = bot_home_merge.home_for(conn, row["conversation_id"]) or row["conversation_id"]
+    conv = conversation(conn, cid)
+    out, sql, args = [], "conversation_id=?", [cid]
     # In a bot's room, only the messages that name the task (backend/message_links.py), not the whole room.
     from .message_links import named
-    ids = named(conn, task_id, row["conversation_id"])
+    ids = named(conn, task_id, cid)
     if ids is not None:
         sql, args = "+conversation_id=? AND id IN (SELECT value FROM json_each(?))", args + [_dump(sorted(ids))]
     if actor is not None:

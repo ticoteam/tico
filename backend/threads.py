@@ -1918,6 +1918,10 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
         actor = as_actor                 # the author from here on; the keeper only carried it in
     if origin and origin.get("origin_id") and start is not None:
         raise Problem("start", "A replicated message posts into a linked thread", 422)
+    if thread_id:
+        # A person's old chat with a bot is now part of the bot's Home (backend/bot_home_merge.py).
+        from . import bot_home_merge
+        thread_id = bot_home_merge.home_for(c, thread_id) or thread_id
     if start is not None or (parent_message_id and not c.execute(
             "SELECT 1 FROM conversations WHERE parent_message_id=?", (parent_message_id,)).fetchone()):
         made = _post_making(c, principal, thread_id, body, start, parent_message_id, checked,

@@ -934,8 +934,11 @@ def message_page(c, cid, *, before=None, since=None, limit=200):
 def task_message_page(c, task, **kwargs):
     """Messages about this task. A dedicated task thread returns the whole conversation;
     a shared chat room returns only rows tagged with this task id."""
-    page = message_page(c, task["conversation_id"], **kwargs)
-    conv = H.conversation(c, task["conversation_id"])
+    from . import bot_home_merge
+    # A person's old chat with the bot moved into its Home (backend/bot_home_merge.py): the task's messages are there.
+    cid = bot_home_merge.home_for(c, task["conversation_id"]) or task["conversation_id"]
+    page = message_page(c, cid, **kwargs)
+    conv = H.conversation(c, cid)
     if conv and conv.get("task_id") == task["id"]:
         return page
     page["messages"] = [m for m in page["messages"] if H.message_task_id(m) == task["id"]]
