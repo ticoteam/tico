@@ -107,6 +107,8 @@ INBOX_LIMIT = 100
 INBOX_PAGE = 500            # unread messages read per query while looking for the newest INBOX_LIMIT readable ones
 # Gateway image calls in flight per process (each holds a thread up to 130 s); more answer 429 with Retry-After.
 GATEWAY_IMAGE_SLOTS = 4
+# The defers the web's Send can keep (preference compose.send_way): the durations its menu offers (ui/app/pill.js).
+SEND_WAY_DEFERS = frozenset("defer:" + f for f in ("30m", "1h", "4h", "24h", "2d", "7d", "never"))
 
 
 def _first_visible(items, visible):
@@ -5681,6 +5683,10 @@ def create_app(settings=None):
             views.human_only(who)
             if not isinstance(body.value, bool):
                 raise Problem("validation", "meetings.auto_share is a boolean", 422)
+        # The way the web's Send goes (ui/app/pill.js): read by any client; sends that name no delivery ignore it.
+        if key == "compose.send_way" and not (body.value in ("steer", "queue") or isinstance(body.value, str)
+                                              and body.value in SEND_WAY_DEFERS):
+            raise Problem("validation", "compose.send_way is steer, queue or defer:<30m|1h|4h|24h|2d|7d|never>", 422)
         # Hide from my chart on the Strategy Bot: a person's own view
         if key == strategy_bot.HIDE_PREF:
             views.human_only(who)
