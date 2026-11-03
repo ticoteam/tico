@@ -363,11 +363,24 @@ impl Runner {
         let previous = self.probed.lock().unwrap().rows.clone();
         let (rows, inputs) = readiness::probe_all(&config, &self.sign_in, &self.client, &candidates, computer_logins, &previous).await;
         let changed = rows != previous;
+        // Read again after the probe: an input that moved while it ran is not in these rows, so one more probe is asked for.
+        let moved = self.inputs_now() != inputs;
         let mut probed = self.probed.lock().unwrap();
         probed.rows = rows;
         probed.inputs = inputs;
         probed.schedule.ran(Instant::now());
+        drop(probed);
+        if moved {
+            readiness::request_probe();
+        }
         changed
+    }
+
+    /// The inputs a probe would take now (readiness::probe_inputs over the config and candidates probe_now reads).
+    fn inputs_now(&self) -> String {
+        let config = self.config_now();
+        let candidates = readiness_candidates(&self.assignments_seen());
+        readiness::probe_inputs(&config, &candidates, computer_logins_for(&candidates))
     }
 
     /// A probe a wait ended on. When an event asked for it and it changed a row, a heartbeat is asked for at once: the
@@ -1367,5 +1380,56 @@ mod tests {
         assert!(runner.events.take("heartbeat"), "an event's probe that changed the rows asks for a heartbeat");
         std::env::set_var("PATH", path);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Fake runtimes that hold each run until `gate` exists, so a probe can be caught part way through.
+    fn held_runtimes(root: &std::path::Path, gate: &std::path::Path) -> (std::path::PathBuf, String) {
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let log = root.join("spawns.log");
+        for rt in crate::harness_tools::runtimes() {
+            let exe = bin.join(crate::harness_tools::executable_for(&rt));
+            let script = format!(
+                "#!/bin/sh\necho \"{rt} $*\" >> '{log}'\ni=0\nwhile [ ! -f '{gate}' ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done\necho '2.1.305 (Claude Code)'\n",
+                log = log.display(),
+                gate = gate.display()
+            );
+            std::fs::write(&exe, script).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let before = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{before}", bin.display()));
+        (log, before)
+    }
+
+    /// An input that changes while a probe runs is not recorded as read: the rows keep the inputs the probe began with,
+    /// and one more probe is asked for, which reads the new inputs (finding 1 of the re-review).
+    #[tokio::test]
+    async fn an_input_that_changes_during_a_probe_is_not_recorded_as_read_and_asks_for_another() {
+        let _guard = crate::readiness::probe_tests::PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join(format!("tico-runner-midprobe-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        let gate = root.join("release");
+        let (log, path) = held_runtimes(&root, &gate);
+        let runner = probe_runner(&root);
+        let before = runner.inputs_now();
+        let drive = async {
+            for _ in 0..200 {
+                if std::fs::read_to_string(&log).map_or(false, |s| !s.is_empty()) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            *runner.assignments.lock().unwrap() = Arc::new(vec![json!({"bot": "mid-probe", "config": {"runtime": "claude"}})]);
+            std::fs::write(&gate, "").unwrap();
+        };
+        let requested = readiness::requests();
+        tokio::join!(runner.probe_now(), drive);
+        assert!(runner.probed.lock().unwrap().inputs == before, "the rows carry the inputs the probe began with");
+        assert!(runner.inputs_now() != before, "and the inputs have moved on");
+        assert!(readiness::requests() > requested, "so one more probe is requested");
+        std::env::set_var("PATH", path);
+        std::fs::remove_dir_all(root).ok();
     }
 }

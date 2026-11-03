@@ -103,6 +103,17 @@ fn tried() -> &'static Mutex<HashMap<(String, String), Instant>> {
     T.get_or_init(Default::default)
 }
 
+/// Bumped by `forget` per (profile, runtime). A background read compares it with the value it saw before it started,
+/// so a sign-out during the read leaves nothing behind. A counter, not a time: no TTL.
+fn generations() -> &'static Mutex<HashMap<(String, String), u64>> {
+    static G: OnceLock<Mutex<HashMap<(String, String), u64>>> = OnceLock::new();
+    G.get_or_init(Default::default)
+}
+
+fn generation(key: &(String, String)) -> u64 {
+    generations().lock().unwrap().get(key).copied().unwrap_or(0)
+}
+
 /// Keep `account` as what `profile` is signed in to for `runtime`, stamped now. A login that is now another account
 /// (email or kind) without signing out between drops the usage windows kept for the last one.
 pub fn remember(profile: &str, runtime: &str, account: Value) {
@@ -131,8 +142,26 @@ pub fn remember_plan(profile: &str, runtime: &str, value: &Value) {
 /// A signed-out login: its account and the time of its last read go, so the next sign-in is read at once.
 pub fn forget(profile: &str, runtime: &str) {
     let key = (profile.to_string(), runtime.to_string());
+    // Held across the removal, so a background read keeping its answer (keep_read) is either before this or refused.
+    let mut gens = generations().lock().unwrap();
+    *gens.entry(key.clone()).or_insert(0) += 1;
     known().lock().unwrap().remove(&key);
     tried().lock().unwrap().remove(&key);
+}
+
+/// Keep a background read's account and usage limits, unless `forget` ran for the same login after the read started
+/// (`since` is the generation it saw before starting). Check and keep run under the generation lock.
+fn keep_read(key: &(String, String), since: u64, account: Value, limits: Option<Value>) -> bool {
+    let gens = generations().lock().unwrap();
+    if gens.get(key).copied().unwrap_or(0) != since {
+        return false;
+    }
+    remember(&key.0, &key.1, account);
+    if let Some(limits) = limits {
+        crate::subscription_refresh::remember_windows(&key.0, &limits);
+    }
+    drop(gens);
+    true
 }
 
 pub fn account(profile: &str, runtime: &str) -> Option<Value> {
@@ -165,12 +194,11 @@ pub fn refresh_in_background(profile: &str, runtime: &str, env: Env) {
         return;
     }
     let runtime = runtime.to_string();
+    // The generation as the read starts: a sign-out after this point makes keep_read discard the answer.
+    let since = generation(&key);
     handle.spawn(async move {
         if let Some((account, limits)) = read_app_server(&runtime, &env).await {
-            remember(&key.0, &key.1, account);
-            if let Some(limits) = limits {
-                crate::subscription_refresh::remember_windows(&key.0, &limits);
-            }
+            keep_read(&key, since, account, limits);
         }
         reading().lock().unwrap().remove(&key);
     });
@@ -228,6 +256,18 @@ pub async fn read_app_server(runtime: &str, env: &Env) -> Option<(Value, Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_read_that_started_before_a_sign_out_does_not_keep_its_account() {
+        let key = ("sign-out-read".to_string(), "codex".to_string());
+        let started = generation(&key);
+        forget("sign-out-read", "codex");
+        assert!(!keep_read(&key, started, json!({"email": "old@example.com"}), None), "a read begun before the sign-out is discarded");
+        assert!(account("sign-out-read", "codex").is_none());
+        assert!(keep_read(&key, generation(&key), json!({"email": "new@example.com"}), None), "a read begun after it is kept");
+        assert_eq!(account("sign-out-read", "codex").unwrap()["email"], "new@example.com");
+        forget("sign-out-read", "codex");
+    }
 
     #[test]
     fn the_account_reader_runs_as_the_bot_user_in_the_profile_home() {

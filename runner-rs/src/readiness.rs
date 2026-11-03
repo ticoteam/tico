@@ -355,6 +355,9 @@ pub fn probe_inputs(config: &Config, assignments: &[Value], computer_logins: boo
 /// hub for a key; the heartbeat never calls it (runner.rs keeps its rows). `previous` is the last probe's rows, whose
 /// commands stand while a version is unchanged. Returns the rows and the inputs they were taken with.
 pub async fn probe_all(config: &Config, sign: &SignIn, client: &Client, assignments: &[Value], computer_logins: bool, previous: &Rows) -> (Rows, String) {
+    // Read before the first check: an input that changes while the probe runs is then not in the signature these rows
+    // carry, so the next pass sees the difference and probes again (runner.rs probe_now asks for one at once).
+    let inputs = probe_inputs(config, assignments, computer_logins);
     let mut rows = Rows::new();
     for runtime in crate::harness_tools::runtimes() {
         let used = logins(config, assignments, computer_logins, &runtime);
@@ -365,7 +368,7 @@ pub async fn probe_all(config: &Config, sign: &SignIn, client: &Client, assignme
             rows.insert((runtime.clone(), name), row);
         }
     }
-    (rows, probe_inputs(config, assignments, computer_logins))
+    (rows, inputs)
 }
 
 /// When the probe last ran, and whether an event asked for one since. The timer is `PROBE_EVERY`; events are `request`.
@@ -477,9 +480,9 @@ pub fn runtime_report(config: &Config, sign: &SignIn, assignments: &[Value], com
         }
         for (name, status) in targets.iter_mut() {
             let profile = used.get(name).cloned().flatten();
-            // The account is read live (accounts.rs), not the copy the probe stored: a background read that finished
-            // after the probe shows on this heartbeat, not on the next probe.
-            let account = crate::accounts::account(name, runtime);
+            // The account is read live (accounts.rs), not the copy the probe stored, and only beside a sign-in the probe
+            // confirmed, as before: a row that is not ready shows none, even a read that finished after a sign-out.
+            let account = if status["authenticated"] == "ready" { crate::accounts::account(name, runtime) } else { None };
             let fields = status.as_object_mut().unwrap();
             match account {
                 Some(account) => fields.insert("account".into(), account),
@@ -1287,6 +1290,29 @@ pub(crate) mod probe_tests {
         crate::accounts::remember("live-acct", "claude", json!({"email": "second@example.com"}));
         assert_eq!(shown(&rows)["email"], "second@example.com", "the next heartbeat shows the read that finished after the probe");
         crate::accounts::forget("live-acct", "claude");
+    }
+
+    /// A row that is not ready shows no account, even one a background read kept after a sign-out: the overlay follows the
+    /// sign-in state, as the stored row did before (finding 2 of the re-review).
+    #[test]
+    fn a_row_that_is_not_ready_shows_no_account() {
+        let config = Config { path: PathBuf::new(), data: json!({"profiles": {"gated-acct": {"dir": "/p/gated-acct"}}}).as_object().unwrap().clone() };
+        let assignments = json!([{"profile": "gated-acct", "bot": "gated-bot", "config": {"runtime": "claude"}}]);
+        let root = std::env::temp_dir().join(format!("tico-probe-gated-{}", uuid::Uuid::new_v4().simple()));
+        let sign = SignIn::new(&root.join("projects"));
+        let mut rows = Rows::new();
+        let missing = json!({"installed": true, "authenticated": "missing", "detail": "Not signed in", "version": "2.1.300"});
+        rows.insert(("claude".into(), "gated-acct".into()), missing.as_object().unwrap().clone());
+        crate::accounts::remember("gated-acct", "claude", json!({"email": "old@example.com"}));
+        let report = runtime_report(&config, &sign, assignments.as_array().unwrap(), false, &rows);
+        let row = &report["claude"]["profiles"]["gated-acct"];
+        assert_eq!(row["authenticated"], "missing", "the row is there, and not ready");
+        assert!(row.get("account").is_none(), "and shows no account");
+        // The same login once it is ready shows the account, so the overlay itself still works.
+        rows.insert(("claude".into(), "gated-acct".into()), json!({"installed": true, "authenticated": "ready", "version": "2.1.300"}).as_object().unwrap().clone());
+        let report = runtime_report(&config, &sign, assignments.as_array().unwrap(), false, &rows);
+        assert_eq!(report["claude"]["profiles"]["gated-acct"]["account"]["email"], "old@example.com");
+        crate::accounts::forget("gated-acct", "claude");
     }
 
     fn median<T: PartialOrd + Copy>(mut values: Vec<T>) -> T {
