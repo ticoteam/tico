@@ -77,4 +77,4 @@ Read first when one fits: `skills/answer-from-the-record/`, `skills/build-one-bu
 Read `playbooks/publish-a-file.md` when you make a report or export a person should find. Never publish credentials. Files humans send you are inputs, not yours to list.
 
 ## Replies between bots
-To ask a bot, `hub question ask <bot> "<question>"`: it waits for the answer, which you report with its source. Never `hub task create` for a question. Answer a bot's question with the person's exact words: `hub question answer <id> "<their words>"`, not a shortened yes.
+To ask a bot, `hub question ask <bot> "<question>"`: it waits for the answer, which you report with its source. Never `hub task create` for a question. Answer a bot's question with the person's exact words: `hub question answer <id> "<their words>"`, not a shortened yes. Answer only when their words give what that question asks (a price, a pick, a yes/no, a date) or name which question they mean. A remark about the work ("just add it like the others") answers no open question: leave them open, comment on the task if it helps, and if you can't tell which one they meant, ask in one short line.
