@@ -245,6 +245,8 @@ NEVER = [(m, re.compile(p)) for m, p in (
     (None, r"/api/v2/access/owner(/.*)?"),
     # The Assistant's own switches: whether it decides approvals (the person's own sign-in only) and whether it is on.
     (None, r"/api/v2/assistant/settings"), ("POST", r"/api/v2/assistant/turn-on"),
+    # The company's AI provider keys and config (a credential): the owner's own sign-in, never a chat.
+    ("PUT", r"/api/v2/providers"),
     # A raw SQL query over the database is not a chat action: the Assistant reads through its own tools, privacy-checked
     # per run, and a query is never made for it from a turn.
     ("POST", r"/api/v2/sql"),
@@ -1503,23 +1505,31 @@ def install(app, store, auth, mutate, onboarding):
     @app.post("/api/v2/assistant/actions")
     def propose(request: Request, body: M.AssistantAction):
         caller = request.state.identity
-        # The Assistant's own background run (its daily sweep, a bot identity) may put a card in one person's own Assistant
-        # chat, with `for`: as that person's card, proposed by the Assistant, never approving anything.
+        # The Assistant's own background run (its daily sweep: a routine of the Assistant bot, so `via` is never
+        # "assistant") may put a card in one person's own Assistant chat, with `for`: as that person's card, proposed by
+        # the Assistant, never approving anything. The person is resolved the way their own chat turn is (`chat_person`):
+        # an unknown, gone or suspended person is refused before any room is made, and the role is their real one.
         background = body.for_person is not None and caller.role not in ("owner", "human")
         if background:
             if H.actor_id(caller.actor) != settings.assistant_bot or not H.is_human(body.for_person):
                 raise Problem("forbidden", "Only the " + settings.assistant_name + " puts a card in a person's chat, "
                               "and only for that person", 403)
-            from dataclasses import replace
-            who = replace(caller, actor=body.for_person, role="human", email="", runner_id="", attempt_id="", agent="",
-                          via="", confirmed=False, task_actor="")
         else:
-            who = person(request)
-            if body.for_person not in (None, who.actor):
+            caller_person = person(request)
+            if body.for_person not in (None, caller_person.actor):
                 raise Problem("forbidden", "Only the " + settings.assistant_name + " puts a card in someone else's chat, "
                               "and only from its own background run", 403)
 
         def work(c):
+            if background:
+                from dataclasses import replace
+                found = auth.chat_person(c, body.for_person, settings.assistant_bot)
+                if not found:
+                    raise Problem("not_found", "No active person " + body.for_person + " to put a card in the chat of", 404)
+                # The card is the person's own; it is not a turn of theirs, so it carries no citation of its own.
+                who = replace(found, via="", task_actor="", attempt_id="", runner_id="")
+            else:
+                who = caller_person
             if normalize_path(body.path) == "/api/v2/seats/batch" and who.role != "owner":
                 raise Problem("forbidden", "Only the owner may confirm a chart-model re-org", 403)
             if normalize_path(body.path) in ("/api/v2/chat/" + settings.assistant_bot,

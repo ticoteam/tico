@@ -209,3 +209,29 @@ def test_one_card_holds_closes_an_automation_change_and_a_rule_stop(api):
     # A step that is never admitted (the Assistant's own switches) is refused on the card as well.
     switch = {"actions": [{"method": "POST", "path": "/api/v2/rules", "body": {"kind": "external", "assistant_direct": False}}]}
     card(api, token, "/api/v2/assistant/batch", switch, summary="Switch the Assistant off", expected=422)
+
+
+def test_a_background_card_is_only_for_a_real_active_person(api):
+    coo = setup_attempt(api, "coo")[2]["token"]
+    card(api, coo, "/api/v2/bots/ops/archive", {"expected_revision": 1}, for_person="human:ghost", expected=404)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM conversations WHERE owner_id='human:ghost' OR "
+                         "id IN (SELECT conversation_id FROM assistant_actions WHERE owner='human:ghost')").fetchone()[0] == 0
+
+
+def test_a_routine_run_of_the_assistant_bot_is_never_the_persons_turn(api):
+    """The daily sweep is a routine of the coo bot: its attempt is not a turn the person started in their Assistant room,
+    so the Assistant principal is None and the run keeps the bot's own identity (via is never "assistant")."""
+    _, _, attempt = setup_attempt(api, "coo")
+    auth = api.app.state.auth
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT * FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
+        assert auth.assistant_principal(c, row) is None
+    assert get(api, "me", attempt["token"])["actor"] == "bot:coo"
+
+
+def test_the_providers_keys_are_never_a_chat_write(api):
+    assert not admits_on_turn("PUT", "/api/v2/providers", {"enabled": []})
+    token = assistant_turn(api, "ana-test")[1]["token"]
+    res = api.put("/api/v2/providers", json={"enabled": [], "expected_revision": 0}, headers=headers(token))
+    assert res.status_code == 403 and res.json()["error"]["code"] == "confirm_required", res.text
