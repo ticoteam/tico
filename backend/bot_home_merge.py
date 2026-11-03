@@ -203,7 +203,7 @@ def histories(c, conversation_ids):
         try:
             moved |= {r[0] for r in c.execute(
                 f"SELECT conversation_id FROM home_merges WHERE conversation_id IN ({','.join('?' * len(part))})", part)}
-        except sqlite3.OperationalError:      # a database from before migration 0062
+        except sqlite3.OperationalError:      # a database from before migration 0063
             break
     return {cid: history_ids(c, cid) if cid in moved else [cid] for cid in ids}
 
@@ -224,7 +224,7 @@ def _covered_bot(c, ref):
     try:
         bot = H._one(c, "SELECT b.id, b.slug, EXISTS(SELECT 1 FROM home_merges m WHERE m.bot_id=b.id) AS covered "
                         "FROM bots b WHERE b.id=? OR b.slug=? LIMIT 1", (ref, ref))
-    except sqlite3.OperationalError:      # a database from before migration 0062
+    except sqlite3.OperationalError:      # a database from before migration 0063
         return None
     return bot if bot and bot.get("covered") else None
 
@@ -235,7 +235,7 @@ def _moved(c, conversation_id):
         return c.execute("SELECT m.home_id, m.bot_id, h.closed_at, h.archived_at FROM home_merges m "
                          "LEFT JOIN conversations h ON h.id=m.home_id WHERE m.conversation_id=?",
                          (conversation_id,)).fetchone()
-    except sqlite3.OperationalError:      # a database from before migration 0062
+    except sqlite3.OperationalError:      # a database from before migration 0063
         return None
 
 
