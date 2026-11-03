@@ -588,6 +588,53 @@ def test_no_create_follows_a_refused_one_until_hq_is_listed(cloud):
     assert cloud.hq.actions().count("create") == CM.ENROLL_TRIES
 
 
+def test_a_look_that_raises_is_named_on_its_row_until_the_next_create_goes_out(cloud, monkeypatch):
+    adopt(cloud)
+    work(cloud)
+    real_mint = CM.mint
+
+    def unowned(c, key, owner=None):
+        raise Problem("operator", "Nobody on the roster to own this cloud machine's computer", 409)
+    monkeypatch.setattr(CM, "mint", unowned)
+    assert cloud.tick(10) == []                                 # the look raised before HQ was asked
+    assert cloud.row()["problem"] == "error:operator" and cloud.row()["problem_at"]
+    assert employee(cloud.api)["cloud_machine"]["problem"] == "Couldn't be made or started (operator): trying again"
+    with cloud.store.read() as c:
+        assert "couldn't be made or started (operator)" in CM.waiting(c, "ops")
+    monkeypatch.setattr(CM, "mint", real_mint)
+    assert cloud.tick(10) == ["create"] and cloud.row()["problem"] == ""
+
+
+def test_a_look_that_raises_with_nothing_to_do_is_cleared_by_the_next_clean_look(cloud, monkeypatch):
+    adopt(cloud)                                                # no work: no machine is wanted
+    real_facts = CM.facts
+
+    def broken(*args):
+        raise RuntimeError("database is locked")
+    monkeypatch.setattr(CM, "facts", broken)
+    assert cloud.tick(10) == [] and cloud.row()["problem"] == "error:RuntimeError"
+    monkeypatch.setattr(CM, "facts", real_facts)
+    assert cloud.tick(10) == [] and cloud.row()["problem"] == ""
+
+
+def test_a_create_waiting_on_a_refused_list_says_so_on_its_row_and_goes_out_once_listed(cloud):
+    adopt(cloud)
+    work(cloud)
+    cloud.hq.fail["create"] = [CM.Refused("boat_error", 502)]   # refused once: the create after it waits on HQ's list
+    assert cloud.tick(10) == ["create"] and cloud.row()["problem"] == "hq:boat_error"
+    adopt(cloud, "cpo")
+    work(cloud, "cpo")
+    listed = cloud.hq.list
+
+    def down():
+        raise CM.Refused("unreachable", 0)
+    cloud.hq.list = down
+    cloud.hq.calls.clear()
+    assert cloud.tick(CM.BACKOFF) == [] and cloud.row("cpo")["problem"] == "hq:unreachable"
+    cloud.hq.list = listed
+    assert cloud.tick(CM.BACKOFF_MAX) == ["create", "create"] and cloud.row("cpo")["problem"] == ""
+
+
 def test_a_create_hq_answers_as_failed_counts_too(cloud):
     adopt(cloud)
     work(cloud)
@@ -1862,3 +1909,20 @@ def test_a_cloud_machine_stopped_when_idle_is_not_offline_on_health(cloud):
         CM.save(c, CM.SHARED, problem="out_of_credit")
     assert health_of(cloud)["computers"]["summary"] == "Every computer is offline."
     assert "computer_offline" in issue_kinds(cloud)
+
+
+def test_a_list_that_breaks_outside_hq_still_lets_the_looks_run_and_says_why(cloud):
+    adopt(cloud)
+    work(cloud)
+    cloud.hq.fail["create"] = [CM.Refused("boat_error", 502)]   # refused once: the next create waits on HQ's list
+    assert cloud.tick(10) == ["create"]
+    adopt(cloud, "cpo")
+    work(cloud, "cpo")
+    listed = cloud.hq.list
+
+    def broken():
+        raise ValueError("bad page")
+    cloud.hq.list = broken
+    assert cloud.tick(CM.BACKOFF) == [] and cloud.row("cpo")["problem"] == "hq:ValueError"
+    cloud.hq.list = listed
+    assert "create" in cloud.tick(CM.BACKOFF_MAX) and cloud.row("cpo")["problem"] == ""

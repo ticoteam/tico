@@ -807,6 +807,7 @@ class Manager:
         self.lock = threading.Lock()
         self.synced = None
         self.relist = False             # a create was refused: no other create until HQ's list has been read
+        self.list_refused = None        # the code of HQ's last refused list, None once one is read: a waiting create says it
 
     @property
     def off(self):
@@ -838,7 +839,11 @@ class Manager:
             if hq is None:
                 return
         if self.synced is None or at - self.synced >= SYNC:
-            self.sync(hq, at)                               # also how this server learns HQ makes machines at all
+            try:
+                self.sync(hq, at)                           # also how this server learns HQ makes machines at all
+            except Exception as exc:  # noqa: BLE001 - the looks still run; a create waiting on the list says why
+                log.exception("Reading HQ's cloud machine list failed")
+                self.list_refused = type(exc).__name__[:60]
         with self.store.read() as c:
             if not offered(c, self.settings):
                 return
@@ -851,8 +856,20 @@ class Manager:
         for key in keys:
             try:
                 self.step(hq, key, at)
-            except Exception:  # noqa: BLE001 - one machine's failure never holds the others
+            except Exception as exc:  # noqa: BLE001 - one machine's failure never holds the others
                 log.exception("Cloud machine step failed for %s", key)
+                self.failed(key, exc)
+
+    def failed(self, key, exc):
+        """Name a look's failure on machine `key`'s row, so its bots' work says why (the log has the trace)."""
+        code = (str(exc.code) if isinstance(exc, Problem) else type(exc).__name__)[:60]
+        try:
+            with self.store.transaction() as c:
+                current = row(c, key)
+                if current and current["problem"] != "error:" + code:
+                    save(c, key, problem="error:" + code, problem_at=H.now())
+        except Exception:  # noqa: BLE001 - recording the failure never breaks the loop
+            log.exception("Naming a cloud machine's failure failed for %s", key)
 
     def sync(self, hq, at):
         """HQ's list: every machine's state, size, cost and starts onto its row (by key), and the sizes. The first sizes
@@ -863,11 +880,13 @@ class Manager:
         try:
             listed = hq.list()
         except Refused as refused:
+            self.list_refused = refused.code
             if refused.status == 503 and refused.code == "not_configured":   # off, or turned off for this company
                 with self.store.transaction() as c:
                     c.execute("DELETE FROM registry_metadata WHERE key=?", (SIZES_KEY,))
             return None
         self.relist = False
+        self.list_refused = None
         with self.store.transaction() as c:
             learned = bool(listed["sizes"]) and (first or not sizes(c))
             if listed["sizes"]:
@@ -940,6 +959,9 @@ class Manager:
                 and not covers(current["wake_key"], found["want"]):
             with self.store.transaction() as c:
                 save(c, key, problem="", problem_at=None)
+        elif problem is None and not action and current["problem"].startswith("error:"):
+            with self.store.transaction() as c:                 # a look that ran clean again
+                save(c, key, problem="", problem_at=None)
         if action:
             self.act(hq, current, action, found, at)
         return action
@@ -953,7 +975,12 @@ class Manager:
             if current is None:
                 return                                      # a claim came first, or the facts changed: not now
         if action == "create" and self.relist:
-            return                                          # the last create was refused, and HQ's list not read since
+            # The last create was refused, and HQ's list not read since. A refused list is said on this row, so the
+            # bot's work says why; a list not yet asked for is waited on silently.
+            if self.list_refused and current["problem"] != "hq:" + self.list_refused:
+                with self.store.transaction() as c:
+                    save(c, key, problem="hq:" + self.list_refused, problem_at=H.now())
+            return
         if action == "create":
             with self.store.transaction() as c:
                 code = mint(c, key, self.execution.auth.owner_id(c) if key == SHARED else None)
@@ -1070,6 +1097,8 @@ def problem_words(problem):
         return ""
     if problem.startswith("hq:"):
         return f"Didn't start ({problem[3:]}): trying again"
+    if problem.startswith("error:"):
+        return f"Couldn't be made or started ({problem[6:]}): trying again"
     return PROBLEMS.get(problem, problem)
 
 
@@ -1083,6 +1112,8 @@ def waiting(c, bot):
         return "out of credit: its cloud machine can't start"
     if machine["problem"].startswith("hq:"):
         return f"its cloud machine didn't start ({machine['problem'][3:]}); trying again"
+    if machine["problem"].startswith("error:"):
+        return f"its cloud machine couldn't be made or started ({machine['problem'][6:]}); trying again"
     if machine["problem"] == "stuck":
         return "its cloud machine started, but this did not run there"
     if machine["problem"] == "no_enroll":
