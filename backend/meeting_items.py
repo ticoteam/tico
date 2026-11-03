@@ -35,9 +35,8 @@ PROCESS_LABELS = {"blocked", "blocked by specs", "needs architecture review", "n
 DUPLICATE_RATIO = 0.8
 DOC_BOT = "doc-updater"
 # A doc update goes to the owner it names, else to DOC_BOT when this team has that bot.
-DOC_OWNER_NAMED = "Choose an owner for this doc update: a person or a bot on this team, as human:<id> or bot:<slug>."
-DOC_OWNER_DEFAULT = ("This team has no " + DOC_BOT + " bot you can send to, so choose who this doc update is for: "
-                     "human:<id> or bot:<slug>.")
+DOC_OWNER_NAMED = "Pick someone on this team to own this doc update, then push again."
+DOC_OWNER_DEFAULT = "This team has no " + DOC_BOT + " bot, so pick who this doc update is for, then push again."
 # Only these keys mean anything per section, so anything else is a mistake worth naming.
 DETAIL_KEYS = {
     "doc": ("document", "change", "why", "owner"),
