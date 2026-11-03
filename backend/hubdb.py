@@ -1109,7 +1109,7 @@ class _SyncWal:
             os.close(fd)
 
 
-def durable_commit(c):
+def durable_commit(c: sqlite3.Connection) -> None:
     """Make this transaction's commit reach the disk before the request answers, from inside the transaction: SQLite
     refuses to change synchronous once it has begun, so the WAL is fsynced once the commit is done. Nothing to do on a
     connection already at FULL (a `durable` transaction), on one with no after-commit queue (a plain connection), or
