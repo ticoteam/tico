@@ -246,7 +246,8 @@ def test_an_approval_undone_then_decided_again_cannot_be_restored_from_the_first
     said = turn_message(api, attempt)
     asked(api, f"approvals/{approval['id']}", {"decision": "declined", "note": "Not now"}, attempt["token"], said)
     [first] = changes_for(api, f"approval:{approval['id']}", token="ana-test")
-    restore(api, first["id"], token="ana-test")
+    with api.app.state.store.transaction() as c:
+        H.approval_undo(c, "human:ana", approval["id"])
     as_assistant(api, "human:ana", lambda c: H.approval_decide(c, "human:ana", approval["id"], "approved"))
     restore(api, first["id"], token="ana-test", expected=409)
     with api.app.state.store.read() as c:
