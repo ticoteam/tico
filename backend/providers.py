@@ -745,11 +745,11 @@ def fill(record, config):
     return {**config, "runtime": runtime, "model": model}
 
 
-def bot_choice(c, settings, config):
+def bot_choice(c, settings, config, record=None):
     """(runtime, model) for a bot's stored config, or ('', '') when nothing resolves: for the
-    places that only record or display what a bot runs on and must not fail."""
+    places that only record or display what a bot runs on and must not fail. `record`: load(c, settings), if read."""
     try:
-        return resolve(load(c, settings), config)
+        return resolve(load(c, settings) if record is None else record, config)
     except ProviderError:
         return "", ""
 

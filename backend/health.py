@@ -561,7 +561,7 @@ def _claimable(c, settings, runner_id, slug, limits, **kw):
         return None
 
 
-def _waiting(c, online_ids, settings=None, limits=None):
+def _waiting(c, online_ids, settings=None, limits=None, loads=None):
     """Active bots whose computer is offline (or that have none while work is queued), with the
     work stuck behind them, and bots whose queued work is old even though their computer is up.
     The third list is every bot with queued work that is not starting, with the computer's own
@@ -683,14 +683,14 @@ def _waiting(c, online_ids, settings=None, limits=None):
             # A bot the claim holds on purpose (a spend limit, a usage-limit cooldown, a lapsed lease whose worker still
             # runs, interrupted work awaiting review, ...) is said with that reason, not "slow".
             claimable = (('company_limit', None, False) if company_stopped else
-                         _claimable(c, settings, where[0], slug, limits, suspect=suspect))
+                         _claimable(c, settings, where[0], slug, limits, suspect=suspect, loads=loads))
             if claimable is None:
                 continue        # the claim's check for this bot raised: Health names that check instead
             refused, first, person = claimable
             if slug in busy and refused in (None, 'lane_held'):
                 # Keep claim priority for age checks; only use oldest-job diagnostics when
                 # that free-lane job is actually refused.
-                diagnostic = _claimable(c, settings, where[0], slug, limits, oldest=True, suspect=suspect)
+                diagnostic = _claimable(c, settings, where[0], slug, limits, oldest=True, suspect=suspect, loads=loads)
                 if diagnostic and diagnostic[0] and diagnostic[0] != "lane_held":
                     refused, first, person = diagnostic
             # Only fenced work is left: the interrupted run holds it, not the running turn, so that is the reason.
@@ -704,7 +704,7 @@ def _waiting(c, online_ids, settings=None, limits=None):
                 row["oldest_queued"], row["oldest"] = row["oldest"], first
             # Counts belong to the individual job's task, not the representative oldest job.
             groups = {}
-            for job, why in queued_reasons(c, settings, where[0], slug, limits, suspect=suspect):
+            for job, why in queued_reasons(c, settings, where[0], slug, limits, suspect=suspect, loads=loads):
                 key = why or "slow"
                 group = groups.setdefault(key, {"reason": key, "queued": 0, "oldest": job["created_at"]})
                 group["queued"] += 1
@@ -720,9 +720,9 @@ def _waiting(c, online_ids, settings=None, limits=None):
     return waiting, slow, stuck
 
 
-def refused_queues(c, settings):
+def refused_queues(c, settings, loads=None):
     from .queue_refusals import aged
-    return list(aged(c, settings))
+    return list(aged(c, settings, loads))
 
 
 WELCOME = "#/welcome"
@@ -1472,7 +1472,7 @@ def _failed(c):
     return total, [{"bot": r["bot_id"], "state": r["state"], "at": r["finished_at"]} for r in rows]
 
 
-def _fallbacks(c):
+def _fallbacks(c, loads=None):
     """(on fallback, limited): bots whose latest run in the last day ran on a fallback harness, with that
     harness and when the unbroken run of fallback turns began; and bots a usage limit still holds."""
     from .execution import cooling_off
@@ -1488,7 +1488,8 @@ def _fallbacks(c):
     on = sorted(({"bot": row["bot"], "harness": row["harness"], "changed_at": row["changed_at"]}
                  for row in latest.values() if row["harness"]), key=lambda row: (row["changed_at"] or "", row["bot"]))
     limited = [{"bot": r["bot"], "changed_at": r["changed_at"]} for r in
-               c.execute("SELECT bot,changed_at FROM bot_status WHERE state='limited' ORDER BY changed_at,bot") if cooling_off(c, r["bot"])]
+               c.execute("SELECT bot,changed_at FROM bot_status WHERE state='limited' ORDER BY changed_at,bot")
+               if cooling_off(c, r["bot"], loads)]
     return on, limited
 
 
@@ -1639,29 +1640,23 @@ def _unreviewed_runs(c, who, auth):
                   [_fix("Open bots", "#/settings", "bots")], items=items) if items else None
 
 
-def _prime_claims(c):
-    """Every bot's own rows that the claim check reads (execution.claim_refusal) for the queued work on each computer
-    and each stuck bot, read one table at a time: the page makes a few statements however many bots it checks."""
+def _prime_claims(c, settings=None):
+    """What the claim check reads (execution._claim_refusal) for every bot and every computer the page checks, read once
+    in set queries (claim_loads.read) and handed to each check the page makes, so the page makes a few statements
+    however many bots it checks. Inside a snapshot the bots' own rows and the computers' rows are also primed for the
+    readers that take them from the snapshot (prime_bot_rows, RUNNER_SQL)."""
+    from . import claim_loads
     from .events import prime_bot_rows
-    from .execution import GATEWAY_WAIT
-    from .read_cache import cache, prime_rows
-    if cache(c) is None:
-        return
+    from .execution import RUNNER_SQL, capability_set
+    from . import browser_exit
+    from .read_cache import cache, prime
     slugs = [row[0] for row in c.execute("SELECT id FROM bots")]
-    prime_bot_rows(c, slugs)
-    # Each computer's row, which the claim's runner and login checks read once per computer with queued work.
-    from .execution import RUNNER_SQL
-    from .read_cache import prime
     runners = {row["id"]: row for row in c.execute("SELECT * FROM runners")}
-    prime(c, RUNNER_SQL, {(rid,): row for rid, row in runners.items()})
-    prime(c, "SELECT readiness,capabilities FROM runners WHERE id=?", {(rid,): row for rid, row in runners.items()})
-    keys = [GATEWAY_WAIT + slug for slug in slugs]
-    found = {}
-    for part in H.chunks(keys):
-        found.update((row["key"], row) for row in c.execute(
-            f"SELECT value,key FROM registry_metadata WHERE key IN ({','.join('?' * len(part))})", part))
-    prime_rows(c, "SELECT value FROM registry_metadata WHERE key=?",
-               {(key,): [found[key]] if key in found else [] for key in keys})
+    if cache(c) is not None:
+        prime_bot_rows(c, slugs)
+        prime(c, RUNNER_SQL, {(rid,): row for rid, row in runners.items()})
+    exits = any(browser_exit.CAPABILITY not in capability_set(row["capabilities"]) for row in runners.values())
+    return claim_loads.read(c, settings, runners, slugs, exits=exits)
 
 
 def view(c, who, settings, auth, github, config):
@@ -1671,10 +1666,10 @@ def view(c, who, settings, auth, github, config):
     full = kind in ("owner", "admin")
     online = _online_runners(c)
     online_ids = {r["id"] for r in online}
-    _prime_claims(c)
+    loads = _prime_claims(c, settings)
     limits = usage_limits.company(c)       # one, so the spend of every period is summed once for all the bots
     computers = _computers(c, online, settings, limits)
-    waiting, slow, stuck_rows = _waiting(c, online_ids, settings, limits)
+    waiting, slow, stuck_rows = _waiting(c, online_ids, settings, limits, loads)
     # A bot onboarding for a day is stuck too, unless something else already holds it (backend/setup_stuck.py).
     listed = {row["bot"] for row in stuck_rows}
     stuck_rows += [row for row in setup_stuck.stuck(c) if row["bot"] not in listed]
@@ -1682,7 +1677,7 @@ def view(c, who, settings, auth, github, config):
         readable = auth.bot_accesses(c, who, [row["bot"] for row in stuck_rows])
         stuck_rows = [row for row in stuck_rows if readable.get(row["bot"], auth.FULL)["read"]]
     blocked = _stuck(c, stuck_rows, online_ids, who, full, auth)
-    on_fallback, limited = _fallbacks(c) if kind != "bot" else ([], [])
+    on_fallback, limited = _fallbacks(c, loads) if kind != "bot" else ([], [])
     if not full and (on_fallback or limited):     # the same rule as `stuck`: only bots the caller may read
         readable = auth.bot_accesses(c, who, sorted({row["bot"] for row in on_fallback + limited}))
         on_fallback = [row for row in on_fallback if readable.get(row["bot"], auth.FULL)["read"]]
@@ -1714,7 +1709,7 @@ def view(c, who, settings, auth, github, config):
                              _diagnostic_summary('Assignments still unstarted two hours after a recovery wake.', assigned),
                              items=assigned))
     from . import task_privacy
-    refused, queued = [], refused_queues(c, settings)
+    refused, queued = [], refused_queues(c, settings, loads)
     # One access check for every refused bot, and one query a chunk of jobs for their oldest queued messages.
     readable = auth.bot_accesses(c, who, sorted({row['bot'] for row in queued})) if queued else {}
     queued = [row for row in queued if readable.get(row['bot'], auth.FULL)['read']]

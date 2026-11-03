@@ -265,21 +265,24 @@ RUNNER_READINESS_SQL = "SELECT readiness FROM runners WHERE id=?"
 RUNNER_CAPABILITIES_SQL = "SELECT capabilities FROM runners WHERE id=? AND revoked_at IS NULL"
 
 
-def in_effect(c, runner_id, runtime):
+def in_effect(c, runner_id, runtime, loads=None):
     """The subscription a turn on `runtime` on this computer signs in with, or None for the computer's own login (none
     given, the one given needs reconnecting or is held at a usage limit until its reset, or a runner too old to take
     one). A held one is passed over like one that needs reconnecting: the turn runs on the computer's own login, else
     the Gateway under the company's choice, else waits; it never waits on the subscription's hold. After the reset its
     first turn is the hold's probe as usual (backend/login_holds.py)."""
-    given = _given(c)
+    given = loads.given if loads is not None else _given(c)
     sub = given.get((runner_id, runtime)) if given else None
     if not sub or sub["status"] == "needs_reconnect" or KINDS.get(sub["kind"], {}).get("runtime") != runtime:
         return None
     from . import login_holds
-    if login_holds.holding(c, "", login_holds.subscription_login(sub["id"]), runtime) == "held":
+    if login_holds.holding(c, "", login_holds.subscription_login(sub["id"]), runtime, loads=loads) == "held":
         return None
-    from .read_cache import one
-    runner = one(c, RUNNER_CAPABILITIES_SQL, (runner_id,))
+    if loads is not None:
+        runner = loads.runner_of(c, runner_id, live=True)
+    else:
+        from .read_cache import one
+        runner = one(c, RUNNER_CAPABILITIES_SQL, (runner_id,))
     return sub if runner_takes(runner) else None
 
 
@@ -308,10 +311,10 @@ def turn_runtimes(config, record=None):
     return [r for r in dict.fromkeys(out) if r in RUNTIMES]
 
 
-def covered_runtimes(c, runner, config):
+def covered_runtimes(c, runner, config, loads=None):
     """{runtime: kind} the computer's subscriptions sign in for a bot on `config` there: a covered runtime needs no
     sign-in on that computer, for the bot's readiness and the claim's check."""
-    return {item["runtime"]: item["subscription"]["kind"] for item in for_claim(c, runner, config)}
+    return {item["runtime"]: item["subscription"]["kind"] for item in for_claim(c, runner, config, loads)}
 
 
 def covered(ready, runtimes):
@@ -726,21 +729,28 @@ def lend(c, runner_id, runtime, actor, shared, others):
 
 
 # ------------------------------------------------------------------------------------------------ claim and run
-def for_claim(c, runner, config):
-    """The subscriptions a claimed turn may use, with automatic candidates limited to installed runtimes."""
-    if not runner or not _given(c):
+def for_claim(c, runner, config, loads=None):
+    """The subscriptions a claimed turn may use, with automatic candidates limited to installed runtimes. `loads`: the
+    claim's loaded values (claim_loads), when the caller has them."""
+    given = loads.given if loads is not None else _given(c)
+    if not runner or not given:
         return []
-    from . import providers
-    from .read_cache import one
     from .store import readiness_document
     own = turn_runtimes(config)
-    row = one(c, RUNNER_READINESS_SQL, (runner["id"],))
+    if loads is not None:
+        row = loads.runner_of(c, runner["id"])
+        record = loads.plain_record(c)
+    else:
+        from . import providers
+        from .read_cache import one
+        row = one(c, RUNNER_READINESS_SQL, (runner["id"],))
+        record = providers.load(c)
     ready = readiness_document(row["readiness"]) if row else {}
     out = []
-    for runtime in turn_runtimes(config, providers.load(c)):
+    for runtime in turn_runtimes(config, record):
         if runtime not in own and ((ready.get("runtimes") or {}).get(runtime) or {}).get("installed") is not True:
             continue          # a subscription authenticates a CLI; it cannot install one
-        sub = in_effect(c, runner["id"], runtime)
+        sub = in_effect(c, runner["id"], runtime, loads=loads)
         if sub:
             lazy = runtime not in own and ACTIVATION_CAPABILITY in (H._json(runner["capabilities"], []) or [])
             out.append({"runtime": runtime, "subscription": sub, "activate": lazy})
