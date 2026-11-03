@@ -551,3 +551,14 @@ def test_the_withdraw_and_list_tools_are_offered_to_bots_and_work(api, botops):
     err, out = call(api, "hub_assistant_withdraw", {"id": aid, "reason": "Wrong person"}, token=other["token"])
     assert not err and out["action"]["status"] == "withdrawn", out
     assert withdrew_note(api, card)[2].startswith("ops withdrew that card")
+
+
+def test_a_private_assistant_card_is_listed_to_its_owner_only(api, botops):
+    """The Assistant's cards come from a person's private chat: only that person sees them in the list."""
+    card = post(api, "assistant/actions", {"summary": "Archive Finance", "path": "/api/v2/bots/finance/archive",
+                                           "body": {"expected_revision": 1}}, token="ana-test")["action"]
+    ids = lambda r: [a["id"] for a in r["actions"]]
+    assert card["id"] in ids(get(api, "assistant/proposals", token="ana-test"))
+    assert card["id"] not in ids(get(api, "assistant/proposals", token="ben-test"))
+    _, _, other = setup_attempt(api, "ops")
+    assert card["id"] not in ids(act(api, other, "GET", "assistant/proposals", None, ref=None).json())

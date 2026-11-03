@@ -1983,7 +1983,9 @@ def install(app, store, auth, mutate, onboarding):
         who = request.state.identity
         if not teammate(who):
             raise Problem("forbidden", "Only people and bots of the company can list proposals", 403)
-        sql, args = "SELECT * FROM assistant_actions WHERE status='pending'", []
+        # A card the Assistant made in someone's private Assistant chat is listed to that person only: its words came
+        # from a private conversation. Cards bots propose (BotOps) are team work, listed to every teammate.
+        sql, args = "SELECT * FROM assistant_actions WHERE status='pending' AND (owner=? OR coalesce(proposer,'assistant')!='assistant')", [who.actor]
         if proposer:
             sql += " AND proposer=?"
             args.append(proposer)
