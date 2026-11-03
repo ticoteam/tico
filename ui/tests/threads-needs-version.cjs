@@ -25,7 +25,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
   });
   const reads = {needs: 0, threads: 0};
   const threads = threadsFake({bot: 'ops'});
-  await page.route('**/*', route => {
+  await page.route('**/*', async route => {
     const url = new URL(route.request().url()), p = url.pathname, method = route.request().method();
     const json = body => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
@@ -44,6 +44,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     }
     if (p === '/api/v2/threads' && method === 'GET') {
       reads.threads++;
+      if (reads.hold) await reads.hold;
       if (reads.failThreads) return route.fulfill({status: 500, contentType: 'application/json', body: '{"error":"down"}'});
     }
     const answer = threads(p, url, method);
@@ -103,10 +104,17 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
   assert.ok(reads.threads > before.threads, 'a connect 5 minutes after the last read reads the list');
   await quiet();
   // A thread change while a read is on its way: that read vouches for nothing, so the next connect reads again.
+  assert.ok(await page.evaluate(() => { const g = THREADS.gen; liveEmit('threads', {kind: 'ranked'}); return THREADS.gen > g; }), 'a thread event counts as a change');
+  await page.waitForTimeout(t(3500));
   await page.waitForFunction(() => !THREADS.loading, null, {timeout: t(5000)});
-  await page.evaluate(() => { void threadsLoad(); liveEmit('threads', {kind: 'ranked'}); });
+  let release;
+  reads.hold = new Promise(r => { release = r; });
+  before = {...reads};
+  await page.evaluate(() => { void threadsLoad(); });
+  for (const end = Date.now() + t(5000); reads.threads === before.threads && Date.now() < end;) await page.waitForTimeout(20);
+  await page.evaluate(() => { THREADS.gen++; });       // a change while the read is held on its way
+  release(); reads.hold = null;
   await page.waitForFunction(() => !THREADS.loading, null, {timeout: t(5000)});
-  await quiet();
   assert.equal(await page.evaluate(() => THREADS.needsSeen), null, 'a read a change overtook holds no version');
 
   assert.deepEqual(errors.filter(e => !/500|failed/i.test(e)), []);
