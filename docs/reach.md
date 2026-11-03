@@ -96,7 +96,7 @@ Details of the API as built:
 
 ## On a phone
 
-The map stays on the Internal tab. Drag it to see the parts off screen. Tap a party to draw its lines and open its
+The map stays on the Internal tab. Scroll it to see the parts off screen. Tap a party to draw its lines and open its
 panel under the map. While you type in **Search people, bots and teams**, the matches replace the map; tap one to
 open it.
 
