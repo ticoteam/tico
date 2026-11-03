@@ -50,4 +50,16 @@ def test_health_statements_do_not_grow_with_history(api):
     for sql, n in collections.Counter(shape(s) for s in large).most_common(25):
         print(n, sql)
     print("statements", len(small), len(large))
+    with api.app.state.store.read() as c:
+        done = set()
+        for sql in large:
+            if not sql.lstrip().upper().startswith(("SELECT", "WITH")) or shape(sql) in done:
+                continue
+            done.add(shape(sql))
+            try:
+                plan = [r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql)]
+            except Exception as e:
+                plan = [repr(e)]
+            if any(p.startswith(("SCAN", "USE TEMP")) and "sqlite_master" not in p for p in plan):
+                print("PLAN", shape(sql), plan)
     assert len(large) <= len(small) + 12, (len(small), len(large))
