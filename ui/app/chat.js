@@ -325,9 +325,10 @@ async function v2StepsOpen(state, el, root = null) {
   const list = (root || $('#conv-thread'))?.querySelector(`details.run-steps[data-turn="${CSS.escape(turn)}"] .steps-list`);
   if (list) list.innerHTML = html;
 }
-// Copy the original message, not timestamps, action labels or rendered link shortcuts.
-function chatCopyHTML(text) {
-  return text ? `<div class="chat-message-actions"><button type="button" class="ghost chat-message-copy" data-chat-copy="${esc(text)}" aria-label="Copy message" title="Copy message"><span class="nav-icon" aria-hidden="true">content_copy</span></button></div>` : '';
+// Copy the original message, not timestamps, action labels or rendered link shortcuts. `fb`: a bot's message's feedback
+// key, whose 👍 / 👎 follow Copy on the row under it (ui/app/feedback.js).
+function chatCopyHTML(text, fb = '') {
+  return text ? `<div class="chat-message-actions"><button type="button" class="ghost chat-message-copy" data-chat-copy="${esc(text)}" aria-label="Copy message" title="Copy message"><span class="nav-icon" aria-hidden="true">content_copy</span></button>${fbButtonsHTML(fb)}</div>` : '';
 }
 document.addEventListener('click', async ev => {
   const button = ev.target.closest('.bubble [data-chat-copy]');
@@ -395,6 +396,7 @@ function v2MessageHTML(m) {
   const mine = !!pid;                       // any person's message sits on the right, under their name
   const who = mine ? esc(personHandle(pid)) : esc(actorLabel(m.sender_id));
   const me = m.sender_id === myActor();    // your own lines need no name on a bot's page
+  const fb = !mine && m.id && String(m.sender_id || '').startsWith('bot:') ? fbKey('message', m.id) : '';
   // The message a new topic started a fresh session for (backend/topic_change.py): one quiet line above it.
   const fresh = mine && m.refs?.topic_changed ? '<div class="conv-break chat-topic-break" role="separator">Topic changed</div>' : '';
   return `${fresh}<div class="conv-run chat${me ? ' from-me' : ''}" data-message="${esc(m.id || '')}">
@@ -403,12 +405,12 @@ function v2MessageHTML(m) {
       ${m.kind && m.kind !== 'say' ? `<span class="pill">${esc(m.kind)}</span>` : ''}
       <span class="spacer" style="flex:1"></span>
       <span class="tnum" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</span></div>
-    <div class="bubble ${mine ? 'you' : 'bot reply'}"><span class="who">${who}</span>${
+    <div class="bubble ${mine ? 'you' : 'bot reply'}"${fb ? ` data-fb-press="${esc(fb)}"` : ''}><span class="who">${who}</span>${
       mine ? esc(m.body || '')
         // The Assistant's read-back of what it will approve is shown exactly as written, never formatted: a requesting
         // bot's fields can't hide part of what the person says yes to.
         : m.refs?.read_back ? `<div class="read-back" style="white-space:pre-line">${esc(m.body || '')}</div>`
-        : `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>`}${chatCopyHTML(m.body)}</div>
+        : `<div class="md">${safeMd(m.body || '', {shortLinks: true})}</div>`}${chatCopyHTML(m.body, fb)}</div>
     ${v2DeliveryHTML(m)}
     ${(m.refs?.warnings || []).map(w => `<div class="chat-warn" title="From the runner, not the bot">${esc(w.charAt(0).toUpperCase() + w.slice(1))}</div>`).join('')}
     ${S.me?.cloud ? chatAttachmentsHTML(m.refs?.attachments || [], m.id || '') : ''}
@@ -672,6 +674,7 @@ function v2ChatRender(state) {
     }, {fresh: state.rendered && v2Jump(state), prepended: state.prepending});
   }
   state.prepending = false;
+  fbSync();
   v2Jump(state);
   state.rendered = true;
   botAvatarsSync();                     // the bot breathes while it answers
