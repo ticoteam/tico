@@ -147,6 +147,8 @@ async function open(browser, {viewer = 'ana', viewport = DESKTOP, hash = '#/comp
     if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
     if (p === '/api/v2/events') return;
     const payload = method === 'GET' ? null : req.postDataJSON?.() ?? null;
+    if (method === 'PUT' && p.endsWith('/disclosure') && hub.disclosureDelay)
+      await new Promise(resolve => setTimeout(resolve, hub.disclosureDelay));
     if (method !== 'GET') hub.writes.push([method, p, payload]);
     else if (/company-page|audiences|editions|readers/.test(p)) hub.reads.push(p);
     if (p === '/api/v2/config') return json(config);
@@ -409,10 +411,17 @@ async function shotPart(page, id, name) {
 
     // Disclosure on a computer: every audience side by side. A rule change sends that cell.
     assert.equal(await page.locator('.cp-table thead th[scope=col]').count(), 3);
+    // Delay the fake's write receipt so a local repaint cannot accidentally satisfy the assertion.
+    hub.disclosureDelay = 75;
+    const disclosureWrite = dataClass => page.waitForResponse(response => response.request().method() === 'PUT'
+      && response.url().endsWith('/api/v2/audiences/a-inv/disclosure')
+      && response.request().postDataJSON()?.rules?.[0]?.data_class === dataClass);
+    const headcountWrite = disclosureWrite('headcount');
     const cell = page.locator('select[data-cp-mode][data-aud="a-inv"][data-class="headcount"]');
     assert.equal(await cell.inputValue(), 'hidden', 'no rule is Hidden');
     await cell.selectOption('delayed');
     await page.waitForFunction(() => document.querySelector('[data-cp-lag][data-aud="a-inv"][data-class="headcount"]')?.closest('.cp-lag') && !document.querySelector('[data-cp-lag][data-aud="a-inv"][data-class="headcount"]').closest('.cp-lag').hidden);
+    await headcountWrite;
     assert.deepEqual(hub.writes.find(w => w[1] === '/api/v2/audiences/a-inv/disclosure')[2], {rules: [{data_class: 'headcount', ref_id: '', mode: 'delayed', lag_days: 30}]});
     // A KPI on the board has a row of its own, filed under kpi, and reads its class's rule until it has one.
     await page.locator('[data-cp-group="kpi"]').click();
@@ -420,8 +429,10 @@ async function shotPart(page, id, name) {
     await kpiCell.waitFor();
     assert.equal(await kpiCell.inputValue(), 'show', 'its class says Show');
     // "Whole quarters only" stays when the mode changes.
+    const revenueWrite = disclosureWrite('revenue');
     await page.locator('select[data-cp-mode][data-aud="a-inv"][data-class="revenue"]').selectOption('range');
     await page.waitForFunction(() => document.querySelector('select[data-cp-mode][data-aud="a-inv"][data-class="revenue"]')?.value === 'range');
+    await revenueWrite;
     assert.deepEqual(hub.writes.at(-1)[2], {rules: [{data_class: 'revenue', ref_id: '', mode: 'range', lag_days: 0, rounding: 'quarterly'}]});
 
     // A stat comes from the KPIs and Finance's numbers; the server fills in its class and words.
