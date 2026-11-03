@@ -458,6 +458,25 @@ impl Tico {
             result => result,
         }
     }
+    /// The server supplies the browser address; an OAuth runner host may serve only API routes.
+    pub fn browser_url(&self) -> Result<String> {
+        let response = self.call("/api/v2/recorder/browser", None, "")?;
+        let browser = settings::safe_url(
+            response["url"]
+                .as_str()
+                .context("Update Tico to copy meeting links")?,
+        )?;
+        let remote = reqwest::Url::parse(&self.destination.base_url)?;
+        let target = reqwest::Url::parse(&browser)?;
+        let local = |u: &reqwest::Url| {
+            ["localhost", "127.0.0.1", "[::1]", "::1"].contains(&u.host_str().unwrap_or(""))
+        };
+        ensure!(
+            local(&remote) || !local(&target),
+            "Tico returned a local browser address for a remote connection"
+        );
+        Ok(browser)
+    }
     pub fn verify(&self) -> Result<Value> {
         let who = self.call("/api/v2/me", None, "")?;
         let actor = who["actor"].as_str().unwrap_or("");
@@ -776,14 +795,18 @@ impl Tico {
             owner.starts_with("bot:") || owner.starts_with("human:"),
             "Choose who gets it"
         );
-        let base = settings::safe_url(&self.destination.base_url)?;
+        let base = self.browser_url().unwrap_or_default();
         let filed = record.deliveries.iter().find(|entry| {
             entry.destination_id == self.destination.id && !entry.meeting_id.is_empty()
         });
-        let link = match (filed, context.live_id.is_empty()) {
-            (Some(entry), _) => format!("{base}/#/meetings?meeting={}", entry.meeting_id),
-            (None, false) => format!("{base}/#/meetings?live={}", context.live_id),
-            (None, true) => String::new(),
+        let link = if base.is_empty() {
+            String::new()
+        } else {
+            match (filed, context.live_id.is_empty()) {
+                (Some(entry), _) => format!("{base}/#/meetings?meeting={}", entry.meeting_id),
+                (None, false) => format!("{base}/#/meetings/live/{}", context.live_id),
+                (None, true) => String::new(),
+            }
         };
         let sender = who["name"]
             .as_str()
@@ -803,7 +826,11 @@ impl Tico {
         store.update_context(id, |current| {
             current.live_destination = self.destination.id.clone();
             if let Some(item) = current.items.iter_mut().find(|item| item.id == item_id) {
-                item.task_url = format!("{base}/#/task/{task}");
+                item.task_url = if base.is_empty() {
+                    String::new()
+                } else {
+                    format!("{base}/#/task/{task}")
+                };
                 item.task_id = task;
                 item.owner = owner.into();
                 item.sent_to = owner_name.into();

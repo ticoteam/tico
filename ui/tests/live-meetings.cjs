@@ -276,7 +276,8 @@ async function main() {
     world.screen = null;
     await page.locator('.live-screen').waitFor({state:'hidden'});
     await page.goto('https://tico-ui.test/#/meetings');
-    assert.equal(await page.evaluate(() => LIVE_MEETINGS), null, 'leaving a meeting stops frame reads and revokes the image');
+    await page.waitForFunction(() => LIVE_MEETINGS === null);
+    assert.equal(await page.locator('.live-screen').count(), 0, 'leaving a meeting removes its shared image');
     assert.deepEqual(errors, []);
     await context.close();
     await require('./support/recorder-pause.cjs')(browser);

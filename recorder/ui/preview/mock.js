@@ -359,6 +359,9 @@
   const toast = (message) => { state.status.message = message; setTimeout(() => (state.status.message = ''), 6000); };
   const open = () => state.meetings[state.status.meeting];
   const commands = {
+    meeting_link: ({id}) => { const m = state.meetings[id]; if (m) { m.link_ready = true; m.live = 'Private in Tico'; } return {url:'https://acme.example/#/meetings/live/' + id, private:true, copied:true, only_you:true}; },
+    share_screen: ({id}) => { state.status.screen = {meeting:id, title:state.meetings[id]?.title, active:true, phase:'Sharing', source:'Selected window', error:''}; },
+    stop_screen: () => { if (state.status.screen) state.status.screen.active = false; },
     edit_shared_line: ({ id, seq, text }) => {
       const block = state.transcripts[id].blocks.find((b) => b.seq === seq);
       Object.assign(block, { paragraphs: [text], edited: true });
