@@ -25,8 +25,8 @@ One row per bot (`cloud_machines`): where it runs (`mode` cloud, or computer: an
 machine (`placement` shared, the default, or own), its own machine's size, Always on and Pause after, and that machine
 as HQ last described it. The shared machine is one more row, keyed SHARED, with the company's size, Always on and Pause
 after for it. A bot's placement defaults by role when its row is made (`default_placement`): `own` for a bot from a
-template in OWN_TEMPLATES (the video producer) or in the Engineering department of the team chart, `shared` for every
-other; a person switches it either way. Off a cloud company (cloud_access.state is None) there are no rows, the option
+template in OWN_TEMPLATES (the video producer) or a Builder (display name "Builder" or "Builder (...)"), `shared`
+for every other, the rest of Engineering included; a person switches it either way. Off a cloud company (cloud_access.state is None) there are no rows, the option
 is hidden and nothing here runs; on one, the same until HQ has listed its sizes (`offered`). On one, a bot with no
 computer defaults to a cloud machine (placement.auto_place; a setup that finished before HQ listed its sizes is placed
 when they come, Onboarding.on_cloud_offered); choosing another computer for it (Execution.assign) sets `computer`, and
@@ -120,7 +120,7 @@ MODES = ("cloud", "computer")
 PLACEMENTS = ("shared", "own")
 SHARED = "_shared"              # the shared machine's row and HQ key: no bot id has an underscore
 OWN_TEMPLATES = ("video-producer",)     # heavy work (renders, encodes) whatever department the bot is in
-OWN_DEPARTMENTS = ("engineering",)      # developers: builds, tests and toolchains of their own
+OWN_TITLE = "builder"                   # a Builder ("Builder", "Builder (Claude)"): long builds, tests and toolchains
 SIZES = ("small", "default", "large", "xlarge")       # the names before HQ has listed its own
 STATES = ("starting", "running", "stopping", "stopped", "deleted", "failed")
 ON = ("starting", "running")
@@ -313,9 +313,10 @@ def save(c, key, **fields):
 
 
 def default_placement(c, bot):
-    """Where a bot's cloud machine is when nobody has chosen: its own for a template in OWN_TEMPLATES or a bot in an
-    OWN_DEPARTMENTS department of the team chart (its group, or its manager's up the chain), the shared one for the
-    rest. Read once, when its row is made: moving it on the chart later moves no machine."""
+    """Where a bot's cloud machine is when nobody has chosen: its own for a template in OWN_TEMPLATES or a Builder (a
+    display name of "Builder", or "Builder (...)"), the shared one for every other bot, the rest of Engineering
+    included (leads, reviewers and QA run short turns). Read once, when its row is made: renaming it later moves no
+    machine."""
     found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     try:
         config = json.loads(found["config"] or "{}") if found else {}
@@ -323,8 +324,9 @@ def default_placement(c, bot):
         config = {}
     if isinstance(config, dict) and config.get("template") in OWN_TEMPLATES:
         return "own"
-    from .task_manager import Chart
-    return "own" if Chart(c).of("bot:" + bot) in OWN_DEPARTMENTS else "shared"
+    named = c.execute("SELECT display_name FROM bots WHERE id=?", (bot,)).fetchone()
+    name = ((named["display_name"] if named else "") or "").strip().lower()
+    return "own" if name == OWN_TITLE or name.startswith(OWN_TITLE + " (") else "shared"
 
 
 def adopt(c, bot, actor=H.KEEPER):

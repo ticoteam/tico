@@ -986,10 +986,12 @@ def idle(cloud):
 def test_placement_defaults_by_role_and_a_person_switches_it(cloud):
     execution = cloud.api.app.state.execution
     with cloud.store.transaction() as c:
-        # coo is in Engineering on the team chart; finance was made from the video producer's template.
+        # coo is a Builder; ops is in Engineering on the team chart, which alone is no reason for its own machine;
+        # finance was made from the video producer's template.
         c.execute("UPDATE registry_metadata SET value=json_set(value,'$.org_groups',json(?)) WHERE key='people'",
                   (json.dumps({"engineering": {"name": "Engineering", "parent": ""}}),))
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.team','engineering') WHERE bot='coo'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.team','engineering') WHERE bot='ops'")
+        c.execute("UPDATE bots SET display_name='Builder (Claude)' WHERE id='coo'")
         c.execute("UPDATE bot_config SET config=json_set(config,'$.template','video-producer') "
                   "WHERE bot='finance'")
         for bot in ("ops", "coo", "finance"):
@@ -1003,6 +1005,15 @@ def test_placement_defaults_by_role_and_a_person_switches_it(cloud):
     post(cloud.api, "bots/ops/cloud-machine", {"placement": "shared"}, token="cara-test", expected=403)
     with cloud.store.read() as c:
         assert CM.members(c) == ["coo"]
+
+
+def test_only_a_builder_by_name_gets_its_own_machine_by_default(cloud):
+    with cloud.store.transaction() as c:
+        for name, want in (("Builder", "own"), ("builder (OpenAI)", "own"), ("Builder (Claude)", "own"),
+                           ("Builders guild", "shared"), ("Reviewer 1", "shared"), ("Engineering Manager", "shared"),
+                           ("", "shared"), (None, "shared")):
+            c.execute("UPDATE bots SET display_name=? WHERE id='ops'", (name,))
+            assert CM.default_placement(c, "ops") == want, name
 
 
 def test_one_shared_machine_wakes_for_any_member_and_hosts_them_all(cloud):
