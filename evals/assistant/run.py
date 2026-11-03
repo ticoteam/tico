@@ -55,10 +55,25 @@ def flag_values(words, name):
     return [words[i + 1] for i, w in enumerate(words[:-1]) if w == name]
 
 
-def write_answer(words, state, mutate):
+def write_answer(words, state, mutate, argv):
     """The answer the real hub gives a write: the changed object. Records the change in the state when `mutate`."""
     noun, verb = words[0], (words[1] if len(words) > 1 else "")
     tid = words[2] if len(words) > 2 and not words[2].startswith("-") else None
+    if noun == "task" and verb in ("create", "question") and mutate:
+        # A new task is a row from now on: `task list` shows it and `task show <id>` returns it, as the real hub does.
+        rest = []
+        for w in words[2:]:
+            if w.startswith("--"):
+                break
+            rest.append(w)
+        new_id = "t_run%d" % (len(state["created"]) + 1)
+        # The title from argv, so a quoted title keeps its spaces; the canon line is split on them.
+        title = next((argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--title"), " ".join(rest))
+        row = {"id": new_id, "title": title,
+               "owner": (flag_values(words, "--owner") or [""])[-1], "status": "open", "requester": "human:dana"}
+        state["created"][new_id] = row
+        state["tasks"][new_id] = "open"
+        return {"ok": True, "task": dict(row)}
     if noun == "task" and verb == "close" and tid:
         if mutate:
             state["tasks"][tid] = "closed"
@@ -89,6 +104,29 @@ def write_answer(words, state, mutate):
     if noun == "rules" and verb == "add":
         return {"ok": True, "rule": {"id": "rule_1", "status": "active"}}
     return None
+
+
+def add_rows(out, rows):
+    """Append the rows this run created to a list answer: a bare list, or the first list in a dict (items, tasks, ...)."""
+    if not rows:
+        return out
+    if isinstance(out, list):
+        return out + [dict(r) for r in rows]
+    key = next((k for k in ("items", "tasks") if isinstance(out.get(k), list)),
+               next((k for k, v in out.items() if isinstance(v, list)), "items"))
+    return {**out, key: list(out.get(key) or []) + [dict(r) for r in rows]}
+
+
+def propose_count(out, argv):
+    """`assistant propose`: the step count is the batch's own `actions` in the --body JSON, when that parses."""
+    body = next((argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--body"), None)
+    try:
+        actions = json.loads(body).get("actions")
+    except Exception:
+        return out
+    if isinstance(out, dict) and isinstance(actions, list) and "actions" in out:
+        out = {**out, "actions": len(actions)}
+    return out
 
 
 def apply_state(obj, table, field, drop=None):
@@ -128,23 +166,40 @@ def answer(argv, via, tool=None):
         state = {}
     state.setdefault("tasks", {})        # task id -> status
     state.setdefault("automations", {})  # automation id -> enabled
+    state.setdefault("created", {})      # task id -> the row a create made
     canned = json.load(open(os.environ["EVAL_CANNED"]))
     row = next((r for r in canned if re.search(r["match"], canon)), None)
     # A canned row that fails (exit non-zero) changes nothing in the state.
-    resp = write_answer(words, state, mutate=not (row and int(row.get("exit", 0))))
+    resp = write_answer(words, state, mutate=not (row and int(row.get("exit", 0))), argv=argv)
     entry = {"argv": line, "via": via, "matched": row["match"] if row else None, "files": files}
     if tool:
         entry["tool"] = tool
     with open(os.environ["EVAL_LOG"], "a") as log:
         log.write(json.dumps(entry) + "\n")
+    created = state["created"]
     if row:
         out = row.get("out", "")
-        if words[:2] == ["task", "list"] and not isinstance(out, str):
+    elif words[:2] == ["task", "list"]:
+        out = {"items": [], "next_offset": None}
+    elif words[:2] == ["task", "show"] and len(words) > 2 and any(k.startswith(words[2]) for k in created):
+        k = next(k for k in created if k.startswith(words[2]))
+        out = {**created[k], "status": state["tasks"].get(k, created[k]["status"])}
+    else:
+        out = None
+    if out is not None and not isinstance(out, str):
+        if words[:2] == ["task", "list"]:
             keep = ("--all" in words or "closed" in flag_values(words, "--where-status")
                     or "closed" in flag_values(words, "--status"))
+            # A created task is open: it joins the list unless the list asks for another status only.
+            wanted = flag_values(words, "--where-status") + flag_values(words, "--status")
+            if not wanted or "open" in wanted:
+                out = add_rows(out, list(created.values()))
             out = apply_state(out, state["tasks"], "status", None if keep else "closed")
-        if words[:2] == ["automation", "show"] and not isinstance(out, str):
+        if words[:2] == ["automation", "show"]:
             out = apply_state(out, state["automations"], "enabled")
+        if words[:2] == ["assistant", "propose"]:
+            out = propose_count(out, argv)
+    if out is not None:
         text = out if isinstance(out, str) else json.dumps(out, indent=1)
     elif resp is not None:
         text = json.dumps(resp)
