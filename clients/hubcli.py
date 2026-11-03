@@ -3000,8 +3000,6 @@ def parser():
     s.set_defaults(fn="release schedule")
 
     appr = sub.add_parser("approval", aliases=["approvals"]).add_subparsers(dest="sub")
-    s = appr.add_parser("list", help="no list: the approvals waiting for you are in `needs-you start`")
-    s.set_defaults(fn="approval list")
     s = appr.add_parser("request",
                         help="ask for a yes; if the owner already said send, mail send --approve <their message id>")
     s.add_argument("--kind", required=True, choices=list(APPROVAL_KINDS))
@@ -4085,6 +4083,10 @@ def split_human(argv):
 
 def main(argv):
     argv, who = split_human(argv)
+    if list(argv[:2]) == ["approval", "list"]:   # no list route; the approvals waiting for a person are in the needs-you walk
+        print("hub: no approval list; `hub needs-you start` walks the approvals waiting for you, and "
+              "`hub approval show <id>` reads one", file=sys.stderr)
+        return 2
     old = legacy_idea(argv)
     if old:
         notice, lines = old
@@ -4111,10 +4113,6 @@ def run(argv, who):
         p.print_help(sys.stderr)
         return 1
     try:
-        if args.fn == "approval list":           # no list route; the approvals waiting for a person are in the needs-you walk
-            print("hub: no approval list; `hub needs-you start` walks the approvals waiting for you, and "
-                  "`hub approval show <id>` reads one", file=sys.stderr)
-            return 2
         if args.fn == "task create" and args.dry_run:     # never reaches remotecli: nothing to send
             return cmd_task_dry_run(args, who)
         if args.fn == "decision ask" and args.list:    # the sets are files in this checkout, no API needed
