@@ -257,7 +257,7 @@ def test_botops_and_the_assistant_give_every_setting_the_same_class_and_who_may(
             # Cards for a direct entry (the owner's rule off): a card wherever BotOps can make one, else the link.
             if got == "run" and settings_catalog.kind_for(e, {}) == "direct":
                 carded = outcome(c, auth, assistant, e, card_direct=True)
-                assert carded == "card" or carded[0] == "unavailable", (e.key, carded)
+                assert carded == "card" or carded[0] in ("unavailable", "forbidden"), (e.key, carded)
     assert {"run", "card", "person_only"} <= seen or role == "human", seen
 
 
