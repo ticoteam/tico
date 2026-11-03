@@ -93,12 +93,11 @@
 .task-chat .task-pill .p-send-icon{margin-bottom:1px}
 .task-chat .task-pill [data-task-chat-status]:empty,.task-chat .task-pill [data-task-chat-to]:empty{display:none}
 .task-chat .task-pill [data-task-chat-status],.task-chat .task-pill [data-task-chat-to]{font-size:var(--t-sm);padding:0 12px}
-/* The send, split when a bot gets the comment: the way it reaches the bot in words, and a caret for the ways
-   (ui/styles/chat.css .p-ways). The menu opens upward, over the thread. */
-.task-chat .task-send{position:relative;display:inline-flex;align-items:center;flex:none}
-.task-chat .task-send .p-send-goal{border-radius:17px 0 0 17px}
-.task-chat .task-send .task-send-caret{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:26px;height:34px;margin-bottom:1px;padding:0;border:0;border-radius:0 17px 17px 0;background:var(--accent);color:var(--accent-ink);cursor:pointer;touch-action:manipulation;box-shadow:inset 1px 0 0 color-mix(in srgb,var(--accent-ink) 28%,transparent)}
-.task-chat .task-send .task-send-caret:hover:not(:disabled){filter:brightness(1.06)}
+/* The send where a bot gets the comment: the caret for the ways (ui/styles/chat.css .p-ways), then Send, whose icon
+   is the way. The menu opens upward, over the thread. */
+.task-chat .task-send{position:relative;display:inline-flex;align-items:center;flex:none;gap:2px}
+.task-chat .task-send .task-send-caret{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;width:26px;height:34px;margin-bottom:1px;padding:0;border:0;border-radius:8px;background:none;color:var(--muted);cursor:pointer;touch-action:manipulation}
+.task-chat .task-send .task-send-caret:hover:not(:disabled),.task-chat .task-send .task-send-caret[aria-expanded="true"]{background:var(--surface2);color:var(--ink)}
 .task-chat .task-send .task-send-caret:disabled{opacity:.45;cursor:default}
 .task-chat .task-send .task-send-caret[hidden]{display:none}
 /* The font ships expand_more only: turned over, it points the way the menu opens. */

@@ -302,9 +302,20 @@ function settingsEditBot(slug = '', inline = false) {
       }
       const cloudSize = event.target.closest('[data-bot-cloud-size]');
       if (cloudSize) stage('cloud-size', 'size', changed(cloudSize) && cloudMachineRun(slug, {size: cloudSize.value}, cloudSize));
+      const cloudPause = event.target.closest('[data-bot-cloud-pause]');
+      if (cloudPause) {
+        settingsFieldClear(cloudPause);
+        if (cloudPause.value === '' && !cloudPause.validity.badInput) cloudPause.value = '30';      // an empty box is the default
+        const whole = cloudPause.checkValidity();
+        if (!whole) settingsFieldError(cloudPause, 'Enter whole minutes from 5 to 1440.');
+        stage('cloud-pause', 'pause after', changed(cloudPause) && whole && cloudMachineRun(slug, {pause_minutes: Number(cloudPause.value)}, cloudPause));
+      }
       const cloudAlways = event.target.closest('[data-bot-cloud-always]');
-      if (cloudAlways) stage('cloud-always', 'always on', cloudAlways.checked !== (cloudAlways.dataset.current === 'true')
-        && cloudMachineRun(slug, {always_on: cloudAlways.checked}, cloudAlways));
+      if (cloudAlways) {
+        rows.querySelectorAll('[data-bot-cloud-pause]').forEach(input => { input.disabled = cloudAlways.checked; });
+        stage('cloud-always', 'always on', cloudAlways.checked !== (cloudAlways.dataset.current === 'true')
+          && cloudMachineRun(slug, {always_on: cloudAlways.checked}, cloudAlways));
+      }
       const compact = event.target.closest('[data-bot-compact]');
       if (compact) stage('compact', 'compact at', changed(compact) && settingsCompactRun(compact));
       const exit = event.target.closest('[data-bot-browser-exit]');

@@ -51,7 +51,7 @@ const {unrouted} = require('./support/routes.cjs');
       if (p === '/api/me') return json({id: 'ana', role: 'member', name: 'Ana', email: 'ana@example.com', cloud: true, registered: true});
       if (p === '/api/v2/config') return json({version: '0.1.0', app_name: 'Tico', local: true});
       if (p === '/api/employees') return json(bots);
-      if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], teams: {research: {label: 'Research'}}});
+      if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'luiz', name: 'Luiz'}], teams: {research: {label: 'Research'}}});
       if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: []});
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/operations') return json({machines: [{id: 'r1', label: 'Box', owner_id: 'ana', bots: bots.map(b => b.name)}], services: [],
@@ -193,8 +193,21 @@ const {unrouted} = require('./support/routes.cjs');
     await capture('phone-task-dialog'); calls = []; await apply();
     assert.deepEqual(calls.map(c => c.slug).sort(), ['alpha', 'default', 'gamma', 'inherit']);
     assert.ok(calls.every(c => c.what === 'task-model')); await close();
+    // Computers and owners are searchable as the Computer and Owners columns show them: delta's computer is Luiz's
+    // "Studio Mac" (the label has no owner name), beta sits on the shared cloud machine, and alpha's owner is Luiz.
+    assert.equal(await search.getAttribute('placeholder'), 'Search bots, models or computers');
+    bots.find(b => b.name === 'delta').machine = {runner_id: 'r2', label: 'Studio Mac', owner_id: 'luiz', generation: 3};
+    bots.find(b => b.name === 'beta').machine = {runner_id: 'r8', label: 'Shared cloud machine', owner_id: 'ana', generation: 1};
+    bots.find(b => b.name === 'beta').cloud_machine = {mode: 'cloud', placement: 'shared', size: 'default', machine_size: 'default', state: 'running', always_on: false};
+    bots.find(b => b.name === 'alpha').bot_owners = [{id: 'luiz', name: 'Luiz'}];
+    await page.evaluate(() => loadSettings());
+    await search.fill('luiz'); assert.deepEqual(await shown(), ['alpha', 'delta'], 'a computer owner finds the bots on their computer, a bot owner the bots they own');
+    await search.fill('Studio Mac'); assert.deepEqual(await shown(), ['delta'], 'a computer label finds the bots on it');
+    await search.fill('shared cloud machine'); assert.deepEqual(await shown(), ['beta'], 'a cloud machine finds the bots on it');
+    await search.fill('box'); assert.deepEqual(await shown(), ['alpha', 'default', 'gamma', 'inherit', 'readable'], 'the default computer finds its bots');
+    await search.fill('luiz studio'); assert.deepEqual(await shown(), ['delta'], 'words can come from the owner and the computer label');
     await search.press('Escape'); assert.equal(await search.inputValue(), ''); assert.equal(await rows.count(), 7);
     assert.deepEqual(errors, []);
-    console.log('ok: search reasons, inherited/default model, metadata, retired state, selection, all destinations, sequential saves, warnings, conflict/partial retry, desktop + phone');
+    console.log('ok: search reasons, inherited/default model, metadata, computers and owners, retired state, selection, all destinations, sequential saves, warnings, conflict/partial retry, desktop + phone');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
