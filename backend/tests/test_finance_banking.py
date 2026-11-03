@@ -1260,3 +1260,31 @@ def test_an_older_connection_whose_opening_went_to_zero_gets_it_back_from_the_ba
     sync_once(books, fake, NEXT_DAY)
     with books.read() as c:
         assert _opening(c) == made
+
+
+def test_card_payments_taken_in_before_they_could_pair_pair_on_a_later_pass(books, monkeypatch):
+    """Both sides of an IO autopay taken in by a release that could not pair them (bank side on Other, card side
+    waiting): the next due pass pairs them as a transfer. One with two possible bank sides still waits."""
+    from backend.finance import banking
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.read() as c:
+        cards = str(c.execute("SELECT a.code FROM fin_money_accounts m JOIN fin_accounts a ON a.id=m.account_id "
+                              "WHERE m.provider_account_id='credit-io'").fetchone()[0])
+    fake.txns["old-out"] = _txn("old-out", "acct-chk", -105.5, "other", day="2026-10-01")
+    fake.txns["old-in"] = _txn("old-in", "credit-io", 105.5, "other", day="2026-10-01")
+    fake.txns["amb-a"] = _txn("amb-a", "acct-chk", -7.0, "other", day="2026-10-05")
+    fake.txns["amb-b"] = _txn("amb-b", "acct-chk", -7.0, "other", day="2026-10-05")
+    fake.txns["amb-in"] = _txn("amb-in", "credit-io", 7.0, "other", day="2026-10-05")
+    with monkeypatch.context() as m:
+        m.setattr(banking, "_card_payment", lambda *a: False)      # the release before pairing
+        m.setattr(banking, "pair_card_payments", lambda *a: 0)
+        sync_once(books, fake)
+    with books.read() as c:
+        assert _row(c, "old-in")[1] is None and ("6900", 10_550) in _codes(c, _row(c, "old-out")[1])
+    sync_once(books, fake, LATER)
+    with books.read() as c:
+        entry = _row(c, "old-in")[1]
+        assert entry and tuple(_row(c, "old-out")) == ("posted", entry)
+        assert _codes(c, entry) == sorted([("1000", -10_550), (cards, 10_550)])
+        assert _row(c, "amb-in")[1] is None

@@ -230,7 +230,9 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
     if due:
         problems += statements(store, provider, cid, now)
         with store.transaction() as c:      # the balance this pass read and every row it took in (inbox too) agree now
-            banking.refresh_connection_openings(load(c, now), cid)
+            ctx = load(c, now)
+            banking.pair_card_payments(ctx, cid)
+            banking.refresh_connection_openings(ctx, cid)
     with store.transaction() as c:
         fields: dict[str, object] = {"last_sync_at": now, "updated_at": now}
         # A first backfill still under way goes on at once (rung below), not a poll later: until it ends the books
