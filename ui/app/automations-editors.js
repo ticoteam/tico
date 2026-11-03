@@ -61,7 +61,7 @@ async function auLastRun(ed) {
 
 const auOpt = (list, val) => list.map(([k, label]) => `<option value="${esc(k)}"${String(k) === String(val ?? '') ? ' selected' : ''}>${esc(label)}</option>`).join('');
 const auWithCur = (list, val, label) => val && !list.some(([k]) => k === val) ? [[val, label || val], ...list] : list;
-const auBots = () => (S.emps || []).filter(e => e.name !== AU_BOT && e.status !== 'archived').map(e => ['bot:' + e.name, botDisplayName(e.name)]);
+const auBots = () => (S.emps || []).filter(e => e.id !== AU_BOT && e.status !== 'archived').map(e => ['bot:' + e.id, botDisplayName(e.id)]);
 const auPeople = () => (S.people || []).map(p => ['person:' + p.id, p.name || p.id]);
 function auFld(label, control, cls = '') { return `<label class="au-f${cls ? ' ' + cls : ''}"><span class="au-lb">${esc(label)}</span>${control}</label>`; }
 function auBox(label, body) { return `<div class="au-f"><span class="au-lb">${esc(label)}</span>${body}</div>`; }
@@ -380,7 +380,7 @@ function auVersionsHTML(ed) {
   if (ed.error) return `<p class="err">${esc(ed.error)}</p>`;
   if (!ed.rows) return '<p class="muted">Loading…</p>';
   return `${auPropsHTML(ed)}<div class="au-vers">${ed.rows.map(v => `<div class="au-vr"><strong>v${esc(v.n)}</strong>
-    <span class="muted" title="${esc(fmt(v.at))}">${esc(auActorName(v.actor))} · ${esc(auRunTime(v.at))}</span><span class="au-sp"></span>
+    <span class="muted" title="${esc(fmt(v.created_at))}">${esc(auActorName(v.actor))} · ${esc(auRunTime(v.created_at))}</span><span class="au-sp"></span>
     ${v.n === AU.cur.version ? '<span class="pill ok">Current</span>' : AU.cur.can_edit ? `<button class="ghost" type="button" data-op="restore" data-n="${esc(v.n)}">Restore</button>` : ''}</div>`).join('')}</div>`;
 }
 async function auRestore(n) {

@@ -1444,7 +1444,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_heartbeat_stops_the_proxies_of_bots_without_an_exit_here_and_closes_their_ports() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());
+        let owned_listener = Arc::downgrade(&listener);
         let port = listener.local_addr().unwrap().port();
         let moved = Arc::new(Proxy::new(port, "Cara's MacBook".into()));
         let task = tokio::spawn(async move {
@@ -1474,8 +1475,10 @@ mod tests {
             drop_proxy(&bot, Some(&proxy));
         }
         assert!(!proxies().lock().unwrap().contains_key("gc-moved"));
-        let _ = task.await;
-        assert!(tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_err(), "its port is closed");
+        assert!(task.await.unwrap_err().is_cancelled(), "the accept loop is stopped");
+        // A parallel test can bind the released port before a connect probe. Check that this proxy
+        // destroyed its own listener; a new listener at that address belongs to another resource.
+        assert!(owned_listener.upgrade().is_none(), "its listening socket is destroyed");
     }
 
     /// scripts/browser-exit run against a stand-in browser that prints the arguments it got.

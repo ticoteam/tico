@@ -1,4 +1,4 @@
-//! Computer-owned task worktrees (runner/worktrees.py): the heartbeat's report of each worktree the server
+//! Computer-owned task worktrees (runner_support/worktrees.py): the heartbeat's report of each worktree the server
 //! tracks here, an attached checkout's local proof (`tasks/.checkout-state/<sha256(link)>.json`, the Python
 //! marker format), and the cleanup and restore actions a heartbeat reply asks for. Never removes a tree before
 //! preserving its history. Adding and setting up a worktree inside a turn stay in the hub CLI (`hub worktree
@@ -1182,7 +1182,7 @@ fn merge_tree_oid(out: &Out) -> Option<String> {
 }
 
 /// Aborts a merge this removal finds abandoned in its own tree, before any switch, add or commit: the rules of
-/// runner/worktrees.py `_clear_merge`. Anything not provably abandoned is kept, untouched.
+/// runner_support/worktrees.py `_clear_merge`. Anything not provably abandoned is kept, untouched.
 async fn clear_merge(path: &Path, link: &str, release: bool, env: &Env) -> R<()> {
     let gitdir = PathBuf::from(git(path, env, &["rev-parse", "--path-format=absolute", "--git-dir"], true).await?.stdout.trim());
     if !gitdir.join("MERGE_HEAD").exists() {
@@ -1329,9 +1329,16 @@ where
                 return Err(WtErr::msg("kept: unpushed commits; push them to free this worktree"));
             }
         } else if dirty {
-            let mut names_text = git(&path, env, &["diff", "HEAD", "--name-only", "-z"], true).await?.stdout;
-            names_text += &git(&path, env, &["ls-files", "--others", "--exclude-standard", "-z"], true).await?.stdout;
-            let names: Vec<&str> = names_text.split('\0').filter(|n| !n.is_empty()).collect();
+            // Names come from the raw bytes: a lossy name is not the file on disk, so its body would go unscanned.
+            let mut names_raw = git(&path, env, &["diff", "HEAD", "--name-only", "-z"], true).await?.raw;
+            names_raw.extend(git(&path, env, &["ls-files", "--others", "--exclude-standard", "-z"], true).await?.raw);
+            let mut names: Vec<&str> = Vec::new();
+            for raw_name in names_raw.split(|byte| *byte == 0).filter(|n| !n.is_empty()) {
+                let Ok(name) = std::str::from_utf8(raw_name) else {
+                    return Err(WtErr::msg("kept: a changed or untracked file name is not valid UTF-8; nothing was saved, committed or pushed"));
+                };
+                names.push(name);
+            }
             let skipped: Vec<String> = names
                 .iter()
                 .filter(|n| {
@@ -2163,7 +2170,7 @@ mod tests {
     #[test]
     fn the_merge_result_tree_is_read_only_when_git_wrote_one() {
         let oid = "0123456789abcdef0123456789abcdef01234567";
-        let out = |code: i32, stdout: &str| Out { code, stdout: stdout.into(), stderr: String::new() };
+        let out = |code: i32, stdout: &str| Out { code, stdout: stdout.into(), raw: stdout.as_bytes().to_vec(), stderr: String::new() };
         assert_eq!(merge_tree_oid(&out(129, "usage: git merge-tree")), None);
         assert_eq!(merge_tree_oid(&out(0, "not a tree\n")), None);
         assert_eq!(merge_tree_oid(&out(0, &format!("{oid}\n"))).as_deref(), Some(oid));

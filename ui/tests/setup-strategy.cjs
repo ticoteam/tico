@@ -107,7 +107,7 @@ async function open(browser, {mode = 'model', viewport = DESKTOP} = {}) {
       if (mode === 'refuse') return json({error: {code: 'validation', detail: "That address is this computer or an internal one; give the team's public website"}}, 422);
       job = {id: 'job-1', state: mode === 'no_model' ? 'no_model' : 'running', step: mode === 'no_model' ? null : body.url ? 'reading' : 'thinking',
         url: body.url, text: body.text, revision: st.draft.revision, pages: [], found: null, written: null, error: null,
-        started: '2026-10-25T09:00:00Z', finished: null};
+        started_at: '2026-10-25T09:00:00Z', finished_at: null};
       return json(job);
     }
     const poll = p.match(/^\/api\/v2\/strategy\/draft-from\/([^/]+)$/);
@@ -262,7 +262,7 @@ async function building(page, website, text) {
       const found = page.locator('#ss-found');
       await found.waitFor();
       assert.match(await found.innerText(), /^The draft changed while this ran, so nothing was written\. It found:/);
-      // Summary, vision, the four sections and the one bet, in that order.
+      // Summary, vision, the sections it found and the one bet, in that order.
       assert.deepEqual(await found.locator('.ss-found-row .strat-bet-k').allTextContents(), ['Summary', 'Vision', 'Who we serve',
         'What we sell, and for how much', "What we know that others don't", "What we won't do", 'Bet']);
       await shot(page, '6-bets-found');

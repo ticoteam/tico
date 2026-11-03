@@ -10,7 +10,7 @@ from backend import routines
 from backend.store import encode
 from backend.tests.test_api import api, get, post, runner  # noqa: F401
 from backend.tests.test_mail_api import seed_org
-from runner.connectors import ConnectorPublisher
+from runner_support.connectors import ConnectorPublisher
 
 DECLARED = "ana@acme.team"
 
@@ -19,7 +19,7 @@ def declare(api, identity, **extra):
     """Give the `inbox` bot (Ana's message bot) a gmail tool with this identity, in bot.yaml's shape."""
     tools = [{"service": "gmail", "identity": identity, "can": ["read", "draft"], **extra}]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='inbox'",
+        c.execute("UPDATE bot_config SET config=? WHERE bot='inbox'",
                   (encode({"name": "inbox", "runtime": "fake", "status": "active", "tools": tools}),))
 
 

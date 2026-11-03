@@ -110,7 +110,7 @@ def test_a_pull_request_refreshed_is_not_work_and_one_pushed_to_is(api):
     with api.app.state.store.transaction() as c:
         G.pull_request(c, {"action": "refresh", "pull_request": {"html_url": url, "state": "open",
                                                                  "head": {"sha": "a1"}, "mergeable": True}})
-        assert c.execute("SELECT updated FROM task_links WHERE task_id=?", (task["id"],)).fetchone()[0]
+        assert c.execute("SELECT updated_at FROM task_links WHERE task_id=?", (task["id"],)).fetchone()[0]
     finish(api, r, first)
     assert shown(api, task)["deferred"]["state"] == "eligible", "metadata only: handed back"
     second = wake(api, r, "Anything else?")
@@ -230,7 +230,7 @@ def test_run_now_drops_a_stored_condition(api):
     task = later(api)
     post(api, f"tasks/{task['id']}/defer", {"after": blocker["id"]})
     got = post(api, f"tasks/{task['id']}/run-now", {})["task"]
-    assert "resume_json" not in got and got["deferred"]["state"] == "queued"
+    assert "resume" not in got and got["deferred"]["state"] == "queued"
 
 
 def test_health_names_a_task_handed_over_two_hours_ago_and_not_worked(api):
@@ -241,7 +241,7 @@ def test_health_names_a_task_handed_over_two_hours_ago_and_not_worked(api):
     with api.app.state.store.transaction() as c:
         assert health_monitor._quiet_work_checks(c) == [], "not yet two hours"
         old = H.shift(H.now(), hours=-3)
-        c.execute("UPDATE events SET ts=? WHERE action=?", (old, Q.CARRIED))
+        c.execute("UPDATE events SET created_at=? WHERE action=?", (old, Q.CARRIED))
         found = health_monitor._quiet_work_checks(c)
         assert [f["key"] for f in found] == [f"quiet_unworked:ops:{task['id']}"]
         assert "ops" in found[0]["title"] and task["id"][:8] in found[0]["detail"]
@@ -256,8 +256,8 @@ def test_a_carrier_from_before_settling_counts_too(api):
     task = later(api)
     first = wake(api, r)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='completed', finished=? WHERE id=?", (H.now(), first["id"]))
-        c.execute("UPDATE events SET ts=? WHERE action=?", (H.shift(H.now(), hours=-3), Q.CARRIED))
+        c.execute("UPDATE attempts SET state='completed', finished_at=? WHERE id=?", (H.now(), first["id"]))
+        c.execute("UPDATE events SET created_at=? WHERE action=?", (H.shift(H.now(), hours=-3), Q.CARRIED))
         view = Q.view(c, H.task(c, task["id"]))
         assert view["state"] == "delivered" and view["worked"] is False
         assert [f["key"] for f in health_monitor._quiet_work_checks(c)] == [f"quiet_unworked:ops:{task['id']}"]
@@ -273,12 +273,12 @@ def test_health_leaves_a_task_the_run_worked_or_handled(api):
     with api.app.state.store.transaction() as c:
         H.task_comment(c, "bot:ops", commented["id"], "Counts look normal.", wake=False)
         Q.defer(c, "bot:ops", handled["id"], handled=True)
-        c.execute("UPDATE events SET ts=? WHERE action=?", (old, Q.CARRIED))
+        c.execute("UPDATE events SET created_at=? WHERE action=?", (old, Q.CARRIED))
         assert health_monitor._quiet_work_checks(c) == [], "the run is still going and worked both"
-        c.execute("UPDATE attempts SET state='completed', finished=? WHERE id=?", (H.now(), first["id"]))
+        c.execute("UPDATE attempts SET state='completed', finished_at=? WHERE id=?", (H.now(), first["id"]))
         assert health_monitor._quiet_work_checks(c) == [], "a run that ended before settling, likewise"
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='running', finished=NULL WHERE id=?", (first["id"],))
+        c.execute("UPDATE attempts SET state='running', finished_at=NULL WHERE id=?", (first["id"],))
     finish(api, r, first)
     with api.app.state.store.transaction() as c:
         assert health_monitor._quiet_work_checks(c) == [], "and once settled"

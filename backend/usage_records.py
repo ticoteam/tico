@@ -1,14 +1,15 @@
 """Immutable per-run accounting, including both sides of a fallback."""
 import json
 
-# New reports retain each primary/fallback segment. Legacy rows remain visible, without guessing their login or effort.
-RUNS = """(SELECT t.id,t.bot,t.started,t.finished,t.task_id,s.input_tokens,s.cached_tokens,s.output_tokens,
- s.model,s.provider,s.est_cost_usd,s.billing,s.runtime,s.harness,s.effort,s.profile,s.est_cost_low,
- NULL AS usage_reason
- FROM turns t JOIN turn_usage_segments s ON s.turn_id=t.id
- UNION ALL SELECT t.id,t.bot,t.started,t.finished,t.task_id,t.input_tokens,t.cached_tokens,t.output_tokens,
+# Each measured segment is an estimate fact (backend/usage_facts.py); a run with none reads from its own row, which
+# carries 0 tokens and why (usage_reason) or, from before usage was measured, nothing. Costs read back as USD.
+RUNS = """(SELECT f.run_id AS id,f.bot_id AS bot,f.started_at,f.metered_at AS finished_at,f.task_id,f.input_tokens,
+ f.cached_tokens,f.output_tokens,f.model,f.provider,f.cost_nano/1e9 AS est_cost_usd,f.billing,f.runtime,f.harness,f.effort,
+ f.profile,f.low_estimate AS est_cost_low,NULL AS usage_reason
+ FROM usage_facts f WHERE f.source='estimate'
+ UNION ALL SELECT t.id,t.bot,t.started_at,t.finished_at,t.task_id,t.input_tokens,t.cached_tokens,t.output_tokens,
  t.model,t.provider,t.est_cost_usd,t.billing,NULL,NULL,NULL,NULL,NULL,t.usage_reason FROM turns t
- WHERE NOT EXISTS (SELECT 1 FROM turn_usage_segments s WHERE s.turn_id=t.id))"""
+ WHERE NOT EXISTS (SELECT 1 FROM usage_facts f WHERE f.run_id=t.id AND f.source='estimate'))"""
 
 # Providers that name a seller, not the model's maker: Cursor `auto` and OpenRouter pick the model themselves.
 RESELLERS = {"cursor", "openrouter"}
@@ -37,15 +38,15 @@ def ran_on(c, turn_ids):
     for start in range(0, len(ids), 500):       # SQLite caps the parameters of one statement
         chunk = ids[start:start + 500]
         marks = ",".join("?" * len(chunk))
-        for row in c.execute(f"SELECT turn_id,model,provider,runtime,harness,effort FROM turn_usage_segments "
-                             f"WHERE turn_id IN ({marks}) ORDER BY turn_id,position", chunk):
-            parts.setdefault(row["turn_id"], []).append(
+        for row in c.execute(f"SELECT run_id,model,provider,runtime,harness,effort FROM usage_facts "
+                             f"WHERE source='estimate' AND run_id IN ({marks}) ORDER BY run_id,position", chunk):
+            parts.setdefault(row["run_id"], []).append(
                 {k: row[k] for k in ("model", "provider", "runtime", "harness", "effort")})
         for row in c.execute(f"SELECT id,model,provider FROM turns WHERE id IN ({marks})", chunk):
             if row["id"] not in parts and (row["model"] or row["provider"]):
                 parts[row["id"]] = [{"model": row["model"], "provider": row["provider"], "runtime": None, "harness": None,
                                      "effort": None}]
-        for row in c.execute(f"SELECT id,json_extract(result_json,'$.fallback'),model_json FROM attempts "
+        for row in c.execute(f"SELECT id,json_extract(result,'$.fallback'),model FROM attempts "
                              f"WHERE id IN ({marks})", chunk):
             fallbacks[row[0]] = row[1]
             chosen[row[0]] = _record(row[2])

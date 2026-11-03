@@ -31,6 +31,7 @@ from .posting import post_entry
 from .setup import AI, VIDEO
 from .store import budgets as SB
 from .store import ledger as SL
+from .store import raw_totals as SR
 from .store import tico
 from .store import usage as SU
 
@@ -106,13 +107,21 @@ def snapshot(c: sqlite3.Connection, payload: Mapping[str, object], *, fetched_at
     remember(c, month, by, fetched_at)
     if fetched_at >= _final_after(month):
         _final_read(c, month, by, fetched_at)   # an unchanged final read still closes the month
-    return SU.add_snapshot(c, month=month, as_of=as_of, ai_nano=totals["ai"], video_nano=totals["video"], rows=kept,
-                           by=by, at=fetched_at)
+    sid = SU.add_snapshot(c, month=month, as_of=as_of, ai_nano=totals["ai"], video_nano=totals["video"], rows=kept,
+                          by=by, at=fetched_at)
+    if sid:
+        # The usage facts take a read only when its snapshot was kept, by the same rule (backend/usage_facts.py).
+        charged: dict[str, int] = {}
+        for r in kept:
+            model = str(r["model"])
+            charged[model] = charged.get(model, 0) + int(str(r["price_nano"]))
+        tico.record_meter(c, month, as_of, charged, fetched_at)
+    return sid
 
 
 def video_models(snap: Mapping[str, object]) -> list[str]:
     """The models a snapshot's meter puts in category `image`."""
-    rows = cast(list[Mapping[str, object]], json.loads(str(snap["rows_json"] or "[]")))
+    rows = cast(list[Mapping[str, object]], json.loads(str(snap["rows"] or "[]")))
     return sorted({str(r.get("model") or "") for r in rows if r.get("line") == "video" and r.get("model")})
 
 
@@ -249,6 +258,12 @@ def _post_one(ctx: Ctx, snap: Mapping[str, object], by: str) -> list[dict[str, o
     models = video_models(snap)
     meter = {"ai": int(str(snap["ai_nano"])), "video": int(str(snap["video_nano"]))}
     holds = _holds_by_line(c, month, as_of, models)
+    if SR.live_entry_in(c, ctx.book.id, f"{month}-01", f"{month}-31") is not None:
+        # The month holds raw totals (spec §4.1), which already carry its spend: nothing posts, and the holds release.
+        for line, _ in LINES:
+            _absorb_into_last(ctx, f"gateway:{month}:{line}:", holds[line], release=True)
+        SU.mark_posted(c, month, as_of, ctx.at)
+        return []
     report: dict[str, object] = {"as_of": as_of}
     done: list[dict[str, object]] = []
     touched: list[tuple[str, str]] = []
@@ -275,6 +290,8 @@ def _post_one(ctx: Ctx, snap: Mapping[str, object], by: str) -> list[dict[str, o
         else:
             _absorb_into_last(ctx, prefix, holds[line], release=False)
         report[line] = {"meter_nano": meter[line], "posted": SU.posted_on(c, ctx.book.id, account, prefix)}
+    # Each model's estimate beside its meter (backend/usage_facts.py), so a drift between them shows per model.
+    report["models"] = tico.usage_reconciled(c, month)
     SU.mark_posted(c, month, as_of, ctx.at)
     fetched = str(snap["created_at"])
     if fetched >= _final_after(month):
@@ -370,7 +387,8 @@ def months_to_fetch(c: sqlite3.Connection, today: date) -> list[str]:
 
 
 def reconcile(c: sqlite3.Connection) -> dict[str, object]:
-    """The last reconcile per recent month: {month: {as_of, ai: {meter_nano, posted}, video: {...}}}."""
+    """The last reconcile per recent month: {month: {as_of, ai: {meter_nano, posted}, video: {...}, models: {model:
+    {estimated_nano, metered_nano, amount_nano}}}}."""
     stored = SL.setting(c, RECONCILE_KEY)
     return dict(cast(dict[str, object], stored)) if isinstance(stored, dict) else {}
 

@@ -172,6 +172,8 @@ pub struct Settings {
     pub background_wait: Option<std::time::Duration>,
     /// A capacity continuation must fail if its saved session is missing; rebuilding context may repeat work.
     pub require_existing_session: bool,
+    /// Packet-only tidy turns have no checkout tools or Hub MCP server.
+    pub packet_only: bool,
 }
 
 /// `background_wait_s` in the bot's run config: seconds, 0 for off; five minutes when unset.
@@ -793,13 +795,13 @@ impl Host {
 
 #[cfg(test)]
 pub mod fixtures {
-    //! runner/tests/fixtures/<harness>/*.jsonl, replayed here.
+    //! runner-rs/tests/fixtures/<harness>/*.jsonl, replayed here.
     use std::path::PathBuf;
 
     use serde_json::Value;
 
     pub fn dir(harness: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../runner/tests/fixtures").join(harness)
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(harness)
     }
 
     /// (fixture path, the events the Python host makes of it), for every fixture of `harness`.
@@ -1025,6 +1027,14 @@ pub fn use_own_config_home(runtime: &str, profile: Option<&crate::profiles::Prof
             true
         }
         _ => false,
+    }
+}
+
+/// A runtime's version the probe just read, for a host that keeps per-version facts (Claude Code's features): read
+/// here, when the version is new, so a turn starts no process for them.
+pub async fn note_version(runtime: &str, version: &str) {
+    if runtime == "claude" {
+        claude::note_version(&[crate::harness_tools::executable_for(runtime)], version).await;
     }
 }
 

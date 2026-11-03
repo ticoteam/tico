@@ -257,7 +257,7 @@ def _mtime(path):
 
 def load(c):
     """The stored record, with every field a client reads present even before a first save."""
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     stored = (_json(row[0], {}) if row else {}) or {}
     return {"names": {**EMPTY_NAMES, **(stored.get("names") or {})},
             "answers": {**EMPTY_ANSWERS, **{k: v for k, v in (stored.get("answers") or {}).items() if k != "never_without_person"}},
@@ -269,7 +269,7 @@ def load(c):
             "company_import": stored.get("company_import") or None,
             # {pick: seat id}: the roles setup laid out as Recruiting seats (`Onboarding.complete`).
             "seats": dict(stored.get("seats") or {}),
-            "updated": stored.get("updated") or "", "updated_by": stored.get("updated_by") or ""}
+            "updated_at": stored.get("updated") or "", "updated_by": stored.get("updated_by") or ""}
 
 
 def display_names(settings, record):
@@ -465,7 +465,7 @@ class Onboarding:
 
     # ------------------------------------------------------------------ catalog
     def catalog(self, c, rendered=True):
-        cards = [card for card in read_cards(self.settings) if not card["retired"] or H.bot(c, card["slug"])]
+        cards = [card for card in read_cards(self.settings) if not card["retired"] or H.resolve_bot(c, card["slug"])]
         if rendered:
             record = load(c)
             names = display_names(self.settings, record)
@@ -500,17 +500,20 @@ class Onboarding:
 
     def _bots(self, c):
         rows = []
-        for row in c.execute("SELECT bot,config_json,onboarding_state,reports_to FROM bot_config ORDER BY bot").fetchall():
-            declared = _json(row["config_json"], {}) or {}
+        labels = {r["id"]: r["slug"] for r in c.execute("SELECT id,slug FROM bots")}   # one read: a manager's label
+        for row in c.execute("SELECT bot,config,onboarding_state,reports_to FROM bot_config ORDER BY bot").fetchall():
+            declared = _json(row["config"], {}) or {}
             bot = H.bot(c, row["bot"]) or {}
             if bot.get("state") == "archived":          # the assistant a company chose not to have
                 continue
             machine, present = self._placement(c, row["bot"])
-            rows.append({"slug": row["bot"], "display_name": bot.get("display_name") or row["bot"],
+            rows.append({"id": row["bot"], "slug": bot.get("slug") or row["bot"],
+                         "display_name": bot.get("display_name") or bot.get("slug") or row["bot"],
                          "status": bot.get("state") or "", "template": declared.get("template") or "",
                          "setup_task_id": declared.get("setup_task_id") or None,
                          "onboarding_state": row["onboarding_state"] or "",
                          "reports_to": row["reports_to"] or "",
+                         "reports_to_slug": labels.get(row["reports_to"] or "", row["reports_to"] or ""),
                          "assigned_to": machine, "repository_present": present})
         return rows
 
@@ -518,11 +521,11 @@ class Onboarding:
     def _placement(c, slug):
         """The machine this bot runs on, and what it last said about the repository. A null
         repository report means no machine has looked yet, not that the repository is missing."""
-        row = c.execute("SELECT r.id,r.label,r.readiness_json FROM assignments a "
+        row = c.execute("SELECT r.id,r.label,r.readiness FROM assignments a "
                         "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (slug,)).fetchone()
         if not row:
             return None, None
-        reported = readiness_document(row["readiness_json"]).get("bots", {}).get(slug)
+        reported = readiness_document(row["readiness"]).get("bots", {}).get(slug)
         return ({"runner_id": row["id"], "label": row["label"]},
                 bool(reported.get("repository_present")) if isinstance(reported, dict) else None)
 
@@ -530,9 +533,9 @@ class Onboarding:
     def _machine(c):
         recent = H.shift(H.now(), seconds=-60)
         runners = [{"id": row["id"], "label": row["label"],
-                    "online": bool(row["last_seen"] and row["last_seen"] > recent)}
-                   for row in c.execute("SELECT id,label,last_seen FROM runners "
-                                        "WHERE revoked_at IS NULL ORDER BY created")]
+                    "online": bool(row["last_seen_at"] and row["last_seen_at"] > recent)}
+                   for row in c.execute("SELECT id,label,last_seen_at FROM runners "
+                                        "WHERE revoked_at IS NULL ORDER BY created_at")]
         return {"runners": runners, "enrolled": bool(runners)}
 
     # ------------------------------------------------------------------ writes
@@ -608,10 +611,10 @@ class Onboarding:
                 raw = cards.get(choice["template"]) or {}
                 # A message bot (`kind: helper`, the Inbox Manager) serves one person and is never on the chart, so it
                 # is made as a bot linked to its mailbox, like the built-ins; only a role becomes a seat.
-                if not (raw.get("required") or raw.get("bootstrap") or raw.get("kind") == "helper") and not H.bot(c, slug):
+                if not (raw.get("required") or raw.get("bootstrap") or raw.get("kind") == "helper") and not H.resolve_bot(c, slug):
                     roles[slug] = choice
             plan = {slug: choice for slug, choice in plan.items() if slug not in roles}
-        rank, parents = 0, {}
+        rank, parents, ids = 0, {}, {}
         for slug, choice in plan.items():
             raw = cards.get(choice["template"])
             card = render(raw, names, choice["display_name"]) if raw else {}
@@ -619,28 +622,31 @@ class Onboarding:
                 card["model"] = models[slug]
             starter = bool(card.get("starter")) and not card.get("bootstrap")
             reports_to = str(choice.get("reports_to") or "") or (home if starter else "")
-            now = reports_to if reports_to.startswith("human:") or (reports_to and H.bot(c, reports_to)) else ""
-            self._define(c, who, slug, choice, card, reports_to=now)
-            MessageBots.link(c, who.actor, slug, who.actor)
-            if reports_to != now:
-                parents[slug] = reports_to          # it reports to a bot that is created later in this plan
+            found = H.resolve_bot(c, reports_to) if reports_to and not reports_to.startswith("human:") else None
+            now = reports_to if reports_to.startswith("human:") else (found or {}).get("id", "")
+            bot_id = self._define(c, who, slug, choice, card, reports_to=now)
+            ids[slug] = bot_id
+            MessageBots.link(c, who.actor, bot_id, who.actor)
+            if reports_to and not found and not reports_to.startswith("human:"):
+                parents[bot_id] = reports_to          # it reports to a bot that is created later in this plan
             if starter:
                 # A starter is created whole, now: parked until its first conversation, no BotOps task.
-                self._make_starter(c, who, slug, choice["template"], rank)
+                self._make_starter(c, who, bot_id, choice["template"], rank)
                 rank += 1
             else:
-                self._setup_task(c, who, slug, choice, card, record["answers"])
+                self._setup_task(c, who, bot_id, choice, card, record["answers"])
             if card.get("bootstrap"):
-                self._seed_routines(c, who, slug, choice["template"])
-        for slug, parent in parents.items():
-            row = c.execute("SELECT revision,reports_to FROM bot_config WHERE bot=?", (slug,)).fetchone()
+                self._seed_routines(c, who, bot_id, choice["template"])
+        for bot_id, parent in parents.items():
+            parent = ids.get(parent, parent)
+            row = c.execute("SELECT revision,reports_to FROM bot_config WHERE bot=?", (bot_id,)).fetchone()
             if row["reports_to"] != parent:
-                self.admin.update_bot(c, who, slug, M.BotDefinitionUpdate(
+                self.admin.update_bot(c, who, bot_id, M.BotDefinitionUpdate(
                     reports_to=parent, expected_revision=row["revision"]))
         # The team builder builds the chart by group: each bot goes in the group of its template, made if the team
         # has none yet (backend/groups.py).
         before = set(Groups._roster(c)["org_groups"])
-        Groups.place(c, self.settings, list(plan), group_order=record["answers"]["departments"])
+        Groups.place(c, self.settings, [ids[slug] for slug in plan], group_order=record["answers"]["departments"])
         laid = self._lay_out(c, who, record, roles, cards, names, home)
         self._link_bets(c, record, before)
         if not record["completed"]:
@@ -721,8 +727,9 @@ class Onboarding:
                 return parent
             if parent in laid:
                 return lifecycle.SEAT_PREFIX + laid[parent]
-            if parent.startswith("human:") or (parent and H.bot(c, parent)):
-                return parent
+            found = H.resolve_bot(c, parent) if parent else None
+            if parent.startswith("human:") or found:
+                return found["id"] if found else parent
             return home
         rows = {slug: {"title": choice["display_name"], "team": teams.get(choice["template"], ""),
                        "description": job_description(cards.get(choice["template"]) or {}, names, choice.get("reason", ""),
@@ -763,6 +770,7 @@ class Onboarding:
         The bot's own call is its "I'm ready" (`lifecycle.ready`) and changes no stage. A member's bot counts toward
         their limit from here on, so the limit is checked now. `arm` False leaves its first routine off (the sample
         company's bots, set up by the sample's own answers)."""
+        slug = (H.resolve_bot(c, slug) or {}).get("id", slug)
         if not H.bot(c, slug):
             raise Problem("not_found", "Bot not found", 404)
         row = c.execute("SELECT onboarding_state,created_by FROM bot_config WHERE bot=?", (slug,)).fetchone()
@@ -796,8 +804,10 @@ class Onboarding:
 
     def attach_template(self, c, who, slug, template, instructions, *, queue_build=False, title_prefix=""):
         """Starters are built by their Computer; custom bots get a BotOps task."""
+        slug = (H.resolve_bot(c, slug) or {}).get("id", slug)
         record = load(c)
-        display = (H.bot(c, slug) or {}).get("display_name") or slug
+        row = H.bot(c, slug) or {}
+        display = row.get("display_name") or row.get("slug") or slug
         card = render(self._template(template), display_names(self.settings, record), display)
         declared = self._declared(c, slug)
         choice = {"template": template, "display_name": display,
@@ -826,19 +836,19 @@ class Onboarding:
         same call Settings makes, so generations, refusals and audit events are identical."""
         who = self.auth.owner_identity(c)
         placed = []
-        computer = c.execute("SELECT operator,accepts_member_bots FROM runners WHERE id=? AND revoked_at IS NULL",
+        computer = c.execute("SELECT owner_id,accepts_member_bots FROM runners WHERE id=? AND revoked_at IS NULL",
                              (runner_id,)).fetchone()
-        for row in c.execute("SELECT bc.bot,bc.config_json,bc.operator FROM bot_config bc "
-                             "LEFT JOIN bots b ON b.slug=bc.bot WHERE COALESCE(b.state,'active')<>'archived' "
+        for row in c.execute("SELECT bc.bot,bc.config,bc.owner_id FROM bot_config bc "
+                             "LEFT JOIN bots b ON b.id=bc.bot WHERE COALESCE(b.state,'active')<>'archived' "
                              "ORDER BY bc.bot").fetchall():
-            if not (_json(row["config_json"], {}) or {}).get("template"):
+            if not (_json(row["config"], {}) or {}).get("template"):
                 continue
             if c.execute("SELECT 1 FROM assignments WHERE bot=?", (row["bot"],)).fetchone():
                 continue                     # a bot a person already placed is never moved
             if c.execute("SELECT 1 FROM cloud_machines WHERE bot=? AND mode='cloud'", (row["bot"],)).fetchone():
                 continue                     # it runs on a cloud machine (backend/cloud_machines.py)
             if self.auth.member_bot(c, row["bot"]) and not (
-                    computer and (computer["accepts_member_bots"] or computer["operator"] == row["operator"])):
+                    computer and (computer["accepts_member_bots"] or computer["owner_id"] == row["owner_id"])):
                 continue                     # a member's bot goes on its member's computer, or one open to members' bots
             try:
                 self.execution.assign(c, who, row["bot"], SimpleNamespace(
@@ -869,13 +879,13 @@ class Onboarding:
         company = display_names(self.settings, load(c))["company_name"].strip().lower()
         if not row or not company or (row["display_name"] or "").strip().lower() != company:
             return False
-        c.execute("UPDATE bots SET display_name='Assistant' WHERE slug=?", (slug,))
-        config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
-        if config and config["config_json"]:
+        c.execute("UPDATE bots SET display_name='Assistant' WHERE id=?", (slug,))
+        config = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        if config and config["config"]:
             try:
-                declared = json.loads(config["config_json"])
+                declared = json.loads(config["config"])
                 declared["display_name"] = "Assistant"
-                c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(declared), slug))
+                c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), slug))
             except ValueError:
                 pass
         return True
@@ -956,10 +966,13 @@ class Onboarding:
         choice = {"template": card["template"], "display_name": card["name"], "instructions": card["instructions"]}
         restored = bool(row and row["state"] == "archived")
         if restored:
-            # The restore keeps the bot's own model and settings; only the name and description are renewed.
+            # The restore keeps the bot's own model and settings; only the name and description are renewed. The model
+            # is in the bot's config (bot_config.config): bots has no model column since migration 0043.
+            kept = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+            kept_model = (H._json(kept[0], {}) or {}).get("model") if kept else ""
             self.admin.create_bot(c, who, M.BotDefinitionCreate(
                 slug=slug, display_name=choice["display_name"], description=str(card.get("summary") or ""),
-                status="planned", repo=self._recorded_repo(c, slug), thread_mode="personal", model=row.get("model") or "restore",
+                status="planned", repo=self._recorded_repo(c, slug), thread_mode="personal", model=kept_model or "restore",
                 effort=row.get("effort") or "high", owners=[H.actor_id(who.actor)]))
         elif not row:
             self._define(c, who, slug, choice, card)
@@ -967,7 +980,7 @@ class Onboarding:
             # BotOps' computer first, then the oldest; one an inbox bot keeps to itself, or one that may not
             # host this bot (another member's), is skipped.
             botops = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (BOTOPS,)).fetchone()
-            machines = [r["id"] for r in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL ORDER BY created")]
+            machines = [r["id"] for r in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL ORDER BY created_at")]
             if botops and botops["runner_id"] in machines:
                 machines.remove(botops["runner_id"])
                 machines.insert(0, botops["runner_id"])
@@ -997,7 +1010,7 @@ class Onboarding:
     def _recorded_repo(c, slug):
         """A restored bot keeps the repository its record names (`emp-<slug>` for one made before `bot-<slug>`)."""
         row = c.execute("SELECT repo FROM bot_config WHERE bot=?", (slug,)).fetchone()
-        return (row["repo"] if row and row["repo"] else "") or "bot-" + slug
+        return (row["repo"] if row and row["repo"] else "") or "bot-" + ((H.bot(c, slug) or {}).get("slug") or slug)
 
     def _template_routines(self, c, template):
         """The template's `routines:` (older: `schedules:`) as validated routines, or [] when it declares none."""
@@ -1012,22 +1025,68 @@ class Onboarding:
 
     def _seed_routines(self, c, who, slug, template):
         """The template's `routines:` (older: `schedules:`) become the bot's first routines, once. A routine a person
-        changed or deleted is never put back: only a key the bot has never had is created. (A bot
-        BotOps builds gets these from `hub bot create`; a built-in one is made here.)"""
-        made = []
+        changed or deleted is never put back: only a key the bot has never had is created. The bot's config names every
+        key it has had (`routines_seeded`), so a key stays seeded even if its schedule row is gone; a key whose row
+        exists (deleted, moved to an automation or changed) counts as seeded too. (A bot BotOps builds gets these from
+        `hub bot create`; a built-in one is made here.) Returns the keys it created."""
+        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        declared = (_json(row[0], {}) or {}) if row else {}
+        had = list(declared.get("routines_seeded") or [])
+        seeded, made = list(had), []
         for entry in self._template_routines(c, template):
-            if c.execute("SELECT 1 FROM schedules WHERE bot=? AND routine_key=?", (slug, entry["id"])).fetchone():
+            key = entry["id"]
+            if key in seeded:
+                continue
+            if c.execute("SELECT 1 FROM schedules WHERE bot=? AND routine_key=?", (slug, key)).fetchone():
+                seeded.append(key)
                 continue
             routines.create(c, who.actor, slug, {"title": entry["title"], "text": entry["instructions"],
                                                  "cron": entry["cron"], "on": entry["on"],
                                                  "timezone": entry["timezone"],
-                                                 "enabled": entry["enabled"]}, key=entry["id"])
-            made.append(entry["id"])
+                                                 "enabled": entry["enabled"]}, key=key)
+            seeded.append(key)
+            made.append(key)
+        if row and seeded != had:
+            declared["routines_seeded"] = seeded
+            self._write_config(c, slug, declared)
+        return made
+
+    def ensure_builtin_routines(self, c):
+        """At startup (an update): the active Assistant gets its template's routines it has never had, its daily sweep,
+        which a company from before it existed never had. Only keys the bot has never had are created (`_seed_routines`),
+        so a routine a person deleted or changed stays so. No other built-in bot is backfilled: its routines are set up
+        with the bot (`_turn_on`), and a backfill would switch on what nobody asked for (a bookkeeper's monthly report).
+        A planned bot gets them when it is set up; a paused or archived bot is a person's stop and is left alone. Returns
+        the (bot, key) pairs it created."""
+        # Only the Assistant (a bootstrap card): its daily sweep is the one routine an install from before it never had.
+        boot = {card["template"] for card in read_cards(self.settings) if card.get("bootstrap")} & {"assistant"}
+        if not boot:
+            return []
+        try:
+            who = self.auth.owner_identity(c)
+        except Problem:
+            return []
+        made = []
+        for bot in c.execute("SELECT bc.bot, bc.config FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+                             "WHERE b.state='active'").fetchall():
+            declared = _json(bot["config"], {}) or {}
+            if declared.get("template") not in boot:
+                continue
+            # Best effort per bot: one bot's failure does not stop the others (the same savepoint pattern as _ensure_builtin).
+            c.execute("SAVEPOINT builtin_routines")
+            try:
+                keys = self._seed_routines(c, who, bot["bot"], declared["template"])
+                c.execute("RELEASE builtin_routines")
+                made += [(bot["bot"], key) for key in keys]
+            except (Problem, ValueError):
+                c.execute("ROLLBACK TO builtin_routines")
+                c.execute("RELEASE builtin_routines")
         return made
 
     def start_setup(self, c, who, slug):
         """A person who manages a parked starter says anything to it: its setup has begun, so its first routine
         goes on (`arm_first_routine`). Anyone else's message to it changes nothing."""
+        slug = (H.resolve_bot(c, slug) or {}).get("id", slug)
         row = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (slug,)).fetchone()
         if (row and statuses.is_parked(row["onboarding_state"]) and who.role in ("owner", "human")
                 and (self.auth.bot_manager(c, who, slug) or self.auth.operator(c, who, slug))):
@@ -1051,7 +1110,7 @@ class Onboarding:
         declared["routine_armed"] = first["id"]
         self._write_config(c, slug, declared)
         explicitly_disabled = c.execute("SELECT 1 FROM events WHERE action='routine.updated' AND target=? "
-                                        "AND json_extract(detail_json,'$.enabled')=0 LIMIT 1", (found["id"],)).fetchone()
+                                        "AND json_extract(detail,'$.enabled')=0 LIMIT 1", (found["id"],)).fetchone()
 
         if not found["enabled"] and not explicitly_disabled:
             routines.update(c, who.actor, found["id"], {"enabled": True})
@@ -1085,18 +1144,18 @@ class Onboarding:
             row = c.execute("SELECT id,label FROM runners WHERE id=? AND revoked_at IS NULL",
                             (runner_id,)).fetchone()
         else:
-            row = c.execute("SELECT id,label FROM runners WHERE operator=? AND revoked_at IS NULL "
-                            "ORDER BY created DESC, rowid DESC LIMIT 1", (self.auth.owner_id(c),)).fetchone()
+            row = c.execute("SELECT id,label FROM runners WHERE owner_id=? AND revoked_at IS NULL "
+                            "ORDER BY created_at DESC, rowid DESC LIMIT 1", (self.auth.owner_id(c),)).fetchone()
             if not row:
                 # The owner changed after the machine enrolled; a lone online machine is still
                 # the one this company's bots belong on.
-                online = c.execute("SELECT id,label FROM runners WHERE revoked_at IS NULL AND last_seen>?",
+                online = c.execute("SELECT id,label FROM runners WHERE revoked_at IS NULL AND last_seen_at>?",
                                    (H.shift(H.now(), seconds=-60),)).fetchall()
                 row = online[0] if len(online) == 1 else None
                 if row:
                     # Only the owner's machines may host every bot, so this one becomes the owner's.
-                    c.execute("UPDATE runners SET operator=? WHERE id=?", (self.auth.owner_id(c), row["id"]))
-                    H.event(c, actor, "runner.adopted", row["id"], {"operator": self.auth.owner_id(c)})
+                    c.execute("UPDATE runners SET owner_id=? WHERE id=?", (self.auth.owner_id(c), row["id"]))
+                    H.event(c, actor, "runner.adopted", row["id"], {"owner": self.auth.owner_id(c)})
         if not row:
             self._adopt_cloud(c, actor)
             return []
@@ -1114,7 +1173,7 @@ class Onboarding:
         from . import cloud_machines
         if not cloud_machines.offered(c, self.settings):
             return False
-        for found in c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot LEFT JOIN "
+        for found in c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.id=bc.bot LEFT JOIN "
                                "assignments a ON a.bot=bc.bot WHERE a.bot IS NULL AND b.state<>'archived' "
                                "ORDER BY bc.bot").fetchall():
             cloud_machines.adopt(c, found["bot"], actor)
@@ -1134,11 +1193,11 @@ class Onboarding:
         planned, so leaving these to a separate click strands the whole setup."""
         cards = {card["template"]: card for card in read_cards(self.settings)}
         who = self.auth.owner_identity(c)
-        for row in c.execute("SELECT bc.bot,bc.revision,bc.config_json FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+        for row in c.execute("SELECT bc.bot,bc.revision,bc.config FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                              "WHERE b.state='planned' AND (EXISTS(SELECT 1 FROM assignments a WHERE a.bot=bc.bot) OR "
                              "EXISTS(SELECT 1 FROM cloud_machines m WHERE m.bot=bc.bot AND m.mode='cloud')) "
                              "ORDER BY bc.bot").fetchall():
-            declared = _json(row["config_json"], {}) or {}
+            declared = _json(row["config"], {}) or {}
             # A starter is parked (`needs_onboarding`), so activating it lets it answer a person and nothing else.
             if not ((cards.get(declared.get("template")) or {}).get("bootstrap") or declared.get("materialize")):
                 continue
@@ -1149,9 +1208,11 @@ class Onboarding:
     # ------------------------------------------------------------------ internals
     @staticmethod
     def _store(c, record, actor):
-        record = {**record, "updated": H.now(), "updated_by": actor}
+        record = {**record, "updated_at": H.now(), "updated_by": actor}
+        # The document holds `updated`, as it always has; only what the code hands out calls it `updated_at`.
+        stored = {**{k: v for k, v in record.items() if k != "updated_at"}, "updated": record["updated_at"]}
         c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
-                  "value_json=excluded.value_json", (KEY, encode(record)))
+                  "value=excluded.value", (KEY, encode(stored)))
         return record
 
     def _plan(self, record, cards, names):
@@ -1174,14 +1235,14 @@ class Onboarding:
 
     @staticmethod
     def _declared(c, slug):
-        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
         if not row:
             raise Problem("not_found", "Bot not found: " + str(slug), 404)
-        return _json(row["config_json"], {}) or {}
+        return _json(row["config"], {}) or {}
 
     @staticmethod
     def _write_config(c, slug, declared):
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(declared), slug))
+        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(declared), slug))
 
     def _runtime(self, c, card):
         """The model a bot built from this card runs on: the card's own pick when it names a
@@ -1209,7 +1270,9 @@ class Onboarding:
         if slug == GOAL_MANAGER:
             # "Strategy Bot", or the owner's name for it: never back
             choice = {**choice, "display_name": strategy_bot.name(c)}
-        existing = c.execute("SELECT revision FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        found = H.resolve_bot(c, slug)
+        bot_id = (found or {}).get("id", slug)
+        existing = c.execute("SELECT revision FROM bot_config WHERE bot=?", (bot_id,)).fetchone()
         if not existing:
             picked = self._runtime(c, card)
             # No provider yet: a stand-in model satisfies the definition, then the bot is left to follow the company default.
@@ -1221,20 +1284,22 @@ class Onboarding:
                 status="planned", repo="bot-" + slug, thread_mode="personal",
                 reports_to=reports_to or None, shared=bool(card.get("shared")), template=choice["template"],
                 model=model, effort=effort, owners=[H.actor_id(who.actor)]))
+            bot_id = H.resolve_bot(c, slug)["id"]          # the id create_bot gave it
             if card.get("session") == "task":
-                c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.session','task') WHERE bot=?", (slug,))
+                c.execute("UPDATE bot_config SET config=json_set(config,'$.session','task') WHERE bot=?", (bot_id,))
             if not picked:
-                self._follow_default(c, slug)
+                self._follow_default(c, bot_id)
         else:
-            before = self.admin.definition(c, slug)
+            before = self.admin.definition(c, bot_id)
             if (before["display_name"], before["description"]) != (choice["display_name"], summary):
-                self.admin.update_bot(c, who, slug, M.BotDefinitionUpdate(
+                self.admin.update_bot(c, who, bot_id, M.BotDefinitionUpdate(
                     display_name=choice["display_name"], description=summary,
                     expected_revision=existing["revision"]))
-        declared = self._declared(c, slug)
+        declared = self._declared(c, bot_id)
         declared.update(template=choice["template"], instructions=choice["instructions"],
                         template_version=releases.version())
-        self._write_config(c, slug, declared)
+        self._write_config(c, bot_id, declared)
+        return bot_id
 
     def _follow_default(self, c, slug):
         """Leave a bot's runtime and model unnamed, so it runs on the company's default once one is chosen
@@ -1243,7 +1308,7 @@ class Onboarding:
         for key in ("runtime", "model", "harness", "reasoning_effort"):
             declared.pop(key, None)
         self._write_config(c, slug, declared)
-        c.execute("UPDATE bots SET runtime='',model='',effort='' WHERE slug=?", (slug,))
+        c.execute("UPDATE bots SET effort='' WHERE id=?", (slug,))
 
     def _setup_task(self, c, who, slug, choice, card, answers):
         """BotOps builds every bot people picked. A bootstrap template (the assistant, BotOps
@@ -1258,7 +1323,7 @@ class Onboarding:
         if choice.get("title_prefix"):
             title = choice["title_prefix"].strip() + " " + title
         from .botops_act import request_task
-        task = request_task(c, self.auth, who, title, setup_body(slug, choice, answers))
+        task = request_task(c, self.auth, who, title, setup_body((H.bot(c, slug) or {}).get("slug", slug), choice, answers))
         declared["setup_task_id"] = task["id"]
         self._write_config(c, slug, declared)
         return task["id"]

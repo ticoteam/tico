@@ -38,6 +38,8 @@ DEFAULTS = {
 }
 # Rules an admin may change too, not only the owner (Settings > General).
 ADMIN_RULES = ("stale_review", "topic_fresh", "stall_triage", "org_rule_checks")
+# The rules that grant access to credentials, personal tokens, the SQL page or Tico support: a turn never changes them.
+CREDENTIAL_RULES = ("admin_credentials", "members_store_credentials", "member_tokens", "admin_sql", "support_access")
 # A rule whose default the server's environment sets (`TICO_STALE_REVIEW=1`, `TICO_TOPIC_FRESH=1` on Tico Team's own
 # server, `TICO_STALL_TRIAGE=0` to start a server with triage off). A saved choice wins; until someone sets the rule it is not stored, so it keeps following the environment.
 ENV_DEFAULTS = {"stale_review": "TICO_STALE_REVIEW", "topic_fresh": "TICO_TOPIC_FRESH",
@@ -59,7 +61,7 @@ def default_of(name):
 
 
 def _stored(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:
@@ -88,7 +90,7 @@ def save(c, actor, changes):
     stored = _stored(c)
     kept = {name: value for name, value in after.items()
             if name not in ENV_DEFAULTS or name in stored or changes.get(name) is not None}
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, json.dumps(kept, sort_keys=True)))
     if after != before:
         H.event(c, actor, "access.rules_updated", "", {"before": before, "after": after})

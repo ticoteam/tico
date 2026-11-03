@@ -11,7 +11,6 @@ from typing import Any, cast
 from . import closing as CL
 from .context import Ctx, load
 from .core import dates
-from .core import rights as R
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, Account, Book, descendants
@@ -173,8 +172,8 @@ def _feed_row(ctx: Ctx, r: Any, money: Mapping[str, Any], lines: Mapping[str, li
     return {"kind": "feed", "id": str(r["id"]), "date": str(r["txn_date"]), "amount": int(r["amount"]),
             "currency": str(r["currency"]), "counterparty": str(r["counterparty"]),
             "description": str(r["description"]), "status": str(r["status"]), "pending": bool(r["pending"]),
-            "provider_kind": str(r["kind"] or ""), "card_id": r["card_id"], "entry_id": r["entry_id"],
-            "reconciled": bool(r["reconciliation_id"]),
+            "provider_status": str(r["provider_status"] or ""), "provider_kind": str(r["kind"] or ""),
+            "card_id": r["card_id"], "entry_id": r["entry_id"], "reconciled": bool(r["reconciliation_id"]),
             "money_account": {"id": str(m["id"]), "name": str(m["name"]), "last4": m["last4"]} if m else None,
             "lines": lines.get(str(r["entry_id"] or ""), [])}
 
@@ -195,7 +194,7 @@ def payment_seen(ctx: Ctx, view: VW.View, cut: Sequence[str] | set[str], r: Any)
     obligation = str(r["obligation"] or "")
     if obligation.startswith("bill:") and not bill_seen(ctx, view, cut, obligation.removeprefix("bill:")):
         return False
-    return view.everything or (account is not None and view.sees(account, SK.loads(r["tags_json"])))
+    return view.everything or (account is not None and view.sees(account, SK.loads(r["tags"])))
 
 
 def bill_seen(ctx: Ctx, view: VW.View, cut: Sequence[str] | set[str], bill_id: str) -> bool:
@@ -387,15 +386,16 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
     """Feed rows and entries as plain rows, newest first. A feed row shows to whoever sees its money account or
     follows its card (with the lines of its posted entry they see); an entry shows as the P&L lines the viewer sees,
     unless a feed row they see stands for it. A feed row standing for a private line the viewer has no full detail for
-    is left out whole (`private_feed`). Filter by money account, status (feed rows), line, dates, a search and `org`
-    (keeps a line's team and teammate); `next` is the cursor for the following page."""
+    is left out whole (`private_feed`). Filter by money account, status (feed rows; "failed" is a row the bank ended,
+    left out of the rest), line, dates, a search and `org` (keeps a line's team and teammate); `next` is the cursor for
+    the following page."""
     ctx = load(c, at)
     from .tab_ap import vendor_labels
     view = ctx.view(viewer)
     if source not in ("all", "feed", "entry"):
         raise invalid("source is all|feed|entry")
-    if status and status not in ("new", "matched", "posted", "ignored", "pending"):
-        raise invalid("status is new|matched|posted|ignored|pending")
+    if status and status not in ("new", "matched", "posted", "ignored", "pending", "failed"):
+        raise invalid("status is new|matched|posted|ignored|pending|failed")
     most = page_size(limit)
     start_day = dates.day(start).isoformat() if start else ""
     end_day = dates.day(end).isoformat() if end else ""
@@ -443,12 +443,16 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
         return out
 
     hidden = set(private_cut(ctx, view))
-    line_ids = [a.id for a in ctx.accounts.values() if a.type in PNL_TYPES and view.sees_account(a) and
-                (not wanted or a.id in wanted) and a.id not in hidden]
+    seen_lines = [a for a in ctx.accounts.values() if view.sees_account(a) and (not wanted or a.id in wanted) and
+                  a.id not in hidden]
+    # Every entry shows (§12): by its income and expense lines, or by its balance sheet lines when it has no others.
+    # Asked for by line, a balance sheet line shows all of its own.
+    line_ids = [a.id for a in seen_lines if wanted or a.type in PNL_TYPES]
+    balance_ids = [a.id for a in seen_lines if not wanted and a.type not in PNL_TYPES]
 
     def fetch_lines(mark: tuple[str, str] | None, n: int) -> list[Any]:
         return SK.lines_page(c, ctx.book.id, account_ids=line_ids, before=mark, most=n, start=start_day, end=end_day,
-                             q=text)
+                             q=text, balance_only_ids=balance_ids)
 
     def show_lines(batch: list[Any]) -> list[tuple[tuple[str, str], Row]]:
         tags = SL.line_tags(c, [str(r["line_id"]) for r in batch])
@@ -564,8 +568,8 @@ def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, hold
     from .store import budgets as SB
     ctx = load(c, at)
     view = ctx.view(viewer)
-    if status and status not in ("active", "frozen", "cancelled"):
-        raise invalid("status is active|frozen|cancelled")
+    if status and status not in ("active", "frozen", "canceled"):
+        raise invalid("status is active|frozen|canceled")
     most = page_size(limit)
     marks = decode_cursor(cursor)
     after = marks[0] if marks else ""
@@ -637,10 +641,13 @@ def _access_to(ctx: Ctx, account_id: str) -> list[Row]:
 def _sync(conn: Any | None) -> Row | None:
     if conn is None:
         return None
-    settings = SK.loads(conn["settings_json"])
+    settings = SK.loads(conn["settings"])
     return {"connection_id": str(conn["id"]), "provider": str(conn["provider"]), "status": str(conn["status"]),
             "last_ok_at": conn["last_ok_at"], "last_sync_at": conn["last_sync_at"], "last_error": conn["last_error"],
-            "egress_ip": settings.get("egress_ip")}
+            "egress_ip": settings.get("egress_ip"),
+            # A bank or Stripe connection's first history import: "importing" until it ends (no opening balance yet).
+            "history": ("done" if settings.get("backfilled") else "importing")
+            if str(conn["provider"]) in ("mercury", "stripe") else None}
 
 
 def _books_mirror(c: sqlite3.Connection, book: Book, cid: str, status: str) -> str:
@@ -697,7 +704,7 @@ def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, gat
             rows["banks"].append(item)
     for r in conns.values():
         if str(r["purpose"]) == "payments" or str(r["provider"]) == "mercury":
-            s = SK.loads(r["settings_json"])
+            s = SK.loads(r["settings"])
             rows["payments"].append({"id": str(r["id"]), "kind": "connection", "name": str(r["name"] or r["provider"]),
                                      "provider": str(r["provider"]), "sync": _sync(r),
                                      "payments": {"mode": "approval_queue",
@@ -769,13 +776,14 @@ def _grant_row(g: VW.Grant, ctx: Ctx) -> Row:
 
 def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
     """Who can see what in Finance (spec §7.5): the org chart with each teammate's default and grants, private lines
-    and the defaults. Owner and finance admins (`finance.admin`) see everyone, with rights and private lines. A manager
-    sees their own row, the teammates in the teams they manage (nested) and everyone who reports to them, with defaults
-    and grants but no rights and no private lines. Anyone else sees only their own row. The owner may view as anyone."""
+    and the defaults. The owner, or anyone granted everything, sees everyone, with rights and private lines; a finance
+    admin (`finance.admin`) adds no view. A manager sees their own row, the teammates in the teams they manage (nested)
+    and everyone who reports to them, with defaults and grants but no rights and no private lines. Anyone else sees
+    only their own row. The owner may view as anyone."""
     ctx = load(c, at)
     org = ctx.org
     owner = bool(org.owner) and viewer == org.owner
-    admin = owner or R.is_admin(org, viewer, ctx.rights(viewer))
+    admin = ctx.view(viewer).everything
     led = frozenset[str]().union(*(org.below(t) for t in org.led_by(viewer)))
     if admin:
         shown = sorted(org.humans | org.bots)
@@ -809,7 +817,8 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
     return {"teams": teams, "teammates": teammates, "private_lines": private,
             "defaults": {"manager": defaults.manager, "member": defaults.member,
                          "manager_payroll": defaults.manager_payroll},
-            "can_view_as": owner, "can_edit_defaults": owner, "view_version": ctx.view(viewer).version}
+            "can_view_as": owner, "can_edit_defaults": owner, "view_version": ctx.view(viewer).version,
+            "finance_approver": (ctx.approver_setting() or None) if owner else None}
 
 
 def _may_grant(ctx: Ctx, viewer: str, subject: str, defaults: VW.Defaults) -> bool:

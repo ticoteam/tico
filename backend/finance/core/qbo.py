@@ -11,7 +11,8 @@ from typing import Any, cast
 
 from . import mirror as M
 
-MINOR_VERSION = "65"
+# QuickBooks' current minor version (the default since Dec 16, 2024); 1 to 74 were discontinued on Aug 1, 2025 and ignored.
+MINOR_VERSION = "75"
 # The QuickBooks entities that post to the books' ledger without being a journal entry, each as one balanced entry.
 POSTED = ("Purchase", "Deposit", "Transfer", "SalesReceipt", "RefundReceipt", "VendorCredit")
 # Every QuickBooks entity the change feed reads.

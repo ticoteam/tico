@@ -4,7 +4,7 @@ The person asks to connect (`POST /api/v2/mail/google/connect`) and gets Google'
 own OAuth client (TICO_GOOGLE_OAUTH_CLIENT_ID/SECRET, run by whoever runs this server; nobody makes a Google
 Cloud project, a service account or domain-wide delegation). Google sends their browser back to
 `/api/v2/mail/google/callback`, which checks the state belongs to the same person and keeps the one-time code.
-The computer that syncs mail (runner/connectors.py) claims it, asks this server to trade it for the grant, confirms
+The computer that syncs mail (runner_support/connectors.py) claims it, asks this server to trade it for the grant, confirms
 the account that signed in is the mailbox asked for and keeps the grant (connectors/mail/oauth.py `finish`).
 
 The OAuth client secret never leaves this server. It is one secret for every team on Tico's public app, so no
@@ -43,11 +43,11 @@ from .store import H, P, Problem
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS google_connects(
- person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, state TEXT, verifier TEXT, code TEXT,
- kind TEXT, message TEXT, hint TEXT, can_json TEXT, runner_id TEXT, holder TEXT, started REAL, created TEXT NOT NULL,
- updated TEXT NOT NULL);
-CREATE UNIQUE INDEX IF NOT EXISTS google_connects_state ON google_connects(state) WHERE state IS NOT NULL;
-CREATE TABLE IF NOT EXISTS google_mail_holders(runner_id TEXT PRIMARY KEY, holds INTEGER NOT NULL, seen REAL NOT NULL);
+ person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, oauth_state TEXT, verifier TEXT, code TEXT,
+ kind TEXT, message TEXT, hint TEXT, can TEXT, runner_id TEXT, holder TEXT, started_at REAL, created_at TEXT NOT NULL,
+ updated_at TEXT NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS google_connects_oauth_state ON google_connects(oauth_state) WHERE oauth_state IS NOT NULL;
+CREATE TABLE IF NOT EXISTS google_mail_holders(runner_id TEXT PRIMARY KEY, holds INTEGER NOT NULL, seen_at REAL NOT NULL);
 """
 # The SHA-256 of a grant's refresh token: the one being connected (`pending_hash`, from the exchange) and the one
 # connected (`grant_hash`, once the computer says connected). A fingerprint, never the token.
@@ -128,7 +128,7 @@ class ConnectorResult(M.Contract):
 
 
 class ClaimRequest(M.Contract):
-    holds_mail: bool = False        # this computer has a Google key or connected accounts (runner/connectors.py)
+    holds_mail: bool = False        # this computer has a Google key or connected accounts (runner_support/connectors.py)
 
 
 class TokenRequest(M.Contract):
@@ -199,33 +199,33 @@ def require_self(who):
 def expiring(c):
     """Whether `expire` has anything to end: the status page reads without the write lock when it has not."""
     now = time.time()
-    return c.execute("SELECT 1 FROM google_connects WHERE (status IN ('signing_in','ready') AND started<?) "
-                     "OR (status IN ('finishing','revoking') AND started<?) LIMIT 1",
+    return c.execute("SELECT 1 FROM google_connects WHERE (status IN ('signing_in','ready') AND started_at<?) "
+                     "OR (status IN ('finishing','revoking') AND started_at<?) LIMIT 1",
                      (now - SIGN_IN_SECONDS, now - CLAIM_SECONDS)).fetchone()
 
 
 def expire(c):
     """Sign-ins nobody finished, and claims a computer never answered, end as failures the person can read."""
     now = time.time()
-    c.execute("UPDATE google_connects SET status='failed',kind='expired',state=NULL,verifier=NULL,code=NULL,"
-              "updated=? WHERE status IN ('signing_in','ready') AND started<?", (H.now(), now - SIGN_IN_SECONDS))
-    c.execute("UPDATE google_connects SET status='failed',kind='unknown',state=NULL,verifier=NULL,code=NULL,"
-              "updated=? WHERE status IN ('finishing','revoking') AND started<?", (H.now(), now - CLAIM_SECONDS))
+    c.execute("UPDATE google_connects SET status='failed',kind='expired',oauth_state=NULL,verifier=NULL,code=NULL,"
+              "updated_at=? WHERE status IN ('signing_in','ready') AND started_at<?", (H.now(), now - SIGN_IN_SECONDS))
+    c.execute("UPDATE google_connects SET status='failed',kind='unknown',oauth_state=NULL,verifier=NULL,code=NULL,"
+              "updated_at=? WHERE status IN ('finishing','revoking') AND started_at<?", (H.now(), now - CLAIM_SECONDS))
 
 
 def view(row, settings, mailbox, syncing):
     status = row["status"] if row else "none"
     out = {"configured": configured(settings), "mailbox": mailbox, "syncing": syncing, "status": status,
-           "scopes": READ_SCOPES, "can": [], "updated": row["updated"] if row else None,
+           "scopes": READ_SCOPES, "can": [], "updated_at": row["updated_at"] if row else None,
            "kind": None, "message": None, "hint": None}
     if row and status == "connected":
-        out["can"] = json.loads(row["can_json"] or "[]")
+        out["can"] = json.loads(row["can"] or "[]")
     if row and status == "failed":
         kind = row["kind"] or "error"
         message, hint = (policy_message(mailbox) if kind == "admin_policy" else MESSAGES.get(kind)
                          or (row["message"] or "Connecting failed.", row["hint"] or "Connect again."))
         out.update(kind=kind, message=message, hint=hint)
-    if row and status == "disconnecting" and (row["started"] or 0) < time.time() - STALLED_SECONDS:
+    if row and status == "disconnecting" and (row["started_at"] or 0) < time.time() - STALLED_SECONDS:
         # It stays queued, so the computer still revokes when it is back; the person can revoke at Google now.
         out.update(stalled=True, message="The computer that holds your Google access hasn't come online, so Tico "
                                          "hasn't revoked it yet.",
@@ -244,13 +244,13 @@ def claimable(c, runner_id, holds):
     expire(c)
     elsewhere = c.execute(
         "SELECT 1 FROM google_mail_holders h JOIN runners r ON r.id=h.runner_id AND r.revoked_at IS NULL "
-        "WHERE h.runner_id<>? AND h.holds=1 AND h.seen>? UNION ALL SELECT 1 FROM google_connects g "
+        "WHERE h.runner_id<>? AND h.holds=1 AND h.seen_at>? UNION ALL SELECT 1 FROM google_connects g "
         "JOIN runners r ON r.id=g.holder AND r.revoked_at IS NULL WHERE g.holder<>? LIMIT 1",
         (runner_id, time.time() - HOLDER_SECONDS, runner_id)).fetchone()
     return c.execute(
         "SELECT g.* FROM google_connects g LEFT JOIN runners r ON r.id=g.holder AND r.revoked_at IS NULL "
         "WHERE g.status IN ('ready','disconnecting') AND (g.holder=? OR (r.id IS NULL AND ?)) "
-        "ORDER BY g.updated LIMIT 1", (runner_id, 1 if holds or not elsewhere else 0)).fetchone()
+        "ORDER BY g.updated_at LIMIT 1", (runner_id, 1 if holds or not elsewhere else 0)).fetchone()
 
 
 def pending(c, runner_id):
@@ -299,12 +299,12 @@ def install(app, store, publisher, mutate):
                      "prompt": "consent", "login_hint": mailbox, "state": state, "code_challenge": challenge,
                      "code_challenge_method": "S256"}
             now = H.now()
-            c.execute("INSERT INTO google_connects(person_id,mailbox,status,state,verifier,code,kind,message,hint,"
-                      "runner_id,started,created,updated) VALUES(?,?,'signing_in',?,?,NULL,NULL,NULL,NULL,NULL,?,?,?) "
+            c.execute("INSERT INTO google_connects(person_id,mailbox,status,oauth_state,verifier,code,kind,message,hint,"
+                      "runner_id,started_at,created_at,updated_at) VALUES(?,?,'signing_in',?,?,NULL,NULL,NULL,NULL,NULL,?,?,?) "
                       "ON CONFLICT(person_id) DO UPDATE SET mailbox=excluded.mailbox,status='signing_in',"
-                      "state=excluded.state,verifier=excluded.verifier,code=NULL,kind=NULL,message=NULL,hint=NULL,"
-                      "can_json=NULL,"
-                      "runner_id=NULL,started=excluded.started,updated=excluded.updated",
+                      "oauth_state=excluded.oauth_state,verifier=excluded.verifier,code=NULL,kind=NULL,message=NULL,hint=NULL,"
+                      "can=NULL,"
+                      "runner_id=NULL,started_at=excluded.started_at,updated_at=excluded.updated_at",
                       (pid, mailbox, state, verifier, time.time(), now, now))
             H.event(c, who.actor, "mail.google.connect.start", mailbox, {})
             return {"auth_url": AUTH_URI + "?" + urllib.parse.urlencode(query), "mailbox": mailbox}
@@ -316,20 +316,20 @@ def install(app, store, publisher, mutate):
         who = request.state.identity
         with store.transaction() as c:
             expire(c)
-            row = c.execute("SELECT * FROM google_connects WHERE state=? AND status='signing_in'",
+            row = c.execute("SELECT * FROM google_connects WHERE oauth_state=? AND status='signing_in'",
                             (state,)).fetchone() if state else None
             if (not row or who.role not in ("owner", "human") or row["person_id"] != H.actor_id(who.actor)
-                    or not secrets.compare_digest(row["state"], state)):
+                    or not secrets.compare_digest(row["oauth_state"], state)):
                 return RedirectResponse(INBOX, status_code=302)
             now = H.now()
             if error or not code:
                 kind = CALLBACK_ERRORS.get(error, "declined" if error else "error")
-                c.execute("UPDATE google_connects SET status='failed',kind=?,state=NULL,verifier=NULL,code=NULL,"
-                          "updated=? WHERE person_id=?", (kind, now, row["person_id"]))
+                c.execute("UPDATE google_connects SET status='failed',kind=?,oauth_state=NULL,verifier=NULL,code=NULL,"
+                          "updated_at=? WHERE person_id=?", (kind, now, row["person_id"]))
                 H.event(c, who.actor, "mail.google.connect.failed", row["mailbox"], {"kind": kind})
                 return RedirectResponse(INBOX, status_code=302)
             # The state is spent; the code waits for the computer that keeps the grant.
-            c.execute("UPDATE google_connects SET status='ready',state=NULL,code=?,updated=? WHERE person_id=?",
+            c.execute("UPDATE google_connects SET status='ready',oauth_state=NULL,code=?,updated_at=? WHERE person_id=?",
                       (code[:2000], now, row["person_id"]))
         return RedirectResponse(INBOX, status_code=302)
 
@@ -340,10 +340,10 @@ def install(app, store, publisher, mutate):
             pid = require_self(who)
             mailbox, _ = mailbox_for(c, pid)
             now = H.now()
-            c.execute("INSERT INTO google_connects(person_id,mailbox,status,started,created,updated) "
+            c.execute("INSERT INTO google_connects(person_id,mailbox,status,started_at,created_at,updated_at) "
                       "VALUES(?,?,'disconnecting',?,?,?) ON CONFLICT(person_id) DO UPDATE SET "
-                      "mailbox=excluded.mailbox,status='disconnecting',state=NULL,verifier=NULL,code=NULL,kind=NULL,"
-                      "message=NULL,hint=NULL,can_json=NULL,runner_id=NULL,started=excluded.started,updated=excluded.updated",
+                      "mailbox=excluded.mailbox,status='disconnecting',oauth_state=NULL,verifier=NULL,code=NULL,kind=NULL,"
+                      "message=NULL,hint=NULL,can=NULL,runner_id=NULL,started_at=excluded.started_at,updated_at=excluded.updated_at",
                       (pid, mailbox, time.time(), now, now))
             H.event(c, who.actor, "mail.google.disconnect", mailbox, {})
             return person_view(c, who)
@@ -356,10 +356,10 @@ def install(app, store, publisher, mutate):
         with store.transaction() as c:
             runner = publisher(c, request.state.identity)
             holds = bool(body and body.holds_mail)
-            c.execute("INSERT INTO google_mail_holders(runner_id,holds,seen) VALUES(?,?,?) ON CONFLICT(runner_id) "
-                      "DO UPDATE SET holds=excluded.holds,seen=excluded.seen", (runner["id"], int(holds), time.time()))
+            c.execute("INSERT INTO google_mail_holders(runner_id,holds,seen_at) VALUES(?,?,?) ON CONFLICT(runner_id) "
+                      "DO UPDATE SET holds=excluded.holds,seen_at=excluded.seen_at", (runner["id"], int(holds), time.time()))
             # Only recent answers count (claimable), so older ones and revoked computers' go.
-            c.execute("DELETE FROM google_mail_holders WHERE seen<? OR runner_id IN "
+            c.execute("DELETE FROM google_mail_holders WHERE seen_at<? OR runner_id IN "
                       "(SELECT id FROM runners WHERE revoked_at IS NOT NULL)", (time.time() - HOLDER_SECONDS,))
             row = claimable(c, runner["id"], holds)
             if not row:
@@ -367,9 +367,9 @@ def install(app, store, publisher, mutate):
             action = "connect" if row["status"] == "ready" else "disconnect"
             if action == "connect" and not configured(settings):
                 c.execute("UPDATE google_connects SET status='failed',kind='app_config',code=NULL,verifier=NULL,"
-                          "updated=? WHERE person_id=?", (H.now(), row["person_id"]))
+                          "updated_at=? WHERE person_id=?", (H.now(), row["person_id"]))
                 return {"connect": None}
-            c.execute("UPDATE google_connects SET status=?,runner_id=?,started=?,updated=? WHERE person_id=?",
+            c.execute("UPDATE google_connects SET status=?,runner_id=?,started_at=?,updated_at=? WHERE person_id=?",
                       ("finishing" if action == "connect" else "revoking", runner["id"], time.time(), H.now(),
                        row["person_id"]))
             out = {"id": row["person_id"], "action": action, "mailbox": row["mailbox"]}
@@ -388,7 +388,7 @@ def install(app, store, publisher, mutate):
                     or not row["verifier"]):
                 raise Problem("state", "No sign-in code waits for this computer to exchange", 409)
             code, verifier = row["code"], row["verifier"]
-            c.execute("UPDATE google_connects SET code=NULL,verifier=NULL,updated=? WHERE person_id=?",
+            c.execute("UPDATE google_connects SET code=NULL,verifier=NULL,updated_at=? WHERE person_id=?",
                       (H.now(), person_id))
         if not configured(settings):
             raise Problem("google_refused", "This Tico server has no Google app set up", 409,
@@ -450,8 +450,8 @@ def install(app, store, publisher, mutate):
             holder = {"connected": runner["id"], "disconnected": None}.get(body.status, row["holder"])
             # Likewise the grant the server will refresh: the new one once connected, none once revoked.
             grant_hash = {"connected": row["pending_hash"], "disconnected": None}.get(body.status, row["grant_hash"])
-            c.execute("UPDATE google_connects SET status=?,kind=?,message=?,hint=?,can_json=?,holder=?,grant_hash=?,"
-                      "pending_hash=NULL,state=NULL,verifier=NULL,code=NULL,updated=? WHERE person_id=?",
+            c.execute("UPDATE google_connects SET status=?,kind=?,message=?,hint=?,can=?,holder=?,grant_hash=?,"
+                      "pending_hash=NULL,oauth_state=NULL,verifier=NULL,code=NULL,updated_at=? WHERE person_id=?",
                       (body.status, kind if failed else None, body.message if failed else None,
                        body.hint if failed else None,
                        json.dumps(sorted(set(body.can))) if body.status == "connected" else None, holder, grant_hash,

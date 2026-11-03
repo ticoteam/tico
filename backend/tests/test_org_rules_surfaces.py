@@ -34,7 +34,7 @@ def mcp(api, name, arguments=None, token="ana-test"):
 
 def hide_quote(api, rule_id):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE org_rules SET cite_json=? WHERE id=?",
+        c.execute("UPDATE org_rules SET cite=? WHERE id=?",
                   (json.dumps({"file_id": "no-such-file", "quote": "SECRET-QUOTE-MARKER"}), rule_id))
 
 
@@ -143,7 +143,7 @@ def _add_via_assistant(api, turn, args):
     return hubtools.BY_NAME["hub_rules_add"]["fn"](turn, {**args, "on_behalf_of": "turn"})
 
 
-def test_the_assistant_adds_a_rule_its_owner_may_make_and_refuses_an_uncited_one(api):
+def test_the_assistant_adds_a_rule_its_owner_may_make_and_refuses_a_citation_that_is_not_theirs(api):
     org(api)
     _, attempt = assistant_turn(api, "ana-test", "Add a rule: everyone logs time.")
     turn = _Turn(api, attempt["token"])
@@ -154,9 +154,10 @@ def test_the_assistant_adds_a_rule_its_owner_may_make_and_refuses_an_uncited_one
     group = _add_via_assistant(api, turn, {"kind": "internal", "text": "Support logs refunds.",
                                            "who": {"groups": ["support"]}})
     assert group["status"] == "active"
+    # A citation that is not the person's own message in their Assistant chat lends nothing.
     with pytest.raises(APIError):
-        hubtools.BY_NAME["hub_rules_add"]["fn"](turn, {"kind": "internal", "text": "Uncited add.",
-                                                       "who": {"groups": ["support"]}})
+        hubtools.BY_NAME["hub_rules_add"]["fn"](turn, {"kind": "internal", "text": "Not theirs.",
+                                                       "who": {"groups": ["support"]}, "on_behalf_of": "nope"})
 
 
 def test_the_assistant_refuses_an_everyone_rule_for_a_plain_member_and_suggests_a_group_rule(api):
@@ -190,3 +191,15 @@ def test_rules_due_takes_the_next_window_and_list_is_the_same_view(api):
     upcoming = cli(api, "ana-test", "due", "--next", "30d")
     assert [d["id"] for d in upcoming["due"]] == [due["id"]]
     assert cli(api, "ana-test", "due", "list", "--next", "30d")["due"] == upcoming["due"]
+
+
+def test_the_cli_and_the_mcp_set_and_clear_where_a_rule_applies(api):
+    org(api)
+    added = cli(api, "ana-test", "add", "--kind", "internal", "--text", "Support writes are reviewed.", "--everyone",
+                "--where", "team:support", "--where", "kind:dm")
+    assert set(added["where"]) == {"team:support", "kind:dm"}
+    edited = cli(api, "ana-test", "edit", added["id"], "--version", str(added["version"]),
+                 "--where", "has_outside_members")
+    assert edited["where"] == ["has_outside_members"]
+    _, cleared = mcp(api, "hub_rules_edit", {"id": added["id"], "version": edited["version"], "where": []})
+    assert cleared["where"] == []

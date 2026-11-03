@@ -3,8 +3,8 @@
 Only trusted filing code calls file_card with a checked memory_tidy.Result and the
 filing ledger's list-price estimate (including subscription usage). There is no
 public offer endpoint: a child cannot turn its own unchecked output into a card.
-No repository, model, approval, message or job writes happen here. Keep application
-is installed by the separate Keep ticket; until then it fails closed.
+No repository, model, approval, message or job writes happen here. Keep queues
+reviewer-authorized deterministic execution on the assigned capable computer.
 """
 import json
 import math
@@ -13,6 +13,7 @@ from datetime import timezone
 from typing import Literal
 
 from fastapi import Request
+from pydantic import Field
 
 from . import models as M
 from .memory_tidy import Result
@@ -23,13 +24,18 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory_tidy_cards (
  id TEXT PRIMARY KEY, bot TEXT NOT NULL, reviewer TEXT NOT NULL, pass_id TEXT NOT NULL UNIQUE,
  memory_commit TEXT NOT NULL, model TEXT NOT NULL, cost_usd REAL NOT NULL,
- diff TEXT NOT NULL, diary TEXT NOT NULL, edits_json TEXT NOT NULL,
- parent_task_id TEXT, check_task_id TEXT, started TEXT NOT NULL, created TEXT NOT NULL,
- expires TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', reason TEXT NOT NULL DEFAULT '',
- decided TEXT, decided_by TEXT);
+ diff TEXT NOT NULL, diary TEXT NOT NULL, edits TEXT NOT NULL,
+ parent_task_id TEXT, check_task_id TEXT, started_at TEXT NOT NULL, created_at TEXT NOT NULL,
+ expires_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', reason TEXT NOT NULL DEFAULT '',
+ decided_at TEXT, decided_by TEXT);
 CREATE UNIQUE INDEX IF NOT EXISTS memory_tidy_cards_one_open ON memory_tidy_cards(bot) WHERE status='open';
-CREATE INDEX IF NOT EXISTS memory_tidy_cards_reviewer ON memory_tidy_cards(reviewer,status,expires);
-CREATE INDEX IF NOT EXISTS memory_tidy_cards_started ON memory_tidy_cards(bot,started);
+CREATE INDEX IF NOT EXISTS memory_tidy_cards_reviewer ON memory_tidy_cards(reviewer,status,expires_at);
+CREATE INDEX IF NOT EXISTS memory_tidy_cards_started ON memory_tidy_cards(bot,started_at);
+CREATE TABLE IF NOT EXISTS memory_tidy_keeps (
+ id TEXT PRIMARY KEY, card_id TEXT NOT NULL REFERENCES memory_tidy_cards(id),
+ runner_id TEXT NOT NULL, requested_by TEXT NOT NULL, created_at TEXT NOT NULL,
+ status TEXT NOT NULL DEFAULT 'queued', commit_sha TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '');
+CREATE UNIQUE INDEX IF NOT EXISTS memory_tidy_keeps_pending_v2 ON memory_tidy_keeps(card_id) WHERE status IN ('queued','applying');
 """
 
 
@@ -37,23 +43,49 @@ def stamp(at):
     return at.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')
 
 
+def reconcile_queued(c):
+    """Only undelivered work can be cancelled without a push reconciliation."""
+    rows = c.execute("SELECT k.id,k.card_id FROM memory_tidy_keeps k JOIN memory_tidy_cards t ON t.id=k.card_id "
+                     "WHERE k.status='queued' AND NOT EXISTS (SELECT 1 FROM assignments a JOIN runners r ON r.id=a.runner_id "
+                     "WHERE a.bot=t.bot AND a.runner_id=k.runner_id AND r.revoked_at IS NULL)").fetchall()
+    for row in rows:
+        reason = 'Computer placement changed before Keep started; review and try again'
+        c.execute("UPDATE memory_tidy_keeps SET status='refused',reason=? WHERE id=?", (reason, row['id']))
+        c.execute('UPDATE memory_tidy_cards SET reason=? WHERE id=?', (reason, row['card_id']))
+
+
 def sweep(c, at=None):
     """Hourly cleanup and filing cleanup; withdrawal never applies an edit."""
+    reconcile_queued(c)
     at = at or H.now()
-    return c.execute("UPDATE memory_tidy_cards SET status='withdrawn',reason='expired',decided=? "
-                     "WHERE status='open' AND expires<=?", (at, at)).rowcount
+    return c.execute("UPDATE memory_tidy_cards SET status='withdrawn',reason='expired',decided_at=? "
+                     "WHERE status='open' AND expires_at<=? AND id NOT IN (SELECT card_id FROM memory_tidy_keeps WHERE status IN ('queued','applying'))", (at, at)).rowcount
 
 
 SUMMARY_FIELDS = ('id', 'bot', 'reviewer', 'memory_commit', 'model', 'cost_usd', 'diary',
-                  'created', 'expires', 'status', 'reason')
+                  'created_at', 'expires_at', 'status', 'reason')
 
 
-def view(row, *, detail=True):
+def ready_runner(c, bot):
+    if c is None:
+        return None
+    row = c.execute("SELECT r.id,r.capabilities FROM assignments a JOIN runners r ON r.id=a.runner_id "
+                    "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
+    return row['id'] if row and 'memory_tidy_keep_v1' in json.loads(row['capabilities']) else None
+
+
+def pending(c, ident):
+    return c is not None and c.execute("SELECT 1 FROM memory_tidy_keeps WHERE card_id=? AND status IN ('queued','applying')", (ident,)).fetchone() is not None
+
+
+def view(c, row, *, detail=True):
     # The card's independent audience is reviewer, not the private task's audience.
     # Task ids and numbered edits remain internal provenance for Keep.
+    slug = (H.bot(c, row['bot']) or {}).get('slug') or row['bot']
     return {**{k: row[k] for k in SUMMARY_FIELDS}, **({'diff': row['diff']} if detail else {}), 'kind': 'memory_tidy',
-            'title': 'Nightly memory tidy: ' + row['bot'], 'requester': 'bot:' + row['bot'],
-            'keep_available': False}
+            'title': 'Nightly memory tidy: ' + slug, 'requester_id': 'bot:' + row['bot'],
+            'keep_available': row['status'] == 'open' and bool(ready_runner(c, row['bot'])) and not pending(c, row['id']),
+            'keep_pending': bool(pending(c, row['id']))}
 
 
 def file_card(c, *, bot, reviewer, pass_id, memory_commit, model, cost_usd,
@@ -68,7 +100,7 @@ def file_card(c, *, bot, reviewer, pass_id, memory_commit, model, cost_usd,
         return None
     previous = c.execute('SELECT * FROM memory_tidy_cards WHERE pass_id=?', (pass_id,)).fetchone()
     if previous:
-        return view(previous)
+        return view(c, previous)
     # The pilot forbids Haiku-tier passes. Reject a misconfigured filing before showing Keep.
     if (not bot or not pass_id or not re.fullmatch(r'(?:human|bot):[^\s:]+', reviewer)
             or not re.fullmatch(r'[0-9a-f]{40,64}', memory_commit)
@@ -86,25 +118,28 @@ def file_card(c, *, bot, reviewer, pass_id, memory_commit, model, cost_usd,
     if started is None:
         raise Problem('validation', 'Invalid pass start', 422)
     started = stamp(started.replace(tzinfo=started.tzinfo or timezone.utc))
-    newer = c.execute('SELECT 1 FROM memory_tidy_cards WHERE bot=? AND started>=? LIMIT 1', (bot, started)).fetchone()
+    newer = c.execute('SELECT 1 FROM memory_tidy_cards WHERE bot=? AND started_at>=? LIMIT 1', (bot, started)).fetchone()
     if newer:
         raise Problem('conflict', 'A newer Nightly memory tidy pass already has a card', 409)
+    reconcile_queued(c)
+    if c.execute("SELECT 1 FROM memory_tidy_keeps k JOIN memory_tidy_cards t ON t.id=k.card_id WHERE t.bot=? AND k.status IN ('queued','applying')", (bot,)).fetchone():
+        raise Problem('conflict', 'A Keep is still being applied on this bot’s computer', 409)
     sweep(c, created)
-    c.execute("UPDATE memory_tidy_cards SET status='withdrawn',reason='replaced',decided=? "
+    c.execute("UPDATE memory_tidy_cards SET status='withdrawn',reason='replaced',decided_at=? "
               "WHERE bot=? AND status='open'", (created, bot))
     ident = H.new_id()
     expires = stamp(crossed_at(created))
     c.execute('INSERT INTO memory_tidy_cards '
-              '(id,bot,reviewer,pass_id,memory_commit,model,cost_usd,diff,diary,edits_json,'
-              'parent_task_id,check_task_id,started,created,expires) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+              '(id,bot,reviewer,pass_id,memory_commit,model,cost_usd,diff,diary,edits,'
+              'parent_task_id,check_task_id,started_at,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
               (ident, bot, reviewer, pass_id, memory_commit, model, cost_usd, result.diff, result.diary,
                result.edits_json, parent_task_id, check_task_id, started, created, expires))
-    return view(c.execute('SELECT * FROM memory_tidy_cards WHERE id=?', (ident,)).fetchone())
+    return view(c, c.execute('SELECT * FROM memory_tidy_cards WHERE id=?', (ident,)).fetchone())
 
 
 def cards_for(c, actor, at=None):
-    return [view(r, detail=False) for r in c.execute("SELECT " + ",".join(SUMMARY_FIELDS) + " FROM memory_tidy_cards WHERE reviewer=? "
-                                     "AND status='open' AND expires>? ORDER BY created,id", (actor, at or H.now()))]
+    return [view(c, r, detail=False) for r in c.execute("SELECT " + ",".join(SUMMARY_FIELDS) + " FROM memory_tidy_cards WHERE reviewer=? "
+                                     "AND status='open' AND (expires_at>? OR id IN (SELECT card_id FROM memory_tidy_keeps WHERE status IN ('queued','applying'))) ORDER BY created_at,id", (actor, at or H.now()))]
 
 
 def require_card(c, actor, ident):
@@ -118,13 +153,20 @@ class MemoryTidyDecision(M.Contract):
     decision: Literal['keep', 'discard']
 
 
+class MemoryTidyCompletion(M.Contract):
+    status: Literal['kept', 'refused']
+    commit: str = ''
+    reason: str = Field(default='', max_length=500)
+
+
 def install(app, store, auth, mutate):
     @app.get('/api/v2/memory-tidy/cards')
     def list_cards(request: Request):
         """The named reviewer's cards, including after the pass tasks close. Bots may read their own cards."""
         who = request.state.identity
         auth.domain(who)
-        with store.read_transaction() as c:
+        with store.transaction() as c:
+            reconcile_queued(c)
             return {'cards': cards_for(c, who.actor)}
 
     @app.get('/api/v2/memory-tidy/cards/{ident}')
@@ -133,8 +175,8 @@ def install(app, store, auth, mutate):
         auth.domain(who)
         with store.read_transaction() as c:
             row = require_card(c, who.actor, ident)
-            card = view(row)
-            if row['status'] == 'open' and row['expires'] <= H.now():
+            card = view(c, row)
+            if row['status'] == 'open' and row['expires_at'] <= H.now() and not pending(c, ident):
                 card.update(status='withdrawn', reason='expired')
             return {'card': card}
 
@@ -144,12 +186,66 @@ def install(app, store, auth, mutate):
         auth.domain(who)
 
         def write(c):
+            reconcile_queued(c)
             row = require_card(c, who.actor, ident)
-            if row['status'] != 'open' or row['expires'] <= H.now():
+            if row['status'] != 'open':
+                raise Problem('conflict', 'This Nightly memory tidy card is no longer open', 409)
+            if pending(c, ident):
+                if body.decision == 'keep':
+                    return {'card': view(c, row)}
+                raise Problem('conflict', 'Keep is already being applied; wait for its result', 409)
+            if row['expires_at'] <= H.now():
                 raise Problem('conflict', 'This Nightly memory tidy card is no longer open', 409)
             if body.decision == 'keep':
-                raise Problem('unavailable', 'Keep is not available yet; the proposal remains open', 409)
-            c.execute("UPDATE memory_tidy_cards SET status='discarded',decided=?,decided_by=? WHERE id=?",
+                runner = ready_runner(c, row['bot'])
+                if not runner:
+                    raise Problem('unavailable', 'Update this bot’s computer to enable Keep; the proposal remains open', 409)
+                c.execute('INSERT INTO memory_tidy_keeps(id,card_id,runner_id,requested_by,created_at) VALUES(?,?,?,?,?)',
+                          (H.new_id(), ident, runner, who.actor, H.now()))
+                return {'card': view(c, row)}
+            c.execute("UPDATE memory_tidy_cards SET status='discarded',decided_at=?,decided_by=? WHERE id=?",
                       (H.now(), who.actor, ident))
-            return {'card': view(require_card(c, who.actor, ident))}
+            return {'card': view(c, require_card(c, who.actor, ident))}
+        return mutate(request, body, write)
+
+    def computer(request):
+        who = request.state.identity
+        if who.role != 'runner':
+            raise Problem('identity', 'A registered computer is required', 403)
+        return who.runner_id
+
+    @app.get('/api/v2/runners/me/memory-tidy-keeps')
+    def computer_keeps(request: Request):
+        rid = computer(request)
+        with store.transaction() as c:
+            reconcile_queued(c)
+            rows = c.execute("SELECT k.id,k.card_id,t.bot,t.memory_commit,t.edits,t.diary,t.created_at,b.config "
+                             "FROM memory_tidy_keeps k JOIN memory_tidy_cards t ON t.id=k.card_id "
+                             "JOIN bot_config b ON b.bot=t.bot JOIN runners r ON r.id=k.runner_id "
+                             "WHERE k.runner_id=? AND r.revoked_at IS NULL AND k.status IN ('queued','applying') ORDER BY k.created_at LIMIT 1", (rid,)).fetchall()
+            for row in rows:
+                c.execute("UPDATE memory_tidy_keeps SET status='applying' WHERE id=?", (row['id'],))
+            # edits_json is the runner wire's name (runner_support/memory_tidy_keep.py); older runners read it too.
+            return {'keeps': [{**{k: r[k] for k in r.keys() if k not in ('config', 'edits')}, 'edits_json': r['edits'], 'config': {key: value for key, value in json.loads(r['config']).items() if key in {'repo', 'repo_url', 'shared_from'}}, 'date': r['created_at'][:10]} for r in rows]}
+
+    @app.post('/api/v2/runners/me/memory-tidy-keeps/{ident}/complete')
+    def complete_keep(request: Request, ident: str, body: MemoryTidyCompletion):
+        rid = computer(request)
+
+        def write(c):
+            row = c.execute('SELECT * FROM memory_tidy_keeps WHERE id=? AND runner_id=?', (ident, rid)).fetchone()
+            if not row:
+                raise Problem('not_found', 'Unknown Keep operation', 404)
+            if row['status'] not in {'queued', 'applying'}:
+                return {'ok': True}  # repeated delivery cannot count twice
+            if body.status == 'kept' and not re.fullmatch(r'[a-f0-9]{40,64}', body.commit):
+                raise Problem('validation', 'A successful Keep needs its pushed commit', 422)
+            c.execute('UPDATE memory_tidy_keeps SET status=?,commit_sha=?,reason=? WHERE id=?',
+                      (body.status, body.commit, body.reason, ident))
+            if body.status == 'kept':
+                c.execute("UPDATE memory_tidy_cards SET status='kept',decided_at=?,decided_by=?,reason=? WHERE id=?",
+                          (H.now(), row['requested_by'], '', row['card_id']))
+            else:
+                c.execute('UPDATE memory_tidy_cards SET reason=? WHERE id=?', (body.reason, row['card_id']))
+            return {'ok': True}
         return mutate(request, body, write)

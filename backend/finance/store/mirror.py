@@ -43,6 +43,28 @@ def ref_set(c: sqlite3.Connection, ref_id: str, *, local_id: str, revision: str,
               (local_id, revision, status, at, ref_id))
 
 
+def reread_seen(c: sqlite3.Connection, cid: str, keys: Sequence[str], gen: int) -> None:
+    """The refs a full re-read of generation `gen` found in the books (by external id, whatever their local table)."""
+    c.executemany("UPDATE fin_external_refs SET seen_gen=? WHERE connection_id=? AND external_id=?",
+                  [(gen, cid, key) for key in keys])
+
+
+def reread_unseen(c: sqlite3.Connection, cid: str, gen: int, kinds: Sequence[str], most: int) -> list[Any]:
+    """Refs a connection holds, not deleted, of the kinds a full read covers, that generation `gen`'s re-read has not
+    found in the books (and has not swept yet): at most `most`, as (id, external id)."""
+    marks = ",".join("?" * len(kinds))
+    return c.execute(
+        "SELECT id, external_id FROM fin_external_refs WHERE connection_id=? AND status<>'deleted' AND "
+        f"substr(external_id, 1, instr(external_id, ':') - 1) IN ({marks}) AND "
+        "(seen_gen IS NULL OR seen_gen NOT IN (?, ?)) ORDER BY id LIMIT ?",
+        (cid, *kinds, gen, -gen, most)).fetchall()
+
+
+def reread_swept(c: sqlite3.Connection, ref_ids: Sequence[str], gen: int) -> None:
+    """Marks refs swept in generation `gen` (negative), so the sweep does not come back to them."""
+    c.executemany("UPDATE fin_external_refs SET seen_gen=? WHERE id=?", [(-gen, ref_id) for ref_id in ref_ids])
+
+
 def restatement_insert(c: sqlite3.Connection, *, book_id: str, period_id: str, day: str, change: str,
                        entry_id: str | None, reversal_id: str | None, cid: str | None, external_id: str, at: str,
                        by: str) -> None:
@@ -70,8 +92,8 @@ def as_map(value: object) -> dict[str, object]:
 
 
 def _settings(c: sqlite3.Connection, cid: str) -> dict[str, object]:
-    """A connection's settings_json as a dict; missing or unreadable settings read as empty."""
-    row = c.execute("SELECT settings_json FROM fin_connections WHERE id=?", (cid,)).fetchone()
+    """A connection's settings as a dict; missing or unreadable settings read as empty."""
+    row = c.execute("SELECT settings FROM fin_connections WHERE id=?", (cid,)).fetchone()
     try:
         value: object = json.loads(row[0]) if row and row[0] else {}
     except ValueError:
@@ -87,7 +109,7 @@ def mirror_state(c: sqlite3.Connection, cid: str) -> dict[str, object]:
 def set_mirror_state(c: sqlite3.Connection, cid: str, fields: Mapping[str, object]) -> None:
     settings = _settings(c, cid)
     settings["mirror"] = {**mirror_state(c, cid), **fields}
-    c.execute("UPDATE fin_connections SET settings_json=? WHERE id=?", (json.dumps(settings, sort_keys=True), cid))
+    c.execute("UPDATE fin_connections SET settings=? WHERE id=?", (json.dumps(settings, sort_keys=True), cid))
 
 
 def candidates(c: sqlite3.Connection, book_id: str, gl_account_id: str, amount: int, start: str,
@@ -143,7 +165,7 @@ def writes_for_feed(c: sqlite3.Connection, feed_id: str) -> list[Any]:
     """Writes out for a bank row not yet confirmed: pending (or claimed for a send), or unknown, which may have landed at
     the provider and so is never sent again."""
     return c.execute("SELECT * FROM fin_outbox WHERE (status='pending' OR (status='failed' AND unknown=1)) "
-                     "AND json_extract(payload_json, '$.feed_id')=?", (feed_id,)).fetchall()
+                     "AND json_extract(payload, '$.feed_id')=?", (feed_id,)).fetchall()
 
 
 def outbox_counts(c: sqlite3.Connection, cid: str) -> dict[str, int]:
@@ -162,7 +184,7 @@ def outbox_counts(c: sqlite3.Connection, cid: str) -> dict[str, int]:
 def cancel_feed_writes(c: sqlite3.Connection, feed_id: str, why: str, at: str) -> None:
     """Withdraw the writes out for a bank row that a provider entry now is (or that was ignored)."""
     c.execute("UPDATE fin_outbox SET status='failed', last_error=?, claimed_at=NULL, updated_at=? WHERE status='pending' "
-              "AND claimed_at IS NULL AND json_extract(payload_json, '$.feed_id')=?", (why, at, feed_id))
+              "AND claimed_at IS NULL AND json_extract(payload, '$.feed_id')=?", (why, at, feed_id))
 
 
 def writes_waiting(c: sqlite3.Connection, cid: str) -> int:
@@ -183,14 +205,14 @@ def contact_by_name(c: sqlite3.Connection, book_id: str, name: str) -> Any:
 
 def contact_insert(c: sqlite3.Connection, *, book_id: str, contact_id: str, name: str, kind: str,
                    emails: Sequence[str], active: bool, at: str, by: str) -> None:
-    c.execute("INSERT INTO fin_contacts(id, book_id, name, kind, emails_json, active, created_at, created_by, updated_at) "
+    c.execute("INSERT INTO fin_contacts(id, book_id, name, kind, emails, active, created_at, created_by, updated_at) "
               "VALUES(?,?,?,?,?,?,?,?,?)", (contact_id, book_id, name, kind, json.dumps(list(emails)), int(active), at,
                                            by, at))
 
 
 def contact_update(c: sqlite3.Connection, contact_id: str, *, name: str, kind: str, emails: Sequence[str],
                    active: bool, at: str) -> None:
-    c.execute("UPDATE fin_contacts SET name=?, kind=?, emails_json=?, active=?, updated_at=? WHERE id=?",
+    c.execute("UPDATE fin_contacts SET name=?, kind=?, emails=?, active=?, updated_at=? WHERE id=?",
               (name, kind, json.dumps(list(emails)), int(active), at, contact_id))
 
 
@@ -244,6 +266,18 @@ def disconnect(c: sqlite3.Connection, cid: str, at: str) -> None:
     c.execute("UPDATE fin_connections SET status='disconnected', updated_at=? WHERE id=?", (at, cid))
 
 
+def stopped_books_grants(c: sqlite3.Connection) -> list[tuple[str, str]]:
+    """(id, provider) for each disconnected books connection that still holds a token. A stopped book keeps its tokens
+    until the books pass has taken the grant off at HQ (books_sync._revoke_stopped)."""
+    out: list[tuple[str, str]] = []
+    for row in c.execute("SELECT id, provider FROM fin_connections WHERE purpose='books' AND status='disconnected' "
+                         "ORDER BY created_at, id").fetchall():
+        books = as_map(_settings(c, str(row[0])).get("books"))
+        if books.get("access") or books.get("refresh"):
+            out.append((str(row[0]), str(row[1])))
+    return out
+
+
 def books_settings(c: sqlite3.Connection, cid: str) -> dict[str, object]:
     """A books connection's own settings: its company, its realm or tenant, and the credential ids of its tokens (the
     secrets stay in the vault; the token expiry times are kept here)."""
@@ -253,12 +287,12 @@ def books_settings(c: sqlite3.Connection, cid: str) -> dict[str, object]:
 def set_books_settings(c: sqlite3.Connection, cid: str, fields: Mapping[str, object]) -> None:
     settings = _settings(c, cid)
     settings["books"] = {**books_settings(c, cid), **fields}
-    c.execute("UPDATE fin_connections SET settings_json=? WHERE id=?", (json.dumps(settings, sort_keys=True), cid))
+    c.execute("UPDATE fin_connections SET settings=? WHERE id=?", (json.dumps(settings, sort_keys=True), cid))
 
 
 def books_connections(c: sqlite3.Connection, provider: str | None = None) -> list[tuple[str, str, str]]:
     """(id, provider, company id) for each books connection that is not disconnected, optionally of one provider."""
-    sql = "SELECT id, provider, settings_json, status FROM fin_connections WHERE purpose='books' AND status!='disconnected'"
+    sql = "SELECT id, provider, settings, status FROM fin_connections WHERE purpose='books' AND status!='disconnected'"
     args: list[object] = []
     if provider:
         sql += " AND provider=?"

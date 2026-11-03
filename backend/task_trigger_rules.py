@@ -8,6 +8,7 @@ import logging
 from contextlib import contextmanager
 
 from . import hubdb as H
+from .migrations import renames
 
 TRIGGERS = ("task.created", "task.step_changed", "task.done", "task.declined", "task.closed")
 CONDITIONS = ("type", "step", "tag", "owner", "requester")
@@ -48,7 +49,7 @@ def pending(conn):
 
 
 def enqueue(conn, event, task, actor, revision, *, field=None, new=None):
-    if event not in TRIGGERS:
+    if event not in TRIGGERS or H.NO_TRIGGERS.get():
         return
     state = _PENDING.get()
     facts = {"step_id" if field == "step" else field: new} if field in ("step", "status") else {}
@@ -112,26 +113,26 @@ def judge(conn, item):
         row = item["row"]
         if not row:
             return
-        ctx = R._Context(conn, item["actor"], row.get("owner") or "", {}, None, row)
+        ctx = R._Context(conn, item["actor"], row.get("owner_id") or "", {}, None, row)
         rows = conn.execute("SELECT r.* FROM rules r LEFT JOIN rule_task_state s ON s.rule_id=r.id "
                             "WHERE r.enabled=1 AND r.event=? AND s.paused_at IS NULL", (item["event"],)).fetchall()
         from . import redesign_migration
         paused = {r["rule_id"] for r in conn.execute("SELECT rule_id FROM rule_task_state WHERE paused_at IS NOT NULL")}
         rows += [r for r in redesign_migration.wake_rows(conn, item["event"])
                  if r["event"] == item["event"] and r["id"] not in paused]
-        rows = sorted(rows, key=lambda r: (R.PRECEDENCE.index(r["scope_kind"]), r["position"], r["created"], r["id"]))
+        rows = sorted(rows, key=lambda r: (R.PRECEDENCE.index(r["scope_kind"]), r["position"], r["created_at"], r["id"]))
         for rule in rows:
-            if not ctx.in_scope(rule) or not ctx.matches(H._json(rule["when_json"], {})):
+            if not ctx.in_scope(rule) or not ctx.matches(H._json(rule["condition"], {})):
                 continue
-            params = H._json(rule["params_json"], {}) or {}
+            params = H._json(rule["params"], {}) or {}
             action = params.get("action")
-            if not conn.execute("INSERT OR IGNORE INTO rule_task_runs(rule_id,task_id,event,revision,at) VALUES(?,?,?,?,?)",
+            if not conn.execute("INSERT OR IGNORE INTO rule_task_runs(rule_id,task_id,event,revision,ran_at) VALUES(?,?,?,?,?)",
                                 (rule["id"], item["task"], item["event"], item["revision"], H.now())).rowcount:
                 continue
             if item["chain"]:
                 _history(conn, item, rule, action, "Skipped: an Action already caused this change; maximum chain depth is one")
                 continue
-            count = conn.execute("SELECT count(*) FROM rule_task_runs WHERE rule_id=? AND fired=1 AND at>?",
+            count = conn.execute("SELECT count(*) FROM rule_task_runs WHERE rule_id=? AND fired=1 AND ran_at>?",
                                  (rule["id"], H.shift(H.now(), hours=-1))).fetchone()[0]
             if count >= 50:
                 conn.execute("INSERT INTO rule_task_state(rule_id,paused_at,pause_reason) VALUES(?,?,?) "
@@ -162,7 +163,7 @@ def _run(conn, item, rule, params):
         if action not in ACTIONS or rule["then_outcome"] != R.ACTION:
             raise ValueError("unsupported Action")
         values = {"event": item["event"], "actor": item["actor"], "task": {
-            k: row.get(k) for k in ("id", "title", "body", "note", "status", "owner", "requester", "type_id", "step_id")}}
+            k: row.get(renames.current_column("tasks", k)) for k in ("id", "title", "body", "note", "status", "owner", "requester", "type_id", "step_id")}}
         if action in R.EVENT_RUNNERS:
             revision = f"task-rule:{rule['id']}:{item['event']}:{item['revision']}"
             result = R.EVENT_RUNNERS[action](conn, rule["id"], by, params, values, event=item["event"],

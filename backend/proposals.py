@@ -1,6 +1,7 @@
 """Proposals for the redesign's budgets (redesign CONTRACT §5): a change to a task cap or a spend limit, filed as an
 approval that a person decides. An org change is no proposal: the Strategy Bot suggests it in words and makes it when the
-person asks (backend/assistant.py `instructed_org`); the owner and group leads make it themselves on the Org tab.
+person asks (the Assistant makes it as them, backend/assistant.py `admits_on_turn`); the owner and group leads make it
+themselves on the Org tab.
 
   KINDS                      task_cap, spend_limit (backend/hubdb.py APPROVAL_KINDS)
   check(c, kind, payload)    refuses, when it is filed, a proposal the hub could not apply (and every one while off)
@@ -87,8 +88,9 @@ def _apply_spend(c, auth, settings, who, aid, change):
     # Only the fields the proposal names: one it leaves out keeps its stored value (backend/usage.py `amounts`).
     limits = M.UsageLimit(**change.model_dump(include=set(M.UsageLimit.model_fields), exclude_unset=True))
     if change.bot:
-        usage.save_limit(c, auth, who, change.bot, limits, via=f"approval:{aid}")
-        return f"Spend limit changed for {_name(c, 'bot:' + change.bot)}."
+        bot = (H.resolve_bot(c, change.bot) or {}).get("id", change.bot)
+        usage.save_limit(c, auth, who, bot, limits, via=f"approval:{aid}")
+        return f"Spend limit changed for {_name(c, 'bot:' + bot)}."
     usage.save_pool(c, auth, who, change.pool, limits, via=f"approval:{aid}")
     return "Spend limit changed for " + ("the whole team." if change.pool == "company" else
                                          _group_name(c, change.pool.split(":", 1)[1]) + ".")

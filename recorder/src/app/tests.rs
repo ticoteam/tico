@@ -774,9 +774,9 @@ fn meeting_chat_shows_people_bots_and_private_questions_in_time_order() {
         "humans": [{"actor": "human:2", "name": "Arthur Silva"}],
         "bots": [{"bot": "librarian"}, {"bot": "head-of-engineering"}],
         "chat": [
-            {"id": "c1", "actor": "human:2", "role": "human", "text": "Hi all", "created": "2026-10-29T15:00:00.000000Z"},
-            {"id": "c2", "actor": "bot:librarian", "role": "bot", "text": "Notes are linked.", "created": "2026-10-29T15:01:00.000000Z"},
-            {"id": "c3", "actor": "human:1", "role": "human", "text": "Thanks", "created": "2026-10-29T15:00:10.000000Z"},
+            {"id": "c1", "actor": "human:2", "role": "human", "text": "Hi all", "created_at": "2026-10-29T15:00:00.000000Z"},
+            {"id": "c2", "actor": "bot:librarian", "role": "bot", "text": "Notes are linked.", "created_at": "2026-10-29T15:01:00.000000Z"},
+            {"id": "c3", "actor": "human:1", "role": "human", "text": "Thanks", "created_at": "2026-10-29T15:00:10.000000Z"},
         ],
         "router": {"turns": [
             {"bot": "head-of-engineering", "status": "claimed"},
@@ -1301,4 +1301,35 @@ fn a_title_without_a_quote_requires_fresh_review_after_each_edit() {
         full_view(&mut app)["meeting"]["data"]["actions"]["items"][0]["paused_warning"],
         true
     );
+}
+
+#[test]
+fn screen_controls_honor_local_pause_and_pending_discard() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let record = store.create("Synthetic screen controls").unwrap();
+    let mut app = app(store.clone(), directory.path());
+    app.open(&record.id).unwrap();
+    assert_eq!(
+        full_view(&mut app)["meeting"]["data"]["can_share_screen"],
+        true
+    );
+    for discarded in [false, true] {
+        store
+            .update_context(&record.id, |context| {
+                context.live_id = "synthetic-live".into();
+                context.live_state = "live".into();
+                context.locally_paused = !discarded;
+                context.live_discarded = discarded;
+                Ok(())
+            })
+            .unwrap();
+        app.context = store.context(&record.id).unwrap();
+        app.bump();
+        assert_eq!(
+            full_view(&mut app)["meeting"]["data"]["can_share_screen"],
+            false
+        );
+        assert!(super::screen::require_live(&app.context).is_err());
+    }
 }

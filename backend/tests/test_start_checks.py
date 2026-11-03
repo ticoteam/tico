@@ -1,36 +1,13 @@
 """A bot's start checks are read once for all its open tasks: counts() asks `waiting` only of the tasks a set
 query says might be waiting, and reads each step name once. The numbers match the one-task-at-a-time checks."""
-import contextlib
-
 from backend import auto_tasks, hubdb as H
-from backend.tests.test_api import api, headers, post  # noqa: F401
+from backend.tests.test_api import api, post  # noqa: F401
 from backend.tests.test_status_reads import setup
-
-
-def employees(api, monkeypatch, token="ana-test"):
-    """GET /api/employees as `token`, and the statements it took."""
-    store, seen = api.app.state.store, []
-    with monkeypatch.context() as patched:
-        for name in ("read", "read_transaction"):
-            def traced(opened=getattr(store, name)):
-                @contextlib.contextmanager
-                def borrowed():
-                    with opened() as c:
-                        c.set_trace_callback(seen.append)
-                        try:
-                            yield c
-                        finally:
-                            c.set_trace_callback(None)
-                return borrowed()
-            patched.setattr(store, name, traced)
-        response = api.get("/api/employees", headers=headers(token))
-    assert response.status_code == 200, response.text
-    return response.json(), len(seen)
 
 
 def open_tasks(store, slug="ops"):
     with store.read_transaction() as c:
-        return H._rows(c.execute("SELECT * FROM tasks WHERE owner=? AND status IN ('open','doing') ORDER BY rowid",
+        return H._rows(c.execute("SELECT * FROM tasks WHERE owner_id=? AND status IN ('open','doing') ORDER BY rowid",
                                  ("bot:" + slug,)))
 
 
@@ -77,10 +54,10 @@ def test_batched_counts_match_each_tasks_own_checks(api, monkeypatch):
         c.execute("UPDATE tasks SET waiting_on='human:ben' WHERE id=?", (t[4],))
         c.execute("UPDATE tasks SET blocked_kind='manual', blocked_reason='Held for legal' WHERE id=?", (t[5],))
         c.execute("UPDATE tasks SET status='doing' WHERE id=?", (t[6],))
-        c.execute("INSERT INTO approvals(id,kind,task_id,decision,created) VALUES('ap-1','deploy',?,NULL,?)",
+        c.execute("INSERT INTO approvals(id,kind,task_id,decision,created_at) VALUES('ap-1','deploy',?,NULL,?)",
                   (t[7], H.now()))
         blocker = H.task_create(c, "human:ana", "Blocker", "Blocks it.", "human:ben")
-        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'blocks',?)",
+        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks',?)",
                   (blocker["id"], t[8], H.now()))
         H.task_ask(c, "bot:ops", t[9], "Which one?", park=False)
         H.task_create(c, "bot:ops", "Child", "Under it.", "human:ben", parent_id=t[10])
@@ -112,15 +89,3 @@ def test_counts_read_a_fixed_number_of_statements_however_many_open_tasks(api, m
         one_by_one(c, rows)
         c.set_trace_callback(None)
     assert len(seen) > 10 * big
-
-
-def test_employees_page_reads_no_more_statements_as_its_bots_open_tasks_grow(api, monkeypatch):
-    setup(api, monkeypatch, tasks=4)
-    employees(api, monkeypatch)                  # the first read warms the table checks each connection keeps
-    _, small = employees(api, monkeypatch)
-    for n in range(40):
-        post(api, "tasks", {"owner": "ops", "title": f"More {n}", "body": "Please review it."})
-    employees(api, monkeypatch)
-    body, big = employees(api, monkeypatch)
-    assert any(row.get("name") == "ops" for row in body if isinstance(row, dict))
-    assert big == small

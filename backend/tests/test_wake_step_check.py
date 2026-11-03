@@ -26,15 +26,15 @@ def convert(api, typ, rules):
     automation (as an install's rules move at upgrade)."""
     with db(api).transaction() as c:
         for position, (rid, step) in enumerate(rules):
-            c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,when_json,then_outcome,params_json,enabled,position,"
-                      "created_by,created,updated,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,1)",
+            c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,position,"
+                      "created_by,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,1)",
                       (rid, "type", typ["id"], "step_entered", json.dumps({"step": step}), "wake", "{}", position,
                        "human:ana", "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z"))
     first_start(api)
 
 
 def wake_id(api, typ):
-    [found] = [a for a in get(api, "automations")["automations"] if (a.get("wakes") or {}).get("scope_id") == typ["id"]]
+    [found] = [a for a in get(api, "automations?limit=500")["automations"] if (a.get("wakes") or {}).get("scope_id") == typ["id"]]
     return found["id"]
 
 
@@ -72,7 +72,7 @@ def test_a_rule_that_names_no_step_is_flagged_in_the_list_and_the_detail_and_sti
     typ = build_type(api)
     convert(api, typ, [("rule_qa", "QA Fixes")])
     aid = wake_id(api, typ)
-    listed = [a for a in get(api, "automations")["automations"] if a["id"] == aid][0]
+    listed = [a for a in get(api, "automations?limit=500")["automations"] if a["id"] == aid][0]
     [problem] = listed["problems"]
     assert problem["rule"] == "rule_qa" and problem["step"] == "QA Fixes"
     assert "QA/PR Rejected" in problem["why"] and "Ready" in problem["why"]
