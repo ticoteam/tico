@@ -433,6 +433,30 @@ def test_an_overloaded_computer_hands_out_a_persons_chat_but_not_a_bots_message(
     with api.app.state.store.read() as c:
         assert c.execute("SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id "
                          "WHERE m.sender_id='bot:ops'").fetchone()[0] == 'queued'
+    # A person's @mention in a thread with product-design reaches it as a keeper carrier, which counts as the person's.
+    assign(api, computer, 'product-design')
+    ready(api, computer, ['ops', 'finance', 'cpo', 'product-design'])
+    thread = post(api, 'threads', {'title': 'Layout', 'members': ['bot:product-design']})
+    asked = post(api, f"threads/{thread['id']}/messages", {'text': '@product-design can you check the layout?'})
+    attempt = claim(api, computer)
+    assert attempt is not None and attempt['bot'] == 'product-design'
+    assert (attempt['message']['refs'] or {}).get('carries') == asked['id'], attempt['message']
+    assert post(api, f"attempts/{attempt['id']}/start-place", {}, computer['token'])['reserved']
+
+
+def test_a_persons_thread_message_to_a_bot_starts_before_the_bots_older_queued_work(api):
+    """A person's @mention in a thread with a bot reaches the bot as a keeper carrier, which counts as the person's
+    message. The claim takes it ahead of the bot's older queued work (a 1:1 DM message is the bot's direct job)."""
+    machine = runner(api)
+    assign(api, machine, 'ops')
+    ready(api, machine, ['ops'])
+    thread = post(api, 'threads', {'title': 'Books', 'members': ['bot:ops']})
+    older = post(api, 'chat/ops', {'text': 'Older bot work'})
+    sent_by(api, older['id'], 'bot:cpo')
+    asked = post(api, f"threads/{thread['id']}/messages", {'text': '@ops close the books'})
+    attempt = claim(api, machine)
+    assert attempt is not None and attempt['bot'] == 'ops'
+    assert (attempt['message']['refs'] or {}).get('carries') == asked['id'], attempt['message']
 
 
 def test_operations_and_computers_share_one_company_default_across_runners(api, monkeypatch):
@@ -622,7 +646,7 @@ def test_an_upgraded_computer_stays_held_after_its_samples_are_pruned_and_startu
     memory(api, computer, .3)
     now = int(time.time()) // 60 * 60
     with store.transaction() as c:
-        # Migration 0060 gives such a computer a state row with no mark.
+        # Migration 0062 gives such a computer a state row with no mark.
         c.execute('UPDATE runner_states SET last_sampled_at=NULL WHERE runner_id=?', (rid,))
     store.initialize()
     with store.read() as c:

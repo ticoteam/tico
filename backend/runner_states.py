@@ -1,4 +1,4 @@
-"""A computer's runtime state: one `runner_states` row per runner, apart from its identity on `runners` (migration 0060).
+"""A computer's runtime state: one `runner_states` row per runner, apart from its identity on `runners` (migration 0062).
 
 Heartbeats, readiness changes and load samples write here, so a beat never rewrites the identity row. Readers that want
 both read the `runners_with_state` view.

@@ -39,6 +39,32 @@ PLACED_SQL = ("SELECT r.id,r.label,r.last_seen_at,r.revoked_at,r.readiness,r.cap
 HELD_SQL = "SELECT id,env FROM credentials WHERE ciphertext IS NOT NULL AND env!=''"
 
 
+def prime_runners(c, ids):
+    """RUNNER_SQL for many computers in one read per 500 (read_cache.prime), so each can_run check on one of them
+    reads none of them again. Outside a snapshot nothing is kept."""
+    from .read_cache import cache, prime
+    if cache(c) is None:
+        return
+    ids = sorted(set(ids))
+    for part in H.chunks(ids):
+        found = {r["id"]: r for r in c.execute(
+            "SELECT id,label,last_seen_at,revoked_at,readiness,capabilities FROM runners_with_state "
+            f"WHERE id IN ({','.join('?' * len(part))})", part)}
+        prime(c, RUNNER_SQL, {(rid,): found.get(rid) for rid in part})
+
+
+def prime_placed(c, bots):
+    """PLACED_SQL for many bots in one read per 500 (read_cache.prime): the computer each bot is on."""
+    from .read_cache import cache, prime
+    if cache(c) is None:
+        return
+    for part in H.chunks(sorted(set(bots))):
+        found = {r["bot"]: r for r in c.execute(
+            "SELECT a.bot,r.id,r.label,r.last_seen_at,r.revoked_at,r.readiness,r.capabilities FROM assignments a "
+            f"JOIN runners_with_state r ON r.id=a.runner_id WHERE a.bot IN ({','.join('?' * len(part))})", part)}
+        prime(c, PLACED_SQL, {(bot,): found.get(bot) for bot in part})
+
+
 def _config(c, bot):
     from .read_cache import one
     row = one(c, CONFIG_SQL, (bot,))

@@ -190,7 +190,7 @@ start_runner() {  # image tag, then the join arguments: as docker/runner.compose
 }
 runner_online() { get getting-started | json 'sys.exit(0 if any(i["id"]=="computer" and i["done"] for i in d["items"]) else 1)'; }
 runner_id() { get operations | json 'd["machines"][0]["id"]'; }
-last_seen() {  # the computers' last contact: runner_states (migration 0060) once this database has it, else runners under the
+last_seen() {  # the computers' last contact: runner_states (migration 0062) once this database has it, else runners under the
   # column it has (the previous release predates the rename)
   if [ "$(sql "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='runner_states'")" = 1 ]; then
     sql "SELECT coalesce(max(last_seen_at),'') FROM runners_with_state WHERE revoked_at IS NULL"

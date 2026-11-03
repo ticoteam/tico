@@ -197,10 +197,22 @@ class SettingsAdmin:
         return P.load(_json(row[0], {}) if row else {"people": H.humans(c)})
 
     def _team(self, c, bot, proposed=None):
+        """The group a bot is made in. Its own team wins (`team_of`). A bot that names none, and that `team_of` leaves
+        in no group because it reports to a person, takes the group that person is in (`P.manager_team`), and keeps it
+        as its own `team` in `proposed` (its config, changed in place) so the chart shows it under that person. The
+        company's own bots and helpers stay out of groups (groups.outside), as the groups migration keeps them."""
+        from . import groups as Groups
         entries = self._entries(c)
+        roster = self._roster(c)
         if proposed is not None:
             entries[bot] = proposed
-        return P.team_of(bot, entries, self._roster(c))
+        team = P.team_of(bot, entries, roster)
+        if team is None and proposed is not None and proposed.get("team") is None \
+                and not Groups.outside(self.settings, proposed.get("name") or bot, proposed):
+            team = P.manager_team(proposed.get("reports_to"), entries, roster)
+            if team:
+                proposed["team"] = team
+        return team
 
     @staticmethod
     def _people(c, ids):

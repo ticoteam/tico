@@ -817,7 +817,7 @@ def test_a_computer_reads_the_status_only_of_tasks_it_ran_that_bots_session_for(
         fresh = {'id': 'r2', 'token_hash': 'synthetic-r2'}
         c.execute(f"INSERT INTO runners({','.join(cols)}) SELECT {','.join('?' if col in fresh else col for col in cols)} "
                   "FROM runners WHERE id='r1'", [fresh[col] for col in cols if col in fresh])
-        # r2 reports what r1 reports: the state columns are runner_states (migration 0060), and the insert made r2's row.
+        # r2 reports what r1 reports: the state columns are runner_states (migration 0062), and the insert made r2's row.
         state = [r[1] for r in c.execute('PRAGMA table_info(runner_states)') if r[1] != 'runner_id']
         c.execute("UPDATE runner_states SET " + ','.join(f"{n}=(SELECT {n} FROM runner_states WHERE runner_id='r1')" for n in state)
                   + " WHERE runner_id='r2'")

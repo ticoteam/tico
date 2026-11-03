@@ -412,7 +412,7 @@ def runner_token(api, bot):
                       "hostname": "h", "state": "active"}
             use = {k: v for k, v in values.items() if k in cols}
             c.execute(f"INSERT INTO runners({','.join(use)}) VALUES({','.join('?' * len(use))})", tuple(use.values()))
-            # Last contact and version are runner_states columns (migration 0060); the insert made the row.
+            # Last contact and version are runner_states columns (migration 0062); the insert made the row.
             c.execute("UPDATE runner_states SET last_seen_at=?,version=? WHERE runner_id='r1'", (H.now(), "1"))
         c.execute("INSERT OR REPLACE INTO assignments VALUES(?,?,?,?,?)", (bot, "r1", 1, H.now(), "ana"))
 
@@ -987,7 +987,7 @@ def _box(api):
                   "hostname": "box", "state": "active"}
         use = {k: v for k, v in values.items() if k in cols}
         c.execute(f"INSERT INTO runners({','.join(use)}) VALUES({','.join('?' * len(use))})", tuple(use.values()))
-        # Last contact and version are runner_states columns (migration 0060); the insert made the row.
+        # Last contact and version are runner_states columns (migration 0062); the insert made the row.
         c.execute("UPDATE runner_states SET last_seen_at=?,version=? WHERE runner_id='r2'", (H.now(), "1"))
 
 

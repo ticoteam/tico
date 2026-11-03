@@ -1,8 +1,8 @@
 """Cloud machines (backend/cloud_machines.py): on a Tico Cloud company a bot with no computer runs on a cloud machine,
 the company's shared one or, for a developer or the video producer, its own. A machine is made on first work with a
 one-time enrollment code and bound to the bots set to run there only; it is started for work, kept with a heartbeat,
-stopped after its size's break-even idle time unless Always on (the shared one once every member is idle), never
-started out of credit, and retried with backoff when HQ refuses. A size change applies at the next start. A stopped
+paused (stopped) after its Pause after minutes idle (30 unless a person sets another) unless Always on (the shared one
+once every member is idle), never started out of credit, and retried with backoff when HQ refuses. A size change applies at the next start. A stopped
 machine whose computer is behind this server's release is started once to update, then stops as usual. Off cloud
 nothing changes. HQ is a fake client and the clock is a fake one."""
 
@@ -106,6 +106,9 @@ def cloud(api, monkeypatch):  # noqa: F811
     monkeypatch.setattr(manager, "on_offered", None)
     at = [time.time()]
     monkeypatch.setattr(CM, "now", lambda: at[0])
+    # These tests time a pause in seconds: 5 minutes (the least a person can set) keeps them at 300 s. The 30-minute
+    # default is tested on its own, in test_the_default_pause_is_30_minutes_of_idle_and_not_before.
+    monkeypatch.setattr(CM, "PAUSE_MINUTES", 5)
 
     class Cloud:
         pass
@@ -169,7 +172,7 @@ def machine_row(**kw):
     return {"bot": "ops", "mode": "cloud", "size": "default", "always_on": 0, "machine_id": "m1", "runner_id": "r1",
             "state": "stopped", "machine_size": "default", "active_at": None, "heartbeat_at": None, "next_try_at": None,
             "failures": 0, "problem": "", "problem_at": None, "wake_key": None, "woke_at": None, "enroll_by": 0,
-            "enroll_fails": 0, **kw}
+            "enroll_fails": 0, "pause_minutes": None, **kw}
 
 
 def test_decide_wakes_for_work_and_creates_on_first_use():
@@ -185,12 +188,12 @@ def test_decide_wakes_for_work_and_creates_on_first_use():
     assert CM.decide(machine_row(state="running"), facts(active=False, turns=True), 1000, 300) == ("heartbeat", None)
 
 
-def test_decide_idle_stop_at_break_even_heartbeat_and_always_on():
+def test_decide_idle_stop_after_the_pause_heartbeat_and_always_on():
     on = machine_row(state="running", active_at=1000, heartbeat_at=1000)
     assert CM.decide(on, facts(), 1059, 300) == (None, None)
     assert CM.decide(on, facts(), 1060, 300) == ("heartbeat", None)
     assert CM.decide(on, facts(), 1299, 300) == ("heartbeat", None)
-    assert CM.decide(on, facts(), 1300, 300) == ("stop", None)            # exactly the size's break-even
+    assert CM.decide(on, facts(), 1300, 300) == ("stop", None)            # exactly the pause
     # Activity since the start moves the idle clock; a turn out never stops it; Always on never idles.
     assert CM.decide(on, facts(activity=1200), 1300, 300) == ("heartbeat", None)
     assert CM.decide(on, facts(activity=1200), 1500, 300) == ("stop", None)
@@ -291,21 +294,29 @@ def test_decide_holds_the_idle_stop_while_its_runner_is_updating():
     assert CM.decide(on, facts(updating=True), 2000, 300) == ("heartbeat", None)
 
 
-def test_idle_for_waits_longer_only_after_a_stop_shorter_than_break_even():
-    """A machine whose last stop was shorter than its idle time stays on SHORT_GAP_FACTOR times longer. A longer stop, a
-    stale one (stopped after it started) or a missing or unreadable time leaves the idle time as it is."""
-    stopped = "2026-11-03T10:00:00.000000Z"
+def test_the_pause_is_pause_minutes_or_30_and_only_whole_minutes_from_5_to_1440_are_stored():
+    assert CM.PAUSE_MINUTES == 30
+    assert CM.pause_after(machine_row()) == 1800
+    assert CM.pause_after(machine_row(pause_minutes=5)) == 300
+    assert CM.pause_after(machine_row(pause_minutes=1440)) == 86400
+    assert CM.machine_view(None)["pause_minutes"] == 30
+    for ok in (5, 30, 1440):
+        assert CM.checked_pause(ok) == ok
+    for bad in (None, 4, 1441, 0, -5, 2.5, "30", True):
+        with pytest.raises(Problem):
+            CM.checked_pause(bad)
 
-    def started(seconds):
-        return H.shift(stopped, seconds=seconds)
-    assert CM.idle_for({"stopped_at": stopped, "started_at": started(60)}, 300) == 300 * CM.SHORT_GAP_FACTOR
-    assert CM.idle_for({"stopped_at": stopped, "started_at": started(299)}, 300) == 300 * CM.SHORT_GAP_FACTOR
-    assert CM.idle_for({"stopped_at": stopped, "started_at": started(300)}, 300) == 300
-    assert CM.idle_for({"stopped_at": stopped, "started_at": started(3600)}, 300) == 300
-    assert CM.idle_for({"stopped_at": started(60), "started_at": stopped}, 300) == 300
-    assert CM.idle_for({"stopped_at": None, "started_at": started(60)}, 300) == 300
-    assert CM.idle_for({"stopped_at": stopped}, 300) == 300
-    assert CM.idle_for({"stopped_at": stopped, "started_at": "not a time"}, 300) == 300
+
+def test_a_machine_pauses_after_its_pause_with_no_turn_out_and_always_on_never_does():
+    on = machine_row(state="running", active_at=1000, heartbeat_at=1000)
+    assert CM.decide(on, facts(), 2799, CM.pause_after(on)) == ("heartbeat", None)     # the default: 30 minutes
+    assert CM.decide(on, facts(), 2800, CM.pause_after(on)) == ("stop", None)
+    assert CM.decide(on, facts(turns=True), 9999, CM.pause_after(on)) == ("heartbeat", None)
+    long = {**on, "pause_minutes": 45}
+    assert CM.decide(long, facts(), 3699, CM.pause_after(long)) == ("heartbeat", None)
+    assert CM.decide(long, facts(), 3700, CM.pause_after(long)) == ("stop", None)
+    always = {**on, "always_on": 1}
+    assert CM.decide(always, facts(), 9999, CM.pause_after(always)) == ("heartbeat", None)
 
 
 # ----------------------------------------------------------------------------- the manager, against a fake HQ
@@ -353,7 +364,7 @@ def test_heartbeat_then_idle_stop_at_break_even_then_wake_with_a_resize(cloud):
     enrolled(cloud)
     cloud.hq.calls.clear()
     cloud.manager.synced = None
-    cloud.tick()                                                # learns the sizes: default stops after 300 s idle
+    cloud.tick()                                                # learns the sizes: the pause is 300 s here
     assert cloud.hq.actions() == []
     assert cloud.tick(60) == ["heartbeat"]
     assert cloud.tick(10) == ["heartbeat"]                      # once a minute, not every look
@@ -378,30 +389,30 @@ def test_heartbeat_then_idle_stop_at_break_even_then_wake_with_a_resize(cloud):
     assert cloud.hq.actions() == []                              # running now: no second start
 
 
-def test_a_machine_woken_soon_after_its_break_even_stop_stays_on_longer(cloud):
-    cloud.hq.clock = lambda: stamp(cloud)                       # HQ stamps started_at and stopped_at by the fake clock
+def test_the_default_pause_is_30_minutes_of_idle_and_not_before(cloud, monkeypatch):
+    monkeypatch.setattr(CM, "PAUSE_MINUTES", 30)               # this test is of the real default, not the fixture's
     enrolled(cloud)
     cloud.hq.calls.clear()
     cloud.manager.synced = None
     cloud.tick()
     with cloud.store.transaction() as c:                        # the queued chat is not why it stays on
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
-    cloud.at[0] = cloud.row()["active_at"] + 299
-    cloud.tick()
-    cloud.tick(1)
-    assert cloud.hq.actions()[-1] == "stop" and cloud.row()["state"] == "stopped"   # its first stop: at break-even
-    stopped = cloud.at[0]
-    # Woken 60 s after that stop, which cost more than staying on would have: this time it stays on four times longer.
-    work(cloud, text="Another thing")
-    cloud.at[0] = stopped + 60
-    cloud.hq.calls.clear()
-    assert cloud.tick() == ["start"]
-    woke = cloud.at[0]
-    cloud.hq.calls.clear()
-    cloud.at[0] = woke + 300                                    # the break-even from before: not this time
+    cloud.at[0] = cloud.row()["active_at"] + 1799
     cloud.tick()
     assert "stop" not in cloud.hq.actions()
-    cloud.at[0] = woke + 1199
+    cloud.tick(1)
+    assert cloud.hq.actions()[-1] == "stop" and cloud.row()["state"] == "stopped"
+
+
+def test_a_custom_pause_is_the_idle_time_the_machine_stops_after(cloud):
+    enrolled(cloud)
+    post(cloud.api, "bots/ops/cloud-machine", {"pause_minutes": 45})
+    cloud.hq.calls.clear()
+    cloud.manager.synced = None
+    cloud.tick()
+    with cloud.store.transaction() as c:                        # the queued chat is not why it stays on
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops'")
+    cloud.at[0] = cloud.row()["active_at"] + 2699
     cloud.tick()
     assert "stop" not in cloud.hq.actions()
     cloud.tick(1)
@@ -449,7 +460,7 @@ def test_a_machine_that_never_enrolls_is_made_again_with_a_fresh_code_three_time
         codes.append(cloud.hq.calls[-1][3])
         made = cloud.row()["machine_id"]
         assert cloud.row()["enroll_by"] == cloud.at[0] + deadline
-        # It boots for longer than its size's idle time: never idle-stopped meanwhile.
+        # It boots for longer than its pause: never idle-stopped meanwhile.
         cloud.tick(deadline - 1)
         assert "stop" not in cloud.hq.actions() and "delete" not in cloud.hq.actions()
         cloud.tick(1)
@@ -923,6 +934,29 @@ def test_sizes_and_choices_are_checked(cloud):
     post(cloud.api, "bots/ops/cloud-machine", {"size": "large"}, token="cara-test", expected=403)
 
 
+def test_pause_after_takes_whole_minutes_from_5_to_1440_and_null_leaves_it(cloud):
+    adopt(cloud)
+    cloud.tick()
+    for bad in (4, 1441, 2.5):
+        post(cloud.api, "bots/ops/cloud-machine", {"pause_minutes": bad}, expected=422)
+    assert post(cloud.api, "bots/ops/cloud-machine", {"pause_minutes": 1440})["cloud_machine"]["pause_minutes"] == 1440
+    assert post(cloud.api, "bots/ops/cloud-machine", {"size": "large"})["cloud_machine"]["pause_minutes"] == 1440
+    assert post(cloud.api, "bots/ops/cloud-machine", {"pause_minutes": None})["cloud_machine"]["pause_minutes"] == 1440
+    assert post(cloud.api, "bots/ops/cloud-machine", {"pause_minutes": 30})["cloud_machine"]["pause_minutes"] == 30
+    with cloud.store.read() as c:
+        assert CM.row(c, "ops")["pause_minutes"] == 30
+
+
+def test_the_shared_machines_pause_is_the_companys_and_checked(cloud):
+    adopt(cloud, "ops", "shared")
+    post(cloud.api, "cloud-machines/shared", {"pause_minutes": 45}, token="cara-test", expected=403)
+    post(cloud.api, "cloud-machines/shared", {"pause_minutes": 4}, token="ben-test", expected=422)
+    assert post(cloud.api, "cloud-machines/shared", {"pause_minutes": 45}, token="ben-test")["shared"]["pause_minutes"] == 45
+    assert post(cloud.api, "cloud-machines/shared", {"always_on": True}, token="ben-test")["shared"]["pause_minutes"] == 45
+    assert post(cloud.api, "cloud-machines/shared", {"pause_minutes": None}, token="ben-test")["shared"]["pause_minutes"] \
+        == 45
+
+
 # ----------------------------------------------------------------------------- the shared machine
 def stamp(cloud, ago=0):
     """The fake clock's now (less `ago` seconds) as the hub's ISO time."""
@@ -952,10 +986,12 @@ def idle(cloud):
 def test_placement_defaults_by_role_and_a_person_switches_it(cloud):
     execution = cloud.api.app.state.execution
     with cloud.store.transaction() as c:
-        # coo is in Engineering on the team chart; finance was made from the video producer's template.
+        # coo is a Builder; ops is in Engineering on the team chart, which alone is no reason for its own machine;
+        # finance was made from the video producer's template.
         c.execute("UPDATE registry_metadata SET value=json_set(value,'$.org_groups',json(?)) WHERE key='people'",
                   (json.dumps({"engineering": {"name": "Engineering", "parent": ""}}),))
-        c.execute("UPDATE bot_config SET config=json_set(config,'$.team','engineering') WHERE bot='coo'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.team','engineering') WHERE bot='ops'")
+        c.execute("UPDATE bots SET display_name='Builder (Claude)' WHERE id='coo'")
         c.execute("UPDATE bot_config SET config=json_set(config,'$.template','video-producer') "
                   "WHERE bot='finance'")
         for bot in ("ops", "coo", "finance"):
@@ -969,6 +1005,15 @@ def test_placement_defaults_by_role_and_a_person_switches_it(cloud):
     post(cloud.api, "bots/ops/cloud-machine", {"placement": "shared"}, token="cara-test", expected=403)
     with cloud.store.read() as c:
         assert CM.members(c) == ["coo"]
+
+
+def test_only_a_builder_by_name_gets_its_own_machine_by_default(cloud):
+    with cloud.store.transaction() as c:
+        for name, want in (("Builder", "own"), ("builder (OpenAI)", "own"), ("Builder (Claude)", "own"),
+                           ("Builders guild", "shared"), ("Reviewer 1", "shared"), ("Engineering Manager", "shared"),
+                           ("", "shared"), (None, "shared")):
+            c.execute("UPDATE bots SET display_name=? WHERE id='ops'", (name,))
+            assert CM.default_placement(c, "ops") == want, name
 
 
 def test_one_shared_machine_wakes_for_any_member_and_hosts_them_all(cloud):
@@ -1009,7 +1054,7 @@ def test_the_shared_machine_idles_only_once_every_member_is_idle(cloud):
     rid = shared_enrolled(cloud, "ops", "finance")
     idle(cloud)
     cloud.manager.synced = None
-    cloud.tick()                                                # learns the sizes: default stops after 300 s idle
+    cloud.tick()                                                # learns the sizes: the pause is 300 s here
     start = cloud.row(CM.SHARED)["active_at"]
     cloud.at[0] = start + 200
     with cloud.store.transaction() as c:                        # finance's watcher ran there; ops did nothing
@@ -1022,6 +1067,21 @@ def test_the_shared_machine_idles_only_once_every_member_is_idle(cloud):
     cloud.tick()
     assert "stop" not in cloud.hq.actions()
     cloud.at[0] = start + 500
+    cloud.tick()
+    assert cloud.hq.actions()[-1] == "stop"
+
+
+def test_the_shared_machine_pauses_after_the_companys_pause(cloud):
+    shared_enrolled(cloud, "ops", "finance")
+    post(cloud.api, "cloud-machines/shared", {"pause_minutes": 45})
+    idle(cloud)
+    cloud.manager.synced = None
+    cloud.tick()                                                # learns the sizes
+    start = cloud.row(CM.SHARED)["active_at"]
+    cloud.at[0] = start + 2699
+    cloud.tick()
+    assert "stop" not in cloud.hq.actions()
+    cloud.at[0] = start + 2700
     cloud.tick()
     assert cloud.hq.actions()[-1] == "stop"
 
@@ -1549,7 +1609,7 @@ def going_idle(cloud, key, computer, bots):
     ready(cloud.api, computer, bots)
     idle(cloud)
     cloud.manager.synced = None
-    cloud.tick()                                                # learns the sizes: default stops after 300 s idle
+    cloud.tick()                                                # learns the sizes: the pause is 300 s here
     cloud.at[0] = cloud.row(key)["active_at"] + 300
     cloud.hq.calls.clear()
 
@@ -1700,7 +1760,7 @@ def reported(cloud, computer, release="", update=None, target=""):
 
 
 def stopped_when_idle(cloud, key="ops"):
-    """Nothing queued for the machine and its clock at the break-even idle time: it is stopped."""
+    """Nothing queued for the machine and its clock at its pause: it is stopped."""
     idle(cloud)
     cloud.hq.calls.clear()
     cloud.at[0] = cloud.row(key)["active_at"] + 300

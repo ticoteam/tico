@@ -11,9 +11,12 @@ Readers that want both read `runners_with_state`, a view of each runner with its
 reads as never seen). A trigger gives every new runner its state row.
 
 On an existing file the state columns are copied, one row per runner, then dropped from `runners`; none is named by an
-index, trigger or view. On a new file `runners` does not exist yet when the migrations run: it is created here in its
+index, trigger or view. An index on `runners` that names a moved column is dropped first (readers use runner_states now),
+and a trigger that names one stops the migration with a RuntimeError naming it, since its SQL has to be rewritten first.
+On a new file `runners` does not exist yet when the migrations run: it is created here in its
 new shape (store.py no longer creates it), so the view and the trigger always have their table.
 """
+import re
 
 STATE = (
     ("last_seen_at", "TEXT"),
@@ -50,6 +53,24 @@ VIEW = ("CREATE VIEW IF NOT EXISTS runners_with_state AS SELECT r.*, "
         + " FROM runners r LEFT JOIN runner_states s ON s.runner_id=r.id")
 
 
+def _dependents(conn, moved):
+    """Drop each index on runners that names a moved column. A trigger on runners that names one raises instead:
+    DROP COLUMN would fail on it with SQLite's message, which does not say which trigger."""
+    rows = conn.execute("SELECT type,name,tbl_name,sql FROM sqlite_master "
+                        "WHERE type IN ('index','trigger') AND sql IS NOT NULL ORDER BY name").fetchall()
+    for kind, name, table, sql in rows:
+        if table != "runners":
+            continue
+        column = next((column for column in moved if re.search(rf"\b{re.escape(column)}\b", sql)), None)
+        if column is None:
+            continue
+        if kind == "index":
+            conn.execute(f'DROP INDEX IF EXISTS "{name}"')
+        else:
+            raise RuntimeError(f"Trigger {name} on runners names {column}, which moves to runner_states, so SQLite cannot "
+                               "drop the column. Drop or rewrite the trigger, then start again. Nothing was changed.")
+
+
 def up(conn):
     columns = {row[1] for row in conn.execute("PRAGMA table_info(runners)")}
     if not columns:
@@ -57,6 +78,7 @@ def up(conn):
     conn.execute(RUNNER_STATES)
     moved = [name for name, _ in STATE if name in columns]
     if moved:
+        _dependents(conn, moved)
         names = ", ".join(moved)
         conn.execute(f"INSERT OR IGNORE INTO runner_states(runner_id, {names}) SELECT id, {names} FROM runners")
         for name in moved:

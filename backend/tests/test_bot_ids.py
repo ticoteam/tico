@@ -37,7 +37,7 @@ NEW_BOTS_DDL = """CREATE TABLE IF NOT EXISTS bots (
   cwd TEXT, host TEXT DEFAULT 'dispatcher', thread_id TEXT, token_hash TEXT,
   state TEXT DEFAULT 'active', created_at TEXT, last_turn_at TEXT);"""
 
-# runners as store.SCHEMA made it before migration 0060 split off its heartbeat state
+# runners as store.SCHEMA made it before migration 0062 split off its heartbeat state
 OLD_RUNNERS_DDL = """CREATE TABLE IF NOT EXISTS runners(
  id TEXT PRIMARY KEY, label TEXT NOT NULL, owner_id TEXT NOT NULL REFERENCES humans(id),
  token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_seen_at TEXT,

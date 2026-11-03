@@ -1,4 +1,4 @@
-"""A computer's identity (`runners`) and its runtime state (`runner_states`, migration 0060): an existing file keeps every
+"""A computer's identity (`runners`) and its runtime state (`runner_states`, migration 0062): an existing file keeps every
 state value when the columns move, the move runs once, and a heartbeat writes only the state row."""
 import sqlite3
 
@@ -16,10 +16,10 @@ SEEN = ("2026-11-01T10:00:00.000000Z", "2026-11-01T08:00:00.000000Z", "1.2.3", 6
         "2026-11-01T09:59:00.000000Z", '["private_lanes_v1"]', "main@abc", "2026-11-01T09:00:00.000000Z", 1, 1761990000)
 
 
-def test_an_existing_file_moves_every_state_value_off_runners_once(tmp_path):
-    path = fresh(tmp_path)
+def _before_the_move(path, extra=()):
+    """The file as it was before 0062: state columns on runners, no state table, view or trigger. r1 reported its state;
+    r2 never did. `extra` statements run after the columns exist, to add indexes or triggers the file had."""
     with sqlite3.connect(path) as c:
-        # The file as it was before 0060: state columns on runners, no state table, view or trigger.
         c.execute("DROP VIEW runners_with_state")
         c.execute("DROP TRIGGER runner_states_new_runner")
         c.execute("DROP TABLE runner_states")
@@ -32,7 +32,14 @@ def test_an_existing_file_moves_every_state_value_off_runners_once(tmp_path):
                   SEEN)
         c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) "
                   "VALUES('r2','Acme box','h1','hash-2','2026-01-01T00:00:00Z')")
-        c.execute("DELETE FROM schema_migrations WHERE version='0060_runner_states'")
+        for statement in extra:
+            c.execute(statement)
+        c.execute("DELETE FROM schema_migrations WHERE version='0062_runner_states'")
+
+
+def test_an_existing_file_moves_every_state_value_off_runners_once(tmp_path):
+    path = fresh(tmp_path)
+    _before_the_move(path)
     boot(path)
     with sqlite3.connect(path) as c:
         columns = {row[1] for row in c.execute("PRAGMA table_info(runners)")}
@@ -48,6 +55,28 @@ def test_an_existing_file_moves_every_state_value_off_runners_once(tmp_path):
     first = snapshot(path)
     boot(path)
     assert snapshot(path) == first
+
+
+def test_an_index_on_a_moved_column_is_dropped_and_the_values_still_move(tmp_path):
+    path = fresh(tmp_path)
+    _before_the_move(path, extra=["CREATE INDEX runners_seen ON runners(last_seen_at)"])
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='runners_seen'").fetchall() == []
+        assert c.execute("SELECT last_seen_at FROM runners_with_state WHERE id='r1'").fetchone() == (SEEN[0],)
+
+
+def test_a_trigger_on_a_moved_column_stops_the_move_and_names_both(tmp_path):
+    path = fresh(tmp_path)
+    _before_the_move(path, extra=["CREATE TRIGGER runner_seen_watch AFTER UPDATE ON runners "
+                                  "WHEN NEW.last_seen_at IS NULL BEGIN SELECT 1; END"])
+    with pytest.raises(RuntimeError, match="runner_seen_watch.*last_seen_at"):
+        boot(path)
+    with sqlite3.connect(path) as c:
+        # Nothing changed: the columns are still on runners, the trigger is still there, no state table.
+        assert {"last_seen_at", "version"} <= {row[1] for row in c.execute("PRAGMA table_info(runners)")}
+        assert c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND name='runner_seen_watch'").fetchall()
+        assert c.execute("SELECT name FROM sqlite_master WHERE name='runner_states'").fetchall() == []
 
 
 def test_a_new_runner_gets_its_state_row_and_leaves_with_it(tmp_path):
