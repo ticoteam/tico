@@ -659,7 +659,7 @@ Timeline messages: the existing message view plus `thread_id`, `root_id`, `seq`,
 
 ### 10.1 Pins, the rail, Browse and Catch up (`backend/thread_rail.py`)
 
-Schema (migration 0062): `thread_pins(id, thread_id, actor, pinned, created_at, updated_at)`, unique `(thread_id,
+Schema (migration 0063): `thread_pins(id, thread_id, actor, pinned, created_at, updated_at)`, unique `(thread_id,
 actor)`; `pinned` 1 pins a root for that actor, 0 unpins it for them over a pin for everyone. `conversations.
 pinned_for_everyone_at` (null: not pinned for everyone). Only roots are pinned (422 `pin_root` for a sub-thread). The
 thread view gains `"pinned_for_everyone": bool` and `me.pinned` (the reader's own row wins, else the pin for everyone);

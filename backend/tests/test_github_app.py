@@ -409,9 +409,11 @@ def runner_token(api, bot):
         if not c.execute("SELECT 1 FROM runners WHERE id='r1'").fetchone():
             cols = [r[1] for r in c.execute("PRAGMA table_info(runners)")]
             values = {"id": "r1", "owner_id": "ana", "label": "mac", "token_hash": "x", "created_at": H.now(), "created_by": "ana",
-                      "last_seen_at": H.now(), "hostname": "h", "version": "1", "state": "active"}
+                      "hostname": "h", "state": "active"}
             use = {k: v for k, v in values.items() if k in cols}
             c.execute(f"INSERT INTO runners({','.join(use)}) VALUES({','.join('?' * len(use))})", tuple(use.values()))
+            # Last contact and version are runner_states columns (migration 0062); the insert made the row.
+            c.execute("UPDATE runner_states SET last_seen_at=?,version=? WHERE runner_id='r1'", (H.now(), "1"))
         c.execute("INSERT OR REPLACE INTO assignments VALUES(?,?,?,?,?)", (bot, "r1", 1, H.now(), "ana"))
 
 
@@ -982,9 +984,11 @@ def _box(api):
     with api.app_state.store.transaction() as c:
         cols = [r[1] for r in c.execute("PRAGMA table_info(runners)")]
         values = {"id": "r2", "owner_id": "ana", "label": "box", "token_hash": "y", "created_at": H.now(), "created_by": "ana",
-                  "last_seen_at": H.now(), "hostname": "box", "version": "1", "state": "active"}
+                  "hostname": "box", "state": "active"}
         use = {k: v for k, v in values.items() if k in cols}
         c.execute(f"INSERT INTO runners({','.join(use)}) VALUES({','.join('?' * len(use))})", tuple(use.values()))
+        # Last contact and version are runner_states columns (migration 0062); the insert made the row.
+        c.execute("UPDATE runner_states SET last_seen_at=?,version=? WHERE runner_id='r2'", (H.now(), "1"))
 
 
 def _built_by_botops(api, gh):

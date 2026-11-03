@@ -21,7 +21,7 @@ def jump(w, seconds):
     # Clock travel represents a reporting computer, without replaying thousands of identical heartbeats.
     w.clock.shift(seconds)
     with w.store.transaction() as c:
-        c.execute('UPDATE runners SET last_seen_at=?,awake_since=NULL', (w.H.now(),))
+        c.execute('UPDATE runner_states SET last_seen_at=?,awake_since=NULL', (w.H.now(),))
     w.heartbeat(w.bot_slugs)
 
 
@@ -69,7 +69,7 @@ def backlog_setup(run, w, team):
                                'bot:' + BOT, lint=False)
         c.execute("UPDATE tasks SET status='doing' WHERE id=?", (task['id'],))
         c.execute("UPDATE jobs SET state='completed'")
-        c.execute('UPDATE runners SET capacity=1')
+        c.execute('UPDATE runner_states SET capacity=1')
         for n in range(100):
             from backend.rules import Decision, WAKE
             w.H._write_message(c, w.H.KEEPER, 'bot:' + BOT, f'Recovery note {n}',
