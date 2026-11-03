@@ -223,6 +223,16 @@ class ThreadRankingRow(TypedDict):
     updated_at: str
 
 
+class ThreadPinRow(TypedDict):
+    """One actor's pin on a root thread (backend/thread_rail.py): `pinned` 0 unpins it for them over a pin for everyone."""
+    id: str
+    thread_id: str
+    actor: str
+    pinned: int
+    created_at: str
+    updated_at: str
+
+
 class MemoryTidyPacketRow(TypedDict):
     """Trusted runner custody for one editing and verification attempt."""
     attempt_id: str

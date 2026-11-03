@@ -1839,7 +1839,7 @@ def _post_making(c, principal, thread_id, body, start, parent_message_id, checke
             if existing:
                 thread_id = existing
         else:
-            allowed = ("title", "audience", "audience_group_id", "members", "task_id", "kind")
+            allowed = ("title", "audience", "audience_group_id", "members", "task_id", "kind", "pin_for_members")
             plan = _create_plan(c, principal, **{k: start[k] for k in allowed if k in start})
     else:
         parent = H.message(c, parent_message_id)
@@ -2106,19 +2106,40 @@ def _insert_thread(c, actor, *, title, audience, audience_group_id=None, owner_i
 
 
 def create(c, principal, *, title="", audience="members", audience_group_id=None, members=(), parent_message_id=None,
-           task_id=None, kind="chat"):
+           task_id=None, kind="chat", pin_for_members=False):
     """A new root thread (or, with `parent_message_id`, that message's sub-thread). The starter is its owner member.
-    A thread made with its first message is `post(..., start={...})`: a held first message makes no thread."""
+    A thread made with its first message is `post(..., start={...})`: a held first message makes no thread.
+    `pin_for_members` pins the new root for its starter and every person added (`_create_from`)."""
     if parent_message_id:
         return view(c, principal, sub_thread(c, principal, parent_message_id))
     row = _create_from(c, principal, _create_plan(c, principal, title=title, audience=audience,
                                                   audience_group_id=audience_group_id, members=members,
-                                                  task_id=task_id, kind=kind))
+                                                  task_id=task_id, kind=kind, pin_for_members=pin_for_members))
     return view(c, principal, thread_row(c, row["id"]))
 
 
+NAME_REQUIRED = "Group chats need a name."
+
+
+def name_problem(actor):
+    """The 422 for a new thread with no title that needs one. A bot is told how to pass it."""
+    detail = NAME_REQUIRED
+    if str(actor or "").startswith("bot:"):
+        detail += (" Pass a title: `title` in hub_thread_create or hub_thread_dm_group, or --title on hub thread create "
+                   "and hub thread dm-group. Only a DM with one teammate may be unnamed.")
+    return Problem("name_required", detail, 422)
+
+
+def require_name(actor, audience, title, others):
+    """Only a DM with one teammate may be unnamed: a group DM (`others` is who else is in it) and every members, team or
+    company thread need a title. A task's thread takes its task's."""
+    if str(title or "").strip() or audience == "task" or (audience == "personal" and others < 2):
+        return
+    raise name_problem(actor)
+
+
 def _create_plan(c, principal, *, title="", audience="members", audience_group_id=None, members=(), task_id=None,
-                 kind="chat"):
+                 kind="chat", pin_for_members=False):
     """Every check a new root thread needs, writing nothing: what `_create_from` then makes."""
     actor, v = _actor_of(principal)
     if audience not in ("company", "team", "members", "task", "personal"):
@@ -2139,8 +2160,9 @@ def _create_plan(c, principal, *, title="", audience="members", audience_group_i
         if target != actor:
             _require_write(c, v, target)
             resolved.append(target)
+    require_name(actor, audience, title, len(set(resolved)))
     return {"title": title, "audience": audience, "audience_group_id": audience_group_id, "members": resolved,
-            "task_id": task_id, "kind": kind}
+            "task_id": task_id, "kind": kind, "pin_for_members": bool(pin_for_members)}
 
 
 def _create_from(c, principal, plan):
@@ -2158,10 +2180,16 @@ def _create_from(c, principal, plan):
                       "VALUES(?,?,?,?,?,?,?)", (_new_id(), row["id"], who, role, actor, now, now))
     for who in [actor] + resolved:
         _follow(c, row["id"], who, "starter" if who == actor else "joined", 0)
+    if plan.get("pin_for_members"):
+        for who in dict.fromkeys([actor] + [m for m in resolved if m.startswith("human:")]):
+            c.execute("INSERT INTO thread_pins(id,thread_id,actor,pinned,created_at,updated_at) VALUES(?,?,?,1,?,?) "
+                      "ON CONFLICT(thread_id,actor) DO UPDATE SET pinned=1, updated_at=excluded.updated_at",
+                      (_new_id(), row["id"], who, now, now))
     _event(c, actor, "thread.created", row["id"], {"audience": audience, "members": resolved})
     _emit_thread_created(c, row)
     _audit(c, actor, "thread:" + row["id"], None, {"audience": audience, "title_length": len(row["subject"] or ""),
-                                                    "members": resolved})
+                                                    "members": resolved,
+                                                    **({"pinned_for_members": True} if plan.get("pin_for_members") else {})})
     return row
 
 
@@ -3170,10 +3198,11 @@ def dm_with(c, v, rows):
                    "dm_with_count": len(people)} for root, people in others.items()}
 
 
-def view(c, principal, row, *, follower=None, summary=None, dm=None):
+def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None):
     """A thread as `principal` reads it. `summary` (subtree_summaries) makes `me.unread` and `me.activity` the whole
     subtree's, as a root row in a list shows them, in place of this thread's own, and adds `new_at`. `dm` is this row's
-    entry from `dm_with`, for a list that read them together."""
+    entry from `dm_with`, for a list that read them together; `pins` the viewer's pin rows by root (`pin_rows`).
+    `pinned_for_everyone` and `me.pinned` are the root's: a sub-thread shows its root's pin."""
     v = _as_viewer(principal)
     row = thread_row(c, row)
     root = root_of(c, row)
@@ -3185,7 +3214,8 @@ def view(c, principal, row, *, follower=None, summary=None, dm=None):
            "task_id": row.get("task_id"), "created_at": row.get("created_at"),
            "last_message_at": row.get("last_message_at"), "archived_at": row.get("archived_at"),
            "last_seq": int(row.get("last_seq") or 0), "last_unread_seq": int(row.get("last_unread_seq") or 0),
-           "retention_days": root.get("retention_days")}
+           "retention_days": root.get("retention_days"),
+           "pinned_for_everyone": bool(root.get("pinned_for_everyone_at"))}
     if out["audience"] == "home":
         out["home"] = {"actor": home_owner(root)}
     elif v is not None:
@@ -3204,12 +3234,30 @@ def view(c, principal, row, *, follower=None, summary=None, dm=None):
         out["me"] = {"member": _is_member(c, v, root["id"]) or v.actor in (root.get("participants") or []),
                      "following": bool(f and f["following"]), "notify": f["notify"] if f else "live",
                      "last_read_seq": f["last_read_seq"] if f else 0, "unread": u["unread"],
-                     "activity": u["activity"], "can_post": can_post(c, v, row), "can_manage": can_manage(c, v, row)}
+                     "activity": u["activity"], "can_post": can_post(c, v, row), "can_manage": can_manage(c, v, row),
+                     "pinned": pinned(out["pinned_for_everyone"], (pins if pins is not None
+                                                                   else pin_rows(c, v.actor, [root["id"]])).get(root["id"]))}
         if summary and not only_old and summary.get("new_at"):
             out["new_at"] = summary["new_at"]
         if out["audience"] in ("personal", "participants") and not row.get("parent_id"):
             out.update(dm or dm_with(c, v, [root]).get(root["id"]) or {})
     return out
+
+
+def pin_rows(c, actor, root_ids):
+    """{root id: the actor's own `thread_pins.pinned`} for the roots it has a row on, one query a chunk."""
+    out = {}
+    for part in H.chunks(list(dict.fromkeys(root_ids))):
+        out.update((r[0], int(r[1])) for r in c.execute(
+            "SELECT thread_id, pinned FROM thread_pins WHERE actor=? AND thread_id IN (%s)" % ",".join("?" * len(part)),
+            (actor, *part)))
+    return out
+
+
+def pinned(for_everyone, own):
+    """Whether a root is pinned for a reader: their own row wins (1 pins, 0 unpins it for them), else the pin for
+    everyone."""
+    return bool(own) if own is not None else bool(for_everyone)
 
 
 def breadcrumb(c, v, row):
@@ -3463,6 +3511,17 @@ def _history_only_roots(c, v):
 def bot_dm_unread(c, v):
     """{bot actor: unread count}: the viewer's DMs with one bot and no one else that have unread for them. These DMs are
     not Needs attention (thread_attention): the Team chart shows each count on its bot, whose page holds the DM."""
+    return {a: n for a, n in one_dm_unread(c, v).items() if a.startswith("bot:")}
+
+
+def person_dm_unread(c, v):
+    """{human actor: unread count}: the viewer's open DMs with one person and no one else that have unread for them."""
+    return {a: n for a, n in one_dm_unread(c, v).items() if a.startswith("human:")}
+
+
+def one_dm_unread(c, v):
+    """{actor: unread count} over the viewer's open, followed, unmuted DMs with exactly one other teammate (a person or a
+    bot), each summed over its subtree. A person's only: a bot has no DM list."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     if not v.is_person:
         return {}
@@ -3478,13 +3537,22 @@ def bot_dm_unread(c, v):
         if root is None or audience_of(root) not in ("personal", "participants") or not thread_readable(c, v, root):
             continue
         others = [a for a in _dm_members(c, root, rows=members[thread_id]) if a != v.actor]
-        if len(others) == 1 and others[0].startswith("bot:"):
+        if len(others) == 1:
             pairs[thread_id] = others[0]
     out = {}
     for thread_id, summary in subtree_summaries(c, v, list(pairs)).items():
         if summary.get("unread"):
             out[pairs[thread_id]] = out.get(pairs[thread_id], 0) + summary["unread"]
     return out
+
+
+def _dm_counts(c, v, cursor):
+    """The sidebar's first page counts unread in each one-teammate DM: `bot_dms` by bot, `person_dms` by person."""
+    if cursor:
+        return {"bot_dms": {}, "person_dms": {}}
+    found = one_dm_unread(c, v)
+    return {"bot_dms": {a: n for a, n in found.items() if a.startswith("bot:")},
+            "person_dms": {a: n for a, n in found.items() if a.startswith("human:")}}
 
 
 # A list the cursor has finished; `next_cursor` is the threads' position, "|", the DMs' position.
@@ -3612,6 +3680,24 @@ def sidebar(c, v, *, cursor=None, limit=50, sort=None):
         v._members = None
 
 
+def unread_terms(c, v):
+    """(by a person, to the viewer): SQL over a root `r`, with the viewer's actor as `:me`, true when its open subtree
+    may hold something unread for them. unread_message_sql's two halves, each by its own index: a person's message past
+    the mark, or a delivery still open for the viewer. A list leaves out every thread with neither; subtree_summaries
+    then counts."""
+    subtree, mark = _SUBTREE.format(me=":me"), _subtree_mark(c, v)
+    by_person = (f"EXISTS (SELECT 1 FROM {subtree}JOIN messages m INDEXED BY messages_thread_human ON "
+                 f"m.conversation_id=s.id AND m.seq>{mark} WHERE s.root_id=r.id AND {_SUBTREE_OPEN} "
+                 f"AND s.last_unread_seq>{mark} AND m.sender_id LIKE 'human:%' AND m.sender_id<>:me "
+                 "AND m.deleted_at IS NULL)")
+    to_viewer = ("r.id IN (SELECT s.root_id FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
+                 "JOIN conversations s ON s.id=d.thread_id LEFT JOIN thread_followers f ON f.thread_id=s.id "
+                 "AND f.actor=d.recipient WHERE d.recipient=:me AND d.state IN ('pending','delivered','capped','held') "
+                 f"AND {H.delivery_counts_sql('m', 'd.recipient', 'd.reason')} "
+                 f"AND {_SUBTREE_OPEN} AND m.seq>{mark} AND m.sender_id<>:me AND m.deleted_at IS NULL)")
+    return by_person, to_viewer
+
+
 def _sidebar_page(c, v, cursor, limit, sort):
     limit = max(1, min(int(limit or 50), MAX_PAGE))
     readable = readable_sql(c, v, "r")
@@ -3623,21 +3709,10 @@ def _sidebar_page(c, v, cursor, limit, sort):
     marks = ",".join(f":name{i}" for i in range(len(names)))
     is_needing = "r.id IN (SELECT value FROM json_each(:needing))"
     is_history = "r.id IN (SELECT value FROM json_each(:history))"
-    subtree, mark = _SUBTREE.format(me=":me"), _subtree_mark(c, v)
     activity = (f"COALESCE(CASE WHEN {is_history} THEN (SELECT MAX(h.seq) FROM messages h WHERE h.conversation_id=r.id "
                 f"AND h.legacy_audience IS NOT NULL) ELSE (SELECT MAX(s.last_seq) FROM conversations s "
                 f"WHERE s.root_id=r.id AND {_SUBTREE_OPEN}) END,0)")
-    # unread_message_sql's two halves, each by its own index: a person's message past the mark, or a delivery still open
-    # for the viewer. The counter leaves out every thread with neither.
-    by_person = (f"EXISTS (SELECT 1 FROM {subtree}JOIN messages m INDEXED BY messages_thread_human ON "
-                 f"m.conversation_id=s.id AND m.seq>{mark} WHERE s.root_id=r.id AND {_SUBTREE_OPEN} "
-                 f"AND s.last_unread_seq>{mark} AND m.sender_id LIKE 'human:%' AND m.sender_id<>:me "
-                 "AND m.deleted_at IS NULL)")
-    to_viewer = ("r.id IN (SELECT s.root_id FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
-                 "JOIN conversations s ON s.id=d.thread_id LEFT JOIN thread_followers f ON f.thread_id=s.id "
-                 "AND f.actor=d.recipient WHERE d.recipient=:me AND d.state IN ('pending','delivered','capped','held') "
-                 f"AND {H.delivery_counts_sql('m', 'd.recipient', 'd.reason')} "
-                 f"AND {_SUBTREE_OPEN} AND m.seq>{mark} AND m.sender_id<>:me AND m.deleted_at IS NULL)")
+    by_person, to_viewer = unread_terms(c, v)
     place = f"CASE WHEN {is_needing} THEN 0 WHEN NOT {is_history} AND ({by_person} OR {to_viewer}) THEN 1 ELSE 2 END"
     from . import thread_rank
     # Someone who reads only a migrated Home's old history gets the middle level for it: its level comes from all of it.
@@ -3692,6 +3767,7 @@ def _sidebar_page(c, v, cursor, limit, sort):
     summaries = subtree_summaries(c, v, [r["id"] for r in every])
     followers = _followers_of(c, v, [r["id"] for r in every])
     dms = dm_with(c, v, every)
+    pins = pin_rows(c, v.actor, [r["id"] for r in every])
 
     def items_of(rows, more):
         """Each row as its list shows it, up to half a page's bytes, so a long list leaves the other room; and its next
@@ -3699,7 +3775,7 @@ def _sidebar_page(c, v, cursor, limit, sort):
         found, budget = [], MAX_PAGE_BYTES // 2
         for r in rows:
             summary = summaries.get(r["id"]) or {"unread": 0, "activity": False}
-            item = view(c, v, r, summary=summary, dm=dms.get(r["id"]), follower=followers.get(r["id"], {}))
+            item = view(c, v, r, summary=summary, dm=dms.get(r["id"]), follower=followers.get(r["id"], {}), pins=pins)
             item["activity_seq"] = r["activity"]
             item["importance"] = r["importance"]
             if needing.get(r["id"], {}).get("new_at"):
@@ -3719,7 +3795,7 @@ def _sidebar_page(c, v, cursor, limit, sort):
                        key=lambda pair: (pair[1]["activity_seq"], pair[1]["id"]), reverse=True)
     return {"attention": [{**needing[r["id"]], **item} for r, item in attention],
             "threads": [item for _, item in threads_found], "dms": [item for _, item in dms_found],
-            "bot_dms": bot_dm_unread(c, v) if not cursor else {},
+            **_dm_counts(c, v, cursor),
             "next_cursor": None if threads_next == dms_next == _SIDEBAR_DONE else f"{threads_next}|{dms_next}"}
 
 
