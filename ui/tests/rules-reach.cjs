@@ -243,9 +243,11 @@ async function until(fn, what) {
       await panel(page).locator('[data-rr-cap="chats_per_day"]').fill('');
       await panel(page).locator('[data-rr-cap="chats_per_day"]').press('Tab');
       await until(async () => lastWrite(writes, 'PUT').body.chats_per_day === null, 'cap cleared');
+      // The clear's read-back redraws the panel and says Saved; let it land before the bad value, or it overwrites the message.
+      await until(async () => (await panel(page).locator('.ru-status').innerText()) === 'Saved', 'clear read back');
       const tasks = panel(page).locator('[data-rr-cap="tasks_per_day"]');
       await tasks.fill('-1'); await tasks.press('Tab');
-      assert.match(await panel(page).locator('.ru-status').innerText(), /whole number/);
+      await until(async () => /whole number/.test(await panel(page).locator('.ru-status').innerText()), 'bad cap refused');
       assert.equal(lastWrite(writes, 'PUT').body.tasks_per_day, undefined);
 
       // The header search marks matches on the map; Enter selects the first. A team's tab and Everyone are parties too.
