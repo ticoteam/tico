@@ -1,5 +1,5 @@
 """Mail actions an automation queued, carried out by the computer that reads the mailbox: the real mail sync publishes
-a message, the automation queues its actions, the connector worker (runner/connectors.py) claims them and runs the
+a message, the automation queues its actions, the connector worker (runner_support/connectors.py) claims them and runs the
 mail CLI (connectors/mail/actions.py) against a fake Gmail, and the run's steps wait until the results come back.
 Also: the lease and its retries never send twice, only that mailbox's computer may claim, and the send switch is read
 again when a send leaves (mail and the Slack outbox)."""
@@ -18,7 +18,7 @@ from clients.tico import APIError
 from connectors.mail import access, audit as audit_log, db, gmail as gm
 from connectors.mail import __main__ as cli
 from connectors.mail.tests import fake
-from runner.connectors import ConnectorPublisher
+from runner_support.connectors import ConnectorPublisher
 
 BOX = "ana@acme.example"
 INVOICE = {"From": "Billing <billing@vendor.example>", "To": BOX, "Subject": "Invoice 4471",
@@ -28,7 +28,7 @@ SEND = {"id": "reply", "type": "action", "do": "send_reply", "args": {"body": "T
 
 
 class Hub:
-    """runner/connectors.py's client, over the test app with this computer's token."""
+    """runner_support/connectors.py's client, over the test app with this computer's token."""
 
     def __init__(self, api, token):
         self.api, self.token = api, token

@@ -15,7 +15,9 @@ const THREADS_ROUTE = '#/threads', THREAD_ROUTE = '#/thread/';
 // `roots`: {root id: {dm: the other actor or null, muted}} for roots not on the rail, learned once, for live counts.
 // `counted`: the message ids an `activity` already counted (an edit sends one more).
 const THREADS = {on: null, rail: null, pinned: [], threads: [], next: null, catchUp: 0, cu: null, dms: {}, roots: {}, counted: new Set(),
-                 loading: null, again: false, wired: false};
+                 loading: null, again: false, wired: false, needsSeen: null, readAt: 0, gen: 0};
+// A stream connect within this long of the rail's last read leaves it be (the `needs` handler in threadsSync).
+const THREADS_CONNECT_FRESH_MS = 300e3;
 // The Catch up count: the sidebar link, the phone tab and the rail's Catch up button all show this.
 const threadsCatchUp = () => THREADS.cu ? THREADS.cu.size : THREADS.catchUp;
 const THREADS_PAGE = 100;
@@ -104,13 +106,18 @@ async function threadsRead() {
 async function threadsLoad() {
   // A change while a read is out reads once more after it: that read may have left before the change.
   if (THREADS.loading) { THREADS.again = true; return THREADS.loading; }
+  // The Needs you version known before the read: the rail it answers is at least that new (the `needs` handler below).
+  // Held only once the read lands, so a read that fails is tried again on the next connect.
+  // A change that comes while it is on its way (`gen`) may not be in it, so that read vouches for nothing.
+  const seen = S.v2.needsVersion || null, gen = THREADS.gen;
+  THREADS.needsSeen = null;
   THREADS.loading = (async () => {
     try {
       const r = await threadsRead();
       // Only a real list turns Threads on; any other answer is a server without them.
       if (!r) { if (THREADS.on !== true) THREADS.on = false; return; }
       const moved = JSON.stringify(r.dms) !== JSON.stringify(THREADS.dms);
-      Object.assign(THREADS, {on: true, ...r});
+      Object.assign(THREADS, {on: true, ...r, needsSeen: gen === THREADS.gen ? seen : null, readAt: Date.now()});
       if (moved && typeof renderTree === 'function') renderTree();
       liveTopicAdd('threads');
     } catch (e) {
@@ -264,7 +271,7 @@ async function threadsPinned(d) {
 }
 // The whole rail is read only on the first load, a `reset`, a `needs` change and the safety poll; every other change is
 // patched from its event (above). Once per burst.
-const threadsRecount = () => liveThrottle('threads-rail', threadsLoad, 4000);
+const threadsRecount = () => liveThrottle('threads-rail', threadsLoad, 3000);
 // Every route: the first load, the current row marked, and the stream wired once.
 function threadsSync() {
   if (!S.me) return;
@@ -273,6 +280,7 @@ function threadsSync() {
   if (THREADS.wired) return;
   THREADS.wired = true;
   liveOn('threads', d => {
+    THREADS.gen++;
     if (d.kind === 'activity') void threadsActivity(d);
     // The viewer's own read (it comes only to them): the root's row and its Catch up place clear; a card for it in an
     // open Catch up goes.
@@ -292,13 +300,20 @@ function threadsSync() {
         }
       } else threadsPut(d.thread, {recheck: d.kind === 'members'});
     }
-    // A message another company's Tico has not taken (`unsent`) or a paused root is a Needs you row with no `needs`
-    // event of its own, so that list is read whole, as if one had come.
-    if (d.kind === 'unsent' || d.kind === 'capped') liveSoon('threads-needs', () => liveEmit('needs', {version: 'read'}), 400);
+    // A paused root is a Needs you row with no `needs` event of its own, so that list is read whole, as if one had come.
+    if (d.kind === 'capped') liveSoon('threads-needs', () => liveEmit('needs', {version: 'read'}), 400);
     threadViewsLive('threads', d);
   });
-  // An ask or a held message moved on the viewer's Needs you list: Catch up holds those too.
-  liveOn('needs', () => { if (THREADS.on) threadsRecount(); });
+  // An ask or a held message moved on the viewer's Needs you list: Catch up holds those too. A reconnect that carried
+  // `threads` over (it replays the thread changes it missed) naming the Needs you version the rail was last read at,
+  // within 5 minutes of that read, moved nothing, so the rail is not read again for it. Any other connect reads it: a
+  // change no event names (a thread the viewer can no longer see) is caught by one at least that often.
+  liveOn('needs', d => {
+    const fresh = Date.now() - THREADS.readAt < THREADS_CONNECT_FRESH_MS;
+    if (!THREADS.on || fresh && d?.carried?.includes('threads') && d.version === THREADS.needsSeen) return;
+    if (!d?.connect) THREADS.gen++;
+    threadsRecount();
+  });
   liveOn('reset', () => { liveSoon('threads-rail', threadsLoad, 400); threadViewsLive('reset', {}); });
   // A safety read every few minutes, for a change the stream never carried.
   setInterval(() => { if (THREADS.on && !document.hidden) threadsRecount(); }, 180000);

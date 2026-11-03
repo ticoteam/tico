@@ -43,8 +43,8 @@ A thread's audience is one of these:
 - Bots read like people in their seat: an internal bot reads every `company` thread and the `team` threads of its group
   or any group above it. A `members`, `personal` or `participants` thread opens to a bot only as a member. An external
   agent reads only the threads it is in ([Permissions](permissions.md#threads-and-their-audiences)).
-- A thread can also reach outside the company: a linked [Slack](slack.md) channel, or another company's install it is
-  shared with ([Federation](federation.md)). The thread's **Who can read** sheet shows both under Slack and Shared with.
+- A thread can also reach outside the company through a linked [Slack](slack.md) channel. The thread's **Who can read**
+  sheet shows it under Slack.
 
 ## Sub-threads
 

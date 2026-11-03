@@ -315,7 +315,7 @@ def test_an_older_threads_shape_gets_the_missing_columns_tables_triggers_and_sea
     path = fresh(tmp_path)
     new = _shape(path)
     with sqlite3.connect(path) as c:
-        for table, column in (("calls", "finalized_at"), ("federation_states", "company"), ("inbound_inboxes", "audience"),
+        for table, column in (("calls", "finalized_at"), ("inbound_inboxes", "audience"),
                               ("org_rules", "where_terms"), ("slack_posts", "recipient_actor"),
                               ("live_meetings", "thread_id")):
             c.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
@@ -342,15 +342,26 @@ def test_an_older_threads_shape_gets_the_missing_columns_tables_triggers_and_sea
     assert snapshot(path) == once
 
 
-def test_a_start_puts_back_the_federation_state_row_a_devcopy_emptied(tmp_path):
-    """federation_states holds one row that Relay.status reads unguarded; migration 0047 makes it once, and every start
-    puts it back when a devcopy emptied the table."""
+def test_migration_0058_drops_the_federation_tables_with_their_rows_and_nothing_else(tmp_path):
+    """Migration 0058 drops the federation tables migration 0047 made (rows and indexes with them), and the unsent index
+    that only they used. A fresh database has no federation table, and a second boot changes nothing."""
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
-        c.execute("DELETE FROM federation_states")
+        assert not [name for name in _tables(c) if name.startswith("federation")]
+    with sqlite3.connect(path) as c:
+        c.execute("CREATE TABLE federation_peerings(id TEXT PRIMARY KEY, peer_install TEXT NOT NULL)")
+        c.execute("INSERT INTO federation_peerings VALUES('fp-1','gi_0123456789abcdef01234567')")
+        c.execute("CREATE INDEX message_deliveries_unsent ON message_deliveries(root_id, recipient) "
+                  "WHERE (state='failed' OR (state='pending' AND attempts>=8))")
+    _back_to_before(path, "0058")
     boot(path)
     with sqlite3.connect(path) as c:
-        assert c.execute("SELECT singleton FROM federation_states").fetchall() == [(1,)]
+        assert not [name for name in _tables(c) if name.startswith("federation")]
+        assert c.execute("SELECT 1 FROM sqlite_master WHERE name='message_deliveries_unsent'").fetchone() is None
+        assert c.execute("SELECT 1 FROM schema_migrations WHERE version='0058_drop_federation'").fetchone()
+    once = snapshot(path)
+    boot(path)
+    assert snapshot(path) == once
 
 def test_an_existing_bots_runtime_model_and_host_move_into_its_config_then_the_columns_go(tmp_path):
     """Migration 0043: a runtime, model or host the config lacks is copied into it (the config keeps what it has), and

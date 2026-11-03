@@ -299,7 +299,7 @@ function threadShareOpen(view) {
   const dlg = threadDialog('thread-share', 'Who can read');
   dlg.innerHTML = `<form>${threadDialogHead('Who can read')}<div class="dash-form">${threadAudienceHTML(t, {titled: true})}<div class="tcn-host"></div></div>${threadDialogFoot('Save')}</form>`;
   threadDialogWire(dlg);
-  renderThreadConnect(t, dlg.querySelector('.tcn-host'));   // Slack and Shared with (ui/app/thread-connect.js)
+  renderThreadConnect(t, dlg.querySelector('.tcn-host'));   // Slack (ui/app/thread-connect.js)
   const form = dlg.querySelector('form');
   form.onsubmit = async ev => {
     ev.preventDefault();

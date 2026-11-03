@@ -56,7 +56,7 @@ function cuMore() {
 }
 const cuMsgHTML = m => {
   if (m.hidden || m.deleted) return '';
-  const who = connectAuthor(m), bot = String(who || '').startsWith('bot:');
+  const who = m.sender_id, bot = String(who || '').startsWith('bot:');
   return `<article class="cu-msg" style="--d:${Math.min(Number(m.depth) || 0, 3)}">${actorAvatar(who, 30)}<div class="cu-msg-main">
     <div class="cu-msg-head"><strong>${esc(actorName(who) || 'Someone')}</strong>${bot ? '<span class="cu-bot">BOT</span>' : ''}<time title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div>
     <div class="cu-msg-body md">${safeMd(m.body || '', {shortLinks: true})}${m.clipped ? '<span class="muted">…</span>' : ''}</div></div></article>`;

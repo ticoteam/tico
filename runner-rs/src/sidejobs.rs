@@ -1,7 +1,7 @@
 //! Side jobs on a runner with no launchd: with TICO_SIDE_JOBS=1 the runner also supervises
 //! `importers`, `close-calls` and `connectors`, each only while it is wanted (the hub assigned meeting importers
 //! here, the Close key is in this computer's secrets, the Google key is here or the hub names this computer for
-//! mail). Each is a Python job (`python -m runner --config <path> <job>`), a separate child
+//! mail). Each is a Python job (`python -m runner_support --config <path> <job>`), a separate child
 //! process, so a crash in one never takes down the bot runner, and each restarts with backoff.
 
 use std::collections::HashMap;
@@ -136,7 +136,7 @@ impl SideJobs {
 
     fn spawn(&self, name: &str) -> std::io::Result<tokio::process::Child> {
         let mut cmd = tokio::process::Command::new(crate::env::python());
-        cmd.args(["-m", "runner", "--config"])
+        cmd.args(["-m", "runner_support", "--config"])
             .arg(&self.config.path)
             .arg(name)
             .current_dir(crate::env::root())

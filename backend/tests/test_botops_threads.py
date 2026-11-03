@@ -73,14 +73,5 @@ def test_a_named_reaction_with_a_plus_is_delegable_and_encoded_or_traversal_path
     assert not default_delegable("PUT", "/api/v2/messages/m1/reactions/../threads", {})
 
 
-def test_federation_management_and_rule_withdraw_are_delegable_rows():
-    for method, path in [("POST", "federation/keys"), ("POST", "federation/keys/rotate"),
-                         ("POST", "federation/peerings"), ("POST", "federation/peerings/p1/approve"),
-                         ("POST", "federation/peerings/p1/pause"), ("POST", "federation/peerings/p1/revoke"),
-                         ("POST", "federation/threads/t1/installs"), ("POST", "federation/threads/t1/readers"),
-                         ("DELETE", "federation/threads/t1/installs/gi_abc"),
-                         ("POST", "rule-holds/h1/withdraw")]:
-        assert default_delegable(method, "/api/v2/" + path, {}), (method, path)
-    # Not delegable: a federation read, and a peering pause sent without its id.
-    assert not default_delegable("POST", "/api/v2/federation/peerings/p1/delete", {})
-    assert not default_delegable("POST", "/api/v2/federation/keys/../peerings", {})
+def test_rule_hold_withdraw_is_a_delegable_row():
+    assert default_delegable("POST", "/api/v2/rule-holds/h1/withdraw", {})
